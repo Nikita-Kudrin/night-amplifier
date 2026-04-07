@@ -1,0 +1,84 @@
+========================================================================
+OPEN SOURCE LICENSES AND ATTRIBUTIONS
+========================================================================
+This software, Night Amplifier, relies on several open-source projects,
+libraries, and databases. The licenses and attributions for these
+third-party components are listed below.
+
+------------------------------------------------------------------------
+1. SOFTWARE LIBRARIES AND DEPENDENCIES (MIT License)
+------------------------------------------------------------------------
+The following open-source software libraries are utilized in this
+application.
+
+Rust Backend Dependencies (Crates):
+* axum, tokio, tower, tower-http - Copyright (c) Tokio Contributors
+* serde, serde_json - Copyright (c) David Tolnay
+* rayon - Copyright (c) Rayon Contributors
+* image - Copyright (c) The image-rs Developers
+* fitsio, fitsio-sys - Copyright (c) Simon Walker
+* lz4_flex - Copyright (c) Pascal Hertleif
+* reqwest - Copyright (c) Sean McArthur
+* chrono - Copyright (c) Chrono Developers
+* tracing, tracing-subscriber - Copyright (c) Tokio Contributors
+* playerone-sdk - Copyright (c) Player One Astronomy / Rust bindings authors
+* cameraunit, cameraunit_asi - Copyright (c) CameraUnit Contributors
+* wide, zip, thiserror, regex, urlencoding
+
+JavaScript/Frontend Dependencies (NPM):
+* vue - Copyright (c) Evan You
+* vite - Copyright (c) Evan You and Vite contributors
+* lz4js - Copyright (c) Pierre Curto
+* vitest - Copyright (c) Vitest contributors
+* eslint, prettier, happy-dom
+
+The above software components are provided under the MIT License:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------
+2. ASTRONOMICAL DATA & CATALOGS (CC BY-SA 4.0)
+------------------------------------------------------------------------
+The Push-To navigation system within this application utilizes astronomical
+target data provided by:
+
+* OpenNGC Database
+  Creator: Mattia Verga and OpenNGC contributors
+  Source: https://github.com/mattiaverga/OpenNGC
+
+This material is licensed under the Creative Commons Attribution-ShareAlike
+4.0 International Public License (CC BY-SA 4.0).
+
+To view a full copy of the terms and conditions of this Public License,
+please visit: https://creativecommons.org/licenses/by-sa/4.0/
+
+------------------------------------------------------------------------
+3. EXTERNAL PLATE SOLVERS
+------------------------------------------------------------------------
+This application integrates with the ASTAP command-line plate solver.
+ASTAP and its associated star databases (e.g., D80, G05, W08) are
+copyright (c) Han Kleijn and are distributed under their respective
+open-source licenses (GPL/freeware).
+
+Night Amplifier operates as an aggregate work by communicating with the
+ASTAP executable at arm's length via the command line interface.
+
+For more information, source code, and terms regarding ASTAP, visit:
+https://www.hnsky.org/astap.htm
+========================================================================
