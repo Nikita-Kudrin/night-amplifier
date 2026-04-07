@@ -1,0 +1,76 @@
+# cargo-deny configuration for night-amplifier-pro
+# https://embarkstudios.github.io/cargo-deny/
+#
+# Install: cargo install cargo-deny
+# Run:     cargo deny check
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu", # Raspberry Pi
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# Advisories: checks against the RustSec Advisory Database
+[advisories]
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste is a transitive dep from image/nalgebra with no safe upgrade available" },
+]
+
+# Licenses: only allow permissive licenses
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MIT-0",
+    "bzip2-1.0.6",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[licenses.private]
+ignore = true
+registries = []
+
+# Bans: control which crates are allowed
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+# Sources: only allow crates.io, block unknown registries and git deps
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

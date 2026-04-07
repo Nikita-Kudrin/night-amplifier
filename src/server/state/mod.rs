@@ -1,0 +1,360 @@
+//! Application state management for the web server
+//!
+//! This module contains the shared state that is accessed by all request handlers.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tracing::warn;
+
+use super::events::ServerEvent;
+use super::services::PushToState;
+use super::settings_persistence::SettingsPersistence;
+use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
+use crate::telemetry::metrics as telemetry_metrics;
+
+mod session;
+mod settings;
+mod types;
+
+pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
+pub use session::{CaptureSession, ConnectedCameraInfo};
+pub use settings::{CaptureSettings, EyepieceSettings};
+pub use types::CaptureState;
+
+/// The main application state shared across all handlers
+pub struct AppState {
+    /// Currently connected cameras info (camera_id -> info)
+    pub cameras: RwLock<HashMap<String, ConnectedCameraInfo>>,
+    /// Currently selected camera ID
+    pub selected_camera: RwLock<Option<String>>,
+    /// Current capture session info
+    pub session: RwLock<CaptureSession>,
+    /// Capture settings
+    pub settings: RwLock<CaptureSettings>,
+    /// Latest rendered frame (for streaming)
+    pub latest_frame: RwLock<Option<Arc<Vec<u8>>>>,
+    /// Frame counter (for change detection)
+    pub frame_counter: AtomicU64,
+    /// Cancellation flag for capture loop
+    pub cancel_flag: AtomicBool,
+    /// Event broadcast channel
+    pub events: broadcast::Sender<ServerEvent>,
+    /// Mutex for capture operations (ensures only one capture at a time)
+    pub capture_lock: Mutex<()>,
+    /// Stream configuration
+    pub stream_fps: u32,
+    pub jpeg_quality: u8,
+    /// Disk writer handle for saving frames
+    pub disk_writer: DiskWriterHandle,
+    /// Push-To navigation state
+    pub push_to: RwLock<Option<PushToState>>,
+    /// Settings persistence manager
+    pub settings_persistence: SettingsPersistence,
+}
+
+impl AppState {
+    /// Create new application state
+    pub fn new(stream_fps: u32, jpeg_quality: u8) -> (Self, DiskWriter) {
+        let (events_tx, _) = broadcast::channel(256);
+        let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
+
+        let push_to_state = Some(PushToState::default());
+        let settings_persistence = SettingsPersistence::default();
+        let settings = settings_persistence.load().unwrap_or_default();
+
+        if let Some(_) = &push_to_state {
+            // Fov handled by plugin async initialization later if necessary or at configuration load time.
+        }
+
+        let state = Self {
+            cameras: RwLock::new(HashMap::new()),
+            selected_camera: RwLock::new(None),
+            session: RwLock::new(CaptureSession::default()),
+            settings: RwLock::new(settings),
+            latest_frame: RwLock::new(None),
+            frame_counter: AtomicU64::new(0),
+            cancel_flag: AtomicBool::new(false),
+            events: events_tx,
+            capture_lock: Mutex::new(()),
+            stream_fps,
+            jpeg_quality,
+            disk_writer: disk_writer_handle,
+            push_to: RwLock::new(push_to_state),
+            settings_persistence,
+        };
+
+        (state, disk_writer)
+    }
+
+    /// Create new application state with custom disk writer configuration
+    pub fn with_disk_writer_config(
+        stream_fps: u32,
+        jpeg_quality: u8,
+        disk_config: DiskWriterConfig,
+    ) -> (Self, DiskWriter) {
+        let (events_tx, _) = broadcast::channel(256);
+        let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
+
+        let push_to_state = Some(PushToState::default());
+        let settings_persistence = SettingsPersistence::default();
+        let settings = settings_persistence.load().unwrap_or_default();
+
+        if let Some(_) = &push_to_state {
+            // Fov handled by plugin async initialization later if necessary or at configuration load time.
+        }
+
+        let state = Self {
+            cameras: RwLock::new(HashMap::new()),
+            selected_camera: RwLock::new(None),
+            session: RwLock::new(CaptureSession::default()),
+            settings: RwLock::new(settings),
+            latest_frame: RwLock::new(None),
+            frame_counter: AtomicU64::new(0),
+            cancel_flag: AtomicBool::new(false),
+            events: events_tx,
+            capture_lock: Mutex::new(()),
+            stream_fps,
+            jpeg_quality,
+            disk_writer: disk_writer_handle,
+            push_to: RwLock::new(push_to_state),
+            settings_persistence,
+        };
+
+        (state, disk_writer)
+    }
+
+    /// Save current settings to disk
+    pub async fn save_settings(&self) {
+        let settings = self.settings.read().await;
+        if let Err(e) = self.settings_persistence.save(&settings) {
+            warn!("Failed to save settings: {}", e);
+        }
+    }
+
+    /// Create new application state for testing
+    #[cfg(test)]
+    pub fn new_for_testing(stream_fps: u32, jpeg_quality: u8) -> (Self, DiskWriter) {
+        let (events_tx, _) = broadcast::channel(256);
+        let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
+        let settings_persistence = SettingsPersistence::new("/nonexistent/test/settings.json");
+
+        let state = Self {
+            cameras: RwLock::new(HashMap::new()),
+            selected_camera: RwLock::new(None),
+            session: RwLock::new(CaptureSession::default()),
+            settings: RwLock::new(CaptureSettings::default()),
+            latest_frame: RwLock::new(None),
+            frame_counter: AtomicU64::new(0),
+            cancel_flag: AtomicBool::new(false),
+            events: events_tx,
+            capture_lock: Mutex::new(()),
+            stream_fps,
+            jpeg_quality,
+            disk_writer: disk_writer_handle,
+            push_to: RwLock::new(None),
+            settings_persistence,
+        };
+
+        (state, disk_writer)
+    }
+
+    /// Get the current capture state
+    pub async fn capture_state(&self) -> CaptureState {
+        self.session.read().await.state
+    }
+
+    /// Update capture state and broadcast event
+    pub async fn set_capture_state(&self, state: CaptureState) {
+        {
+            let mut session = self.session.write().await;
+            session.state = state;
+        }
+        let _ = self.events.send(ServerEvent::state_changed(state));
+    }
+
+    /// Increment frame count and broadcast event
+    pub async fn frame_captured(&self, stacked: bool) {
+        let (frame_number, stacked_count) = {
+            let mut session = self.session.write().await;
+            session.frame_count += 1;
+            if stacked {
+                session.stacked_count += 1;
+            }
+            (session.frame_count, session.stacked_count)
+        };
+        let _ = self
+            .events
+            .send(ServerEvent::frame_captured(frame_number, stacked_count));
+    }
+
+    /// Record a rejected frame
+    pub async fn frame_rejected(&self, reason: String) {
+        let (frame_number, stacked_count) = {
+            let mut session = self.session.write().await;
+            session.frame_count += 1;
+            session.rejected_count += 1;
+            (session.frame_count, session.stacked_count)
+        };
+        let _ = self.events.send(ServerEvent::frame_rejected(
+            frame_number,
+            stacked_count,
+            reason,
+        ));
+    }
+
+    /// Set the latest rendered frame for streaming
+    pub async fn set_latest_frame(&self, jpeg_data: Vec<u8>) {
+        let frame_size = jpeg_data.len() as u64;
+        *self.latest_frame.write().await = Some(Arc::new(jpeg_data));
+        self.frame_counter.fetch_add(1, Ordering::SeqCst);
+        telemetry_metrics::record_latest_frame_size(frame_size);
+    }
+
+    /// Get the latest frame if available
+    pub async fn get_latest_frame(&self) -> Option<Arc<Vec<u8>>> {
+        self.latest_frame.read().await.clone()
+    }
+
+    /// Subscribe to events
+    pub fn subscribe_events(&self) -> broadcast::Receiver<ServerEvent> {
+        let receiver = self.events.subscribe();
+        telemetry_metrics::record_event_subscribers(self.events.receiver_count() as u64);
+        receiver
+    }
+
+    /// Send an error event
+    pub fn send_error(&self, message: String) {
+        let _ = self.events.send(ServerEvent::error(message));
+    }
+
+    /// Check if cancellation was requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::SeqCst)
+    }
+
+    /// Request cancellation
+    pub fn request_cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Reset cancellation flag
+    pub fn reset_cancel(&self) {
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    /// Reset session for new capture
+    pub async fn reset_session(&self) {
+        let mut session = self.session.write().await;
+        session.frame_count = 0;
+        session.stacked_count = 0;
+        session.rejected_count = 0;
+        session.last_error = None;
+        session.started_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+        );
+    }
+
+    /// Reset frame counters without resetting session start time
+    pub async fn reset_counters(&self) {
+        let mut session = self.session.write().await;
+        session.frame_count = 0;
+        session.stacked_count = 0;
+        session.rejected_count = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capture_state_default() {
+        assert_eq!(CaptureState::default(), CaptureState::Idle);
+    }
+
+    #[test]
+    fn test_capture_settings_default() {
+        let settings = CaptureSettings::default();
+        assert_eq!(settings.exposure_us, 1_000_000);
+        assert_eq!(settings.gain, 0);
+        assert!(settings.auto_stretch);
+        assert!(settings.stacking);
+    }
+
+    #[test]
+    fn test_capture_settings_to_config() {
+        let settings = CaptureSettings {
+            exposure_us: 2_000_000,
+            gain: 100,
+            offset: 20,
+            bin: 2,
+            planetary_roi: None,
+            ..Default::default()
+        };
+
+        let config = settings.to_capture_config();
+        assert_eq!(config.exposure_us, 2_000_000);
+        assert_eq!(config.gain, 100);
+        assert_eq!(config.offset, 20);
+        assert_eq!(config.bin, 2);
+    }
+
+    #[tokio::test]
+    async fn test_app_state_creation() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        assert_eq!(state.capture_state().await, CaptureState::Idle);
+        assert!(!state.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_app_state_capture_state() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+
+        state.set_capture_state(CaptureState::Capturing).await;
+        assert_eq!(state.capture_state().await, CaptureState::Capturing);
+
+        state.set_capture_state(CaptureState::Idle).await;
+        assert_eq!(state.capture_state().await, CaptureState::Idle);
+    }
+
+    #[tokio::test]
+    async fn test_app_state_frame_tracking() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        state.reset_session().await;
+
+        state.frame_captured(true).await;
+        state.frame_captured(true).await;
+        state.frame_captured(false).await;
+
+        let session = state.session.read().await;
+        assert_eq!(session.frame_count, 3);
+        assert_eq!(session.stacked_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_app_state_cancellation() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+
+        assert!(!state.is_cancelled());
+        state.request_cancel();
+        assert!(state.is_cancelled());
+        state.reset_cancel();
+        assert!(!state.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_app_state_frame_storage() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+
+        assert!(state.get_latest_frame().await.is_none());
+
+        state.set_latest_frame(vec![1, 2, 3, 4]).await;
+        let frame = state.get_latest_frame().await.unwrap();
+        assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
+    }
+}

@@ -1,0 +1,145 @@
+use crate::background::BackgroundExtractionAlgorithm;
+use crate::camera::CaptureConfig;
+use crate::planetary::AlignmentRoi;
+use crate::render::{SaturationBoostConfig, StretchAggressiveness};
+use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
+
+/// Capture settings that can be modified during a session
+#[derive(Debug, Clone)]
+pub struct CaptureSettings {
+    /// Exposure time in microseconds
+    pub exposure_us: u64,
+    /// Gain value
+    pub gain: i32,
+    /// Offset (black level)
+    pub offset: i32,
+    /// Binning factor
+    pub bin: u8,
+    /// Enable auto-stretch for preview
+    pub auto_stretch: bool,
+    /// Enable live stacking
+    pub stacking: bool,
+    /// Sigma for rejection during stacking
+    pub rejection_sigma: f32,
+    /// Outlier rejection method (None, SigmaClip, etc.)
+    pub rejection_method: RejectionMethod,
+    /// Enable background subtraction
+    pub background_subtraction: bool,
+    /// Algorithm for background extraction (GridBilinear or RBF)
+    pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
+    /// Enable saving raw frames to disk (FITS format)
+    pub save_raw_frames: bool,
+    /// Enable saving stacked image to disk (FITS + PNG)
+    pub save_stacked_image: bool,
+    /// Stacking type (Deep Sky or Planetary)
+    pub stacking_type: StackingType,
+    /// Quality-based frame weighting preset for stacking
+    pub weighting_preset: WeightingPreset,
+    /// Auto stretch aggressiveness (Low, Medium, High)
+    pub stretch_aggressiveness: StretchAggressiveness,
+    /// Enable shadow saturation boost
+    pub saturation_boost: bool,
+    /// Shadow saturation boost strength (0.0-1.0)
+    pub saturation_boost_strength: f32,
+    /// Use simulated camera instead of a real one
+    pub use_simulated_camera: bool,
+    /// Number of images to preload for simulated camera
+    pub simulated_preload_images: usize,
+    /// Region of interest for comet nucleus tracking
+    pub comet_roi: Option<AlignmentRoi>,
+    /// Region of interest for planetary alignment
+    pub planetary_roi: Option<AlignmentRoi>,
+    /// Enable "Wanderer" mode for automatic stack reset on movement
+    pub wanderer_mode: bool,
+    /// Deduced field of view from successful plate solves
+    pub push_to_fov: Option<f32>,
+    /// Eyepiece view settings
+    pub eyepiece: EyepieceSettings,
+}
+
+/// Settings specifically for the eyepiece view feature
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EyepieceSettings {
+    /// Enable Binoview
+    pub binoview: bool,
+    /// Screen width
+    pub screen_width: f32,
+    /// Screen height
+    pub screen_height: f32,
+    /// Measurement unit (e.g. "mm", "inches")
+    pub screen_measurement: String,
+    /// Screen resolution X
+    pub screen_resolution_x: u32,
+    /// Screen resolution Y
+    pub screen_resolution_y: u32,
+}
+
+impl Default for EyepieceSettings {
+    fn default() -> Self {
+        Self {
+            binoview: true,
+            screen_width: 140.0,
+            screen_height: 67.0,
+            screen_measurement: "mm".to_string(),
+            screen_resolution_x: 2880,
+            screen_resolution_y: 1440,
+        }
+    }
+}
+
+impl Default for CaptureSettings {
+    fn default() -> Self {
+        Self {
+            exposure_us: 1_000_000,
+            gain: 0,
+            offset: 10,
+            bin: 1,
+            auto_stretch: true,
+            stacking: true,
+            rejection_sigma: 2.5,
+            rejection_method: RejectionMethod::default(),
+            background_subtraction: true,
+            background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
+            save_raw_frames: false,
+            save_stacked_image: false,
+            stacking_type: StackingType::default(),
+            weighting_preset: WeightingPreset::default(),
+            stretch_aggressiveness: StretchAggressiveness::default(),
+            saturation_boost: false,
+            saturation_boost_strength: 0.5,
+            use_simulated_camera: false,
+            simulated_preload_images: 5,
+            comet_roi: None,
+            planetary_roi: None,
+            wanderer_mode: false,
+            push_to_fov: None,
+            eyepiece: EyepieceSettings::default(),
+        }
+    }
+}
+
+impl CaptureSettings {
+    /// Get the saturation boost config based on current settings
+    pub fn saturation_boost_config(&self) -> SaturationBoostConfig {
+        if self.saturation_boost {
+            SaturationBoostConfig {
+                enabled: true,
+                strength: self.saturation_boost_strength,
+                shadow_peak: 0.15,
+                upper_limit: 0.4,
+            }
+        } else {
+            SaturationBoostConfig::default()
+        }
+    }
+
+    /// Convert to camera capture config
+    pub fn to_capture_config(&self) -> CaptureConfig {
+        CaptureConfig::new()
+            .with_exposure_us(self.exposure_us)
+            .with_gain(self.gain)
+            .with_offset(self.offset)
+            .with_bin(self.bin)
+            .with_simulated_preload_images(self.simulated_preload_images)
+    }
+}
