@@ -49,6 +49,15 @@ The camera module uses an extensible provider system. Enable features for specif
 
 Captured frames are automatically saved to FITS files when the "Save Frames to Disk" setting is enabled (default: on).
 
+**Image Storage Formats:**
+
+| Output                  | Format | Bit Depth          |
+|-------------------------|--------|--------------------|
+| Raw frames              | FITS   | 16-bit unsigned    |
+| Stacked image           | FITS   | 32-bit float       |
+| Stacked image (preview) | PNG    | 8-bit              |
+| Planetary frames        | SER    | 16-bit unsigned    |
+
 **Directory Structure:**
 
 ```
