@@ -333,7 +333,7 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     storage::save_stacked_result(&state, stacked_frame, &camera_info).await;
 
     // End capture session
-    state.disk_writer.end_session().await;
+    state.disk_writer.end_session();
 
     info!(camera_id = %camera_id, "Capture loop ended");
 

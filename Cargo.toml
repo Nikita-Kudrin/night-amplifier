@@ -110,3 +110,7 @@ harness = false
 [[bench]]
 name = "background_benchmark"
 harness = false
+
+[[bench]]
+name = "disk_writer_benchmark"
+harness = false
