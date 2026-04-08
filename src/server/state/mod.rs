@@ -52,6 +52,8 @@ pub struct AppState {
     pub push_to: RwLock<Option<PushToState>>,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
+    /// Cancel token for currently active camera
+    pub active_camera_cancel_token: RwLock<Option<Arc<AtomicBool>>>,
 }
 
 impl AppState {
@@ -83,6 +85,7 @@ impl AppState {
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to_state),
             settings_persistence,
+            active_camera_cancel_token: RwLock::new(None),
         };
 
         (state, disk_writer)
@@ -120,6 +123,7 @@ impl AppState {
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to_state),
             settings_persistence,
+            active_camera_cancel_token: RwLock::new(None),
         };
 
         (state, disk_writer)
@@ -155,6 +159,7 @@ impl AppState {
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(None),
             settings_persistence,
+            active_camera_cancel_token: RwLock::new(None),
         };
 
         (state, disk_writer)
@@ -266,6 +271,23 @@ impl AppState {
         session.stacked_count = 0;
         session.rejected_count = 0;
     }
+
+    /// Set active camera cancel token
+    pub async fn set_active_camera_token(&self, token: Arc<AtomicBool>) {
+        *self.active_camera_cancel_token.write().await = Some(token);
+    }
+
+    /// Clear active camera cancel token
+    pub async fn clear_active_camera_token(&self) {
+        *self.active_camera_cancel_token.write().await = None;
+    }
+
+    /// Cancel currently active camera exposure
+    pub async fn cancel_active_exposure(&self) {
+        if let Some(token) = self.active_camera_cancel_token.read().await.as_ref() {
+            token.store(true, Ordering::SeqCst);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +378,21 @@ mod tests {
         state.set_latest_frame(vec![1, 2, 3, 4]).await;
         let frame = state.get_latest_frame().await.unwrap();
         assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn test_app_state_active_camera_cancellation() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let token = Arc::new(AtomicBool::new(false));
+
+        state.set_active_camera_token(Arc::clone(&token)).await;
+        assert!(!token.load(Ordering::SeqCst));
+
+        state.cancel_active_exposure().await;
+        assert!(token.load(Ordering::SeqCst));
+
+        state.clear_active_camera_token().await;
+        // The token itself remains true, but AppState no longer holds it
+        assert!(state.active_camera_cancel_token.read().await.is_none());
     }
 }
