@@ -11,37 +11,43 @@ use crate::server::state::AppState;
 /// In the Community edition, this does nothing unless the Push-To plugin is installed
 /// (i.e. running Night Amplifier Pro).
 pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
+    // 1. Check local state first - cheap and prevents blocking on plugin status if already solving
+    {
+        let push_to_guard = state.push_to.read().await;
+        if let Some(ref pt) = *push_to_guard {
+            if pt.solving_in_progress {
+                debug!("Plate solving skipped: solving already in progress (local check)");
+                return;
+            }
+        } else {
+            debug!("Plate solving skipped: Push-To state not initialized in AppState");
+            return;
+        }
+    }
+
     let plugin = match crate::push_to::PUSH_TO_PLUGIN.get() {
         Some(p) => p,
         None => return, // Do nothing if Push-To is not available
     };
 
+    // 2. Now check if solver is ready and target is set via plugin status
     let push_to_status = plugin.get_status().await;
 
-    // Check if we should solve
-    let should_solve = {
-        let push_to_guard = state.push_to.read().await;
-        if let Some(ref pt) = *push_to_guard {
-            let has_target = push_to_status.current_target.is_some();
-            let not_solving = !pt.solving_in_progress;
-            let solver_ready = push_to_status.solver_ready;
+    // Double check solving state from plugin just in case, and check target/ready
+    let has_target = push_to_status.current_target.is_some();
+    let solver_ready = push_to_status.solver_ready;
+    let plugin_is_solving = push_to_status.is_solving;
 
-            if !has_target {
-                debug!("Plate solving skipped: no target set");
-            } else if !not_solving {
-                debug!("Plate solving skipped: solving already in progress");
-            } else if !solver_ready {
-                debug!("Plate solving skipped: solver not ready (database/binary missing)");
-            }
-
-            has_target && not_solving && solver_ready
-        } else {
-            debug!("Plate solving skipped: Push-To state not initialized in AppState");
-            false
-        }
-    };
-
-    if !should_solve {
+    if !has_target {
+        debug!("Plate solving skipped: no target set");
+        return;
+    }
+    if !solver_ready {
+        debug!("Plate solving skipped: solver not ready (database/binary missing)");
+        return;
+    }
+    if plugin_is_solving {
+        debug!("Plate solving skipped: plugin reports solving already in progress");
         return;
     }
 

@@ -279,8 +279,14 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
                     true
                 };
 
-                // Trigger plate solving if target is set and not already solving
-                solving::try_plate_solve(&state, &display_frame).await;
+                // Trigger plate solving asynchronously so it doesn't block the frame stream
+                tokio::spawn({
+                    let state = Arc::clone(&state);
+                    let frame = display_frame.clone();
+                    async move {
+                        solving::try_plate_solve(&state, &frame).await;
+                    }
+                });
 
                 // Process frame through unified render pipeline
                 let mut preview_frame = display_frame;
