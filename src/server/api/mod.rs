@@ -66,6 +66,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
             post(push_to::set_push_to_target).delete(push_to::clear_push_to_target),
         )
         .route("/push-to/direction", get(push_to::get_push_to_direction))
+        .route("/push-to/cancel", post(push_to::cancel_push_to_solve))
         .route("/push-to/catalog/search", get(push_to::search_catalog))
         .route(
             "/push-to/catalog/messier",

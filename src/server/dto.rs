@@ -411,6 +411,8 @@ pub struct CatalogEntryResponse {
 pub struct PushToStatusResponse {
     /// Whether the solver database is loaded
     pub solver_ready: bool,
+    /// Whether a plate solve is currently in progress
+    pub is_solving: bool,
     /// Current target (if set)
     pub current_target: Option<CatalogEntryResponse>,
     /// Last solved position (if available)

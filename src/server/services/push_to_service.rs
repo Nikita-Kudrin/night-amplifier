@@ -22,10 +22,20 @@ impl PushToService {
         } else {
             PushToStatusResponse {
                 solver_ready: false,
+                is_solving: false,
                 current_target: None,
                 last_position: None,
                 direction: None,
             }
+        }
+    }
+
+    /// Cancel current plate solving process
+    pub async fn cancel_solve(_state: &AppState) -> Result<(), String> {
+        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+            plugin.cancel_solve().await.map_err(|e| e.to_string())
+        } else {
+            Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
     }
 

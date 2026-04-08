@@ -17,6 +17,7 @@ pub mod fits;
 pub mod frame;
 pub mod logging;
 pub mod planetary;
+pub mod process;
 pub mod push_to;
 pub mod registration;
 pub mod render;
@@ -45,6 +46,7 @@ pub use detection::{
 };
 pub use error::{Result, StackError};
 pub use frame::{Frame, PixelFormat};
+pub use process::{ChildGuard, ExternalProcess};
 pub use registration::{
     register_frames, register_frames_adaptive, AdaptiveRegistration, AdaptiveRegistrationResult,
     AffineTransform, BrightnessVariation, FovType, ImageRegistration, RegistrationConfig,

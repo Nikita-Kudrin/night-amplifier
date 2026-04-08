@@ -4,6 +4,7 @@ import {
     setTargetByName,
     setTargetByCoordinates,
     clearTarget as apiClearTarget,
+    cancelPushToSolve as apiCancelSolve,
 } from './api.js'
 
 /**
@@ -19,14 +20,16 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
     const currentTarget = eventStream?.currentTarget || ref(null)
     const pushDirection = eventStream?.pushDirection || ref(null)
     const currentPosition = ref(null)
+    const isSolving = ref(false)
 
     async function refreshStatus() {
         try {
             const status = await getPushToStatus()
             // Backend returns current_target (snake_case)
             currentTarget.value = status.current_target
-            currentPosition.value = status.current_position
+            currentPosition.value = status.last_position // Status response uses last_position
             pushDirection.value = status.direction
+            isSolving.value = status.is_solving
         } catch {
             // Ignore - push-to may not be initialized
         }
@@ -73,6 +76,18 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
         return execute()
     }
 
+    async function cancelSolve() {
+        const execute = async () => {
+            await apiCancelSolve()
+            isSolving.value = false
+        }
+
+        if (withErrorHandling) {
+            return withErrorHandling(execute)
+        }
+        return execute()
+    }
+
     onMounted(() => {
         refreshStatus()
     })
@@ -81,9 +96,11 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
         currentTarget,
         currentPosition,
         pushDirection,
+        isSolving,
         refreshStatus,
         selectTargetByName,
         selectTargetByCoordinates,
         clearTarget,
+        cancelSolve,
     }
 }

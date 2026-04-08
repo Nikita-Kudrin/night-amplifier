@@ -92,6 +92,7 @@ pub trait PushToSystemPlugin: Send + Sync {
 
     // Real-time API
     async fn get_status(&self) -> PushToStatusResponse;
+    async fn cancel_solve(&self) -> PushToResult<()>;
     async fn search_catalog(&self, query: &str, limit: usize) -> Vec<CatalogEntryResponse>;
     async fn get_catalog_by_type(&self, catalog_type: &str) -> Vec<CatalogEntryResponse>;
     async fn set_target_by_name(&self, name: &str) -> Result<CatalogEntryResponse, String>;

@@ -269,6 +269,15 @@ export async function getPushDirection() {
 }
 
 /**
+ * Cancel current plate solving process
+ */
+export async function cancelPushToSolve() {
+    return request('/push-to/cancel', {
+        method: 'POST',
+    })
+}
+
+/**
  * Get all Messier objects
  * @returns {Promise<CatalogEntry[]>}
  */
@@ -431,6 +440,7 @@ export async function installCatalog() {
  * @property {CoordinateInfo|null} current_position - Current telescope position
  * @property {PushDirection|null} direction - Direction to target
  * @property {boolean} solver_ready - Whether plate solver is ready
+ * @property {boolean} is_solving - Whether plate solving is in progress
  */
 
 /**
