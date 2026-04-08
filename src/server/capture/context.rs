@@ -282,13 +282,15 @@ impl PlanetaryStackingContext {
         let search_radius = 50;
         let subpixel_factor = 2;
 
-        let (dx, dy) = crate::planetary::compute_alignment(
+        let (dx, dy, ncc) = crate::planetary::compute_alignment(
             reference,
             frame,
             &roi,
             search_radius,
             subpixel_factor,
         );
+
+        debug!(dx, dy, ncc, "Planetary alignment results");
 
         // Convert (dx, dy) translation to AffineTransform
         // Note: Planetary alignment is currently translation-only

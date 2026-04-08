@@ -14,7 +14,7 @@ pub fn compute_alignment(
     roi: &AlignmentRoi,
     search_radius: usize,
     subpixel_factor: usize,
-) -> (f32, f32) {
+) -> (f32, f32, f32) { // Returns (dx, dy, ncc)
     let ref_lum = frame_to_luminance(reference);
     let frame_lum = frame_to_luminance(frame);
 
@@ -29,10 +29,12 @@ pub fn compute_alignment(
     let ref_std = compute_std_dev(&ref_roi);
 
     if ref_std < 1e-6 {
-        return (0.0, 0.0);
+        let (rx, ry) = compute_centroid(&ref_lum, width, height);
+        let (fx, fy) = compute_centroid(&frame_lum, width, height);
+        return (rx - fx, ry - fy, 0.0);
     }
 
-    let (best_dx, best_dy) = search_best_correlation(
+    let (best_dx, best_dy, best_corr) = search_best_correlation(
         &frame_lum,
         &ref_roi,
         ref_mean,
@@ -45,6 +47,14 @@ pub fn compute_alignment(
         roi_h,
         search_radius,
     );
+    let best_corr = best_corr.max(0.0); // Ensure it's not f32::MIN if no matches found
+
+    // If correlation is poor, fallback to centroid
+    if best_corr < 0.3 {
+        let (rx, ry) = compute_centroid(&ref_lum, width, height);
+        let (fx, fy) = compute_centroid(&frame_lum, width, height);
+        return (rx - fx, ry - fy, best_corr);
+    }
 
     if subpixel_factor > 1
         && best_dx.abs() < search_radius as i32
@@ -54,10 +64,40 @@ pub fn compute_alignment(
             &frame_lum, &ref_roi, ref_mean, ref_std, width, height, roi_x, roi_y, roi_w, roi_h,
             best_dx, best_dy,
         );
-        return (best_dx as f32 + sub_dx, best_dy as f32 + sub_dy);
+        // Negate to match centroid convention (dx = rx - fx)
+        return (-(best_dx as f32 + sub_dx), -(best_dy as f32 + sub_dy), best_corr);
     }
 
-    (best_dx as f32, best_dy as f32)
+    // Negate to match centroid convention (dx = rx - fx)
+    (-(best_dx as i32 as f32), -(best_dy as i32 as f32), best_corr)
+}
+
+/// Computes the weighted centroid of luminance data.
+pub fn compute_centroid(lum: &[f32], width: usize, height: usize) -> (f32, f32) {
+    let mut sum_x = 0.0f64;
+    let mut sum_y = 0.0f64;
+    let mut sum_weight = 0.0f64;
+
+    // Use a simple threshold to focus on the object and ignore background noise
+    let threshold = 0.1f32;
+
+    for y in 0..height {
+        for x in 0..width {
+            let val = lum[y * width + x];
+            if val > threshold {
+                let w = (val - threshold) as f64;
+                sum_x += x as f64 * w;
+                sum_y += y as f64 * w;
+                sum_weight += w;
+            }
+        }
+    }
+
+    if sum_weight > 1e-6 {
+        ((sum_x / sum_weight) as f32, (sum_y / sum_weight) as f32)
+    } else {
+        (width as f32 / 2.0, height as f32 / 2.0)
+    }
 }
 
 /// Clamps ROI to valid bounds and returns (x, y, w, h).
@@ -82,7 +122,7 @@ fn search_best_correlation(
     roi_w: usize,
     roi_h: usize,
     search_radius: usize,
-) -> (i32, i32) {
+) -> (i32, i32, f32) {
     let mut best_corr = f32::MIN;
     let mut best_dx = 0i32;
     let mut best_dy = 0i32;
@@ -109,7 +149,7 @@ fn search_best_correlation(
         }
     }
 
-    (best_dx, best_dy)
+    (best_dx, best_dy, best_corr)
 }
 
 /// Computes normalized cross-correlation between two ROIs.

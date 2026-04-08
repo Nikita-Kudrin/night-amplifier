@@ -147,13 +147,16 @@ impl PlanetaryStacker {
             AlignmentRoi::centered(self.width, self.height, size)
         });
 
-        compute_alignment(
+        let (dx, dy, ncc) = compute_alignment(
             reference,
             frame,
             &roi,
             self.config.search_radius,
             self.config.subpixel_factor,
-        )
+        );
+
+        tracing::debug!(dx, dy, ncc, "Planetary stacker alignment results");
+        (dx, dy)
     }
 
     /// Returns the number of frames collected

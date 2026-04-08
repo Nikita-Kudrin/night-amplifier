@@ -111,8 +111,28 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         last_stacking_type = settings.stacking_type;
 
         // Capture a frame
-        match camera.capture(&capture_config) {
-            Ok(frame) => {
+        let frame = match camera.capture(&capture_config) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(camera_id = %camera_id, error = %e, "Frame capture failed");
+                state.frame_rejected(format!("Capture failed: {}", e)).await;
+
+                // If we get too many consecutive errors, stop
+                if storage::should_stop_on_errors(&state).await {
+                    error!(camera_id = %camera_id, "Too many capture failures, stopping");
+                    state.send_error("Too many capture failures, stopping".to_string());
+                    break;
+                }
+                continue;
+            }
+        };
+
+        if state.is_cancelled() {
+            break;
+        }
+
+
+        // Process frame
                 // Get frame number for this capture
                 let frame_number = {
                     let session = state.session.read().await;
@@ -205,8 +225,16 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
                         stacking_failed = stacking_failed,
                         "Stacking disabled or failed, using raw frame"
                     );
+                    registration_succeeded = false;
                     frame.clone()
                 };
+
+                // If stacking is enabled but registration failed, fallback to raw frame for live view
+                // so the user doesn't see a frozen image.
+                if stacking_enabled && !registration_succeeded {
+                    debug!("Registration failed, falling back to raw frame for live view");
+                    display_frame = frame.clone();
+                }
 
                 // Wanderer mode: reset stack if movement detected (registration failed)
                 if settings.wanderer_mode && stacking_enabled && !registration_succeeded {
@@ -270,18 +298,10 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
                             .await;
                     }
                 }
-            }
-            Err(e) => {
-                warn!(camera_id = %camera_id, error = %e, "Frame capture failed");
-                state.frame_rejected(format!("Capture failed: {}", e)).await;
 
-                // If we get too many consecutive errors, stop
-                if storage::should_stop_on_errors(&state).await {
-                    error!(camera_id = %camera_id, "Too many capture failures, stopping");
-                    state.send_error("Too many capture failures, stopping".to_string());
-                    break;
-                }
-            }
+        // Check for cancellation after heavy processing
+        if state.is_cancelled() {
+            break;
         }
 
         // Small delay between frames if not cancelled
