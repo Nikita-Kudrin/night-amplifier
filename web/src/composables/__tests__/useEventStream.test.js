@@ -217,4 +217,30 @@ describe('useEventStream', () => {
             expect(astapInstallProgress.value).toBe(null)
         })
     })
+
+    describe('Push-To events', () => {
+        it('updates plateSolving on plate_solving_started event', async () => {
+            const {plateSolving} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+
+            expect(plateSolving.value.inProgress).toBe(true)
+            expect(plateSolving.value.targetName).toBe('M31')
+        })
+
+        it('clears plateSolving on target_cleared event', async () => {
+            const {plateSolving} = useEventStream()
+
+            await openWebSocket()
+            // Set initial state
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            expect(plateSolving.value.inProgress).toBe(true)
+
+            // Send target_cleared
+            await sendEvent({type: 'target_cleared'})
+            expect(plateSolving.value.inProgress).toBe(false)
+            expect(plateSolving.value.targetName).toBe(null)
+        })
+    })
 })

@@ -68,6 +68,9 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             await apiClearTarget()
             currentTarget.value = null
             pushDirection.value = null
+            if (eventStream?.clearPlateSolving) {
+                eventStream.clearPlateSolving()
+            }
         }
 
         if (withErrorHandling) {
@@ -80,6 +83,9 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
         const execute = async () => {
             await apiCancelSolve()
             isSolving.value = false
+            if (eventStream?.clearPlateSolving) {
+                eventStream.clearPlateSolving()
+            }
         }
 
         if (withErrorHandling) {

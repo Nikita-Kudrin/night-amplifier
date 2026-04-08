@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use super::super::dto::{
     CatalogEntryResponse, CoordinateResponse, PushToDirectionResponse, PushToStatusResponse,
 };
+use super::super::events::ServerEvent;
 use super::super::state::AppState;
 use crate::push_to::{PushToError, PUSH_TO_PLUGIN};
 
@@ -31,9 +32,14 @@ impl PushToService {
     }
 
     /// Cancel current plate solving process
-    pub async fn cancel_solve(_state: &AppState) -> Result<(), String> {
+    pub async fn cancel_solve(state: &AppState) -> Result<(), String> {
         if let Some(plugin) = PUSH_TO_PLUGIN.get() {
-            plugin.cancel_solve().await.map_err(|e| e.to_string())
+            let result = plugin.cancel_solve().await.map_err(|e| e.to_string());
+            // Clear solving status on frontend immediately
+            let _ = state
+                .events
+                .send(ServerEvent::position_solve_failed("Cancelled by user"));
+            result
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
@@ -90,9 +96,11 @@ impl PushToService {
     }
 
     /// Clear the current target
-    pub async fn clear_target(_state: &AppState) -> Result<(), String> {
+    pub async fn clear_target(state: &AppState) -> Result<(), String> {
         if let Some(plugin) = PUSH_TO_PLUGIN.get() {
-            plugin.clear_target().await
+            let result = plugin.clear_target().await;
+            let _ = state.events.send(ServerEvent::target_cleared());
+            result
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
