@@ -59,6 +59,12 @@ impl SerWriter {
             });
         }
 
+        tracing::debug!(
+            frame_number = self.frames_written + 1,
+            width = frame.width(),
+            height = frame.height(),
+            "Encoding and writing SER frame"
+        );
         let bytes = encode_frame(frame, &self.header);
 
         self.writer.write_all(&bytes).map_err(|e| {
@@ -100,6 +106,10 @@ impl SerWriter {
 
     /// Finalizes the file, writing timestamps and updating header.
     pub fn finalize(mut self) -> Result<()> {
+        tracing::info!(
+            frames_written = self.frames_written,
+            "Finalizing SER file"
+        );
         self.writer
             .flush()
             .map_err(|e| StackError::InvalidConfiguration(format!("Failed to flush: {}", e)))?;

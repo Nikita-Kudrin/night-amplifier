@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
@@ -125,8 +125,7 @@ impl DiskWriter {
                 _ => SerColorId::Mono, // Fallback
             };
 
-            // Determine bit depth from metadata or default to 8
-            // Our frames are f32, SER supports 8/16. We'll use 16 for better precision if possible,
+            // Determine bit depth from metadata or default to 16 for f32 frames
             let bit_depth = 16;
 
             let header = SerHeader::new(
@@ -137,21 +136,33 @@ impl DiskWriter {
             )
             .with_instrument(&request.metadata.camera.clone().unwrap_or_default());
 
-            info!(path = ?path, ?color_id, bit_depth, "Creating new SER file");
+            info!(path = ?path, ?color_id, bit_depth, "Creating new SER file for planetary session");
             self.ser_writer = Some(SerWriter::create(path, header).map_err(|e| {
                 DiskWriterError::WriteFailed(format!("Failed to create SER file: {}", e))
             })?);
         }
 
         if let Some(writer) = &mut self.ser_writer {
+            // Check dimensions for consistency
+            if request.frame.width() as u32 != writer.header().width || 
+               request.frame.height() as u32 != writer.header().height {
+                warn!(
+                    frame_dims = ?(request.frame.width(), request.frame.height()),
+                    ser_dims = ?(writer.header().width, writer.header().height),
+                    "Frame dimensions changed during SER session, rejecting frame"
+                );
+                return Err(DiskWriterError::WriteFailed("Dimension mismatch for SER session".to_string()));
+            }
+
             // Convert timestamp from FITS date-obs to Windows FILETIME if needed,
             // but for now let's use current time as UTC timestamp.
             let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
+            debug!(frame_number = request.frame_number, "Writing frame to SER container");
             writer
                 .write_frame(&request.frame, Some(timestamp))
                 .map_err(|e| {
-                    DiskWriterError::WriteFailed(format!("Failed to write SER frame: {}", e))
+                    DiskWriterError::WriteFailed(format!("Failed to write SER frame {}: {}", request.frame_number, e))
                 })?;
         }
 
