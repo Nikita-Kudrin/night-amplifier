@@ -1,4 +1,4 @@
-import {ref, onUnmounted, shallowRef} from 'vue'
+import {ref, onUnmounted, shallowRef, computed} from 'vue'
 import lz4 from 'lz4js'
 import {WS_RECONNECT, RGB8_MAGIC} from '../constants'
 
@@ -173,6 +173,25 @@ export function useEventStream() {
     const pushDirection = ref(null)
     const currentTarget = ref(null)
     const plateSolving = ref({inProgress: false, targetName: null, lastResult: null})
+
+    const solvingMessage = computed(() => {
+        const {inProgress, lastResult, targetName} = plateSolving.value
+        const targetSuffix = targetName ? ` for ${targetName}` : ''
+
+        if (inProgress) {
+            return `Finding${targetSuffix}...`
+        }
+
+        if (lastResult === 'success') {
+            return `Found${targetSuffix}`
+        }
+
+        if (lastResult === 'failed') {
+            return `Failed to find${targetSuffix}`
+        }
+
+        return null
+    })
 
     // ASTAP installation state
     const astapInstallProgress = ref(null)
@@ -394,6 +413,7 @@ export function useEventStream() {
         pushDirection,
         currentTarget,
         plateSolving,
+        solvingMessage,
         astapInstallProgress,
         catalogInstallProgress,
         clearError,
