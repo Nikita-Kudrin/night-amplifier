@@ -28,7 +28,7 @@ const hasProSolver = computed(() => capabilities?.value?.push_to?.astap_solver ?
 const showProOverlay = computed(() => !hasProSolver.value)
 
 // Target management
-const {currentTarget, selectTargetByName, clearTarget} = usePushToTarget({
+const {currentTarget, selectTargetByName, clearTarget, isSolving, cancelSolve} = usePushToTarget({
   withErrorHandling,
   eventStream,
 })
@@ -131,9 +131,18 @@ onUnmounted(() => {
             type="text"
             placeholder="Search Messier, NGC, IC..."
             class="search-input"
+            :disabled="isSolving"
             @focus="revealResults"
         />
-        <div v-if="searching" class="search-spinner"></div>
+        <div v-if="searching || isSolving" class="search-spinner"></div>
+        <button 
+          v-if="isSolving" 
+          class="btn-cancel-solve" 
+          title="Cancel solving" 
+          @click="cancelSolve"
+        >
+          Cancel
+        </button>
 
         <!-- Search Results Dropdown -->
         <div v-if="showResults && searchResults.length > 0" class="search-results">
@@ -496,5 +505,26 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: var(--text-secondary);
   margin-bottom: 1rem;
+}
+
+.btn-cancel-solve {
+  position: absolute;
+  right: 2rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  z-index: 5;
+}
+
+.btn-cancel-solve:hover {
+  background: var(--surface-hover);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 </style>

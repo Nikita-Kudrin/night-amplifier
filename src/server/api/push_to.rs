@@ -99,6 +99,22 @@ pub async fn clear_push_to_target(State(state): State<Arc<AppState>>) -> impl In
     }
 }
 
+/// POST /api/push-to/cancel
+///
+/// Cancel the current plate solving process
+pub async fn cancel_push_to_solve(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match PushToService::cancel_solve(&state).await {
+        Ok(()) => (
+            StatusCode::OK,
+            ApiResponse::ok(MessageResponse {
+                message: "Plate solve cancelled".to_string(),
+                camera_id: None,
+            }),
+        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+    }
+}
+
 /// GET /api/push-to/direction
 ///
 /// Get the current push direction to target
