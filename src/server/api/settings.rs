@@ -127,6 +127,21 @@ pub async fn update_settings(
         let disk_enabled =
             is_stacking_mode && (settings.save_raw_frames || settings.save_stacked_image);
         state.disk_writer.set_enabled(disk_enabled);
+
+        // If exposure-impacting settings changed while capturing, cancel current exposure
+        // so changes take effect immediately.
+        let capture_state = state.capture_state().await;
+        if capture_state == CaptureState::Capturing {
+            let exposure_changed = request.exposure_us.is_some();
+            let gain_changed = request.gain.is_some();
+            let offset_changed = request.offset.is_some();
+            let bin_changed = request.bin.is_some();
+
+            if exposure_changed || gain_changed || offset_changed || bin_changed {
+                tracing::info!("Exposure-impacting settings updated while capturing, cancelling current exposure to apply changes");
+                state.cancel_active_exposure().await;
+            }
+        }
     }
 
     let _ = state.events.send(ServerEvent::SettingsUpdated);

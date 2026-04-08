@@ -69,6 +69,9 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         }
     };
 
+    // Register active camera cancel token in state
+    state.set_active_camera_token(camera.cancel_token()).await;
+
     // Stacking contexts - initialized on first frame when stacking is enabled
     let mut stacking_ctx: Option<StackingContext> = None;
     let mut comet_ctx: Option<Box<dyn CometContext>> = None;
@@ -114,6 +117,13 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         let frame = match camera.capture(&capture_config) {
             Ok(f) => f,
             Err(e) => {
+                if let crate::camera::CameraError::Cancelled = e {
+                    debug!("Capture cancelled (likely due to settings update), starting next frame");
+                    // Reset cancel flag so next capture isn't immediately cancelled
+                    camera.cancel_token().store(false, std::sync::atomic::Ordering::SeqCst);
+                    continue;
+                }
+
                 warn!(camera_id = %camera_id, error = %e, "Frame capture failed");
                 state.frame_rejected(format!("Capture failed: {}", e)).await;
 
@@ -312,6 +322,7 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
 
     // Close camera
     let _ = camera.close();
+    state.clear_active_camera_token().await;
 
     // Save stacked result if applicable
     let stacked_frame = stacking_ctx
