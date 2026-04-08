@@ -61,6 +61,7 @@ function formatDuration(startedAt) {
   }
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
 }
+
 </script>
 
 <template>
@@ -106,9 +107,7 @@ function formatDuration(startedAt) {
         <circle cx="12" cy="12" r="10"/>
         <path d="M12 6v6l4 2"/>
       </svg>
-      <span>Plate solving{{
-          eventStream.plateSolving.value.targetName ? ` for ${eventStream.plateSolving.value.targetName}` : ''
-        }}...</span>
+      <span>{{ eventStream.solvingMessage.value }}</span>
     </div>
 
     <!-- Plate solve result -->
@@ -141,11 +140,7 @@ function formatDuration(startedAt) {
         <circle cx="12" cy="12" r="10"/>
         <path d="M15 9l-6 6M9 9l6 6"/>
       </svg>
-      <span>{{
-          eventStream.plateSolving.value.lastResult === 'success' ? 'Solved' : 'Failed solving'
-        }}{{
-          eventStream.plateSolving.value.targetName ? ` for ${eventStream.plateSolving.value.targetName}` : ''
-        }}</span>
+      <span>{{ eventStream.solvingMessage.value }}</span>
     </div>
 
     <!-- Disk writer warning -->

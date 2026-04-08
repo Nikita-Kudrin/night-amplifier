@@ -278,11 +278,6 @@ const backendLabel = computed(() => {
         @start-comet-roi-selection="startCometRoiSelection"
     />
 
-    <!-- Plate solving indicator -->
-    <div v-if="eventStream.plateSolving.value.inProgress" class="solving-indicator">
-      <div class="solving-spinner"></div>
-      <span>Solving...</span>
-    </div>
 
     <!-- Connection status -->
     <div v-if="!connected" class="connection-status disconnected">
@@ -356,38 +351,4 @@ const backendLabel = computed(() => {
   animation: pulse 2s infinite;
 }
 
-.solving-indicator {
-  position: absolute;
-  top: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
-  padding: 0.5rem 1rem;
-  border-radius: 20px;
-  border: 1px solid var(--primary);
-  color: var(--primary);
-  font-size: 0.875rem;
-  font-weight: 500;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.solving-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(var(--primary-rgb), 0.2);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 </style>
