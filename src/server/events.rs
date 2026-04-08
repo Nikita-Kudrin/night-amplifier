@@ -279,6 +279,10 @@ impl ServerEvent {
         }
     }
 
+    pub fn target_cleared() -> Self {
+        ServerEvent::TargetCleared
+    }
+
     pub fn astap_install_starting(component: impl Into<String>) -> Self {
         ServerEvent::AstapInstallStarting {
             component: component.into(),

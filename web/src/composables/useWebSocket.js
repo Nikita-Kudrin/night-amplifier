@@ -280,6 +280,7 @@ export function useEventStream() {
                         console.log('[EventStream] Target cleared')
                         currentTarget.value = null
                         pushDirection.value = null
+                        clearPlateSolving()
                         break
                     case 'astap_install_starting':
                         astapInstallProgress.value = {
