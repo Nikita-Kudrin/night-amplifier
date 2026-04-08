@@ -8,7 +8,7 @@ use tracing::{debug, error, info, instrument, warn};
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
 use super::utils::write_png;
-use crate::fits::write_fits;
+use crate::fits::{write_fits, write_fits_u16};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -184,13 +184,13 @@ impl DiskWriter {
             let frame = request.frame.clone();
             let metadata = request.metadata.clone();
             let path = path.clone();
-            move || write_fits(&frame, &path, Some(&metadata))
+            move || write_fits_u16(&frame, &path, Some(&metadata))
         })
         .await
         .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?
         .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
-        debug!(path = ?path, "Raw FITS file written successfully");
+        debug!(path = ?path, "Raw FITS file written successfully (16-bit)");
         Ok(())
     }
 

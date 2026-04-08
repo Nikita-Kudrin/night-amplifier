@@ -200,6 +200,15 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 - **disk_writer/** - Asynchronous disk writer with queue for saving captured frames. Uses bounded channel to queue write
   requests without blocking capture loop. Monitors queue depth and warns about slow disk performance.
 
+  **Image Storage Formats:**
+
+  | Output                  | Format | Bit Depth          |
+  |-------------------------|--------|--------------------|
+  | Raw frames              | FITS   | 16-bit unsigned    |
+  | Stacked image           | FITS   | 32-bit float       |
+  | Stacked image (preview) | PNG    | 8-bit              |
+  | Planetary frames        | SER    | 16-bit unsigned    |
+
 - **push_to/** - Community-side trait definition for the Push-To navigation system. Actual implementation resides in the
   Pro repository.
 
