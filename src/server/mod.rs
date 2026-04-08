@@ -197,10 +197,13 @@ impl Server {
 
     /// Run the server
     pub async fn run(mut self) -> Result<(), ServerError> {
-        // Spawn the disk writer task
+        // Spawn the disk writer on a dedicated OS thread so file I/O
+        // never competes with the tokio blocking-thread pool.
         if let Some(disk_writer) = self.disk_writer.take() {
-            tokio::spawn(disk_writer.run());
-            info!("Disk writer task started");
+            std::thread::Builder::new()
+                .name("disk-writer".into())
+                .spawn(move || disk_writer.run())
+                .expect("failed to spawn disk writer thread");
         }
 
         let app = self.build_router();

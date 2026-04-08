@@ -1,8 +1,7 @@
 use chrono::{Local, Utc};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::{mpsc, Arc, RwLock};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
@@ -12,14 +11,17 @@ use crate::fits::{write_fits, write_fits_u16};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
 
-/// The disk writer background task
+/// The disk writer background task.
+///
+/// Runs on a dedicated OS thread so that file I/O never competes with
+/// the tokio blocking-thread pool used by stacking, plate solving, etc.
 pub struct DiskWriter {
     /// Channel receiver for write requests
     pub(crate) receiver: mpsc::Receiver<DiskWriterMessage>,
     /// Shared queue depth counter
     pub(crate) queue_depth: Arc<AtomicUsize>,
     /// Session directory for raw frames
-    pub(crate) session_dir: Arc<tokio::sync::RwLock<Option<PathBuf>>>,
+    pub(crate) session_dir: Arc<RwLock<Option<PathBuf>>>,
     /// Stacked output directory
     pub(crate) stacked_dir: PathBuf,
     /// Active SER writer for planetary sessions
@@ -33,7 +35,7 @@ impl DiskWriter {
     pub fn new_internal(
         receiver: mpsc::Receiver<DiskWriterMessage>,
         queue_depth: Arc<AtomicUsize>,
-        session_dir: Arc<tokio::sync::RwLock<Option<PathBuf>>>,
+        session_dir: Arc<RwLock<Option<PathBuf>>>,
         stacked_dir: PathBuf,
     ) -> Self {
         Self {
@@ -46,21 +48,20 @@ impl DiskWriter {
         }
     }
 
-    /// Run the disk writer task
-    pub async fn run(mut self) {
+    /// Run the disk writer task (blocking — intended for a dedicated OS thread)
+    pub fn run(mut self) {
         info!("Disk writer task started");
 
-        while let Some(message) = self.receiver.recv().await {
+        while let Ok(message) = self.receiver.recv() {
             match message {
                 DiskWriterMessage::StartSession { path, session_type } => {
                     self.session_type = session_type;
                     if session_type == WritingSessionType::VideoContainer {
-                        // We'll initialize SerWriter on the first frame to get dimensions/bit depth
                         debug!(path = ?path, "Planetary session started, will use SER container");
                     }
                 }
                 DiskWriterMessage::WriteFrame(request) => {
-                    let result = self.process_request(&request).await;
+                    let result = self.process_request(&request);
 
                     let depth = self.queue_depth.fetch_sub(1, Ordering::SeqCst) - 1;
                     telemetry_metrics::record_disk_writer_queue_depth(depth as u64);
@@ -95,29 +96,28 @@ impl DiskWriter {
         frame_number = request.frame_number,
         resolution = %format!("{}x{}x{}", request.frame.width(), request.frame.height(), request.frame.channels())
     ))]
-    async fn process_request(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_request(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
         match request.frame_type {
             FrameType::Raw => {
                 if self.session_type == WritingSessionType::VideoContainer {
-                    self.process_ser_frame(request).await
+                    self.process_ser_frame(request)
                 } else {
-                    self.process_fits_raw(request).await
+                    self.process_fits_raw(request)
                 }
             }
-            FrameType::Stacked => self.process_fits_stacked(request).await,
-            FrameType::StackedPng => self.process_png_stacked(request).await,
+            FrameType::Stacked => self.process_fits_stacked(request),
+            FrameType::StackedPng => self.process_png_stacked(request),
         }
     }
 
-    async fn process_ser_frame(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
-        let session_dir = self.session_dir.read().await;
-        let session_dir = session_dir.as_ref().ok_or_else(|| {
-            DiskWriterError::DirectoryCreationFailed("No active session".to_string())
-        })?;
-
+    fn process_ser_frame(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
         if self.ser_writer.is_none() {
-            let filename = "capture.ser";
-            let path = session_dir.join(filename);
+            let guard = self.session_dir.read().unwrap_or_else(|e| e.into_inner());
+            let session_dir = guard.as_ref().ok_or_else(|| {
+                DiskWriterError::DirectoryCreationFailed("No active session".to_string())
+            })?;
+
+            let path = session_dir.join("capture.ser");
 
             let color_id = match request.frame.channels() {
                 1 => SerColorId::Mono,
@@ -144,33 +144,37 @@ impl DiskWriter {
 
         if let Some(writer) = &mut self.ser_writer {
             // Check dimensions for consistency
-            if request.frame.width() as u32 != writer.header().width || 
-               request.frame.height() as u32 != writer.header().height {
+            if request.frame.width() as u32 != writer.header().width
+                || request.frame.height() as u32 != writer.header().height
+            {
                 warn!(
                     frame_dims = ?(request.frame.width(), request.frame.height()),
                     ser_dims = ?(writer.header().width, writer.header().height),
                     "Frame dimensions changed during SER session, rejecting frame"
                 );
-                return Err(DiskWriterError::WriteFailed("Dimension mismatch for SER session".to_string()));
+                return Err(DiskWriterError::WriteFailed(
+                    "Dimension mismatch for SER session".to_string(),
+                ));
             }
 
-            // Convert timestamp from FITS date-obs to Windows FILETIME if needed,
-            // but for now let's use current time as UTC timestamp.
             let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
             debug!(frame_number = request.frame_number, "Writing frame to SER container");
             writer
                 .write_frame(&request.frame, Some(timestamp))
                 .map_err(|e| {
-                    DiskWriterError::WriteFailed(format!("Failed to write SER frame {}: {}", request.frame_number, e))
+                    DiskWriterError::WriteFailed(format!(
+                        "Failed to write SER frame {}: {}",
+                        request.frame_number, e
+                    ))
                 })?;
         }
 
         Ok(())
     }
 
-    async fn process_fits_raw(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
-        let session_dir = self.session_dir.read().await;
+    fn process_fits_raw(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+        let session_dir = self.session_dir.read().unwrap_or_else(|e| e.into_inner());
         let session_dir = session_dir.as_ref().ok_or_else(|| {
             DiskWriterError::DirectoryCreationFailed("No active session".to_string())
         })?;
@@ -180,25 +184,18 @@ impl DiskWriter {
 
         debug!(path = ?path, "Writing raw FITS file");
 
-        tokio::task::spawn_blocking({
-            let frame = request.frame.clone();
-            let metadata = request.metadata.clone();
-            let path = path.clone();
-            move || write_fits_u16(&frame, &path, Some(&metadata))
-        })
-        .await
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+        write_fits_u16(&request.frame, &path, Some(&request.metadata))
+            .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Raw FITS file written successfully (16-bit)");
         Ok(())
     }
 
-    async fn process_fits_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_fits_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
         let session_name = self
             .session_dir
             .read()
-            .await
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
@@ -209,25 +206,18 @@ impl DiskWriter {
 
         debug!(path = ?path, "Writing stacked FITS file");
 
-        tokio::task::spawn_blocking({
-            let frame = request.frame.clone();
-            let metadata = request.metadata.clone();
-            let path = path.clone();
-            move || write_fits(&frame, &path, Some(&metadata))
-        })
-        .await
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+        write_fits(&request.frame, &path, Some(&request.metadata))
+            .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stacked FITS file written successfully");
         Ok(())
     }
 
-    async fn process_png_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_png_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
         let session_name = self
             .session_dir
             .read()
-            .await
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
@@ -238,14 +228,8 @@ impl DiskWriter {
 
         debug!(path = ?path, "Writing stretched PNG file");
 
-        tokio::task::spawn_blocking({
-            let frame = request.frame.clone();
-            let path = path.clone();
-            move || write_png(&frame, &path)
-        })
-        .await
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?
-        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+        write_png(&request.frame, &path)
+            .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stretched PNG file written successfully");
         Ok(())

@@ -36,7 +36,6 @@ pub async fn initialize_capture_session(state: &AppState) -> Result<(), String> 
         state
             .disk_writer
             .start_session(session_type)
-            .await
             .map_err(|e| format!("Failed to create capture directory: {}", e))?;
     }
     Ok(())
@@ -68,7 +67,6 @@ pub async fn save_frame_to_disk(
     if let Err(e) = state
         .disk_writer
         .queue_raw_frame(raw_frame, frame_number, metadata)
-        .await
     {
         warn!(error = %e, frame_number = frame_number, "Failed to queue frame for saving");
     }
@@ -142,7 +140,6 @@ pub async fn save_stacked_result(
         if let Err(e) = state
             .disk_writer
             .queue_stacked_frame(fits_frame, metadata)
-            .await
         {
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
@@ -156,7 +153,6 @@ pub async fn save_stacked_result(
         if let Err(e) = state
             .disk_writer
             .queue_stacked_png(stretched_frame, stacked_count)
-            .await
         {
             warn!(error = %e, "Failed to queue stretched PNG for saving");
         }

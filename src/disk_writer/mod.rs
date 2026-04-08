@@ -1,12 +1,12 @@
-//! Asynchronous disk writer with queue for saving captured frames
+//! Disk writer with queue for saving captured frames
 //!
-//! This module provides a background task that writes frames to disk without
-//! blocking the capture loop. It uses a bounded channel to queue write requests
-//! and monitors queue depth to warn about slow disk performance.
+//! This module provides a background thread that writes frames to disk without
+//! blocking the capture loop or the tokio runtime. It uses a bounded channel to
+//! queue write requests and monitors queue depth to warn about slow disk
+//! performance.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::sync::{mpsc, Arc, RwLock};
 use tracing::error;
 
 mod config;
@@ -30,10 +30,10 @@ impl DiskWriter {
     ///
     /// Returns the writer task and a handle for sending requests
     pub fn new(config: DiskWriterConfig) -> (Self, DiskWriterHandle) {
-        let (sender, receiver) = mpsc::channel(config.max_queue_size);
+        let (sender, receiver) = mpsc::sync_channel(config.max_queue_size);
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let queue_warning = Arc::new(AtomicBool::new(false));
-        let session_dir = Arc::new(tokio::sync::RwLock::new(None));
+        let session_dir = Arc::new(RwLock::new(None));
         let enabled = Arc::new(AtomicBool::new(config.enabled));
 
         // Create directories
@@ -97,8 +97,8 @@ mod tests {
         assert!(!config.enabled);
     }
 
-    #[tokio::test]
-    async fn test_disk_writer_handle_enabled() {
+    #[test]
+    fn test_disk_writer_handle_enabled() {
         let config = DiskWriterConfig::default();
         let (_writer, handle) = DiskWriter::new(config);
 
@@ -107,76 +107,69 @@ mod tests {
         assert!(!handle.is_enabled());
     }
 
-    #[tokio::test]
-    async fn test_disk_writer_session_management() {
+    #[test]
+    fn test_disk_writer_session_management() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw");
         let config = DiskWriterConfig::new(&temp_dir);
         let (_writer, handle) = DiskWriter::new(config);
 
         let session_path = handle
             .start_session(WritingSessionType::IndividualFrames)
-            .await
             .unwrap();
         assert!(session_path.exists());
 
-        let dir = handle.session_dir().await;
+        let dir = handle.session_dir();
         assert!(dir.is_some());
         assert_eq!(dir.unwrap(), session_path);
 
-        let name = handle.session_name().await;
+        let name = handle.session_name();
         assert!(name.is_some());
 
-        let ended = handle.end_session().await;
+        let ended = handle.end_session();
         assert!(ended.is_some());
-        assert!(handle.session_dir().await.is_none());
+        assert!(handle.session_dir().is_none());
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
-    #[tokio::test]
-    async fn test_queue_depth_tracking() {
+    #[test]
+    fn test_queue_depth_tracking() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_queue");
         let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
         let (writer, handle) = DiskWriter::new(config);
 
         handle
             .start_session(WritingSessionType::IndividualFrames)
-            .await
             .unwrap();
-        let writer_task = tokio::spawn(writer.run());
+        let writer_task = std::thread::spawn(move || writer.run());
 
         let frame = Frame::filled(10, 10, 1, 0.5).unwrap();
         for i in 0..3 {
-            let _ = handle
-                .queue_raw_frame(frame.clone(), i, FitsMetadata::new())
-                .await;
+            let _ = handle.queue_raw_frame(frame.clone(), i, FitsMetadata::new());
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        std::thread::sleep(std::time::Duration::from_millis(500));
         assert_eq!(handle.queue_depth(), 0);
 
         drop(handle);
-        writer_task.abort();
+        writer_task.join().unwrap();
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
-    #[tokio::test]
-    async fn test_queue_warning_threshold() {
+    #[test]
+    fn test_queue_warning_threshold() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_warning");
         let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
         let (_writer, handle) = DiskWriter::new(config);
 
         handle
             .start_session(WritingSessionType::IndividualFrames)
-            .await
             .unwrap();
         assert!(!handle.has_queue_warning());
 
         let frame = Frame::filled(10, 10, 1, 0.5).unwrap();
         for i in 0..(QUEUE_WARNING_THRESHOLD + 2) {
-            let _ = handle
-                .queue_raw_frame(frame.clone(), i as u64, FitsMetadata::new())
-                .await;
+            let _ = handle.queue_raw_frame(frame.clone(), i as u64, FitsMetadata::new());
         }
 
         assert!(handle.has_queue_warning());
@@ -186,40 +179,37 @@ mod tests {
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
-    #[tokio::test]
-    async fn test_disk_writer_ser_session() {
+    #[test]
+    fn test_disk_writer_ser_session() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_ser");
         let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
         let (writer, handle) = DiskWriter::new(config);
 
         handle
             .start_session(WritingSessionType::VideoContainer)
-            .await
             .unwrap();
-        let writer_task = tokio::spawn(writer.run());
+        let writer_task = std::thread::spawn(move || writer.run());
 
         let frame = Frame::filled(32, 32, 1, 0.5).unwrap();
         let mut metadata = FitsMetadata::new();
         metadata.camera = Some("Test Camera".to_string());
 
         for i in 0..5 {
-            let _ = handle
-                .queue_raw_frame(frame.clone(), i, metadata.clone())
-                .await;
+            let _ = handle.queue_raw_frame(frame.clone(), i, metadata.clone());
         }
 
         // Give it some time to process
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
-        let session_dir = handle.session_dir().await.unwrap();
+        let session_dir = handle.session_dir().unwrap();
         let ser_path = session_dir.join("capture.ser");
         assert!(ser_path.exists(), "SER file should be created");
 
-        handle.end_session().await.unwrap();
+        handle.end_session().unwrap();
 
         // Drop handle and wait for worker to finish
         drop(handle);
-        writer_task.await.unwrap();
+        writer_task.join().unwrap();
 
         // Check if file size is reasonable (Header 178 + 5 frames * 32*32*2 bytes for 16-bit)
         let metadata = std::fs::metadata(&ser_path).unwrap();
