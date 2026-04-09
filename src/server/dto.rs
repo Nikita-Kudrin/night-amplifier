@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::state::{CaptureSession, CaptureSettings, EyepieceSettings};
+use super::state::{CaptureSession, CaptureSettings, EyepieceSettings, TelescopeSettings};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::CameraInfo;
 use crate::planetary::AlignmentRoi;
@@ -181,6 +181,7 @@ pub struct SettingsResponse {
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
     pub eyepiece: EyepieceSettings,
+    pub telescope: TelescopeSettings,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -209,6 +210,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             planetary_roi: settings.planetary_roi.clone(),
             wanderer_mode: settings.wanderer_mode,
             eyepiece: settings.eyepiece.clone(),
+            telescope: settings.telescope.clone(),
         }
     }
 }
@@ -327,6 +329,9 @@ pub struct UpdateSettingsRequest {
 
     #[serde(default)]
     pub eyepiece: Option<EyepieceSettings>,
+
+    #[serde(default)]
+    pub telescope: Option<TelescopeSettings>,
 }
 
 /// Configure simulated camera request

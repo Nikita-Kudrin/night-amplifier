@@ -120,6 +120,9 @@ pub async fn update_settings(
         if let Some(eyepiece) = request.eyepiece {
             settings.eyepiece = eyepiece;
         }
+        if let Some(telescope) = request.telescope {
+            settings.telescope = telescope;
+        }
 
         // Enable disk writer only in stacking mode (not live view or wanderer)
         // This must be done after all mode settings are updated

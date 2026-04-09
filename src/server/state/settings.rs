@@ -55,6 +55,44 @@ pub struct CaptureSettings {
     pub push_to_fov: Option<f32>,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
+    /// Telescope and camera parameters for FOV calculation
+    pub telescope: TelescopeSettings,
+}
+
+/// Telescope and camera parameters for FOV calculation
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TelescopeSettings {
+    /// Telescope focal length in mm
+    #[serde(default)]
+    pub focal_length_mm: Option<f32>,
+    /// Pixel size X in micrometers (manual override or from camera database)
+    #[serde(default)]
+    pub pixel_size_x_um: Option<f32>,
+    /// Pixel size Y in micrometers (manual override or from camera database)
+    #[serde(default)]
+    pub pixel_size_y_um: Option<f32>,
+    /// Sensor width in pixels
+    #[serde(default)]
+    pub sensor_width_px: Option<u32>,
+    /// Sensor height in pixels
+    #[serde(default)]
+    pub sensor_height_px: Option<u32>,
+    /// Barlow/reducer coefficient (effective_fl = focal_length * coeff; default 1.0)
+    #[serde(default)]
+    pub barlow_coeff: Option<f32>,
+}
+
+impl Default for TelescopeSettings {
+    fn default() -> Self {
+        Self {
+            focal_length_mm: None,
+            pixel_size_x_um: None,
+            pixel_size_y_um: None,
+            sensor_width_px: None,
+            sensor_height_px: None,
+            barlow_coeff: None,
+        }
+    }
 }
 
 /// Settings specifically for the eyepiece view feature
@@ -114,6 +152,7 @@ impl Default for CaptureSettings {
             wanderer_mode: false,
             push_to_fov: None,
             eyepiece: EyepieceSettings::default(),
+            telescope: TelescopeSettings::default(),
         }
     }
 }
