@@ -8,6 +8,7 @@
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
+use crate::render::simd::multiply_rgb_clamp_simd;
 use crate::statistics::{compute_image_stats, fast_median, ImageStats};
 use rayon::prelude::*;
 
@@ -69,12 +70,11 @@ pub fn neutralize_background(frame: &mut Frame, multipliers: &[f32; 3]) -> Resul
         });
     }
 
+    let row_len = frame.width() * 3;
     let data = frame.data_mut();
 
-    data.par_chunks_mut(3).for_each(|pixel| {
-        pixel[0] = (pixel[0] * multipliers[0]).clamp(0.0, 1.0);
-        pixel[1] = (pixel[1] * multipliers[1]).clamp(0.0, 1.0);
-        pixel[2] = (pixel[2] * multipliers[2]).clamp(0.0, 1.0);
+    data.par_chunks_mut(row_len).for_each(|row| {
+        multiply_rgb_clamp_simd(row, multipliers);
     });
 
     Ok(())

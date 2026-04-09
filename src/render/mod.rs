@@ -7,6 +7,7 @@ mod autostretch;
 mod black_point;
 mod output;
 pub mod pipeline;
+pub mod simd;
 mod stretch;
 mod white_balance;
 

@@ -1,5 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
+use crate::render::simd::apply_luminance_preserving_simd;
 use rayon::prelude::*;
 
 /// Inverse hyperbolic sine function
@@ -130,6 +131,7 @@ pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32) -> Result<()>
     }
 
     let asinh_norm = 1.0 / asinh(stretch_factor);
+    let width = frame.width();
     let data = frame.data_mut();
 
     if channels == 1 {
@@ -142,26 +144,11 @@ pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32) -> Result<()>
             *pixel = (asinh(stretch_factor * value) * asinh_norm).clamp(0.0, 1.0);
         });
     } else {
-        data.par_chunks_mut(3).for_each(|pixel| {
-            let r = pixel[0];
-            let g = pixel[1];
-            let b = pixel[2];
-
-            let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-
-            if luminance <= 1e-8 {
-                pixel[0] = 0.0;
-                pixel[1] = 0.0;
-                pixel[2] = 0.0;
-                return;
-            }
-
-            let luminance_stretched = asinh(stretch_factor * luminance) * asinh_norm;
-            let scale = luminance_stretched / luminance;
-
-            pixel[0] = (r * scale).clamp(0.0, 1.0);
-            pixel[1] = (g * scale).clamp(0.0, 1.0);
-            pixel[2] = (b * scale).clamp(0.0, 1.0);
+        let row_len = width * 3;
+        data.par_chunks_mut(row_len).for_each(|row| {
+            apply_luminance_preserving_simd(row, |l| {
+                asinh(stretch_factor * l) * asinh_norm
+            });
         });
     }
 
