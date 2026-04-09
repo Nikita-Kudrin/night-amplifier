@@ -9,7 +9,7 @@ import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
-import {getAstapStatus, getAstapDatabases} from '../composables/api.js'
+import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -42,6 +42,19 @@ async function fetchAstapStatus() {
 watch(showDatabaseManager, (visible) => {
   if (!visible) fetchAstapStatus()
 })
+
+const installedDatabases = computed(() => astapStatus.value?.installed_databases ?? [])
+const hasMultipleDatabases = computed(() => installedDatabases.value.length > 1)
+
+async function selectDatabase(dbId) {
+  const db = installedDatabases.value.find(d => d.id === dbId)
+  if (!db || dbId === astapStatus.value?.database_type) return
+
+  await withErrorHandling(async () => {
+    await updatePushToConfig({database_path: db.database_path})
+    astapStatus.value = {...astapStatus.value, database_type: dbId}
+  })
+}
 
 // Compute FOV warning: check height FOV (used by ASTAP) against the active database range
 const fovWarning = computed(() => {
@@ -550,6 +563,22 @@ onUnmounted(() => {
           <div v-if="calculatedFov" class="fov-display">
             <span class="fov-label">FOV</span>
             <span class="fov-value">{{ formatFov(calculatedFov.x) }} &times; {{ formatFov(calculatedFov.y) }}</span>
+          </div>
+
+          <!-- Active Database selector (shown when multiple databases are installed) -->
+          <div v-if="hasMultipleDatabases" class="eq-row database-select-row">
+            <label class="eq-label">Database</label>
+            <div class="eq-input-area">
+              <select
+                  :value="astapStatus?.database_type"
+                  class="telescope-input"
+                  @change="selectDatabase($event.target.value)"
+              >
+                <option v-for="db in installedDatabases" :key="db.id" :value="db.id">
+                  {{ db.id }} ({{ db.min_fov_deg }}°–{{ db.max_fov_deg }}°)
+                </option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
