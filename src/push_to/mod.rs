@@ -16,6 +16,7 @@ pub use error::{PushToError, PushToResult};
 use crate::detection::StarDetector;
 use crate::frame::Frame;
 use crate::server::{
+    TelescopeSettings,
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
     DatabaseTypeResponse, PushToDirectionResponse, PushToPositionResponse, PushToStatusResponse,
 };
@@ -106,6 +107,10 @@ pub trait PushToSolverPlugin: Send + Sync {
 
     /// Update the field-of-view hint for the solver
     async fn set_fov(&self, fov: f32) -> Result<(), String>;
+
+    /// Update telescope settings for FOV calculation.
+    /// The solver will compute the precise image-height FOV from these parameters.
+    async fn set_telescope_settings(&self, settings: TelescopeSettings) -> Result<(), String>;
 }
 
 /// Catalog search, target selection, and database operations.

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
+use super::super::services::PushToService;
 use super::super::state::{AppState, CaptureState, StackingType};
 
 /// GET /api/settings
@@ -41,6 +42,8 @@ pub async fn update_settings(
             );
         }
     }
+
+    let telescope_updated = request.telescope.is_some();
 
     {
         let mut settings = state.settings.write().await;
@@ -154,6 +157,12 @@ pub async fn update_settings(
     }
 
     let _ = state.events.send(ServerEvent::SettingsUpdated);
+
+    // Propagate telescope settings to plate solver for FOV calculation
+    if telescope_updated {
+        let telescope = state.settings.read().await.telescope.clone();
+        let _ = PushToService::set_telescope_settings(&state, telescope).await;
+    }
 
     // Persist settings to disk
     state.save_settings().await;
