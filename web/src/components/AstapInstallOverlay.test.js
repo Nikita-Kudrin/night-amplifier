@@ -18,11 +18,13 @@ describe('AstapInstallOverlay', () => {
         getAstapStatus.mockResolvedValue({
             binary_installed: false,
             database_installed: false,
+            installed_databases: [],
             ready: false,
         })
         getAstapDatabases.mockResolvedValue([
-            {id: 'W08', description: 'Wide Field', fov_range: '0.8° - 8°', size: '90 MB'},
-            {id: 'G05', description: 'Gaia DR3', fov_range: '0.2° - 5°', size: '400 MB'},
+            {id: 'D80', description: 'General Purpose', fov_range: '0.15°-6°', size: '~1.3GB', installed: false},
+            {id: 'G05', description: 'Camera Lenses', fov_range: '3°-20°', size: '~100MB', installed: false},
+            {id: 'W08', description: 'Fisheye Lenses', fov_range: '20°-80°', size: '<1MB', installed: false},
         ])
         installAstap.mockResolvedValue({})
     })
@@ -34,8 +36,9 @@ describe('AstapInstallOverlay', () => {
         }
     }
 
-    function mountOverlay(astapInstallProgressRef = ref(null)) {
+    function mountOverlay(astapInstallProgressRef = ref(null), props = {}) {
         return mount(AstapInstallOverlay, {
+            props,
             global: {
                 provide: {
                     eventStream: createMockEventStream(astapInstallProgressRef),
@@ -57,7 +60,47 @@ describe('AstapInstallOverlay', () => {
 
             expect(wrapper.find('.loading-state').exists()).toBe(false)
             expect(wrapper.find('.database-section').exists()).toBe(true)
-            expect(wrapper.text()).toContain('Select Star Database')
+            expect(wrapper.text()).toContain('Select Star Databases')
+        })
+
+        it('pre-selects D80 for fresh install', async () => {
+            const wrapper = mountOverlay()
+            await flushPromises()
+
+            // D80 should be pre-selected via checkbox
+            const d80Checkbox = wrapper.find('input[value="D80"]')
+            expect(d80Checkbox.element.checked).toBe(true)
+        })
+    })
+
+    describe('Multi-database selection', () => {
+        it('uses checkboxes instead of radio buttons', async () => {
+            const wrapper = mountOverlay()
+            await flushPromises()
+
+            const checkboxes = wrapper.findAll('input[type="checkbox"]')
+            expect(checkboxes.length).toBe(3)
+            // No radio buttons
+            expect(wrapper.findAll('input[type="radio"]').length).toBe(0)
+        })
+
+        it('shows installed badge for installed databases', async () => {
+            getAstapDatabases.mockResolvedValue([
+                {id: 'D80', description: 'General Purpose', fov_range: '0.15°-6°', size: '~1.3GB', installed: true},
+                {id: 'G05', description: 'Camera Lenses', fov_range: '3°-20°', size: '~100MB', installed: false},
+                {id: 'W08', description: 'Fisheye Lenses', fov_range: '20°-80°', size: '<1MB', installed: false},
+            ])
+            getAstapStatus.mockResolvedValue({
+                binary_installed: true,
+                database_installed: true,
+                installed_databases: [{id: 'D80', database_path: '/astap/d80_database'}],
+                ready: true,
+            })
+
+            const wrapper = mountOverlay(ref(null), {allowManage: true})
+            await flushPromises()
+
+            expect(wrapper.text()).toContain('Installed')
         })
     })
 
@@ -73,7 +116,7 @@ describe('AstapInstallOverlay', () => {
 
             // Simulate progress event
             progressRef.value = {
-                component: 'W08 database',
+                component: 'W08 Database',
                 stage: 'downloading',
                 percent: 4.15,
                 bytesDownloaded: 52428800, // 50 MB
@@ -85,7 +128,7 @@ describe('AstapInstallOverlay', () => {
             await flushPromises()
 
             expect(wrapper.find('.installing-state').exists()).toBe(true)
-            expect(wrapper.find('.progress-text').text()).toContain('Downloading W08 database')
+            expect(wrapper.find('.progress-text').text()).toContain('Downloading W08 Database')
             expect(wrapper.find('.progress-text').text()).toContain('50.0')
             expect(wrapper.find('.progress-text').text()).toContain('1203.4')
             expect(wrapper.find('.progress-text').text()).toContain('4.2%')
@@ -100,7 +143,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
 
             progressRef.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'downloading',
                 percent: 25.5,
                 bytesDownloaded: 100000000,
@@ -125,7 +168,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
 
             progressRef.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'downloading',
                 percent: 10,
                 bytesDownloaded: 100000000,
@@ -147,7 +190,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
 
             progressRef.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'extracting',
                 percent: 45.5,
                 stageName: 'Extracting Database',
@@ -156,7 +199,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
             await flushPromises()
 
-            expect(wrapper.find('.progress-text').text()).toContain('Extracting W08 database')
+            expect(wrapper.find('.progress-text').text()).toContain('Extracting D80 Database')
             expect(wrapper.find('.progress-text').text()).toContain('45.5%')
         })
 
@@ -169,7 +212,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
 
             progressRef.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'completed',
                 stageName: 'Database Installed',
                 overallPercent: 100,
@@ -177,7 +220,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
             await flushPromises()
 
-            expect(wrapper.find('.progress-text').text()).toContain('W08 database installed successfully')
+            expect(wrapper.find('.progress-text').text()).toContain('D80 Database installed successfully')
         })
 
         it('shows failed state with error message', async () => {
@@ -189,7 +232,7 @@ describe('AstapInstallOverlay', () => {
             await nextTick()
 
             progressRef.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'failed',
                 error: 'Connection timeout',
             }
@@ -224,7 +267,7 @@ describe('AstapInstallOverlay', () => {
 
             // Simulate progress event
             astapInstallProgress.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'downloading',
                 percent: 15.3,
                 bytesDownloaded: 200000000,
@@ -236,7 +279,7 @@ describe('AstapInstallOverlay', () => {
             // Allow watch to trigger
             await flushPromises()
 
-            expect(wrapper.find('.progress-text').text()).toContain('Downloading W08 database')
+            expect(wrapper.find('.progress-text').text()).toContain('Downloading D80 Database')
             expect(wrapper.find('.progress-text').text()).toContain('15.3%')
         })
 
@@ -295,7 +338,7 @@ describe('AstapInstallOverlay', () => {
 
             // Database download (implies CLI is done)
             astapInstallProgress.value = {
-                component: 'W08 database',
+                component: 'D80 Database',
                 stage: 'downloading',
                 percent: 5,
                 bytesDownloaded: 50000000,
@@ -314,19 +357,19 @@ describe('AstapInstallOverlay', () => {
     })
 
     describe('Install button', () => {
-        it('starts installation when clicked', async () => {
+        it('starts installation with selected databases', async () => {
             const wrapper = mountOverlay()
             await flushPromises()
 
-            // Select W08 database (first in list)
-            const w08Option = wrapper.find('input[value="W08"]')
-            await w08Option.setValue(true)
+            // D80 is pre-selected, also select G05
+            const g05Checkbox = wrapper.find('input[value="G05"]')
+            await g05Checkbox.setValue(true)
 
             const installButton = wrapper.find('.btn-primary')
             await installButton.trigger('click')
             await flushPromises()
 
-            expect(installAstap).toHaveBeenCalledWith('W08')
+            expect(installAstap).toHaveBeenCalledWith(['D80', 'G05'])
             expect(wrapper.vm.installing).toBe(true)
         })
     })
@@ -359,6 +402,71 @@ describe('AstapInstallOverlay', () => {
             wrapper.unmount()
 
             expect(clearAstapInstallProgress).toHaveBeenCalled()
+        })
+    })
+
+    describe('Manage mode', () => {
+        it('does not auto-close when allowManage is true and system is ready', async () => {
+            getAstapStatus.mockResolvedValue({
+                binary_installed: true,
+                database_installed: true,
+                installed_databases: [{id: 'D80', database_path: '/astap/d80_database'}],
+                ready: true,
+            })
+            getAstapDatabases.mockResolvedValue([
+                {id: 'D80', description: 'General Purpose', fov_range: '0.15°-6°', size: '~1.3GB', installed: true},
+                {id: 'G05', description: 'Camera Lenses', fov_range: '3°-20°', size: '~100MB', installed: false},
+            ])
+
+            const wrapper = mountOverlay(ref(null), {allowManage: true})
+            await flushPromises()
+
+            // Should NOT have emitted close
+            expect(wrapper.emitted('close')).toBeFalsy()
+            // Should show database section for managing
+            expect(wrapper.find('.database-section').exists()).toBe(true)
+        })
+
+        it('shows "Download Selected" button in manage mode', async () => {
+            getAstapStatus.mockResolvedValue({
+                binary_installed: true,
+                database_installed: true,
+                installed_databases: [{id: 'D80', database_path: '/astap/d80_database'}],
+                ready: true,
+            })
+            getAstapDatabases.mockResolvedValue([
+                {id: 'D80', description: 'General Purpose', fov_range: '0.15°-6°', size: '~1.3GB', installed: true},
+                {id: 'G05', description: 'Camera Lenses', fov_range: '3°-20°', size: '~100MB', installed: false},
+            ])
+
+            const wrapper = mountOverlay(ref(null), {allowManage: true})
+            await flushPromises()
+
+            const installBtn = wrapper.find('.btn-primary')
+            expect(installBtn.text()).toBe('Download Selected')
+        })
+
+        it('shows all-installed message when everything is downloaded', async () => {
+            getAstapStatus.mockResolvedValue({
+                binary_installed: true,
+                database_installed: true,
+                installed_databases: [
+                    {id: 'D80', database_path: '/astap/d80_database'},
+                    {id: 'G05', database_path: '/astap/g05_database'},
+                    {id: 'W08', database_path: '/astap/w08_database'},
+                ],
+                ready: true,
+            })
+            getAstapDatabases.mockResolvedValue([
+                {id: 'D80', description: 'General Purpose', fov_range: '0.15°-6°', size: '~1.3GB', installed: true},
+                {id: 'G05', description: 'Camera Lenses', fov_range: '3°-20°', size: '~100MB', installed: true},
+                {id: 'W08', description: 'Fisheye Lenses', fov_range: '20°-80°', size: '<1MB', installed: true},
+            ])
+
+            const wrapper = mountOverlay(ref(null), {allowManage: true})
+            await flushPromises()
+
+            expect(wrapper.text()).toContain('All available databases are installed')
         })
     })
 })

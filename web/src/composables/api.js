@@ -13,6 +13,7 @@ const BASE_URL = '/api'
 async function request(endpoint, options = {}) {
     const url = `${BASE_URL}${endpoint}`
     const config = {
+        cache: 'no-store',
         headers: {
             'Content-Type': 'application/json',
             ...options.headers,
@@ -336,14 +337,14 @@ export async function getAstapDatabases() {
 }
 
 /**
- * Start ASTAP installation
- * @param {string} [databaseType='D20'] - Database type to install (D05, D20, D50)
+ * Start ASTAP installation with selected databases
+ * @param {string[]} [databaseTypes=['D80']] - Database types to install (e.g. ['D80', 'G05'])
  * @returns {Promise<{message: string}>}
  */
-export async function installAstap(databaseType = 'D20') {
+export async function installAstap(databaseTypes = ['D80']) {
     return request('/astap/install', {
         method: 'POST',
-        body: {database_type: databaseType},
+        body: {database_types: databaseTypes},
     })
 }
 

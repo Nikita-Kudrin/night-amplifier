@@ -46,6 +46,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/capture/start', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({camera_id: 'cam1'}),
             })
@@ -59,6 +60,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/capture/start', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({}),
             })
@@ -72,6 +74,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/capture/stop', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(response)
@@ -89,6 +92,7 @@ describe('API Client', () => {
             const result = await getCaptureStatus()
 
             expect(fetchMock).toHaveBeenCalledWith('/api/capture/status', {
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(status)
@@ -107,6 +111,7 @@ describe('API Client', () => {
             const result = await getSettings()
 
             expect(fetchMock).toHaveBeenCalledWith('/api/settings', {
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(settings)
@@ -120,6 +125,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/settings', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({exposure_us: 2000000}),
             })
@@ -139,6 +145,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/settings', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(updates),
             })
@@ -156,6 +163,7 @@ describe('API Client', () => {
             const result = await listCameras()
 
             expect(fetchMock).toHaveBeenCalledWith('/api/cameras', {
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(cameras)
@@ -173,6 +181,7 @@ describe('API Client', () => {
             const result = await getCameraInfo('playerone_0')
 
             expect(fetchMock).toHaveBeenCalledWith('/api/cameras/playerone_0', {
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(cameraInfo)
@@ -197,6 +206,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/cameras/playerone_0/connect', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(response)
@@ -210,6 +220,7 @@ describe('API Client', () => {
 
             expect(fetchMock).toHaveBeenCalledWith('/api/cameras/playerone_0/disconnect', {
                 method: 'POST',
+                cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
             })
             expect(result).toEqual(response)

@@ -3,7 +3,7 @@ defineProps({
   status: {
     type: Object,
     required: true,
-    // { binary_installed: boolean, database_installed: boolean, database_type: string }
+    // { binary_installed: boolean, database_installed: boolean, installed_databases: Array<{id, database_path}> }
   },
 })
 </script>
@@ -18,11 +18,15 @@ defineProps({
         </span>
         <span>ASTAP CLI</span>
       </div>
-      <div class="status-item">
-        <span class="status-icon" :class="{ installed: status?.database_installed }">
-          {{ status?.database_installed ? '&#10003;' : '&#10007;' }}
-        </span>
-        <span>Star Database {{ status?.database_type ? `(${status.database_type})` : '' }}</span>
+      <template v-if="status?.installed_databases?.length > 0">
+        <div v-for="db in status.installed_databases" :key="db.id" class="status-item">
+          <span class="status-icon installed">&#10003;</span>
+          <span>{{ db.id }} Database</span>
+        </div>
+      </template>
+      <div v-else class="status-item">
+        <span class="status-icon">&#10007;</span>
+        <span>No Star Database</span>
       </div>
     </div>
   </div>

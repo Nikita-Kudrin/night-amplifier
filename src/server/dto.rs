@@ -495,16 +495,27 @@ pub struct AstapStatusResponse {
     /// Path to the ASTAP binary (if installed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<String>,
-    /// Whether a star database is installed
+    /// Whether at least one star database is installed
     pub database_installed: bool,
-    /// Path to the database directory (if installed)
+    /// Path to the primary database directory (if installed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database_path: Option<String>,
-    /// Which database is installed (if any)
+    /// Primary installed database type (if any)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub database_type: Option<String>,
+    /// All installed databases with their paths
+    pub installed_databases: Vec<InstalledDatabaseInfo>,
     /// Whether the system is ready for plate solving
     pub ready: bool,
+}
+
+/// Information about a single installed database
+#[derive(Debug, Serialize)]
+pub struct InstalledDatabaseInfo {
+    /// Database identifier (D80, G05, W08)
+    pub id: String,
+    /// Path to this database's directory
+    pub database_path: String,
 }
 
 /// Available database types for installation
@@ -518,19 +529,32 @@ pub struct DatabaseTypeResponse {
     pub fov_range: String,
     /// Approximate download size (e.g., "~3GB")
     pub size: String,
+    /// Whether this database is already installed
+    pub installed: bool,
 }
 
 /// ASTAP installation request
 #[derive(Debug, Deserialize)]
 pub struct AstapInstallRequest {
-    /// Which database to install (D80, G05, W08)
-    /// Defaults to D80 if not specified
-    #[serde(default = "default_database_type")]
-    pub database_type: String,
+    /// Which databases to install (D80, G05, W08)
+    #[serde(default)]
+    pub database_types: Vec<String>,
+    /// Legacy single database field for backward compatibility
+    #[serde(default)]
+    pub database_type: Option<String>,
 }
 
-fn default_database_type() -> String {
-    "D80".to_string()
+impl AstapInstallRequest {
+    /// Normalize the request into a list of database types
+    pub fn into_database_types(self) -> Vec<String> {
+        if !self.database_types.is_empty() {
+            self.database_types
+        } else if let Some(dt) = self.database_type {
+            vec![dt]
+        } else {
+            vec!["D80".to_string()]
+        }
+    }
 }
 
 // ============================================================================

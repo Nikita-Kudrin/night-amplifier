@@ -30,6 +30,7 @@ pub async fn get_astap_status() -> impl IntoResponse {
                 database_installed: false,
                 database_path: None,
                 database_type: None,
+                installed_databases: vec![],
                 ready: false,
             }),
         )
@@ -58,9 +59,10 @@ pub async fn install_astap(
     State(_state): State<Arc<AppState>>,
     Json(request): Json<AstapInstallRequest>,
 ) -> impl IntoResponse {
+    let database_types = request.into_database_types();
     if let Some(plugin) = PUSH_TO_PLUGIN.get() {
         match plugin
-            .install_astap(&request.database_type, _state.events.clone())
+            .install_astap(&database_types, _state.events.clone())
             .await
         {
             Ok(_) => (

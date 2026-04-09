@@ -3,11 +3,11 @@ const props = defineProps({
   databases: {
     type: Array,
     required: true,
-    // Each database: { id: string, description: string, fov_range: string, size: string }
+    // Each database: { id: string, description: string, fov_range: string, size: string, installed: boolean }
   },
   modelValue: {
-    type: String,
-    default: '',
+    type: Array,
+    default: () => [],
   },
   hint: {
     type: String,
@@ -16,6 +16,21 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue'])
+
+function toggleDatabase(dbId) {
+  const current = [...props.modelValue]
+  const index = current.indexOf(dbId)
+  if (index >= 0) {
+    current.splice(index, 1)
+  } else {
+    current.push(dbId)
+  }
+  emit('update:modelValue', current)
+}
+
+function isSelected(dbId) {
+  return props.modelValue.includes(dbId)
+}
 </script>
 
 <template>
@@ -27,14 +42,14 @@ const emit = defineEmits(['update:modelValue'])
           v-for="db in databases"
           :key="db.id"
           class="database-option"
-          :class="{ selected: modelValue === db.id }"
+          :class="{ selected: isSelected(db.id), installed: db.installed }"
       >
         <input
-            type="radio"
+            type="checkbox"
             :value="db.id"
-            :checked="modelValue === db.id"
-            name="database"
-            @change="emit('update:modelValue', db.id)"
+            :checked="isSelected(db.id) || db.installed"
+            :disabled="db.installed"
+            @change="toggleDatabase(db.id)"
         />
         <div class="database-info">
           <span class="database-name">{{ db.description }}</span>
@@ -44,6 +59,7 @@ const emit = defineEmits(['update:modelValue'])
             <span class="detail-item">{{ db.size }}</span>
             <span class="detail-separator">|</span>
             <span class="detail-item database-id">{{ db.id }}</span>
+            <span v-if="db.installed" class="installed-badge">Installed</span>
           </span>
         </div>
       </label>
@@ -75,13 +91,19 @@ const emit = defineEmits(['update:modelValue'])
   transition: border-color 0.2s, background 0.2s;
 }
 
-.database-option:hover {
+.database-option:hover:not(.installed) {
   background: var(--surface-elevated);
 }
 
 .database-option.selected {
   border-color: var(--primary);
   background: rgba(74, 158, 255, 0.1);
+}
+
+.database-option.installed {
+  border-color: var(--success, #22c55e);
+  background: rgba(34, 197, 94, 0.05);
+  cursor: default;
 }
 
 .database-option input {
@@ -99,6 +121,10 @@ const emit = defineEmits(['update:modelValue'])
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.installed .database-name {
+  color: var(--text-secondary);
 }
 
 .database-details {
@@ -121,5 +147,12 @@ const emit = defineEmits(['update:modelValue'])
   font-family: monospace;
   font-weight: 500;
   color: var(--text-secondary);
+}
+
+.installed-badge {
+  color: var(--success, #22c55e);
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
 }
 </style>
