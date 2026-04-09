@@ -209,8 +209,13 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   | Stacked image (preview) | PNG    | 8-bit              |
   | Planetary frames        | SER    | 16-bit unsigned    |
 
-- **push_to/** - Community-side trait definition for the Push-To navigation system. Actual implementation resides in the
-  Pro repository.
+- **app.rs** - Shared application entry point (`app::run()`) used by both Community and Pro binaries. Handles CLI
+  argument parsing, logging setup, and server startup. Pro binary passes a plugin-registration closure.
+
+- **push_to/** - Community-side trait definitions for the Push-To navigation system, split into three sub-traits:
+  `PushToSolverPlugin` (plate solving, direction), `PushToCatalogPlugin` (catalog search, targets),
+  `PushToInstallerPlugin` (ASTAP/catalog installation). `PushToSystemPlugin` is a compound super-trait.
+  Actual implementations reside in the Pro repository.
 
 ### Server Module (src/server/)
 
@@ -218,7 +223,10 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 - **state.rs** - `AppState` for shared server state. Thread-safe with `Arc<RwLock<T>>` for settings.
 - **api.rs** - REST API handlers for capture control, settings management, and camera operations.
 - **ws.rs** - WebSocket handlers for live image streaming (`/ws/stream`) and server events (`/ws/events`).
-- **dto.rs** - Data transfer objects for API request/response serialization.
+- **dto/** - Data transfer objects for API request/response serialization, split by domain:
+    - `mod.rs` - Core DTOs (ApiResponse, Settings, Camera, Capture)
+    - `push_to.rs` - Push-To navigation DTOs (position, direction, catalog)
+    - `install.rs` - ASTAP and catalog installation DTOs
 - **events.rs** - Server event types for WebSocket broadcasting.
 - **capture.rs** - Capture session management and frame processing logic.
 - **encoding.rs** - Frame encoding (RGB8+LZ4) for WebSocket streaming.
@@ -323,7 +331,10 @@ Certain advanced features are implemented via a plugin system to allow the Commu
 delegating performance-critical or professional logic to the Pro repository.
 
 - **REJECTION_PLUGIN** - Handles `SigmaClip`, `WinsorizedSigmaClip`, and `MinMax` rejection methods.
-- **PUSH_TO_PLUGIN** - Handles plate solving and celestial catalogs.
+- **PUSH_TO_PLUGIN** - Compound plugin (`PushToSystemPlugin`) combining three sub-traits:
+    - `PushToSolverPlugin` - Plate solving and direction calculation
+    - `PushToCatalogPlugin` - Celestial catalog search and target management
+    - `PushToInstallerPlugin` - ASTAP binary and catalog installation
 - **COMET_PLUGIN** - Handles specialized comet detection and tracking logic.
 - **BACKGROUND_PLUGIN** - Extends background extraction with advanced models like RBF.
 

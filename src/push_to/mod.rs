@@ -3,6 +3,11 @@
 //! Push-To navigation is a professional feature available only in Night Amplifier Pro.
 //! This module provides the plugin interfaces to allow safe compilation of the Community version
 //! while gating the functionality.
+//!
+//! The plugin is split into three focused sub-traits following the Interface Segregation Principle:
+//! - [`PushToSolverPlugin`] — plate solving, position tracking, and direction calculation
+//! - [`PushToCatalogPlugin`] — catalog search, target selection, and database loading
+//! - [`PushToInstallerPlugin`] — ASTAP and catalog installation management
 
 pub mod error;
 
@@ -76,11 +81,11 @@ impl InstallStage {
     }
 }
 
-/// Plugin trait for advanced Push-To navigation
+/// Plate solving, position tracking, and direction calculation.
 #[async_trait]
-pub trait PushToSystemPlugin: Send + Sync {
+pub trait PushToSolverPlugin: Send + Sync {
     /// Process a new frame for plate solving.
-    /// Needs to return both the position result (if successful) and the direction result (if target is set)
+    /// Returns both the position result (if successful) and the direction result (if target is set)
     async fn process_new_frame(
         &self,
         frame: &Frame,
@@ -90,31 +95,81 @@ pub trait PushToSystemPlugin: Send + Sync {
         Option<PushToDirectionResponse>,
     )>;
 
-    // Real-time API
+    /// Get the current Push-To navigation status
     async fn get_status(&self) -> PushToStatusResponse;
-    async fn cancel_solve(&self) -> PushToResult<()>;
-    async fn search_catalog(&self, query: &str, limit: usize) -> Vec<CatalogEntryResponse>;
-    async fn get_catalog_by_type(&self, catalog_type: &str) -> Vec<CatalogEntryResponse>;
-    async fn set_target_by_name(&self, name: &str) -> Result<CatalogEntryResponse, String>;
-    async fn set_target_by_coords(&self, ra: f64, dec: f64) -> Result<CoordinateResponse, String>;
-    async fn clear_target(&self) -> Result<(), String>;
-    async fn get_direction(&self) -> Option<PushToDirectionResponse>;
-    async fn set_fov(&self, fov: f32) -> Result<(), String>;
-    async fn load_database(&self, path: &str) -> Result<(), String>;
 
-    // Installers
+    /// Cancel the current plate solving process
+    async fn cancel_solve(&self) -> PushToResult<()>;
+
+    /// Get the current push direction to target
+    async fn get_direction(&self) -> Option<PushToDirectionResponse>;
+
+    /// Update the field-of-view hint for the solver
+    async fn set_fov(&self, fov: f32) -> Result<(), String>;
+}
+
+/// Catalog search, target selection, and database operations.
+#[async_trait]
+pub trait PushToCatalogPlugin: Send + Sync {
+    /// Search the catalog for targets matching a query
+    async fn search_catalog(&self, query: &str, limit: usize) -> Vec<CatalogEntryResponse>;
+
+    /// Get all catalog entries of a specific type (e.g. "Messier", "NGC", "IC")
+    async fn get_catalog_by_type(&self, catalog_type: &str) -> Vec<CatalogEntryResponse>;
+
+    /// Set the current target by catalog name (e.g. "M31", "NGC 7000")
+    async fn set_target_by_name(&self, name: &str) -> Result<CatalogEntryResponse, String>;
+
+    /// Set the current target by RA/Dec coordinates
+    async fn set_target_by_coords(&self, ra: f64, dec: f64) -> Result<CoordinateResponse, String>;
+
+    /// Clear the current target
+    async fn clear_target(&self) -> Result<(), String>;
+
+    /// Load a solver database from the given path
+    async fn load_database(&self, path: &str) -> Result<(), String>;
+}
+
+/// ASTAP binary and catalog installation management.
+#[async_trait]
+pub trait PushToInstallerPlugin: Send + Sync {
+    /// Get ASTAP installation status
     async fn get_astap_status(&self) -> AstapStatusResponse;
+
+    /// Get available database types for installation
     async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse>;
+
+    /// Start ASTAP installation (binary and selected databases)
     async fn install_astap(
         &self,
         database_types: &[String],
         events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
     ) -> Result<(), String>;
+
+    /// Get OpenNGC catalog installation status
     async fn get_catalog_status(&self) -> CatalogStatusResponse;
+
+    /// Start OpenNGC catalog installation
     async fn install_catalog(
         &self,
         events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
     ) -> Result<(), String>;
+}
+
+/// Combined Push-To plugin trait for registration in the global OnceLock.
+///
+/// Implementors must provide all three sub-traits. The single OnceLock keeps
+/// the registration pattern simple while sub-traits let consumers depend only
+/// on the interface they need.
+pub trait PushToSystemPlugin:
+    PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin
+{
+}
+
+/// Blanket implementation: any type implementing all three sub-traits is a PushToSystemPlugin.
+impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushToSystemPlugin
+    for T
+{
 }
 
 /// Global registry for the Push-To plugin
