@@ -99,6 +99,19 @@ export const BACKGROUND_ALGORITHM_OPTIONS = [
 ]
 
 
+// Telescope setup limits
+export const TELESCOPE_LIMITS = {
+    focal_length_min: 50,
+    focal_length_max: 10000,
+    barlow_min: 0.1,
+    barlow_max: 5.0,
+    barlow_step: 0.05,
+    barlow_default: 1.0,
+    pixel_size_min: 0.5,
+    pixel_size_max: 20.0,
+    pixel_size_step: 0.01,
+}
+
 // Capture states
 export const CAPTURE_STATES = {
     IDLE: 'Idle',
@@ -156,6 +169,14 @@ export const DEFAULT_SETTINGS = {
         screen_measurement: 'mm',
         screen_resolution_x: 2880,
         screen_resolution_y: 1440,
+    },
+    telescope: {
+        focal_length_mm: null,
+        pixel_size_x_um: null,
+        pixel_size_y_um: null,
+        sensor_width_px: null,
+        sensor_height_px: null,
+        barlow_coeff: null,
     }
 }
 
@@ -183,4 +204,8 @@ export const HELP_TEXTS = {
     eyepiece_screen_settings: "Configure physical screen dimensions and resolution to calculate accurate split for Binoview.",
     rejection_method: "Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\nChanges apply immediately to subsequent frames.",
     rejection_sigma: "Controls the sensitivity of the rejection algorithm. Lower values (e.g., 2.0) are more aggressive; higher values (e.g., 4.0) preserve more signal. Changes apply immediately to subsequent frames.",
+    telescope_focal_length: "The focal length of your telescope in millimeters.",
+    telescope_camera_sensor: "Select your camera from the database or enter pixel size manually. You can also auto-fill from the connected camera.",
+    telescope_barlow: "Barlow/reducer coefficient. 1.0 = no barlow/reducer. Values > 1.0 for barlows (e.g. 2.0 for 2x barlow). Values < 1.0 for reducers (e.g. 0.63 for a 0.63x reducer).",
+    telescope_fov: "Calculated Field of View based on your telescope and camera parameters. Sent to the plate solver for faster solving.",
 }

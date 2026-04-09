@@ -269,6 +269,20 @@ export async function getPushDirection() {
 }
 
 /**
+ * Update Push-To configuration (FOV hint, database path)
+ * @param {Object} config
+ * @param {number} [config.fov_degrees] - Field of view hint in degrees
+ * @param {string} [config.database_path] - Path to solver database
+ * @returns {Promise<PushToStatus>}
+ */
+export async function updatePushToConfig(config) {
+    return request('/push-to/config', {
+        method: 'POST',
+        body: config,
+    })
+}
+
+/**
  * Cancel current plate solving process
  */
 export async function cancelPushToSolve() {

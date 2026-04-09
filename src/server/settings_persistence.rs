@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-use super::state::{CaptureSettings, EyepieceSettings};
+use super::state::{CaptureSettings, EyepieceSettings, TelescopeSettings};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories};
 use crate::planetary::AlignmentRoi;
@@ -68,6 +68,8 @@ pub struct PersistedSettings {
     pub push_to_fov: Option<f32>,
     #[serde(default)]
     pub eyepiece: EyepieceSettings,
+    #[serde(default)]
+    pub telescope: TelescopeSettings,
 }
 
 fn default_preload_images() -> usize {
@@ -112,6 +114,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             wanderer_mode: settings.wanderer_mode,
             push_to_fov: settings.push_to_fov,
             eyepiece: settings.eyepiece.clone(),
+            telescope: settings.telescope.clone(),
         }
     }
 }
@@ -143,6 +146,7 @@ impl From<PersistedSettings> for CaptureSettings {
             wanderer_mode: persisted.wanderer_mode,
             push_to_fov: persisted.push_to_fov,
             eyepiece: persisted.eyepiece,
+            telescope: persisted.telescope,
         }
     }
 }
@@ -298,6 +302,14 @@ mod tests {
                 screen_resolution_x: 2880,
                 screen_resolution_y: 1440,
             },
+            telescope: TelescopeSettings {
+                focal_length_mm: Some(1000.0),
+                pixel_size_x_um: Some(3.76),
+                pixel_size_y_um: Some(3.76),
+                sensor_width_px: Some(3008),
+                sensor_height_px: Some(3008),
+                barlow_coeff: Some(1.0),
+            },
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -351,6 +363,22 @@ mod tests {
             restored.eyepiece.screen_resolution_y,
             settings.eyepiece.screen_resolution_y
         );
+        assert_eq!(
+            restored.telescope.focal_length_mm,
+            settings.telescope.focal_length_mm
+        );
+        assert_eq!(
+            restored.telescope.pixel_size_x_um,
+            settings.telescope.pixel_size_x_um
+        );
+        assert_eq!(
+            restored.telescope.barlow_coeff,
+            settings.telescope.barlow_coeff
+        );
+        assert_eq!(
+            restored.telescope.sensor_width_px,
+            settings.telescope.sensor_width_px
+        );
     }
 
     #[test]
@@ -390,6 +418,7 @@ mod tests {
                 screen_resolution_x: 2880,
                 screen_resolution_y: 1440,
             },
+            telescope: TelescopeSettings::default(),
         };
 
         persistence.save(&settings).unwrap();
