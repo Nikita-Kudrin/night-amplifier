@@ -2,6 +2,8 @@
 //!
 //! This module contains request and response types used by the REST API handlers.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::state::{CaptureSession, CaptureSettings, EyepieceSettings, TelescopeSettings};
@@ -182,6 +184,12 @@ pub struct SettingsResponse {
     pub wanderer_mode: bool,
     pub eyepiece: EyepieceSettings,
     pub telescope: TelescopeSettings,
+    /// Per-camera telescope profiles keyed by camera name
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Name of the last active camera
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_camera_name: Option<String>,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -211,6 +219,8 @@ impl From<&CaptureSettings> for SettingsResponse {
             wanderer_mode: settings.wanderer_mode,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
+            camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
+            last_camera_name: settings.last_camera_name.clone(),
         }
     }
 }
@@ -332,6 +342,13 @@ pub struct UpdateSettingsRequest {
 
     #[serde(default)]
     pub telescope: Option<TelescopeSettings>,
+
+    /// Per-camera telescope profiles keyed by camera name
+    #[serde(default)]
+    pub camera_telescope_profiles: Option<HashMap<String, TelescopeSettings>>,
+    /// Name of the last active camera
+    #[serde(default)]
+    pub last_camera_name: Option<String>,
 }
 
 /// Configure simulated camera request
