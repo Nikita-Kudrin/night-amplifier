@@ -1,5 +1,5 @@
 <script setup>
-import {ref, onMounted, onUnmounted, inject, computed} from 'vue'
+import {ref, onMounted, onUnmounted, inject, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {useCatalogSearch, getCatalogClass} from '../composables/useCatalogSearch.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
@@ -9,6 +9,7 @@ import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
+import {getAstapStatus} from '../composables/api.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -18,6 +19,43 @@ const manualCoordsEnabled = ref(false)
 const equipmentCollapsed = ref(false)
 const manualSensorExpanded = ref(false)
 const showDatabaseManager = ref(false)
+
+// FOV warning state
+const astapStatus = ref(null)
+const showFovWarning = ref(false)
+
+async function fetchAstapStatus() {
+  try {
+    astapStatus.value = await getAstapStatus()
+  } catch {
+    // Ignore — plugin may not be available in Community version
+  }
+}
+
+// Re-fetch status when database manager is closed (user may have installed a new DB)
+watch(showDatabaseManager, (visible) => {
+  if (!visible) fetchAstapStatus()
+})
+
+// Compute FOV warning: check height FOV (used by ASTAP) against the active database range
+const fovWarning = computed(() => {
+  if (!astapStatus.value?.database_type || !calculatedFov.value) return null
+  const activeDb = astapStatus.value.installed_databases?.find(
+    db => db.id === astapStatus.value.database_type
+  )
+  if (!activeDb) return null
+
+  const fovY = calculatedFov.value.y
+  if (fovY >= activeDb.min_fov_deg && fovY <= activeDb.max_fov_deg) return null
+
+  const fovStr = formatFov(fovY)
+  const direction = fovY < activeDb.min_fov_deg ? 'too narrow' : 'too wide'
+  return {
+    database_id: activeDb.id,
+    current_fov: fovStr,
+    message: `FOV ${fovStr} is ${direction} for the ${activeDb.id} database (${activeDb.min_fov_deg}°–${activeDb.max_fov_deg}°). Plate solving may fail with this setup.`,
+  }
+})
 
 // Catalog search
 const {searchQuery, searchResults, searching, showResults, clearSearch, hideResults, revealResults} =
@@ -128,6 +166,7 @@ function handleClickOutside(event) {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  fetchAstapStatus()
 })
 
 onUnmounted(() => {
@@ -152,7 +191,23 @@ onUnmounted(() => {
         </svg>
       </button>
       <h2>Push-To Navigation</h2>
+      <button
+          v-if="fovWarning"
+          class="fov-warning-btn"
+          :title="`FOV warning: ${fovWarning.current_fov} vs ${fovWarning.database_id} database`"
+          @click.stop="showFovWarning = !showFovWarning"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </button>
     </div>
+
+    <BaseAlert v-if="showFovWarning && fovWarning" type="warning" @dismiss="showFovWarning = false">
+      {{ fovWarning.message }}
+    </BaseAlert>
 
     <BaseAlert v-if="error" type="error" @dismiss="clearError">
       {{ error }}
@@ -1098,5 +1153,21 @@ onUnmounted(() => {
 
 .btn-manage-databases:hover {
   color: var(--primary);
+}
+
+.fov-warning-btn {
+  background: none;
+  border: none;
+  padding: 0.1rem 0.2rem;
+  cursor: pointer;
+  color: #f59e0b;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.fov-warning-btn:hover {
+  color: #d97706;
 }
 </style>
