@@ -8,6 +8,7 @@ import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
+import AstapInstallOverlay from './AstapInstallOverlay.vue'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -16,6 +17,7 @@ const collapsed = ref(false)
 const manualCoordsEnabled = ref(false)
 const equipmentCollapsed = ref(false)
 const manualSensorExpanded = ref(false)
+const showDatabaseManager = ref(false)
 
 // Catalog search
 const {searchQuery, searchResults, searching, showResults, clearSearch, hideResults, revealResults} =
@@ -468,6 +470,22 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- Manage Databases -->
+      <button
+          v-if="hasProSolver"
+          class="btn-manage-databases"
+          @click="showDatabaseManager = true"
+      >
+        Manage Star Databases
+      </button>
+
+      <AstapInstallOverlay
+          v-if="showDatabaseManager"
+          :allow-manage="true"
+          @close="showDatabaseManager = false"
+          @installed="showDatabaseManager = false"
+      />
     </div>
   </div>
 </template>
@@ -1065,5 +1083,20 @@ onUnmounted(() => {
   font-size: 0.75rem;
   color: var(--text-primary);
   font-family: monospace;
+}
+
+.btn-manage-databases {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0.25rem 0;
+  text-align: center;
+}
+
+.btn-manage-databases:hover {
+  color: var(--primary);
 }
 </style>

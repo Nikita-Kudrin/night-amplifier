@@ -4,7 +4,7 @@ import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
 /**
  * Composable for managing ASTAP installation state and progress.
  * Handles status checking, database selection, installation progress tracking,
- * and WebSocket event integration.
+ * and WebSocket event integration. Supports multi-database selection.
  */
 export function useAstapInstall() {
     // Core state
@@ -12,7 +12,7 @@ export function useAstapInstall() {
     const installing = ref(false)
     const status = ref(null)
     const databases = ref([])
-    const selectedDatabase = ref('D80')
+    const selectedDatabases = ref(['D80'])
     const error = ref(null)
 
     // Installation progress
@@ -25,7 +25,7 @@ export function useAstapInstall() {
     const eventStream = inject('eventStream', null)
 
     // Computed properties
-    const canInstall = computed(() => !installing.value && selectedDatabase.value)
+    const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
 
     const progressText = computed(() => {
         return formatProgressText(installProgress.value)
@@ -69,7 +69,7 @@ export function useAstapInstall() {
         stageCompletion.value = createEmptyStageCompletion()
 
         try {
-            await installAstap(selectedDatabase.value)
+            await installAstap(selectedDatabases.value)
             return true
         } catch (e) {
             error.value = e.message
@@ -94,7 +94,7 @@ export function useAstapInstall() {
             error: progress.error,
         }
 
-        updateStageCompletion(stageCompletion.value, stage, progress.stageName)
+        updateStageCompletion(stageCompletion.value, stage, progress.stageName, progress.component)
 
         if (stage === 'failed') {
             error.value = `Installation failed: ${progress.error}`
@@ -104,7 +104,10 @@ export function useAstapInstall() {
 
     function isInstallationComplete() {
         const p = installProgress.value
-        return p.stage === 'completed' && p.component && p.component.includes('Database')
+        if (p.stage !== 'completed') return false
+        // Check if the last selected database has completed
+        const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
+        return p.component && p.component.includes(lastDb)
     }
 
     function resetState() {
@@ -141,7 +144,7 @@ export function useAstapInstall() {
         installing,
         status,
         databases,
-        selectedDatabase,
+        selectedDatabases,
         error,
         installProgress,
         stageCompletion,
@@ -179,9 +182,7 @@ function createEmptyStageCompletion() {
         cliDownloaded: false,
         cliExtracted: false,
         cliCompleted: false,
-        dbDownloaded: false,
-        dbExtracted: false,
-        dbCompleted: false,
+        completedDatabases: new Set(),
     }
 }
 
@@ -247,29 +248,24 @@ function calculateProgressPercent(progress) {
     return null
 }
 
-function updateStageCompletion(completion, stage, stageName) {
+function updateStageCompletion(completion, stage, stageName, component) {
     if (stage === 'downloading') {
         if (stageName === 'Downloading ASTAP CLI') {
             completion.cliDownloaded = false
         } else if (stageName === 'Downloading Database') {
             completion.cliCompleted = true
-            completion.dbDownloaded = false
         }
     } else if (stage === 'extracting') {
         if (stageName === 'Extracting ASTAP CLI') {
             completion.cliDownloaded = true
             completion.cliExtracted = false
-        } else if (stageName === 'Extracting Database') {
-            completion.dbDownloaded = true
-            completion.dbExtracted = false
         }
     } else if (stage === 'completed') {
         if (stageName === 'ASTAP CLI Installed') {
             completion.cliExtracted = true
             completion.cliCompleted = true
-        } else if (stageName === 'Database Installed') {
-            completion.dbExtracted = true
-            completion.dbCompleted = true
+        } else if (stageName === 'Database Installed' && component) {
+            completion.completedDatabases.add(component)
         }
     }
 }

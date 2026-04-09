@@ -6,6 +6,13 @@ import DatabaseSelector from './ui/DatabaseSelector.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 
+const props = defineProps({
+  allowManage: {
+    type: Boolean,
+    default: false,
+  },
+})
+
 const emit = defineEmits(['close', 'installed'])
 
 // State
@@ -13,7 +20,7 @@ const loading = ref(true)
 const installing = ref(false)
 const status = ref(null)
 const databases = ref([])
-const selectedDatabase = ref('D80')
+const selectedDatabases = ref([])
 const error = ref(null)
 
 // Installation progress (local copy for UI state)
@@ -30,34 +37,47 @@ const installProgress = ref({
 
 // Stage completion tracking
 const stageCompletion = ref({
-  cliDownloaded: false,
-  cliExtracted: false,
   cliCompleted: false,
-  dbDownloaded: false,
-  dbExtracted: false,
-  dbCompleted: false,
+  completedDatabases: new Set(),
 })
 
 // Event stream for receiving WebSocket events
 const eventStream = inject('eventStream', null)
 
 // Computed
-const canInstall = computed(() => !installing.value && selectedDatabase.value)
+const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
 
-const stages = computed(() => [
-  {
-    label: 'ASTAP CLI',
-    completed: stageCompletion.value.cliCompleted,
-    active: !stageCompletion.value.cliCompleted,
-    showSpinner: !stageCompletion.value.cliCompleted && installProgress.value.component === 'ASTAP CLI'
-  },
-  {
-    label: 'Star Database',
-    completed: stageCompletion.value.dbCompleted,
-    active: stageCompletion.value.cliCompleted && !stageCompletion.value.dbCompleted,
-    showSpinner: stageCompletion.value.cliCompleted && installProgress.value.component.includes('Database')
+const hasUninstalledDatabases = computed(() =>
+    databases.value.some(db => !db.installed)
+)
+
+const stages = computed(() => {
+  const result = []
+
+  // Only show CLI stage for fresh installs
+  if (!status.value?.binary_installed) {
+    result.push({
+      label: 'ASTAP CLI',
+      completed: stageCompletion.value.cliCompleted,
+      active: !stageCompletion.value.cliCompleted,
+      showSpinner: !stageCompletion.value.cliCompleted && installProgress.value.component === 'ASTAP CLI',
+    })
   }
-])
+
+  // Show a stage for each selected database
+  for (const dbId of selectedDatabases.value) {
+    const dbComponent = `${dbId} Database`
+    const isCompleted = stageCompletion.value.completedDatabases.has(dbComponent)
+    result.push({
+      label: `${dbId} Database`,
+      completed: isCompleted,
+      active: (status.value?.binary_installed || stageCompletion.value.cliCompleted) && !isCompleted,
+      showSpinner: installProgress.value.component === dbComponent,
+    })
+  }
+
+  return result
+})
 
 const progressText = computed(() => {
   const p = installProgress.value
@@ -123,6 +143,13 @@ const progressPercent = computed(() => {
   return null
 })
 
+const installButtonText = computed(() => {
+  if (status.value?.ready) {
+    return 'Download Selected'
+  }
+  return 'Install ASTAP'
+})
+
 // Methods
 async function loadStatus() {
   loading.value = true
@@ -132,10 +159,20 @@ async function loadStatus() {
     status.value = statusData
     databases.value = dbData
 
-    // If already installed, emit and close
-    if (statusData.ready) {
+    // If already installed and not in manage mode, emit and close
+    if (statusData.ready && !props.allowManage) {
       emit('installed')
       emit('close')
+      return
+    }
+
+    // Pre-select uninstalled databases: D80 for fresh, none for manage mode
+    if (!statusData.ready) {
+      // Fresh install: pre-select D80
+      selectedDatabases.value = ['D80']
+    } else {
+      // Manage mode: start with nothing selected, user picks what to add
+      selectedDatabases.value = []
     }
   } catch (e) {
     error.value = e.message
@@ -157,9 +194,13 @@ async function startInstall() {
     stage: '',
     error: null,
   }
+  stageCompletion.value = {
+    cliCompleted: !!status.value?.binary_installed,
+    completedDatabases: new Set(),
+  }
 
   try {
-    await installAstap(selectedDatabase.value)
+    await installAstap(selectedDatabases.value)
     // Installation started - progress will come via WebSocket
   } catch (e) {
     error.value = e.message
@@ -183,39 +224,39 @@ function handleProgressUpdate(progress) {
     error: progress.error,
   }
 
-  // Track stage completion based on stage name
+  // Track stage completion
   if (stage === 'downloading') {
-    if (progress.stageName === 'Downloading ASTAP CLI') {
-      stageCompletion.value.cliDownloaded = false
-    } else if (progress.stageName === 'Downloading Database') {
+    if (progress.stageName === 'Downloading Database') {
       stageCompletion.value.cliCompleted = true
-      stageCompletion.value.dbDownloaded = false
     }
   } else if (stage === 'extracting') {
     if (progress.stageName === 'Extracting ASTAP CLI') {
       stageCompletion.value.cliDownloaded = true
-      stageCompletion.value.cliExtracted = false
-    } else if (progress.stageName === 'Extracting Database') {
-      stageCompletion.value.dbDownloaded = true
-      stageCompletion.value.dbExtracted = false
     }
   } else if (stage === 'completed') {
     if (progress.stageName === 'ASTAP CLI Installed') {
-      stageCompletion.value.cliExtracted = true
       stageCompletion.value.cliCompleted = true
-    } else if (progress.stageName === 'Database Installed') {
-      stageCompletion.value.dbExtracted = true
-      stageCompletion.value.dbCompleted = true
+    } else if (progress.stageName === 'Database Installed' && progress.component) {
+      stageCompletion.value.completedDatabases.add(progress.component)
     }
-    // Check if all components are installed (database is last)
+
+    // Check if all selected databases are installed (last database completes)
     if (progress.component && progress.component.includes('Database')) {
-      setTimeout(async () => {
-        await loadStatus()
-        if (status.value?.ready) {
-          emit('installed')
-          emit('close')
-        }
-      }, 500)
+      const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
+      if (progress.component.includes(lastDb)) {
+        setTimeout(async () => {
+          await loadStatus()
+          if (status.value?.ready) {
+            emit('installed')
+            if (!props.allowManage) {
+              emit('close')
+            } else {
+              // In manage mode, stop installing to show updated status
+              installing.value = false
+            }
+          }
+        }, 500)
+      }
     }
   } else if (stage === 'failed') {
     error.value = `Installation failed: ${progress.error}`
@@ -249,7 +290,7 @@ onUnmounted(() => {
   <div class="overlay-backdrop" @click.self="!installing && emit('close')">
     <div class="overlay-content">
       <div class="overlay-header">
-        <h2>ASTAP Plate Solver Setup</h2>
+        <h2>{{ allowManage ? 'Manage Star Databases' : 'ASTAP Plate Solver Setup' }}</h2>
         <button
             v-if="!installing"
             class="btn-close"
@@ -285,32 +326,41 @@ onUnmounted(() => {
         />
       </div>
 
-      <!-- Ready to install -->
+      <!-- Ready to install / manage databases -->
       <div v-else class="overlay-body">
-        <p class="intro-text">
+        <p v-if="!allowManage" class="intro-text">
           ASTAP plate solver is required for Push-To navigation. It will be downloaded and installed
           automatically.
         </p>
+        <p v-else class="intro-text">
+          Download additional star databases to support different fields of view.
+        </p>
 
-        <AstapStatusSection :status="status"/>
+        <AstapStatusSection v-if="!allowManage" :status="status"/>
 
-        <div class="database-section">
-          <h3>Select Star Database</h3>
+        <div v-if="hasUninstalledDatabases" class="database-section">
+          <h3>Select Star Databases</h3>
           <DatabaseSelector
-              v-model="selectedDatabase"
+              v-model="selectedDatabases"
               :databases="databases"
-              hint="Choose based on your telescope's field of view."
+              hint="Choose based on your telescope's field of view. You can install multiple databases."
           />
+        </div>
+        <div v-else class="all-installed-message">
+          All available databases are installed.
         </div>
 
         <div class="actions">
-          <button class="btn btn-secondary" @click="emit('close')">Cancel</button>
+          <button class="btn btn-secondary" @click="emit('close')">
+            {{ status?.ready ? 'Close' : 'Cancel' }}
+          </button>
           <button
+              v-if="hasUninstalledDatabases"
               class="btn btn-primary"
               :disabled="!canInstall"
               @click="startInstall"
           >
-            Install ASTAP
+            {{ installButtonText }}
           </button>
         </div>
       </div>
@@ -445,6 +495,13 @@ onUnmounted(() => {
   color: var(--text-muted);
   text-transform: uppercase;
   margin: 0 0 0.75rem;
+}
+
+.all-installed-message {
+  color: var(--success, #22c55e);
+  font-size: 0.875rem;
+  text-align: center;
+  padding: 1.5rem 0;
 }
 
 .actions {

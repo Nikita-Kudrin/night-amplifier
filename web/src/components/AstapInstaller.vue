@@ -1,6 +1,7 @@
 <script setup>
 import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
 import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
+import DatabaseSelector from './ui/DatabaseSelector.vue'
 
 const emit = defineEmits(['installed', 'state-change'])
 
@@ -9,8 +10,9 @@ const loading = ref(true)
 const error = ref(null)
 const status = ref(null)
 const databases = ref([])
-const selectedDatabase = ref('D80')
+const selectedDatabases = ref(['D80'])
 const installing = ref(false)
+const showAddDatabases = ref(false)
 
 // Installation progress
 const progress = ref({
@@ -26,19 +28,24 @@ const progress = ref({
 
 // Stage completion tracking
 const stageCompletion = ref({
-  cliDownloaded: false,
-  cliExtracted: false,
   cliCompleted: false,
-  dbDownloaded: false,
-  dbExtracted: false,
-  dbCompleted: false,
+  completedDatabases: new Set(),
 })
 
 // Event stream for receiving WebSocket events
 const eventStream = inject('eventStream', null)
 
 // Computed
-const canInstall = computed(() => !installing.value && selectedDatabase.value)
+const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
+
+const installedDbIds = computed(() => {
+  if (!status.value?.installed_databases) return []
+  return status.value.installed_databases.map(d => d.id)
+})
+
+const hasUninstalledDatabases = computed(() =>
+    databases.value.some(db => !db.installed)
+)
 
 const progressText = computed(() => {
   const p = progress.value
@@ -79,6 +86,13 @@ async function loadStatus() {
     if (statusData.ready) {
       emit('installed', statusData)
     }
+
+    // Pre-select uninstalled databases
+    if (!statusData.ready) {
+      selectedDatabases.value = ['D80']
+    } else {
+      selectedDatabases.value = []
+    }
   } catch (e) {
     error.value = e.message
   } finally {
@@ -101,16 +115,12 @@ async function startInstall() {
     error: null,
   }
   stageCompletion.value = {
-    cliDownloaded: false,
-    cliExtracted: false,
-    cliCompleted: false,
-    dbDownloaded: false,
-    dbExtracted: false,
-    dbCompleted: false,
+    cliCompleted: !!status.value?.binary_installed,
+    completedDatabases: new Set(),
   }
 
   try {
-    await installAstap(selectedDatabase.value)
+    await installAstap(selectedDatabases.value)
   } catch (e) {
     error.value = e.message
     installing.value = false
@@ -135,33 +145,26 @@ function handleProgress(p) {
 
   // Track stage completion
   if (stage === 'downloading') {
-    if (p.stageName === 'Downloading ASTAP CLI') {
-      stageCompletion.value.cliDownloaded = false
-    } else if (p.stageName === 'Downloading Database') {
+    if (p.stageName === 'Downloading Database') {
       stageCompletion.value.cliCompleted = true
-      stageCompletion.value.dbDownloaded = false
-    }
-  } else if (stage === 'extracting') {
-    if (p.stageName === 'Extracting ASTAP CLI') {
-      stageCompletion.value.cliDownloaded = true
-    } else if (p.stageName === 'Extracting Database') {
-      stageCompletion.value.dbDownloaded = true
     }
   } else if (stage === 'completed') {
     if (p.stageName === 'ASTAP CLI Installed') {
-      stageCompletion.value.cliExtracted = true
       stageCompletion.value.cliCompleted = true
-    } else if (p.stageName === 'Database Installed') {
-      stageCompletion.value.dbExtracted = true
-      stageCompletion.value.dbCompleted = true
+    } else if (p.stageName === 'Database Installed' && p.component) {
+      stageCompletion.value.completedDatabases.add(p.component)
     }
 
     if (p.component && p.component.includes('Database')) {
-      setTimeout(async () => {
-        await loadStatus()
-        installing.value = false
-        emit('state-change', false)
-      }, 500)
+      const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
+      if (p.component.includes(lastDb)) {
+        setTimeout(async () => {
+          await loadStatus()
+          installing.value = false
+          showAddDatabases.value = false
+          emit('state-change', false)
+        }, 500)
+      }
     }
   } else if (stage === 'failed') {
     error.value = `Installation failed: ${p.error}`
@@ -186,7 +189,7 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
   <div class="setup-section" :class="{ completed: status?.ready }">
     <div class="section-header">
       <span class="section-number" :class="{ done: status?.ready }">
-        {{ status?.ready ? '✓' : '1' }}
+        {{ status?.ready ? '&#10003;' : '1' }}
       </span>
       <h3>ASTAP Plate Solver</h3>
     </div>
@@ -204,9 +207,37 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
     </div>
 
     <!-- Installed -->
-    <div v-else-if="status?.ready" class="section-status installed">
-      <span class="status-check">✓</span>
-      <span>Installed ({{ status.database_type }} database)</span>
+    <div v-else-if="status?.ready && !installing && !showAddDatabases" class="section-content">
+      <div class="section-status installed">
+        <span class="status-check">&#10003;</span>
+        <span>Installed ({{ installedDbIds.join(', ') }})</span>
+      </div>
+      <button
+          v-if="hasUninstalledDatabases"
+          class="btn btn-link"
+          @click="showAddDatabases = true"
+      >
+        Add more databases
+      </button>
+    </div>
+
+    <!-- Add databases (post-setup) -->
+    <div v-else-if="showAddDatabases && !installing" class="section-content">
+      <DatabaseSelector
+          v-model="selectedDatabases"
+          :databases="databases"
+          hint="Select additional databases to download."
+      />
+      <div class="add-db-actions">
+        <button class="btn btn-sm" @click="showAddDatabases = false">Cancel</button>
+        <button
+            class="btn btn-primary btn-sm"
+            :disabled="!canInstall"
+            @click="startInstall"
+        >
+          Download Selected
+        </button>
+      </div>
     </div>
 
     <!-- Installing -->
@@ -220,31 +251,28 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
       </div>
     </div>
 
-    <!-- Ready to install -->
+    <!-- Ready to install (fresh) -->
     <div v-else class="section-content">
       <div class="status-items">
         <div class="status-item">
           <span class="status-icon" :class="{ installed: status?.binary_installed }">
-            {{ status?.binary_installed ? '✓' : '✗' }}
+            {{ status?.binary_installed ? '&#10003;' : '&#10007;' }}
           </span>
           <span>ASTAP CLI</span>
         </div>
         <div class="status-item">
           <span class="status-icon" :class="{ installed: status?.database_installed }">
-            {{ status?.database_installed ? '✓' : '✗' }}
+            {{ status?.database_installed ? '&#10003;' : '&#10007;' }}
           </span>
           <span>Star Database</span>
         </div>
       </div>
 
-      <div class="database-selector">
-        <label class="selector-label">Database:</label>
-        <select v-model="selectedDatabase" class="selector-select">
-          <option v-for="db in databases" :key="db.id" :value="db.id">
-            {{ db.description }} ({{ db.fov_range }}, {{ db.size }})
-          </option>
-        </select>
-      </div>
+      <DatabaseSelector
+          v-model="selectedDatabases"
+          :databases="databases"
+          hint="Choose based on your telescope's field of view."
+      />
 
       <button
           class="btn btn-primary btn-block"
@@ -258,7 +286,6 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
 </template>
 
 <style scoped>
-/* Reuse styles from PushToSetupOverlay.vue (will move to common or keep for now) */
 .setup-section {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -329,7 +356,6 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 1rem;
   font-size: 0.875rem;
 }
 
@@ -403,28 +429,6 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
   background: var(--success, #22c55e);
 }
 
-.database-selector {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.selector-label {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.selector-select {
-  flex: 1;
-  padding: 0.4rem 0.6rem;
-  font-size: 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text-primary);
-}
-
 .progress-bar {
   width: 100%;
   height: 6px;
@@ -460,11 +464,34 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
 
 .btn-block {
   width: 100%;
+  margin-top: 0.75rem;
 }
 
 .btn-primary {
   background: var(--primary);
   color: white;
   border: none;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 0.8rem;
+  padding: 0.25rem 0;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-top: 0.5rem;
+}
+
+.btn-link:hover {
+  color: var(--primary-hover, #3a8ee8);
+}
+
+.add-db-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 </style>

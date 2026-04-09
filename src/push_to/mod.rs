@@ -107,7 +107,7 @@ pub trait PushToSystemPlugin: Send + Sync {
     async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse>;
     async fn install_astap(
         &self,
-        database_type: &str,
+        database_types: &[String],
         events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
     ) -> Result<(), String>;
     async fn get_catalog_status(&self) -> CatalogStatusResponse;
