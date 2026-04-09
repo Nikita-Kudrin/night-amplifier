@@ -26,6 +26,7 @@ pub mod stacking;
 pub mod statistics;
 pub mod telemetry;
 
+pub mod app;
 pub mod server;
 
 pub use background::{
