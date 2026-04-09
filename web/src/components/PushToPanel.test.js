@@ -22,7 +22,7 @@ vi.mock('../composables/api.js', () => ({
     cancelPushToSolve: vi.fn(),
 }))
 
-import {getAstapStatus, getAstapDatabases} from '../composables/api.js'
+import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
@@ -648,5 +648,92 @@ describe('PushToPanel – FOV warning', () => {
             expect(text).not.toContain('Switch')
             expect(text).not.toContain('download')
         })
+    })
+})
+
+describe('PushToPanel – database selection', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+    })
+
+    it('does not show database selector when only one database is installed', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('D80'), databases(['D80']))
+        await flushPromises()
+
+        expect(wrapper.find('.database-select-row').exists()).toBe(false)
+    })
+
+    it('does not show database selector when no databases are installed', async () => {
+        const status = {binary_installed: true, database_installed: false, installed_databases: [], ready: false}
+        const wrapper = mountPanel(settingsForFov(100), status, databases())
+        await flushPromises()
+
+        expect(wrapper.find('.database-select-row').exists()).toBe(false)
+    })
+
+    it('shows database selector when multiple databases are installed', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('D80', 'G05'), databases(['D80', 'G05']))
+        await flushPromises()
+
+        expect(wrapper.find('.database-select-row').exists()).toBe(true)
+    })
+
+    it('reflects the currently active database in the selector', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('G05', 'D80'), databases(['D80', 'G05']))
+        await flushPromises()
+
+        const select = wrapper.find('.database-select-row select')
+        expect(select.element.value).toBe('G05')
+    })
+
+    it('lists all installed databases as options', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('D80', 'G05', 'W08'), databases(['D80', 'G05', 'W08']))
+        await flushPromises()
+
+        const options = wrapper.findAll('.database-select-row option')
+        const values = options.map(o => o.element.value)
+        expect(values).toContain('D80')
+        expect(values).toContain('G05')
+        expect(values).toContain('W08')
+    })
+
+    it('calls updatePushToConfig with the correct database path when selection changes', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('D80', 'G05'), databases(['D80', 'G05']))
+        await flushPromises()
+
+        const select = wrapper.find('.database-select-row select')
+        await select.setValue('G05')
+        await flushPromises()
+
+        expect(updatePushToConfig).toHaveBeenCalledWith({database_path: DB_CONFIGS.G05.database_path})
+    })
+
+    it('updates the FOV warning after switching to a database that covers the current FOV', async () => {
+        // D80 active, FOV ≈ 6.02° is too wide for D80 (max 6°) → warning shown
+        // After switching to G05 (3°–20°) which covers 6.02° → warning disappears
+        const wrapper = mountPanel(
+            settingsForFov(227),
+            astapStatus('D80', 'G05'),
+            databases(['D80', 'G05']),
+        )
+        await flushPromises()
+        expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
+
+        const select = wrapper.find('.database-select-row select')
+        await select.setValue('G05')
+        await flushPromises()
+
+        expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
+    })
+
+    it('does not call updatePushToConfig when selecting the already-active database', async () => {
+        const wrapper = mountPanel(settingsForFov(100), astapStatus('D80', 'G05'), databases(['D80', 'G05']))
+        await flushPromises()
+
+        const select = wrapper.find('.database-select-row select')
+        await select.setValue('D80')
+        await flushPromises()
+
+        expect(updatePushToConfig).not.toHaveBeenCalled()
     })
 })
