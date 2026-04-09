@@ -9,7 +9,7 @@ use super::super::dto::{
     CatalogEntryResponse, CoordinateResponse, PushToDirectionResponse, PushToStatusResponse,
 };
 use super::super::events::ServerEvent;
-use super::super::state::AppState;
+use super::super::state::{AppState, TelescopeSettings};
 use crate::push_to::{PushToError, PUSH_TO_PLUGIN};
 
 /// Push-To navigation service
@@ -121,6 +121,18 @@ impl PushToService {
             plugin.set_fov(fov_degrees).await
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
+        }
+    }
+
+    /// Update telescope settings on the solver for precise FOV calculation
+    pub async fn set_telescope_settings(
+        _state: &AppState,
+        settings: TelescopeSettings,
+    ) -> Result<(), String> {
+        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+            plugin.set_telescope_settings(settings).await
+        } else {
+            Ok(()) // No plugin available; not an error
         }
     }
 
