@@ -176,87 +176,23 @@ describe('PushToPanel – FOV warning', () => {
             expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
         })
 
-        // ── D80 in-range ─────────────────────────────────────────────────────
+        // ── Per-database in-range tests ─────────────────────────────────────
 
-        it('D80: FOV exactly at minimum boundary (0.15°)', async () => {
-            // h=6 → fovY ≈ 0.159° ≥ 0.15° (D80 min)
-            expect(computedFovY(6)).toBeGreaterThanOrEqual(0.15)
-            const wrapper = mountPanel(settingsForFov(6), astapStatus('D80'))
+        it.each([
+            {db: 'D80', h: 6, minFov: 0.15, op: 'gte', label: 'minimum'},
+            {db: 'D80', h: heightForFov(2.5), label: 'mid-range (≈2.5°)'},
+            {db: 'D80', h: 226, maxFov: 6.0, op: 'lte', label: 'maximum'},
+            {db: 'G05', h: 114, minFov: 3.0, op: 'gte', label: 'minimum'},
+            {db: 'G05', h: heightForFov(10), label: 'mid-range (≈10°)'},
+            {db: 'G05', h: 753, maxFov: 20.0, op: 'lte', label: 'maximum'},
+            {db: 'W08', h: 755, minFov: 20.0, op: 'gte', label: 'minimum'},
+            {db: 'W08', h: heightForFov(50), label: 'mid-range (≈50°)'},
+            {db: 'W08', h: 3015, maxFov: 80.0, op: 'lte', label: 'maximum'},
+        ])('$db: no warning at $label boundary', async ({db, h, minFov, maxFov, op}) => {
+            if (op === 'gte') expect(computedFovY(h)).toBeGreaterThanOrEqual(minFov)
+            if (op === 'lte') expect(computedFovY(h)).toBeLessThanOrEqual(maxFov)
+            const wrapper = mountPanel(settingsForFov(h), astapStatus(db))
             await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('D80: FOV well within range (≈ 2.5°)', async () => {
-            const h = heightForFov(2.5)
-            const wrapper = mountPanel(settingsForFov(h), astapStatus('D80'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('D80: FOV exactly at maximum boundary (6°)', async () => {
-            // h=226 → fovY ≈ 5.995° ≤ 6.0° (D80 max)
-            expect(computedFovY(226)).toBeLessThanOrEqual(6.0)
-            const wrapper = mountPanel(settingsForFov(226), astapStatus('D80'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        // ── G05 in-range ─────────────────────────────────────────────────────
-
-        it('G05: FOV exactly at minimum boundary (3°)', async () => {
-            // h=114 → fovY ≈ 3.024° ≥ 3.0° (G05 min)
-            expect(computedFovY(114)).toBeGreaterThanOrEqual(3.0)
-            const wrapper = mountPanel(settingsForFov(114), astapStatus('G05'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('G05: FOV well within range (≈ 10°)', async () => {
-            const h = heightForFov(10)
-            const wrapper = mountPanel(settingsForFov(h), astapStatus('G05'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('G05: FOV at maximum boundary — G05 max = W08 min (20°)', async () => {
-            // h=753 → fovY ≈ 19.975° ≤ 20.0° (G05 max)
-            expect(computedFovY(753)).toBeLessThanOrEqual(20.0)
-            const wrapper = mountPanel(settingsForFov(753), astapStatus('G05'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        // ── W08 in-range ─────────────────────────────────────────────────────
-
-        it('W08: FOV exactly at minimum boundary (20°)', async () => {
-            // h=755 → fovY ≈ 20.028° ≥ 20.0° (W08 min)
-            expect(computedFovY(755)).toBeGreaterThanOrEqual(20.0)
-            const wrapper = mountPanel(settingsForFov(755), astapStatus('W08'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('W08: FOV well within range (≈ 50°)', async () => {
-            const h = heightForFov(50)
-            const wrapper = mountPanel(settingsForFov(h), astapStatus('W08'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
-        })
-
-        it('W08: FOV exactly at maximum boundary (80°)', async () => {
-            // h=3015 → fovY ≈ 79.98° ≤ 80.0° (W08 max)
-            expect(computedFovY(3015)).toBeLessThanOrEqual(80.0)
-            const wrapper = mountPanel(settingsForFov(3015), astapStatus('W08'))
-            await flushPromises()
-
             expect(wrapper.find('.fov-warning-btn').exists()).toBe(false)
         })
     })
@@ -264,136 +200,35 @@ describe('PushToPanel – FOV warning', () => {
     // ── Warning conditions ───────────────────────────────────────────────────
 
     describe('warning shown when', () => {
-        // ── D80 out-of-range ─────────────────────────────────────────────────
-
-        it('D80: FOV too narrow (0.10° < 0.15° min)', async () => {
-            // h=4 → fovY ≈ 0.106° < D80 min (0.15°)
-            expect(computedFovY(4)).toBeLessThan(0.15)
-            const wrapper = mountPanel(settingsForFov(4), astapStatus('D80'))
+        it.each([
+            {db: 'D80', h: 4, threshold: 0.15, op: 'lt', direction: 'too narrow'},
+            {db: 'D80', h: 227, threshold: 6.0, op: 'gt', direction: 'too wide'},
+            {db: 'G05', h: 113, threshold: 3.0, op: 'lt', direction: 'too narrow'},
+            {db: 'G05', h: 754, threshold: 20.0, op: 'gt', direction: 'too wide'},
+            {db: 'W08', h: 753, threshold: 20.0, op: 'lt', direction: 'too narrow'},
+            {db: 'W08', h: 3017, threshold: 80.0, op: 'gt', direction: 'too wide'},
+        ])('$db: shows warning icon when FOV is $direction', async ({db, h, threshold, op}) => {
+            if (op === 'lt') expect(computedFovY(h)).toBeLessThan(threshold)
+            if (op === 'gt') expect(computedFovY(h)).toBeGreaterThan(threshold)
+            const wrapper = mountPanel(settingsForFov(h), astapStatus(db))
             await flushPromises()
-
             expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
         })
 
-        it('D80: FOV too narrow — message says "too narrow"', async () => {
-            const wrapper = mountPanel(settingsForFov(4), astapStatus('D80'))
+        it.each([
+            {db: 'D80', h: 4, direction: 'too narrow'},
+            {db: 'D80', h: 227, direction: 'too wide'},
+            {db: 'G05', h: 113, direction: 'too narrow'},
+            {db: 'G05', h: 754, direction: 'too wide'},
+            {db: 'W08', h: 753, direction: 'too narrow'},
+            {db: 'W08', h: 3017, direction: 'too wide'},
+        ])('$db: message says "$direction" and mentions database name', async ({db, h, direction}) => {
+            const wrapper = mountPanel(settingsForFov(h), astapStatus(db))
             await flushPromises()
             await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too narrow')
-        })
-
-        it('D80: FOV too wide (> 6° max)', async () => {
-            // h=227 → fovY ≈ 6.022° > D80 max (6°)
-            expect(computedFovY(227)).toBeGreaterThan(6.0)
-            const wrapper = mountPanel(settingsForFov(227), astapStatus('D80'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
-        })
-
-        it('D80: FOV too wide — message says "too wide"', async () => {
-            const wrapper = mountPanel(settingsForFov(227), astapStatus('D80'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too wide')
-        })
-
-        it('D80: warning message mentions the database name', async () => {
-            const wrapper = mountPanel(settingsForFov(4), astapStatus('D80'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('D80')
-        })
-
-        // ── G05 out-of-range ─────────────────────────────────────────────────
-
-        it('G05: FOV too narrow (< 3° min)', async () => {
-            // h=113 → fovY ≈ 2.997° < G05 min (3°)
-            expect(computedFovY(113)).toBeLessThan(3.0)
-            const wrapper = mountPanel(settingsForFov(113), astapStatus('G05'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
-        })
-
-        it('G05: FOV too narrow — message says "too narrow"', async () => {
-            const wrapper = mountPanel(settingsForFov(113), astapStatus('G05'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too narrow')
-        })
-
-        it('G05: FOV too wide (> 20° max)', async () => {
-            // h=754 → fovY ≈ 20.002° > G05 max (20°)
-            expect(computedFovY(754)).toBeGreaterThan(20.0)
-            const wrapper = mountPanel(settingsForFov(754), astapStatus('G05'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
-        })
-
-        it('G05: FOV too wide — message says "too wide"', async () => {
-            const wrapper = mountPanel(settingsForFov(754), astapStatus('G05'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too wide')
-        })
-
-        it('G05: warning message mentions the database name', async () => {
-            const wrapper = mountPanel(settingsForFov(113), astapStatus('G05'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('G05')
-        })
-
-        // ── W08 out-of-range ─────────────────────────────────────────────────
-
-        it('W08: FOV too narrow (< 20° min)', async () => {
-            // h=753 → fovY ≈ 19.975° < W08 min (20°)
-            expect(computedFovY(753)).toBeLessThan(20.0)
-            const wrapper = mountPanel(settingsForFov(753), astapStatus('W08'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
-        })
-
-        it('W08: FOV too narrow — message says "too narrow"', async () => {
-            const wrapper = mountPanel(settingsForFov(753), astapStatus('W08'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too narrow')
-        })
-
-        it('W08: FOV too wide (> 80° max)', async () => {
-            // h=3017 → fovY ≈ 80.013° > W08 max (80°)
-            expect(computedFovY(3017)).toBeGreaterThan(80.0)
-            const wrapper = mountPanel(settingsForFov(3017), astapStatus('W08'))
-            await flushPromises()
-
-            expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
-        })
-
-        it('W08: FOV too wide — message says "too wide"', async () => {
-            const wrapper = mountPanel(settingsForFov(3017), astapStatus('W08'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('too wide')
-        })
-
-        it('W08: warning message mentions the database name', async () => {
-            const wrapper = mountPanel(settingsForFov(753), astapStatus('W08'))
-            await flushPromises()
-            await wrapper.find('.fov-warning-btn').trigger('click')
-
-            expect(wrapper.find('.alert-warning').text()).toContain('W08')
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain(direction)
+            expect(text).toContain(db)
         })
     })
 

@@ -1,188 +1,46 @@
 <script setup>
-import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
-import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
+import {ref, computed, watch} from 'vue'
+import {useAstapInstall} from '../composables/useAstapInstall.js'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
 
 const emit = defineEmits(['installed', 'state-change'])
 
-// State
-const loading = ref(true)
-const error = ref(null)
-const status = ref(null)
-const databases = ref([])
-const selectedDatabases = ref(['D80'])
-const installing = ref(false)
+const {
+  loading, installing, error, status, databases, selectedDatabases,
+  installProgress, canInstall, hasUninstalledDatabases, progressText,
+  loadStatus, startInstall, isInstallationComplete,
+} = useAstapInstall()
+
 const showAddDatabases = ref(false)
 
-// Installation progress
-const progress = ref({
-  component: '',
-  percent: null,
-  bytesDownloaded: 0,
-  totalBytes: null,
-  stage: '',
-  stageName: '',
-  overallPercent: null,
-  error: null,
+// Emit 'installed' when status loads as ready
+watch(loading, (isLoading, wasLoading) => {
+  if (wasLoading && !isLoading && status.value?.ready) {
+    emit('installed', status.value)
+  }
 })
 
-// Stage completion tracking
-const stageCompletion = ref({
-  cliCompleted: false,
-  completedDatabases: new Set(),
-})
+// Emit state-change when installing changes
+watch(installing, (val) => emit('state-change', val))
 
-// Event stream for receiving WebSocket events
-const eventStream = inject('eventStream', null)
+// Handle installation completion
+watch(
+  () => isInstallationComplete(),
+  (complete) => {
+    if (!complete) return
+    setTimeout(async () => {
+      await loadStatus()
+      installing.value = false
+      showAddDatabases.value = false
+    }, 500)
+  }
+)
 
-// Computed
-const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
-
+// Installer-specific computed
 const installedDbIds = computed(() => {
   if (!status.value?.installed_databases) return []
   return status.value.installed_databases.map(d => d.id)
 })
-
-const hasUninstalledDatabases = computed(() =>
-    databases.value.some(db => !db.installed)
-)
-
-const progressText = computed(() => {
-  const p = progress.value
-  if (p.stage === 'starting') {
-    if (p.component === 'ASTAP CLI') return 'Installing ASTAP...'
-    if (p.component && p.component.includes('Database')) {
-      return `Downloading ${p.component.replace('Database', 'star database')}...`
-    }
-    return `Starting ${p.component}...`
-  }
-  if (p.stage === 'downloading') {
-    if (p.percent !== null && p.totalBytes !== null) {
-      const downloadedMb = (p.bytesDownloaded / (1024 * 1024)).toFixed(1)
-      const totalMb = (p.totalBytes / (1024 * 1024)).toFixed(1)
-      return `Downloading ${p.component}: ${downloadedMb} / ${totalMb} MB`
-    }
-    const mb = (p.bytesDownloaded / (1024 * 1024)).toFixed(1)
-    return `Downloading ${p.component}: ${mb} MB`
-  }
-  if (p.stage === 'extracting') return `Extracting ${p.component}...`
-  if (p.stage === 'completed') return `${p.component} installed`
-  if (p.stage === 'failed') return `Failed: ${p.error}`
-  return ''
-})
-
-// Methods
-async function loadStatus() {
-  loading.value = true
-  error.value = null
-  try {
-    const [statusData, dbData] = await Promise.all([
-      getAstapStatus(),
-      getAstapDatabases(),
-    ])
-    status.value = statusData
-    databases.value = dbData
-
-    if (statusData.ready) {
-      emit('installed', statusData)
-    }
-
-    // Pre-select uninstalled databases
-    if (!statusData.ready) {
-      selectedDatabases.value = ['D80']
-    } else {
-      selectedDatabases.value = []
-    }
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-async function startInstall() {
-  if (!canInstall.value) return
-
-  installing.value = true
-  emit('state-change', true)
-  error.value = null
-  progress.value = {
-    component: '',
-    percent: null,
-    bytesDownloaded: 0,
-    totalBytes: null,
-    stage: 'starting',
-    error: null,
-  }
-  stageCompletion.value = {
-    cliCompleted: !!status.value?.binary_installed,
-    completedDatabases: new Set(),
-  }
-
-  try {
-    await installAstap(selectedDatabases.value)
-  } catch (e) {
-    error.value = e.message
-    installing.value = false
-    emit('state-change', false)
-  }
-}
-
-function handleProgress(p) {
-  if (!p) return
-
-  const stage = p.stage
-  progress.value = {
-    component: p.component || '',
-    percent: p.percent,
-    bytesDownloaded: p.bytesDownloaded || 0,
-    totalBytes: p.totalBytes,
-    stage: stage,
-    stageName: p.stageName || '',
-    overallPercent: p.overallPercent,
-    error: p.error,
-  }
-
-  // Track stage completion
-  if (stage === 'downloading') {
-    if (p.stageName === 'Downloading Database') {
-      stageCompletion.value.cliCompleted = true
-    }
-  } else if (stage === 'completed') {
-    if (p.stageName === 'ASTAP CLI Installed') {
-      stageCompletion.value.cliCompleted = true
-    } else if (p.stageName === 'Database Installed' && p.component) {
-      stageCompletion.value.completedDatabases.add(p.component)
-    }
-
-    if (p.component && p.component.includes('Database')) {
-      const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
-      if (p.component.includes(lastDb)) {
-        setTimeout(async () => {
-          await loadStatus()
-          installing.value = false
-          showAddDatabases.value = false
-          emit('state-change', false)
-        }, 500)
-      }
-    }
-  } else if (stage === 'failed') {
-    error.value = `Installation failed: ${p.error}`
-    installing.value = false
-    emit('state-change', false)
-  }
-}
-
-// Watch for progress updates
-watch(
-    () => eventStream?.astapInstallProgress?.value,
-    (p) => p && handleProgress(p),
-    {deep: true}
-)
-
-// Lifecycle
-onMounted(loadStatus)
-onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
 </script>
 
 <template>
@@ -246,8 +104,8 @@ onUnmounted(() => eventStream?.clearAstapInstallProgress?.())
         <div class="spinner-small"></div>
         <span class="progress-label">{{ progressText }}</span>
       </div>
-      <div v-if="progress.overallPercent !== null" class="progress-bar">
-        <div class="progress-fill" :style="{ width: progress.overallPercent + '%' }"></div>
+      <div v-if="installProgress.overallPercent !== null" class="progress-bar">
+        <div class="progress-fill" :style="{ width: installProgress.overallPercent + '%' }"></div>
       </div>
     </div>
 
