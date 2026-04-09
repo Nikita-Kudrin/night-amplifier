@@ -118,9 +118,13 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
             Ok(f) => f,
             Err(e) => {
                 if let crate::camera::CameraError::Cancelled = e {
-                    debug!("Capture cancelled (likely due to settings update), starting next frame");
+                    debug!(
+                        "Capture cancelled (likely due to settings update), starting next frame"
+                    );
                     // Reset cancel flag so next capture isn't immediately cancelled
-                    camera.cancel_token().store(false, std::sync::atomic::Ordering::SeqCst);
+                    camera
+                        .cancel_token()
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                     continue;
                 }
 
@@ -141,179 +145,175 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
             break;
         }
 
-
         // Process frame
-                // Get frame number for this capture
-                let frame_number = {
-                    let session = state.session.read().await;
-                    session.frame_count + 1
-                };
+        // Get frame number for this capture
+        let frame_number = {
+            let session = state.session.read().await;
+            session.frame_count + 1
+        };
 
-                // Save raw frame to disk if enabled (only in stacking mode, not live view or wanderer)
-                let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
-                if settings.save_raw_frames && is_stacking_mode && state.disk_writer.is_enabled() {
-                    queue_warning_active = storage::save_frame_to_disk(
-                        &state,
+        // Save raw frame to disk if enabled (only in stacking mode, not live view or wanderer)
+        let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
+        if settings.save_raw_frames && is_stacking_mode && state.disk_writer.is_enabled() {
+            queue_warning_active = storage::save_frame_to_disk(
+                &state,
+                &frame,
+                frame_number,
+                &settings,
+                &camera_info,
+                queue_warning_active,
+            )
+            .await;
+        }
+
+        // Process frame through stacking pipeline if enabled
+        let mut registration_succeeded = true;
+        let mut display_frame = if stacking_enabled && !stacking_failed {
+            // Check if frame dimensions match existing context (e.g. after binning change)
+            let dimension_mismatch = if let Some(ctx) = stacking_ctx.as_ref() {
+                frame.width() != ctx.width()
+                    || frame.height() != ctx.height()
+                    || frame.channels() != ctx.channels()
+            } else if let Some(ctx) = comet_ctx.as_ref() {
+                frame.width() != ctx.width()
+                    || frame.height() != ctx.height()
+                    || frame.channels() != ctx.channels()
+            } else if let Some(ctx) = planetary_ctx.as_ref() {
+                frame.width() != ctx.width()
+                    || frame.height() != ctx.height()
+                    || frame.channels() != ctx.channels()
+            } else {
+                false
+            };
+
+            if dimension_mismatch {
+                info!("Frame dimensions changed (likely due to binning change), resetting stack");
+                stacking_ctx = None;
+                comet_ctx = None;
+                planetary_ctx = None;
+                state.reset_counters().await;
+            }
+
+            debug!(
+                stacking = settings.stacking,
+                stacking_type = ?settings.stacking_type,
+                "Processing frame through stacking pipeline"
+            );
+            let (res_frame, matched) = match settings.stacking_type {
+                StackingType::Comet => {
+                    crate::server::capture::pipeline::process_frame_with_comet_stacking(
                         &frame,
-                        frame_number,
                         &settings,
-                        &camera_info,
-                        queue_warning_active,
+                        &mut comet_ctx,
+                        &mut stacking_failed,
                     )
+                    .await
+                }
+                StackingType::Planetary => {
+                    crate::server::capture::pipeline::process_frame_with_planetary_stacking(
+                        &frame,
+                        &settings,
+                        &mut planetary_ctx,
+                        &mut stacking_failed,
+                    )
+                    .await
+                }
+                _ => {
+                    // DeepSky and future types that use star registration
+                    crate::server::capture::pipeline::process_frame_with_stacking(
+                        &frame,
+                        &settings,
+                        &mut stacking_ctx,
+                        &mut stacking_failed,
+                    )
+                    .await
+                }
+            };
+            registration_succeeded = matched;
+            res_frame
+        } else {
+            debug!(
+                stacking = settings.stacking,
+                stacking_type = ?settings.stacking_type,
+                stacking_failed = stacking_failed,
+                "Stacking disabled or failed, using raw frame"
+            );
+            registration_succeeded = false;
+            frame.clone()
+        };
+
+        // If stacking is enabled but registration failed, fallback to raw frame for live view
+        // so the user doesn't see a frozen image.
+        if stacking_enabled && !registration_succeeded {
+            debug!("Registration failed, falling back to raw frame for live view");
+            display_frame = frame.clone();
+        }
+
+        // Wanderer mode: reset stack if movement detected (registration failed)
+        if settings.wanderer_mode && stacking_enabled && !registration_succeeded {
+            info!("Wanderer mode: movement detected (registration failed), resetting stack");
+            stacking_ctx = None;
+            comet_ctx = None;
+            planetary_ctx = None;
+            state.reset_counters().await;
+            // In wanderer mode, show raw frame when moving
+            display_frame = frame.clone();
+        }
+
+        // Track whether this frame was successfully stacked
+        let was_stacked = if stacking_enabled {
+            match settings.stacking_type {
+                StackingType::Comet => comet_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.frame_count() > 0)
+                    .unwrap_or(false),
+                StackingType::Planetary => planetary_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.frame_count() > 0)
+                    .unwrap_or(false),
+                _ => stacking_ctx
+                    .as_ref()
+                    .map(|ctx| ctx.frame_count() > 0)
+                    .unwrap_or(false),
+            }
+        } else {
+            true
+        };
+
+        // Trigger plate solving asynchronously so it doesn't block the frame stream
+        tokio::spawn({
+            let state = Arc::clone(&state);
+            let frame = display_frame.clone();
+            async move {
+                solving::try_plate_solve(&state, &frame).await;
+            }
+        });
+
+        // Process frame through unified render pipeline
+        let mut preview_frame = display_frame;
+        if let Err(e) =
+            crate::server::capture::pipeline::process_preview_frame(&mut preview_frame, &settings)
+        {
+            state.send_error(format!("Preview processing failed: {}", e));
+            continue;
+        }
+
+        // Encode frame as RGB8+LZ4 for streaming
+        let encode_result = {
+            let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
+            encode_rgb8_lz4(&preview_frame)
+        };
+        match encode_result {
+            Ok(encoded_data) => {
+                state.set_latest_frame(encoded_data).await;
+                state.frame_captured(was_stacked).await;
+            }
+            Err(e) => {
+                state
+                    .frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e))
                     .await;
-                }
-
-                // Process frame through stacking pipeline if enabled
-                let mut registration_succeeded = true;
-                let mut display_frame = if stacking_enabled && !stacking_failed {
-                    // Check if frame dimensions match existing context (e.g. after binning change)
-                    let dimension_mismatch = if let Some(ctx) = stacking_ctx.as_ref() {
-                        frame.width() != ctx.width()
-                            || frame.height() != ctx.height()
-                            || frame.channels() != ctx.channels()
-                    } else if let Some(ctx) = comet_ctx.as_ref() {
-                        frame.width() != ctx.width()
-                            || frame.height() != ctx.height()
-                            || frame.channels() != ctx.channels()
-                    } else if let Some(ctx) = planetary_ctx.as_ref() {
-                        frame.width() != ctx.width()
-                            || frame.height() != ctx.height()
-                            || frame.channels() != ctx.channels()
-                    } else {
-                        false
-                    };
-
-                    if dimension_mismatch {
-                        info!("Frame dimensions changed (likely due to binning change), resetting stack");
-                        stacking_ctx = None;
-                        comet_ctx = None;
-                        planetary_ctx = None;
-                        state.reset_counters().await;
-                    }
-
-                    debug!(
-                        stacking = settings.stacking,
-                        stacking_type = ?settings.stacking_type,
-                        "Processing frame through stacking pipeline"
-                    );
-                    let (res_frame, matched) = match settings.stacking_type {
-                        StackingType::Comet => {
-                            crate::server::capture::pipeline::process_frame_with_comet_stacking(
-                                &frame,
-                                &settings,
-                                &mut comet_ctx,
-                                &mut stacking_failed,
-                            )
-                            .await
-                        }
-                        StackingType::Planetary => {
-                            crate::server::capture::pipeline::process_frame_with_planetary_stacking(
-                                &frame,
-                                &settings,
-                                &mut planetary_ctx,
-                                &mut stacking_failed,
-                            )
-                            .await
-                        }
-                        _ => {
-                            // DeepSky and future types that use star registration
-                            crate::server::capture::pipeline::process_frame_with_stacking(
-                                &frame,
-                                &settings,
-                                &mut stacking_ctx,
-                                &mut stacking_failed,
-                            )
-                            .await
-                        }
-                    };
-                    registration_succeeded = matched;
-                    res_frame
-                } else {
-                    debug!(
-                        stacking = settings.stacking,
-                        stacking_type = ?settings.stacking_type,
-                        stacking_failed = stacking_failed,
-                        "Stacking disabled or failed, using raw frame"
-                    );
-                    registration_succeeded = false;
-                    frame.clone()
-                };
-
-                // If stacking is enabled but registration failed, fallback to raw frame for live view
-                // so the user doesn't see a frozen image.
-                if stacking_enabled && !registration_succeeded {
-                    debug!("Registration failed, falling back to raw frame for live view");
-                    display_frame = frame.clone();
-                }
-
-                // Wanderer mode: reset stack if movement detected (registration failed)
-                if settings.wanderer_mode && stacking_enabled && !registration_succeeded {
-                    info!(
-                        "Wanderer mode: movement detected (registration failed), resetting stack"
-                    );
-                    stacking_ctx = None;
-                    comet_ctx = None;
-                    planetary_ctx = None;
-                    state.reset_counters().await;
-                    // In wanderer mode, show raw frame when moving
-                    display_frame = frame.clone();
-                }
-
-                // Track whether this frame was successfully stacked
-                let was_stacked = if stacking_enabled {
-                    match settings.stacking_type {
-                        StackingType::Comet => comet_ctx
-                            .as_ref()
-                            .map(|ctx| ctx.frame_count() > 0)
-                            .unwrap_or(false),
-                        StackingType::Planetary => planetary_ctx
-                            .as_ref()
-                            .map(|ctx| ctx.frame_count() > 0)
-                            .unwrap_or(false),
-                        _ => stacking_ctx
-                            .as_ref()
-                            .map(|ctx| ctx.frame_count() > 0)
-                            .unwrap_or(false),
-                    }
-                } else {
-                    true
-                };
-
-                // Trigger plate solving asynchronously so it doesn't block the frame stream
-                tokio::spawn({
-                    let state = Arc::clone(&state);
-                    let frame = display_frame.clone();
-                    async move {
-                        solving::try_plate_solve(&state, &frame).await;
-                    }
-                });
-
-                // Process frame through unified render pipeline
-                let mut preview_frame = display_frame;
-                if let Err(e) = crate::server::capture::pipeline::process_preview_frame(
-                    &mut preview_frame,
-                    &settings,
-                ) {
-                    state.send_error(format!("Preview processing failed: {}", e));
-                    continue;
-                }
-
-                // Encode frame as RGB8+LZ4 for streaming
-                let encode_result = {
-                    let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
-                    encode_rgb8_lz4(&preview_frame)
-                };
-                match encode_result {
-                    Ok(encoded_data) => {
-                        state.set_latest_frame(encoded_data).await;
-                        state.frame_captured(was_stacked).await;
-                    }
-                    Err(e) => {
-                        state
-                            .frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e))
-                            .await;
-                    }
-                }
+            }
+        }
 
         // Check for cancellation after heavy processing
         if state.is_cancelled() {

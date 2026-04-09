@@ -209,11 +209,7 @@ impl CameraProvider for SimulatedProvider {
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
 
-                    let mut info = create_camera_info(
-                        dir_name,
-                        files.len(),
-                        &probe,
-                    );
+                    let mut info = create_camera_info(dir_name, files.len(), &probe);
                     info.id = index as i32;
                     cameras.push(info);
                 }

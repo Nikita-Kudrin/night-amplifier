@@ -75,14 +75,12 @@ impl SimulatedCamera {
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
 
-        let info = create_camera_info(
-            dir_name,
-            files.len(),
-            &probe,
-        );
+        let info = create_camera_info(dir_name, files.len(), &probe);
 
         let debayerer = if probe.sensor_type == SensorType::Color {
-            probe.bayer_pattern.map(|p| Debayerer::new(DebayerConfig::new(p)))
+            probe
+                .bayer_pattern
+                .map(|p| Debayerer::new(DebayerConfig::new(p)))
         } else {
             None
         };

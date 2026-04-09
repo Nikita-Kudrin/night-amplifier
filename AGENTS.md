@@ -203,7 +203,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   **Image Storage Formats:**
 
   | Output                  | Format | Bit Depth          |
-  |-------------------------|--------|--------------------|
+    |-------------------------|--------|--------------------|
   | Raw frames              | FITS   | 16-bit unsigned    |
   | Stacked image           | FITS   | 32-bit float       |
   | Stacked image (preview) | PNG    | 8-bit              |

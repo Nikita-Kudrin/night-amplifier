@@ -14,7 +14,8 @@ pub fn compute_alignment(
     roi: &AlignmentRoi,
     search_radius: usize,
     subpixel_factor: usize,
-) -> (f32, f32, f32) { // Returns (dx, dy, ncc)
+) -> (f32, f32, f32) {
+    // Returns (dx, dy, ncc)
     let ref_lum = frame_to_luminance(reference);
     let frame_lum = frame_to_luminance(frame);
 
@@ -65,11 +66,19 @@ pub fn compute_alignment(
             best_dx, best_dy,
         );
         // Negate to match centroid convention (dx = rx - fx)
-        return (-(best_dx as f32 + sub_dx), -(best_dy as f32 + sub_dy), best_corr);
+        return (
+            -(best_dx as f32 + sub_dx),
+            -(best_dy as f32 + sub_dy),
+            best_corr,
+        );
     }
 
     // Negate to match centroid convention (dx = rx - fx)
-    (-(best_dx as i32 as f32), -(best_dy as i32 as f32), best_corr)
+    (
+        -(best_dx as i32 as f32),
+        -(best_dy as i32 as f32),
+        best_corr,
+    )
 }
 
 /// Computes the weighted centroid of luminance data.

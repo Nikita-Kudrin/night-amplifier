@@ -137,10 +137,7 @@ pub async fn save_stacked_result(
             .with_stacked_frames(stacked_count)
             .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
 
-        if let Err(e) = state
-            .disk_writer
-            .queue_stacked_frame(fits_frame, metadata)
-        {
+        if let Err(e) = state.disk_writer.queue_stacked_frame(fits_frame, metadata) {
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 

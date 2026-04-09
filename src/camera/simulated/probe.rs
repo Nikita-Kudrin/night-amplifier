@@ -20,9 +20,7 @@ pub struct ProbeResult {
 }
 
 /// Probe an image file to get its dimensions and sensor type
-pub fn probe_image_dimensions(
-    path: &Path,
-) -> CameraResult<ProbeResult> {
+pub fn probe_image_dimensions(path: &Path) -> CameraResult<ProbeResult> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

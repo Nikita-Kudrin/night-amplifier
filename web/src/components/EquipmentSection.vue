@@ -36,9 +36,9 @@ const filteredCameras = computed(() => {
   const q = cameraSearchQuery.value.toLowerCase().trim()
   if (!q) return []
   return CAMERA_DATABASE.filter(c =>
-    c.brand.toLowerCase().includes(q) ||
-    c.model.toLowerCase().includes(q) ||
-    c.sensor.toLowerCase().includes(q)
+      c.brand.toLowerCase().includes(q) ||
+      c.model.toLowerCase().includes(q) ||
+      c.sensor.toLowerCase().includes(q)
   ).slice(0, 15)
 })
 
@@ -96,7 +96,7 @@ defineExpose({calculatedFov})
       <div class="eq-row">
         <label class="eq-label">
           Focal length
-          <BaseInfoIcon :message="HELP_TEXTS.telescope_focal_length" />
+          <BaseInfoIcon :message="HELP_TEXTS.telescope_focal_length"/>
         </label>
         <div class="input-with-unit eq-input-area">
           <input
@@ -115,7 +115,7 @@ defineExpose({calculatedFov})
       <div class="eq-row eq-row-camera">
         <label class="eq-label">
           Camera
-          <BaseInfoIcon :message="HELP_TEXTS.telescope_camera_sensor" />
+          <BaseInfoIcon :message="HELP_TEXTS.telescope_camera_sensor"/>
         </label>
         <div class="camera-search-container eq-input-area">
           <input
@@ -245,7 +245,7 @@ defineExpose({calculatedFov})
       <div class="eq-row">
         <label class="eq-label">
           Barlow / Reducer
-          <BaseInfoIcon :message="HELP_TEXTS.telescope_barlow" />
+          <BaseInfoIcon :message="HELP_TEXTS.telescope_barlow"/>
         </label>
         <div class="input-with-unit eq-input-area">
           <input

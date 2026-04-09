@@ -214,10 +214,17 @@ export function useEventStream() {
         },
         frame_captured: handleFrameEvent,
         frame_rejected: handleFrameEvent,
-        error(data) { lastError.value = data.message },
-        settings_updated() { /* components should refresh */ },
-        disk_writer_warning(data) { diskWriterWarning.value = data.queue_depth },
-        disk_writer_warning_cleared() { diskWriterWarning.value = null },
+        error(data) {
+            lastError.value = data.message
+        },
+        settings_updated() { /* components should refresh */
+        },
+        disk_writer_warning(data) {
+            diskWriterWarning.value = data.queue_depth
+        },
+        disk_writer_warning_cleared() {
+            diskWriterWarning.value = null
+        },
         plate_solving_started(data) {
             plateSolving.value = {inProgress: true, targetName: data.target_name, lastResult: null}
         },

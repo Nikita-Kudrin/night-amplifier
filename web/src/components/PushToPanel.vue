@@ -57,7 +57,7 @@ async function selectDatabase(dbId) {
 const fovWarning = computed(() => {
   if (!astapStatus.value?.database_type || !calculatedFov.value) return null
   const activeDb = astapStatus.value.installed_databases?.find(
-    db => db.id === astapStatus.value.database_type
+      db => db.id === astapStatus.value.database_type
   )
   if (!activeDb) return null
 
@@ -70,7 +70,7 @@ const fovWarning = computed(() => {
 
   // Suggest alternative databases that cover the user's FOV
   const matching = availableDatabases.value.filter(
-    db => db.id !== activeDb.id && fovY >= db.min_fov_deg && fovY <= db.max_fov_deg
+      db => db.id !== activeDb.id && fovY >= db.min_fov_deg && fovY <= db.max_fov_deg
   )
   let suggestion = null
   if (matching.length > 0) {
@@ -249,11 +249,11 @@ onUnmounted(() => {
             @focus="revealResults"
         />
         <div v-if="searching || isSolving" class="search-spinner"></div>
-        <button 
-          v-if="isSolving" 
-          class="btn-cancel-solve" 
-          title="Cancel solving" 
-          @click="cancelSolve"
+        <button
+            v-if="isSolving"
+            class="btn-cancel-solve"
+            title="Cancel solving"
+            @click="cancelSolve"
         >
           Cancel
         </button>
