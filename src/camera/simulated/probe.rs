@@ -9,10 +9,20 @@ use crate::CfaPattern;
 
 use super::registry::{FITS_EXTENSIONS, PNG_EXTENSIONS, TIFF_EXTENSIONS};
 
+/// Result of probing an image file
+pub struct ProbeResult {
+    pub width: u32,
+    pub height: u32,
+    pub sensor_type: SensorType,
+    pub bayer_pattern: Option<CfaPattern>,
+    pub pixel_size_x: f64,
+    pub pixel_size_y: f64,
+}
+
 /// Probe an image file to get its dimensions and sensor type
 pub fn probe_image_dimensions(
     path: &Path,
-) -> CameraResult<(u32, u32, SensorType, Option<CfaPattern>)> {
+) -> CameraResult<ProbeResult> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -33,7 +43,7 @@ pub fn probe_image_dimensions(
     }
 }
 
-fn probe_tiff_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Option<CfaPattern>)> {
+fn probe_tiff_dimensions(path: &Path) -> CameraResult<ProbeResult> {
     use tiff::decoder::Decoder;
     use tiff::ColorType;
 
@@ -57,10 +67,17 @@ fn probe_tiff_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Opt
         _ => (SensorType::Mono, None),
     };
 
-    Ok((width, height, sensor_type, bayer_pattern))
+    Ok(ProbeResult {
+        width,
+        height,
+        sensor_type,
+        bayer_pattern,
+        pixel_size_x: 0.0,
+        pixel_size_y: 0.0,
+    })
 }
 
-fn probe_fits_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Option<CfaPattern>)> {
+fn probe_fits_dimensions(path: &Path) -> CameraResult<ProbeResult> {
     use fitsio::hdu::HduInfo;
     use fitsio::FitsFile;
 
@@ -112,10 +129,40 @@ fn probe_fits_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Opt
         (SensorType::Color, None)
     };
 
-    Ok((width, height, sensor_type, bayer_pattern))
+    // Try to extract pixel size from keywords
+    let mut pixel_size_x = 0.0;
+    let mut pixel_size_y = 0.0;
+
+    if let Ok(hdu) = fitsfile.hdu(0) {
+        // Try various common keywords
+        if let Ok(px) = hdu.read_key::<f64>(&mut fitsfile, "XPIXSZ") {
+            pixel_size_x = px;
+        } else if let Ok(px) = hdu.read_key::<f64>(&mut fitsfile, "PIXSIZE1") {
+            pixel_size_x = px;
+        } else if let Ok(px) = hdu.read_key::<f64>(&mut fitsfile, "PIXEL_SZ") {
+            pixel_size_x = px;
+        }
+
+        if let Ok(py) = hdu.read_key::<f64>(&mut fitsfile, "YPIXSZ") {
+            pixel_size_y = py;
+        } else if let Ok(py) = hdu.read_key::<f64>(&mut fitsfile, "PIXSIZE2") {
+            pixel_size_y = py;
+        } else if pixel_size_x > 0.0 {
+            pixel_size_y = pixel_size_x;
+        }
+    }
+
+    Ok(ProbeResult {
+        width,
+        height,
+        sensor_type,
+        bayer_pattern,
+        pixel_size_x,
+        pixel_size_y,
+    })
 }
 
-fn probe_png_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Option<CfaPattern>)> {
+fn probe_png_dimensions(path: &Path) -> CameraResult<ProbeResult> {
     use zune_png::zune_core::bytestream::ZCursor;
     use zune_png::zune_core::colorspace::ColorSpace;
     use zune_png::PngDecoder;
@@ -143,7 +190,14 @@ fn probe_png_dimensions(path: &Path) -> CameraResult<(u32, u32, SensorType, Opti
         _ => (SensorType::Color, None),
     };
 
-    Ok((width as u32, height as u32, sensor_type, bayer_pattern))
+    Ok(ProbeResult {
+        width: width as u32,
+        height: height as u32,
+        sensor_type,
+        bayer_pattern,
+        pixel_size_x: 0.0,
+        pixel_size_y: 0.0,
+    })
 }
 
 #[cfg(test)]
@@ -170,11 +224,11 @@ mod tests {
             fptr.create_image("EXT1".to_string(), &description).unwrap();
         }
 
-        let (width, height, sensor_type, bayer_pattern) = probe_fits_dimensions(&path).unwrap();
-        assert_eq!(width, 20);
-        assert_eq!(height, 10);
-        assert_eq!(sensor_type, SensorType::Color); // Default for mono in probe
-        assert_eq!(bayer_pattern, Some(CfaPattern::Rggb));
+        let result = probe_fits_dimensions(&path).unwrap();
+        assert_eq!(result.width, 20);
+        assert_eq!(result.height, 10);
+        assert_eq!(result.sensor_type, SensorType::Color); // Default for mono in probe
+        assert_eq!(result.bayer_pattern, Some(CfaPattern::Rggb));
     }
 
     #[test]
@@ -196,8 +250,8 @@ mod tests {
             fptr.create_image("".to_string(), &description).unwrap();
         }
 
-        let (width, height, _, _) = probe_fits_dimensions(&path).unwrap();
-        assert_eq!(width, 40);
-        assert_eq!(height, 30);
+        let result = probe_fits_dimensions(&path).unwrap();
+        assert_eq!(result.width, 40);
+        assert_eq!(result.height, 30);
     }
 }

@@ -48,7 +48,8 @@ fn test_camera_info_response_from_info() {
         id: 42,
         max_width: 4096,
         max_height: 3072,
-        pixel_size_um: 3.76,
+        pixel_size_x_um: 3.76,
+        pixel_size_y_um: 3.76,
         sensor_type: SensorType::Color,
         has_cooler: true,
         bit_depth: 14,
@@ -65,7 +66,8 @@ fn test_camera_info_response_from_info() {
     assert_eq!(response.name, "Test Camera");
     assert_eq!(response.max_width, 4096);
     assert_eq!(response.max_height, 3072);
-    assert_eq!(response.pixel_size_um, 3.76);
+    assert_eq!(response.pixel_size_x_um, 3.76);
+    assert_eq!(response.pixel_size_y_um, 3.76);
     assert_eq!(response.sensor_type, "Color");
     assert!(response.has_cooler);
     assert_eq!(response.bit_depth, 14);

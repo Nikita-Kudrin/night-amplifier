@@ -66,8 +66,8 @@ impl SimulatedCamera {
             )));
         }
 
-        // Probe the first file to get dimensions
-        let (width, height, sensor_type, bayer_pattern) = probe_image_dimensions(&files[0])?;
+        // Probe the first file to get dimensions and info
+        let probe = probe_image_dimensions(&files[0])?;
 
         // Extract directory name for camera name
         let dir_name = directory
@@ -78,14 +78,11 @@ impl SimulatedCamera {
         let info = create_camera_info(
             dir_name,
             files.len(),
-            width,
-            height,
-            sensor_type,
-            bayer_pattern,
+            &probe,
         );
 
-        let debayerer = if sensor_type == SensorType::Color {
-            bayer_pattern.map(|p| Debayerer::new(DebayerConfig::new(p)))
+        let debayerer = if probe.sensor_type == SensorType::Color {
+            probe.bayer_pattern.map(|p| Debayerer::new(DebayerConfig::new(p)))
         } else {
             None
         };
@@ -93,8 +90,9 @@ impl SimulatedCamera {
         info!(
             directory = %directory.display(),
             file_count = files.len(),
-            width = width,
-            height = height,
+            width = probe.width,
+            height = probe.height,
+            pixel_size = %format!("{}x{}", probe.pixel_size_x, probe.pixel_size_y),
             "Simulated camera opened"
         );
 
@@ -290,19 +288,17 @@ impl Camera for SimulatedCamera {
 pub fn create_camera_info(
     dir_name: &str,
     file_count: usize,
-    width: u32,
-    height: u32,
-    sensor_type: SensorType,
-    bayer_pattern: Option<crate::CfaPattern>,
+    probe: &super::probe::ProbeResult,
 ) -> CameraInfo {
     CameraInfo {
         name: format!("Simulator: {} ({} files)", dir_name, file_count),
         id: 0,
-        max_width: width,
-        max_height: height,
-        pixel_size_um: 3.76, // Common sensor pixel size
-        sensor_type,
-        bayer_pattern,
+        max_width: probe.width,
+        max_height: probe.height,
+        pixel_size_x_um: probe.pixel_size_x,
+        pixel_size_y_um: probe.pixel_size_y,
+        sensor_type: probe.sensor_type,
+        bayer_pattern: probe.bayer_pattern,
         has_cooler: false,
         has_shutter: false,
         is_usb3: true,

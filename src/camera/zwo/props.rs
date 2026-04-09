@@ -27,6 +27,8 @@ pub(crate) fn build_camera_info(
     let max_width = info_handle.get_ccd_width();
     let max_height = info_handle.get_ccd_height();
     let pixel_size_um = info_handle.get_pixel_size().unwrap_or(0.0) as f64;
+    let pixel_size_x_um = pixel_size_um;
+    let pixel_size_y_um = pixel_size_um;
 
     // Parse props display output for additional info
     let props = cam.get_props();
@@ -50,7 +52,8 @@ pub(crate) fn build_camera_info(
         id,
         max_width,
         max_height,
-        pixel_size_um,
+        pixel_size_x_um,
+        pixel_size_y_um,
         sensor_type: if parsed.is_color {
             SensorType::Color
         } else {
