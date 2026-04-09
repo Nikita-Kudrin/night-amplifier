@@ -31,6 +31,10 @@ pub struct InstalledDatabaseInfo {
     pub id: String,
     /// Path to this database's directory
     pub database_path: String,
+    /// Minimum FOV in degrees this database supports
+    pub min_fov_deg: f32,
+    /// Maximum FOV in degrees this database supports
+    pub max_fov_deg: f32,
 }
 
 /// Available database types for installation
@@ -69,6 +73,25 @@ impl AstapInstallRequest {
         } else {
             vec!["D80".to_string()]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_installed_database_info_fov_fields_present() {
+        // Verify the DTO struct exposes min_fov_deg and max_fov_deg fields.
+        let info = InstalledDatabaseInfo {
+            id: "D80".to_string(),
+            database_path: "/astap/d80_database".to_string(),
+            min_fov_deg: 0.15,
+            max_fov_deg: 6.0,
+        };
+        assert_eq!(info.id, "D80");
+        assert_eq!(info.min_fov_deg, 0.15);
+        assert_eq!(info.max_fov_deg, 6.0);
     }
 }
 
