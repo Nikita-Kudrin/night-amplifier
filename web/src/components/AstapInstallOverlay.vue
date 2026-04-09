@@ -1,6 +1,6 @@
 <script setup>
-import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
-import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
+import {computed, watch} from 'vue'
+import {useAstapInstall} from '../composables/useAstapInstall.js'
 import AstapStatusSection from './AstapStatusSection.vue'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
@@ -15,46 +15,43 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'installed'])
 
-// State
-const loading = ref(true)
-const installing = ref(false)
-const status = ref(null)
-const databases = ref([])
-const selectedDatabases = ref([])
-const error = ref(null)
+const {
+  loading, installing, error, status, databases, selectedDatabases,
+  installProgress, stageCompletion,
+  canInstall, hasUninstalledDatabases, progressText, overallProgressText, progressPercent,
+  loadStatus, startInstall, isInstallationComplete,
+} = useAstapInstall()
 
-// Installation progress (local copy for UI state)
-const installProgress = ref({
-  component: '',
-  percent: null,
-  bytesDownloaded: 0,
-  totalBytes: null,
-  stage: '', // 'starting', 'downloading', 'extracting', 'completed', 'failed'
-  stageName: '', // Human-readable stage name from server
-  overallPercent: null, // Overall installation progress (0-100)
-  error: null,
+// Handle initial load: if already installed and not managing, close immediately
+watch(loading, async (isLoading, wasLoading) => {
+  if (wasLoading && !isLoading && status.value?.ready && !props.allowManage) {
+    emit('installed')
+    emit('close')
+  }
 })
 
-// Stage completion tracking
-const stageCompletion = ref({
-  cliCompleted: false,
-  completedDatabases: new Set(),
-})
-
-// Event stream for receiving WebSocket events
-const eventStream = inject('eventStream', null)
-
-// Computed
-const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
-
-const hasUninstalledDatabases = computed(() =>
-    databases.value.some(db => !db.installed)
+// Handle installation completion
+watch(
+  () => isInstallationComplete(),
+  (complete) => {
+    if (!complete) return
+    setTimeout(async () => {
+      await loadStatus()
+      installing.value = false
+      if (status.value?.ready) {
+        emit('installed')
+        if (!props.allowManage) {
+          emit('close')
+        }
+      }
+    }, 500)
+  }
 )
 
+// Overlay-specific computed
 const stages = computed(() => {
   const result = []
 
-  // Only show CLI stage for fresh installs
   if (!status.value?.binary_installed) {
     result.push({
       label: 'ASTAP CLI',
@@ -64,7 +61,6 @@ const stages = computed(() => {
     })
   }
 
-  // Show a stage for each selected database
   for (const dbId of selectedDatabases.value) {
     const dbComponent = `${dbId} Database`
     const isCompleted = stageCompletion.value.completedDatabases.has(dbComponent)
@@ -79,210 +75,8 @@ const stages = computed(() => {
   return result
 })
 
-const progressText = computed(() => {
-  const p = installProgress.value
-  if (p.stage === 'starting') {
-    if (p.component === 'ASTAP CLI') {
-      return 'Installing ASTAP...'
-    }
-    if (p.component && p.component.includes('Database')) {
-      return `Downloading ${p.component.replace('Database', 'star database')}...`
-    }
-    return `Starting ${p.component}...`
-  }
-  if (p.stage === 'downloading') {
-    if (p.percent !== null && p.totalBytes !== null) {
-      const downloadedMb = (p.bytesDownloaded / (1024 * 1024)).toFixed(1)
-      const totalMb = (p.totalBytes / (1024 * 1024)).toFixed(1)
-      return `Downloading ${p.component}: ${downloadedMb} / ${totalMb} MB (${p.percent.toFixed(1)}%)`
-    }
-    if (p.percent !== null) {
-      return `Downloading ${p.component}: ${p.percent.toFixed(1)}%`
-    }
-    const mb = (p.bytesDownloaded / (1024 * 1024)).toFixed(1)
-    return `Downloading ${p.component}: ${mb} MB`
-  }
-  if (p.stage === 'extracting') {
-    if (p.percent !== null) {
-      return `Extracting ${p.component}: ${p.percent.toFixed(1)}%`
-    }
-    return `Extracting ${p.component}...`
-  }
-  if (p.stage === 'completed') {
-    return `${p.component} installed successfully`
-  }
-  if (p.stage === 'failed') {
-    return `Failed: ${p.error}`
-  }
-  return ''
-})
-
-const overallProgressText = computed(() => {
-  const p = installProgress.value
-  if (p.overallPercent !== null && p.overallPercent !== undefined) {
-    return `Overall progress: ${p.overallPercent.toFixed(0)}%`
-  }
-  return ''
-})
-
-const progressPercent = computed(() => {
-  const p = installProgress.value
-  // Use overall percent if available, otherwise fall back to stage percent
-  if (p.overallPercent !== null && p.overallPercent !== undefined) {
-    return p.overallPercent
-  }
-  if (p.stage === 'downloading' && p.percent !== null && p.percent !== undefined) {
-    return p.percent
-  }
-  if (p.stage === 'extracting' && p.percent !== null && p.percent !== undefined) {
-    return p.percent
-  }
-  if (p.stage === 'completed') {
-    return 100
-  }
-  return null
-})
-
 const installButtonText = computed(() => {
-  if (status.value?.ready) {
-    return 'Download Selected'
-  }
-  return 'Install ASTAP'
-})
-
-// Methods
-async function loadStatus() {
-  loading.value = true
-  error.value = null
-  try {
-    const [statusData, dbData] = await Promise.all([getAstapStatus(), getAstapDatabases()])
-    status.value = statusData
-    databases.value = dbData
-
-    // If already installed and not in manage mode, emit and close
-    if (statusData.ready && !props.allowManage) {
-      emit('installed')
-      emit('close')
-      return
-    }
-
-    // Pre-select uninstalled databases: D80 for fresh, none for manage mode
-    if (!statusData.ready) {
-      // Fresh install: pre-select D80
-      selectedDatabases.value = ['D80']
-    } else {
-      // Manage mode: start with nothing selected, user picks what to add
-      selectedDatabases.value = []
-    }
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-async function startInstall() {
-  if (!canInstall.value) return
-
-  installing.value = true
-  error.value = null
-  installProgress.value = {
-    component: '',
-    percent: null,
-    bytesDownloaded: 0,
-    totalBytes: null,
-    stage: '',
-    error: null,
-  }
-  stageCompletion.value = {
-    cliCompleted: !!status.value?.binary_installed,
-    completedDatabases: new Set(),
-  }
-
-  try {
-    await installAstap(selectedDatabases.value)
-    // Installation started - progress will come via WebSocket
-  } catch (e) {
-    error.value = e.message
-    installing.value = false
-  }
-}
-
-function handleProgressUpdate(progress) {
-  if (!progress) return
-
-  const stage = progress.stage
-
-  installProgress.value = {
-    component: progress.component || '',
-    percent: progress.percent,
-    bytesDownloaded: progress.bytesDownloaded || 0,
-    totalBytes: progress.totalBytes,
-    stage: stage,
-    stageName: progress.stageName || '',
-    overallPercent: progress.overallPercent,
-    error: progress.error,
-  }
-
-  // Track stage completion
-  if (stage === 'downloading') {
-    if (progress.stageName === 'Downloading Database') {
-      stageCompletion.value.cliCompleted = true
-    }
-  } else if (stage === 'extracting') {
-    if (progress.stageName === 'Extracting ASTAP CLI') {
-      stageCompletion.value.cliDownloaded = true
-    }
-  } else if (stage === 'completed') {
-    if (progress.stageName === 'ASTAP CLI Installed') {
-      stageCompletion.value.cliCompleted = true
-    } else if (progress.stageName === 'Database Installed' && progress.component) {
-      stageCompletion.value.completedDatabases.add(progress.component)
-    }
-
-    // Check if all selected databases are installed (last database completes)
-    if (progress.component && progress.component.includes('Database')) {
-      const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
-      if (progress.component.includes(lastDb)) {
-        setTimeout(async () => {
-          await loadStatus()
-          if (status.value?.ready) {
-            emit('installed')
-            if (!props.allowManage) {
-              emit('close')
-            } else {
-              // In manage mode, stop installing to show updated status
-              installing.value = false
-            }
-          }
-        }, 500)
-      }
-    }
-  } else if (stage === 'failed') {
-    error.value = `Installation failed: ${progress.error}`
-    installing.value = false
-  }
-}
-
-// Watch for ASTAP install progress updates from eventStream
-watch(
-    () => eventStream?.astapInstallProgress?.value,
-    (progress) => {
-      if (progress) {
-        handleProgressUpdate(progress)
-      }
-    },
-    {deep: true}
-)
-
-// Lifecycle
-onMounted(() => {
-  loadStatus()
-})
-
-onUnmounted(() => {
-  // Clear the install progress when overlay closes
-  eventStream?.clearAstapInstallProgress?.()
+  return status.value?.ready ? 'Download Selected' : 'Install ASTAP'
 })
 </script>
 

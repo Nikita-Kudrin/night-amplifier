@@ -27,6 +27,10 @@ export function useAstapInstall() {
     // Computed properties
     const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)
 
+    const hasUninstalledDatabases = computed(() =>
+        databases.value.some(db => !db.installed)
+    )
+
     const progressText = computed(() => {
         return formatProgressText(installProgress.value)
     })
@@ -150,6 +154,7 @@ export function useAstapInstall() {
         stageCompletion,
         // Computed
         canInstall,
+        hasUninstalledDatabases,
         progressText,
         overallProgressText,
         progressPercent,

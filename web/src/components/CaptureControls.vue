@@ -132,62 +132,27 @@ async function handleStop() {
   })
 }
 
-async function applyExposure() {
+async function applySetting(settings) {
   await withErrorHandling(async () => {
-    await updateSettings({exposure_us: exposureUs.value})
+    await updateSettings(settings)
     await refreshSettings()
   })
 }
 
-async function applyGain() {
-  await withErrorHandling(async () => {
-    await updateSettings({gain: gain.value})
-    await refreshSettings()
-  })
-}
+const applyExposure = () => applySetting({exposure_us: exposureUs.value})
+const applyGain = () => applySetting({gain: gain.value})
+const setExposurePreset = (us) => applySetting({exposure_us: us})
+const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
+const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
+const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
 
-async function setExposurePreset(us) {
-  await withErrorHandling(async () => {
-    await updateSettings({exposure_us: us})
-    await refreshSettings()
-  })
-}
-
-async function applyStackingType() {
-  await withErrorHandling(async () => {
-    await updateSettings({stacking_type: selectedStackingType.value})
-    await refreshSettings()
-  })
-}
-
-async function applyStackingMode(val) {
-  let updates = {}
-  if (val === 'wanderer') {
-    updates = {stacking: true, wanderer_mode: true}
-  } else if (val === 'stacking') {
-    updates = {stacking: true, wanderer_mode: false}
-  } else {
-    updates = {stacking: false, wanderer_mode: false}
+function applyStackingMode(val) {
+  const modes = {
+    wanderer: {stacking: true, wanderer_mode: true},
+    stacking: {stacking: true, wanderer_mode: false},
+    off: {stacking: false, wanderer_mode: false},
   }
-
-  await withErrorHandling(async () => {
-    await updateSettings(updates)
-    await refreshSettings()
-  })
-}
-
-async function applyAutoStretch() {
-  await withErrorHandling(async () => {
-    await updateSettings({auto_stretch: autoStretch.value})
-    await refreshSettings()
-  })
-}
-
-async function applyStretchAggressiveness() {
-  await withErrorHandling(async () => {
-    await updateSettings({stretch_aggressiveness: stretchAggressiveness.value})
-    await refreshSettings()
-  })
+  applySetting(modes[val] || modes.off)
 }
 
 const showCometLock = computed(() => {
