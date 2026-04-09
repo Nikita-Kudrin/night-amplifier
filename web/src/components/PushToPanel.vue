@@ -44,6 +44,13 @@ const {currentTarget, selectTargetByName, clearTarget, isSolving, cancelSolve} =
 const {raInput, decInput, coordError, validateCoordinates, clearInputs} = useCoordinateInput()
 
 // Telescope setup
+// Connected camera info for auto-fill and profile switching
+const connectedCameraInfo = computed(() => {
+  if (!selectedCamera?.value || !cameras?.value) return null
+  const cam = cameras.value.find(c => c.id === selectedCamera.value)
+  return cam?.info || null
+})
+
 const {
   focalLength,
   pixelSizeX,
@@ -55,7 +62,7 @@ const {
   calculatedFov,
   autoFillFromCamera,
   selectCamera,
-} = useTelescopeSetup({withErrorHandling})
+} = useTelescopeSetup({withErrorHandling, connectedCameraInfo})
 
 // Camera sensor search
 const cameraSearchQuery = ref('')
@@ -76,13 +83,6 @@ function selectCameraEntry(entry) {
   cameraSearchQuery.value = `${entry.brand} ${entry.model}`
   showCameraResults.value = false
 }
-
-// Connected camera info for auto-fill
-const connectedCameraInfo = computed(() => {
-  if (!selectedCamera?.value || !cameras?.value) return null
-  const cam = cameras.value.find(c => c.id === selectedCamera.value)
-  return cam?.info || null
-})
 
 function fillFromConnectedCamera() {
   if (connectedCameraInfo.value) {

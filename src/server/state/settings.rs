@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::CaptureConfig;
 use crate::planetary::AlignmentRoi;
@@ -57,6 +59,10 @@ pub struct CaptureSettings {
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
     pub telescope: TelescopeSettings,
+    /// Per-camera telescope profiles keyed by camera name
+    pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Name of the last active camera (for profile inheritance)
+    pub last_camera_name: Option<String>,
 }
 
 /// Telescope and camera parameters for FOV calculation
@@ -153,6 +159,8 @@ impl Default for CaptureSettings {
             push_to_fov: None,
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
+            camera_telescope_profiles: HashMap::new(),
+            last_camera_name: None,
         }
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! Saves settings to a JSON file so they persist across server restarts.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,12 @@ pub struct PersistedSettings {
     pub eyepiece: EyepieceSettings,
     #[serde(default)]
     pub telescope: TelescopeSettings,
+    /// Per-camera telescope profiles keyed by camera name
+    #[serde(default)]
+    pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Name of the last active camera
+    #[serde(default)]
+    pub last_camera_name: Option<String>,
 }
 
 fn default_preload_images() -> usize {
@@ -115,6 +122,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             push_to_fov: settings.push_to_fov,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
+            camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
+            last_camera_name: settings.last_camera_name.clone(),
         }
     }
 }
@@ -147,6 +156,8 @@ impl From<PersistedSettings> for CaptureSettings {
             push_to_fov: persisted.push_to_fov,
             eyepiece: persisted.eyepiece,
             telescope: persisted.telescope,
+            camera_telescope_profiles: persisted.camera_telescope_profiles,
+            last_camera_name: persisted.last_camera_name,
         }
     }
 }
@@ -310,6 +321,17 @@ mod tests {
                 sensor_height_px: Some(3008),
                 barlow_coeff: Some(1.0),
             },
+            camera_telescope_profiles: HashMap::from([
+                ("Neptune-C II".to_string(), TelescopeSettings {
+                    focal_length_mm: Some(1000.0),
+                    pixel_size_x_um: Some(2.9),
+                    pixel_size_y_um: Some(2.9),
+                    sensor_width_px: Some(2712),
+                    sensor_height_px: Some(1538),
+                    barlow_coeff: Some(1.0),
+                }),
+            ]),
+            last_camera_name: Some("Neptune-C II".to_string()),
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -379,6 +401,9 @@ mod tests {
             restored.telescope.sensor_width_px,
             settings.telescope.sensor_width_px
         );
+        assert_eq!(restored.camera_telescope_profiles.len(), 1);
+        assert!(restored.camera_telescope_profiles.contains_key("Neptune-C II"));
+        assert_eq!(restored.last_camera_name, Some("Neptune-C II".to_string()));
     }
 
     #[test]
@@ -419,6 +444,8 @@ mod tests {
                 screen_resolution_y: 1440,
             },
             telescope: TelescopeSettings::default(),
+            camera_telescope_profiles: HashMap::new(),
+            last_camera_name: None,
         };
 
         persistence.save(&settings).unwrap();
