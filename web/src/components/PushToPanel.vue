@@ -9,7 +9,7 @@ import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
-import {getAstapStatus} from '../composables/api.js'
+import {getAstapStatus, getAstapDatabases} from '../composables/api.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -22,11 +22,17 @@ const showDatabaseManager = ref(false)
 
 // FOV warning state
 const astapStatus = ref(null)
+const availableDatabases = ref([])
 const showFovWarning = ref(false)
 
 async function fetchAstapStatus() {
   try {
-    astapStatus.value = await getAstapStatus()
+    const [statusData, dbData] = await Promise.all([
+      getAstapStatus(),
+      getAstapDatabases(),
+    ])
+    astapStatus.value = statusData
+    availableDatabases.value = dbData
   } catch {
     // Ignore — plugin may not be available in Community version
   }
@@ -50,10 +56,31 @@ const fovWarning = computed(() => {
 
   const fovStr = formatFov(fovY)
   const direction = fovY < activeDb.min_fov_deg ? 'too narrow' : 'too wide'
+  let message = `FOV ${fovStr} is ${direction} for the ${activeDb.id} database (${activeDb.min_fov_deg}°–${activeDb.max_fov_deg}°). Plate solving may fail with this setup.`
+
+  // Suggest alternative databases that cover the user's FOV
+  const matching = availableDatabases.value.filter(
+    db => db.id !== activeDb.id && fovY >= db.min_fov_deg && fovY <= db.max_fov_deg
+  )
+  let suggestion = null
+  if (matching.length > 0) {
+    const installed = matching.filter(db => db.installed)
+    const notInstalled = matching.filter(db => !db.installed)
+    const parts = []
+    if (installed.length > 0) {
+      parts.push(`Switch to ${installed.map(db => db.id).join(', ')}`)
+    }
+    if (notInstalled.length > 0) {
+      parts.push(`download ${notInstalled.map(db => db.id).join(', ')}`)
+    }
+    suggestion = parts.join(' or ')
+  }
+
   return {
     database_id: activeDb.id,
     current_fov: fovStr,
-    message: `FOV ${fovStr} is ${direction} for the ${activeDb.id} database (${activeDb.min_fov_deg}°–${activeDb.max_fov_deg}°). Plate solving may fail with this setup.`,
+    message,
+    suggestion,
   }
 })
 
@@ -207,6 +234,7 @@ onUnmounted(() => {
 
     <BaseAlert v-if="showFovWarning && fovWarning" type="warning" @dismiss="showFovWarning = false">
       {{ fovWarning.message }}
+      <strong v-if="fovWarning.suggestion"> {{ fovWarning.suggestion }}.</strong>
     </BaseAlert>
 
     <BaseAlert v-if="error" type="error" @dismiss="clearError">

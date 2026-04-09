@@ -6,6 +6,7 @@ import PushToPanel from './PushToPanel.vue'
 // Mock the full API module used by PushToPanel and its composables
 vi.mock('../composables/api.js', () => ({
     getAstapStatus: vi.fn(),
+    getAstapDatabases: vi.fn(),
     updateSettings: vi.fn().mockResolvedValue({}),
     updatePushToConfig: vi.fn().mockResolvedValue({}),
     searchCatalog: vi.fn().mockResolvedValue([]),
@@ -21,7 +22,7 @@ vi.mock('../composables/api.js', () => ({
     cancelPushToSolve: vi.fn(),
 }))
 
-import {getAstapStatus} from '../composables/api.js'
+import {getAstapStatus, getAstapDatabases} from '../composables/api.js'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
@@ -74,10 +75,23 @@ function astapStatus(activeDbId, ...extraDbs) {
     }
 }
 
+// All available databases (from getAstapDatabases API) with numeric FOV fields
+const ALL_DATABASES = [
+    {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: false},
+    {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: false},
+    {id: 'W08', description: 'Fisheye Lenses', min_fov_deg: 20.0, max_fov_deg: 80.0, size: '<1MB', installed: false},
+]
+
+/** Build a getAstapDatabases mock response with specified DBs marked as installed */
+function databases(installedIds = []) {
+    return ALL_DATABASES.map(db => ({...db, installed: installedIds.includes(db.id)}))
+}
+
 // ─── Component mounting ───────────────────────────────────────────────────────
 
-function mountPanel(settings, mockedAstapStatus) {
+function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases()) {
     getAstapStatus.mockResolvedValue(mockedAstapStatus)
+    getAstapDatabases.mockResolvedValue(mockedDatabases)
 
     return mount(PushToPanel, {
         global: {
@@ -513,6 +527,126 @@ describe('PushToPanel – FOV warning', () => {
 
             const btn = wrapper.find('.fov-warning-btn')
             expect(btn.attributes('title')).toBeTruthy()
+        })
+    })
+
+    // ── Database suggestions ─────────────────────────────────────────────────
+
+    describe('FOV warning suggestions', () => {
+        it('suggests switching to an installed database that covers the FOV', async () => {
+            // Active DB = D80, FOV ≈ 6.02° (too wide for D80 max=6°), G05 installed covers 3-20°
+            const wrapper = mountPanel(
+                settingsForFov(227),
+                astapStatus('D80', 'G05'),
+                databases(['D80', 'G05']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too wide')
+            expect(text).toContain('Switch to G05')
+        })
+
+        it('suggests downloading a database that is not installed', async () => {
+            // Active DB = D80, FOV ≈ 6.02° (too wide), G05 NOT installed
+            const wrapper = mountPanel(
+                settingsForFov(227),
+                astapStatus('D80'),
+                databases(['D80']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too wide')
+            expect(text).toContain('download G05')
+        })
+
+        it('suggests both switching and downloading when multiple databases match', async () => {
+            // Active DB = W08, FOV ≈ 5° (too narrow for W08 min=20°)
+            // D80 (0.15-6°) covers it — installed
+            // G05 (3-20°) covers it — NOT installed
+            const h = heightForFov(5)
+            const wrapper = mountPanel(
+                settingsForFov(h),
+                astapStatus('W08', 'D80'),
+                databases(['W08', 'D80']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too narrow')
+            expect(text).toContain('Switch to D80')
+            expect(text).toContain('download G05')
+        })
+
+        it('shows no suggestion when FOV is below all databases', async () => {
+            // FOV ≈ 0.053° — below D80 min (0.15°)
+            const wrapper = mountPanel(
+                settingsForFov(2),
+                astapStatus('D80'),
+                databases(['D80']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too narrow')
+            expect(text).not.toContain('Switch')
+            expect(text).not.toContain('download')
+        })
+
+        it('shows no suggestion when FOV is above all databases', async () => {
+            // fovY ≈ 80.1° — above W08 max (80°)
+            const wrapper = mountPanel(
+                settingsForFov(3020),
+                astapStatus('W08'),
+                databases(['D80', 'G05', 'W08']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too wide')
+            expect(text).not.toContain('Switch')
+            expect(text).not.toContain('download')
+        })
+
+        it('does not suggest the active database itself', async () => {
+            // Active = G05, FOV ≈ 1° (too narrow for G05 min=3°), D80 covers 0.15-6°
+            const h = heightForFov(1)
+            const wrapper = mountPanel(
+                settingsForFov(h),
+                astapStatus('G05'),
+                databases(['G05', 'D80']),
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too narrow')
+            expect(text).toContain('Switch to D80')
+            // The warning message itself mentions G05 as the active DB,
+            // but the suggestion should not suggest G05.
+            expect(text).not.toContain('Switch to G05')
+            expect(text).not.toContain('download G05')
+        })
+
+        it('handles empty available databases gracefully', async () => {
+            const wrapper = mountPanel(
+                settingsForFov(4),
+                astapStatus('D80'),
+                [],
+            )
+            await flushPromises()
+            await wrapper.find('.fov-warning-btn').trigger('click')
+
+            const text = wrapper.find('.alert-warning').text()
+            expect(text).toContain('too narrow')
+            expect(text).not.toContain('Switch')
+            expect(text).not.toContain('download')
         })
     })
 })

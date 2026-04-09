@@ -44,8 +44,10 @@ pub struct DatabaseTypeResponse {
     pub id: String,
     /// Human-readable description
     pub description: String,
-    /// FOV range string (e.g., "0.2°-15°")
-    pub fov_range: String,
+    /// Minimum FOV in degrees this database supports
+    pub min_fov_deg: f32,
+    /// Maximum FOV in degrees this database supports
+    pub max_fov_deg: f32,
     /// Approximate download size (e.g., "~3GB")
     pub size: String,
     /// Whether this database is already installed
@@ -92,6 +94,20 @@ mod tests {
         assert_eq!(info.id, "D80");
         assert_eq!(info.min_fov_deg, 0.15);
         assert_eq!(info.max_fov_deg, 6.0);
+    }
+
+    #[test]
+    fn test_database_type_response_fov_fields_present() {
+        let resp = DatabaseTypeResponse {
+            id: "D80".to_string(),
+            description: "General Purpose".to_string(),
+            min_fov_deg: 0.15,
+            max_fov_deg: 6.0,
+            size: "~1.3GB".to_string(),
+            installed: false,
+        };
+        assert_eq!(resp.min_fov_deg, 0.15);
+        assert_eq!(resp.max_fov_deg, 6.0);
     }
 }
 

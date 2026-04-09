@@ -386,10 +386,12 @@ export async function installCatalog() {
 
 /**
  * @typedef {object} DatabaseType
- * @property {string} id - Database identifier (D05, D20, D50)
- * @property {string} name - Human-readable name
- * @property {string} description - Description including size and FOV range
- * @property {number} min_fov_degrees - Minimum field of view in degrees
+ * @property {string} id - Database identifier (D80, G05, W08)
+ * @property {string} description - Human-readable description
+ * @property {number} min_fov_deg - Minimum field of view in degrees
+ * @property {number} max_fov_deg - Maximum field of view in degrees
+ * @property {string} size - Approximate download size
+ * @property {boolean} installed - Whether this database is already installed
  */
 
 /**

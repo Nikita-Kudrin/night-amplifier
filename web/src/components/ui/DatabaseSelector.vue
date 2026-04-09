@@ -3,7 +3,7 @@ const props = defineProps({
   databases: {
     type: Array,
     required: true,
-    // Each database: { id: string, description: string, fov_range: string, size: string, installed: boolean }
+    // Each database: { id, description, min_fov_deg, max_fov_deg, size, installed }
   },
   modelValue: {
     type: Array,
@@ -31,6 +31,10 @@ function toggleDatabase(dbId) {
 function isSelected(dbId) {
   return props.modelValue.includes(dbId)
 }
+
+function formatFovRange(db) {
+  return `${db.min_fov_deg}°–${db.max_fov_deg}°`
+}
 </script>
 
 <template>
@@ -54,7 +58,7 @@ function isSelected(dbId) {
         <div class="database-info">
           <span class="database-name">{{ db.description }}</span>
           <span class="database-details">
-            <span class="detail-item">{{ db.fov_range }}</span>
+            <span class="detail-item">{{ formatFovRange(db) }}</span>
             <span class="detail-separator">|</span>
             <span class="detail-item">{{ db.size }}</span>
             <span class="detail-separator">|</span>
