@@ -22,9 +22,30 @@ describe('AstapInstallOverlay', () => {
             ready: false,
         })
         getAstapDatabases.mockResolvedValue([
-            {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: false},
-            {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: false},
-            {id: 'W08', description: 'Fisheye Lenses', min_fov_deg: 20.0, max_fov_deg: 80.0, size: '<1MB', installed: false},
+            {
+                id: 'D80',
+                description: 'General Purpose',
+                min_fov_deg: 0.15,
+                max_fov_deg: 6.0,
+                size: '~1.3GB',
+                installed: false
+            },
+            {
+                id: 'G05',
+                description: 'Camera Lenses',
+                min_fov_deg: 3.0,
+                max_fov_deg: 20.0,
+                size: '~100MB',
+                installed: false
+            },
+            {
+                id: 'W08',
+                description: 'Fisheye Lenses',
+                min_fov_deg: 20.0,
+                max_fov_deg: 80.0,
+                size: '<1MB',
+                installed: false
+            },
         ])
         installAstap.mockResolvedValue({})
     })
@@ -86,9 +107,30 @@ describe('AstapInstallOverlay', () => {
 
         it('shows installed badge for installed databases', async () => {
             getAstapDatabases.mockResolvedValue([
-                {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: true},
-                {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: false},
-                {id: 'W08', description: 'Fisheye Lenses', min_fov_deg: 20.0, max_fov_deg: 80.0, size: '<1MB', installed: false},
+                {
+                    id: 'D80',
+                    description: 'General Purpose',
+                    min_fov_deg: 0.15,
+                    max_fov_deg: 6.0,
+                    size: '~1.3GB',
+                    installed: true
+                },
+                {
+                    id: 'G05',
+                    description: 'Camera Lenses',
+                    min_fov_deg: 3.0,
+                    max_fov_deg: 20.0,
+                    size: '~100MB',
+                    installed: false
+                },
+                {
+                    id: 'W08',
+                    description: 'Fisheye Lenses',
+                    min_fov_deg: 20.0,
+                    max_fov_deg: 80.0,
+                    size: '<1MB',
+                    installed: false
+                },
             ])
             getAstapStatus.mockResolvedValue({
                 binary_installed: true,
@@ -414,8 +456,22 @@ describe('AstapInstallOverlay', () => {
                 ready: true,
             })
             getAstapDatabases.mockResolvedValue([
-                {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: true},
-                {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: false},
+                {
+                    id: 'D80',
+                    description: 'General Purpose',
+                    min_fov_deg: 0.15,
+                    max_fov_deg: 6.0,
+                    size: '~1.3GB',
+                    installed: true
+                },
+                {
+                    id: 'G05',
+                    description: 'Camera Lenses',
+                    min_fov_deg: 3.0,
+                    max_fov_deg: 20.0,
+                    size: '~100MB',
+                    installed: false
+                },
             ])
 
             const wrapper = mountOverlay(ref(null), {allowManage: true})
@@ -435,8 +491,22 @@ describe('AstapInstallOverlay', () => {
                 ready: true,
             })
             getAstapDatabases.mockResolvedValue([
-                {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: true},
-                {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: false},
+                {
+                    id: 'D80',
+                    description: 'General Purpose',
+                    min_fov_deg: 0.15,
+                    max_fov_deg: 6.0,
+                    size: '~1.3GB',
+                    installed: true
+                },
+                {
+                    id: 'G05',
+                    description: 'Camera Lenses',
+                    min_fov_deg: 3.0,
+                    max_fov_deg: 20.0,
+                    size: '~100MB',
+                    installed: false
+                },
             ])
 
             const wrapper = mountOverlay(ref(null), {allowManage: true})
@@ -458,9 +528,30 @@ describe('AstapInstallOverlay', () => {
                 ready: true,
             })
             getAstapDatabases.mockResolvedValue([
-                {id: 'D80', description: 'General Purpose', min_fov_deg: 0.15, max_fov_deg: 6.0, size: '~1.3GB', installed: true},
-                {id: 'G05', description: 'Camera Lenses', min_fov_deg: 3.0, max_fov_deg: 20.0, size: '~100MB', installed: true},
-                {id: 'W08', description: 'Fisheye Lenses', min_fov_deg: 20.0, max_fov_deg: 80.0, size: '<1MB', installed: true},
+                {
+                    id: 'D80',
+                    description: 'General Purpose',
+                    min_fov_deg: 0.15,
+                    max_fov_deg: 6.0,
+                    size: '~1.3GB',
+                    installed: true
+                },
+                {
+                    id: 'G05',
+                    description: 'Camera Lenses',
+                    min_fov_deg: 3.0,
+                    max_fov_deg: 20.0,
+                    size: '~100MB',
+                    installed: true
+                },
+                {
+                    id: 'W08',
+                    description: 'Fisheye Lenses',
+                    min_fov_deg: 20.0,
+                    max_fov_deg: 80.0,
+                    size: '<1MB',
+                    installed: true
+                },
             ])
 
             const wrapper = mountOverlay(ref(null), {allowManage: true})

@@ -159,7 +159,10 @@ impl DiskWriter {
 
             let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
 
-            debug!(frame_number = request.frame_number, "Writing frame to SER container");
+            debug!(
+                frame_number = request.frame_number,
+                "Writing frame to SER container"
+            );
             writer
                 .write_frame(&request.frame, Some(timestamp))
                 .map_err(|e| {

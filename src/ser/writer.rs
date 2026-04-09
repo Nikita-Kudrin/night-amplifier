@@ -106,10 +106,7 @@ impl SerWriter {
 
     /// Finalizes the file, writing timestamps and updating header.
     pub fn finalize(mut self) -> Result<()> {
-        tracing::info!(
-            frames_written = self.frames_written,
-            "Finalizing SER file"
-        );
+        tracing::info!(frames_written = self.frames_written, "Finalizing SER file");
         self.writer
             .flush()
             .map_err(|e| StackError::InvalidConfiguration(format!("Failed to flush: {}", e)))?;

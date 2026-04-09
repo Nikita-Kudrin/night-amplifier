@@ -25,15 +25,15 @@ watch(installing, (val) => emit('state-change', val))
 
 // Handle installation completion
 watch(
-  () => isInstallationComplete(),
-  (complete) => {
-    if (!complete) return
-    setTimeout(async () => {
-      await loadStatus()
-      installing.value = false
-      showAddDatabases.value = false
-    }, 500)
-  }
+    () => isInstallationComplete(),
+    (complete) => {
+      if (!complete) return
+      setTimeout(async () => {
+        await loadStatus()
+        installing.value = false
+        showAddDatabases.value = false
+      }, 500)
+    }
 )
 
 // Installer-specific computed

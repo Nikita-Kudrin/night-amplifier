@@ -16,9 +16,9 @@ pub use error::{PushToError, PushToResult};
 use crate::detection::StarDetector;
 use crate::frame::Frame;
 use crate::server::{
-    TelescopeSettings,
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
     DatabaseTypeResponse, PushToDirectionResponse, PushToPositionResponse, PushToStatusResponse,
+    TelescopeSettings,
 };
 use async_trait::async_trait;
 use std::sync::OnceLock;
@@ -172,10 +172,7 @@ pub trait PushToSystemPlugin:
 }
 
 /// Blanket implementation: any type implementing all three sub-traits is a PushToSystemPlugin.
-impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushToSystemPlugin
-    for T
-{
-}
+impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushToSystemPlugin for T {}
 
 /// Global registry for the Push-To plugin
 pub static PUSH_TO_PLUGIN: OnceLock<Box<dyn PushToSystemPlugin>> = OnceLock::new();

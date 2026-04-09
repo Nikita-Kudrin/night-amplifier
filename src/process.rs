@@ -4,14 +4,14 @@
 //! as process groups (Unix) or Job Objects (Windows). This ensures that
 //! when a process is killed, all of its children are also terminated.
 
+use process_wrap::tokio::CommandWrap;
 use std::process::ExitStatus;
 use tokio::process::Command;
-use process_wrap::tokio::CommandWrap;
 
-#[cfg(unix)]
-use process_wrap::tokio::ProcessGroup;
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
 
 /// A handle to a spawned external process group (Asynchronous)
 pub struct ExternalProcess {
@@ -29,7 +29,9 @@ impl ExternalProcess {
         let child: Box<dyn process_wrap::tokio::ChildWrapper> = {
             #[cfg(unix)]
             {
-                CommandWrap::from(cmd).wrap(ProcessGroup::leader()).spawn()?
+                CommandWrap::from(cmd)
+                    .wrap(ProcessGroup::leader())
+                    .spawn()?
             }
             #[cfg(windows)]
             {

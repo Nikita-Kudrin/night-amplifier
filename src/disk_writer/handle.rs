@@ -56,10 +56,7 @@ impl DiskWriterHandle {
     }
 
     /// Start a new capture session, creating the session directory
-    pub fn start_session(
-        &self,
-        session_type: WritingSessionType,
-    ) -> std::io::Result<PathBuf> {
+    pub fn start_session(&self, session_type: WritingSessionType) -> std::io::Result<PathBuf> {
         let timestamp = Local::now().format("%d-%m-%Y_%H-%M-%S").to_string();
         let session_path = self
             .stacked_dir
@@ -70,8 +67,7 @@ impl DiskWriterHandle {
 
         std::fs::create_dir_all(&session_path)?;
 
-        *self.session_dir.write().unwrap_or_else(|e| e.into_inner()) =
-            Some(session_path.clone());
+        *self.session_dir.write().unwrap_or_else(|e| e.into_inner()) = Some(session_path.clone());
 
         // Notify the worker to start a session
         let _ = self.sender.try_send(DiskWriterMessage::StartSession {

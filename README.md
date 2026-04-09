@@ -51,12 +51,12 @@ Captured frames are automatically saved to FITS files when the "Save Frames to D
 
 **Image Storage Formats:**
 
-| Output                  | Format | Bit Depth          |
-|-------------------------|--------|--------------------|
-| Raw frames              | FITS   | 16-bit unsigned    |
-| Stacked image           | FITS   | 32-bit float       |
-| Stacked image (preview) | PNG    | 8-bit              |
-| Planetary frames        | SER    | 16-bit unsigned    |
+| Output                  | Format | Bit Depth       |
+|-------------------------|--------|-----------------|
+| Raw frames              | FITS   | 16-bit unsigned |
+| Stacked image           | FITS   | 32-bit float    |
+| Stacked image (preview) | PNG    | 8-bit           |
+| Planetary frames        | SER    | 16-bit unsigned |
 
 **Directory Structure:**
 

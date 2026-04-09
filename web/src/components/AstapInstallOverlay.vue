@@ -32,20 +32,20 @@ watch(loading, async (isLoading, wasLoading) => {
 
 // Handle installation completion
 watch(
-  () => isInstallationComplete(),
-  (complete) => {
-    if (!complete) return
-    setTimeout(async () => {
-      await loadStatus()
-      installing.value = false
-      if (status.value?.ready) {
-        emit('installed')
-        if (!props.allowManage) {
-          emit('close')
+    () => isInstallationComplete(),
+    (complete) => {
+      if (!complete) return
+      setTimeout(async () => {
+        await loadStatus()
+        installing.value = false
+        if (status.value?.ready) {
+          emit('installed')
+          if (!props.allowManage) {
+            emit('close')
+          }
         }
-      }
-    }, 500)
-  }
+      }, 500)
+    }
 )
 
 // Overlay-specific computed
