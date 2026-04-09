@@ -5,6 +5,7 @@
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
+use crate::render::simd::{subtract_rgb_clamp_simd, subtract_scalar_clamp_simd};
 use crate::statistics::{compute_image_stats, ChannelStats, ImageStats};
 use rayon::prelude::*;
 
@@ -257,12 +258,11 @@ pub fn subtract_black_point(frame: &mut Frame, black_points: &[f32; 3]) -> Resul
         });
     }
 
+    let row_len = frame.width() * 3;
     let data = frame.data_mut();
 
-    data.par_chunks_mut(3).for_each(|pixel| {
-        pixel[0] = (pixel[0] - black_points[0]).clamp(0.0, 1.0);
-        pixel[1] = (pixel[1] - black_points[1]).clamp(0.0, 1.0);
-        pixel[2] = (pixel[2] - black_points[2]).clamp(0.0, 1.0);
+    data.par_chunks_mut(row_len).for_each(|row| {
+        subtract_rgb_clamp_simd(row, black_points);
     });
 
     Ok(())
@@ -277,10 +277,11 @@ pub fn subtract_black_point(frame: &mut Frame, black_points: &[f32; 3]) -> Resul
 /// * `frame` - Mutable reference to a frame (any number of channels)
 /// * `black_point` - The black point value to subtract from all pixels
 pub fn subtract_black_point_uniform(frame: &mut Frame, black_point: f32) -> Result<()> {
+    let row_len = frame.width() * frame.channels();
     let data = frame.data_mut();
 
-    data.par_iter_mut().for_each(|v| {
-        *v = (*v - black_point).clamp(0.0, 1.0);
+    data.par_chunks_mut(row_len).for_each(|row| {
+        subtract_scalar_clamp_simd(row, black_point);
     });
 
     Ok(())

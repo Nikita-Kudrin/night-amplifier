@@ -1,3 +1,5 @@
+use wide::f32x4;
+
 /// Performs bilinear interpolation with direct data access.
 ///
 /// Takes raw data slice instead of Frame reference to avoid
@@ -17,11 +19,13 @@ pub fn bilinear_interpolate_direct(
     let fx = sx - x0 as f32;
     let fy = sy - y0 as f32;
 
-    // Pre-compute weights
-    let w00 = (1.0 - fx) * (1.0 - fy);
-    let w10 = fx * (1.0 - fy);
-    let w01 = (1.0 - fx) * fy;
-    let w11 = fx * fy;
+    // Pre-compute weights as SIMD vector [w00, w10, w01, w11]
+    let weights = f32x4::new([
+        (1.0 - fx) * (1.0 - fy),
+        fx * (1.0 - fy),
+        (1.0 - fx) * fy,
+        fx * fy,
+    ]);
 
     // Pre-compute row offsets
     let row_stride = width * channels;
@@ -37,10 +41,13 @@ pub fn bilinear_interpolate_direct(
     let base11 = row1_offset + col1_offset;
 
     for c in 0..channels {
-        output[c] = w00 * data[base00 + c]
-            + w10 * data[base10 + c]
-            + w01 * data[base01 + c]
-            + w11 * data[base11 + c];
+        let corners = f32x4::new([
+            data[base00 + c],
+            data[base10 + c],
+            data[base01 + c],
+            data[base11 + c],
+        ]);
+        output[c] = (corners * weights).reduce_add();
     }
 }
 
@@ -88,11 +95,12 @@ pub fn warp_row_rgb(
             let fx = sx - x0 as f32;
             let fy = sy - y0 as f32;
 
-            // Pre-compute weights
+            // Pre-compute weights as SIMD vector [w00, w10, w01, w11]
             let w00 = (1.0 - fx) * (1.0 - fy);
             let w10 = fx * (1.0 - fy);
             let w01 = (1.0 - fx) * fy;
             let w11 = fx * fy;
+            let weights = f32x4::new([w00, w10, w01, w11]);
 
             // Compute base indices (row-major, 3 channels)
             let base00 = y0 * row_stride + x0 * 3;
@@ -100,21 +108,31 @@ pub fn warp_row_rgb(
             let base01 = base00 + row_stride;
             let base11 = base01 + 3;
 
-            // Unrolled RGB interpolation
-            row[out_idx] = w00 * src_data[base00]
-                + w10 * src_data[base10]
-                + w01 * src_data[base01]
-                + w11 * src_data[base11];
+            // SIMD-accelerated RGB interpolation: load 4 corners per channel,
+            // multiply by weights, reduce to single value
+            let r_corners = f32x4::new([
+                src_data[base00],
+                src_data[base10],
+                src_data[base01],
+                src_data[base11],
+            ]);
+            row[out_idx] = (r_corners * weights).reduce_add();
 
-            row[out_idx + 1] = w00 * src_data[base00 + 1]
-                + w10 * src_data[base10 + 1]
-                + w01 * src_data[base01 + 1]
-                + w11 * src_data[base11 + 1];
+            let g_corners = f32x4::new([
+                src_data[base00 + 1],
+                src_data[base10 + 1],
+                src_data[base01 + 1],
+                src_data[base11 + 1],
+            ]);
+            row[out_idx + 1] = (g_corners * weights).reduce_add();
 
-            row[out_idx + 2] = w00 * src_data[base00 + 2]
-                + w10 * src_data[base10 + 2]
-                + w01 * src_data[base01 + 2]
-                + w11 * src_data[base11 + 2];
+            let b_corners = f32x4::new([
+                src_data[base00 + 2],
+                src_data[base10 + 2],
+                src_data[base01 + 2],
+                src_data[base11 + 2],
+            ]);
+            row[out_idx + 2] = (b_corners * weights).reduce_add();
 
             sx += sx_step;
             sy += sy_step;

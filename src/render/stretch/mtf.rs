@@ -1,5 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
+use crate::render::simd::apply_luminance_preserving_simd;
 use rayon::prelude::*;
 
 /// Midtones Transfer Function (MTF)
@@ -50,6 +51,7 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
         )));
     }
 
+    let width = frame.width();
     let data = frame.data_mut();
 
     if channels == 1 {
@@ -57,11 +59,9 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
             *pixel = mtf(*pixel, midtone);
         });
     } else {
-        data.par_chunks_mut(3).for_each(|pixel| {
-            let (r, g, b) = mtf_stretch_color_preserving(pixel[0], pixel[1], pixel[2], midtone);
-            pixel[0] = r;
-            pixel[1] = g;
-            pixel[2] = b;
+        let row_len = width * 3;
+        data.par_chunks_mut(row_len).for_each(|row| {
+            apply_luminance_preserving_simd(row, |l| mtf(l, midtone));
         });
     }
 
