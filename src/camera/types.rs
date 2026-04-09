@@ -47,8 +47,10 @@ pub struct CameraInfo {
     pub max_width: u32,
     /// Maximum image height
     pub max_height: u32,
-    /// Pixel size in micrometers
-    pub pixel_size_um: f64,
+    /// Pixel size X in micrometers
+    pub pixel_size_x_um: f64,
+    /// Pixel size Y in micrometers
+    pub pixel_size_y_um: f64,
     /// Sensor type (mono/color)
     pub sensor_type: SensorType,
     /// Bayer pattern (for color cameras)
@@ -86,7 +88,8 @@ impl Default for CameraInfo {
             id: 0,
             max_width: 0,
             max_height: 0,
-            pixel_size_um: 0.0,
+            pixel_size_x_um: 0.0,
+            pixel_size_y_um: 0.0,
             sensor_type: SensorType::Mono,
             bayer_pattern: None,
             has_cooler: false,

@@ -3,7 +3,7 @@
 //! Provides a clean interface for camera discovery, connection, and disconnection.
 
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::camera::{CameraEntry, CameraRegistry};
 use crate::server::error::{ApiError, ApiResult};
@@ -153,6 +153,11 @@ impl CameraService {
                     camera_name = %info.name,
                     provider = %provider_registry_name,
                     "Camera connected"
+                );
+                debug!(
+                    camera_id = %camera_id,
+                    specifications = ?info,
+                    "Camera specifications"
                 );
 
                 let camera_info = ConnectedCameraInfo {

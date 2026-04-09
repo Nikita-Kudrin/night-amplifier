@@ -203,7 +203,7 @@ impl CameraProvider for SimulatedProvider {
 
             // Probe first file for dimensions
             match probe_image_dimensions(&files[0]) {
-                Ok((width, height, sensor_type, bayer_pattern)) => {
+                Ok(probe) => {
                     let dir_name = dir
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -212,10 +212,7 @@ impl CameraProvider for SimulatedProvider {
                     let mut info = create_camera_info(
                         dir_name,
                         files.len(),
-                        width,
-                        height,
-                        sensor_type,
-                        bayer_pattern,
+                        &probe,
                     );
                     info.id = index as i32;
                     cameras.push(info);
