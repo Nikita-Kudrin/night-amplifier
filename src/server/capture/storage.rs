@@ -25,6 +25,7 @@ pub fn run_storage_task(
     debug!("Storage task started");
 
     let mut queue_warning_active = false;
+    let mut last_warning_time = std::time::Instant::now();
 
     while let Ok(msg) = storage_rx.recv() {
         let CapturedFrame {
@@ -40,14 +41,22 @@ pub fn run_storage_task(
             continue;
         }
 
-        queue_warning_active = rt.block_on(save_frame_to_disk(
+        let (new_warning_active, new_last_time) = rt.block_on(save_frame_to_disk(
             &state,
             &frame,
             frame_number,
             &settings,
             &camera_info,
             queue_warning_active,
+            last_warning_time,
         ));
+        queue_warning_active = new_warning_active;
+        last_warning_time = new_last_time;
+    }
+
+    if queue_warning_active {
+        state.disk_writer.clear_queue_warning();
+        let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
     }
 
     debug!("Storage task ended");
@@ -93,7 +102,8 @@ pub async fn save_frame_to_disk(
     settings: &CaptureSettings,
     camera_info: &ConnectedCameraInfo,
     mut queue_warning_active: bool,
-) -> bool {
+    mut last_warning_time: std::time::Instant,
+) -> (bool, std::time::Instant) {
     use crate::disk_writer::QUEUE_WARNING_THRESHOLD;
     use crate::fits::FitsMetadata;
     use chrono::Utc;
@@ -116,18 +126,22 @@ pub async fn save_frame_to_disk(
     }
 
     let queue_depth = state.disk_writer.queue_depth();
-    if queue_depth > QUEUE_WARNING_THRESHOLD && !queue_warning_active {
-        queue_warning_active = true;
-        let _ = state
-            .events
-            .send(ServerEvent::DiskWriterWarning { queue_depth });
+    if queue_depth > QUEUE_WARNING_THRESHOLD {
+        let now = std::time::Instant::now();
+        if !queue_warning_active || now.duration_since(last_warning_time).as_secs() >= 2 {
+            queue_warning_active = true;
+            last_warning_time = now;
+            let _ = state
+                .events
+                .send(ServerEvent::DiskWriterWarning { queue_depth });
+        }
     } else if queue_depth <= QUEUE_WARNING_THRESHOLD && queue_warning_active {
         queue_warning_active = false;
         state.disk_writer.clear_queue_warning();
         let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
     }
 
-    queue_warning_active
+    (queue_warning_active, last_warning_time)
 }
 
 /// Check if we should stop due to too many errors
