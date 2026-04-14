@@ -208,6 +208,10 @@ onUnmounted(() => {
     </BaseAlert>
 
     <div v-show="!collapsed" class="push-to-content">
+      <BaseAlert v-if="!calculatedFov && hasProSolver" type="warning" :dismissible="false" style="margin-bottom: 0.5rem">
+        Without specifying the focal length and sensor pixel size, Push-To might not work reliably. By specifying those 2 parameters in the Equipment section, you can drastically increase the success rate of Push-To.
+      </BaseAlert>
+
       <!-- Pro Only Overlay -->
       <div v-if="showProOverlay" class="pro-overlay">
         <div class="pro-message">
