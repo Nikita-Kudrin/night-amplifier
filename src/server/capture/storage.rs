@@ -1,13 +1,57 @@
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::RwLockReadGuard;
-use tracing::{error, info, warn};
+use tracing::{debug, info, warn};
 
+use super::channel::CapturedFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo};
 use crate::stacking::StackingType;
+
+/// Dedicated storage task running on its own OS thread.
+///
+/// Receives `CapturedFrame` messages from the storage channel and saves
+/// raw frames to disk via the existing `DiskWriterHandle`. The storage
+/// channel has independent capacity and dropping logic from the stacking
+/// channel.
+pub fn run_storage_task(
+    state: Arc<AppState>,
+    storage_rx: mpsc::Receiver<CapturedFrame>,
+    rt: tokio::runtime::Handle,
+) {
+    debug!("Storage task started");
+
+    let mut queue_warning_active = false;
+
+    while let Ok(msg) = storage_rx.recv() {
+        let CapturedFrame {
+            frame,
+            frame_number,
+            settings,
+            camera_info,
+        } = msg;
+
+        // Only save if raw frame saving is still enabled
+        let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
+        if !settings.save_raw_frames || !is_stacking_mode || !state.disk_writer.is_enabled() {
+            continue;
+        }
+
+        queue_warning_active = rt.block_on(save_frame_to_disk(
+            &state,
+            &frame,
+            frame_number,
+            &settings,
+            &camera_info,
+            queue_warning_active,
+        ));
+    }
+
+    debug!("Storage task ended");
+}
 
 /// Get camera info from state
 pub async fn get_camera_info(state: &AppState, camera_id: &str) -> Option<ConnectedCameraInfo> {

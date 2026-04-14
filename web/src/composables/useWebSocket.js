@@ -166,6 +166,7 @@ export function useEventStream() {
     const captureState = ref('Idle')
     const frameCount = ref(0)
     const stackedCount = ref(0)
+    const droppedCount = ref(0)
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
 
@@ -210,6 +211,7 @@ export function useEventStream() {
             if (data.state === 'Starting') {
                 frameCount.value = 0
                 stackedCount.value = 0
+                droppedCount.value = 0
             }
         },
         frame_captured: handleFrameEvent,
@@ -224,6 +226,9 @@ export function useEventStream() {
         },
         disk_writer_warning_cleared() {
             diskWriterWarning.value = null
+        },
+        frame_dropped(data) {
+            droppedCount.value = data.dropped_count
         },
         plate_solving_started(data) {
             plateSolving.value = {inProgress: true, targetName: data.target_name, lastResult: null}
@@ -360,6 +365,7 @@ export function useEventStream() {
         captureState,
         frameCount,
         stackedCount,
+        droppedCount,
         lastError,
         diskWriterWarning,
         pushDirection,
