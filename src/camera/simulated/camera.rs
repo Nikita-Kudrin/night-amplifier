@@ -259,7 +259,33 @@ impl Camera for SimulatedCamera {
         self.current_gain = config.gain;
         self.current_offset = config.offset;
 
-        self.load_current_frame(config.simulated_preload_images)
+        // Measure actual disk read time
+        let read_start = Instant::now();
+        let frame = self.load_current_frame(config.simulated_preload_images)?;
+        let read_duration = read_start.elapsed();
+
+        // Simulate realistic exposure: sleep for (exposure - read_time)
+        let exposure_duration = std::time::Duration::from_micros(config.exposure_us);
+        if let Some(remaining) = exposure_duration.checked_sub(read_duration) {
+            if remaining > std::time::Duration::from_millis(1) {
+                let sleep_start = Instant::now();
+                // Poll the cancel flag every 50ms for responsiveness
+                let poll_interval = std::time::Duration::from_millis(50);
+                while sleep_start.elapsed() < remaining {
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        return Err(CameraError::Cancelled);
+                    }
+                    let left = remaining.saturating_sub(sleep_start.elapsed());
+                    std::thread::sleep(left.min(poll_interval));
+                }
+            }
+        }
+
+        if self.cancel_flag.load(Ordering::SeqCst) {
+            return Err(CameraError::Cancelled);
+        }
+
+        Ok(frame)
     }
 
     fn cancel(&self) {

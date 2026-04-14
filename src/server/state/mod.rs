@@ -54,6 +54,8 @@ pub struct AppState {
     pub settings_persistence: SettingsPersistence,
     /// Cancel token for currently active camera
     pub active_camera_cancel_token: RwLock<Option<Arc<AtomicBool>>>,
+    /// Counter for frames dropped due to pipeline back-pressure
+    pub dropped_frames: AtomicU64,
 }
 
 impl AppState {
@@ -86,6 +88,7 @@ impl AppState {
             push_to: RwLock::new(push_to_state),
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
+            dropped_frames: AtomicU64::new(0),
         };
 
         (state, disk_writer)
@@ -124,6 +127,7 @@ impl AppState {
             push_to: RwLock::new(push_to_state),
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
+            dropped_frames: AtomicU64::new(0),
         };
 
         (state, disk_writer)
@@ -160,6 +164,7 @@ impl AppState {
             push_to: RwLock::new(None),
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
+            dropped_frames: AtomicU64::new(0),
         };
 
         (state, disk_writer)
@@ -262,6 +267,8 @@ impl AppState {
                 .unwrap()
                 .as_millis() as u64,
         );
+        drop(session);
+        self.dropped_frames.store(0, Ordering::SeqCst);
     }
 
     /// Reset frame counters without resetting session start time
@@ -270,6 +277,8 @@ impl AppState {
         session.frame_count = 0;
         session.stacked_count = 0;
         session.rejected_count = 0;
+        drop(session);
+        self.dropped_frames.store(0, Ordering::SeqCst);
     }
 
     /// Set active camera cancel token
@@ -287,6 +296,18 @@ impl AppState {
         if let Some(token) = self.active_camera_cancel_token.read().await.as_ref() {
             token.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// Record a dropped frame (pipeline back-pressure) and broadcast event
+    pub fn frame_dropped(&self) -> u64 {
+        let count = self.dropped_frames.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = self.events.send(ServerEvent::frame_dropped(count));
+        count
+    }
+
+    /// Get the current dropped frames count
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_frames.load(Ordering::SeqCst)
     }
 }
 

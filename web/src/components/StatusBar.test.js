@@ -12,6 +12,7 @@ describe('StatusBar', () => {
                 captureState: ref('Idle'),
                 frameCount: ref(0),
                 stackedCount: ref(0),
+                droppedCount: ref(0),
                 lastError: ref(null),
                 clearError: vi.fn(),
                 diskWriterWarning: ref(null),
@@ -193,6 +194,26 @@ describe('StatusBar', () => {
             await wrapper.find('.error').trigger('click')
 
             expect(clearError).toHaveBeenCalled()
+        })
+    })
+
+    describe('Dropped Frames Counter', () => {
+        it('does not show dropped counter when no frames dropped', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {droppedCount: ref(0)},
+            })
+
+            expect(wrapper.find('.dropped').exists()).toBe(false)
+        })
+
+        it('shows dropped counter when frames have been dropped', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {droppedCount: ref(5)},
+            })
+
+            const dropped = wrapper.find('.dropped')
+            expect(dropped.exists()).toBe(true)
+            expect(dropped.text()).toContain('Dropped: 5')
         })
     })
 })

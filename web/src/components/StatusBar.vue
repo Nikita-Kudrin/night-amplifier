@@ -205,6 +205,21 @@ function formatDuration(startedAt) {
       <span v-else>Total {{ eventStream.frameCount.value }}</span>
     </div>
 
+    <!-- Dropped frames counter -->
+    <div v-if="eventStream.droppedCount.value > 0" class="status-item frames dropped">
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <path d="M12 2v6l-2 2M12 22v-6l2-2M2 12h6l2 2M22 12h-6l-2-2"/>
+      </svg>
+      <span>Dropped: {{ eventStream.droppedCount.value }}</span>
+    </div>
+
     <!-- Capture state -->
     <div class="status-item state" :class="stateClass">
       <span class="state-indicator"></span>
@@ -316,6 +331,10 @@ function formatDuration(startedAt) {
 
 .frames {
   font-family: var(--font-mono);
+}
+
+.frames.dropped {
+  color: var(--warning);
 }
 
 .status-item.solving {

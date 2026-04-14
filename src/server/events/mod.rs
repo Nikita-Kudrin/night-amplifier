@@ -46,6 +46,9 @@ pub enum ServerEvent {
     /// Disk writer queue warning cleared
     DiskWriterWarningCleared,
 
+    /// Frame was dropped because the pipeline couldn't keep up
+    FrameDropped { dropped_count: u64 },
+
     /// Warning message (e.g., client too slow)
     Warning { message: String },
 
@@ -225,6 +228,10 @@ impl ServerEvent {
         ServerEvent::Warning {
             message: message.into(),
         }
+    }
+
+    pub fn frame_dropped(dropped_count: u64) -> Self {
+        ServerEvent::FrameDropped { dropped_count }
     }
 
     pub fn plate_solving_started(target_name: Option<String>) -> Self {
