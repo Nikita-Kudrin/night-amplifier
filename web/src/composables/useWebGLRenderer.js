@@ -254,7 +254,7 @@ export function useWebGLRenderer() {
     }
 
     function isInitialized() {
-        return gl !== null && program !== null
+        return backend.value !== 'unknown' && backend.value !== 'none'
     }
 
     return {

@@ -56,7 +56,7 @@ export function useCanvas2DRenderer() {
     }
 
     function isInitialized() {
-        return ctx2d !== null
+        return backend.value !== 'unknown' && backend.value !== 'none'
     }
 
     return {
