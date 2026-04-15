@@ -10,6 +10,8 @@
 //! - [`PushToInstallerPlugin`] — ASTAP and catalog installation management
 
 pub mod error;
+pub mod progress;
+pub mod download;
 
 pub use error::{PushToError, PushToResult};
 

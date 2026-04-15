@@ -16,6 +16,9 @@ use crate::integration::image_loading::{load_image, save_processed_frame_to_dir}
 fn test_debayer_pipeline() {
     println!("\n=== Debayer Pipeline Test ===\n");
 
+    // Ensure fixtures are downloaded from Google Drive
+    crate::integration::common::ensure_fixtures_sync();
+
     // Prepare dedicated output directory FIRST (clears old data before any processing)
     let output_dir = match prepare_test_output_dir(DEBAYER_OUTPUT_DIR) {
         Ok(dir) => {

@@ -10,6 +10,8 @@ use night_amplifier::{
     subtract_background, CfaPattern, DebayerAlgorithm, DebayerConfig, DetectionConfig, Frame,
     PipelineConfig, StackingPipeline, StarDetector,
 };
+use night_amplifier::camera::{Camera, SimulatedCamera};
+use night_amplifier::camera::CaptureConfig;
 use serial_test::serial;
 
 use crate::integration::common::{
@@ -20,7 +22,7 @@ use crate::integration::common::{
 use crate::integration::image_loading::{
     load_image, load_images_from_paths, save_processed_frame_to_dir,
 };
-use crate::integration::prefetch::ParallelPrefetcher;
+
 
 /// Process all fixture subdirectories and save results
 /// This is the main test that processes each fixture set and outputs stacked/stretched images
@@ -32,6 +34,9 @@ use crate::integration::prefetch::ParallelPrefetcher;
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn test_process_all_fixture_sets() {
     println!("\n=== Processing All Fixture Sets ===\n");
+
+    // Ensure fixtures are downloaded from Google Drive
+    crate::integration::common::ensure_fixtures_sync();
 
     // Prepare dedicated output directory (clears only this test's directory)
     let output_dir = match prepare_test_output_dir(STACKED_OUTPUT_DIR) {
@@ -57,6 +62,9 @@ fn test_process_all_fixture_sets() {
     println!("Found {} fixture set(s) to process.\n", fixture_sets.len());
 
     let mut processed_count = 0;
+
+    // Refresh fixture sets after downloading
+    let fixture_sets = find_fixture_sets();
 
     for fixture_set in &fixture_sets {
         if process_fixture_set(fixture_set, &output_dir) {
@@ -226,13 +234,28 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
     let total_frames = images.len();
     let mut frames_processed = 0;
 
-    // Start parallel prefetcher - loads frames in background using all CPUs
-    let prefetcher = ParallelPrefetcher::new(&images, detected_pattern, 1, num_cpus);
+    // Create production simulated camera
+    let mut camera = SimulatedCamera::new(fixture_set.path.clone())
+        .expect("Failed to create simulated camera");
 
-    // Process frames as they become available
-    while let Some(prefetched) = prefetcher.next() {
-        // Process through the pipeline (detection + registration + stacking)
-        let _result = pipeline.process_frame(&prefetched.frame);
+    // Use 1 microsecond exposure (per requirements)
+    let capture_config = CaptureConfig::default().with_exposure_us(1);
+
+    // Consume the first frame (which we already processed as reference)
+    let _ = camera.capture(&capture_config).expect("Failed to capture reference frame from simulated camera");
+
+    // Process remainder of frames 
+    for _ in 0..(images.len() - 1) {
+        let frame = match camera.capture(&capture_config) {
+            Ok(f) => f,
+            Err(e) => {
+                println!("        Failed to capture frame: {}", e);
+                break;
+            }
+        };
+
+        // Process through the pipeline
+        let _result = pipeline.process_frame(&frame);
 
         frames_processed += 1;
 

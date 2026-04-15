@@ -21,6 +21,9 @@ use crate::integration::image_loading::{load_images_from_paths, save_processed_f
 fn test_full_stacking_pipeline() {
     println!("\n=== Full Stacking Pipeline Test ===\n");
 
+    // Ensure fixtures are downloaded from Google Drive
+    crate::integration::common::ensure_fixtures_sync();
+
     let fixture_sets = find_fixture_sets();
     if fixture_sets.is_empty() {
         println!("No fixture directories found. Skipping test.\n");
