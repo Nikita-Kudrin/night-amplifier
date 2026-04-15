@@ -170,3 +170,80 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
 
     Ok(output_dir)
 }
+
+/// Downloads and extracts test fixture datasets from Google Drive.
+///
+/// Each fixture is only downloaded once — if the target directory already exists,
+/// it is skipped. After downloading, the zip is extracted and removed.
+pub async fn ensure_fixtures() {
+    use night_amplifier::push_to::download::download_file;
+    use tokio::sync::mpsc;
+    use std::path::Path;
+    use std::fs;
+    use std::io;
+
+    let fixtures = vec![
+        ("250mm-dob-imx464-orion-png", "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download"),
+        ("130mm-imx464-dumbell-nebulae-png", "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download"),
+        ("130mm-imx464-ring-nebulae-png", "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download"),
+    ];
+
+    let fixtures_dir = Path::new(FIXTURES_DIR);
+    if !fixtures_dir.exists() {
+        fs::create_dir_all(fixtures_dir).expect("Failed to create fixtures dir");
+    }
+
+    let (tx, mut rx) = mpsc::channel(100);
+    
+    // Drain channel
+    tokio::spawn(async move {
+        while let Some(_) = rx.recv().await {}
+    });
+
+    for (name, url) in fixtures {
+        let dir_path = fixtures_dir.join(name);
+        if dir_path.exists() {
+            continue;
+        }
+
+        let zip_path = fixtures_dir.join(format!("{}.zip", name));
+        
+        println!("Downloading fixture {} from {}", name, url);
+        download_file(url, &zip_path, name, None, tx.clone()).await.unwrap();
+
+        println!("Extracting fixture {}", name);
+        let file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            let outpath = match file.enclosed_name() {
+                Some(path) => fixtures_dir.join(path),
+                None => continue,
+            };
+            
+            if file.name().ends_with('/') {
+                fs::create_dir_all(&outpath).unwrap();
+            } else {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        fs::create_dir_all(&p).unwrap();
+                    }
+                }
+                let mut outfile = fs::File::create(&outpath).unwrap();
+                io::copy(&mut file, &mut outfile).unwrap();
+            }
+        }
+        
+        // Remove the zip after extraction
+        fs::remove_file(zip_path).unwrap();
+        println!("Fixture {} ready", name);
+    }
+}
+
+/// Synchronous wrapper for ensure_fixtures for use in standard tests.
+pub fn ensure_fixtures_sync() {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(ensure_fixtures());
+}
