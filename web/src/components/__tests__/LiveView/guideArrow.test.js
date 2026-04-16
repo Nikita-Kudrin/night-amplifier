@@ -1,14 +1,9 @@
-import {describe, it, expect, beforeEach, vi} from 'vitest'
-import {ref} from 'vue'
-import {flushPromises} from '@vue/test-utils'
-import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
+import {setupMocks, mountLiveView} from './setup.js'
 
 describe('LiveView - Guide Arrow Integration', () => {
-    let mocks
-
     beforeEach(() => {
         vi.clearAllMocks()
-        mocks = setupMocks()
+        setupMocks()
     })
 
     describe('visibility', () => {

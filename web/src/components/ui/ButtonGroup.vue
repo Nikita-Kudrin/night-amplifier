@@ -1,11 +1,17 @@
 <script setup>
 defineProps({
-  modelValue: [String, Number],
+  modelValue: {
+    type: [String, Number],
+    default: null
+  },
   options: {
     type: Array,
     required: true,
   },
-  disabled: Boolean,
+  disabled: {
+    type: Boolean,
+    default: false
+  },
 })
 
 const emit = defineEmits(['update:modelValue'])

@@ -1,4 +1,3 @@
-import {vi} from 'vitest'
 import {ref, shallowRef} from 'vue'
 import {mount} from '@vue/test-utils'
 

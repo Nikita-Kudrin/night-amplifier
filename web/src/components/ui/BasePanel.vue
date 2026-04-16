@@ -1,6 +1,9 @@
 <script setup>
 defineProps({
-  title: String,
+  title: {
+    type: String,
+    default: '',
+  },
   bordered: {
     type: Boolean,
     default: true,

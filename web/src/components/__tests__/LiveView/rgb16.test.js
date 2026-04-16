@@ -1,4 +1,3 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
 import {setupMocks, mountLiveView} from './setup.js'
 
@@ -14,7 +13,7 @@ describe('LiveView - RGB8 Data Handling', () => {
     })
 
     it('uploads RGB8 data natively when WebGL2 is supported', async () => {
-        const wrapper = mountLiveView()
+        mountLiveView()
         await nextTick()
 
         const pixelData = new Uint8Array(3) // 1 pixel * 3 bytes

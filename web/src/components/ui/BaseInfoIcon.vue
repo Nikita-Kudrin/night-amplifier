@@ -1,7 +1,7 @@
 <script setup>
 import {ref, onMounted, onUnmounted, nextTick} from 'vue'
 
-const props = defineProps({
+defineProps({
   message: {
     type: String,
     required: true

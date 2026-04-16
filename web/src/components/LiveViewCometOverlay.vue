@@ -1,10 +1,25 @@
 <script setup>
 defineProps({
-  isCometMode: Boolean,
-  hasFrame: Boolean,
-  roiDisplayRect: Object,
-  isSelectingCometRoi: Boolean,
-  selectionRect: Object,
+  isCometMode: {
+    type: Boolean,
+    default: false
+  },
+  hasFrame: {
+    type: Boolean,
+    default: false
+  },
+  roiDisplayRect: {
+    type: Object,
+    default: null
+  },
+  isSelectingCometRoi: {
+    type: Boolean,
+    default: false
+  },
+  selectionRect: {
+    type: Object,
+    default: null
+  },
 })
 
 defineEmits(['cancel'])

@@ -41,7 +41,6 @@ watch(showDatabaseManager, (visible) => {
 })
 
 const installedDatabases = computed(() => astapStatus.value?.installed_databases ?? [])
-const hasMultipleDatabases = computed(() => installedDatabases.value.length > 1)
 
 async function selectDatabase(dbId) {
   const db = installedDatabases.value.find(d => d.id === dbId)

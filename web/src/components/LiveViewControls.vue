@@ -1,12 +1,33 @@
 <script setup>
 defineProps({
-  scale: Number,
-  frameNumber: Number,
-  backendLabel: String,
-  isFullscreen: Boolean,
-  hasFrame: Boolean,
-  isCometMode: Boolean,
-  isSelectingCometRoi: Boolean,
+  scale: {
+    type: Number,
+    default: 1.0
+  },
+  frameNumber: {
+    type: Number,
+    default: 0
+  },
+  backendLabel: {
+    type: String,
+    default: 'Canvas2D'
+  },
+  isFullscreen: {
+    type: Boolean,
+    default: false
+  },
+  hasFrame: {
+    type: Boolean,
+    default: false
+  },
+  isCometMode: {
+    type: Boolean,
+    default: false
+  },
+  isSelectingCometRoi: {
+    type: Boolean,
+    default: false
+  },
 })
 
 defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 'startCometRoiSelection'])

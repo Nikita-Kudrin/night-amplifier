@@ -81,7 +81,6 @@ export function useWebGLRenderer() {
     const backend = ref('unknown') // 'webgl2-8bit', 'webgl1', 'none'
 
     let gl = null
-    let glVersion = 0 // 1 or 2
     let program = null
     let texture = null
     let positionBuffer = null
@@ -123,7 +122,6 @@ export function useWebGLRenderer() {
         console.log('[WebGLRenderer] Renderer:', gl2.getParameter(gl2.RENDERER))
 
         gl = gl2
-        glVersion = 2
 
         const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSourceGL2)
         const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceGL2)
@@ -155,7 +153,6 @@ export function useWebGLRenderer() {
         console.log('[WebGLRenderer] WebGL1 context created')
 
         gl = gl1
-        glVersion = 1
 
         const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSourceGL1)
         const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceGL1)
@@ -245,7 +242,6 @@ export function useWebGLRenderer() {
             if (program) gl.deleteProgram(program)
         }
         gl = null
-        glVersion = 0
         program = null
         texture = null
         positionBuffer = null

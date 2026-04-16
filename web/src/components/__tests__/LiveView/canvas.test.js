@@ -1,4 +1,3 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
 import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
 
@@ -35,7 +34,7 @@ describe('LiveView - Canvas Display', () => {
     })
 
     it('initializes WebGL context on mount', async () => {
-        const wrapper = mountLiveView()
+        mountLiveView()
         await nextTick()
 
         expect(mocks.mockWebGLRenderer.init).toHaveBeenCalled()
