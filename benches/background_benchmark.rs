@@ -20,12 +20,12 @@ fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     frame
 }
 
-fn bench_background_estimation(c: &mut Criterion) {
+fn bench_background_estimation_grid(c: &mut Criterion) {
     // 2712 x 1538 matches the resolution in the trace logs
     let frame = create_test_frame(2712, 1538, 3);
 
-    let mut group = c.benchmark_group("background_estimation");
-    group.sample_size(10); // Since it takes >1 second, reduce sample size
+    let mut group = c.benchmark_group("background_estimation_grid");
+    group.sample_size(10); // Matches the previous setting
 
     let config_grid =
         BackgroundConfig::default().with_algorithm(BackgroundExtractionAlgorithm::GridBilinear);
@@ -35,15 +35,8 @@ fn bench_background_estimation(c: &mut Criterion) {
         b.iter(|| extractor_grid.estimate(black_box(&frame)).unwrap())
     });
 
-    let config_rbf = BackgroundConfig::default().with_algorithm(BackgroundExtractionAlgorithm::Rbf);
-    let extractor_rbf = BackgroundExtractor::new(config_rbf);
-
-    group.bench_function("estimate_rbf", |b| {
-        b.iter(|| extractor_rbf.estimate(black_box(&frame)).unwrap())
-    });
-
     group.finish();
 }
 
-criterion_group!(benches, bench_background_estimation);
+criterion_group!(benches, bench_background_estimation_grid);
 criterion_main!(benches);
