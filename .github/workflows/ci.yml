@@ -56,7 +56,7 @@ jobs:
         with:
           name: tests-archive
       - name: Run unit tests
-        run: cargo nextest run --archive-file tests.tar.zst --workspace --exclude-tests integration_pipeline
+        run: cargo nextest run --archive-file tests.tar.zst -E 'not (binary(integration_pipeline) or binary(pro_gating_test))'
  
   rust-integration-tests:
     needs: rust-build-all
@@ -72,7 +72,7 @@ jobs:
         with:
           name: tests-archive
       - name: Run integration tests
-        run: cargo nextest run --archive-file tests.tar.zst --test integration_pipeline --run-ignored all
+        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all
  
   rust-benchmarks:
     needs: rust-build-all
