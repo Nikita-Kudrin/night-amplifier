@@ -1,12 +1,15 @@
 <script setup>
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-const props = defineProps({
+defineProps({
   modelValue: {
     type: Number,
     required: true,
   },
-  label: String,
+  label: {
+    type: String,
+    default: ''
+  },
   min: {
     type: Number,
     default: 0,
@@ -27,8 +30,14 @@ const props = defineProps({
     type: Function,
     default: (v) => v,
   },
-  help: String,
-  disabled: Boolean,
+  help: {
+    type: String,
+    default: ''
+  },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])

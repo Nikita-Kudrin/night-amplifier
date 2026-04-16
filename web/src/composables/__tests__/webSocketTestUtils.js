@@ -1,4 +1,3 @@
-import {vi} from 'vitest'
 import {nextTick} from 'vue'
 
 // --- Constants ---

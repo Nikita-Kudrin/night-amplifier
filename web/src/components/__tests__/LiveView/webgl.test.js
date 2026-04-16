@@ -1,4 +1,3 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
 import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
 
@@ -14,7 +13,7 @@ describe('LiveView - WebGL Rendering', () => {
     })
 
     it('uploads texture when frameData changes', async () => {
-        const wrapper = mountLiveView()
+        mountLiveView()
         await nextTick()
 
         // Set frame data
@@ -27,7 +26,7 @@ describe('LiveView - WebGL Rendering', () => {
     })
 
     it('updates viewport when dimensions change', async () => {
-        const wrapper = mountLiveView()
+        mountLiveView()
         await nextTick()
 
         mocks.mockImageStream.frameData.value = createMockFrameData(100, 50)

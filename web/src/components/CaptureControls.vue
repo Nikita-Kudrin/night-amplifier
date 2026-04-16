@@ -110,12 +110,6 @@ const exposureUs = computed(() => {
   }
 })
 
-const exposureDisplay = computed(() => {
-  const us = settings.value?.exposure_us || 0
-  if (us >= 1000000) return `${(us / 1000000).toFixed(1)}s`
-  if (us >= 1000) return `${(us / 1000).toFixed(0)}ms`
-  return `${us}us`
-})
 
 const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || EXPOSURE_PRESETS.ms)
 

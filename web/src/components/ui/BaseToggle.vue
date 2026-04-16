@@ -2,22 +2,30 @@
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
 defineProps({
-  modelValue: Boolean,
-  label: String,
+  modelValue: {
+    type: Boolean,
+    default: false
+  },
+  label: {
+    type: String,
+    default: ''
+  },
   size: {
     type: String,
     default: 'normal',
     validator: (v) => ['small', 'normal'].includes(v),
   },
-  help: String,
-  disabled: Boolean,
+  help: {
+    type: String,
+    default: ''
+  },
+  disabled: {
+    type: Boolean,
+    default: false
+  },
 })
 
 const emit = defineEmits(['update:modelValue'])
-
-function toggle() {
-  emit('update:modelValue', !arguments[0])
-}
 </script>
 
 <template>

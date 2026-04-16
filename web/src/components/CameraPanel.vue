@@ -33,7 +33,7 @@ const directoryPath = ref('')
 onMounted(async () => {
   try {
     simulatorConfig.value = await getSimulatorConfig()
-  } catch (e) {
+  } catch {
     // Ignore - simulator not configured
   }
 })

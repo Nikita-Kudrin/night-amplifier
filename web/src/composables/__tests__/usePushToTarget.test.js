@@ -1,5 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {ref, nextTick} from 'vue'
+import {ref} from 'vue'
 import {usePushToTarget} from '../usePushToTarget.js'
 import * as api from '../api.js'
 

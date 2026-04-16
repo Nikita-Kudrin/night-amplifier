@@ -1,4 +1,3 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {
     MockWebSocket,
     RGB8_BYTES_PER_PIXEL,
@@ -9,7 +8,6 @@ import {
     waitForAsyncProcessing,
     suppressConsoleErrors,
     createTestFrame,
-    createRgb8PixelData,
     createRgb8Lz4Buffer,
     createInvalidMagicBuffer,
     setupGlobalWebSocketMock,
@@ -78,8 +76,6 @@ describe('useImageStream', () => {
             getWebSocket().simulateMessage(createTestFrame(2, 2))
             await waitForAsyncProcessing()
             expect(dimensions.value).toEqual({width: 2, height: 2})
-
-            const largerFrame = createRgb8Lz4Buffer(4, 3, createRgb8PixelData(4, 3))
         })
 
         it('ignores non-binary messages', async () => {

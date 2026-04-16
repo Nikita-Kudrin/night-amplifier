@@ -119,8 +119,12 @@ const HELP = HELP_TEXTS
               style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px;"
               @change="applySetting('background_extraction_algorithm', $event.target.value)"
           >
-            <option v-for="opt in BACKGROUND_ALGORITHM_OPTIONS" :key="opt.value" :value="opt.value"
-                    :disabled="opt.pro && !capabilities.deep_sky.rbf_background">
+            <option
+                v-for="opt in BACKGROUND_ALGORITHM_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+                :disabled="opt.pro && !capabilities.deep_sky.rbf_background"
+            >
               {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.rbf_background ? '🔒' : '' }}
             </option>
           </select>
@@ -196,26 +200,41 @@ const HELP = HELP_TEXTS
         />
       </div>
 
-      <div v-if="localSettings.eyepiece.binoview" class="control-group"
-           style="flex-direction: column; align-items: stretch; margin-top: 0.5rem">
+      <div
+          v-if="localSettings.eyepiece.binoview"
+          class="control-group"
+          style="flex-direction: column; align-items: stretch; margin-top: 0.5rem"
+      >
         <label class="control-label" style="margin-bottom: 0.5rem">
           Screen settings
           <BaseInfoIcon :message="HELP.eyepiece_screen_settings"/>
         </label>
 
         <div class="control-row" style="justify-content: flex-start; margin-bottom: 0.5rem">
-          <input type="number" v-model.number="localSettings.eyepiece.screen_width" min="1" step="0.1"
-                 @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-                 style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
-                 title="Width"/>
+          <input
+              v-model.number="localSettings.eyepiece.screen_width"
+              type="number"
+              min="1"
+              step="0.1"
+              style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
+              title="Width"
+              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
+          />
           <span style="margin: 0 4px">x</span>
-          <input type="number" v-model.number="localSettings.eyepiece.screen_height" min="1" step="0.1"
-                 @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-                 style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
-                 title="Height"/>
-          <select v-model="localSettings.eyepiece.screen_measurement"
-                  @change="applySetting('eyepiece', localSettings.eyepiece)"
-                  style="margin-left: 8px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;">
+          <input
+              v-model.number="localSettings.eyepiece.screen_height"
+              type="number"
+              min="1"
+              step="0.1"
+              style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
+              title="Height"
+              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
+          />
+          <select
+              v-model="localSettings.eyepiece.screen_measurement"
+              style="margin-left: 8px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
+              @change="applySetting('eyepiece', localSettings.eyepiece)"
+          >
             <option value="mm">mm</option>
             <option value="inches">inches</option>
           </select>
@@ -223,15 +242,25 @@ const HELP = HELP_TEXTS
 
         <div class="control-row" style="justify-content: flex-start;">
           <label style="margin-right: 8px; font-size: 0.9em; color: var(--text-secondary)">Resolution</label>
-          <input type="number" v-model.number="localSettings.eyepiece.screen_resolution_x" min="1" step="1"
-                 @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-                 style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
-                 title="Resolution X"/>
+          <input
+              v-model.number="localSettings.eyepiece.screen_resolution_x"
+              type="number"
+              min="1"
+              step="1"
+              style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
+              title="Resolution X"
+              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
+          />
           <span style="margin: 0 4px">x</span>
-          <input type="number" v-model.number="localSettings.eyepiece.screen_resolution_y" min="1" step="1"
-                 @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-                 style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
-                 title="Resolution Y"/>
+          <input
+              v-model.number="localSettings.eyepiece.screen_resolution_y"
+              type="number"
+              min="1"
+              step="1"
+              style="width: 70px; background: var(--surface); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; padding: 4px;"
+              title="Resolution Y"
+              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
+          />
         </div>
       </div>
     </div>
@@ -274,8 +303,12 @@ const HELP = HELP_TEXTS
               style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px;"
               @change="applySetting('rejection_method', $event.target.value)"
           >
-            <option v-for="opt in REJECTION_METHOD_OPTIONS" :key="opt.value" :value="opt.value"
-                    :disabled="opt.pro && !capabilities.deep_sky.advanced_rejection">
+            <option
+                v-for="opt in REJECTION_METHOD_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+                :disabled="opt.pro && !capabilities.deep_sky.advanced_rejection"
+            >
               {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.advanced_rejection ? '🔒' : '' }}
             </option>
           </select>
