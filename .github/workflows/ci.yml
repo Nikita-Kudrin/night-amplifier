@@ -33,7 +33,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
       - name: Run unit tests
-        run: cargo test
+        run: cargo test --no-default-features
 
   rust-integration-tests:
     runs-on: ubuntu-24.04
@@ -60,7 +60,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
       - name: Run integration tests
-        run: cargo test --test integration_pipeline -- --ignored --test-threads=1
+        run: cargo test --no-default-features --test integration_pipeline -- --ignored --test-threads=1
 
   rust-benchmarks:
     runs-on: ubuntu-24.04
@@ -87,7 +87,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
       - name: Run benchmarks
-        run: cargo bench
+        run: cargo bench --no-default-features
 
   web-tests:
     runs-on: ubuntu-24.04
