@@ -1,71 +1,81 @@
 name: CI
-
+ 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
+ 
 on:
   push:
     branches:
       - '**'
   pull_request:
     branches: [ "main" ]
-
+ 
 jobs:
+  rust-build-all:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Archive tests
+        run: cargo nextest archive --archive-file tests.tar.zst --no-default-features
+      - name: Build benchmarks
+        run: cargo bench --no-run --no-default-features
+      - name: Upload Test Archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-archive
+          path: tests.tar.zst
+          retention-days: 1
+ 
   rust-unit-tests:
+    needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Download Archive
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
+          name: tests-archive
       - name: Run unit tests
-        run: cargo test --no-default-features
-
+        run: cargo nextest run --archive-file tests.tar.zst --workspace --exclude-tests integration_pipeline
+ 
   rust-integration-tests:
+    needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - name: Download Archive
+        uses: actions/download-artifact@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+          name: tests-archive
       - name: Run integration tests
-        run: cargo test --no-default-features --test integration_pipeline -- --ignored --test-threads=1
-
+        run: cargo nextest run --archive-file tests.tar.zst --test integration_pipeline --run-ignored all
+ 
   rust-benchmarks:
+    needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -82,16 +92,10 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
       - name: Run benchmarks
         run: cargo bench --no-default-features
-
+ 
   web-tests:
     runs-on: ubuntu-24.04
     steps:
@@ -118,7 +122,7 @@ jobs:
       - name: Run web unit tests
         working-directory: ./web
         run: npm run test:run
-
+ 
   web-lint:
     runs-on: ubuntu-24.04
     steps:
