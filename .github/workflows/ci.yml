@@ -72,7 +72,7 @@ jobs:
         with:
           name: tests-archive
       - name: Run integration tests
-        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all
+        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1
  
   rust-benchmarks:
     needs: rust-build-all

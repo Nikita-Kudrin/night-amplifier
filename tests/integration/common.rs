@@ -208,35 +208,53 @@ pub async fn ensure_fixtures() {
 
         let zip_path = fixtures_dir.join(format!("{}.zip", name));
         
+        // Check again after potential race
+        if dir_path.exists() {
+            continue;
+        }
+
         println!("Downloading fixture {} from {}", name, url);
-        download_file(url, &zip_path, name, None, tx.clone()).await.unwrap();
+        if let Err(e) = download_file(url, &zip_path, name, None, tx.clone()).await {
+            if !dir_path.exists() {
+                panic!("Failed to download fixture {}: {}", name, e);
+            }
+            continue;
+        }
 
         println!("Extracting fixture {}", name);
-        let file = fs::File::open(&zip_path).unwrap();
-        let mut archive = zip::ZipArchive::new(file).unwrap();
-        
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i).unwrap();
-            let outpath = match file.enclosed_name() {
-                Some(path) => fixtures_dir.join(path),
-                None => continue,
+        if let Ok(file) = fs::File::open(&zip_path) {
+            let mut archive = match zip::ZipArchive::new(file) {
+                Ok(a) => a,
+                Err(_) => {
+                    if dir_path.exists() { continue; }
+                    panic!("Failed to open zip archive for {}", name);
+                }
             };
             
-            if file.name().ends_with('/') {
-                fs::create_dir_all(&outpath).unwrap();
-            } else {
-                if let Some(p) = outpath.parent() {
-                    if !p.exists() {
-                        fs::create_dir_all(&p).unwrap();
+            for i in 0..archive.len() {
+                let mut file = archive.by_index(i).unwrap();
+                let outpath = match file.enclosed_name() {
+                    Some(path) => fixtures_dir.join(path),
+                    None => continue,
+                };
+                
+                if file.name().ends_with('/') {
+                    let _ = fs::create_dir_all(&outpath);
+                } else {
+                    if let Some(p) = outpath.parent() {
+                        let _ = fs::create_dir_all(&p);
+                    }
+                    if let Ok(mut outfile) = fs::File::create(&outpath) {
+                        let _ = io::copy(&mut file, &mut outfile);
                     }
                 }
-                let mut outfile = fs::File::create(&outpath).unwrap();
-                io::copy(&mut file, &mut outfile).unwrap();
             }
+            
+            // Remove the zip after extraction (ignore if already removed by another test)
+            let _ = fs::remove_file(zip_path);
         }
         
-        // Remove the zip after extraction
-        fs::remove_file(zip_path).unwrap();
+        println!("Fixture {} ready", name);
         println!("Fixture {} ready", name);
     }
 }
