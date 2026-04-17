@@ -14,6 +14,8 @@ pub mod progress;
 pub mod download;
 
 pub use error::{PushToError, PushToResult};
+pub use progress::InstallProgress;
+pub use download::download_file;
 
 use crate::detection::StarDetector;
 use crate::frame::Frame;
