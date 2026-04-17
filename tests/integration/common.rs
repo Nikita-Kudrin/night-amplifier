@@ -171,22 +171,33 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
     Ok(output_dir)
 }
 
+/// Default list of fixture datasets to download.
+pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
+    ("250mm-dob-imx464-orion-png", "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download"),
+    ("35mm-imx464-orion-tiff", "https://drive.google.com/uc?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download"),
+    ("130mm-imx464-dumbell-nebulae-png", "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download"),
+    ("130mm-imx464-ring-nebulae-png", "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download"),
+];
+
 /// Downloads and extracts test fixture datasets from Google Drive.
 ///
 /// Each fixture is only downloaded once — if the target directory already exists,
 /// it is skipped. After downloading, the zip is extracted and removed.
-pub async fn ensure_fixtures() {
+pub async fn ensure_fixtures(names: Option<&[&str]>) {
     use night_amplifier::push_to::download::download_file;
     use tokio::sync::mpsc;
     use std::path::Path;
     use std::fs;
     use std::io;
 
-    let fixtures = vec![
-        ("250mm-dob-imx464-orion-png", "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download"),
-        ("130mm-imx464-dumbell-nebulae-png", "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download"),
-        ("130mm-imx464-ring-nebulae-png", "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download"),
-    ];
+    let fixtures: Vec<(&str, &str)> = if let Some(names) = names {
+        DEFAULT_FIXTURES.iter()
+            .filter(|(name, _)| names.contains(name))
+            .copied()
+            .collect()
+    } else {
+        DEFAULT_FIXTURES.iter().copied().collect()
+    };
 
     let fixtures_dir = Path::new(FIXTURES_DIR);
     if !fixtures_dir.exists() {
@@ -194,7 +205,7 @@ pub async fn ensure_fixtures() {
     }
 
     let (tx, mut rx) = mpsc::channel(100);
-    
+
     // Drain channel
     tokio::spawn(async move {
         while let Some(_) = rx.recv().await {}
@@ -207,7 +218,7 @@ pub async fn ensure_fixtures() {
         }
 
         let zip_path = fixtures_dir.join(format!("{}.zip", name));
-        
+
         // Check again after potential race
         if dir_path.exists() {
             continue;
@@ -230,14 +241,14 @@ pub async fn ensure_fixtures() {
                     panic!("Failed to open zip archive for {}", name);
                 }
             };
-            
+
             for i in 0..archive.len() {
                 let mut file = archive.by_index(i).unwrap();
                 let outpath = match file.enclosed_name() {
                     Some(path) => fixtures_dir.join(path),
                     None => continue,
                 };
-                
+
                 if file.name().ends_with('/') {
                     let _ = fs::create_dir_all(&outpath);
                 } else {
@@ -249,12 +260,11 @@ pub async fn ensure_fixtures() {
                     }
                 }
             }
-            
+
             // Remove the zip after extraction (ignore if already removed by another test)
             let _ = fs::remove_file(zip_path);
         }
-        
-        println!("Fixture {} ready", name);
+
         println!("Fixture {} ready", name);
     }
 }
@@ -263,5 +273,9 @@ pub async fn ensure_fixtures() {
 pub fn ensure_fixtures_sync() {
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(ensure_fixtures());
+        .block_on(ensure_fixtures(
+            Some(&["250mm-dob-imx464-orion-png",
+                "130mm-imx464-dumbell-nebulae-png",
+                "130mm-imx464-ring-nebulae-png"])
+        ));
 }
