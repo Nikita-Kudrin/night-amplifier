@@ -89,6 +89,7 @@ pub async fn download_file(
 
 fn create_http_client() -> PushToResult<reqwest::Client> {
     reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(std::time::Duration::from_secs(3600)) // 1 hour timeout for large files
         .cookie_store(true) // Required for Google Drive confirmation
