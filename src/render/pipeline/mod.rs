@@ -7,7 +7,7 @@
 use crate::background::subtract_background_with_config;
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use tracing::{debug, warn};
+use tracing::{debug, field, instrument, warn, Span};
 
 mod config;
 pub use config::RenderPipelineConfig;
@@ -56,6 +56,15 @@ impl RenderPipeline {
     }
 
     /// Process a frame through the complete pipeline in-place
+    #[instrument(skip(self, frame), fields(
+        width = frame.width(),
+        height = frame.height(),
+        channels = frame.channels(),
+        background_subtracted = field::Empty,
+        auto_stretched = field::Empty,
+        saturation_boosted = field::Empty,
+        contrast_applied = field::Empty,
+    ))]
     pub fn process(&self, frame: &mut Frame) -> Result<PipelineResult> {
         let channels = frame.channels();
         if channels != 1 && channels != 3 {
@@ -123,6 +132,12 @@ impl RenderPipeline {
                 debug!("Contrast adjustment applied");
             }
         }
+
+        let span = Span::current();
+        span.record("background_subtracted", result.background_subtracted);
+        span.record("auto_stretched", result.stretch_result.is_some());
+        span.record("saturation_boosted", result.saturation_boosted);
+        span.record("contrast_applied", result.contrast_applied);
 
         Ok(result)
     }

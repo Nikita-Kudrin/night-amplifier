@@ -58,6 +58,8 @@ pub struct StackedFrame {
     pub display_frame: Frame,
     /// Whether this frame was successfully added to the stack.
     pub was_stacked: bool,
+    /// Sequential frame number within the capture session.
+    pub frame_number: u64,
     /// Snapshot of capture settings (for render pipeline configuration).
     pub settings: CaptureSettings,
 }

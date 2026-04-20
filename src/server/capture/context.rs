@@ -3,7 +3,7 @@
 //! This module provides `StackingContext` and `PlanetaryStackingContext` which
 //! encapsulate the logic for frame registration and accumulation.
 
-use tracing::{debug, info, warn};
+use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
 use crate::detection::{
     compute_median_fwhm, compute_median_snr, DetectionConfig, Star, StarDetector,
@@ -78,10 +78,16 @@ impl StackingContext {
         })
     }
 
+    #[instrument(skip(self, frame), fields(
+        star_count = field::Empty,
+    ))]
     pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<usize, String> {
         // Try adaptive detection first for best results
-        self.reference_stars = crate::detection::detect_stars_adaptive(frame)
-            .map_err(|e| format!("Star detection failed: {}", e))?;
+        self.reference_stars = {
+            let _span = info_span!("detect_stars").entered();
+            crate::detection::detect_stars_adaptive(frame)
+                .map_err(|e| format!("Star detection failed: {}", e))?
+        };
 
         if self.reference_stars.len() < 3 {
             return Err(format!(
@@ -101,29 +107,43 @@ impl StackingContext {
             .map_err(|e| format!("Failed to add reference frame: {}", e))?;
 
         self.is_initialized = true;
+        Span::current().record("star_count", self.reference_stars.len());
         Ok(self.reference_stars.len())
     }
 
+    #[instrument(skip(self, frame), fields(
+        registered = field::Empty,
+        matched_stars = field::Empty,
+    ))]
     pub fn add_frame(&mut self, frame: &Frame) -> Result<bool, String> {
         if !self.is_initialized {
             return Err("Stacking context not initialized".to_string());
         }
 
         // Use adaptive detection for target frame as well
-        let target_stars = match crate::detection::detect_stars_adaptive(frame) {
-            Ok(stars) => stars,
-            Err(_) => return Ok(false),
+        let target_stars = {
+            let _span = info_span!("detect_stars").entered();
+            match crate::detection::detect_stars_adaptive(frame) {
+                Ok(stars) => stars,
+                Err(_) => {
+                    Span::current().record("registered", false);
+                    return Ok(false);
+                }
+            }
         };
 
         if target_stars.len() < 3 {
+            Span::current().record("registered", false);
             return Ok(false);
         }
 
         // Use adaptive registration which tries multiple strategies for robustness
-        let transform = match self
-            .adaptive_registration
-            .register(&self.reference_stars, &target_stars)
-        {
+        let register_result = {
+            let _span = info_span!("register").entered();
+            self.adaptive_registration
+                .register(&self.reference_stars, &target_stars)
+        };
+        let transform = match register_result {
             Ok(result) => {
                 debug!(
                     config = %result.config_used,
@@ -131,9 +151,13 @@ impl StackingContext {
                     residual = result.mean_residual,
                     "Registration succeeded"
                 );
+                Span::current().record("matched_stars", result.matched_stars);
                 result.transform
             }
-            Err(_) => return Ok(false),
+            Err(_) => {
+                Span::current().record("registered", false);
+                return Ok(false);
+            }
         };
 
         // Compute quality metrics from detected stars for weighted stacking
@@ -142,15 +166,15 @@ impl StackingContext {
             snr: compute_median_snr(&target_stars),
         };
 
-        match self
+        let added = self
             .stacker
             .add_frame_with_quality(frame, &transform, quality)
-        {
-            Ok(()) => Ok(true),
-            Err(_) => Ok(false),
-        }
+            .is_ok();
+        Span::current().record("registered", added);
+        Ok(added)
     }
 
+    #[instrument(skip(self), fields(frame_count = self.frame_count()))]
     pub fn compute(&self) -> Result<Frame, String> {
         self.stacker
             .compute()
@@ -249,6 +273,7 @@ impl PlanetaryStackingContext {
         })
     }
 
+    #[instrument(skip(self, frame))]
     pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), String> {
         self.reference_frame = Some(frame.clone());
 
@@ -263,6 +288,12 @@ impl PlanetaryStackingContext {
         Ok(())
     }
 
+    #[instrument(skip(self, frame, settings), fields(
+        dx = field::Empty,
+        dy = field::Empty,
+        ncc = field::Empty,
+        registered = field::Empty,
+    ))]
     pub fn add_frame(&mut self, frame: &Frame, settings: &CaptureSettings) -> Result<bool, String> {
         if !self.is_initialized {
             return Err("Planetary stacking context not initialized".to_string());
@@ -291,6 +322,10 @@ impl PlanetaryStackingContext {
         );
 
         debug!(dx, dy, ncc, "Planetary alignment results");
+        let span = Span::current();
+        span.record("dx", dx);
+        span.record("dy", dy);
+        span.record("ncc", ncc);
 
         // Convert (dx, dy) translation to AffineTransform
         // Note: Planetary alignment is currently translation-only
@@ -303,14 +338,19 @@ impl PlanetaryStackingContext {
             .stacker
             .add_frame_with_quality(frame, &transform, quality)
         {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                span.record("registered", true);
+                Ok(true)
+            }
             Err(e) => {
                 debug!(error = %e, "Failed to add frame to planetary stack");
+                span.record("registered", false);
                 Ok(false)
             }
         }
     }
 
+    #[instrument(skip(self), fields(frame_count = self.frame_count()))]
     pub fn compute(&self) -> Result<Frame, String> {
         self.stacker
             .compute()
