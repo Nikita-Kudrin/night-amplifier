@@ -1919,6 +1919,7 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "playerone-sdk",
+ "playerone-sdk-sys",
  "png",
  "process-wrap",
  "rayon",

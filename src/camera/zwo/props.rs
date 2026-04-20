@@ -74,6 +74,7 @@ pub(crate) fn build_camera_info(
         max_gain,
         unity_gain: 120,
         hcg_gain: 100,
+        sensor_modes: Vec::new(),
     }
 }
 

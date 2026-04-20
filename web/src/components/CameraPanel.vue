@@ -18,6 +18,7 @@ const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const cameraStatus = inject('cameraStatus', { value: {} })
 const cameraPhase = inject('cameraPhase', { value: {} })
+const settings = inject('settings', ref(null))
 
 const { error, clearError, withErrorHandling } = useError()
 
@@ -105,6 +106,17 @@ function phaseLabel(cam) {
   if (phase === 'precooling') return 'Precooling'
   if (phase === 'warming_up') return 'Warming up'
   return null
+}
+
+function sensorModePill(cam) {
+  const modes = cam?.info?.sensor_modes
+  if (!modes || modes.length === 0) return null
+  const override = settings.value?.sensor_mode_override
+  const desired =
+    override ?? (settings.value?.stacking_type === 'planetary' ? 'normal' : 'low_readout_noise')
+  const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
+  const match = modes.find((m) => needle.test(m.name))
+  return (match ?? modes[0]).name
 }
 
 async function handleConfigureSimulator() {
@@ -245,6 +257,9 @@ const HELP = {
               <span class="camera-details">
                 {{ formatResolution(cam) }}
                 <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
+                <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
+                  sensorModePill(cam)
+                }}</span>
                 <span v-if="temperaturePill(cam)" class="temp-pill">{{
                   temperaturePill(cam)
                 }}</span>
@@ -465,6 +480,14 @@ const HELP = {
 .phase-pill {
   background: rgba(234, 179, 8, 0.18);
   color: #eab308;
+  padding: 0.05rem 0.375rem;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.sensor-mode-pill {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
   padding: 0.05rem 0.375rem;
   border-radius: 999px;
   font-weight: 500;
