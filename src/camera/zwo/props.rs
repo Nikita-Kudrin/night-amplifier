@@ -61,6 +61,8 @@ pub(crate) fn build_camera_info(
         },
         bayer_pattern: parsed.bayer_pattern,
         has_cooler: parsed.has_cooler,
+        min_temp_c: if parsed.has_cooler { Some(-40.0) } else { None },
+        max_temp_c: if parsed.has_cooler { Some(20.0) } else { None },
         has_shutter: parsed.has_shutter,
         is_usb3: parsed.is_usb3,
         bit_depth: parsed.bit_depth,

@@ -35,6 +35,12 @@ pub fn camera_info_from_properties(props: &CameraProperties) -> CameraInfo {
         })
         .collect();
 
+    let (min_temp_c, max_temp_c) = if props.is_has_cooler {
+        (Some(-40.0), Some(20.0))
+    } else {
+        (None, None)
+    };
+
     CameraInfo {
         name: props.camera_model_name.clone(),
         id: props.camera_id as i32,
@@ -45,6 +51,8 @@ pub fn camera_info_from_properties(props: &CameraProperties) -> CameraInfo {
         sensor_type,
         bayer_pattern,
         has_cooler: props.is_has_cooler,
+        min_temp_c,
+        max_temp_c,
         has_shutter: false,
         is_usb3: props.is_usb_3_speed,
         bit_depth: props.bit_depth as u8,

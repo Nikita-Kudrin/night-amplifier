@@ -11,6 +11,7 @@ use tracing::warn;
 use super::events::ServerEvent;
 use super::services::PushToState;
 use super::settings_persistence::SettingsPersistence;
+use crate::camera::CameraStatus;
 use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -56,6 +57,8 @@ pub struct AppState {
     pub active_camera_cancel_token: RwLock<Option<Arc<AtomicBool>>>,
     /// Counter for frames dropped due to pipeline back-pressure
     pub dropped_frames: AtomicU64,
+    /// Latest reported camera status keyed by camera name (for cooled cameras)
+    pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
 }
 
 impl AppState {
@@ -89,6 +92,7 @@ impl AppState {
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
+            latest_camera_status: RwLock::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -128,6 +132,7 @@ impl AppState {
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
+            latest_camera_status: RwLock::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -165,6 +170,7 @@ impl AppState {
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
+            latest_camera_status: RwLock::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -298,6 +304,35 @@ impl AppState {
         }
     }
 
+    /// Cache the latest camera status sample and broadcast a status event.
+    pub async fn update_camera_status(
+        &self,
+        camera_name: &str,
+        status: CameraStatus,
+        target_temp_c: Option<f64>,
+    ) {
+        {
+            let mut map = self.latest_camera_status.write().await;
+            map.insert(camera_name.to_string(), status.clone());
+        }
+        let _ = self.events.send(ServerEvent::camera_status_updated(
+            camera_name,
+            status.temperature_c,
+            status.cooler_power,
+            status.cooler_on,
+            target_temp_c,
+        ));
+    }
+
+    /// Get the latest cached camera status for the given camera name.
+    pub async fn get_camera_status(&self, camera_name: &str) -> Option<CameraStatus> {
+        self.latest_camera_status
+            .read()
+            .await
+            .get(camera_name)
+            .cloned()
+    }
+
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
         let count = self.dropped_frames.fetch_add(1, Ordering::SeqCst) + 1;
@@ -399,6 +434,82 @@ mod tests {
         state.set_latest_frame(vec![1, 2, 3, 4]).await;
         let frame = state.get_latest_frame().await.unwrap();
         assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn test_capture_settings_to_config_forwards_cooling() {
+        let settings = CaptureSettings {
+            cooler_enabled: true,
+            target_temp_c: Some(-10.0),
+            ..Default::default()
+        };
+
+        let config = settings.to_capture_config();
+        assert!(config.cooler_enabled);
+        assert_eq!(config.target_temp_c, Some(-10.0));
+    }
+
+    #[tokio::test]
+    async fn test_capture_settings_to_config_cooler_off_keeps_target_none() {
+        let settings = CaptureSettings {
+            cooler_enabled: false,
+            target_temp_c: None,
+            ..Default::default()
+        };
+
+        let config = settings.to_capture_config();
+        assert!(!config.cooler_enabled);
+        assert_eq!(config.target_temp_c, None);
+    }
+
+    #[tokio::test]
+    async fn test_update_camera_status_caches_and_broadcasts() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let mut subscriber = state.subscribe_events();
+
+        let status = CameraStatus {
+            temperature_c: -5.0,
+            cooler_power: Some(60.0),
+            cooler_on: true,
+            is_exposing: false,
+            current_gain: 100,
+            current_offset: 10,
+            current_exposure_us: 1_000_000,
+        };
+
+        state
+            .update_camera_status("Test Cam", status.clone(), Some(-10.0))
+            .await;
+
+        let cached = state.get_camera_status("Test Cam").await.unwrap();
+        assert_eq!(cached.temperature_c, -5.0);
+        assert_eq!(cached.cooler_power, Some(60.0));
+        assert!(cached.cooler_on);
+
+        // The broadcast should have produced a CameraStatusUpdated event
+        let event = subscriber.recv().await.unwrap();
+        match event {
+            ServerEvent::CameraStatusUpdated {
+                name,
+                temperature_c,
+                cooler_power,
+                cooler_on,
+                target_temp_c,
+            } => {
+                assert_eq!(name, "Test Cam");
+                assert_eq!(temperature_c, -5.0);
+                assert_eq!(cooler_power, Some(60.0));
+                assert!(cooler_on);
+                assert_eq!(target_temp_c, Some(-10.0));
+            }
+            other => panic!("Unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_camera_status_returns_none_for_unknown() {
+        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        assert!(state.get_camera_status("Unknown").await.is_none());
     }
 
     #[tokio::test]

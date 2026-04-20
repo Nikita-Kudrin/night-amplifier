@@ -57,6 +57,10 @@ pub struct CameraInfo {
     pub bayer_pattern: Option<CfaPattern>,
     /// Whether the camera supports cooling
     pub has_cooler: bool,
+    /// Minimum target temperature in Celsius (None when has_cooler is false or vendor SDK does not expose it)
+    pub min_temp_c: Option<f64>,
+    /// Maximum target temperature in Celsius (None when has_cooler is false or vendor SDK does not expose it)
+    pub max_temp_c: Option<f64>,
     /// Whether the camera has a mechanical shutter
     pub has_shutter: bool,
     /// Whether the camera supports USB3
@@ -93,6 +97,8 @@ impl Default for CameraInfo {
             sensor_type: SensorType::Mono,
             bayer_pattern: None,
             has_cooler: false,
+            min_temp_c: None,
+            max_temp_c: None,
             has_shutter: false,
             is_usb3: false,
             bit_depth: 8,

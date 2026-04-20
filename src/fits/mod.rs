@@ -205,4 +205,35 @@ mod tests {
         let meta = FitsMetadata::new();
         assert_eq!(meta.software, Some("Night Amplifier".to_string()));
     }
+
+    #[test]
+    fn test_fits_metadata_with_temperature_and_set_temp() {
+        let meta = FitsMetadata::new()
+            .with_temperature(-9.5)
+            .with_set_temp(-10.0);
+        assert_eq!(meta.temperature, Some(-9.5));
+        assert_eq!(meta.set_temp_c, Some(-10.0));
+    }
+
+    #[test]
+    fn test_write_fits_with_set_temp_succeeds() {
+        let frame = Frame::filled(50, 50, 1, 0.5).unwrap();
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_set_temp.fits");
+
+        let meta = FitsMetadata::new()
+            .with_exposure_us(1_000_000)
+            .with_temperature(-8.7)
+            .with_set_temp(-10.0);
+
+        let result = write_fits(&frame, &path, Some(&meta));
+        assert!(
+            result.is_ok(),
+            "Failed to write FITS with SET-TEMP: {:?}",
+            result
+        );
+        assert!(path.exists());
+
+        std::fs::remove_file(&path).ok();
+    }
 }

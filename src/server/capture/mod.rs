@@ -29,6 +29,7 @@ use stacking_task::run_stacking_task;
 
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use super::encoding::encode_rgb8_lz4;
@@ -39,6 +40,9 @@ use crate::stacking::CometContext;
 pub use context::{PlanetaryStackingContext, StackingContext};
 
 use channel::{max_queue_capacity, CapturedFrame, StackedFrame};
+
+/// Cadence for polling cooled-camera status from the capture thread.
+const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The main capture orchestrator.
 ///
@@ -239,6 +243,9 @@ fn run_capture_task(
 
     // Frame numbering continues from 1 (probe frame was #1)
     let mut frame_number: u64 = 1;
+    let mut last_status_at = Instant::now()
+        .checked_sub(STATUS_POLL_INTERVAL)
+        .unwrap_or_else(Instant::now);
 
     loop {
         if state.is_cancelled() {
@@ -294,6 +301,11 @@ fn run_capture_task(
             break;
         }
 
+        if camera.info().has_cooler && last_status_at.elapsed() >= STATUS_POLL_INTERVAL {
+            poll_camera_status(&state, camera.as_ref(), settings.target_temp_c, &rt);
+            last_status_at = Instant::now();
+        }
+
         frame_number += 1;
         let arc_frame = Arc::new(frame);
 
@@ -331,5 +343,28 @@ fn run_capture_task(
     let _ = camera.close();
     debug!("Capture task ended");
     // stacking_tx and storage_tx are dropped here, signaling downstream to exit
+}
+
+/// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated` event.
+///
+/// Status reads run from inside the capture thread, naturally serialized with
+/// `camera.capture()` calls — this avoids contention with vendor SDKs that
+/// require a single handle per device. Errors are logged and swallowed because
+/// status reporting is best-effort and must not interrupt capture.
+fn poll_camera_status(
+    state: &Arc<AppState>,
+    camera: &dyn crate::camera::Camera,
+    target_temp_c: Option<f64>,
+    rt: &tokio::runtime::Handle,
+) {
+    match camera.status() {
+        Ok(status) => {
+            let name = camera.info().name.clone();
+            rt.block_on(state.update_camera_status(&name, status, target_temp_c));
+        }
+        Err(e) => {
+            debug!(error = %e, "Failed to read camera status");
+        }
+    }
 }
 

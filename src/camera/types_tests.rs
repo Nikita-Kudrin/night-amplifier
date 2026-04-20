@@ -59,6 +59,8 @@ fn test_capture_config_validation() {
         sensor_type: SensorType::Color,
         bayer_pattern: Some(CfaPattern::Rggb),
         has_cooler: false,
+        min_temp_c: None,
+        max_temp_c: None,
         has_shutter: false,
         is_usb3: true,
         bit_depth: 12,

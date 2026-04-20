@@ -124,6 +124,10 @@ pub struct CameraInfoResponse {
     pub pixel_size_y_um: f64,
     pub sensor_type: String,
     pub has_cooler: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_temp_c: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_temp_c: Option<f64>,
     pub bit_depth: u8,
     pub min_exposure_us: u64,
     pub max_exposure_us: u64,
@@ -142,6 +146,8 @@ impl CameraInfoResponse {
             pixel_size_y_um: info.pixel_size_y_um,
             sensor_type: format!("{:?}", info.sensor_type),
             has_cooler: info.has_cooler,
+            min_temp_c: info.min_temp_c,
+            max_temp_c: info.max_temp_c,
             bit_depth: info.bit_depth,
             min_exposure_us: info.min_exposure_us,
             max_exposure_us: info.max_exposure_us,
@@ -196,6 +202,11 @@ pub struct SettingsResponse {
     /// Name of the last active camera
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_camera_name: Option<String>,
+    /// Whether the cooler should be active during capture
+    pub cooler_enabled: bool,
+    /// Target sensor temperature in Celsius
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_temp_c: Option<f64>,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -227,6 +238,8 @@ impl From<&CaptureSettings> for SettingsResponse {
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             last_camera_name: settings.last_camera_name.clone(),
+            cooler_enabled: settings.cooler_enabled,
+            target_temp_c: settings.target_temp_c,
         }
     }
 }
@@ -351,6 +364,13 @@ pub struct UpdateSettingsRequest {
     /// Name of the last active camera
     #[serde(default)]
     pub last_camera_name: Option<String>,
+    /// Whether the cooler should be active during capture
+    #[serde(default)]
+    pub cooler_enabled: Option<bool>,
+    /// Target sensor temperature in Celsius. Use `Some(None)` is not possible via JSON;
+    /// pass `null` to clear by sending `target_temp_c_clear` instead.
+    #[serde(default)]
+    pub target_temp_c: Option<f64>,
 }
 
 /// Configure simulated camera request

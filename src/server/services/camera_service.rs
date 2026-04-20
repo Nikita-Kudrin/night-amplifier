@@ -229,6 +229,12 @@ impl CameraService {
                     }
                 }
 
+                // Drop any cached camera status (cooled cameras)
+                {
+                    let mut statuses = state.latest_camera_status.write().await;
+                    statuses.remove(&name);
+                }
+
                 // Broadcast event
                 let _ = state.events.send(ServerEvent::camera_disconnected(&name));
 

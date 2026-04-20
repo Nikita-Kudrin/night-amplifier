@@ -37,6 +37,17 @@ pub enum ServerEvent {
     /// Camera disconnected
     CameraDisconnected { name: String },
 
+    /// Cooled camera status sample (sensor temperature, cooler power, cooler state)
+    CameraStatusUpdated {
+        name: String,
+        temperature_c: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cooler_power: Option<f64>,
+        cooler_on: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_temp_c: Option<f64>,
+    },
+
     /// Error occurred
     Error { message: String },
 
@@ -212,6 +223,22 @@ impl ServerEvent {
 
     pub fn camera_disconnected(name: impl Into<String>) -> Self {
         ServerEvent::CameraDisconnected { name: name.into() }
+    }
+
+    pub fn camera_status_updated(
+        name: impl Into<String>,
+        temperature_c: f64,
+        cooler_power: Option<f64>,
+        cooler_on: bool,
+        target_temp_c: Option<f64>,
+    ) -> Self {
+        ServerEvent::CameraStatusUpdated {
+            name: name.into(),
+            temperature_c,
+            cooler_power,
+            cooler_on,
+            target_temp_c,
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
@@ -392,5 +419,34 @@ mod tests {
 
         assert_eq!(json["type"], "warning");
         assert_eq!(json["message"], "Dropped 5 events");
+    }
+
+    #[test]
+    fn test_camera_status_updated_serialization() {
+        let event = ServerEvent::camera_status_updated(
+            "Test Cam",
+            -8.5,
+            Some(42.0),
+            true,
+            Some(-10.0),
+        );
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_status_updated");
+        assert_eq!(json["name"], "Test Cam");
+        assert_eq!(json["temperature_c"], -8.5);
+        assert_eq!(json["cooler_power"], 42.0);
+        assert_eq!(json["cooler_on"], true);
+        assert_eq!(json["target_temp_c"], -10.0);
+    }
+
+    #[test]
+    fn test_camera_status_updated_omits_none_fields() {
+        let event = ServerEvent::camera_status_updated("Test Cam", 20.0, None, false, None);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_status_updated");
+        assert!(json.get("cooler_power").is_none());
+        assert!(json.get("target_temp_c").is_none());
     }
 }

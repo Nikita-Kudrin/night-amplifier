@@ -77,6 +77,12 @@ pub struct PersistedSettings {
     /// Name of the last active camera
     #[serde(default)]
     pub last_camera_name: Option<String>,
+    /// Whether the cooler should be active during capture
+    #[serde(default)]
+    pub cooler_enabled: bool,
+    /// Target sensor temperature in Celsius
+    #[serde(default)]
+    pub target_temp_c: Option<f64>,
 }
 
 fn default_preload_images() -> usize {
@@ -124,6 +130,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             last_camera_name: settings.last_camera_name.clone(),
+            cooler_enabled: settings.cooler_enabled,
+            target_temp_c: settings.target_temp_c,
         }
     }
 }
@@ -158,6 +166,8 @@ impl From<PersistedSettings> for CaptureSettings {
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
             last_camera_name: persisted.last_camera_name,
+            cooler_enabled: persisted.cooler_enabled,
+            target_temp_c: persisted.target_temp_c,
         }
     }
 }

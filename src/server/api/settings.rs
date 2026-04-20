@@ -132,6 +132,12 @@ pub async fn update_settings(
         if let Some(name) = request.last_camera_name {
             settings.last_camera_name = Some(name);
         }
+        if let Some(cooler_enabled) = request.cooler_enabled {
+            settings.cooler_enabled = cooler_enabled;
+        }
+        if let Some(target_temp_c) = request.target_temp_c {
+            settings.target_temp_c = Some(target_temp_c.clamp(-60.0, 30.0));
+        }
 
         // Enable disk writer only in stacking mode (not live view or wanderer)
         // This must be done after all mode settings are updated
