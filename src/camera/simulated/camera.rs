@@ -412,6 +412,7 @@ pub fn create_camera_info(
         max_gain: 500,
         unity_gain: 100,
         hcg_gain: 120,
+        sensor_modes: Vec::new(),
     }
 }
 

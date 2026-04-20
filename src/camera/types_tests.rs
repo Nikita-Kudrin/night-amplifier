@@ -72,6 +72,7 @@ fn test_capture_config_validation() {
         max_gain: 500,
         unity_gain: 100,
         hcg_gain: 120,
+        sensor_modes: Vec::new(),
     };
 
     // Valid config
@@ -126,6 +127,23 @@ fn test_capture_config_validation() {
         config.validate(&info),
         Err(CameraError::ParameterNotSupported(_))
     ));
+
+    // Sensor mode on camera without mode selection
+    let config = CaptureConfig::new().with_sensor_mode(DualSamplingMode::LowReadoutNoise);
+    assert!(matches!(
+        config.validate(&info),
+        Err(CameraError::ParameterNotSupported(ref name)) if name == "sensor_mode"
+    ));
+
+    // Sensor mode on camera that advertises it
+    let mut info_with_modes = info.clone();
+    info_with_modes.sensor_modes = vec![SensorMode {
+        index: 0,
+        name: "Normal".to_string(),
+        description: String::new(),
+    }];
+    let config = CaptureConfig::new().with_sensor_mode(DualSamplingMode::Normal);
+    assert!(config.validate(&info_with_modes).is_ok());
 }
 
 #[test]

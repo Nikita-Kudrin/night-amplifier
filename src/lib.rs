@@ -75,8 +75,8 @@ pub use statistics::{
 // Camera support (re-export all public types)
 pub use camera::{
     Camera, CameraEntry, CameraError, CameraInfo, CameraProvider, CameraRegistry, CameraResult,
-    CameraStatus, CaptureConfig, GainPresets, ImageFormat, PlayerOneCamera, PlayerOneProvider,
-    SensorType, ZwoCamera, ZwoProvider,
+    CameraStatus, CaptureConfig, DualSamplingMode, GainPresets, ImageFormat, PlayerOneCamera,
+    PlayerOneProvider, SensorMode, SensorType, ZwoCamera, ZwoProvider,
 };
 
 // Logging support

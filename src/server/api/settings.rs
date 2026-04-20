@@ -138,6 +138,9 @@ pub async fn update_settings(
         if let Some(target_temp_c) = request.target_temp_c {
             settings.target_temp_c = Some(target_temp_c.clamp(-60.0, 30.0));
         }
+        if let Some(sensor_mode) = request.sensor_mode_override {
+            settings.sensor_mode_override = Some(sensor_mode);
+        }
 
         // Enable disk writer only in stacking mode (not live view or wanderer)
         // This must be done after all mode settings are updated

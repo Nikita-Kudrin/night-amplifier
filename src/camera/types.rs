@@ -1,6 +1,7 @@
 //! Common camera types and configurations
 
 use crate::CfaPattern;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use super::error::{CameraError, CameraResult};
@@ -12,6 +13,28 @@ pub enum SensorType {
     Mono,
     /// Color sensor with Bayer CFA
     Color,
+}
+
+/// Dual sampling sensor mode (Player One terminology). Only meaningful for
+/// cameras that advertise sensor-mode selection — other providers ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DualSamplingMode {
+    /// Higher frame rate, lower dynamic range — suited for planetary imaging.
+    Normal,
+    /// Lower readout noise and higher dynamic range — suited for deep-sky and comet imaging.
+    LowReadoutNoise,
+}
+
+/// A sensor-mode slot reported by the underlying camera SDK.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SensorMode {
+    /// Zero-based index used to select the mode in SDK calls.
+    pub index: u32,
+    /// Short display name (e.g. "Normal", "LRN").
+    pub name: String,
+    /// Longer description, suitable for tooltips.
+    pub description: String,
 }
 
 /// Image format from camera
@@ -83,6 +106,8 @@ pub struct CameraInfo {
     pub unity_gain: i32,
     /// HCG (High Conversion Gain) threshold
     pub hcg_gain: i32,
+    /// Sensor modes advertised by the camera. Empty when mode selection is not supported.
+    pub sensor_modes: Vec<SensorMode>,
 }
 
 impl Default for CameraInfo {
@@ -110,6 +135,7 @@ impl Default for CameraInfo {
             max_gain: 100,
             unity_gain: 0,
             hcg_gain: 0,
+            sensor_modes: Vec::new(),
         }
     }
 }
@@ -163,6 +189,8 @@ pub struct CaptureConfig {
     pub hardware_bin: bool,
     /// Number of images to preload for simulated camera
     pub simulated_preload_images: usize,
+    /// Desired dual-sampling sensor mode. None leaves the camera's current mode unchanged.
+    pub sensor_mode: Option<DualSamplingMode>,
 }
 
 impl Default for CaptureConfig {
@@ -180,6 +208,7 @@ impl Default for CaptureConfig {
             high_speed: false,
             hardware_bin: true,
             simulated_preload_images: 5,
+            sensor_mode: None,
         }
     }
 }
@@ -269,6 +298,12 @@ impl CaptureConfig {
         self
     }
 
+    /// Set the desired dual-sampling sensor mode
+    pub fn with_sensor_mode(mut self, mode: DualSamplingMode) -> Self {
+        self.sensor_mode = Some(mode);
+        self
+    }
+
     /// Validate configuration against camera capabilities
     pub fn validate(&self, info: &CameraInfo) -> CameraResult<()> {
         // Validate exposure
@@ -351,6 +386,13 @@ impl CaptureConfig {
         // Validate cooling
         if self.cooler_enabled && !info.has_cooler {
             return Err(CameraError::ParameterNotSupported("cooler".to_string()));
+        }
+
+        // Validate sensor mode: only meaningful when the camera advertises modes.
+        if self.sensor_mode.is_some() && info.sensor_modes.is_empty() {
+            return Err(CameraError::ParameterNotSupported(
+                "sensor_mode".to_string(),
+            ));
         }
 
         Ok(())

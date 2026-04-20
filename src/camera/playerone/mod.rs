@@ -12,6 +12,7 @@ use crate::Frame;
 
 mod capture;
 mod properties;
+mod sensor_mode;
 
 pub use properties::{camera_info_from_description, camera_info_from_properties};
 
@@ -81,11 +82,13 @@ impl PlayerOneCamera {
         }
 
         let description = descriptions.into_iter().nth(index).unwrap();
-        let info = camera_info_from_description(&description);
+        let mut info = camera_info_from_description(&description);
 
         let camera = catch_ffi_panic("PlayerOne::open::description.open", || description.open())
             .map_err(CameraError::from)?
             .map_err(|e| CameraError::OpenFailed(format!("{:?}", e)))?;
+
+        info.sensor_modes = sensor_mode::list_sensor_modes(camera.id());
 
         Ok(Self {
             camera,

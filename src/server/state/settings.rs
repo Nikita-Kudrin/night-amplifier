@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::background::BackgroundExtractionAlgorithm;
-use crate::camera::CaptureConfig;
+use crate::camera::{CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
 use crate::render::{SaturationBoostConfig, StretchAggressiveness};
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -51,6 +51,8 @@ pub struct CaptureSettings {
     pub cooler_enabled: bool,
     /// Target sensor temperature in Celsius (None means "no target set")
     pub target_temp_c: Option<f64>,
+    /// Manual override for camera sensor mode. None means "derive from stacking_type".
+    pub sensor_mode_override: Option<DualSamplingMode>,
     /// Region of interest for comet nucleus tracking
     pub comet_roi: Option<AlignmentRoi>,
     /// Region of interest for planetary alignment
@@ -159,6 +161,7 @@ impl Default for CaptureSettings {
             simulated_preload_images: 5,
             cooler_enabled: false,
             target_temp_c: None,
+            sensor_mode_override: None,
             comet_roi: None,
             planetary_roi: None,
             wanderer_mode: false,
@@ -188,16 +191,66 @@ impl CaptureSettings {
 
     /// Convert to camera capture config
     pub fn to_capture_config(&self) -> CaptureConfig {
+        let sensor_mode = self
+            .sensor_mode_override
+            .unwrap_or_else(|| self.stacking_type.desired_sensor_mode());
         let mut config = CaptureConfig::new()
             .with_exposure_us(self.exposure_us)
             .with_gain(self.gain)
             .with_offset(self.offset)
             .with_bin(self.bin)
             .with_simulated_preload_images(self.simulated_preload_images)
-            .with_cooler(self.cooler_enabled);
+            .with_cooler(self.cooler_enabled)
+            .with_sensor_mode(sensor_mode);
         if let Some(temp) = self.target_temp_c {
             config.target_temp_c = Some(temp);
         }
         config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_config_picks_lrn_for_deep_sky() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::DeepSky,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    #[test]
+    fn capture_config_picks_lrn_for_comet() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::Comet,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    #[test]
+    fn capture_config_picks_normal_for_planetary() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::Planetary,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::Normal));
+    }
+
+    #[test]
+    fn sensor_mode_override_trumps_stacking_type_auto() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::Planetary,
+            sensor_mode_override: Some(DualSamplingMode::LowReadoutNoise),
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
     }
 }
