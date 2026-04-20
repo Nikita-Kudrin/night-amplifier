@@ -41,8 +41,12 @@ The camera module uses an extensible provider system. Enable features for specif
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power
-  monitoring, and `CCD-TEMP` / `SET-TEMP` headers in saved FITS frames. Cooling activates while a
-  capture session is running.
+  monitoring, and `CCD-TEMP` / `SET-TEMP` headers in saved FITS frames. Connecting a camera with
+  cooling enabled begins pre-cooling immediately; the UI shows a `Precooling` badge and live
+  temperature until the sensor settles near the target. Disconnecting a cooled camera runs a
+  warm-up sequence (cooler off, watch sensor rise to ~10 °C, with a 5-minute timeout) before the
+  USB handle is released, preventing dew condensation on a cold sensor. Capture can start at any
+  time — during pre-cool or warm-up — and automatically re-enables the cooler per current settings.
 
 > [!NOTE]
 > Pro features such as **Comet Stacking**, **Advanced Outlier Rejection** (Sigma Clipping), **RBF Background Extraction

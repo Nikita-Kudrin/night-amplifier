@@ -37,6 +37,8 @@ describe('CameraPanel', () => {
             },
             // Default: simulator disabled so it doesn't affect existing tests
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
+            cameraStatus: ref(overrides.cameraStatus ?? {}),
+            cameraPhase: ref(overrides.cameraPhase ?? {}),
         }
     }
 
@@ -388,6 +390,56 @@ describe('CameraPanel', () => {
             await flushPromises()
 
             expect(wrapper.find('.alert-error').text()).toContain('Connection failed')
+        })
+    })
+
+    describe('Lifecycle phase display', () => {
+        const cooledCamera = {
+            id: 'cam1',
+            name: 'Cooled Camera',
+            connected: true,
+            info: {max_width: 1920, max_height: 1080, has_cooler: true},
+        }
+
+        it('shows Precooling pill when phase is precooling', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'precooling'},
+            })
+
+            const pill = wrapper.find('.phase-pill')
+            expect(pill.exists()).toBe(true)
+            expect(pill.text()).toBe('Precooling')
+        })
+
+        it('shows Warming up pill and spinner when phase is warming_up', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'warming_up'},
+            })
+
+            expect(wrapper.find('.phase-pill').text()).toBe('Warming up')
+            expect(wrapper.find('.spinner').exists()).toBe(true)
+            expect(wrapper.find('.btn-danger').text()).toContain('Warming up')
+        })
+
+        it('disables Disconnect while warming up', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'warming_up'},
+            })
+
+            expect(wrapper.find('.btn-danger').attributes('disabled')).toBeDefined()
+        })
+
+        it('omits phase pill when camera is idle', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'idle'},
+            })
+
+            expect(wrapper.find('.phase-pill').exists()).toBe(false)
+            expect(wrapper.find('.btn-danger').text()).toBe('Disconnect')
         })
     })
 

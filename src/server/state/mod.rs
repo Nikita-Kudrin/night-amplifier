@@ -4,14 +4,14 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::warn;
 
 use super::events::ServerEvent;
 use super::services::PushToState;
 use super::settings_persistence::SettingsPersistence;
-use crate::camera::CameraStatus;
+use crate::camera::{Camera, CameraStatus};
 use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -22,7 +22,7 @@ mod types;
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use session::{CaptureSession, ConnectedCameraInfo};
 pub use settings::{CaptureSettings, EyepieceSettings, TelescopeSettings};
-pub use types::CaptureState;
+pub use types::{CameraPhase, CaptureState};
 
 /// The main application state shared across all handlers
 pub struct AppState {
@@ -59,6 +59,34 @@ pub struct AppState {
     pub dropped_frames: AtomicU64,
     /// Latest reported camera status keyed by camera name (for cooled cameras)
     pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
+    /// Long-lived camera handle. `Some` while connected and not capturing.
+    /// Taken out during a capture session and returned on exit.
+    pub active_camera: StdMutex<Option<Box<dyn Camera>>>,
+    /// Current lifecycle phase per connected camera (keyed by camera name).
+    pub camera_phase: RwLock<HashMap<String, CameraPhase>>,
+    /// Sender used by `lifecycle` to issue commands to the running monitor
+    /// thread. `None` when no monitor is running.
+    pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
+}
+
+/// Commands accepted by the camera monitor thread. Defined here (not in
+/// `camera_session`) so `AppState` can hold the sender without a cyclic
+/// module dependency.
+#[derive(Debug, Clone, Copy)]
+pub enum MonitorCmd {
+    /// Camera is about to be handed off to the capture thread. Monitor
+    /// should pause its polling loop.
+    HandOffToCapture,
+    /// Camera handle has been returned. Monitor should resume polling.
+    ResumeAfterCapture,
+    /// Begin the warmup sequence: disable cooler and watch for the sensor
+    /// to rise to `WARMUP_THRESHOLD_C`. On completion the monitor closes
+    /// the handle and exits.
+    StartWarmup,
+    /// Cancel an in-progress warmup (user started capture during warmup).
+    CancelWarmup,
+    /// Stop polling and close the handle immediately.
+    Shutdown,
 }
 
 impl AppState {
@@ -93,6 +121,9 @@ impl AppState {
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
+            active_camera: StdMutex::new(None),
+            camera_phase: RwLock::new(HashMap::new()),
+            camera_monitor_tx: StdMutex::new(None),
         };
 
         (state, disk_writer)
@@ -133,6 +164,9 @@ impl AppState {
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
+            active_camera: StdMutex::new(None),
+            camera_phase: RwLock::new(HashMap::new()),
+            camera_monitor_tx: StdMutex::new(None),
         };
 
         (state, disk_writer)
@@ -171,6 +205,9 @@ impl AppState {
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
+            active_camera: StdMutex::new(None),
+            camera_phase: RwLock::new(HashMap::new()),
+            camera_monitor_tx: StdMutex::new(None),
         };
 
         (state, disk_writer)
@@ -331,6 +368,31 @@ impl AppState {
             .await
             .get(camera_name)
             .cloned()
+    }
+
+    /// Set the lifecycle phase for a camera and broadcast a `CameraPhaseChanged` event.
+    pub async fn set_camera_phase(&self, camera_name: &str, phase: CameraPhase) {
+        {
+            let mut map = self.camera_phase.write().await;
+            if phase == CameraPhase::Disconnected {
+                map.remove(camera_name);
+            } else {
+                map.insert(camera_name.to_string(), phase);
+            }
+        }
+        let _ = self
+            .events
+            .send(ServerEvent::camera_phase_changed(camera_name, phase));
+    }
+
+    /// Read the current lifecycle phase for a camera (defaults to Disconnected).
+    pub async fn camera_phase(&self, camera_name: &str) -> CameraPhase {
+        self.camera_phase
+            .read()
+            .await
+            .get(camera_name)
+            .copied()
+            .unwrap_or(CameraPhase::Disconnected)
     }
 
     /// Record a dropped frame (pipeline back-pressure) and broadcast event

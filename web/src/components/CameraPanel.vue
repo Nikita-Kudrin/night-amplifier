@@ -17,6 +17,7 @@ const refreshCameras = inject('refreshCameras')
 const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const cameraStatus = inject('cameraStatus', { value: {} })
+const cameraPhase = inject('cameraPhase', { value: {} })
 
 const { error, clearError, withErrorHandling } = useError()
 
@@ -89,6 +90,21 @@ function temperaturePill(cam) {
   const status = cameraStatus.value?.[cam.name]
   if (!status) return null
   return `${status.temperature_c.toFixed(1)}°C`
+}
+
+function phaseOf(cam) {
+  return cameraPhase.value?.[cam?.name] || null
+}
+
+function isWarmingUp(cam) {
+  return phaseOf(cam) === 'warming_up'
+}
+
+function phaseLabel(cam) {
+  const phase = phaseOf(cam)
+  if (phase === 'precooling') return 'Precooling'
+  if (phase === 'warming_up') return 'Warming up'
+  return null
 }
 
 async function handleConfigureSimulator() {
@@ -228,6 +244,7 @@ const HELP = {
               <span class="camera-name">{{ cam.name }}</span>
               <span class="camera-details">
                 {{ formatResolution(cam) }}
+                <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
                 <span v-if="temperaturePill(cam)" class="temp-pill">{{
                   temperaturePill(cam)
                 }}</span>
@@ -236,11 +253,18 @@ const HELP = {
             <div class="camera-actions">
               <button
                 class="btn btn-sm btn-danger"
-                :disabled="connecting === cam.id || isCapturing"
-                title="Disconnect"
+                :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
+                :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
                 @click.stop="handleDisconnect(cam.id)"
               >
-                {{ connecting === cam.id ? '...' : 'Disconnect' }}
+                <span v-if="isWarmingUp(cam)" class="spinner" aria-hidden="true"></span>
+                <span>{{
+                  connecting === cam.id
+                    ? '...'
+                    : isWarmingUp(cam)
+                      ? 'Warming up…'
+                      : 'Disconnect'
+                }}</span>
               </button>
               <button
                 v-if="isSimulatedCamera(cam)"
@@ -436,6 +460,32 @@ const HELP = {
   padding: 0.05rem 0.375rem;
   border-radius: 999px;
   font-variant-numeric: tabular-nums;
+}
+
+.phase-pill {
+  background: rgba(234, 179, 8, 0.18);
+  color: #eab308;
+  padding: 0.05rem 0.375rem;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.35rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .camera-actions {

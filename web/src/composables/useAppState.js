@@ -21,6 +21,8 @@ const capabilities = ref({
 })
 // Latest live camera status keyed by camera name (cooled cameras)
 const cameraStatus = ref({})
+// Camera lifecycle phase keyed by camera name: 'idle' | 'precooling' | 'capturing' | 'warming_up' | 'disconnected'
+const cameraPhase = ref({})
 
 // Retry state
 let retryTimeoutId = null
@@ -164,6 +166,24 @@ function updateCameraStatus(name, status) {
 }
 
 /**
+ * Update the cached camera phase map from a `camera_phase_changed` event.
+ * When a camera transitions to 'disconnected' the entry is dropped so UI
+ * components don't mistake stale state for a live camera.
+ */
+function updateCameraPhase(name, phase) {
+  if (phase === 'disconnected') {
+    const next = { ...cameraPhase.value }
+    delete next[name]
+    cameraPhase.value = next
+  } else {
+    cameraPhase.value = {
+      ...cameraPhase.value,
+      [name]: phase,
+    }
+  }
+}
+
+/**
  * Composable hook for app state
  */
 export function useAppState() {
@@ -177,6 +197,7 @@ export function useAppState() {
     simulatorEnabled,
     capabilities: readonly(capabilities),
     cameraStatus: readonly(cameraStatus),
+    cameraPhase: readonly(cameraPhase),
 
     // Computed
     selectedCamera,
@@ -194,12 +215,14 @@ export function useAppState() {
     clearGlobalError,
     setSimulatorEnabled,
     updateCameraStatus,
+    updateCameraPhase,
 
     // Direct refs for provide/inject compatibility (temporary)
     _settingsRef: settings,
     _camerasRef: cameras,
     _selectedCameraIdRef: selectedCameraId,
     _cameraStatusRef: cameraStatus,
+    _cameraPhaseRef: cameraPhase,
   }
 }
 

@@ -6,7 +6,7 @@ mod install;
 
 use serde::Serialize;
 
-use super::state::CaptureState;
+use super::state::{CameraPhase, CaptureState};
 
 /// Event types sent to WebSocket clients
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +46,12 @@ pub enum ServerEvent {
         cooler_on: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         target_temp_c: Option<f64>,
+    },
+
+    /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected)
+    CameraPhaseChanged {
+        name: String,
+        phase: CameraPhaseDto,
     },
 
     /// Error occurred
@@ -191,6 +197,29 @@ impl From<CaptureState> for CaptureStateDto {
     }
 }
 
+/// DTO for CameraPhase serialization (snake_case to match JS event handling).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraPhaseDto {
+    Disconnected,
+    Idle,
+    Precooling,
+    Capturing,
+    WarmingUp,
+}
+
+impl From<CameraPhase> for CameraPhaseDto {
+    fn from(phase: CameraPhase) -> Self {
+        match phase {
+            CameraPhase::Disconnected => CameraPhaseDto::Disconnected,
+            CameraPhase::Idle => CameraPhaseDto::Idle,
+            CameraPhase::Precooling => CameraPhaseDto::Precooling,
+            CameraPhase::Capturing => CameraPhaseDto::Capturing,
+            CameraPhase::WarmingUp => CameraPhaseDto::WarmingUp,
+        }
+    }
+}
+
 impl ServerEvent {
     pub fn state_changed(state: CaptureState) -> Self {
         ServerEvent::StateChanged {
@@ -238,6 +267,13 @@ impl ServerEvent {
             cooler_power,
             cooler_on,
             target_temp_c,
+        }
+    }
+
+    pub fn camera_phase_changed(name: impl Into<String>, phase: CameraPhase) -> Self {
+        ServerEvent::CameraPhaseChanged {
+            name: name.into(),
+            phase: phase.into(),
         }
     }
 
@@ -448,5 +484,23 @@ mod tests {
         assert_eq!(json["type"], "camera_status_updated");
         assert!(json.get("cooler_power").is_none());
         assert!(json.get("target_temp_c").is_none());
+    }
+
+    #[test]
+    fn test_camera_phase_changed_serialization() {
+        let event = ServerEvent::camera_phase_changed("Test Cam", CameraPhase::Precooling);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "camera_phase_changed");
+        assert_eq!(json["name"], "Test Cam");
+        assert_eq!(json["phase"], "precooling");
+    }
+
+    #[test]
+    fn test_camera_phase_warming_up_serialization() {
+        let event = ServerEvent::camera_phase_changed("Test Cam", CameraPhase::WarmingUp);
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["phase"], "warming_up");
     }
 }
