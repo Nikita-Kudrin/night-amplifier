@@ -16,6 +16,8 @@ const settings = inject('settings')
 const selectedCamera = inject('selectedCamera')
 const eventStream = inject('eventStream')
 const refreshSettings = inject('refreshSettings')
+const cameras = inject('cameras', {value: []})
+const cameraPhase = inject('cameraPhase', {value: {}})
 const capabilities = inject('capabilities', {
   has_pro: false,
   deep_sky: {advanced_rejection: false, rbf_background: false},
@@ -97,6 +99,22 @@ const isCapturing = computed(
 const isStopping = computed(() => eventStream.captureState.value === CAPTURE_STATES.STOPPING)
 
 const canStart = computed(() => selectedCamera.value && !isCapturing.value && !isStopping.value)
+
+const selectedCameraName = computed(() => {
+  const id = selectedCamera.value
+  if (!id) return null
+  const cam = (cameras?.value || []).find((c) => c.id === id)
+  return cam?.name || null
+})
+
+const selectedCameraPhase = computed(() => {
+  const name = selectedCameraName.value
+  return name ? cameraPhase.value?.[name] || null : null
+})
+
+const showPrecoolWarning = computed(
+    () => selectedCameraPhase.value === 'precooling' && !isCapturing.value
+)
 
 const exposureUs = computed(() => {
   const val = exposure.value
@@ -229,6 +247,10 @@ const HELP = HELP_TEXTS
           <span>{{ isStopping ? 'Stopping...' : 'Stop' }}</span>
         </button>
       </template>
+    </div>
+
+    <div v-if="showPrecoolWarning" class="precool-warning">
+      Sensor is still cooling — capture will start with elevated dark current.
     </div>
 
     <!-- Exposure control -->
@@ -473,5 +495,15 @@ const HELP = HELP_TEXTS
 .control-disabled {
   opacity: 0.5;
   pointer-events: none;
+}
+
+.precool-warning {
+  margin: 0.25rem 0 0.5rem 0;
+  padding: 0.35rem 0.5rem;
+  background: rgba(234, 179, 8, 0.12);
+  border-left: 3px solid #eab308;
+  color: #eab308;
+  font-size: 0.72rem;
+  border-radius: 3px;
 }
 </style>

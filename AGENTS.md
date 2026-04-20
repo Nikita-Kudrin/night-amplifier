@@ -161,14 +161,21 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   simulator. Handles exposure, gain, and configuration logic. Cooled cameras expose `has_cooler`,
   `min_temp_c`, `max_temp_c` on `CameraInfo` and live `temperature_c` / `cooler_power` / `cooler_on`
   on `CameraStatus`. Cooler activation is driven through `CaptureConfig.cooler_enabled` /
-  `target_temp_c`, applied each frame inside `Camera::capture()`. The simulator models temperature
-  with a first-order lag toward the target (tau ≈ 3s) so the cooler UI can be tested without
-  hardware.
+  `target_temp_c`, applied each frame inside `Camera::capture()` so live UI edits take effect
+  without restarting capture. The simulator models temperature with a first-order lag toward the
+  target (tau ≈ 3s) so the cooler UI can be tested without hardware.
 
-  **Cooled-camera limitation:** the camera handle is opened only inside the capture thread
-  (`src/server/capture/mod.rs`), so cooling can only run while a capture session is active. There is
-  no separate "pre-cool before capture" or "warm-up before disconnect" workflow yet — that would
-  require holding the handle in `AppState` long-term.
+  **Camera lifecycle (pre-cool / warm-up):** the camera handle is opened at connect time and held
+  long-term in `AppState.active_camera` (see `src/server/camera_session/`). If `cooler_enabled`
+  and `target_temp_c` are set in settings, connecting begins pre-cooling immediately; the
+  lifecycle phase (`CameraPhase`) transitions `Precooling → Idle` once the sensor settles within
+  `PRECOOL_TOLERANCE_C` for two consecutive samples. Disconnect with a live cooler enters
+  `WarmingUp`, disables the TEC, and only closes the USB handle once the sensor reaches
+  `WARMUP_THRESHOLD_C` (default 10 °C) or `WARMUP_TIMEOUT` (5 min) elapses — this prevents dew
+  condensation on a still-cold sensor. Capture start transfers the handle to the capture thread
+  (phase → `Capturing`); on exit, the handle returns to the session. Starting capture during
+  warmup cancels warmup and re-enables the cooler per current settings. The background monitor
+  runs on a dedicated `std::thread` (not a tokio task) so USB stalls can never poison the runtime.
 
 - **plugins/** - Registry and traits for professional features (Push-To, Advanced Rejection, Comet Stacking). Allows the
   Community version to interact with the Pro version when available.
@@ -506,6 +513,7 @@ Events sent via `/ws/events`:
 | `camera_connected`            | `name`                                                                                | Camera connected                   |
 | `camera_disconnected`         | `name`                                                                                | Camera disconnected                |
 | `camera_status_updated`       | `name`, `temperature_c`, `cooler_power`, `cooler_on`, `target_temp_c`                 | Cooled camera status sample (~2s)  |
+| `camera_phase_changed`        | `name`, `phase` (`idle`/`precooling`/`capturing`/`warming_up`/`disconnected`)         | Camera lifecycle phase transition  |
 | `error`                       | `message`                                                                             | Error occurred                     |
 | `disk_writer_warning`         | `queue_depth`                                                                         | Disk write queue exceeds threshold |
 | `disk_writer_warning_cleared` | -                                                                                     | Queue warning cleared              |

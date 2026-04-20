@@ -25,10 +25,12 @@ const {
   refreshCameras,
   initializeState,
   updateCameraStatus,
+  updateCameraPhase,
   _settingsRef,
   _camerasRef,
   _selectedCameraIdRef,
   _cameraStatusRef,
+  _cameraPhaseRef,
   capabilities,
 } = useAppState()
 
@@ -50,6 +52,7 @@ provide('refreshSettings', refreshSettings)
 provide('refreshCameras', refreshCameras)
 provide('capabilities', capabilities)
 provide('cameraStatus', _cameraStatusRef)
+provide('cameraPhase', _cameraPhaseRef)
 
 // Handle Push-To button click - check ASTAP and catalog status first
 async function handlePushToClick() {
@@ -112,6 +115,13 @@ watch(
         cooler_on: event.cooler_on,
         target_temp_c: event.target_temp_c ?? null,
       })
+    }
+    if (event?.type === 'camera_phase_changed') {
+      updateCameraPhase(event.name, event.phase)
+    }
+    if (event?.type === 'camera_disconnected') {
+      updateCameraPhase(event.name, 'disconnected')
+      refreshCameras()
     }
   }
 )
