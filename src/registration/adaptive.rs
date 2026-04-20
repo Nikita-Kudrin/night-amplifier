@@ -3,6 +3,8 @@
 //! Provides automatic configuration selection based on imaging conditions and
 //! hint-based optimization for challenging scenarios.
 
+use tracing::{field, instrument, Span};
+
 use crate::detection::Star;
 use crate::error::{Result, StackError};
 
@@ -71,6 +73,14 @@ impl AdaptiveRegistration {
     }
 
     /// Registers using adaptive strategy - tries multiple configurations until one works.
+    #[instrument(skip(self, ref_stars, tgt_stars), fields(
+        ref_count = ref_stars.len(),
+        target_count = tgt_stars.len(),
+        config_used = field::Empty,
+        matched_stars = field::Empty,
+        mean_residual = field::Empty,
+        attempts = field::Empty,
+    ))]
     pub fn register(
         &self,
         ref_stars: &[Star],
@@ -89,6 +99,12 @@ impl AdaptiveRegistration {
                         &transform,
                         config.max_residual * 2.0,
                     );
+
+                    let span = Span::current();
+                    span.record("config_used", name.as_str());
+                    span.record("matched_stars", matched_stars);
+                    span.record("mean_residual", mean_residual);
+                    span.record("attempts", attempt + 1);
 
                     return Ok(AdaptiveRegistrationResult {
                         transform,

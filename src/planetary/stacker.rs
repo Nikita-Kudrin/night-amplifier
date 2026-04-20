@@ -1,6 +1,7 @@
 //! Planetary stacker engine for collecting, scoring, aligning, and stacking frames.
 
 use rayon::prelude::*;
+use tracing::{field, instrument, Span};
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
@@ -78,6 +79,12 @@ impl PlanetaryStacker {
     }
 
     /// Built-in add_frame implementation.
+    #[instrument(skip(self, frame), fields(
+        width = frame.width(),
+        height = frame.height(),
+        frame_count = field::Empty,
+        quality = field::Empty,
+    ))]
     pub fn add_frame_builtin(&mut self, frame: &Frame) -> Result<f32> {
         if self.reference.is_none() {
             return self.add_first_frame(frame);
@@ -98,6 +105,9 @@ impl PlanetaryStacker {
                 if quality > self.frames[worst_idx].quality {
                     self.frames.swap_remove(worst_idx);
                 } else {
+                    let span = Span::current();
+                    span.record("frame_count", self.frames.len());
+                    span.record("quality", quality);
                     return Ok(quality);
                 }
             }
@@ -109,6 +119,9 @@ impl PlanetaryStacker {
             offset,
         });
 
+        let span = Span::current();
+        span.record("frame_count", self.frames.len());
+        span.record("quality", quality);
         Ok(quality)
     }
 
