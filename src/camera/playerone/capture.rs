@@ -6,6 +6,7 @@ use tracing::warn;
 
 use super::super::error::{CameraError, CameraResult};
 use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
+use super::sensor_mode;
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
 
@@ -100,11 +101,30 @@ pub fn apply_config(
             })?;
     }
 
+    if !info.sensor_modes.is_empty() {
+        apply_sensor_mode(camera, config, info);
+    }
+
     if info.has_cooler {
         apply_cooler_config(camera, config);
     }
 
     Ok(())
+}
+
+fn apply_sensor_mode(camera: &mut POACamera, config: &CaptureConfig, info: &CameraInfo) {
+    let Some(desired) = config.sensor_mode else {
+        return;
+    };
+    let camera_id = camera.id();
+    match sensor_mode::resolve_mode_index(&info.sensor_modes, desired) {
+        Some(index) => {
+            if let Err(err) = sensor_mode::set_sensor_mode(camera_id, index) {
+                warn!(?err, index, ?desired, "Failed to set sensor mode");
+            }
+        }
+        None => warn!(?desired, modes = ?info.sensor_modes, "Desired sensor mode not found on camera"),
+    }
 }
 
 fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {

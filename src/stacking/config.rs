@@ -1,4 +1,5 @@
 use super::rejection::RejectionMethod;
+use crate::camera::DualSamplingMode;
 use serde::{Deserialize, Serialize};
 
 /// Available stacking types
@@ -75,6 +76,16 @@ impl StackingType {
             StackingType::DeepSky => true,
             StackingType::Planetary => false,
             StackingType::Comet => true,
+        }
+    }
+
+    /// Preferred sensor mode for cameras that advertise dual sampling.
+    /// Deep-sky and comet imaging benefit from lower read noise; planetary
+    /// imaging prefers the higher frame rate of the normal mode.
+    pub fn desired_sensor_mode(&self) -> DualSamplingMode {
+        match self {
+            StackingType::DeepSky | StackingType::Comet => DualSamplingMode::LowReadoutNoise,
+            StackingType::Planetary => DualSamplingMode::Normal,
         }
     }
 
@@ -465,5 +476,21 @@ mod tests {
 
         assert_eq!(config.weighting.fwhm_weight, 0.8);
         assert_eq!(config.sigma_low, 2.0);
+    }
+
+    #[test]
+    fn desired_sensor_mode_matches_stacking_type() {
+        assert_eq!(
+            StackingType::DeepSky.desired_sensor_mode(),
+            DualSamplingMode::LowReadoutNoise
+        );
+        assert_eq!(
+            StackingType::Comet.desired_sensor_mode(),
+            DualSamplingMode::LowReadoutNoise
+        );
+        assert_eq!(
+            StackingType::Planetary.desired_sensor_mode(),
+            DualSamplingMode::Normal
+        );
     }
 }

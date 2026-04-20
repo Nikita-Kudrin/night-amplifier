@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{CaptureSession, CaptureSettings, EyepieceSettings, TelescopeSettings};
 use crate::background::BackgroundExtractionAlgorithm;
-use crate::camera::CameraInfo;
+use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
 use crate::planetary::AlignmentRoi;
 use crate::render::StretchAggressiveness;
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -113,6 +113,25 @@ impl From<&CaptureSession> for CaptureStatusResponse {
     }
 }
 
+/// Camera sensor mode DTO (dual sampling mode slot)
+#[derive(Debug, Serialize)]
+pub struct SensorModeDto {
+    pub index: u32,
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+impl From<&SensorMode> for SensorModeDto {
+    fn from(mode: &SensorMode) -> Self {
+        Self {
+            index: mode.index,
+            name: mode.name.clone(),
+            description: mode.description.clone(),
+        }
+    }
+}
+
 /// Camera info response
 #[derive(Debug, Serialize)]
 pub struct CameraInfoResponse {
@@ -133,6 +152,9 @@ pub struct CameraInfoResponse {
     pub max_exposure_us: u64,
     pub min_gain: i32,
     pub max_gain: i32,
+    /// Sensor (dual sampling) modes reported by the camera. Empty when unsupported.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sensor_modes: Vec<SensorModeDto>,
 }
 
 impl CameraInfoResponse {
@@ -153,6 +175,7 @@ impl CameraInfoResponse {
             max_exposure_us: info.max_exposure_us,
             min_gain: info.min_gain,
             max_gain: info.max_gain,
+            sensor_modes: info.sensor_modes.iter().map(SensorModeDto::from).collect(),
         }
     }
 }
@@ -207,6 +230,10 @@ pub struct SettingsResponse {
     /// Target sensor temperature in Celsius
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_temp_c: Option<f64>,
+    /// Manual override for camera sensor mode (Player One dual sampling).
+    /// When null, the mode is auto-selected based on `stacking_type`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_mode_override: Option<DualSamplingMode>,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -240,6 +267,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
+            sensor_mode_override: settings.sensor_mode_override,
         }
     }
 }
@@ -371,6 +399,9 @@ pub struct UpdateSettingsRequest {
     /// pass `null` to clear by sending `target_temp_c_clear` instead.
     #[serde(default)]
     pub target_temp_c: Option<f64>,
+    /// Manual override for camera sensor mode (Player One dual sampling)
+    #[serde(default)]
+    pub sensor_mode_override: Option<DualSamplingMode>,
 }
 
 /// Configure simulated camera request

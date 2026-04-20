@@ -64,5 +64,6 @@ pub fn camera_info_from_properties(props: &CameraProperties) -> CameraInfo {
         max_gain: 500,
         unity_gain: 100,
         hcg_gain: 120,
+        sensor_modes: Vec::new(),
     }
 }

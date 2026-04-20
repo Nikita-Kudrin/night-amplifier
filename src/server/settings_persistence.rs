@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use super::state::{CaptureSettings, EyepieceSettings, TelescopeSettings};
 use crate::background::BackgroundExtractionAlgorithm;
-use crate::camera::{add_simulated_directory, get_simulated_directories};
+use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
 use crate::render::StretchAggressiveness;
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -83,6 +83,9 @@ pub struct PersistedSettings {
     /// Target sensor temperature in Celsius
     #[serde(default)]
     pub target_temp_c: Option<f64>,
+    /// Manual override for camera sensor mode (Player One dual sampling)
+    #[serde(default)]
+    pub sensor_mode_override: Option<DualSamplingMode>,
 }
 
 fn default_preload_images() -> usize {
@@ -132,6 +135,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
+            sensor_mode_override: settings.sensor_mode_override,
         }
     }
 }
@@ -168,6 +172,7 @@ impl From<PersistedSettings> for CaptureSettings {
             last_camera_name: persisted.last_camera_name,
             cooler_enabled: persisted.cooler_enabled,
             target_temp_c: persisted.target_temp_c,
+            sensor_mode_override: persisted.sensor_mode_override,
         }
     }
 }

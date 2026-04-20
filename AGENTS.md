@@ -165,6 +165,16 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   without restarting capture. The simulator models temperature with a first-order lag toward the
   target (tau ≈ 3s) so the cooler UI can be tested without hardware.
 
+  **Dual Sampling Mode (Player One):** Player One cameras that advertise sensor-mode selection
+  (e.g., Uranus-C Pro) expose `sensor_modes: Vec<SensorMode>` on `CameraInfo` (empty when
+  unsupported). The active mode is auto-selected from `StackingType` via
+  `StackingType::desired_sensor_mode()`: `DeepSky | Comet → LowReadoutNoise`,
+  `Planetary → Normal`. `CaptureSettings.sensor_mode_override` lets callers pin a specific mode
+  regardless of stacking type. Mode-name matching (substring: `lrn`/`low readout` vs `normal`)
+  lives in `src/camera/playerone/sensor_mode.rs` and uses the raw `playerone-sdk-sys` bindings
+  wrapped in `catch_ffi_panic`, since the safe `playerone-sdk` crate does not expose sensor-mode
+  APIs. The mode is applied once per frame inside `apply_config()` before exposure start.
+
   **Camera lifecycle (pre-cool / warm-up):** the camera handle is opened at connect time and held
   long-term in `AppState.active_camera` (see `src/server/camera_session/`). If `cooler_enabled`
   and `target_temp_c` are set in settings, connecting begins pre-cooling immediately; the
@@ -393,6 +403,7 @@ Adding a new stacking type only requires changes to the enum itself - no changes
     - `supports_stacking()` - Can frames be added incrementally?
     - `supports_quality_weighting()` - Does it support FWHM/SNR weighting?
     - `uses_aggressive_stretch()` - Does it need aggressive auto-stretch?
+    - `desired_sensor_mode()` - Preferred Player One dual sampling mode (`Normal` for high-FPS targets, `LowReadoutNoise` for long-exposure targets).
 
 4. The capture loop automatically uses these capability methods - no changes needed there
 
@@ -499,6 +510,7 @@ The `/api/settings` endpoint accepts these fields:
 | `simulated_preload_images`  | u32  | 5       | Number of images to preload for sim cam |
 | `cooler_enabled`            | bool | false   | Activate camera TEC during capture      |
 | `target_temp_c`             | f64? | null    | Target sensor temperature in Celsius    |
+| `sensor_mode_override`      | enum? | null   | Override auto sensor mode: "normal" (planetary) or "low_readout_noise" (deep sky / comet). Player One cameras with dual sampling only. When null, the mode is auto-selected from `stacking_type`. |
 
 ### WebSocket Events
 

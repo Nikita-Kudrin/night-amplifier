@@ -60,6 +60,25 @@ async fn test_update_settings_cooler_fields() {
 }
 
 #[tokio::test]
+async fn test_update_settings_sensor_mode_override_roundtrip() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "sensor_mode_override": "low_readout_noise" }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["sensor_mode_override"], "low_readout_noise");
+
+    let (_, json) = get_json(&app, "/api/settings").await;
+    assert_eq!(json["data"]["sensor_mode_override"], "low_readout_noise");
+}
+
+#[tokio::test]
 async fn test_update_settings_target_temp_clamped() {
     let state = create_test_state();
     let app = create_test_router(state);

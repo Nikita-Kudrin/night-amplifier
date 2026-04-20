@@ -57,7 +57,10 @@ mod zwo_stub;
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};
-pub use types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType};
+pub use types::{
+    CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets, ImageFormat,
+    SensorMode, SensorType,
+};
 
 // Provider-specific re-exports
 #[cfg(feature = "playerone")]
