@@ -285,7 +285,18 @@ fn run_capture_task(
         };
 
         // Capture a frame (blocking FFI call)
-        let frame = match camera.capture(&capture_config) {
+        let capture_result = {
+            let _span = tracing::info_span!(
+                "camera_capture",
+                frame_number = frame_number + 1,
+                exposure_us = capture_config.exposure_us,
+                gain = capture_config.gain,
+                bin = capture_config.bin,
+            )
+            .entered();
+            camera.capture(&capture_config)
+        };
+        let frame = match capture_result {
             Ok(f) => f,
             Err(e) => {
                 if let crate::camera::CameraError::Cancelled = e {

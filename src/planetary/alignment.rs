@@ -1,5 +1,7 @@
 //! Frame alignment using cross-correlation for planetary stacking.
 
+use tracing::instrument;
+
 use crate::frame::Frame;
 
 use super::config::AlignmentRoi;
@@ -8,6 +10,12 @@ use super::quality::{compute_std_dev, frame_to_luminance};
 /// Computes alignment offset using cross-correlation.
 ///
 /// Returns (dx, dy) offset to align frame to reference.
+#[instrument(skip(reference, frame, roi), fields(
+    width = reference.width(),
+    height = reference.height(),
+    search_radius,
+    subpixel_factor,
+))]
 pub fn compute_alignment(
     reference: &Frame,
     frame: &Frame,

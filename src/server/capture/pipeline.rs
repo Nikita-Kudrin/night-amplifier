@@ -1,4 +1,4 @@
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use super::context::{PlanetaryStackingContext, StackingContext};
 use crate::background::{subtract_background_with_config, BackgroundConfig};
@@ -7,6 +7,11 @@ use crate::server::state::CaptureSettings;
 use crate::stacking::{CometContext, COMET_PLUGIN};
 
 /// Process a frame through the stacking pipeline
+#[instrument(skip_all, fields(
+    width = frame.width(),
+    height = frame.height(),
+    channels = frame.channels(),
+))]
 pub async fn process_frame_with_stacking(
     frame: &Frame,
     settings: &CaptureSettings,
@@ -75,6 +80,11 @@ pub async fn process_frame_with_stacking(
 }
 
 /// Process a frame through the comet stacking pipeline
+#[instrument(skip_all, fields(
+    width = frame.width(),
+    height = frame.height(),
+    channels = frame.channels(),
+))]
 pub async fn process_frame_with_comet_stacking(
     frame: &Frame,
     settings: &CaptureSettings,
@@ -167,6 +177,11 @@ pub async fn process_frame_with_comet_stacking(
 }
 
 /// Process a frame through the planetary stacking pipeline
+#[instrument(skip_all, fields(
+    width = frame.width(),
+    height = frame.height(),
+    channels = frame.channels(),
+))]
 pub async fn process_frame_with_planetary_stacking(
     frame: &Frame,
     settings: &CaptureSettings,

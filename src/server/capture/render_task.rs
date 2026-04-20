@@ -26,9 +26,17 @@ pub fn run_render_task(
 
         let StackedFrame {
             mut display_frame,
+            was_stacked,
+            frame_number,
             settings,
-            ..
         } = latest;
+
+        let _iter_span = tracing::info_span!(
+            "render_iteration",
+            frame_number,
+            was_stacked,
+        )
+        .entered();
 
         // Process frame through unified render pipeline
         if let Err(e) = pipeline::process_preview_frame(&mut display_frame, &settings) {
@@ -83,6 +91,7 @@ mod tests {
         let msg = super::StackedFrame {
             display_frame: frame,
             was_stacked: true,
+            frame_number: 1,
             settings,
         };
 
@@ -100,14 +109,16 @@ mod tests {
         let initial = super::StackedFrame {
             display_frame: crate::frame::Frame::zeros(4, 4, 3).unwrap(),
             was_stacked: false,
+            frame_number: 0,
             settings: settings.clone(),
         };
 
         // Queue additional frames
-        for _ in 0..3 {
+        for n in 0..3 {
             let msg = super::StackedFrame {
                 display_frame: crate::frame::Frame::zeros(4, 4, 3).unwrap(),
                 was_stacked: false,
+                frame_number: n + 1,
                 settings: settings.clone(),
             };
             tx.send(msg).unwrap();
@@ -116,6 +127,7 @@ mod tests {
         let last = super::StackedFrame {
             display_frame: crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap(),
             was_stacked: true,
+            frame_number: 4,
             settings: settings.clone(),
         };
         tx.send(last).unwrap();

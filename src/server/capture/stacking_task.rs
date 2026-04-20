@@ -33,12 +33,21 @@ pub fn run_stacking_task(
     while let Ok(msg) = stacking_rx.recv() {
         let CapturedFrame {
             frame,
+            frame_number,
             settings,
             ..
         } = msg;
 
         // Detect when stacking is toggled on or stacking type changes — reset context
         let stacking_enabled = settings.stacking && settings.stacking_type.supports_stacking();
+
+        let _iter_span = tracing::info_span!(
+            "stacking_iteration",
+            frame_number,
+            stacking_type = ?settings.stacking_type,
+            stacking_enabled,
+        )
+        .entered();
         let stacking_type_changed = settings.stacking_type != last_stacking_type;
 
         if (stacking_enabled && !was_stacking_enabled)
@@ -171,6 +180,7 @@ pub fn run_stacking_task(
         let render_msg = StackedFrame {
             display_frame,
             was_stacked,
+            frame_number,
             settings,
         };
         if let Err(mpsc::TrySendError::Disconnected(_)) = render_tx.try_send(render_msg) {
