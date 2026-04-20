@@ -46,11 +46,14 @@ const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The main capture orchestrator.
 ///
-/// Opens the camera, creates bounded channels, spawns four independent
-/// worker threads, and awaits their completion. On shutdown, saves the
-/// stacked result (if any) and cleans up resources.
+/// Takes the long-lived camera handle from `AppState` (opened at connect
+/// time), creates bounded channels, spawns four independent worker threads,
+/// and awaits their completion. On shutdown, returns the handle to
+/// `AppState` so the monitor thread can resume — unless the capture task
+/// lost the handle due to a hard error, in which case the lifecycle layer
+/// finalizes a disconnect.
 pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
-    use crate::camera::CameraRegistry;
+    use crate::server::camera_session::lifecycle;
 
     // Transition to capturing state
     state.set_capture_state(CaptureState::Capturing).await;
@@ -80,22 +83,21 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         return;
     }
 
-    // Open camera for capture
-    let mut registry = CameraRegistry::new();
-    registry.register_defaults();
-
-    let mut camera = match registry.open_camera(&camera_info.provider, camera_info.index) {
+    // Take the handle from AppState (held by camera_session since connect).
+    // This cancels any in-progress warmup and flips the phase to Capturing.
+    let camera_name = camera_info.info.name.clone();
+    let mut camera = match lifecycle::take_for_capture(&state, &camera_name).await {
         Ok(cam) => {
             debug!(
                 camera_id = %camera_id,
                 provider = %camera_info.provider,
-                "Camera opened for capture"
+                "Camera handle taken for capture"
             );
             cam
         }
         Err(e) => {
-            error!(camera_id = %camera_id, error = %e, "Failed to open camera for capture");
-            state.send_error(format!("Failed to open camera: {}", e));
+            error!(camera_id = %camera_id, error = %e, "Failed to take camera handle for capture");
+            state.send_error(format!("Failed to take camera handle: {}", e));
             state.set_capture_state(CaptureState::Idle).await;
             return;
         }
@@ -114,8 +116,8 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         Err(e) => {
             error!(error = %e, "Failed to capture probe frame for pipeline setup");
             state.send_error(format!("Failed to capture initial frame: {}", e));
-            let _ = camera.close();
             state.clear_active_camera_token().await;
+            lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
             state.set_capture_state(CaptureState::Idle).await;
             return;
         }
@@ -168,7 +170,7 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     let capture_handle = std::thread::Builder::new()
         .name("capture-task".into())
         .spawn(move || {
-            run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture);
+            run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture)
         })
         .expect("Failed to spawn capture thread");
 
@@ -194,11 +196,17 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         .expect("Failed to spawn storage thread");
 
     // Wait for all threads to complete (blocking join wrapped in spawn_blocking
-    // to avoid blocking the tokio runtime)
-    let _ = tokio::task::spawn_blocking(move || {
-        if let Err(e) = capture_handle.join() {
-            error!("Capture thread panicked: {:?}", e);
-        }
+    // to avoid blocking the tokio runtime). The capture task returns the
+    // handle so it can be returned to the session; downstream threads
+    // produce no output.
+    let returned_camera = tokio::task::spawn_blocking(move || {
+        let cam = match capture_handle.join() {
+            Ok(cam) => cam,
+            Err(e) => {
+                error!("Capture thread panicked: {:?}", e);
+                None
+            }
+        };
         // Once capture is done (senders dropped), downstream threads will drain and exit
         if let Err(e) = storage_handle.join() {
             error!("Storage thread panicked: {:?}", e);
@@ -209,16 +217,19 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         if let Err(e) = render_handle.join() {
             error!("Render thread panicked: {:?}", e);
         }
+        cam
     })
-    .await;
+    .await
+    .unwrap_or(None);
 
     // End capture session
     state.disk_writer.end_session();
 
     info!(camera_id = %camera_id, "Capture pipeline ended");
 
-    // Clean up
+    // Return the camera handle to the session (or finalize disconnect if lost).
     state.clear_active_camera_token().await;
+    lifecycle::return_from_capture(&state, &camera_name, returned_camera).await;
     state.set_capture_state(CaptureState::Idle).await;
 }
 
@@ -238,7 +249,7 @@ fn run_capture_task(
     stacking_tx: mpsc::SyncSender<CapturedFrame>,
     storage_tx: mpsc::SyncSender<CapturedFrame>,
     rt: tokio::runtime::Handle,
-) {
+) -> Option<Box<dyn crate::camera::Camera>> {
     debug!("Capture task started");
 
     // Frame numbering continues from 1 (probe frame was #1)
@@ -246,6 +257,7 @@ fn run_capture_task(
     let mut last_status_at = Instant::now()
         .checked_sub(STATUS_POLL_INTERVAL)
         .unwrap_or_else(Instant::now);
+    let mut camera_ok = true;
 
     loop {
         if state.is_cancelled() {
@@ -284,6 +296,14 @@ fn run_capture_task(
                         .cancel_token()
                         .store(false, std::sync::atomic::Ordering::SeqCst);
                     continue;
+                }
+
+                // Hard disconnect errors invalidate the handle — don't return it.
+                if let crate::camera::CameraError::Disconnected = e {
+                    error!(error = %e, "Camera disconnected during capture");
+                    state.send_error(format!("Camera disconnected: {}", e));
+                    camera_ok = false;
+                    break;
                 }
 
                 warn!(error = %e, "Frame capture failed");
@@ -339,10 +359,16 @@ fn run_capture_task(
         }
     }
 
-    // Close camera before dropping senders
-    let _ = camera.close();
     debug!("Capture task ended");
-    // stacking_tx and storage_tx are dropped here, signaling downstream to exit
+    // stacking_tx and storage_tx are dropped here, signaling downstream to exit.
+    // Return the handle so the orchestrator can hand it back to the camera
+    // session (or drop it on a hard disconnect).
+    if camera_ok {
+        Some(camera)
+    } else {
+        let _ = camera.close();
+        None
+    }
 }
 
 /// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated` event.
