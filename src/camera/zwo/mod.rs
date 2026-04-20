@@ -233,18 +233,28 @@ impl ZwoCamera {
                 message: format!("Failed to set ROI: {:?}", e),
             })?;
 
-        if self.info.has_cooler && config.cooler_enabled {
+        if self.info.has_cooler {
             use cameraunit::CameraInfo;
-            if let Some(temp) = config.target_temp_c {
-                catch_ffi_panic("ZWO::set_temperature", || {
-                    self.camera.set_temperature(temp as f32)
-                })
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::CoolingFailed(format!("{:?}", e)))?;
+            if config.cooler_enabled {
+                if let Some(temp) = config.target_temp_c {
+                    let result = catch_ffi_panic("ZWO::set_temperature", || {
+                        self.camera.set_temperature(temp as f32)
+                    });
+                    match result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => tracing::warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature"),
+                        Err(e) => tracing::warn!(error = %e, "Panic setting target temperature"),
+                    }
+                }
             }
-            catch_ffi_panic("ZWO::set_cooler", || self.camera.set_cooler(true))
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::CoolingFailed(format!("{:?}", e)))?;
+            let result = catch_ffi_panic("ZWO::set_cooler", || {
+                self.camera.set_cooler(config.cooler_enabled)
+            });
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => tracing::warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state"),
+                Err(e) => tracing::warn!(error = %e, "Panic setting cooler state"),
+            }
         }
 
         Ok(())

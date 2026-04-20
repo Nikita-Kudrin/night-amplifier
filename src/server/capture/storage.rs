@@ -109,7 +109,7 @@ pub async fn save_frame_to_disk(
     use chrono::Utc;
 
     let raw_frame = frame.clone();
-    let metadata = FitsMetadata::new()
+    let mut metadata = FitsMetadata::new()
         .with_exposure_us(settings.exposure_us)
         .with_gain(settings.gain)
         .with_offset(settings.offset)
@@ -117,6 +117,15 @@ pub async fn save_frame_to_disk(
         .with_frame_number(frame_number)
         .with_binning(settings.bin)
         .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+
+    if camera_info.info.has_cooler {
+        if let Some(set_temp) = settings.target_temp_c {
+            metadata = metadata.with_set_temp(set_temp);
+        }
+        if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
+            metadata = metadata.with_temperature(status.temperature_c);
+        }
+    }
 
     if let Err(e) = state
         .disk_writer
@@ -188,12 +197,21 @@ pub async fn save_stacked_result(
             }
         }
 
-        let metadata = FitsMetadata::new()
+        let mut metadata = FitsMetadata::new()
             .with_exposure_us(settings.exposure_us)
             .with_gain(settings.gain)
             .with_camera(&camera_info.info.name)
             .with_stacked_frames(stacked_count)
             .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+
+        if camera_info.info.has_cooler {
+            if let Some(set_temp) = settings.target_temp_c {
+                metadata = metadata.with_set_temp(set_temp);
+            }
+            if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
+                metadata = metadata.with_temperature(status.temperature_c);
+            }
+        }
 
         if let Err(e) = state.disk_writer.queue_stacked_frame(fits_frame, metadata) {
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");

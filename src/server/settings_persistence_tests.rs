@@ -66,6 +66,8 @@ mod tests {
                 },
             )]),
             last_camera_name: Some("Neptune-C II".to_string()),
+            cooler_enabled: true,
+            target_temp_c: Some(-10.0),
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -140,6 +142,8 @@ mod tests {
             .camera_telescope_profiles
             .contains_key("Neptune-C II"));
         assert_eq!(restored.last_camera_name, Some("Neptune-C II".to_string()));
+        assert!(restored.cooler_enabled);
+        assert_eq!(restored.target_temp_c, Some(-10.0));
     }
 
     #[test]
@@ -182,6 +186,8 @@ mod tests {
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
             last_camera_name: None,
+            cooler_enabled: false,
+            target_temp_c: None,
         };
 
         persistence.save(&settings).unwrap();

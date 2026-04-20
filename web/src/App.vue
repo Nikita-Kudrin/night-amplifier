@@ -1,8 +1,8 @@
 <script setup>
-import {ref, provide, onMounted, watch} from 'vue'
-import {useEventStream} from './composables/useWebSocket.js'
-import {useAppState} from './composables/useAppState.js'
-import {getAstapStatus, getCatalogStatus, clearTarget} from './composables/api.js'
+import { ref, provide, onMounted, watch } from 'vue'
+import { useEventStream } from './composables/useWebSocket.js'
+import { useAppState } from './composables/useAppState.js'
+import { getAstapStatus, getCatalogStatus, clearTarget } from './composables/api.js'
 
 import CameraPanel from './components/CameraPanel.vue'
 import CaptureControls from './components/CaptureControls.vue'
@@ -24,9 +24,11 @@ const {
   refreshSettings,
   refreshCameras,
   initializeState,
+  updateCameraStatus,
   _settingsRef,
   _camerasRef,
   _selectedCameraIdRef,
+  _cameraStatusRef,
   capabilities,
 } = useAppState()
 
@@ -47,6 +49,7 @@ provide('simulatorEnabled', simulatorEnabled)
 provide('refreshSettings', refreshSettings)
 provide('refreshCameras', refreshCameras)
 provide('capabilities', capabilities)
+provide('cameraStatus', _cameraStatusRef)
 
 // Handle Push-To button click - check ASTAP and catalog status first
 async function handlePushToClick() {
@@ -72,10 +75,7 @@ async function handlePushToClick() {
   // Check ASTAP and catalog status before showing Push-To panel
   checkingSetup.value = true
   try {
-    const [astapStatus, catalogStatus] = await Promise.all([
-      getAstapStatus(),
-      getCatalogStatus(),
-    ])
+    const [astapStatus, catalogStatus] = await Promise.all([getAstapStatus(), getCatalogStatus()])
 
     if (astapStatus.ready && catalogStatus.installed) {
       // Everything is installed, show Push-To panel
@@ -99,11 +99,22 @@ function handleSetupComplete() {
 }
 
 // Watch for external settings updates to sync our state across instances
-watch(() => eventStream.lastEvent.value, (event) => {
-  if (event?.type === 'settings_updated') {
-    refreshSettings()
+watch(
+  () => eventStream.lastEvent.value,
+  (event) => {
+    if (event?.type === 'settings_updated') {
+      refreshSettings()
+    }
+    if (event?.type === 'camera_status_updated') {
+      updateCameraStatus(event.name, {
+        temperature_c: event.temperature_c,
+        cooler_power: event.cooler_power ?? null,
+        cooler_on: event.cooler_on,
+        target_temp_c: event.target_temp_c ?? null,
+      })
+    }
   }
-})
+)
 
 // Initialize on mount
 onMounted(() => {
@@ -112,7 +123,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <EyepieceView v-if="isEyepieceRoute"/>
+  <EyepieceView v-if="isEyepieceRoute" />
 
   <div v-else class="app">
     <!-- Header -->
@@ -120,28 +131,34 @@ onMounted(() => {
       <h1 class="logo">NightAmplifier</h1>
       <div class="header-spacer"></div>
       <button
-          class="btn btn-icon btn-header-icon"
-          :class="{ active: showPushTo, loading: checkingSetup }"
-          title="Push-To Navigation"
-          :disabled="checkingSetup"
-          @click="handlePushToClick"
+        class="btn btn-icon btn-header-icon"
+        :class="{ active: showPushTo, loading: checkingSetup }"
+        title="Push-To Navigation"
+        :disabled="checkingSetup"
+        @click="handlePushToClick"
       >
-        <svg v-if="!checkingSetup" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
+        <svg
+          v-if="!checkingSetup"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
         </svg>
         <span v-else class="btn-spinner"></span>
       </button>
       <button
-          class="btn btn-icon btn-header-icon"
-          :class="{ active: showSettings }"
-          title="Settings"
-          @click="showSettings = !showSettings"
+        class="btn btn-icon btn-header-icon"
+        :class="{ active: showSettings }"
+        title="Settings"
+        @click="showSettings = !showSettings"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"/>
+          <circle cx="12" cy="12" r="3" />
           <path
-              d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"
+            d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"
           />
         </svg>
       </button>
@@ -157,10 +174,10 @@ onMounted(() => {
     <div v-else-if="error" class="error-screen">
       <div class="error-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <rect x="2" y="4" width="20" height="16" rx="2"/>
-          <line x1="8" y1="10" x2="8" y2="14"/>
-          <line x1="12" y1="10" x2="12" y2="14"/>
-          <line x1="16" y1="10" x2="16" y2="14"/>
+          <rect x="2" y="4" width="20" height="16" rx="2" />
+          <line x1="8" y1="10" x2="8" y2="14" />
+          <line x1="12" y1="10" x2="12" y2="14" />
+          <line x1="16" y1="10" x2="16" y2="14" />
         </svg>
       </div>
       <h2 class="error-title">Cannot Connect to Server</h2>
@@ -175,26 +192,26 @@ onMounted(() => {
     <main v-else class="main">
       <!-- Left panel (controls) -->
       <aside class="sidebar" :class="{ 'settings-open': showSettings, 'pushto-open': showPushTo }">
-        <PushToPanel v-if="showPushTo"/>
-        <CameraPanel/>
-        <CaptureControls/>
-        <SettingsPanel v-if="showSettings"/>
+        <PushToPanel v-if="showPushTo" />
+        <CameraPanel />
+        <CaptureControls />
+        <SettingsPanel v-if="showSettings" />
       </aside>
 
       <!-- Live view (center) -->
       <section class="content">
-        <LiveView/>
+        <LiveView />
       </section>
     </main>
 
     <!-- Status bar -->
-    <StatusBar/>
+    <StatusBar />
 
     <!-- Push-To Setup Overlay -->
     <PushToSetupOverlay
-        v-if="showPushToSetup"
-        @close="showPushToSetup = false"
-        @installed="handleSetupComplete"
+      v-if="showPushToSetup"
+      @close="showPushToSetup = false"
+      @installed="handleSetupComplete"
     />
   </div>
 </template>

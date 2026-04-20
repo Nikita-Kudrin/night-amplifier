@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tracing::{debug, info};
@@ -22,6 +22,60 @@ use super::probe::probe_image_dimensions;
 use super::registry::find_image_files;
 
 const MAX_PRELOAD_IMAGES: usize = 10;
+
+/// Ambient temperature for simulated cooled cameras (deg C).
+const SIM_AMBIENT_TEMP_C: f64 = 20.0;
+/// Maximum temperature delta below ambient that the simulated TEC can sustain.
+const SIM_MAX_DELTA_C: f64 = 40.0;
+/// Time constant for the first-order lag approach to the target temperature.
+const SIM_COOLER_TAU_S: f64 = 3.0;
+
+/// Internal cooler state for the simulated camera.
+struct SimulatedCoolerState {
+    current_temp_c: f64,
+    target_temp_c: f64,
+    cooler_on: bool,
+    last_tick: Instant,
+}
+
+impl SimulatedCoolerState {
+    fn new() -> Self {
+        Self {
+            current_temp_c: SIM_AMBIENT_TEMP_C,
+            target_temp_c: SIM_AMBIENT_TEMP_C,
+            cooler_on: false,
+            last_tick: Instant::now(),
+        }
+    }
+
+    /// Advance the temperature toward the goal using a first-order lag.
+    /// When the cooler is off, the goal is the ambient temperature.
+    fn advance(&mut self) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f64();
+        self.last_tick = now;
+        if dt <= 0.0 {
+            return;
+        }
+        let goal = if self.cooler_on {
+            self.target_temp_c
+        } else {
+            SIM_AMBIENT_TEMP_C
+        };
+        let factor = 1.0 - (-dt / SIM_COOLER_TAU_S).exp();
+        self.current_temp_c += (goal - self.current_temp_c) * factor;
+    }
+
+    /// Return cooler power as 0..100 percent based on the size of the requested delta.
+    fn cooler_power(&self) -> Option<f64> {
+        if !self.cooler_on {
+            return Some(0.0);
+        }
+        let delta = (SIM_AMBIENT_TEMP_C - self.target_temp_c).abs();
+        let normalized = (delta / SIM_MAX_DELTA_C).clamp(0.0, 1.0);
+        Some(normalized * 100.0)
+    }
+}
 
 /// Simulated camera that reads images from files
 ///
@@ -43,6 +97,8 @@ pub struct SimulatedCamera {
     current_exposure_us: u64,
     current_gain: i32,
     current_offset: i32,
+    /// Simulated cooler state (always present so the simulator can model cooled cameras).
+    cooler: Mutex<SimulatedCoolerState>,
 }
 
 impl SimulatedCamera {
@@ -106,6 +162,7 @@ impl SimulatedCamera {
             current_exposure_us: 1_000_000,
             current_gain: 0,
             current_offset: 10,
+            cooler: Mutex::new(SimulatedCoolerState::new()),
         })
     }
 
@@ -234,10 +291,12 @@ impl Camera for SimulatedCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
+        let mut cooler = self.cooler.lock().unwrap();
+        cooler.advance();
         Ok(CameraStatus {
-            temperature_c: 20.0, // Room temperature
-            cooler_power: None,
-            cooler_on: false,
+            temperature_c: cooler.current_temp_c,
+            cooler_power: cooler.cooler_power(),
+            cooler_on: cooler.cooler_on,
             is_exposing: false,
             current_gain: self.current_gain,
             current_offset: self.current_offset,
@@ -245,12 +304,18 @@ impl Camera for SimulatedCamera {
         })
     }
 
-    fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-        Err(CameraError::ParameterNotSupported("cooler".to_string()))
+    fn set_target_temperature(&mut self, temp_c: f64) -> CameraResult<()> {
+        let mut cooler = self.cooler.lock().unwrap();
+        cooler.advance();
+        cooler.target_temp_c = temp_c;
+        Ok(())
     }
 
-    fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-        Err(CameraError::ParameterNotSupported("cooler".to_string()))
+    fn set_cooler(&mut self, enabled: bool) -> CameraResult<()> {
+        let mut cooler = self.cooler.lock().unwrap();
+        cooler.advance();
+        cooler.cooler_on = enabled;
+        Ok(())
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
@@ -258,6 +323,16 @@ impl Camera for SimulatedCamera {
         self.current_exposure_us = config.exposure_us;
         self.current_gain = config.gain;
         self.current_offset = config.offset;
+
+        // Apply simulated cooler settings so the simulator reacts to UI changes.
+        if self.info.has_cooler {
+            let mut cooler = self.cooler.lock().unwrap();
+            cooler.advance();
+            cooler.cooler_on = config.cooler_enabled;
+            if let Some(target) = config.target_temp_c {
+                cooler.target_temp_c = target;
+            }
+        }
 
         // Measure actual disk read time
         let read_start = Instant::now();
@@ -323,7 +398,9 @@ pub fn create_camera_info(
         pixel_size_y_um: probe.pixel_size_y,
         sensor_type: probe.sensor_type,
         bayer_pattern: probe.bayer_pattern,
-        has_cooler: false,
+        has_cooler: true,
+        min_temp_c: Some(SIM_AMBIENT_TEMP_C - SIM_MAX_DELTA_C),
+        max_temp_c: Some(SIM_AMBIENT_TEMP_C),
         has_shutter: false,
         is_usb3: true,
         bit_depth: 16,
@@ -389,5 +466,63 @@ mod tests {
         assert_eq!(camera.cache_start, 8);
         assert_eq!(camera.cache.len(), 5); // 8, 9, 0, 1, 2 (wrap around)
         assert_eq!(camera.current_index, 9);
+    }
+
+    #[test]
+    fn test_simulator_cooler_state_advances_toward_target() {
+        let mut state = SimulatedCoolerState::new();
+        assert!((state.current_temp_c - SIM_AMBIENT_TEMP_C).abs() < f64::EPSILON);
+
+        state.cooler_on = true;
+        state.target_temp_c = -10.0;
+
+        // Backdate last_tick by 30 seconds (~10 tau) so the lag should converge.
+        state.last_tick = Instant::now() - std::time::Duration::from_secs(30);
+        state.advance();
+
+        assert!(
+            state.current_temp_c < 0.0,
+            "Expected temperature to fall below 0°C, got {}",
+            state.current_temp_c
+        );
+        assert!(
+            state.current_temp_c > -10.5,
+            "Expected temperature not to overshoot the target"
+        );
+    }
+
+    #[test]
+    fn test_simulator_cooler_returns_to_ambient_when_off() {
+        let mut state = SimulatedCoolerState::new();
+        state.cooler_on = true;
+        state.target_temp_c = -10.0;
+        state.current_temp_c = -10.0;
+
+        state.cooler_on = false;
+        state.last_tick = Instant::now() - std::time::Duration::from_secs(30);
+        state.advance();
+
+        assert!(
+            (state.current_temp_c - SIM_AMBIENT_TEMP_C).abs() < 1.0,
+            "Expected temperature to return near ambient, got {}",
+            state.current_temp_c
+        );
+    }
+
+    #[test]
+    fn test_simulator_cooler_power_zero_when_off() {
+        let mut state = SimulatedCoolerState::new();
+        state.target_temp_c = -10.0;
+        state.cooler_on = false;
+        assert_eq!(state.cooler_power(), Some(0.0));
+    }
+
+    #[test]
+    fn test_simulator_cooler_power_scales_with_delta() {
+        let mut state = SimulatedCoolerState::new();
+        state.cooler_on = true;
+        state.target_temp_c = SIM_AMBIENT_TEMP_C - SIM_MAX_DELTA_C;
+        let power = state.cooler_power().unwrap();
+        assert!((power - 100.0).abs() < f64::EPSILON);
     }
 }

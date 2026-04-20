@@ -40,6 +40,38 @@ async fn test_update_settings_single_field() {
 }
 
 #[tokio::test]
+async fn test_update_settings_cooler_fields() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "cooler_enabled": true,
+            "target_temp_c": -12.5,
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["cooler_enabled"], true);
+    assert_eq!(json["data"]["target_temp_c"], -12.5);
+}
+
+#[tokio::test]
+async fn test_update_settings_target_temp_clamped() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (_, json) = post_json(&app, "/api/settings", json!({"target_temp_c": -200.0})).await;
+    assert_eq!(json["data"]["target_temp_c"], -60.0);
+
+    let (_, json) = post_json(&app, "/api/settings", json!({"target_temp_c": 999.0})).await;
+    assert_eq!(json["data"]["target_temp_c"], 30.0);
+}
+
+#[tokio::test]
 async fn test_update_settings_multiple_fields() {
     let state = create_test_state();
     let app = create_test_router(state);
