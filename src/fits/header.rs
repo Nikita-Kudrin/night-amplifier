@@ -74,6 +74,11 @@ pub(crate) fn write_fits_headers(
         if let Some(temp) = meta.temperature {
             hdu.write_key(fptr, "CCD-TEMP", temp).ok();
         }
+
+        // Target (set point) temperature
+        if let Some(set_temp) = meta.set_temp_c {
+            hdu.write_key(fptr, "SET-TEMP", set_temp).ok();
+        }
     }
 
     Ok(())

@@ -158,7 +158,17 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   auto-stretch and background neutralization. Sampling-based for performance on large images.
 
 - **camera/** - Generalized camera interface (traits) supporting native SDKs (ZWO, PlayerOne) and a high-fidelity
-  simulator. Handles exposure, gain, and configuration logic.
+  simulator. Handles exposure, gain, and configuration logic. Cooled cameras expose `has_cooler`,
+  `min_temp_c`, `max_temp_c` on `CameraInfo` and live `temperature_c` / `cooler_power` / `cooler_on`
+  on `CameraStatus`. Cooler activation is driven through `CaptureConfig.cooler_enabled` /
+  `target_temp_c`, applied each frame inside `Camera::capture()`. The simulator models temperature
+  with a first-order lag toward the target (tau ≈ 3s) so the cooler UI can be tested without
+  hardware.
+
+  **Cooled-camera limitation:** the camera handle is opened only inside the capture thread
+  (`src/server/capture/mod.rs`), so cooling can only run while a capture session is active. There is
+  no separate "pre-cool before capture" or "warm-up before disconnect" workflow yet — that would
+  require holding the handle in `AppState` long-term.
 
 - **plugins/** - Registry and traits for professional features (Push-To, Advanced Rejection, Comet Stacking). Allows the
   Community version to interact with the Pro version when available.
@@ -480,6 +490,8 @@ The `/api/settings` endpoint accepts these fields:
 | `saturation_boost_strength` | f32  | 0.5     | Saturation boost intensity (0.0-1.0)    |
 | `memory_limit_mb`           | u32  | 4000    | Memory limit for stacking (MB)          |
 | `simulated_preload_images`  | u32  | 5       | Number of images to preload for sim cam |
+| `cooler_enabled`            | bool | false   | Activate camera TEC during capture      |
+| `target_temp_c`             | f64? | null    | Target sensor temperature in Celsius    |
 
 ### WebSocket Events
 
@@ -493,6 +505,7 @@ Events sent via `/ws/events`:
 | `settings_updated`            | -                                                                                     | Settings were changed              |
 | `camera_connected`            | `name`                                                                                | Camera connected                   |
 | `camera_disconnected`         | `name`                                                                                | Camera disconnected                |
+| `camera_status_updated`       | `name`, `temperature_c`, `cooler_power`, `cooler_on`, `target_temp_c`                 | Cooled camera status sample (~2s)  |
 | `error`                       | `message`                                                                             | Error occurred                     |
 | `disk_writer_warning`         | `queue_depth`                                                                         | Disk write queue exceeds threshold |
 | `disk_writer_warning_cleared` | -                                                                                     | Queue warning cleared              |

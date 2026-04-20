@@ -2,6 +2,7 @@ use playerone_sdk::{Camera as POACamera, ImageFormat as POAImageFormat, ROI};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::warn;
 
 use super::super::error::{CameraError, CameraResult};
 use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
@@ -99,7 +100,34 @@ pub fn apply_config(
             })?;
     }
 
+    if info.has_cooler {
+        apply_cooler_config(camera, config);
+    }
+
     Ok(())
+}
+
+fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {
+    if config.cooler_enabled {
+        if let Some(temp) = config.target_temp_c {
+            let result = catch_ffi_panic("PlayerOne::set_target_temperature", || {
+                camera.set_target_temperature(temp as i64)
+            });
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature"),
+                Err(e) => warn!(error = %e, "Panic setting target temperature"),
+            }
+        }
+    }
+    let result = catch_ffi_panic("PlayerOne::set_cooler", || {
+        camera.set_cooler(config.cooler_enabled)
+    });
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state"),
+        Err(e) => warn!(error = %e, "Panic setting cooler state"),
+    }
 }
 
 pub fn get_capture_dimensions(info: &CameraInfo, config: &CaptureConfig) -> (u32, u32) {

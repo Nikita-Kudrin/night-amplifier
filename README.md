@@ -40,6 +40,9 @@ The camera module uses an extensible provider system. Enable features for specif
 - **Stacking modes** - Deep Sky and Planetary stacking.
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
+- **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power
+  monitoring, and `CCD-TEMP` / `SET-TEMP` headers in saved FITS frames. Cooling activates while a
+  capture session is running.
 
 > [!NOTE]
 > Pro features such as **Comet Stacking**, **Advanced Outlier Rejection** (Sigma Clipping), **RBF Background Extraction
@@ -81,6 +84,8 @@ captures/
 - `FRAMENUM` - Frame number in sequence
 - `NCOMBINE` - Number of stacked frames (for stacked results)
 - `XBINNING` / `YBINNING` - Binning factor
+- `CCD-TEMP` - Sensor temperature in Celsius (cooled cameras only)
+- `SET-TEMP` - Target sensor temperature in Celsius (cooled cameras only)
 - `SOFTWARE` - "Night Amplifier"
 
 **Slow Disk Warning:** If disk I/O can't keep up with the capture rate, a warning appears in the web interface when the

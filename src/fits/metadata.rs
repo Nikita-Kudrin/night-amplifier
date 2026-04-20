@@ -25,6 +25,8 @@ pub struct FitsMetadata {
     pub binning: Option<u8>,
     /// Sensor temperature in Celsius
     pub temperature: Option<f64>,
+    /// Target sensor temperature in Celsius (cooled cameras only)
+    pub set_temp_c: Option<f64>,
 }
 
 impl FitsMetadata {
@@ -81,6 +83,18 @@ impl FitsMetadata {
     /// Set binning factor
     pub fn with_binning(mut self, bin: u8) -> Self {
         self.binning = Some(bin);
+        self
+    }
+
+    /// Set sensor temperature in Celsius
+    pub fn with_temperature(mut self, temp_c: f64) -> Self {
+        self.temperature = Some(temp_c);
+        self
+    }
+
+    /// Set target sensor temperature in Celsius (cooled cameras only)
+    pub fn with_set_temp(mut self, set_temp_c: f64) -> Self {
+        self.set_temp_c = Some(set_temp_c);
         self
     }
 }

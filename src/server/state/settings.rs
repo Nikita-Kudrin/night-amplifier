@@ -47,6 +47,10 @@ pub struct CaptureSettings {
     pub use_simulated_camera: bool,
     /// Number of images to preload for simulated camera
     pub simulated_preload_images: usize,
+    /// Whether the cooler should be active during capture (cooled cameras only)
+    pub cooler_enabled: bool,
+    /// Target sensor temperature in Celsius (None means "no target set")
+    pub target_temp_c: Option<f64>,
     /// Region of interest for comet nucleus tracking
     pub comet_roi: Option<AlignmentRoi>,
     /// Region of interest for planetary alignment
@@ -153,6 +157,8 @@ impl Default for CaptureSettings {
             saturation_boost_strength: 0.5,
             use_simulated_camera: false,
             simulated_preload_images: 5,
+            cooler_enabled: false,
+            target_temp_c: None,
             comet_roi: None,
             planetary_roi: None,
             wanderer_mode: false,
@@ -182,11 +188,16 @@ impl CaptureSettings {
 
     /// Convert to camera capture config
     pub fn to_capture_config(&self) -> CaptureConfig {
-        CaptureConfig::new()
+        let mut config = CaptureConfig::new()
             .with_exposure_us(self.exposure_us)
             .with_gain(self.gain)
             .with_offset(self.offset)
             .with_bin(self.bin)
             .with_simulated_preload_images(self.simulated_preload_images)
+            .with_cooler(self.cooler_enabled);
+        if let Some(temp) = self.target_temp_c {
+            config.target_temp_c = Some(temp);
+        }
+        config
     }
 }
