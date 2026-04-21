@@ -96,6 +96,14 @@ echo ""
 echo "── Building Rust binary (release) ──"
 cd "${PROJECT_ROOT}"
 
+# WORKAROUND: fitsio-sys pollutes the global cargo registry with compiled object files.
+# If we switch between native and cross-compilation, the linker will crash trying to link
+# an x86_64 libcfitsio.a into an aarch64 binary. We must clean the cached objects.
+if [[ -d "${HOME}/.cargo/registry/src" ]]; then
+    find "${HOME}/.cargo/registry/src" -type f -name "*.o" -path "*/fitsio-sys-*/ext/cfitsio/*" -delete 2>/dev/null || true
+    find "${HOME}/.cargo/registry/src" -type f -name "*.a" -path "*/fitsio-sys-*/ext/cfitsio/lib/*" -delete 2>/dev/null || true
+fi
+
 export RUSTFLAGS="-C target-cpu=${TARGET_CPU} ${RUSTFLAGS:-}"
 echo "RUSTFLAGS=${RUSTFLAGS}"
 
