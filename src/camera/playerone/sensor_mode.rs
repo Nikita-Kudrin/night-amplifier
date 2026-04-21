@@ -115,7 +115,10 @@ pub fn current_sensor_mode(camera_id: i32) -> Option<u32> {
 /// the camera's reported mode names. Returns `None` if no compatible mode is found.
 pub fn resolve_mode_index(modes: &[SensorMode], desired: DualSamplingMode) -> Option<u32> {
     let keywords: &[&str] = match desired {
-        DualSamplingMode::LowReadoutNoise => &["lrn", "low readout", "low read"],
+        // Different Player One cameras label the LRN mode differently — e.g.
+        // Uranus-C Pro uses "LRN", Ares-C PRO uses "Low Noise". Match all
+        // observed variants.
+        DualSamplingMode::LowReadoutNoise => &["lrn", "low readout", "low read", "low noise"],
         DualSamplingMode::Normal => &["normal"],
     };
     modes
@@ -160,6 +163,16 @@ mod tests {
     #[test]
     fn resolves_lrn_case_insensitive() {
         let modes = vec![mode(0, "normal"), mode(1, "Low Readout Noise")];
+        assert_eq!(
+            resolve_mode_index(&modes, DualSamplingMode::LowReadoutNoise),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn resolves_lrn_from_low_noise_label() {
+        // Ares-C PRO labels the low-readout-noise mode as "Low Noise".
+        let modes = vec![mode(0, "Normal"), mode(1, "Low Noise")];
         assert_eq!(
             resolve_mode_index(&modes, DualSamplingMode::LowReadoutNoise),
             Some(1)

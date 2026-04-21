@@ -22,14 +22,12 @@ impl CameraDescription {
             unsafe { sdk.api.POACloseCamera(self.properties.cameraID); }
             return Err(format!("POAInitCamera failed: {:?}", err));
         }
-        Ok(Camera { id: self.properties.cameraID, max_width: self.properties.maxWidth, max_height: self.properties.maxHeight })
+        Ok(Camera { id: self.properties.cameraID })
     }
 }
 
 pub struct Camera {
     id: i32,
-    max_width: i32,
-    max_height: i32,
 }
 
 impl Camera {
@@ -134,12 +132,6 @@ impl Camera {
         
         let err = unsafe { sdk.api.POASetImageSize(self.id, roi.width as i32, roi.height as i32) };
         if err == POAErrors::POA_OK { Ok(()) } else { Err(format!("POASetImageSize failed: {:?}", err)) }
-    }
-
-    pub fn create_image_buffer(&self) -> Result<Vec<u8>, String> {
-        // Find max buffer size
-        let size = self.max_width * self.max_height * 3;
-        Ok(vec![0; size as usize])
     }
 
     pub fn start_exposure(&mut self) -> Result<(), String> {

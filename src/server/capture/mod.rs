@@ -44,6 +44,34 @@ use channel::{max_queue_capacity, CapturedFrame, StackedFrame};
 /// Cadence for polling cooled-camera status from the capture thread.
 const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Override the capture format with the best raw format advertised by the
+/// camera (`Raw16` preferred, `Raw8` as fallback). Leaves the config untouched
+/// if neither is advertised, letting the provider surface a clear SDK error.
+fn apply_best_raw_format(
+    config: &mut crate::camera::CaptureConfig,
+    info: &crate::camera::CameraInfo,
+    camera_name: &str,
+) {
+    if let Some(format) = crate::camera::ImageFormat::best_raw_format(&info.supported_formats) {
+        if config.format != format {
+            debug!(
+                camera = %camera_name,
+                selected = ?format,
+                requested = ?config.format,
+                supported = ?info.supported_formats,
+                "Adjusted capture format to best available raw format"
+            );
+            config.format = format;
+        }
+    } else {
+        warn!(
+            camera = %camera_name,
+            supported = ?info.supported_formats,
+            "Camera advertises neither Raw16 nor Raw8 — capture may fail"
+        );
+    }
+}
+
 /// The main capture orchestrator.
 ///
 /// Takes the long-lived camera handle from `AppState` (opened at connect
@@ -110,7 +138,8 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
 
     // Capture a probe frame to determine dimensions and channel capacities
     let settings = state.settings.read().await.clone();
-    let capture_config = settings.to_capture_config();
+    let mut capture_config = settings.to_capture_config();
+    apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     let probe_frame = match camera.capture(&capture_config) {
         Ok(f) => f,
         Err(e) => {
@@ -266,7 +295,7 @@ fn run_capture_task(
 
         // Read settings snapshot for this frame
         let settings = rt.block_on(state.settings.read()).clone();
-        let capture_config = settings.to_capture_config();
+        let mut capture_config = settings.to_capture_config();
 
         // Get camera info
         let camera_info = {
@@ -283,6 +312,8 @@ fn run_capture_task(
                 break;
             }
         };
+
+        apply_best_raw_format(&mut capture_config, &camera_info.info, &camera.info().name);
 
         // Capture a frame (blocking FFI call)
         let capture_result = {

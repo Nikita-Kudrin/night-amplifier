@@ -57,6 +57,22 @@ impl ImageFormat {
             ImageFormat::Rgb24 => 3,
         }
     }
+
+    /// Pick the best raw capture format from the camera's supported list.
+    ///
+    /// Prefers `Raw16` for its higher dynamic range; falls back to `Raw8`.
+    /// Returns `None` when the camera advertises neither (pathological case —
+    /// we never want to capture in hardware-debayered RGB24 for astronomy
+    /// because calibration and debayering are done in software from raw data).
+    pub fn best_raw_format(supported: &[ImageFormat]) -> Option<ImageFormat> {
+        if supported.contains(&ImageFormat::Raw16) {
+            Some(ImageFormat::Raw16)
+        } else if supported.contains(&ImageFormat::Raw8) {
+            Some(ImageFormat::Raw8)
+        } else {
+            None
+        }
+    }
 }
 
 /// Camera information
