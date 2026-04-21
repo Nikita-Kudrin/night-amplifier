@@ -12,7 +12,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::state::{CaptureSession, CaptureSettings, EyepieceSettings, TelescopeSettings};
+use super::state::{
+    CameraCaptureProfile, CaptureSession, CaptureSettings, EyepieceSettings, TelescopeSettings,
+};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
 use crate::planetary::AlignmentRoi;
@@ -222,6 +224,9 @@ pub struct SettingsResponse {
     /// Per-camera telescope profiles keyed by camera name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub camera_profiles: HashMap<String, CameraCaptureProfile>,
     /// Name of the last active camera
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_camera_name: Option<String>,
@@ -264,6 +269,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
+            camera_profiles: settings.camera_profiles.clone(),
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
@@ -389,6 +395,10 @@ pub struct UpdateSettingsRequest {
     /// Per-camera telescope profiles keyed by camera name
     #[serde(default)]
     pub camera_telescope_profiles: Option<HashMap<String, TelescopeSettings>>,
+    /// Per-camera capture profiles (mainly for tests to seed the map without
+    /// going through a camera connect).
+    #[serde(default)]
+    pub camera_profiles: Option<HashMap<String, CameraCaptureProfile>>,
     /// Name of the last active camera
     #[serde(default)]
     pub last_camera_name: Option<String>,
