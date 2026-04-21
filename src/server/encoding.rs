@@ -16,20 +16,7 @@ use crate::frame::Frame;
 /// Followed by LZ4-compressed RGB8 pixel data (3 bytes per pixel)
 pub const RGB8_MAGIC: u32 = 0x53413038; // "SA08" in little-endian
 
-/// Encode RGB8 data as JPEG
-pub fn encode_jpeg(rgb8: &[u8], width: u32, height: u32, quality: u8) -> Result<Vec<u8>, String> {
-    use image::codecs::jpeg::JpegEncoder;
-    use std::io::Cursor;
 
-    let mut jpeg_buffer = Cursor::new(Vec::new());
-    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg_buffer, quality);
-
-    encoder
-        .encode(rgb8, width, height, image::ExtendedColorType::Rgb8)
-        .map_err(|e| format!("JPEG encoding error: {}", e))?;
-
-    Ok(jpeg_buffer.into_inner())
-}
 
 /// Encode RGB8 data with LZ4 compression for high-speed streaming
 pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {

@@ -150,9 +150,7 @@ pub async fn run(register_plugins: impl FnOnce()) {
 
     let config = ServerConfig::new()
         .with_bind_addr(addr)
-        .with_static_dir(Some("web".to_string()))
-        .with_stream_fps(10)
-        .with_jpeg_quality(85);
+        .with_static_dir(Some("web".to_string()));
 
     info!("Starting server on http://{}", addr);
     info!("API endpoints:");

@@ -25,9 +25,9 @@ use super::state::AppState;
 /// Clients connect to `/ws/stream` to receive frames.
 ///
 /// Protocol:
-/// - Server sends binary messages containing frame data (RGB8 or JPEG)
+/// - Server sends binary messages containing frame data (LZ4 compressed RGB8)
 /// - Client can send "ping" text messages to keep connection alive
-/// - Server rate-limits based on configured FPS
+/// - Server pushes frames as soon as they are rendered
 pub async fn stream_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
@@ -37,9 +37,14 @@ pub async fn stream_handler(
 
 /// Handle the image stream WebSocket connection
 async fn handle_stream(mut socket: WebSocket, state: Arc<AppState>) {
-    let frame_interval = Duration::from_millis(1000 / state.stream_fps as u64);
-    let mut ticker = interval(frame_interval);
-    let mut last_frame_counter: u64 = 0;
+    let mut last_frame_counter: u64 = state.frame_counter.load(Ordering::SeqCst);
+
+    // Send initial frame if available
+    if let Some(frame_data) = state.get_latest_frame().await {
+        if socket.send(Message::Binary(frame_data.as_ref().clone().into())).await.is_err() {
+            return;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -66,8 +71,8 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // Send frames at configured rate
-            _ = ticker.tick() => {
+            // Send frames when a new one is ready
+            _ = state.frame_ready.notified() => {
                 let current_counter = state.frame_counter.load(Ordering::SeqCst);
 
                 // Only send if there's a new frame

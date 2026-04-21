@@ -44,9 +44,8 @@ pub struct AppState {
     pub events: broadcast::Sender<ServerEvent>,
     /// Mutex for capture operations (ensures only one capture at a time)
     pub capture_lock: Mutex<()>,
-    /// Stream configuration
-    pub stream_fps: u32,
-    pub jpeg_quality: u8,
+    /// Notification for new frame ready
+    pub frame_ready: Arc<tokio::sync::Notify>,
     /// Disk writer handle for saving frames
     pub disk_writer: DiskWriterHandle,
     /// Push-To navigation state
@@ -91,7 +90,7 @@ pub enum MonitorCmd {
 
 impl AppState {
     /// Create new application state
-    pub fn new(stream_fps: u32, jpeg_quality: u8) -> (Self, DiskWriter) {
+    pub fn new() -> (Self, DiskWriter) {
         let (events_tx, _) = broadcast::channel(256);
         let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
 
@@ -113,8 +112,7 @@ impl AppState {
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
             capture_lock: Mutex::new(()),
-            stream_fps,
-            jpeg_quality,
+            frame_ready: Arc::new(tokio::sync::Notify::new()),
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to_state),
             settings_persistence,
@@ -131,8 +129,6 @@ impl AppState {
 
     /// Create new application state with custom disk writer configuration
     pub fn with_disk_writer_config(
-        stream_fps: u32,
-        jpeg_quality: u8,
         disk_config: DiskWriterConfig,
     ) -> (Self, DiskWriter) {
         let (events_tx, _) = broadcast::channel(256);
@@ -156,8 +152,7 @@ impl AppState {
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
             capture_lock: Mutex::new(()),
-            stream_fps,
-            jpeg_quality,
+            frame_ready: Arc::new(tokio::sync::Notify::new()),
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to_state),
             settings_persistence,
@@ -182,7 +177,7 @@ impl AppState {
 
     /// Create new application state for testing
     #[cfg(test)]
-    pub fn new_for_testing(stream_fps: u32, jpeg_quality: u8) -> (Self, DiskWriter) {
+    pub fn new_for_testing() -> (Self, DiskWriter) {
         let (events_tx, _) = broadcast::channel(256);
         let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
         let settings_persistence = SettingsPersistence::new("/nonexistent/test/settings.json");
@@ -197,8 +192,7 @@ impl AppState {
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
             capture_lock: Mutex::new(()),
-            stream_fps,
-            jpeg_quality,
+            frame_ready: Arc::new(tokio::sync::Notify::new()),
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(None),
             settings_persistence,
@@ -258,10 +252,11 @@ impl AppState {
     }
 
     /// Set the latest rendered frame for streaming
-    pub async fn set_latest_frame(&self, jpeg_data: Vec<u8>) {
-        let frame_size = jpeg_data.len() as u64;
-        *self.latest_frame.write().await = Some(Arc::new(jpeg_data));
+    pub async fn set_latest_frame(&self, frame_data: Vec<u8>) {
+        let frame_size = frame_data.len() as u64;
+        *self.latest_frame.write().await = Some(Arc::new(frame_data));
         self.frame_counter.fetch_add(1, Ordering::SeqCst);
+        self.frame_ready.notify_waiters();
         telemetry_metrics::record_latest_frame_size(frame_size);
     }
 
@@ -446,14 +441,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_app_state_creation() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
         assert_eq!(state.capture_state().await, CaptureState::Idle);
         assert!(!state.is_cancelled());
     }
 
     #[tokio::test]
     async fn test_app_state_capture_state() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
 
         state.set_capture_state(CaptureState::Capturing).await;
         assert_eq!(state.capture_state().await, CaptureState::Capturing);
@@ -464,7 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_app_state_frame_tracking() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
         state.reset_session().await;
 
         state.frame_captured(true).await;
@@ -478,7 +473,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_app_state_cancellation() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
 
         assert!(!state.is_cancelled());
         state.request_cancel();
@@ -489,7 +484,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_app_state_frame_storage() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
 
         assert!(state.get_latest_frame().await.is_none());
 
@@ -526,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_camera_status_caches_and_broadcasts() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
         let mut subscriber = state.subscribe_events();
 
         let status = CameraStatus {
@@ -570,13 +565,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_camera_status_returns_none_for_unknown() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
         assert!(state.get_camera_status("Unknown").await.is_none());
     }
 
     #[tokio::test]
     async fn test_app_state_active_camera_cancellation() {
-        let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+        let (state, _disk_writer) = AppState::new_for_testing();
         let token = Arc::new(AtomicBool::new(false));
 
         state.set_active_camera_token(Arc::clone(&token)).await;

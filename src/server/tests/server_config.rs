@@ -40,7 +40,7 @@ fn test_server_state_access() {
     let state = server.state();
 
     // Should be able to access state
-    assert_eq!(state.stream_fps, ServerConfig::default().stream_fps);
+    assert!(!state.is_cancelled());
 }
 
 #[test]

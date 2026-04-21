@@ -395,7 +395,7 @@ async fn test_send_error_broadcasts_event() {
 
 #[tokio::test]
 async fn test_app_state_has_disk_writer() {
-    let (state, _disk_writer) = AppState::new(5, 85);
+    let (state, _disk_writer) = AppState::new();
 
     // Disk writer handle should be accessible
     assert!(state.disk_writer.is_enabled()); // Default enabled
@@ -411,7 +411,7 @@ async fn test_app_state_with_disk_writer_config() {
         .with_enabled(false)
         .with_max_queue_size(50);
 
-    let (state, _disk_writer) = AppState::with_disk_writer_config(5, 85, config);
+    let (state, _disk_writer) = AppState::with_disk_writer_config(config);
 
     // Should use custom config
     assert!(!state.disk_writer.is_enabled());

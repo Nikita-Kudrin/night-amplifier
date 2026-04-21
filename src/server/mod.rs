@@ -41,7 +41,7 @@ mod ws;
 mod tests;
 
 pub use dto::*;
-pub use encoding::{encode_jpeg, encode_rgb8_lz4, RGB8_MAGIC};
+pub use encoding::{encode_rgb8_lz4, RGB8_MAGIC};
 pub use error::{ApiError, ApiResult, ServerError};
 pub use events::ServerEvent;
 pub use services::{CameraService, CaptureService};
@@ -70,10 +70,6 @@ pub struct ServerConfig {
     pub enable_cors: bool,
     /// Maximum WebSocket message size in bytes
     pub max_ws_message_size: usize,
-    /// Image stream frame rate (frames per second)
-    pub stream_fps: u32,
-    /// JPEG quality for streamed images (1-100)
-    pub jpeg_quality: u8,
 }
 
 impl Default for ServerConfig {
@@ -83,8 +79,6 @@ impl Default for ServerConfig {
             static_dir: None,
             enable_cors: true,
             max_ws_message_size: 16 * 1024 * 1024, // 16MB
-            stream_fps: 5,
-            jpeg_quality: 85,
         }
     }
 }
@@ -119,17 +113,6 @@ impl ServerConfig {
         self
     }
 
-    /// Set the stream frame rate
-    pub fn with_stream_fps(mut self, fps: u32) -> Self {
-        self.stream_fps = fps;
-        self
-    }
-
-    /// Set the JPEG quality for streamed images
-    pub fn with_jpeg_quality(mut self, quality: u8) -> Self {
-        self.jpeg_quality = quality.clamp(1, 100);
-        self
-    }
 }
 
 use crate::disk_writer::DiskWriter;
@@ -144,7 +127,7 @@ pub struct Server {
 impl Server {
     /// Create a new server with the given configuration
     pub fn new(config: ServerConfig) -> Self {
-        let (state, disk_writer) = AppState::new(config.stream_fps, config.jpeg_quality);
+        let (state, disk_writer) = AppState::new();
         Self {
             config,
             state: Arc::new(state),
