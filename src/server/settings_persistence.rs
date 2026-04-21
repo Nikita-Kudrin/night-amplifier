@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-use super::state::{CaptureSettings, EyepieceSettings, TelescopeSettings};
+use super::state::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
@@ -74,6 +74,9 @@ pub struct PersistedSettings {
     /// Per-camera telescope profiles keyed by camera name
     #[serde(default)]
     pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
+    #[serde(default)]
+    pub camera_profiles: HashMap<String, CameraCaptureProfile>,
     /// Name of the last active camera
     #[serde(default)]
     pub last_camera_name: Option<String>,
@@ -132,6 +135,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
+            camera_profiles: settings.camera_profiles.clone(),
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
@@ -169,6 +173,7 @@ impl From<PersistedSettings> for CaptureSettings {
             eyepiece: persisted.eyepiece,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
+            camera_profiles: persisted.camera_profiles,
             last_camera_name: persisted.last_camera_name,
             cooler_enabled: persisted.cooler_enabled,
             target_temp_c: persisted.target_temp_c,
