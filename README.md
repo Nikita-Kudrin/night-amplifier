@@ -8,49 +8,49 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Supported Platforms
 
-| OS            | Architecture | Tested? |
-|---------------|--------------|---------|
-| Linux         | x86_64       | YES     |
-| Linux         | ARM64        | NO      |
-| Raspberry Pi5 | ARM64        | NO      |
-| Windows       | x86_64       | NO      |
-| Windows       | ARM64        | NO      |
-| macOS         | x86_64       | NO      |
-| macOS         | ARM64        | NO      |
+| OS            | Architecture | Supported                                                 |
+|---------------|--------------|-----------------------------------------------------------|
+| Linux         | x86_64       | ✅                                                         |
+| Linux         | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Raspberry Pi5 | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Windows       | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Windows       | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| macOS         | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| macOS         | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+
+[![CI](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml)
 
 ## Camera SDK Support
 
 The camera module uses an extensible provider system. Enable features for specific manufacturers:
 
-| Provider       | SDK Required                                                         | Tested? |
-|----------------|----------------------------------------------------------------------|---------|
-| Player One     | [Player One SDK](https://player-one-astronomy.com/service/software/) | YES     |
-| ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | NO      |
-| INDI           | *Planned*                                                            | -       |
-| Touptek        | *Planned*                                                            | -       |
-| QHYCCD         | *Planned*                                                            | -       |
-| SVBony         | *Planned*                                                            | -       |
-| Altair Astro   | *?*                                                                  | -       |
-| Atik           | *?*                                                                  | -       |
-| USB web camera | *?*                                                                  | -       |
-| Simulated      | Loads PNG/TIFF/FITS/SER from directories                             | YES     |
+| Provider       | SDK Required                                                         | Supported                                                 |
+|----------------|----------------------------------------------------------------------|-----------------------------------------------------------|
+| Player One     | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                         |
+| ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| INDI           | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Touptek        | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| QHYCCD         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| SVBony         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Altair Astro   | *?*                                                                  | ...                                                       |
+| Atik           | *?*                                                                  | ...                                                       |
+| USB web camera | *?*                                                                  | ...                                                       |
+| Simulated      | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                         |
 
 ## Features
 
 - **Stacking modes** - Deep Sky and Planetary stacking.
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
-- **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power
-  monitoring, and `CCD-TEMP` / `SET-TEMP` headers in saved FITS frames. Connecting a camera with
-  cooling enabled begins pre-cooling immediately; the UI shows a `Precooling` badge and live
-  temperature until the sensor settles near the target. Disconnecting a cooled camera runs a
-  warm-up sequence (cooler off, watch sensor rise to ~10 °C, with a 5-minute timeout) before the
-  USB handle is released, preventing dew condensation on a cold sensor. Capture can start at any
-  time — during pre-cool or warm-up — and automatically re-enables the cooler per current settings.
+- **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power, monitoring,
+  pre-cooling, warming-up
 
 > [!NOTE]
-> Pro features such as **Comet Stacking**, **Advanced Outlier Rejection** (Sigma Clipping), **RBF Background Extraction
-**, and the **Push-To Navigation System** are available in the 'Night Amplifier Pro' version.
+> Pro features are available in the 'Night Amplifier Pro' version:  
+> - **Push-To Navigation System** (via ASTAP)
+> - **Comet Stacking**
+> - **Advanced Outlier Rejection** (Sigma Clipping)
+> - **RBF Background Extraction**
 
 ## Frame Storage
 
