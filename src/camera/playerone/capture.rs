@@ -225,12 +225,19 @@ pub fn run_capture(
     // Reset cancel flag
     cancel_flag.store(false, Ordering::SeqCst);
 
-    // Create buffer
-    let mut buffer = catch_ffi_panic("PlayerOne::create_image_buffer", || {
-        camera.create_image_buffer()
-    })
-    .map_err(CameraError::from)?
-    .map_err(|e| CameraError::ImageReadFailed(e))?;
+    // Allocate a buffer that exactly matches the selected format and capture
+    // dimensions. `Frame::from_raw` enforces buffer length equality, so an
+    // over-allocated worst-case buffer would be rejected downstream.
+    let (width, height) = get_capture_dimensions(info, config);
+    let bytes_per_pixel = match config.format {
+        ImageFormat::Raw8 => 1,
+        ImageFormat::Raw16 => 2,
+        ImageFormat::Rgb24 => 3,
+    };
+    let buffer_len = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(bytes_per_pixel);
+    let mut buffer = vec![0u8; buffer_len];
 
     // Calculate timeout
     let exposure_duration = Duration::from_micros(config.exposure_us);
@@ -281,7 +288,5 @@ pub fn run_capture(
         .map_err(CameraError::from)?
         .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
 
-    // Convert to Frame
-    let (width, height) = get_capture_dimensions(info, config);
     buffer_to_frame(info, &buffer, width, height, config)
 }
