@@ -72,6 +72,52 @@ fn apply_best_raw_format(
     }
 }
 
+/// Drop cooler-related fields when the camera has no cooler. Saved settings
+/// may carry `cooler_enabled = true` from a previous cooled camera; without
+/// this override `CaptureConfig::validate` would reject the config and
+/// capture would fail before the first frame.
+fn apply_cooler_support_override(
+    config: &mut crate::camera::CaptureConfig,
+    info: &crate::camera::CameraInfo,
+    camera_name: &str,
+) {
+    if info.has_cooler {
+        return;
+    }
+    if config.cooler_enabled || config.target_temp_c.is_some() {
+        debug!(
+            camera = %camera_name,
+            "Camera has no cooler; clearing cooler_enabled / target_temp_c from capture config"
+        );
+        config.cooler_enabled = false;
+        config.target_temp_c = None;
+    }
+}
+
+/// Drop `sensor_mode` when the camera doesn't advertise sensor modes.
+/// `CaptureSettings::to_capture_config` fills `sensor_mode` unconditionally
+/// from the explicit override or from `stacking_type.desired_sensor_mode()`
+/// — neither is aware of the active camera's capabilities. Without this
+/// override, `CaptureConfig::validate` rejects the request with
+/// `ParameterNotSupported("sensor_mode")` for any camera that reports an
+/// empty `sensor_modes` list (e.g. Player One uncooled planetary models).
+fn apply_sensor_mode_support_override(
+    config: &mut crate::camera::CaptureConfig,
+    info: &crate::camera::CameraInfo,
+    camera_name: &str,
+) {
+    if !info.sensor_modes.is_empty() {
+        return;
+    }
+    if config.sensor_mode.is_some() {
+        debug!(
+            camera = %camera_name,
+            "Camera advertises no sensor modes; clearing sensor_mode from capture config"
+        );
+        config.sensor_mode = None;
+    }
+}
+
 /// The main capture orchestrator.
 ///
 /// Takes the long-lived camera handle from `AppState` (opened at connect
@@ -140,6 +186,8 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     let settings = state.settings.read().await.clone();
     let mut capture_config = settings.to_capture_config();
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
+    apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
+    apply_sensor_mode_support_override(&mut capture_config, &camera_info.info, &camera_name);
     let probe_frame = match camera.capture(&capture_config) {
         Ok(f) => f,
         Err(e) => {
@@ -314,6 +362,12 @@ fn run_capture_task(
         };
 
         apply_best_raw_format(&mut capture_config, &camera_info.info, &camera.info().name);
+        apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera.info().name);
+        apply_sensor_mode_support_override(
+            &mut capture_config,
+            &camera_info.info,
+            &camera.info().name,
+        );
 
         // Capture a frame (blocking FFI call)
         let capture_result = {

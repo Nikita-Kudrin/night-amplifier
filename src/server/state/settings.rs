@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::background::BackgroundExtractionAlgorithm;
-use crate::camera::{CaptureConfig, DualSamplingMode};
+use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
 use crate::render::{SaturationBoostConfig, StretchAggressiveness};
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -67,8 +67,70 @@ pub struct CaptureSettings {
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
     pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
+    /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`.
+    /// Holds the seven hardware-specific fields so switching between cameras
+    /// doesn't leak stale values (e.g. cooler=true from a cooled camera into
+    /// an uncooled one).
+    pub camera_profiles: HashMap<String, CameraCaptureProfile>,
     /// Name of the last active camera (for profile inheritance)
     pub last_camera_name: Option<String>,
+}
+
+/// Hardware-specific capture settings scoped to a single camera
+/// (keyed by `"{provider}/{model_name}"` in `CaptureSettings::camera_profiles`).
+///
+/// These are swapped into the flat `CaptureSettings` fields on connect so the
+/// rest of the pipeline (capture loop, cooler monitor, UI DTO) stays unaware
+/// of the per-camera indirection.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CameraCaptureProfile {
+    pub exposure_us: u64,
+    pub gain: i32,
+    pub offset: i32,
+    pub bin: u8,
+    pub cooler_enabled: bool,
+    pub target_temp_c: Option<f64>,
+    pub sensor_mode_override: Option<DualSamplingMode>,
+}
+
+impl CameraCaptureProfile {
+    /// Capture the seven flat fields from `settings`, zeroing any field the
+    /// camera can't support: cooler fields on uncooled cameras, and
+    /// `sensor_mode_override` on cameras that advertise no sensor modes.
+    /// The clamp prevents stale values from a previous camera's session
+    /// from leaking into a freshly-seeded profile.
+    pub fn from_settings_clamped(settings: &CaptureSettings, info: &CameraInfo) -> Self {
+        let (cooler_enabled, target_temp_c) = if info.has_cooler {
+            (settings.cooler_enabled, settings.target_temp_c)
+        } else {
+            (false, None)
+        };
+        let sensor_mode_override = if info.sensor_modes.is_empty() {
+            None
+        } else {
+            settings.sensor_mode_override
+        };
+        Self {
+            exposure_us: settings.exposure_us,
+            gain: settings.gain,
+            offset: settings.offset,
+            bin: settings.bin,
+            cooler_enabled,
+            target_temp_c,
+            sensor_mode_override,
+        }
+    }
+
+    /// Write the seven fields onto the flat `CaptureSettings`.
+    pub fn apply_to(&self, settings: &mut CaptureSettings) {
+        settings.exposure_us = self.exposure_us;
+        settings.gain = self.gain;
+        settings.offset = self.offset;
+        settings.bin = self.bin;
+        settings.cooler_enabled = self.cooler_enabled;
+        settings.target_temp_c = self.target_temp_c;
+        settings.sensor_mode_override = self.sensor_mode_override;
+    }
 }
 
 /// Telescope and camera parameters for FOV calculation
@@ -169,6 +231,7 @@ impl Default for CaptureSettings {
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
+            camera_profiles: HashMap::new(),
             last_camera_name: None,
         }
     }

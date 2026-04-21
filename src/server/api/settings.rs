@@ -3,10 +3,23 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 
+use super::super::camera_session::lifecycle::camera_profile_key;
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
 use super::super::state::{AppState, CaptureState, StackingType};
+
+/// Returns the profile key (`"{provider}/{model}"`) for the currently
+/// connected camera, if any. `None` when no camera is attached — callers
+/// should treat that as "skip per-camera work" rather than creating a
+/// phantom profile.
+async fn active_camera_profile_key(state: &Arc<AppState>) -> Option<String> {
+    let cameras = state.cameras.read().await;
+    cameras
+        .values()
+        .next()
+        .map(|info| camera_profile_key(&info.provider, &info.info.name))
+}
 
 /// GET /api/settings
 ///
@@ -46,6 +59,12 @@ pub async fn update_settings(
     let telescope_updated = request.telescope.is_some();
     let cooler_fields_changed =
         request.cooler_enabled.is_some() || request.target_temp_c.is_some();
+
+    // Resolve the active camera's profile key before taking `settings.write()`
+    // so we never hold `settings.write()` while awaiting `cameras.read()` —
+    // elsewhere the lock order is cameras-first (e.g. disconnect), and the
+    // reversed order here could deadlock under contention.
+    let active_key = active_camera_profile_key(&state).await;
 
     {
         let mut settings = state.settings.write().await;
@@ -131,6 +150,9 @@ pub async fn update_settings(
         if let Some(profiles) = request.camera_telescope_profiles {
             settings.camera_telescope_profiles = profiles;
         }
+        if let Some(profiles) = request.camera_profiles {
+            settings.camera_profiles = profiles;
+        }
         if let Some(name) = request.last_camera_name {
             settings.last_camera_name = Some(name);
         }
@@ -142,6 +164,22 @@ pub async fn update_settings(
         }
         if let Some(sensor_mode) = request.sensor_mode_override {
             settings.sensor_mode_override = Some(sensor_mode);
+        }
+
+        // Mirror the seven hardware-specific fields into the currently-
+        // connected camera's profile. Skip when no camera is connected so we
+        // don't create phantom entries.
+        if let Some(key) = active_key.clone() {
+            let snapshot = super::super::state::CameraCaptureProfile {
+                exposure_us: settings.exposure_us,
+                gain: settings.gain,
+                offset: settings.offset,
+                bin: settings.bin,
+                cooler_enabled: settings.cooler_enabled,
+                target_temp_c: settings.target_temp_c,
+                sensor_mode_override: settings.sensor_mode_override,
+            };
+            settings.camera_profiles.insert(key, snapshot);
         }
 
         // Enable disk writer only in stacking mode (not live view or wanderer)

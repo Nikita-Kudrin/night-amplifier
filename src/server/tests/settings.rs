@@ -441,3 +441,43 @@ async fn test_disk_writer_disabled_when_switching_from_stacking_to_wanderer() {
     post_json(&app, "/api/settings", json!({ "wanderer_mode": true })).await;
     assert!(!state.disk_writer.is_enabled());
 }
+
+#[tokio::test]
+async fn test_settings_update_mirrors_to_active_profile() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    let app = create_test_router(state.clone());
+
+    let (status, _json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "gain": 300, "exposure_us": 2_000_000, "cooler_enabled": true, "target_temp_c": -10.0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let settings = state.settings.read().await;
+    let profile = settings
+        .camera_profiles
+        .get("Mock/Test Camera")
+        .expect("profile should be mirrored for the active camera");
+    assert_eq!(profile.gain, 300);
+    assert_eq!(profile.exposure_us, 2_000_000);
+    assert!(profile.cooler_enabled);
+    assert_eq!(profile.target_temp_c, Some(-10.0));
+}
+
+#[tokio::test]
+async fn test_settings_update_with_no_camera_does_not_create_profile() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(&app, "/api/settings", json!({ "gain": 250 })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let settings = state.settings.read().await;
+    assert!(
+        settings.camera_profiles.is_empty(),
+        "no camera connected → no profile should be created"
+    );
+}

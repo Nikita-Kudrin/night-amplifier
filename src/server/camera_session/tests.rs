@@ -514,3 +514,142 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
     assert_eq!(state.camera_phase(&name).await, CameraPhase::Disconnected);
     assert!(state.cameras.read().await.is_empty());
 }
+
+// ----------------------------------------------------------------------------
+// apply_camera_profile_on_connect — pure unit tests
+// ----------------------------------------------------------------------------
+
+/// Shape a `CameraInfo` for the unit tests. Only the fields checked by
+/// `apply_camera_profile_on_connect` matter here.
+fn test_camera_info(has_cooler: bool, supports_sensor_modes: bool) -> CameraInfo {
+    use crate::camera::SensorMode;
+    CameraInfo {
+        name: "test".to_string(),
+        has_cooler,
+        sensor_modes: if supports_sensor_modes {
+            vec![SensorMode {
+                index: 0,
+                name: "Normal".to_string(),
+                description: "normal".to_string(),
+            }]
+        } else {
+            Vec::new()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn connect_seeds_profile_for_new_camera() {
+    use crate::server::state::CaptureSettings;
+
+    let mut settings = CaptureSettings::default();
+    settings.exposure_us = 123_456;
+    settings.gain = 77;
+    settings.cooler_enabled = true;
+    settings.target_temp_c = Some(-5.0);
+
+    let key = "PlayerOne/Neptune-C II".to_string();
+    let info = test_camera_info(true, true);
+    lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
+
+    // Flat fields unchanged when cooler and sensor modes are supported.
+    assert_eq!(settings.exposure_us, 123_456);
+    assert_eq!(settings.gain, 77);
+    assert!(settings.cooler_enabled);
+    assert_eq!(settings.target_temp_c, Some(-5.0));
+
+    // Profile was created and mirrors the flat fields.
+    let profile = settings
+        .camera_profiles
+        .get(&key)
+        .expect("profile should be seeded");
+    assert_eq!(profile.exposure_us, 123_456);
+    assert_eq!(profile.gain, 77);
+    assert!(profile.cooler_enabled);
+    assert_eq!(profile.target_temp_c, Some(-5.0));
+}
+
+#[test]
+fn connect_loads_existing_profile() {
+    use crate::server::state::{CameraCaptureProfile, CaptureSettings};
+
+    let mut settings = CaptureSettings::default();
+    settings.exposure_us = 1;
+    settings.gain = 0;
+
+    let key = "PlayerOne/2600MC".to_string();
+    settings.camera_profiles.insert(
+        key.clone(),
+        CameraCaptureProfile {
+            exposure_us: 9_999,
+            gain: 250,
+            offset: 50,
+            bin: 2,
+            cooler_enabled: true,
+            target_temp_c: Some(-15.0),
+            sensor_mode_override: None,
+        },
+    );
+
+    let info = test_camera_info(true, true);
+    lifecycle::apply_camera_profile_on_connect(&mut settings, key, &info);
+
+    assert_eq!(settings.exposure_us, 9_999);
+    assert_eq!(settings.gain, 250);
+    assert_eq!(settings.offset, 50);
+    assert_eq!(settings.bin, 2);
+    assert!(settings.cooler_enabled);
+    assert_eq!(settings.target_temp_c, Some(-15.0));
+}
+
+#[test]
+fn connect_clamps_cooler_for_uncooled_camera() {
+    use crate::server::state::CaptureSettings;
+
+    let mut settings = CaptureSettings::default();
+    settings.cooler_enabled = true;
+    settings.target_temp_c = Some(-10.0);
+    settings.gain = 150;
+
+    let key = "PlayerOne/Neptune-C II".to_string();
+    let info = test_camera_info(false, true);
+    lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
+
+    // Flat fields clamped.
+    assert!(!settings.cooler_enabled);
+    assert_eq!(settings.target_temp_c, None);
+    // Non-cooler fields unchanged.
+    assert_eq!(settings.gain, 150);
+
+    // Seeded profile also has cooler fields zeroed.
+    let profile = settings
+        .camera_profiles
+        .get(&key)
+        .expect("profile should be seeded");
+    assert!(!profile.cooler_enabled);
+    assert_eq!(profile.target_temp_c, None);
+    assert_eq!(profile.gain, 150);
+}
+
+#[test]
+fn connect_clamps_sensor_mode_for_camera_without_modes() {
+    use crate::camera::DualSamplingMode;
+    use crate::server::state::CaptureSettings;
+
+    let mut settings = CaptureSettings::default();
+    settings.sensor_mode_override = Some(DualSamplingMode::LowReadoutNoise);
+    settings.gain = 150;
+
+    let key = "PlayerOne/Neptune-C II".to_string();
+    let info = test_camera_info(false, false);
+    lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
+
+    // Flat field + seeded profile both have the stale override cleared.
+    assert_eq!(settings.sensor_mode_override, None);
+    let profile = settings
+        .camera_profiles
+        .get(&key)
+        .expect("profile should be seeded");
+    assert_eq!(profile.sensor_mode_override, None);
+}

@@ -21,7 +21,7 @@ mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use session::{CaptureSession, ConnectedCameraInfo};
-pub use settings::{CaptureSettings, EyepieceSettings, TelescopeSettings};
+pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 pub use types::{CameraPhase, CaptureState};
 
 /// The main application state shared across all handlers

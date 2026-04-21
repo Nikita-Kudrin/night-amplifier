@@ -9,7 +9,9 @@ mod tests {
     use crate::background::BackgroundExtractionAlgorithm;
     use crate::render::StretchAggressiveness;
     use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
-    use crate::server::state::{CaptureSettings, EyepieceSettings, TelescopeSettings};
+    use crate::server::state::{
+        CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings,
+    };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
     #[test]
@@ -65,6 +67,32 @@ mod tests {
                     barlow_coeff: Some(1.0),
                 },
             )]),
+            camera_profiles: HashMap::from([
+                (
+                    "PlayerOne/Neptune-C II".to_string(),
+                    CameraCaptureProfile {
+                        exposure_us: 500_000,
+                        gain: 220,
+                        offset: 8,
+                        bin: 1,
+                        cooler_enabled: false,
+                        target_temp_c: None,
+                        sensor_mode_override: None,
+                    },
+                ),
+                (
+                    "ZWO/ASI2600MC".to_string(),
+                    CameraCaptureProfile {
+                        exposure_us: 10_000_000,
+                        gain: 100,
+                        offset: 50,
+                        bin: 1,
+                        cooler_enabled: true,
+                        target_temp_c: Some(-10.0),
+                        sensor_mode_override: None,
+                    },
+                ),
+            ]),
             last_camera_name: Some("Neptune-C II".to_string()),
             cooler_enabled: true,
             target_temp_c: Some(-10.0),
@@ -142,6 +170,22 @@ mod tests {
         assert!(restored
             .camera_telescope_profiles
             .contains_key("Neptune-C II"));
+        assert_eq!(restored.camera_profiles.len(), 2);
+        let neptune_profile = restored
+            .camera_profiles
+            .get("PlayerOne/Neptune-C II")
+            .expect("Neptune-C II profile should be persisted");
+        assert_eq!(neptune_profile.exposure_us, 500_000);
+        assert_eq!(neptune_profile.gain, 220);
+        assert!(!neptune_profile.cooler_enabled);
+        assert_eq!(neptune_profile.target_temp_c, None);
+        let zwo_profile = restored
+            .camera_profiles
+            .get("ZWO/ASI2600MC")
+            .expect("ASI2600MC profile should be persisted");
+        assert_eq!(zwo_profile.gain, 100);
+        assert!(zwo_profile.cooler_enabled);
+        assert_eq!(zwo_profile.target_temp_c, Some(-10.0));
         assert_eq!(restored.last_camera_name, Some("Neptune-C II".to_string()));
         assert!(restored.cooler_enabled);
         assert_eq!(restored.target_temp_c, Some(-10.0));
@@ -186,6 +230,7 @@ mod tests {
             },
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
+            camera_profiles: HashMap::new(),
             last_camera_name: None,
             cooler_enabled: false,
             target_temp_c: None,

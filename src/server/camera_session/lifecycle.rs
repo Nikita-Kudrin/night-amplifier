@@ -8,11 +8,12 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use super::monitor;
-use crate::camera::{Camera, CameraRegistry};
+use crate::camera::{Camera, CameraInfo, CameraRegistry};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::events::ServerEvent;
 use crate::server::state::{
-    AppState, CameraPhase, CaptureState, ConnectedCameraInfo, MonitorCmd,
+    AppState, CameraCaptureProfile, CameraPhase, CaptureSettings, CaptureState,
+    ConnectedCameraInfo, MonitorCmd,
 };
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -84,22 +85,31 @@ pub async fn connect(
         "Camera specifications"
     );
 
+    // Swap the per-camera profile into the flat `CaptureSettings` fields
+    // before deciding precool — otherwise a cooled-camera's `cooler_enabled`
+    // would leak into the next-connected uncooled camera.
+    let profile_key = camera_profile_key(&provider_registry_name, &camera_name);
+    let (cooler_enabled, target_temp_c) = {
+        let mut settings = state.settings.write().await;
+        apply_camera_profile_on_connect(&mut settings, profile_key.clone(), &info);
+        (settings.cooler_enabled, settings.target_temp_c)
+    };
+
     // Decide initial phase: if the camera supports cooling and the user has
     // a target in settings, kick off precool right now. Otherwise Idle.
-    let (initial_phase, cooler_applied) = {
-        let settings = state.settings.read().await;
-        if info.has_cooler && settings.cooler_enabled && settings.target_temp_c.is_some() {
-            let target = settings.target_temp_c.unwrap();
-            match apply_cooler(camera.as_mut(), true, Some(target)) {
-                Ok(()) => (CameraPhase::Precooling, true),
-                Err(e) => {
-                    warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
-                    (CameraPhase::Idle, false)
-                }
+    let (initial_phase, cooler_applied) = if info.has_cooler
+        && cooler_enabled
+        && target_temp_c.is_some()
+    {
+        match apply_cooler(camera.as_mut(), true, target_temp_c) {
+            Ok(()) => (CameraPhase::Precooling, true),
+            Err(e) => {
+                warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
+                (CameraPhase::Idle, false)
             }
-        } else {
-            (CameraPhase::Idle, false)
         }
+    } else {
+        (CameraPhase::Idle, false)
     };
 
     let connected_info = ConnectedCameraInfo {
@@ -142,6 +152,9 @@ pub async fn connect(
 
     let _ = state.events.send(ServerEvent::camera_connected(&camera_name));
 
+    // Persist the (possibly new / clamped) camera profile to disk.
+    state.save_settings().await;
+
     debug!(
         camera_id = %camera_id,
         phase = ?initial_phase,
@@ -150,6 +163,47 @@ pub async fn connect(
     );
 
     Ok(connected_info)
+}
+
+/// Build the `HashMap` key used to store per-camera capture profiles.
+/// The combination of `provider` + `model` matches what the user intuits as
+/// the camera's identity ("PlayerOne/Neptune-C II").
+pub fn camera_profile_key(provider: &str, camera_name: &str) -> String {
+    format!("{}/{}", provider, camera_name)
+}
+
+/// Swap the per-camera profile for `key` into the flat fields of `settings`.
+///
+/// * If a profile exists for `key`, its seven fields overwrite the flat
+///   fields.
+/// * Otherwise, a fresh profile is seeded from the current flat fields,
+///   clamping hardware-unsupported settings to safe defaults before the
+///   seed (cooler fields when the camera has no cooler, `sensor_mode_override`
+///   when the camera advertises no sensor modes). The flat fields are
+///   clamped to match.
+///
+/// The clamp prevents stale settings from a previous camera's session from
+/// bleeding into a freshly-seeded profile that could never legitimately use
+/// them — and, crucially, keeps `CaptureConfig::validate` from rejecting the
+/// first frame on the new camera.
+pub fn apply_camera_profile_on_connect(
+    settings: &mut CaptureSettings,
+    key: String,
+    info: &CameraInfo,
+) {
+    if let Some(profile) = settings.camera_profiles.get(&key).cloned() {
+        profile.apply_to(settings);
+    } else {
+        if !info.has_cooler {
+            settings.cooler_enabled = false;
+            settings.target_temp_c = None;
+        }
+        if info.sensor_modes.is_empty() {
+            settings.sensor_mode_override = None;
+        }
+        let profile = CameraCaptureProfile::from_settings_clamped(settings, info);
+        settings.camera_profiles.insert(key, profile);
+    }
 }
 
 /// Disconnect (or begin warmup prior to disconnect) for a camera.
