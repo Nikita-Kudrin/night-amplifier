@@ -1,6 +1,10 @@
 //! Player One Astronomy camera implementation
 
-use playerone_sdk::{Camera as POACamera, CameraDescription};
+pub mod ffi_types;
+pub mod sdk;
+pub mod shim;
+
+use shim::{Camera as POACamera, CameraDescription};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -129,7 +133,8 @@ impl Camera for PlayerOneCamera {
 
         let current_offset = catch_ffi_panic("PlayerOne::offset", || self.camera.offset())
             .map_err(CameraError::from)?
-            .unwrap_or(0) as i32;
+            .map(|v| v as i32)
+            .unwrap_or(0);
 
         let current_exposure_us = catch_ffi_panic("PlayerOne::exposure", || self.camera.exposure())
             .map_err(CameraError::from)?

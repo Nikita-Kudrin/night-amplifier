@@ -1,4 +1,12 @@
-use playerone_sdk::{Camera as POACamera, ImageFormat as POAImageFormat, ROI};
+use super::ffi_types::POAImgFormat;
+use super::shim::Camera as POACamera;
+
+pub struct ROI {
+    pub start_x: u32,
+    pub start_y: u32,
+    pub width: u32,
+    pub height: u32,
+}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,10 +64,10 @@ pub fn apply_config(
         })?;
 
     // Set image format
-    let format: POAImageFormat = match config.format {
-        ImageFormat::Raw8 => POAImageFormat::RAW8,
-        ImageFormat::Raw16 => POAImageFormat::RAW16,
-        ImageFormat::Rgb24 => POAImageFormat::RGB24,
+    let format: POAImgFormat = match config.format {
+        ImageFormat::Raw8 => POAImgFormat::POA_RAW8,
+        ImageFormat::Raw16 => POAImgFormat::POA_RAW16,
+        ImageFormat::Rgb24 => POAImgFormat::POA_RGB24,
     };
     catch_ffi_panic("PlayerOne::set_image_format", || {
         camera.set_image_format(format)
@@ -221,7 +229,8 @@ pub fn run_capture(
     let mut buffer = catch_ffi_panic("PlayerOne::create_image_buffer", || {
         camera.create_image_buffer()
     })
-    .map_err(CameraError::from)?;
+    .map_err(CameraError::from)?
+    .map_err(|e| CameraError::ImageReadFailed(e))?;
 
     // Calculate timeout
     let exposure_duration = Duration::from_micros(config.exposure_us);

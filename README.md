@@ -11,8 +11,9 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 | OS            | Architecture | Supported                                                 |
 |---------------|--------------|-----------------------------------------------------------|
 | Linux         | x86_64       | ✅                                                         |
-| Linux         | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| Raspberry Pi5 | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Linux         | ARM64        | ✅                                                         |
+| Raspberry Pi5 | ARM64        | ✅ (optimized build)                                       |
+| Orange Pi5    | ARM64        | ✅ (optimized build)                                       |
 | Windows       | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | Windows       | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | macOS         | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
@@ -22,7 +23,9 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Camera SDK Support
 
-The camera module uses an extensible provider system. Enable features for specific manufacturers:
+The camera module uses a dynamic runtime loading system. Camera SDKs are **optional runtime dependencies**. If an SDK is not installed on your system, the binary will still run perfectly, but that specific camera brand will simply be disabled.
+
+Enable features for specific manufacturers when compiling:
 
 | Provider       | SDK Required                                                         | Supported                                                 |
 |----------------|----------------------------------------------------------------------|-----------------------------------------------------------|
@@ -95,7 +98,56 @@ captures/
 **Slow Disk Warning:** If disk I/O can't keep up with the capture rate, a warning appears in the web interface when the
 write queue exceeds 5 frames. The queue depth is shown to help diagnose performance issues.
 
-## Building
+## Distribution Builds
+
+Night Amplifier can be built as a self-contained single binary with the web UI embedded.
+No external files are needed to run the distribution binary.
+
+### Pre-built Downloads
+
+Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page
+for Linux x86_64 and ARM64 (including optimized builds for Raspberry Pi 5 / Orange Pi 5).
+
+For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to run.
+
+Alternatively, download the `.tar.gz` archive for your platform, extract, and run:
+
+```bash
+tar xzf night-amplifier-*.tar.gz
+cd night-amplifier-*/
+./night-amplifier          # Default port 8080
+./night-amplifier 3000     # Custom port
+```
+
+### Building Locally
+
+Local builds are optimized for your specific CPU architecture (`-C target-cpu=native`),
+which is critical for maximum performance on devices like Raspberry Pi 5 or Orange Pi 5.
+
+```bash
+./scripts/build-dist.sh
+```
+
+The archive is created in `dist/`. Extract and run `./night-amplifier`.
+
+### Cross-compile for ARM64
+
+```bash
+# Requires: cargo install cross
+./scripts/build-dist.sh --cross --target aarch64-unknown-linux-gnu --target-cpu cortex-a76
+```
+
+### Build Options
+
+| Flag | Description |
+|------|-------------|
+| `--target <triple>` | Rust target triple (default: host) |
+| `--target-cpu <cpu>` | CPU optimization (default: `native`) |
+| `--cross` | Use `cross` for cross-compilation |
+| `--no-frontend` | Skip web frontend build |
+| `--appimage` | Also create an AppImage |
+
+## Building from Source
 
 ```bash
 cargo build
@@ -111,7 +163,9 @@ cargo test
 
 #### Player One Setup
 
-**Prerequisites:**
+**Runtime Prerequisites (Optional):**
+
+To use Player One cameras, you must install the following system libraries:
 
 - **libusb-1.0**: Required by the Player One SDK
   ```bash
@@ -164,7 +218,9 @@ cargo build --release --features playerone
 
 #### ZWO Setup
 
-**Prerequisites:**
+**Runtime Prerequisites (Optional):**
+
+To use ZWO ASI cameras, you must install the following system libraries:
 
 - **libusb-1.0**: Required by the ZWO ASI SDK
   ```bash

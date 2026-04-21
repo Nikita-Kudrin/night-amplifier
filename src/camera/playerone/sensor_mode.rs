@@ -16,10 +16,10 @@
 
 use std::os::raw::c_int;
 
-use playerone_sdk_sys::{
-    POAErrors, POAGetSensorMode, POAGetSensorModeCount, POAGetSensorModeInfo, POASensorModeInfo,
-    POASetSensorMode,
+use super::ffi_types::{
+    POAErrors, POASensorModeInfo,
 };
+use super::sdk::PlayerOneSdk;
 use tracing::warn;
 
 use crate::camera::types::{DualSamplingMode, SensorMode};
@@ -28,9 +28,10 @@ use crate::ffi_safety::catch_ffi_panic;
 /// Enumerate all sensor modes advertised by the camera. Returns an empty vector
 /// when the camera does not support mode selection or when any FFI call fails.
 pub fn list_sensor_modes(camera_id: i32) -> Vec<SensorMode> {
+    let sdk = PlayerOneSdk::try_load().expect("SDK must be loaded to list sensor modes");
     let count_result = catch_ffi_panic("PlayerOne::POAGetSensorModeCount", || {
         let mut count: c_int = 0;
-        let err = unsafe { POAGetSensorModeCount(camera_id, &mut count) };
+        let err = unsafe { sdk.api.POAGetSensorModeCount(camera_id, &mut count) };
         (err, count)
     });
 
@@ -54,9 +55,10 @@ pub fn list_sensor_modes(camera_id: i32) -> Vec<SensorMode> {
 }
 
 fn fetch_sensor_mode_info(camera_id: i32, index: c_int) -> Option<SensorMode> {
+    let sdk = PlayerOneSdk::try_load().expect("SDK must be loaded to fetch sensor mode info");
     let info_result = catch_ffi_panic("PlayerOne::POAGetSensorModeInfo", || {
         let mut info = POASensorModeInfo::default();
-        let err = unsafe { POAGetSensorModeInfo(camera_id, index, &mut info) };
+        let err = unsafe { sdk.api.POAGetSensorModeInfo(camera_id, index, &mut info) };
         (err, info)
     });
 
@@ -79,8 +81,9 @@ fn fetch_sensor_mode_info(camera_id: i32, index: c_int) -> Option<SensorMode> {
 
 /// Apply a sensor mode index. Must not be called while an exposure is in progress.
 pub fn set_sensor_mode(camera_id: i32, index: u32) -> Result<(), POAErrors> {
+    let sdk = PlayerOneSdk::try_load().expect("SDK must be loaded to set sensor mode");
     let result = catch_ffi_panic("PlayerOne::POASetSensorMode", || unsafe {
-        POASetSensorMode(camera_id, index as c_int)
+        sdk.api.POASetSensorMode(camera_id, index as c_int)
     });
     match result {
         Ok(POAErrors::POA_OK) => Ok(()),
@@ -96,9 +99,10 @@ pub fn set_sensor_mode(camera_id: i32, index: u32) -> Result<(), POAErrors> {
 /// or when the FFI call fails.
 #[allow(dead_code)]
 pub fn current_sensor_mode(camera_id: i32) -> Option<u32> {
+    let sdk = PlayerOneSdk::try_load().expect("SDK must be loaded to get sensor mode");
     let result = catch_ffi_panic("PlayerOne::POAGetSensorMode", || {
         let mut idx: c_int = 0;
-        let err = unsafe { POAGetSensorMode(camera_id, &mut idx) };
+        let err = unsafe { sdk.api.POAGetSensorMode(camera_id, &mut idx) };
         (err, idx)
     });
     match result {

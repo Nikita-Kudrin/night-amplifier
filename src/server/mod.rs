@@ -26,6 +26,7 @@ mod api;
 mod camera_session;
 mod capture;
 mod dto;
+mod embedded_assets;
 mod encoding;
 pub mod error;
 pub mod events;
@@ -184,13 +185,18 @@ impl Server {
             app
         };
 
-        // Serve static files if configured
+        // Serve static files: prefer filesystem (for development), fall back
+        // to embedded assets (for distribution).
         let app = if let Some(ref static_dir) = self.config.static_dir {
             let index_path = std::path::Path::new(static_dir).join("index.html");
-            let serve_dir = ServeDir::new(static_dir).fallback(ServeFile::new(index_path));
-            app.fallback_service(serve_dir)
+            if index_path.exists() {
+                let serve_dir = ServeDir::new(static_dir).fallback(ServeFile::new(index_path));
+                app.fallback_service(serve_dir)
+            } else {
+                app.fallback(embedded_assets::serve_embedded)
+            }
         } else {
-            app
+            app.fallback(embedded_assets::serve_embedded)
         };
 
         app.with_state(Arc::clone(&self.state))
