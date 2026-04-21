@@ -4,6 +4,7 @@ use night_amplifier::background::{
 };
 use night_amplifier::frame::Frame;
 use std::hint::black_box;
+use std::time::Duration;
 
 fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     let mut frame = Frame::zeros(width, height, channels).unwrap();
@@ -26,6 +27,7 @@ fn bench_background_estimation_grid(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("background_estimation_grid");
     group.sample_size(10); // Matches the previous setting
+    group.warm_up_time(Duration::from_secs(1));
 
     let config_grid =
         BackgroundConfig::default().with_algorithm(BackgroundExtractionAlgorithm::GridBilinear);

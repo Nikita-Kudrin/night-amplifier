@@ -3,6 +3,7 @@ use night_amplifier::disk_writer::WritingSessionType;
 use night_amplifier::frame::Frame;
 use night_amplifier::{DiskWriter, DiskWriterConfig, FitsMetadata};
 use std::hint::black_box;
+use std::time::Duration;
 
 /// Benchmark: queue N raw FITS frames through the disk writer and wait for all
 /// writes to complete. Measures end-to-end throughput including serialisation
@@ -10,6 +11,7 @@ use std::hint::black_box;
 fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
     let mut group = c.benchmark_group("disk_writer");
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
 
     let frame = Frame::filled(1280, 960, 1, 0.42).unwrap();
     let metadata = FitsMetadata::new();
@@ -49,6 +51,7 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
 fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
     let mut group = c.benchmark_group("disk_writer_contention");
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
 
     let frame = Frame::filled(1280, 960, 1, 0.42).unwrap();
     let metadata = FitsMetadata::new();
