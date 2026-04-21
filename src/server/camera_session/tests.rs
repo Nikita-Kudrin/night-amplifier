@@ -196,7 +196,7 @@ async fn wait_for_phase(
 
 #[tokio::test]
 async fn precool_settles_to_idle() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     // Configure settings so the monitor sees a target temperature.
     {
@@ -229,7 +229,7 @@ async fn precool_settles_to_idle() {
 
 #[tokio::test]
 async fn no_precool_when_cooler_disabled() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
 
     // No cooler_enabled → monitor should stay in Idle forever; no Precooling event.
@@ -246,7 +246,7 @@ async fn no_precool_when_cooler_disabled() {
 
 #[tokio::test]
 async fn warmup_finishes_and_disconnects() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     {
         let mut s = state.settings.write().await;
@@ -295,7 +295,7 @@ async fn warmup_finishes_and_disconnects() {
 
 #[tokio::test]
 async fn disconnect_with_cooler_off_is_synchronous() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
 
@@ -310,7 +310,7 @@ async fn disconnect_with_cooler_off_is_synchronous() {
 
 #[tokio::test]
 async fn take_and_return_handle_during_precool() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     {
         let mut s = state.settings.write().await;
@@ -341,7 +341,7 @@ async fn take_and_return_handle_during_precool() {
 
 #[tokio::test]
 async fn capture_during_warmup_cancels_warmup() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     {
         let mut s = state.settings.write().await;
@@ -365,7 +365,7 @@ async fn capture_during_warmup_cancels_warmup() {
 
 #[tokio::test]
 async fn return_from_capture_without_handle_finalizes_disconnect() {
-    let (state, _dw) = AppState::new_for_testing(5, 85);
+    let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
 

@@ -15,7 +15,7 @@ use crate::CfaPattern;
 
 /// Create a test app state with default configuration (no settings persistence)
 pub fn create_test_state() -> Arc<AppState> {
-    let (state, _disk_writer) = AppState::new_for_testing(5, 85);
+    let (state, _disk_writer) = AppState::new_for_testing();
     Arc::new(state)
 }
 
