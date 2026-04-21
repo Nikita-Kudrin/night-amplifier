@@ -44,6 +44,8 @@ pub async fn update_settings(
     }
 
     let telescope_updated = request.telescope.is_some();
+    let cooler_fields_changed =
+        request.cooler_enabled.is_some() || request.target_temp_c.is_some();
 
     {
         let mut settings = state.settings.write().await;
@@ -166,6 +168,14 @@ pub async fn update_settings(
     }
 
     let _ = state.events.send(ServerEvent::SettingsUpdated);
+
+    // Push live cooler changes to the active camera. Without this, slider
+    // moves are persisted but never reach the TEC while the camera is idle —
+    // the per-frame apply_cooler_config inside capture() only runs while
+    // capturing.
+    if cooler_fields_changed {
+        crate::server::camera_session::lifecycle::apply_cooler_settings(&state).await;
+    }
 
     // Propagate telescope settings to plate solver for FOV calculation
     if telescope_updated {
