@@ -35,11 +35,26 @@ jobs:
         run: cargo nextest archive --archive-file tests.tar.zst --no-default-features
       - name: Build benchmarks
         run: cargo bench --no-run --no-default-features
+      - name: Archive benchmark binaries
+        run: |
+          mkdir -p bench-binaries
+          for bin in target/release/deps/*benchmark*; do
+            if [ -x "$bin" ] && [ ! -d "$bin" ] && [[ ! "$bin" == *.d ]]; then
+              cp "$bin" bench-binaries/
+            fi
+          done
+          tar czf bench-binaries.tar.gz bench-binaries/
       - name: Upload Test Archive
         uses: actions/upload-artifact@v4
         with:
           name: tests-archive
           path: tests.tar.zst
+          retention-days: 1
+      - name: Upload Benchmark Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-binaries-archive
+          path: bench-binaries.tar.gz
           retention-days: 1
  
   rust-unit-tests:
@@ -78,7 +93,6 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
       - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -91,10 +105,19 @@ jobs:
           swap-storage: true
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Download Benchmark Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: bench-binaries-archive
       - name: Run benchmarks
-        run: cargo bench --no-default-features
+        run: |
+          tar xzf bench-binaries.tar.gz
+          for bin in bench-binaries/*; do
+            if [ -x "$bin" ]; then
+              echo "=== Running $(basename $bin) ==="
+              "$bin" --bench
+            fi
+          done
  
   web-tests-and-lint:
     runs-on: ubuntu-24.04

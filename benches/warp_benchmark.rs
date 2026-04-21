@@ -6,6 +6,7 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use night_amplifier::{warp_frame, AffineTransform, Frame};
 use std::f32::consts::PI;
 use std::hint::black_box;
+use std::time::Duration;
 
 /// Generate a synthetic frame for benchmarking
 fn generate_frame(width: usize, height: usize) -> Frame {
@@ -29,8 +30,10 @@ fn generate_frame(width: usize, height: usize) -> Frame {
 
 fn warp_identity_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_identity");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for size in [512, 1024, 2048, 4096].iter() {
+    for size in [1024, 2048].iter() {
         let frame = generate_frame(*size, *size);
         let transform = AffineTransform::identity();
 
@@ -50,8 +53,10 @@ fn warp_identity_benchmark(c: &mut Criterion) {
 
 fn warp_rotation_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_rotation");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for size in [512, 1024, 2048, 4096].iter() {
+    for size in [1024, 2048].iter() {
         let frame = generate_frame(*size, *size);
         // Small rotation typical for astronomical tracking
         let transform = AffineTransform::new(PI / 180.0 * 2.0, 1.0, 5.0, 3.0);
@@ -70,37 +75,9 @@ fn warp_rotation_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-fn warp_comparison_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("warp_comparison");
-
-    let size = 2048;
-    let frame = generate_frame(size, size);
-    let identity = AffineTransform::identity();
-    let rotation = AffineTransform::new(PI / 180.0 * 5.0, 1.01, 10.0, -5.0);
-
-    group.bench_with_input(
-        BenchmarkId::new("identity", format!("{}x{}", size, size)),
-        &(&frame, &identity),
-        |b, (frame, transform)| {
-            b.iter(|| warp_frame(black_box(frame), black_box(transform), 0.0).expect("Warp failed"))
-        },
-    );
-
-    group.bench_with_input(
-        BenchmarkId::new("rotation_scale", format!("{}x{}", size, size)),
-        &(&frame, &rotation),
-        |b, (frame, transform)| {
-            b.iter(|| warp_frame(black_box(frame), black_box(transform), 0.0).expect("Warp failed"))
-        },
-    );
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     warp_identity_benchmark,
-    warp_rotation_benchmark,
-    warp_comparison_benchmark
+    warp_rotation_benchmark
 );
 criterion_main!(benches);

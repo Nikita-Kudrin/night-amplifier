@@ -5,6 +5,7 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use night_amplifier::{CfaPattern, DebayerAlgorithm, DebayerConfig, Frame};
 use std::hint::black_box;
+use std::time::Duration;
 
 /// Generate a synthetic Bayer frame for benchmarking
 fn generate_bayer_frame(width: usize, height: usize) -> Frame {
@@ -26,8 +27,10 @@ fn generate_bayer_frame(width: usize, height: usize) -> Frame {
 
 fn debayer_bilinear_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_bilinear");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for size in [512, 1024, 2048, 4096].iter() {
+    for size in [1024, 2048].iter() {
         let frame = generate_bayer_frame(*size, *size);
         let config =
             DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Bilinear);
@@ -49,8 +52,10 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
 
 fn debayer_vng_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_vng");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
 
-    for size in [512, 1024, 2048].iter() {
+    for size in [1024, 2048].iter() {
         let frame = generate_bayer_frame(*size, *size);
         let config = DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Vng);
 
@@ -69,45 +74,5 @@ fn debayer_vng_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-fn debayer_comparison_benchmark(c: &mut Criterion) {
-    let mut group = c.benchmark_group("debayer_comparison");
-
-    let size = 2048;
-    let frame = generate_bayer_frame(size, size);
-
-    let bilinear_config =
-        DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Bilinear);
-    let vng_config = DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Vng);
-
-    group.bench_with_input(
-        BenchmarkId::new("bilinear", format!("{}x{}", size, size)),
-        &frame,
-        |b, frame| {
-            b.iter(|| {
-                night_amplifier::debayer_with_config(black_box(frame), bilinear_config.clone())
-                    .expect("Debayer failed")
-            })
-        },
-    );
-
-    group.bench_with_input(
-        BenchmarkId::new("vng", format!("{}x{}", size, size)),
-        &frame,
-        |b, frame| {
-            b.iter(|| {
-                night_amplifier::debayer_with_config(black_box(frame), vng_config.clone())
-                    .expect("Debayer failed")
-            })
-        },
-    );
-
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    debayer_bilinear_benchmark,
-    debayer_vng_benchmark,
-    debayer_comparison_benchmark
-);
+criterion_group!(benches, debayer_bilinear_benchmark, debayer_vng_benchmark);
 criterion_main!(benches);
