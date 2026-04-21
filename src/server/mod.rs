@@ -80,7 +80,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             bind_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
-            static_dir: Some("web".to_string()),
+            static_dir: None,
             enable_cors: true,
             max_ws_message_size: 16 * 1024 * 1024, // 16MB
             stream_fps: 5,
