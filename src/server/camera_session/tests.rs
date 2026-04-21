@@ -364,6 +364,142 @@ async fn capture_during_warmup_cancels_warmup() {
 }
 
 #[tokio::test]
+async fn live_target_temp_change_propagates_to_hardware() {
+    // Reproduces the bug: camera cooled to 1°C, user raises the slider to 20°C,
+    // temperature never changes because the new target was only persisted in
+    // settings and never forwarded to the TEC.
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    // Build the mock by hand so we can keep a handle on the cooler state.
+    let (mut cam, cooler) = MockCamera::new(true, 5.0);
+    // Seed at 1°C target, cooler on.
+    {
+        let mut c = cooler.lock().unwrap();
+        c.cooler_on = true;
+        c.target_temp_c = 1.0;
+        c.current_temp_c = 1.0;
+    }
+    // Mirror into settings as if connect() had applied them.
+    {
+        let mut s = state.settings.write().await;
+        s.cooler_enabled = true;
+        s.target_temp_c = Some(1.0);
+    }
+    let name = cam.info().name.clone();
+    let connected_info = ConnectedCameraInfo {
+        id: "mock_0".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        info: cam.info().clone(),
+    };
+    let _ = cam.set_cooler(true);
+    let _ = cam.set_target_temperature(1.0);
+    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    *state.selected_camera.write().await = Some("mock_0".to_string());
+    *state.active_camera.lock().unwrap() = Some(Box::new(cam));
+    state.set_camera_phase(&name, CameraPhase::Idle).await;
+
+    // User moves the slider: settings get the new target, then we push it live.
+    {
+        let mut s = state.settings.write().await;
+        s.target_temp_c = Some(20.0);
+    }
+    lifecycle::apply_cooler_settings(&state).await;
+
+    // Hardware must have received the new setpoint.
+    assert_eq!(cooler.lock().unwrap().target_temp_c, 20.0);
+    // And the phase should flip back to Precooling so the monitor re-settles.
+    assert_eq!(state.camera_phase(&name).await, CameraPhase::Precooling);
+
+    // Clean up.
+    lifecycle::finalize_disconnect(&state, &name).await;
+}
+
+#[tokio::test]
+async fn live_cooler_disable_propagates_to_hardware() {
+    // User disables the cooler from the UI while the camera is idle-cooled —
+    // the TEC must actually turn off (not just the setting flip in memory).
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    let (mut cam, cooler) = MockCamera::new(true, 5.0);
+    {
+        let mut c = cooler.lock().unwrap();
+        c.cooler_on = true;
+        c.target_temp_c = -5.0;
+        c.current_temp_c = -5.0;
+    }
+    {
+        let mut s = state.settings.write().await;
+        s.cooler_enabled = true;
+        s.target_temp_c = Some(-5.0);
+    }
+    let name = cam.info().name.clone();
+    let connected_info = ConnectedCameraInfo {
+        id: "mock_0".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        info: cam.info().clone(),
+    };
+    let _ = cam.set_cooler(true);
+    let _ = cam.set_target_temperature(-5.0);
+    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    *state.active_camera.lock().unwrap() = Some(Box::new(cam));
+    state.set_camera_phase(&name, CameraPhase::Idle).await;
+
+    {
+        let mut s = state.settings.write().await;
+        s.cooler_enabled = false;
+    }
+    lifecycle::apply_cooler_settings(&state).await;
+
+    assert!(!cooler.lock().unwrap().cooler_on, "cooler should be off on hardware");
+
+    lifecycle::finalize_disconnect(&state, &name).await;
+}
+
+#[tokio::test]
+async fn live_cooler_apply_is_skipped_during_warmup() {
+    // While the monitor is driving warmup it intentionally holds the cooler
+    // off. A stray settings write (e.g., user toggled something else) must not
+    // re-enable the TEC and fight the warmup sequence.
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    let (cam, cooler) = MockCamera::new(true, 5.0);
+    {
+        let mut c = cooler.lock().unwrap();
+        c.cooler_on = false; // Monitor disabled it at warmup start.
+        c.target_temp_c = -10.0;
+    }
+    {
+        let mut s = state.settings.write().await;
+        s.cooler_enabled = true; // Settings still say enabled (stale).
+        s.target_temp_c = Some(-10.0);
+    }
+    let name = cam.info().name.clone();
+    let connected_info = ConnectedCameraInfo {
+        id: "mock_0".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        info: cam.info().clone(),
+    };
+    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    *state.active_camera.lock().unwrap() = Some(Box::new(cam));
+    state.set_camera_phase(&name, CameraPhase::WarmingUp).await;
+
+    lifecycle::apply_cooler_settings(&state).await;
+
+    // Cooler must stay off — the warmup phase owns it.
+    assert!(!cooler.lock().unwrap().cooler_on);
+
+    // Clean up without going through the monitor (no monitor was spawned).
+    *state.active_camera.lock().unwrap() = None;
+    state.cameras.write().await.clear();
+}
+
+#[tokio::test]
 async fn return_from_capture_without_handle_finalizes_disconnect() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);

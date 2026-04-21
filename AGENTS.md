@@ -162,8 +162,14 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
   `min_temp_c`, `max_temp_c` on `CameraInfo` and live `temperature_c` / `cooler_power` / `cooler_on`
   on `CameraStatus`. Cooler activation is driven through `CaptureConfig.cooler_enabled` /
   `target_temp_c`, applied each frame inside `Camera::capture()` so live UI edits take effect
-  without restarting capture. The simulator models temperature with a first-order lag toward the
-  target (tau ≈ 3s) so the cooler UI can be tested without hardware.
+  without restarting capture. When the camera is connected but idle (not capturing),
+  `update_settings` forwards the new `cooler_enabled` / `target_temp_c` to the active handle via
+  `camera_session::lifecycle::apply_cooler_settings` — otherwise the slider would only update
+  in-memory settings while the TEC keeps chasing the old setpoint. That live-apply is skipped
+  during `Capturing` (per-frame path owns it) and `WarmingUp` (monitor intentionally holds the
+  cooler off). If the user raises the target while phase is `Idle`, the phase flips back to
+  `Precooling` so the monitor re-runs the settle logic. The simulator models temperature with a
+  first-order lag toward the target (tau ≈ 3s) so the cooler UI can be tested without hardware.
 
   **Dual Sampling Mode (Player One):** Player One cameras that advertise sensor-mode selection
   (e.g., Uranus-C Pro) expose `sensor_modes: Vec<SensorMode>` on `CameraInfo` (empty when

@@ -380,6 +380,82 @@ pub(super) fn apply_cooler(
     Ok(())
 }
 
+/// Push the current `cooler_enabled` / `target_temp_c` settings to the active
+/// camera handle. Called by the settings API when those fields change while
+/// the camera is connected but not capturing — otherwise the slider moves are
+/// only persisted and never reach the TEC.
+///
+/// Skips if:
+/// - no camera is connected,
+/// - the camera does not support cooling,
+/// - the handle is currently held by the capture thread (the per-frame
+///   `apply_cooler_config` inside `Camera::capture()` will pick up the new
+///   settings on the next frame),
+/// - the camera is in the `WarmingUp` phase (the monitor intentionally
+///   disabled the cooler and is waiting for the sensor to thaw).
+pub async fn apply_cooler_settings(state: &Arc<AppState>) {
+    let (camera_name, has_cooler) = {
+        let cameras = state.cameras.read().await;
+        match cameras.values().next() {
+            Some(info) => (info.info.name.clone(), info.info.has_cooler),
+            None => return,
+        }
+    };
+    if !has_cooler {
+        return;
+    }
+
+    let phase = state.camera_phase(&camera_name).await;
+    if matches!(phase, CameraPhase::Capturing | CameraPhase::WarmingUp) {
+        debug!(
+            camera_name = %camera_name,
+            ?phase,
+            "Skipping live cooler apply — phase owns the cooler"
+        );
+        return;
+    }
+
+    let (enabled, target) = {
+        let settings = state.settings.read().await;
+        (settings.cooler_enabled, settings.target_temp_c)
+    };
+
+    let applied = {
+        let mut guard = state
+            .active_camera
+            .lock()
+            .expect("active_camera mutex poisoned");
+        match guard.as_mut() {
+            Some(cam) => match apply_cooler(cam.as_mut(), enabled, target) {
+                Ok(()) => true,
+                Err(e) => {
+                    warn!(error = %e, "Failed to apply live cooler settings");
+                    false
+                }
+            },
+            None => return,
+        }
+    };
+    if !applied {
+        return;
+    }
+
+    // If the user changed the target while we were already settled (Idle),
+    // drop back to Precooling so the monitor re-drives the settle logic.
+    if enabled && target.is_some() && phase == CameraPhase::Idle {
+        state
+            .set_camera_phase(&camera_name, CameraPhase::Precooling)
+            .await;
+    }
+
+    info!(
+        camera_name = %camera_name,
+        enabled,
+        target_temp_c = ?target,
+        "Live cooler settings applied"
+    );
+}
+
 /// Send a monitor command, swallowing failures if the monitor has exited.
 fn send_monitor_cmd(state: &Arc<AppState>, cmd: MonitorCmd) {
     if let Some(tx) = state
