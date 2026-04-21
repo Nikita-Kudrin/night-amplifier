@@ -1,5 +1,4 @@
 use super::*;
-use crate::CfaPattern;
 
 #[test]
 fn test_provider_available() {
@@ -9,43 +8,19 @@ fn test_provider_available() {
 }
 
 #[test]
-fn test_parse_props_display_color() {
-    let props_str = r#"Camera ASI294MC Pro
-	ID: 0 UUID:
-	Detector: 4144 x 2822
-	Color: true, Shutter: false, Cooler: true, USB3: true, Trigger: false
-	Bayer Pattern: Some(BayerRG)
-	Bins: [1, 2, 3, 4]
-	Pixel Size: 4.63 um, e/ADU: 0.37, Bit Depth: 14
-            "#;
-
-    let parsed = parse_props_display(props_str);
-
-    assert!(parsed.is_color);
-    assert_eq!(parsed.bayer_pattern, Some(CfaPattern::Rggb));
-    assert!(parsed.has_cooler);
-    assert!(!parsed.has_shutter);
-    assert!(parsed.is_usb3);
-    assert_eq!(parsed.bit_depth, 14);
-    assert_eq!(parsed.supported_bins, vec![1, 2, 3, 4]);
+fn test_num_cameras_returns_zero_without_sdk() {
+    // Without the actual SDK .so loaded, num_cameras should return 0
+    let count = shim::num_cameras();
+    assert_eq!(count, 0);
 }
 
 #[test]
-fn test_parse_props_display_mono() {
-    let props_str = r#"Camera ASI183MM
-	ID: 1 UUID:
-	Detector: 5496 x 3672
-	Color: false, Shutter: false, Cooler: false, USB3: true, Trigger: false
-	Bayer Pattern: None
-	Bins: [1, 2]
-	Pixel Size: 2.4 um, e/ADU: 0.3, Bit Depth: 12
-            "#;
-
-    let parsed = parse_props_display(props_str);
-
-    assert!(!parsed.is_color);
-    assert!(parsed.bayer_pattern.is_none());
-    assert!(!parsed.has_cooler);
-    assert_eq!(parsed.bit_depth, 12);
-    assert_eq!(parsed.supported_bins, vec![1, 2]);
+fn test_get_camera_ids_without_hardware() {
+    // Without hardware, get_camera_ids returns either None (SDK not installed)
+    // or Some(empty map) (SDK installed, no cameras connected)
+    let ids = shim::get_camera_ids();
+    match ids {
+        None => {} // SDK not installed - expected in CI
+        Some(map) => assert!(map.is_empty(), "Expected no cameras without hardware"),
+    }
 }

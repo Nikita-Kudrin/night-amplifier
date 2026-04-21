@@ -20,22 +20,15 @@ path = "src/main.rs"
 thiserror = "2.0.18"
 rayon = "1.11.0"
 wide = "1.1.1"  # SIMD abstractions for performance-critical code
+
+# Embedded web frontend assets for single-binary distribution
+rust-embed = "8"
+mime_guess = "2"
 nalgebra = "0.34.1"  # Linear algebra for RBF background extraction
 async-trait = "0.1.89"
 process-wrap = { version = "9.1.0", features = ["std", "tokio1"] }
-
-# Optional: Player One camera support (high-level safe API)
-playerone-sdk = { version = "0.2.2", optional = true }
-# Optional: raw Player One bindings for APIs not covered by the safe wrapper (sensor mode selection).
-# TODO: remove once https://github.com/Uriopass/playerone-sdk-rs ships sensor-mode APIs in the safe
-# crate (expected in playerone-sdk >= 0.3.0). When that happens, also drop the "playerone-sdk-sys"
-# entry from the `playerone` feature below and replace src/camera/playerone/sensor_mode.rs with
-# direct calls on `playerone_sdk::Camera`.
-playerone-sdk-sys = { version = "0.1.1", optional = true }
-
 # Optional: ZWO ASI camera support
-cameraunit_asi = { version = "4.1.0", optional = true }
-cameraunit = { version = "5.1.0", optional = true }
+# Now loaded at runtime via dlopen - no compile-time linking needed
 
 # Web server dependencies
 axum = { version = "0.8.8", features = ["ws"] }
@@ -43,6 +36,7 @@ tokio = { version = "1.50.0", features = ["full"] }
 tower-http = { version = "0.6.8", features = ["fs", "cors"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+
 
 # FITS file support for astronomical image storage
 fitsio = "0.21.9"
@@ -79,11 +73,15 @@ futures-util = "0.3.32"
 zip = "8.2.0"
 regex = "1.12.3"
 urlencoding = "2.1.3"
+dlopen2 = "0.8.2"
 
 [features]
 default = ["playerone", "zwo"]
-playerone = ["playerone-sdk", "playerone-sdk-sys"]
-zwo = ["cameraunit_asi", "cameraunit"]
+playerone = []
+zwo = []
+# Bundle cfitsio from source (static link) for portable distribution.
+# Without this, the system libcfitsio-dev is required.
+bundled-cfitsio = ["fitsio/fitsio-src"]
 # OpenTelemetry support - enabled by default in debug builds via cfg
 telemetry = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing-opentelemetry"]
 
@@ -100,10 +98,7 @@ serial_test = "3.4.0" # Run integration tests sequentially
 opt-level = 3
 lto = true
 codegen-units = 1
-
-[profile.release-pi]
-inherits = "release"
-opt-level = "s"  # Optimize for size on Pi
+strip = true
 
 [[bench]]
 name = "debayer_benchmark"
