@@ -48,6 +48,30 @@ fn test_image_format_bytes_per_pixel() {
 }
 
 #[test]
+fn best_raw_format_prefers_raw16() {
+    let supported = vec![ImageFormat::Raw8, ImageFormat::Raw16, ImageFormat::Rgb24];
+    assert_eq!(
+        ImageFormat::best_raw_format(&supported),
+        Some(ImageFormat::Raw16)
+    );
+}
+
+#[test]
+fn best_raw_format_falls_back_to_raw8() {
+    let supported = vec![ImageFormat::Raw8, ImageFormat::Rgb24];
+    assert_eq!(
+        ImageFormat::best_raw_format(&supported),
+        Some(ImageFormat::Raw8)
+    );
+}
+
+#[test]
+fn best_raw_format_returns_none_when_no_raw_format() {
+    let supported = vec![ImageFormat::Rgb24];
+    assert_eq!(ImageFormat::best_raw_format(&supported), None);
+}
+
+#[test]
 fn test_capture_config_validation() {
     let info = CameraInfo {
         name: "Test Camera".to_string(),
