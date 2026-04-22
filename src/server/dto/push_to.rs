@@ -28,7 +28,11 @@ pub struct PushToPositionResponse {
 /// Push-To direction response
 #[derive(Debug, Serialize)]
 pub struct PushToDirectionResponse {
-    /// Angle to push in degrees (0 = north, 90 = east)
+    /// Angle to push in degrees, in the image frame:
+    /// 0 = screen up, 90 = screen right, rotation is clockwise.
+    /// The plate-solved camera rotation and parity are already applied, so
+    /// this can be used directly as an SVG/CSS rotation for a chevron that
+    /// points "up" at 0°. For a celestial-frame label use `direction_hint`.
     pub angle_deg: f64,
     /// Angular distance to target in degrees
     pub distance_deg: f64,
