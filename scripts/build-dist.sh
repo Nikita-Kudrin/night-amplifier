@@ -75,6 +75,8 @@ if [[ "${TARGET}" == *"-linux"* ]]; then
     OS_SUFFIX="-linux"
 elif [[ "${TARGET}" == *"-windows"* ]]; then
     OS_SUFFIX="-windows"
+elif [[ "${TARGET}" == *"-apple-darwin"* ]]; then
+    OS_SUFFIX="-macos"
 fi
 
 CPU_SUFFIX=""
