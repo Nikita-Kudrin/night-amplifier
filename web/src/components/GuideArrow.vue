@@ -110,16 +110,22 @@ const containerStyle = computed(() => {
 
   const angleRad = (props.angleDeg * Math.PI) / 180
   const arrowSize = responsiveBaseSize.value * arrowScale.value
-  // Arrow tip extends from center: width is arrowSize, height is arrowSize * 1.6
-  // The tip is at the top of the SVG, about half the height from center
-  const arrowTipOffsetX = arrowSize * 0.5
-  const arrowTipOffsetY = arrowSize * 1.6 * 0.5
+  // After rotation by angleRad, the SVG's axis-aligned bounding box has
+  // half-extents W|cos θ| + H|sin θ| (x) and W|sin θ| + H|cos θ| (y).
+  const cosA = Math.abs(Math.cos(angleRad))
+  const sinA = Math.abs(Math.sin(angleRad))
+  const svgHalfW = arrowSize * 0.5
+  const svgHalfH = arrowSize * 1.6 * 0.5
+  const halfWRot = svgHalfW * cosA + svgHalfH * sinA
+  const halfHRot = svgHalfW * sinA + svgHalfH * cosA
 
   const marginX = props.imageWidth * EDGE_MARGIN_PERCENT
   const marginY = props.imageHeight * EDGE_MARGIN_PERCENT
 
-  const maxOffsetX = props.imageWidth / 2 - arrowTipOffsetX - marginX
-  const maxOffsetY = props.imageHeight / 2 - arrowTipOffsetY - marginY
+  // Clamp to 0 so the arrow pins to image centre on viewports where the
+  // rotated arrow plus margin already spans the image half-size.
+  const maxOffsetX = Math.max(0, props.imageWidth / 2 - halfWRot - marginX)
+  const maxOffsetY = Math.max(0, props.imageHeight / 2 - halfHRot - marginY)
 
   const dirX = Math.sin(angleRad)
   const dirY = -Math.cos(angleRad)
@@ -152,6 +158,23 @@ const containerStyle = computed(() => {
 const rotationStyle = computed(() => {
   return {
     transform: `rotate(${props.angleDeg}deg)`,
+  }
+})
+
+// Place the info box on the chevrons' "tail" side (opposite the target direction)
+// so it doesn't occlude the target the arrow is pointing at. The SVG drawing tail
+// sits at ~0.3125 of SVG height below SVG centre (viewBox y=130 of 160), so push
+// the info box past that plus a small gap.
+const INFO_TAIL_GAP_PX = 20
+const distanceInfoStyle = computed(() => {
+  const angleRad = (props.angleDeg * Math.PI) / 180
+  const tailDirX = -Math.sin(angleRad)
+  const tailDirY = Math.cos(angleRad)
+  const arrowSize = responsiveBaseSize.value * arrowScale.value
+  const tailOffsetPx = arrowSize * 1.6 * 0.3125 + INFO_TAIL_GAP_PX
+  return {
+    top: `calc(50% + ${tailDirY * tailOffsetPx}px)`,
+    left: `calc(50% + ${tailDirX * tailOffsetPx}px)`,
   }
 })
 
@@ -220,39 +243,40 @@ function formatScreenSizes(screens) {
       <span class="on-target-label">On Target</span>
     </div>
 
-    <div v-else class="arrow-wrapper" :style="rotationStyle">
-      <svg
-          viewBox="0 0 100 160" :width="responsiveBaseSize * arrowScale"
-          :height="responsiveBaseSize * 1.6 * arrowScale">
-        <defs>
-          <linearGradient id="chevronGradient" x1="0%" y1="100%" x2="0%" y2="0%">
-            <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.32"/>
-            <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.8"/>
-          </linearGradient>
-        </defs>
+    <template v-else>
+      <div class="arrow-wrapper" :style="rotationStyle">
+        <svg
+            viewBox="0 0 100 160" :width="responsiveBaseSize * arrowScale"
+            :height="responsiveBaseSize * 1.6 * arrowScale">
+          <defs>
+            <linearGradient id="chevronGradient" x1="0%" y1="100%" x2="0%" y2="0%">
+              <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.32"/>
+              <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.8"/>
+            </linearGradient>
+          </defs>
 
-        <g transform="translate(50, 130)">
-          <path
-              v-for="(chevron, index) in chevrons"
-              :key="index"
-              :d="`M${-25 * chevron.scale} ${-chevron.yOffset} L0 ${-chevron.yOffset - 20 * chevron.scale} L${25 * chevron.scale} ${-chevron.yOffset}`"
-              fill="none"
-              stroke="url(#chevronGradient)"
-              :stroke-width="chevron.strokeWidth"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              :opacity="chevron.opacity"
-          />
-        </g>
-      </svg>
+          <g transform="translate(50, 130)">
+            <path
+                v-for="(chevron, index) in chevrons"
+                :key="index"
+                :d="`M${-25 * chevron.scale} ${-chevron.yOffset} L0 ${-chevron.yOffset - 20 * chevron.scale} L${25 * chevron.scale} ${-chevron.yOffset}`"
+                fill="none"
+                stroke="url(#chevronGradient)"
+                :stroke-width="chevron.strokeWidth"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                :opacity="chevron.opacity"
+            />
+          </g>
+        </svg>
+      </div>
 
-      <!-- Distance info positioned at the "from" edge (bottom) of the chevrons -->
-      <div class="distance-info" :style="{ transform: `rotate(${-angleDeg}deg)` }">
+      <div class="distance-info" :style="distanceInfoStyle">
         <span class="distance">{{ formatDistance(distanceDeg) }}</span>
         <span v-if="formatScreenSizes(screenSizes)" class="screen-size">{{ formatScreenSizes(screenSizes) }}</span>
         <span class="hint">{{ directionHint }}</span>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -313,6 +337,8 @@ function formatScreenSizes(screens) {
 }
 
 .distance-info {
+  position: absolute;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -322,7 +348,7 @@ function formatScreenSizes(screens) {
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   opacity: 0.8;
-  margin-top: -0.5rem;
+  white-space: nowrap;
 }
 
 .distance {
