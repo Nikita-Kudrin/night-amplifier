@@ -78,6 +78,7 @@ mod tests {
                         cooler_enabled: false,
                         target_temp_c: None,
                         sensor_mode_override: None,
+                        cooler_fast_mode: false,
                     },
                 ),
                 (
@@ -90,12 +91,14 @@ mod tests {
                         cooler_enabled: true,
                         target_temp_c: Some(-10.0),
                         sensor_mode_override: None,
+                        cooler_fast_mode: true,
                     },
                 ),
             ]),
             last_camera_name: Some("Neptune-C II".to_string()),
             cooler_enabled: true,
             target_temp_c: Some(-10.0),
+            cooler_fast_mode: true,
             sensor_mode_override: Some(crate::camera::DualSamplingMode::LowReadoutNoise),
         };
 
@@ -234,6 +237,7 @@ mod tests {
             last_camera_name: None,
             cooler_enabled: false,
             target_temp_c: None,
+            cooler_fast_mode: false,
             sensor_mode_override: None,
         };
 

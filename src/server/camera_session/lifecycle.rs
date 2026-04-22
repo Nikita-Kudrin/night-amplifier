@@ -89,19 +89,40 @@ pub async fn connect(
     // before deciding precool — otherwise a cooled-camera's `cooler_enabled`
     // would leak into the next-connected uncooled camera.
     let profile_key = camera_profile_key(&provider_registry_name, &camera_name);
-    let (cooler_enabled, target_temp_c) = {
+    let (cooler_enabled, target_temp_c, cooler_fast_mode) = {
         let mut settings = state.settings.write().await;
         apply_camera_profile_on_connect(&mut settings, profile_key.clone(), &info);
-        (settings.cooler_enabled, settings.target_temp_c)
+        (
+            settings.cooler_enabled,
+            settings.target_temp_c,
+            settings.cooler_fast_mode,
+        )
     };
 
     // Decide initial phase: if the camera supports cooling and the user has
     // a target in settings, kick off precool right now. Otherwise Idle.
+    //
+    // In normal (ramped) mode we hold the TEC setpoint at the current sensor
+    // temperature and let the monitor ramp it toward the user's target at
+    // `RAMP_RATE_C_PER_MIN`. In fast mode we push the final target directly,
+    // restoring the old "snap to setpoint" behavior.
     let (initial_phase, cooler_applied) = if info.has_cooler
         && cooler_enabled
         && target_temp_c.is_some()
     {
-        match apply_cooler(camera.as_mut(), true, target_temp_c) {
+        let final_target = target_temp_c.expect("checked is_some above");
+        let initial_setpoint = if cooler_fast_mode {
+            final_target
+        } else {
+            match camera.status() {
+                Ok(s) => s.temperature_c,
+                Err(_) => final_target,
+            }
+        };
+        let seed = camera
+            .set_target_temperature(initial_setpoint)
+            .and_then(|()| camera.set_cooler(true));
+        match seed {
             Ok(()) => (CameraPhase::Precooling, true),
             Err(e) => {
                 warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
@@ -149,6 +170,19 @@ pub async fn connect(
         .camera_monitor_tx
         .lock()
         .expect("camera_monitor_tx mutex poisoned") = Some(tx);
+
+    // If we started precooling, hand the ramp targets off to the monitor so
+    // it can begin rate-limited tracking (or snap to target when in fast mode).
+    if cooler_applied {
+        send_monitor_cmd(
+            state,
+            MonitorCmd::UpdateCoolerTarget {
+                enabled: true,
+                target: target_temp_c,
+                fast: cooler_fast_mode,
+            },
+        );
+    }
 
     let _ = state.events.send(ServerEvent::camera_connected(&camera_name));
 
@@ -240,7 +274,10 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
     // (current intent) OR the last status sample reported cooler_on, ramp
     // the TEC down before closing the handle. Relying on settings alone is
     // important because the monitor may not have polled yet on fresh connects.
-    let cooler_enabled_in_settings = state.settings.read().await.cooler_enabled;
+    let (cooler_enabled_in_settings, fast) = {
+        let settings = state.settings.read().await;
+        (settings.cooler_enabled, settings.cooler_fast_mode)
+    };
     let cooler_reported_on = state
         .get_camera_status(&camera_name)
         .await
@@ -254,8 +291,8 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
         state
             .set_camera_phase(&camera_name, CameraPhase::WarmingUp)
             .await;
-        send_monitor_cmd(state, MonitorCmd::StartWarmup);
-        info!(camera_id = %camera_id, "Warmup initiated; disconnect will complete asynchronously");
+        send_monitor_cmd(state, MonitorCmd::StartWarmup { fast });
+        info!(camera_id = %camera_id, fast, "Warmup initiated; disconnect will complete asynchronously");
         Ok(camera_name)
     } else {
         // No cooler active — close immediately.
@@ -274,12 +311,15 @@ pub async fn take_for_capture(
 
     if phase == CameraPhase::WarmingUp {
         // User started capture mid-warmup — cancel, re-enable cooler per
-        // current settings before handoff.
+        // current settings before handoff. Capture's per-frame
+        // `apply_cooler_config` pushes the final target, so the ramp the
+        // monitor would have installed is overridden anyway.
         debug!(camera_name, "Cancelling warmup: capture requested");
         send_monitor_cmd(state, MonitorCmd::CancelWarmup);
         let settings = state.settings.read().await;
         if settings.cooler_enabled {
             let target = settings.target_temp_c;
+            let fast = settings.cooler_fast_mode;
             drop(settings);
             if let Some(cam) = state
                 .active_camera
@@ -287,8 +327,19 @@ pub async fn take_for_capture(
                 .expect("active_camera mutex poisoned")
                 .as_mut()
             {
-                let _ = apply_cooler(cam.as_mut(), true, target);
+                let _ = cam.set_cooler(true);
             }
+            // Re-seed the cooldown ramp so that if capture exits quickly the
+            // monitor picks up a gentle ramp rather than snapping to target.
+            // Fast mode preserves the old "snap to target" behavior.
+            send_monitor_cmd(
+                state,
+                MonitorCmd::UpdateCoolerTarget {
+                    enabled: true,
+                    target,
+                    fast,
+                },
+            );
         }
     }
 
@@ -335,6 +386,7 @@ pub async fn return_from_capture(
             let settings = state.settings.read().await;
             let target = settings.target_temp_c;
             let cooler_enabled = settings.cooler_enabled;
+            let fast = settings.cooler_fast_mode;
             drop(settings);
 
             let next_phase = if cooler_enabled && target.is_some() {
@@ -353,6 +405,21 @@ pub async fn return_from_capture(
 
             state.set_camera_phase(camera_name, next_phase).await;
             send_monitor_cmd(state, MonitorCmd::ResumeAfterCapture);
+
+            // If we're back in Precooling after capture, the capture thread's
+            // per-frame apply pushed the final target to hardware — which
+            // means the monitor needs to re-seed its cooldown ramp from the
+            // current sensor temp if the sensor is still settling.
+            if next_phase == CameraPhase::Precooling {
+                send_monitor_cmd(
+                    state,
+                    MonitorCmd::UpdateCoolerTarget {
+                        enabled: cooler_enabled,
+                        target,
+                        fast,
+                    },
+                );
+            }
         }
         None => {
             // Capture thread crashed or returned without the handle.
@@ -420,20 +487,6 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str) {
     info!(camera_name, "Camera disconnected");
 }
 
-/// Convenience: apply cooler enable + target temperature under the handle mutex.
-/// The caller must already hold the mutex guard.
-pub(super) fn apply_cooler(
-    camera: &mut dyn Camera,
-    enabled: bool,
-    target_temp_c: Option<f64>,
-) -> crate::camera::CameraResult<()> {
-    if let Some(t) = target_temp_c {
-        camera.set_target_temperature(t)?;
-    }
-    camera.set_cooler(enabled)?;
-    Ok(())
-}
-
 /// Push the current `cooler_enabled` / `target_temp_c` settings to the active
 /// camera handle. Called by the settings API when those fields change while
 /// the camera is connected but not capturing — otherwise the slider moves are
@@ -469,21 +522,28 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>) {
         return;
     }
 
-    let (enabled, target) = {
+    let (enabled, target, fast) = {
         let settings = state.settings.read().await;
-        (settings.cooler_enabled, settings.target_temp_c)
+        (
+            settings.cooler_enabled,
+            settings.target_temp_c,
+            settings.cooler_fast_mode,
+        )
     };
 
+    // Only the cooler enable/disable switch is pushed to hardware here; the
+    // target temperature is handed to the monitor so the setpoint ramps at
+    // RAMP_RATE_C_PER_MIN instead of snapping to the final value.
     let applied = {
         let mut guard = state
             .active_camera
             .lock()
             .expect("active_camera mutex poisoned");
         match guard.as_mut() {
-            Some(cam) => match apply_cooler(cam.as_mut(), enabled, target) {
+            Some(cam) => match cam.set_cooler(enabled) {
                 Ok(()) => true,
                 Err(e) => {
-                    warn!(error = %e, "Failed to apply live cooler settings");
+                    warn!(error = %e, "Failed to apply live cooler switch");
                     false
                 }
             },
@@ -502,10 +562,23 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>) {
             .await;
     }
 
+    // Hand the new target to the monitor: it will re-seed the cooldown ramp
+    // from the current sensor temperature (or snap to target when in fast
+    // mode) and advance toward `target`.
+    send_monitor_cmd(
+        state,
+        MonitorCmd::UpdateCoolerTarget {
+            enabled,
+            target,
+            fast,
+        },
+    );
+
     info!(
         camera_name = %camera_name,
         enabled,
         target_temp_c = ?target,
+        fast,
         "Live cooler settings applied"
     );
 }
