@@ -183,15 +183,29 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 
   **Camera lifecycle (pre-cool / warm-up):** the camera handle is opened at connect time and held
   long-term in `AppState.active_camera` (see `src/server/camera_session/`). If `cooler_enabled`
-  and `target_temp_c` are set in settings, connecting begins pre-cooling immediately; the
-  lifecycle phase (`CameraPhase`) transitions `Precooling → Idle` once the sensor settles within
-  `PRECOOL_TOLERANCE_C` for two consecutive samples. Disconnect with a live cooler enters
-  `WarmingUp`, disables the TEC, and only closes the USB handle once the sensor reaches
-  `WARMUP_THRESHOLD_C` (default 10 °C) or `WARMUP_TIMEOUT` (5 min) elapses — this prevents dew
-  condensation on a still-cold sensor. Capture start transfers the handle to the capture thread
-  (phase → `Capturing`); on exit, the handle returns to the session. Starting capture during
-  warmup cancels warmup and re-enables the cooler per current settings. The background monitor
-  runs on a dedicated `std::thread` (not a tokio task) so USB stalls can never poison the runtime.
+  and `target_temp_c` are set in settings, connecting begins pre-cooling immediately. Both
+  cool-down and warm-up are **rate-limited to `RAMP_RATE_C_PER_MIN` (5 °C/min)** to avoid
+  mechanical stress on the sensor die and condensation on a rapidly-cooling cover glass. The
+  monitor advances the commanded setpoint via `set_target_temperature()` each tick; the camera's
+  internal PID tracks the ramp. Vendor SDKs that take integer °C (e.g. PlayerOne) are gated on
+  the rounded setpoint changing, so an SDK call is issued roughly every 12 s at production rate.
+  The lifecycle phase (`CameraPhase`) transitions `Precooling → Idle` once the commanded setpoint
+  has reached the user's target **and** the sensor settles within `PRECOOL_TOLERANCE_C` for two
+  consecutive samples. Disconnect with a live cooler enters `WarmingUp`: the TEC stays **on**
+  and the setpoint ramps up to `WARMUP_RAMP_TARGET_C` (20 °C); internal duty drops naturally
+  toward 0 % as the setpoint crosses ambient. The USB handle closes only once the sensor reaches
+  `WARMUP_THRESHOLD_C` (default 10 °C) and duty is ≤ 5 % — or `WARMUP_TIMEOUT` (5 min) elapses —
+  preventing dew condensation on a still-cold sensor. Capture start transfers the handle to the
+  capture thread (phase → `Capturing`); on exit, the handle returns to the session. Starting
+  capture during warmup cancels warmup and re-enables the cooler per current settings. Starting
+  capture mid-ramp aborts the ramp — the capture thread's per-frame `apply_cooler_config` pushes
+  the final target to hardware. Live target changes from the UI are handed to the monitor via
+  `MonitorCmd::UpdateCoolerTarget`, which re-seeds the cooldown ramp from the current sensor
+  temperature. The per-camera `cooler_fast_mode` setting bypasses the ramp end-to-end: cooldown
+  snaps the TEC to the final target immediately, warmup disables the cooler outright. This is
+  an expert/user-opt-in override — the UI shows a persistent warning icon while fast mode is
+  on. The background monitor runs on a dedicated `std::thread` (not a tokio task) so
+  USB stalls can never poison the runtime.
 
 - **plugins/** - Registry and traits for professional features (Push-To, Advanced Rejection, Comet Stacking). Allows the
   Community version to interact with the Pro version when available.
@@ -516,6 +530,7 @@ The `/api/settings` endpoint accepts these fields:
 | `simulated_preload_images`  | u32  | 5       | Number of images to preload for sim cam |
 | `cooler_enabled`            | bool | false   | Activate camera TEC during capture      |
 | `target_temp_c`             | f64? | null    | Target sensor temperature in Celsius    |
+| `cooler_fast_mode`          | bool | false   | Bypass the 5 °C/min cool/warm ramp — hardware cools/warms as fast as possible. Not recommended for long-term use. |
 | `sensor_mode_override`      | enum? | null   | Override auto sensor mode: "normal" (planetary) or "low_readout_noise" (deep sky / comet). Player One cameras with dual sampling only. When null, the mode is auto-selected from `stacking_type`. |
 
 ### WebSocket Events

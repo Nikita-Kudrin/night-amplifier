@@ -24,6 +24,7 @@ const maxTemp = computed(() => currentCamera.value?.info?.max_temp_c ?? COOLER_T
 
 const localCoolerEnabled = ref(false)
 const localTargetTemp = ref(COOLER_TEMP_LIMITS.default)
+const localCoolerFastMode = ref(false)
 
 watch(
   settings,
@@ -33,6 +34,7 @@ watch(
     if (typeof newSettings.target_temp_c === 'number') {
       localTargetTemp.value = newSettings.target_temp_c
     }
+    localCoolerFastMode.value = newSettings.cooler_fast_mode ?? false
   },
   { immediate: true }
 )
@@ -80,6 +82,11 @@ function handleTargetChange(value) {
   debouncedApply({ target_temp_c: value })
 }
 
+function handleFastModeToggle(enabled) {
+  localCoolerFastMode.value = enabled
+  applySetting({ cooler_fast_mode: enabled })
+}
+
 function formatTemp(v) {
   return `${Number(v).toFixed(1)}°C`
 }
@@ -115,6 +122,34 @@ function formatPower(v) {
       :help="HELP_TEXTS.target_temp_c"
       @change="handleTargetChange"
     />
+
+    <div class="control-group fast-mode-row">
+      <BaseToggle
+        v-model="localCoolerFastMode"
+        label="Fast"
+        size="small"
+        :help="HELP_TEXTS.cooler_fast_mode"
+        @update:model-value="handleFastModeToggle"
+      >
+        <template #label-extra>
+          <svg
+            v-if="localCoolerFastMode"
+            class="fast-warning-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-label="Warning"
+          >
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+        </template>
+      </BaseToggle>
+    </div>
 
     <div class="cooler-status">
       <div class="status-row">
@@ -207,5 +242,17 @@ function formatPower(v) {
   padding: 0.375rem 0.5rem;
   font-size: 0.75rem;
   margin-bottom: 0.5rem;
+}
+
+.fast-mode-row {
+  margin-top: 0.5rem;
+}
+
+.fast-warning-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--warning);
+  margin-left: 0.25rem;
+  vertical-align: middle;
 }
 </style>

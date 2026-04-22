@@ -57,8 +57,9 @@ pub async fn update_settings(
     }
 
     let telescope_updated = request.telescope.is_some();
-    let cooler_fields_changed =
-        request.cooler_enabled.is_some() || request.target_temp_c.is_some();
+    let cooler_fields_changed = request.cooler_enabled.is_some()
+        || request.target_temp_c.is_some()
+        || request.cooler_fast_mode.is_some();
 
     // Resolve the active camera's profile key before taking `settings.write()`
     // so we never hold `settings.write()` while awaiting `cameras.read()` —
@@ -162,6 +163,9 @@ pub async fn update_settings(
         if let Some(target_temp_c) = request.target_temp_c {
             settings.target_temp_c = Some(target_temp_c.clamp(-60.0, 30.0));
         }
+        if let Some(fast_mode) = request.cooler_fast_mode {
+            settings.cooler_fast_mode = fast_mode;
+        }
         if let Some(sensor_mode) = request.sensor_mode_override {
             settings.sensor_mode_override = Some(sensor_mode);
         }
@@ -178,6 +182,7 @@ pub async fn update_settings(
                 cooler_enabled: settings.cooler_enabled,
                 target_temp_c: settings.target_temp_c,
                 sensor_mode_override: settings.sensor_mode_override,
+                cooler_fast_mode: settings.cooler_fast_mode,
             };
             settings.camera_profiles.insert(key, snapshot);
         }

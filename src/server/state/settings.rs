@@ -51,6 +51,9 @@ pub struct CaptureSettings {
     pub cooler_enabled: bool,
     /// Target sensor temperature in Celsius (None means "no target set")
     pub target_temp_c: Option<f64>,
+    /// Bypass the 5 °C/min ramp and cool/warm as fast as the hardware allows.
+    /// Defeats sensor-stress / condensation protections — user-opt-in only.
+    pub cooler_fast_mode: bool,
     /// Manual override for camera sensor mode. None means "derive from stacking_type".
     pub sensor_mode_override: Option<DualSamplingMode>,
     /// Region of interest for comet nucleus tracking
@@ -91,6 +94,8 @@ pub struct CameraCaptureProfile {
     pub cooler_enabled: bool,
     pub target_temp_c: Option<f64>,
     pub sensor_mode_override: Option<DualSamplingMode>,
+    #[serde(default)]
+    pub cooler_fast_mode: bool,
 }
 
 impl CameraCaptureProfile {
@@ -118,10 +123,11 @@ impl CameraCaptureProfile {
             cooler_enabled,
             target_temp_c,
             sensor_mode_override,
+            cooler_fast_mode: settings.cooler_fast_mode,
         }
     }
 
-    /// Write the seven fields onto the flat `CaptureSettings`.
+    /// Write the fields onto the flat `CaptureSettings`.
     pub fn apply_to(&self, settings: &mut CaptureSettings) {
         settings.exposure_us = self.exposure_us;
         settings.gain = self.gain;
@@ -130,6 +136,7 @@ impl CameraCaptureProfile {
         settings.cooler_enabled = self.cooler_enabled;
         settings.target_temp_c = self.target_temp_c;
         settings.sensor_mode_override = self.sensor_mode_override;
+        settings.cooler_fast_mode = self.cooler_fast_mode;
     }
 }
 
@@ -223,6 +230,7 @@ impl Default for CaptureSettings {
             simulated_preload_images: 5,
             cooler_enabled: false,
             target_temp_c: None,
+            cooler_fast_mode: false,
             sensor_mode_override: None,
             comet_roi: None,
             planetary_roi: None,

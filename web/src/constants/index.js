@@ -170,6 +170,7 @@ export const DEFAULT_SETTINGS = {
   wanderer_mode: false,
   cooler_enabled: false,
   target_temp_c: null,
+  cooler_fast_mode: false,
   eyepiece: {
     binoview: true,
     screen_width: 140.0,
@@ -240,4 +241,6 @@ export const HELP_TEXTS = {
     "Activates the camera's TEC cooler during capture to lower sensor temperature and reduce thermal noise. Cooling only applies while a capture session is running.",
   target_temp_c:
     'Target sensor temperature in Celsius. Pick a value warm enough that your TEC can hold it consistently (typically 20-30°C below ambient).',
+  cooler_fast_mode:
+    'Skips the rate-limited temperature ramp (5°C/min) — the camera cools and warms up as fast as the hardware allows. Not recommended for long-term use: abrupt temperature swings can stress the sensor and risk condensation on the cover glass.',
 }
