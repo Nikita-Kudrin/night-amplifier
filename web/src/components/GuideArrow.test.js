@@ -170,8 +170,73 @@ describe('GuideArrow', () => {
                 imageWidth: 2000,
                 imageHeight: 2000,
             })
-            // MAX_BASE_SIZE is 160, MAX_SCALE is 1.0 => 160
-            expect(getSvgWidth(wrapper)).toBeLessThanOrEqual(160)
+            // MAX_BASE_SIZE is 240, MAX_SCALE is 1.6 => 384
+            expect(getSvgWidth(wrapper)).toBeLessThanOrEqual(384)
+        })
+    })
+
+    describe('scaling by on-screen edge proximity', () => {
+        const proximityImageProps = {imageWidth: 600, imageHeight: 400}
+
+        it('grows as the target drifts toward the screen edge at fixed FOV', () => {
+            const near = mountArrow({
+                distanceDeg: 0.3,
+                fovDeg: 4,
+                isClose: true,
+                ...proximityImageProps,
+            })
+            const far = mountArrow({
+                distanceDeg: 1.5,
+                fovDeg: 4,
+                ...proximityImageProps,
+            })
+            expect(getSvgWidth(far)).toBeGreaterThan(getSvgWidth(near))
+        })
+
+        it('on-screen arrow at the threshold is no larger than off-screen arrow', () => {
+            const atEdge = mountArrow({
+                distanceDeg: 1.6, // exactly OFF_SCREEN_THRESHOLD (0.4) * fovDeg
+                fovDeg: 4,
+                ...proximityImageProps,
+            })
+            const offScreen = mountArrow({
+                distanceDeg: 5,
+                fovDeg: 4,
+                ...proximityImageProps,
+            })
+            expect(getSvgWidth(offScreen)).toBeGreaterThanOrEqual(getSvgWidth(atEdge))
+        })
+
+        it('falls back to distance-based scaling when fovDeg is unknown', () => {
+            const small = mountArrow({distanceDeg: 1, isClose: true, ...proximityImageProps})
+            const large = mountArrow({distanceDeg: 30, ...proximityImageProps})
+            expect(getSvgWidth(small)).toBeLessThan(getSvgWidth(large))
+        })
+
+        it('does not grow with distance when the target stays near centre on a wide FOV', () => {
+            const a = mountArrow({distanceDeg: 0.3, fovDeg: 20, isClose: true, ...proximityImageProps})
+            const b = mountArrow({distanceDeg: 0.6, fovDeg: 40, isClose: true, ...proximityImageProps})
+            // Both targets sit at ~1.5% of the screen — sizes should match even though
+            // absolute distance doubles, because scaling is screen-relative.
+            expect(getSvgWidth(a)).toBeCloseTo(getSvgWidth(b), 5)
+        })
+
+        it('squashes near-centre more aggressively than a linear mapping would', () => {
+            // edgeProximity raw ≈ 0.25 (quarter of the on-screen band)
+            const nearCentre = mountArrow({
+                distanceDeg: 0.4,
+                fovDeg: 4,
+                isClose: true,
+                ...proximityImageProps,
+            })
+            // edgeProximity raw = 1.0 (at the on/off-screen threshold)
+            const nearEdge = mountArrow({distanceDeg: 1.6, fovDeg: 4, ...proximityImageProps})
+
+            // Old linear mapping produced scales 0.475 → 1.000 (ratio ≈ 2.1×). With the
+            // quadratic ease-in the ratio is strictly greater, codifying the "more contrast"
+            // outcome so a regression to linear is caught.
+            const ratio = getSvgWidth(nearEdge) / getSvgWidth(nearCentre)
+            expect(ratio).toBeGreaterThan(3)
         })
     })
 
