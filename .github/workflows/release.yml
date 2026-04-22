@@ -118,6 +118,13 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install libusb
 
+      - name: Install system deps (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install cfitsio:${{ matrix.target == 'aarch64-pc-windows-msvc' && 'arm64' || 'x64' }}-windows-static
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+          echo "VCPKGRS_STATIC=1" >> $GITHUB_ENV
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
