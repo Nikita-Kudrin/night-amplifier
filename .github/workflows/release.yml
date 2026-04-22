@@ -117,6 +117,7 @@ jobs:
           $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet"
           echo "PKG_CONFIG_PATH=$vcpkg_path/lib/pkgconfig" >> $env:GITHUB_ENV
           echo "CFITSIO_STATIC=1" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $env:GITHUB_ENV
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Cache cargo
