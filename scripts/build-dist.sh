@@ -61,7 +61,19 @@ else
     echo "Target: ${TARGET}"
 fi
 
-ARTIFACT_NAME="night-amplifier-${VERSION}-${TARGET}"
+ARCH=$(echo "${TARGET}" | cut -d'-' -f1)
+
+OS_SUFFIX=""
+if [[ "${TARGET}" == *"-linux"* ]]; then
+    OS_SUFFIX="-linux"
+fi
+
+CPU_SUFFIX=""
+if [[ "${TARGET_CPU}" == "cortex-a76" ]]; then
+    CPU_SUFFIX="-pi5"
+fi
+
+ARTIFACT_NAME="night-amplifier-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}"
 DIST_DIR="${PROJECT_ROOT}/dist/${ARTIFACT_NAME}"
 BINARY_NAME="night_amplifier"
 
@@ -172,7 +184,8 @@ if [[ "${BUILD_APPIMAGE}" == "true" ]]; then
     "${SCRIPT_DIR}/build-appimage.sh" \
         --binary "${DIST_DIR}/night-amplifier" \
         --version "${VERSION}" \
-        --arch "${TARGET}"
+        --arch "${TARGET}" \
+        --cpu-suffix "${CPU_SUFFIX}"
 fi
 
 echo ""
