@@ -327,6 +327,7 @@ const rejectedCount = computed(() => {
 
 .status-item.solving {
   color: var(--primary);
+  padding: 0.25rem 0.5rem;
 }
 
 .solving-spinner {
