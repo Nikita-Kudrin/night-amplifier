@@ -13,8 +13,8 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 | Linux                     | x86_64       | ✅                                                         |
 | Linux                     | ARM64        | ✅                                                         |
 | Raspberry Pi5, Orange Pi5 | ARM64        | ✅                                                         |
-| Windows                   | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| Windows                   | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Windows                   | x86_64       | ✅                                                         |
+| Windows                   | ARM64        | ✅                                                         |
 | macOS                     | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | macOS                     | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 
@@ -107,7 +107,7 @@ No external files are needed to run the distribution binary.
 ### Pre-built Downloads
 
 Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page
-for Linux x86_64 and ARM64 (including optimized builds for Raspberry Pi 5 / Orange Pi 5).
+for Linux (x86_64, ARM64) and Windows (x86_64, ARM64). Optimized builds for Raspberry Pi 5 / Orange Pi 5 are included.
 
 For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to
 run.
