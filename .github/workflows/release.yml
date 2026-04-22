@@ -76,6 +76,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Free Disk Space
+        if: runner.os == 'Linux'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: true
