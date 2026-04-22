@@ -58,6 +58,10 @@ else
     echo "Target: ${TARGET}"
 fi
 
+# ── Resolve version and package from Cargo.toml ──────────────────────
+VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
 # ── Select default features ──────────────────────────────────────────
 # On Windows, bundled-cfitsio uses autotools which fails with MSVC.
 # We default to system/vcpkg cfitsio instead.
@@ -73,10 +77,6 @@ if [[ "${TARGET}" != *"-windows"* ]]; then
         EXTRA_FEATURES="${EXTRA_FEATURES},${FITS_FEATURE}"
     fi
 fi
-
-# ── Resolve version and package from Cargo.toml ──────────────────────
-VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
-PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 DISPLAY_NAME="Night Amplifier"
 if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
