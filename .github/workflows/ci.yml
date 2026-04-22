@@ -15,16 +15,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Install nextest
@@ -93,16 +84,7 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Download Benchmark Binaries
@@ -123,16 +105,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Free Disk Space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
