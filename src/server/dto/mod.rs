@@ -235,6 +235,9 @@ pub struct SettingsResponse {
     /// Target sensor temperature in Celsius
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_temp_c: Option<f64>,
+    /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
+    #[serde(default)]
+    pub cooler_fast_mode: bool,
     /// Manual override for camera sensor mode (Player One dual sampling).
     /// When null, the mode is auto-selected based on `stacking_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,6 +276,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
+            cooler_fast_mode: settings.cooler_fast_mode,
             sensor_mode_override: settings.sensor_mode_override,
         }
     }
@@ -409,6 +413,9 @@ pub struct UpdateSettingsRequest {
     /// pass `null` to clear by sending `target_temp_c_clear` instead.
     #[serde(default)]
     pub target_temp_c: Option<f64>,
+    /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
+    #[serde(default)]
+    pub cooler_fast_mode: Option<bool>,
     /// Manual override for camera sensor mode (Player One dual sampling)
     #[serde(default)]
     pub sensor_mode_override: Option<DualSamplingMode>,

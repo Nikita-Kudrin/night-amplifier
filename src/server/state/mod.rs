@@ -71,19 +71,32 @@ pub struct AppState {
 /// Commands accepted by the camera monitor thread. Defined here (not in
 /// `camera_session`) so `AppState` can hold the sender without a cyclic
 /// module dependency.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum MonitorCmd {
     /// Camera is about to be handed off to the capture thread. Monitor
     /// should pause its polling loop.
     HandOffToCapture,
     /// Camera handle has been returned. Monitor should resume polling.
     ResumeAfterCapture,
-    /// Begin the warmup sequence: disable cooler and watch for the sensor
-    /// to rise to `WARMUP_THRESHOLD_C`. On completion the monitor closes
-    /// the handle and exits.
-    StartWarmup,
+    /// Begin the warmup sequence. When `fast` is true the cooler is
+    /// disabled immediately and the sensor rises naturally (old behavior).
+    /// Otherwise the monitor keeps the cooler on and raises the commanded
+    /// setpoint toward `WARMUP_RAMP_TARGET_C` at `RAMP_RATE_C_PER_MIN`. In
+    /// both cases the handle closes once the sensor reaches
+    /// `WARMUP_THRESHOLD_C` and duty is ≤ 5 %.
+    StartWarmup { fast: bool },
     /// Cancel an in-progress warmup (user started capture during warmup).
     CancelWarmup,
+    /// Install or update the cooldown target. When `fast` is true the final
+    /// target is pushed to hardware immediately and no ramp is installed.
+    /// Otherwise the monitor re-seeds its cooldown ramp from the latest
+    /// sensor temperature and advances toward `target` at
+    /// `RAMP_RATE_C_PER_MIN`. `enabled = false` clears any active ramp.
+    UpdateCoolerTarget {
+        enabled: bool,
+        target: Option<f64>,
+        fast: bool,
+    },
     /// Stop polling and close the handle immediately.
     Shutdown,
 }

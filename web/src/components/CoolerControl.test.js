@@ -162,4 +162,72 @@ describe('CoolerControl', () => {
 
     expect(updateSettings).toHaveBeenCalledWith({ cooler_enabled: true })
   })
+
+  it('renders the Fast toggle when the camera has a cooler', async () => {
+    const wrapper = mountControl({
+      cameras: [
+        {
+          id: 'cam1',
+          name: 'Cool Cam',
+          info: { has_cooler: true, max_width: 1920, max_height: 1080 },
+        },
+      ],
+      selectedCamera: 'cam1',
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.fast-mode-row').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Fast')
+  })
+
+  it('shows the warning icon only when Fast mode is on', async () => {
+    const provides = {
+      cameras: [
+        {
+          id: 'cam1',
+          name: 'Cool Cam',
+          info: { has_cooler: true, max_width: 1920, max_height: 1080 },
+        },
+      ],
+      selectedCamera: 'cam1',
+      settings: {
+        cooler_enabled: false,
+        target_temp_c: null,
+        cooler_fast_mode: false,
+      },
+    }
+
+    const off = mountControl(provides)
+    await flushPromises()
+    expect(off.find('.fast-warning-icon').exists()).toBe(false)
+
+    const on = mountControl({
+      ...provides,
+      settings: { ...provides.settings, cooler_fast_mode: true },
+    })
+    await flushPromises()
+    expect(on.find('.fast-warning-icon').exists()).toBe(true)
+  })
+
+  it('calls updateSettings with cooler_fast_mode when Fast is toggled', async () => {
+    const wrapper = mountControl({
+      cameras: [
+        {
+          id: 'cam1',
+          name: 'Cool Cam',
+          info: { has_cooler: true, max_width: 1920, max_height: 1080 },
+        },
+      ],
+      selectedCamera: 'cam1',
+    })
+    await flushPromises()
+
+    // Toggles are rendered in DOM order: cooler_enabled first, then Fast.
+    const toggles = wrapper.findAll('input[type="checkbox"]')
+    const fastToggle = toggles[toggles.length - 1]
+    await fastToggle.setValue(true)
+    await nextTick()
+
+    expect(updateSettings).toHaveBeenCalledWith({ cooler_fast_mode: true })
+  })
 })
