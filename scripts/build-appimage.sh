@@ -46,7 +46,12 @@ esac
 
 APPDIR="${PROJECT_ROOT}/dist/${APP_ID}.AppDir"
 SAFE_APP_NAME=$(echo "${APP_NAME}" | tr ' ' '_')
-APPIMAGE_NAME="${SAFE_APP_NAME}-${VERSION}-${ARCH}${CPU_SUFFIX}.AppImage"
+PRO_SUFFIX=""
+if [[ "${SAFE_APP_NAME}" == *"_Pro" ]]; then
+    SAFE_APP_NAME=$(echo "${SAFE_APP_NAME}" | sed 's/_Pro$//')
+    PRO_SUFFIX="-pro"
+fi
+APPIMAGE_NAME="${SAFE_APP_NAME}-${VERSION}-${ARCH}${CPU_SUFFIX}${PRO_SUFFIX}.AppImage"
 
 rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin"

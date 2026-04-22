@@ -99,7 +99,15 @@ if [[ "${TARGET}" == *"-windows"* ]]; then
     OUT_BINARY_NAME="${OUT_BINARY_NAME}.exe"
 fi
 
-ARTIFACT_NAME="$(echo "${OUT_BINARY_NAME}" | sed 's/\.exe$//')-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}"
+# For Pro version, we want the suffix at the end of the artifact name
+BASE_NAME=$(echo "${OUT_BINARY_NAME}" | sed 's/\.exe$//')
+PRO_SUFFIX=""
+if [[ "${BASE_NAME}" == *"-pro" ]]; then
+    BASE_NAME=$(echo "${BASE_NAME}" | sed 's/-pro$//')
+    PRO_SUFFIX="-pro"
+fi
+
+ARTIFACT_NAME="${BASE_NAME}-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}${PRO_SUFFIX}"
 DIST_DIR="${PROJECT_ROOT}/dist/${ARTIFACT_NAME}"
 
 echo "CPU optimization: ${TARGET_CPU}"
