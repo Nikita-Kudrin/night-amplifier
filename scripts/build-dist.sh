@@ -209,7 +209,14 @@ cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
 cd "${PROJECT_ROOT}/dist"
 if [[ "${TARGET}" == *"-windows"* ]]; then
     ARCHIVE="${ARTIFACT_NAME}.zip"
-    zip -r "${ARCHIVE}" "${ARTIFACT_NAME}/"
+    if command -v zip >/dev/null 2>&1; then
+        zip -r "${ARCHIVE}" "${ARTIFACT_NAME}/"
+    elif command -v 7z >/dev/null 2>&1; then
+        7z a -tzip "${ARCHIVE}" "${ARTIFACT_NAME}/"
+    else
+        echo "Error: Neither 'zip' nor '7z' found for packaging."
+        exit 1
+    fi
 else
     ARCHIVE="${ARTIFACT_NAME}.tar.gz"
     tar czf "${ARCHIVE}" "${ARTIFACT_NAME}/"
