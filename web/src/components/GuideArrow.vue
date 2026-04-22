@@ -42,15 +42,19 @@ const props = defineProps({
 
 const MAX_DISTANCE = 30
 const MIN_SCALE = 0.3
-const MAX_SCALE = 1.0
+const MAX_SCALE = 1.6
 
 const MIN_BASE_SIZE = 60
-const MAX_BASE_SIZE = 160
-const MAX_BASE_SIZE_OFF_SCREEN = 200
+const MAX_BASE_SIZE = 240
+const MAX_BASE_SIZE_OFF_SCREEN = 290
 const REFERENCE_CONTAINER_SIZE = 600
 
 const OFF_SCREEN_THRESHOLD = 0.4
 const EDGE_MARGIN_PERCENT = 0.10
+
+// Quadratic ease-in: near-centre targets get squashed more aggressively than
+// a linear mapping would, while near-edge targets reach a larger ceiling.
+const EDGE_PROXIMITY_CURVE = 2
 
 const normalizedDistance = computed(() => {
   return Math.min(props.distanceDeg / MAX_DISTANCE, 1.0)
@@ -66,12 +70,17 @@ const isOffScreen = computed(() => {
   return screenSizes.value > OFF_SCREEN_THRESHOLD
 })
 
+// Drive on-screen growth by how close the target is to the frame edge, so
+// chevrons visibly lengthen as the target drifts outward. Fall back to the
+// linear distance-based signal when FOV is unknown (no plate solve yet).
+const edgeProximity = computed(() => {
+  if (screenSizes.value === null) return normalizedDistance.value
+  const raw = Math.min(screenSizes.value / OFF_SCREEN_THRESHOLD, 1.0)
+  return Math.pow(raw, EDGE_PROXIMITY_CURVE)
+})
+
 const arrowScale = computed(() => {
-  const base = MIN_SCALE + (MAX_SCALE - MIN_SCALE) * normalizedDistance.value
-  if (isOffScreen.value) {
-    return Math.min(base * 1.3, MAX_SCALE)
-  }
-  return base
+  return MIN_SCALE + (MAX_SCALE - MIN_SCALE) * edgeProximity.value
 })
 
 const responsiveBaseSize = computed(() => {

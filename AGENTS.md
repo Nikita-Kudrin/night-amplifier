@@ -78,12 +78,15 @@ cargo run --release --features telemetry -- --telemetry
 # Frontend (from web/)
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm install && npm run dev      # dev server on :5173, proxies to :8080
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run build                    # production build to web/dist/
-cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run lint:fix && npm run format
+cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run lint:fix
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run test:run
 ```
 
 Load nvm in subshells when needed: `. "$HOME/.nvm/nvm.sh" 2>/dev/null || true`.
 **Note:** All `npm` commands must be run from the `web/` directory.
+
+**Do not run `npm run format`.** Prettier rewrites every file in the tree, which pollutes the diff with
+unrelated changes. The developer runs formatting on their own schedule — agents must leave it alone.
 
 **Important:** Always run `cargo test` after making any code changes to ensure nothing is broken. For frontend changes,
 also run `cd web && npm run test:run` to verify frontend tests pass.
