@@ -29,6 +29,14 @@ BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
 EXTRA_FEATURES="bundled-cfitsio"
 
+# Auto-detect if we are on Windows (even before parsing args for default feature selection)
+HOST_OS=$(rustc -vV | grep '^host:' | awk '{print $2}')
+if [[ "${HOST_OS}" == *"-windows"* ]]; then
+    # On Windows, bundled-cfitsio uses autotools which fails with MSVC.
+    # We default to system/vcpkg cfitsio instead.
+    EXTRA_FEATURES=""
+fi
+
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
