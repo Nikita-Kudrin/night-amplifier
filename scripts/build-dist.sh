@@ -27,7 +27,8 @@ TARGET_CPU="native"
 USE_CROSS="${CROSS:-0}"
 BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
-EXTRA_FEATURES=""
+# Default features for distribution: include camera support
+EXTRA_FEATURES="playerone,zwo"
 
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -60,11 +61,11 @@ fi
 # ── Select default features ──────────────────────────────────────────
 # On Windows, bundled-cfitsio uses autotools which fails with MSVC.
 # We default to system/vcpkg cfitsio instead.
-if [[ -z "${EXTRA_FEATURES}" ]]; then
-    if [[ "${TARGET}" == *"-windows"* ]]; then
-        EXTRA_FEATURES=""
-    else
+if [[ "${TARGET}" != *"-windows"* ]]; then
+    if [[ -z "${EXTRA_FEATURES}" ]]; then
         EXTRA_FEATURES="bundled-cfitsio"
+    else
+        EXTRA_FEATURES="${EXTRA_FEATURES},bundled-cfitsio"
     fi
 fi
 
@@ -73,7 +74,7 @@ VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.
 PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 DISPLAY_NAME="Night Amplifier"
-if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+if [[ "${PACKAGE_NAME}" == *"_pro"* ]] || [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
     DISPLAY_NAME="Night Amplifier Pro"
 fi
 
@@ -105,12 +106,22 @@ fi
 # For Pro version, we want the suffix at the end of the artifact name
 BASE_NAME=$(echo "${OUT_BINARY_NAME}" | sed 's/\.exe$//')
 PRO_SUFFIX=""
-if [[ "${BASE_NAME}" == *"-pro" ]]; then
-    BASE_NAME=$(echo "${BASE_NAME}" | sed 's/-pro$//')
-    PRO_SUFFIX="-pro"
+if [[ "${BASE_NAME}" == *"-pro" ]] || [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+    if [[ "${BASE_NAME}" != *"-pro" ]]; then
+        BASE_NAME="${BASE_NAME}-pro"
+    fi
+    # If the base name already has -pro, we don't add another one later
+    # but the ARTIFACT_NAME logic below expects PRO_SUFFIX
 fi
 
-ARTIFACT_NAME="${BASE_NAME}-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}${PRO_SUFFIX}"
+# Clean up BASE_NAME if it already has -pro for the artifact name construction
+ARTIFACT_BASE=$(echo "${BASE_NAME}" | sed 's/-pro$//')
+PRO_FLAG=""
+if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+    PRO_FLAG="-pro"
+fi
+
+ARTIFACT_NAME="${ARTIFACT_BASE}-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}${PRO_FLAG}"
 DIST_DIR="${PROJECT_ROOT}/dist/${ARTIFACT_NAME}"
 
 echo "CPU optimization: ${TARGET_CPU}"
