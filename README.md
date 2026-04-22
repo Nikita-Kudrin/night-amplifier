@@ -8,22 +8,23 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Supported Platforms
 
-| OS            | Architecture | Supported                                                 |
-|---------------|--------------|-----------------------------------------------------------|
-| Linux         | x86_64       | ✅                                                         |
-| Linux         | ARM64        | ✅                                                         |
-| Raspberry Pi5 | ARM64        | ✅ (optimized build)                                       |
-| Orange Pi5    | ARM64        | ✅ (optimized build)                                       |
-| Windows       | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| Windows       | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| macOS         | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| macOS         | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| OS                        | Architecture | Supported                                                 |
+|---------------------------|--------------|-----------------------------------------------------------|
+| Linux                     | x86_64       | ✅                                                         |
+| Linux                     | ARM64        | ✅                                                         |
+| Raspberry Pi5, Orange Pi5 | ARM64        | ✅                                                         |
+| Windows                   | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| Windows                   | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| macOS                     | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| macOS                     | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 
 [![CI](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml)
 
 ## Camera SDK Support
 
-The camera module uses a dynamic runtime loading system. Camera SDKs are **optional runtime dependencies**. If an SDK is not installed on your system, the binary will still run perfectly, but that specific camera brand will simply be disabled.
+The camera module uses a dynamic runtime loading system. Camera SDKs are **optional runtime dependencies**. If an SDK is
+not installed on your system, the binary will still run perfectly, but that specific camera brand will simply be
+disabled.
 
 Enable features for specific manufacturers when compiling:
 
@@ -42,16 +43,16 @@ Enable features for specific manufacturers when compiling:
 
 ## Features
 
-- **Stacking modes** - Deep Sky and Planetary stacking.
+- **Stacking modes** - Deep Sky, Planetary (![Testing](https://img.shields.io/badge/🚀_Testing-green)) .
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power, monitoring,
-  pre-cooling, warming-up
+  rate-limited pre-cooling and warming-up (5 °C/min) to reduce mechanical stress and condensation risk
 
 > [!NOTE]
-> Pro features are available in the 'Night Amplifier Pro' version:  
-> - **Push-To Navigation System** (via ASTAP)
-> - **Comet Stacking**
+> Pro features are available in the 'Night Amplifier Pro' version:
+> - **Push-To Navigation System** (via ASTAP) - ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Comet Stacking** - ![Testing](https://img.shields.io/badge/🚀_Testing-green)
 > - **Advanced Outlier Rejection** (Sigma Clipping)
 > - **RBF Background Extraction**
 
@@ -108,7 +109,8 @@ No external files are needed to run the distribution binary.
 Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page
 for Linux x86_64 and ARM64 (including optimized builds for Raspberry Pi 5 / Orange Pi 5).
 
-For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to run.
+For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to
+run.
 
 Alternatively, download the `.tar.gz` archive for your platform, extract, and run:
 
@@ -139,13 +141,13 @@ The archive is created in `dist/`. Extract and run `./night-amplifier`.
 
 ### Build Options
 
-| Flag | Description |
-|------|-------------|
-| `--target <triple>` | Rust target triple (default: host) |
+| Flag                 | Description                          |
+|----------------------|--------------------------------------|
+| `--target <triple>`  | Rust target triple (default: host)   |
 | `--target-cpu <cpu>` | CPU optimization (default: `native`) |
-| `--cross` | Use `cross` for cross-compilation |
-| `--no-frontend` | Skip web frontend build |
-| `--appimage` | Also create an AppImage |
+| `--cross`            | Use `cross` for cross-compilation    |
+| `--no-frontend`      | Skip web frontend build              |
+| `--appimage`         | Also create an AppImage              |
 
 ## Building from Source
 
