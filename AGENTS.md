@@ -71,6 +71,7 @@ cargo build --release
 cargo test                                                          # fast unit tests
 # These are ignored by default and must be run explicitly:
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
+cargo bench --bench <name>                                          # benchmarks — keep each bench binary ≤ ~30 s on CI; use `sample_size(10)`, short warm-up (~500 ms), and 1–2 s `measurement_time` (see `benches/background_benchmark.rs`).
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 
