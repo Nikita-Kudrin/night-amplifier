@@ -49,9 +49,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ── Resolve version from Cargo.toml ─────────────────────────────────
+# ── Resolve version and package from Cargo.toml ──────────────────────
 VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
-echo "=== Night Amplifier v${VERSION} distribution build ==="
+PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+
+DISPLAY_NAME="Night Amplifier"
+if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+    DISPLAY_NAME="Night Amplifier Pro"
+fi
+
+echo "=== ${DISPLAY_NAME} v${VERSION} distribution build ==="
 
 # ── Resolve target triple ────────────────────────────────────────────
 if [[ -z "${TARGET}" ]]; then
@@ -66,6 +73,8 @@ ARCH=$(echo "${TARGET}" | cut -d'-' -f1)
 OS_SUFFIX=""
 if [[ "${TARGET}" == *"-linux"* ]]; then
     OS_SUFFIX="-linux"
+elif [[ "${TARGET}" == *"-windows"* ]]; then
+    OS_SUFFIX="-windows"
 fi
 
 CPU_SUFFIX=""
@@ -73,18 +82,34 @@ if [[ "${TARGET_CPU}" == "cortex-a76" ]]; then
     CPU_SUFFIX="-pi5"
 fi
 
-ARTIFACT_NAME="night-amplifier-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}"
+BINARY_NAME="${PACKAGE_NAME}"
+OUT_BINARY_NAME=$(echo "${PACKAGE_NAME}" | tr '_' '-')
+if [[ "${TARGET}" == *"-windows"* ]]; then
+    BINARY_NAME="${BINARY_NAME}.exe"
+    OUT_BINARY_NAME="${OUT_BINARY_NAME}.exe"
+fi
+
+ARTIFACT_NAME="$(echo "${OUT_BINARY_NAME}" | sed 's/\.exe$//')-${VERSION}-${ARCH}${CPU_SUFFIX}${OS_SUFFIX}"
 DIST_DIR="${PROJECT_ROOT}/dist/${ARTIFACT_NAME}"
-BINARY_NAME="night_amplifier"
 
 echo "CPU optimization: ${TARGET_CPU}"
 echo "Use cross: ${USE_CROSS}"
 
 # ── Step 1: Build web frontend ───────────────────────────────────────
+FRONTEND_DIR="${PROJECT_ROOT}/web"
+if [[ ! -d "${FRONTEND_DIR}" ]]; then
+    # Fallback to sibling night-amplifier/web (useful for Pro build)
+    FRONTEND_DIR="${PROJECT_ROOT}/../night-amplifier/web"
+fi
+
 if [[ "${BUILD_FRONTEND}" == "true" ]]; then
     echo ""
     echo "── Building web frontend ──"
-    cd "${PROJECT_ROOT}/web"
+    if [[ ! -d "${FRONTEND_DIR}" ]]; then
+        echo "Error: Frontend directory not found at ${FRONTEND_DIR}" >&2
+        exit 1
+    fi
+    cd "${FRONTEND_DIR}"
 
     # Source nvm if available (CI and some dev environments)
     if [[ -f "$HOME/.nvm/nvm.sh" ]]; then
@@ -94,12 +119,12 @@ if [[ "${BUILD_FRONTEND}" == "true" ]]; then
 
     npm ci --prefer-offline 2>/dev/null || npm install
     npm run build
-    echo "Frontend built: web/dist/"
+    echo "Frontend built: ${FRONTEND_DIR}/dist/"
 else
     echo ""
     echo "── Skipping frontend build (--no-frontend) ──"
-    if [[ ! -f "${PROJECT_ROOT}/web/dist/index.html" ]]; then
-        echo "WARNING: web/dist/ does not exist. Embedded assets will be empty." >&2
+    if [[ ! -f "${FRONTEND_DIR}/dist/index.html" ]]; then
+        echo "WARNING: ${FRONTEND_DIR}/dist/ does not exist. Embedded assets will be empty." >&2
     fi
 fi
 
@@ -158,14 +183,19 @@ fi
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 
-cp "${BINARY_PATH}" "${DIST_DIR}/night-amplifier"
+cp "${BINARY_PATH}" "${DIST_DIR}/${OUT_BINARY_NAME}"
 cp "${PROJECT_ROOT}/LICENSE" "${DIST_DIR}/"
 cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
 
-# Create tarball
+# Create archive
 cd "${PROJECT_ROOT}/dist"
-ARCHIVE="${ARTIFACT_NAME}.tar.gz"
-tar czf "${ARCHIVE}" "${ARTIFACT_NAME}/"
+if [[ "${TARGET}" == *"-windows"* ]]; then
+    ARCHIVE="${ARTIFACT_NAME}.zip"
+    zip -r "${ARCHIVE}" "${ARTIFACT_NAME}/"
+else
+    ARCHIVE="${ARTIFACT_NAME}.tar.gz"
+    tar czf "${ARCHIVE}" "${ARTIFACT_NAME}/"
+fi
 
 ARCHIVE_PATH="${PROJECT_ROOT}/dist/${ARCHIVE}"
 SIZE=$(du -h "${ARCHIVE_PATH}" | awk '{print $1}')
@@ -182,10 +212,13 @@ if [[ "${BUILD_APPIMAGE}" == "true" ]]; then
     echo ""
     echo "── Building AppImage ──"
     "${SCRIPT_DIR}/build-appimage.sh" \
-        --binary "${DIST_DIR}/night-amplifier" \
+        --binary "${DIST_DIR}/${OUT_BINARY_NAME}" \
         --version "${VERSION}" \
         --arch "${TARGET}" \
-        --cpu-suffix "${CPU_SUFFIX}"
+        --cpu-suffix "${CPU_SUFFIX}" \
+        --app-name "${DISPLAY_NAME}" \
+        --app-id "$(echo "${OUT_BINARY_NAME}" | sed 's/\.exe$//')" \
+        --icon "${FRONTEND_DIR}/src/assets/night_amplifier_logo_256.png"
 fi
 
 echo ""

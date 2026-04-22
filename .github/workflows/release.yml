@@ -30,17 +30,31 @@ jobs:
 
           # ── Linux ARM64 (generic — all aarch64 devices) ────────────
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-24.04-arm
             target_cpu: generic
             artifact_name: linux-arm64-generic
-            use_cross: true
+            use_cross: false
 
           # ── Linux ARM64 (Pi5 / Orange Pi5 — Cortex-A76 optimized) ─
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-24.04-arm
             target_cpu: cortex-a76
             artifact_name: linux-arm64-pi5
-            use_cross: true
+            use_cross: false
+
+          # ── Windows x86_64 ──────────────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+            target_cpu: x86-64-v3
+            artifact_name: windows-x64
+            use_cross: false
+
+          # ── Windows ARM64 ───────────────────────────────────────────
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            target_cpu: generic
+            artifact_name: windows-arm64
+            use_cross: false
 
     runs-on: ${{ matrix.runner }}
 
@@ -82,7 +96,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install system deps (native builds)
-        if: "!matrix.use_cross"
+        if: "!matrix.use_cross && runner.os == 'Linux'"
         run: sudo apt-get update && sudo apt-get install -y libcfitsio-dev
 
       - name: Cache cargo
@@ -92,22 +106,24 @@ jobs:
 
       # ── Build distribution ───────────────────────────────────────
       - name: Build distribution archive
+        shell: bash
         run: |
           ./scripts/build-dist.sh \
             --target ${{ matrix.target }} \
             --target-cpu ${{ matrix.target_cpu }} \
             --no-frontend \
-            --appimage \
+            ${{ runner.os == 'Linux' && '--appimage' || '' }} \
             ${{ matrix.use_cross && '--cross' || '' }}
 
       # ── Upload artifacts ─────────────────────────────────────────
-      - name: Upload tar.gz
+      - name: Upload distribution archives
         uses: actions/upload-artifact@v4
         with:
           name: night-amplifier-${{ matrix.artifact_name }}
           path: |
             dist/*.tar.gz
             dist/*.AppImage
+            dist/*.zip
           retention-days: 7
 
   # ── GitHub Release ───────────────────────────────────────────────
@@ -131,5 +147,6 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.AppImage
+            artifacts/**/*.zip
           generate_release_notes: true
           draft: true
