@@ -19,7 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 # ── Defaults ─────────────────────────────────────────────────────────
 TARGET=""
@@ -27,15 +27,7 @@ TARGET_CPU="native"
 USE_CROSS="${CROSS:-0}"
 BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
-EXTRA_FEATURES="bundled-cfitsio"
-
-# Auto-detect if we are on Windows (even before parsing args for default feature selection)
-HOST_OS=$(rustc -vV | grep '^host:' | awk '{print $2}')
-if [[ "${HOST_OS}" == *"-windows"* ]]; then
-    # On Windows, bundled-cfitsio uses autotools which fails with MSVC.
-    # We default to system/vcpkg cfitsio instead.
-    EXTRA_FEATURES=""
-fi
+EXTRA_FEATURES=""
 
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -57,6 +49,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ── Resolve target triple ────────────────────────────────────────────
+if [[ -z "${TARGET}" ]]; then
+    TARGET=$(rustc -vV | grep '^host:' | awk '{print $2}')
+    echo "Target (auto-detected): ${TARGET}"
+else
+    echo "Target: ${TARGET}"
+fi
+
+# ── Select default features ──────────────────────────────────────────
+# On Windows, bundled-cfitsio uses autotools which fails with MSVC.
+# We default to system/vcpkg cfitsio instead.
+if [[ -z "${EXTRA_FEATURES}" ]]; then
+    if [[ "${TARGET}" == *"-windows"* ]]; then
+        EXTRA_FEATURES=""
+    else
+        EXTRA_FEATURES="bundled-cfitsio"
+    fi
+fi
+
 # ── Resolve version and package from Cargo.toml ──────────────────────
 VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
@@ -67,14 +78,6 @@ if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
 fi
 
 echo "=== ${DISPLAY_NAME} v${VERSION} distribution build ==="
-
-# ── Resolve target triple ────────────────────────────────────────────
-if [[ -z "${TARGET}" ]]; then
-    TARGET=$(rustc -vV | grep '^host:' | awk '{print $2}')
-    echo "Target (auto-detected): ${TARGET}"
-else
-    echo "Target: ${TARGET}"
-fi
 
 ARCH=$(echo "${TARGET}" | cut -d'-' -f1)
 
