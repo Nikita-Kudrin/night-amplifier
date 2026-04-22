@@ -36,6 +36,30 @@ function getSvgWidth(wrapper) {
     return parseFloat(svg.attributes('width'))
 }
 
+function getSvgRotatedBbox(wrapper, angleDeg) {
+    const svg = wrapper.find('.arrow-wrapper svg')
+    const svgW = parseFloat(svg.attributes('width'))
+    const svgH = parseFloat(svg.attributes('height'))
+    const rad = (angleDeg * Math.PI) / 180
+    const cosA = Math.abs(Math.cos(rad))
+    const sinA = Math.abs(Math.sin(rad))
+    return {
+        halfW: (svgW / 2) * cosA + (svgH / 2) * sinA,
+        halfH: (svgW / 2) * sinA + (svgH / 2) * cosA,
+    }
+}
+
+function expectSvgWithinImage(wrapper, {imageLeft = 0, imageTop = 0, imageWidth, imageHeight, angleDeg}) {
+    const pos = getPosition(wrapper)
+    const {halfW, halfH} = getSvgRotatedBbox(wrapper, angleDeg)
+    // After the restructure, the guide-arrow-container is sized to the SVG (distance-info is
+    // absolute-positioned and out of flow), so `pos` is the SVG's rotation centre.
+    expect(pos.left - halfW).toBeGreaterThanOrEqual(imageLeft)
+    expect(pos.left + halfW).toBeLessThanOrEqual(imageLeft + imageWidth)
+    expect(pos.top - halfH).toBeGreaterThanOrEqual(imageTop)
+    expect(pos.top + halfH).toBeLessThanOrEqual(imageTop + imageHeight)
+}
+
 describe('GuideArrow', () => {
     describe('rendering', () => {
         it('renders arrow wrapper when not on target', () => {
@@ -558,6 +582,77 @@ describe('GuideArrow', () => {
                 const pos = getPosition(wrapper)
                 expect(pos.top).toBeLessThanOrEqual(400) // 100 + 300
                 expect(pos.top).toBeGreaterThanOrEqual(100)
+            })
+
+            // Rotated SVG bounds: axis-aligned bounds on `pos` alone are insufficient because
+            // for diagonal angles (e.g. 135°) the rotated SVG extends further along both axes
+            // than its unrotated half-dimensions. These checks caught the mobile overflow bug.
+            const rotatedBoundsCases = [
+                {angleDeg: 0, description: 'cardinal north'},
+                {angleDeg: 45, description: 'diagonal NE'},
+                {angleDeg: 90, description: 'cardinal east'},
+                {angleDeg: 135, description: 'diagonal SE'},
+                {angleDeg: 180, description: 'cardinal south'},
+                {angleDeg: 225, description: 'diagonal SW'},
+                {angleDeg: 270, description: 'cardinal west'},
+                {angleDeg: 315, description: 'diagonal NW'},
+                {angleDeg: 60, description: 'non-orthogonal 60°'},
+                {angleDeg: 200, description: 'non-orthogonal 200°'},
+            ]
+
+            describe('rotated SVG stays within image on desktop-sized viewport', () => {
+                rotatedBoundsCases.forEach(({angleDeg, description}) => {
+                    it(`keeps rotated SVG within image for ${description}`, () => {
+                        const props = {
+                            angleDeg,
+                            distanceDeg: 20,
+                            directionHint: 'Off',
+                            imageLeft: 0,
+                            imageTop: 0,
+                            imageWidth: 800,
+                            imageHeight: 600,
+                            fovDeg: 2,
+                        }
+                        const wrapper = mountArrow(props)
+                        expectSvgWithinImage(wrapper, props)
+                    })
+                })
+            })
+
+            describe('rotated SVG stays within image on mobile-sized viewport', () => {
+                rotatedBoundsCases.forEach(({angleDeg, description}) => {
+                    it(`keeps rotated SVG within image for ${description} at 370×210`, () => {
+                        const props = {
+                            angleDeg,
+                            distanceDeg: 80,
+                            directionHint: 'Off',
+                            imageLeft: 5,
+                            imageTop: 45,
+                            imageWidth: 370,
+                            imageHeight: 210,
+                            fovDeg: 6,
+                        }
+                        const wrapper = mountArrow(props)
+                        expectSvgWithinImage(wrapper, props)
+                    })
+                })
+            })
+
+            it('pins arrow to image centre when rotated SVG cannot fit with margin', () => {
+                const props = {
+                    angleDeg: 135,
+                    distanceDeg: 50,
+                    directionHint: 'Off',
+                    imageLeft: 0,
+                    imageTop: 0,
+                    imageWidth: 200,
+                    imageHeight: 150,
+                    fovDeg: 2,
+                }
+                const wrapper = mountArrow(props)
+                const pos = getPosition(wrapper)
+                expect(pos.left).toBe(100)
+                expect(pos.top).toBe(75)
             })
         })
 
