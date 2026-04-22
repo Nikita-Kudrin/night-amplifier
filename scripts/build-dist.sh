@@ -62,10 +62,15 @@ fi
 # On Windows, bundled-cfitsio uses autotools which fails with MSVC.
 # We default to system/vcpkg cfitsio instead.
 if [[ "${TARGET}" != *"-windows"* ]]; then
+    FITS_FEATURE="bundled-cfitsio"
+    if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+        FITS_FEATURE="night_amplifier/bundled-cfitsio"
+    fi
+
     if [[ -z "${EXTRA_FEATURES}" ]]; then
-        EXTRA_FEATURES="bundled-cfitsio"
+        EXTRA_FEATURES="${FITS_FEATURE}"
     else
-        EXTRA_FEATURES="${EXTRA_FEATURES},bundled-cfitsio"
+        EXTRA_FEATURES="${EXTRA_FEATURES},${FITS_FEATURE}"
     fi
 fi
 
@@ -74,7 +79,7 @@ VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.
 PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 DISPLAY_NAME="Night Amplifier"
-if [[ "${PACKAGE_NAME}" == *"_pro"* ]] || [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
+if [[ "${PACKAGE_NAME}" == *"_pro"* ]]; then
     DISPLAY_NAME="Night Amplifier Pro"
 fi
 
