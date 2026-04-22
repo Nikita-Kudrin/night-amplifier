@@ -14,12 +14,14 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BINARY=""
 VERSION="0.0.0"
 ARCH_TRIPLE=""
+CPU_SUFFIX=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --binary)  BINARY="$2"; shift 2 ;;
-        --version) VERSION="$2"; shift 2 ;;
-        --arch)    ARCH_TRIPLE="$2"; shift 2 ;;
+        --binary)     BINARY="$2"; shift 2 ;;
+        --version)    VERSION="$2"; shift 2 ;;
+        --arch)       ARCH_TRIPLE="$2"; shift 2 ;;
+        --cpu-suffix) CPU_SUFFIX="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -37,7 +39,7 @@ case "${ARCH_TRIPLE}" in
 esac
 
 APPDIR="${PROJECT_ROOT}/dist/NightAmplifier.AppDir"
-APPIMAGE_NAME="Night_Amplifier-${VERSION}-${ARCH}.AppImage"
+APPIMAGE_NAME="Night_Amplifier-${VERSION}-${ARCH}${CPU_SUFFIX}.AppImage"
 
 rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin"
