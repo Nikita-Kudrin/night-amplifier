@@ -20,6 +20,9 @@ pub enum PushToError {
     #[error("Not enough stars for plate solving (found {found}, need {required})")]
     NotEnoughStars { found: usize, required: usize },
 
+    #[error("Frame quality too poor for plate solving: {0}")]
+    PoorFrameQuality(String),
+
     #[error("Target '{0}' not found in catalog")]
     TargetNotFound(String),
 
