@@ -15,6 +15,9 @@ BINARY=""
 VERSION="0.0.0"
 ARCH_TRIPLE=""
 CPU_SUFFIX=""
+APP_NAME="Night Amplifier"
+APP_ID="night-amplifier"
+ICON_SRC=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -22,6 +25,9 @@ while [[ $# -gt 0 ]]; do
         --version)    VERSION="$2"; shift 2 ;;
         --arch)       ARCH_TRIPLE="$2"; shift 2 ;;
         --cpu-suffix) CPU_SUFFIX="$2"; shift 2 ;;
+        --app-name)   APP_NAME="$2"; shift 2 ;;
+        --app-id)     APP_ID="$2"; shift 2 ;;
+        --icon)       ICON_SRC="$2"; shift 2 ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
@@ -38,42 +44,46 @@ case "${ARCH_TRIPLE}" in
     *)        ARCH="$(uname -m)" ;;
 esac
 
-APPDIR="${PROJECT_ROOT}/dist/NightAmplifier.AppDir"
-APPIMAGE_NAME="Night_Amplifier-${VERSION}-${ARCH}${CPU_SUFFIX}.AppImage"
+APPDIR="${PROJECT_ROOT}/dist/${APP_ID}.AppDir"
+SAFE_APP_NAME=$(echo "${APP_NAME}" | tr ' ' '_')
+APPIMAGE_NAME="${SAFE_APP_NAME}-${VERSION}-${ARCH}${CPU_SUFFIX}.AppImage"
 
 rm -rf "${APPDIR}"
 mkdir -p "${APPDIR}/usr/bin"
 
 # ── Binary ───────────────────────────────────────────────────────────
-cp "${BINARY}" "${APPDIR}/usr/bin/night-amplifier"
-chmod +x "${APPDIR}/usr/bin/night-amplifier"
+cp "${BINARY}" "${APPDIR}/usr/bin/${APP_ID}"
+chmod +x "${APPDIR}/usr/bin/${APP_ID}"
 
 # ── Desktop entry ────────────────────────────────────────────────────
-cat > "${APPDIR}/night-amplifier.desktop" <<'EOF'
+cat > "${APPDIR}/${APP_ID}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Night Amplifier
+Name=${APP_NAME}
 Comment=EAA Live Stacking Server for Astronomy
-Exec=night-amplifier
-Icon=night-amplifier
+Exec=${APP_ID}
+Icon=${APP_ID}
 Categories=Science;Astronomy;
 Terminal=true
 EOF
 
 # ── Icon ─────────────────────────────────────────────────────────────
-LOGO_SRC="${PROJECT_ROOT}/web/src/assets/night_amplifier_logo_256.png"
-if [[ -f "${LOGO_SRC}" ]]; then
-    cp "${LOGO_SRC}" "${APPDIR}/night-amplifier.png"
+if [[ -z "${ICON_SRC}" ]]; then
+    ICON_SRC="${PROJECT_ROOT}/web/src/assets/night_amplifier_logo_256.png"
+fi
+
+if [[ -f "${ICON_SRC}" ]]; then
+    cp "${ICON_SRC}" "${APPDIR}/${APP_ID}.png"
 else
-    echo "WARNING: Logo not found at ${LOGO_SRC}. AppImage will have no icon." >&2
+    echo "WARNING: Logo not found at ${ICON_SRC}. AppImage will have no icon." >&2
 fi
 
 # ── AppRun launcher ─────────────────────────────────────────────────
-cat > "${APPDIR}/AppRun" <<'RUNEOF'
+cat > "${APPDIR}/AppRun" <<RUNEOF
 #!/bin/bash
-SELF="$(readlink -f "$0")"
-APPDIR="$(dirname "${SELF}")"
-exec "${APPDIR}/usr/bin/night-amplifier" "$@"
+SELF="\$(readlink -f "\$0")"
+APPDIR="\$(dirname "\${SELF}")"
+exec "\${APPDIR}/usr/bin/${APP_ID}" "\$@"
 RUNEOF
 chmod +x "${APPDIR}/AppRun"
 
