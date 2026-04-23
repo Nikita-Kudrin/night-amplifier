@@ -8,15 +8,15 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Supported Platforms
 
-| OS                        | Architecture | Supported                                                 |
-|---------------------------|--------------|-----------------------------------------------------------|
-| Linux                     | x86_64       | ✅                                                         |
-| Linux                     | ARM64        | ✅                                                         |
-| Raspberry Pi5, Orange Pi5 | ARM64        | ✅                                                         |
-| Windows                   | x86_64       | ✅                                                         |
-| Windows                   | ARM64        | ✅                                                         |
-| macOS                     | x86_64       | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| macOS                     | ARM64        | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| OS                        | Architecture | Supported |
+|---------------------------|--------------|-----------|
+| Linux                     | x86_64       | ✅         |
+| Linux                     | ARM64        | ✅         |
+| Raspberry Pi5, Orange Pi5 | ARM64        | ✅         |
+| Windows                   | x86_64       | ✅         |
+| Windows                   | ARM64        | ✅         |
+| macOS                     | x86_64       | ✅         |
+| macOS                     | ARM64        | ✅         |
 
 [![CI](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml)
 
