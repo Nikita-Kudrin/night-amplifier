@@ -5,6 +5,11 @@ defineProps({
   message: {
     type: String,
     required: true
+  },
+  type: {
+    type: String,
+    default: 'info',
+    validator: (v) => ['info', 'warning'].includes(v)
   }
 })
 
@@ -97,16 +102,26 @@ onUnmounted(() => {
   <div ref="iconRef" class="info-icon-container">
     <button
         class="info-icon"
+        :class="type"
         type="button"
         title="Click for help"
         @click="toggleTooltip"
     >
       <svg
+          v-if="type === 'info'"
           viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
           stroke-linejoin="round">
         <circle cx="12" cy="12" r="10"></circle>
         <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
         <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+      <svg
+          v-else-if="type === 'warning'"
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+          stroke-linejoin="round">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
       </svg>
     </button>
 
@@ -148,8 +163,18 @@ onUnmounted(() => {
   margin-left: 4px;
 }
 
-.info-icon:hover {
+.info-icon:hover,
+.info-icon.info:hover {
   color: var(--primary);
+  transform: scale(1.1);
+}
+
+.info-icon.warning {
+  color: #f59e0b;
+}
+
+.info-icon.warning:hover {
+  color: #d97706;
   transform: scale(1.1);
 }
 
