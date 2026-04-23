@@ -40,6 +40,7 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             const result = await setTargetByName(designation)
             // api.setTargetByName returns the target object directly
             currentTarget.value = result
+            pushDirection.value = null
             return result
         }
 
@@ -54,6 +55,7 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             const result = await setTargetByCoordinates(ra, dec)
             // api.setTargetByCoordinates returns the target object directly
             currentTarget.value = result
+            pushDirection.value = null
             return result
         }
 

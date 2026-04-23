@@ -73,6 +73,9 @@ impl CaptureService {
         state.request_cancel();
         state.set_capture_state(CaptureState::Stopping).await;
 
+        // Clear Push-To target when capture is stopped
+        let _ = super::PushToService::clear_target(state).await;
+
         info!("Capture session stopping");
         true
     }
