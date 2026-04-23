@@ -56,15 +56,9 @@ provide('cameraPhase', _cameraPhaseRef)
 
 // Handle Push-To button click - check ASTAP and catalog status first
 async function handlePushToClick() {
-  // If already showing Push-To panel, clear target and toggle off
+  // If already showing Push-To panel, toggle off
   if (showPushTo.value) {
     showPushTo.value = false
-    // Clear target to stop plate solving
-    try {
-      await clearTarget()
-    } catch {
-      // Ignore errors - target may not be set
-    }
     return
   }
 
