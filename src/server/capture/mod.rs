@@ -178,9 +178,7 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     };
 
     // Register active camera cancel token in state
-    state
-        .set_active_camera_token(camera.cancel_token())
-        .await;
+    state.set_active_camera_token(camera.cancel_token()).await;
 
     // Capture a probe frame to determine dimensions and channel capacities
     let settings = state.settings.read().await.clone();
@@ -246,9 +244,7 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
 
     let capture_handle = std::thread::Builder::new()
         .name("capture-task".into())
-        .spawn(move || {
-            run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture)
-        })
+        .spawn(move || run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture))
         .expect("Failed to spawn capture thread");
 
     let stacking_handle = std::thread::Builder::new()
@@ -447,10 +443,7 @@ fn run_capture_task(
                 camera_info,
             };
             if storage_tx.try_send(storage_msg).is_err() {
-                warn!(
-                    frame_number,
-                    "Raw frame dropped: storage pipeline busy"
-                );
+                warn!(frame_number, "Raw frame dropped: storage pipeline busy");
             }
         }
     }
@@ -489,4 +482,3 @@ fn poll_camera_status(
         }
     }
 }
-

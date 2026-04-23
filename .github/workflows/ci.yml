@@ -1,12 +1,12 @@
 name: CI
- 
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
- 
+
 on:
   pull_request:
     branches: [ "main" ]
- 
+
 jobs:
   rust-build-all:
     runs-on: ubuntu-24.04
@@ -44,7 +44,7 @@ jobs:
           name: bench-binaries-archive
           path: bench-binaries.tar.gz
           retention-days: 1
- 
+  
   rust-unit-tests:
     needs: rust-build-all
     runs-on: ubuntu-24.04
@@ -60,7 +60,7 @@ jobs:
           name: tests-archive
       - name: Run unit tests
         run: cargo nextest run --archive-file tests.tar.zst -E 'not (binary(integration_pipeline) or binary(pro_gating_test))'
- 
+  
   rust-integration-tests:
     needs: rust-build-all
     runs-on: ubuntu-24.04
@@ -76,7 +76,7 @@ jobs:
           name: tests-archive
       - name: Run integration tests
         run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1
- 
+  
   rust-benchmarks:
     needs: rust-build-all
     runs-on: ubuntu-24.04
@@ -97,7 +97,7 @@ jobs:
               "$bin" --bench
             fi
           done
- 
+  
   web-tests-and-lint:
     runs-on: ubuntu-24.04
     steps:

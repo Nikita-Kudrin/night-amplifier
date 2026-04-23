@@ -10,9 +10,9 @@ pub mod ffi_types;
 pub mod sdk;
 pub mod shim;
 
-use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
+use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
@@ -211,12 +211,14 @@ impl ZwoCamera {
             (0, 0, width, height)
         };
 
-        catch_ffi_panic("ZWO::set_roi", || self.camera.set_roi(x, y, w, h, config.bin as i32))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set ROI: {}", e),
-            })?;
+        catch_ffi_panic("ZWO::set_roi", || {
+            self.camera.set_roi(x, y, w, h, config.bin as i32)
+        })
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::SdkError {
+            code: -1,
+            message: format!("Failed to set ROI: {}", e),
+        })?;
 
         if self.info.has_cooler {
             if config.cooler_enabled {
@@ -226,7 +228,9 @@ impl ZwoCamera {
                     });
                     match result {
                         Ok(Ok(_)) => {}
-                        Ok(Err(e)) => tracing::warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature"),
+                        Ok(Err(e)) => {
+                            tracing::warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature")
+                        }
                         Err(e) => tracing::warn!(error = %e, "Panic setting target temperature"),
                     }
                 }
@@ -236,7 +240,9 @@ impl ZwoCamera {
             });
             match result {
                 Ok(Ok(_)) => {}
-                Ok(Err(e)) => tracing::warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state"),
+                Ok(Err(e)) => {
+                    tracing::warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state")
+                }
                 Err(e) => tracing::warn!(error = %e, "Panic setting cooler state"),
             }
         }
@@ -279,8 +285,6 @@ impl ZwoCamera {
             }
             ImageFormat::Rgb24 => (PixelFormat::Rgb8, 3),
         };
-
-
 
         if self.info.sensor_type == SensorType::Color && channels == 1 {
             let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
@@ -425,7 +429,7 @@ impl Camera for ZwoCamera {
         }
 
         let (width, height) = self.get_capture_dimensions(config);
-        
+
         let channels = match config.format {
             ImageFormat::Raw8 | ImageFormat::Raw16 => 1,
             ImageFormat::Rgb24 => 3,
@@ -434,12 +438,14 @@ impl Camera for ZwoCamera {
             ImageFormat::Raw8 | ImageFormat::Rgb24 => 1,
             ImageFormat::Raw16 => 2,
         };
-        
+
         let mut image = vec![0u8; (width * height * channels * bytes_per_channel) as usize];
-        
-        catch_ffi_panic("ZWO::download_image", || self.camera.get_image_data(&mut image))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::ImageReadFailed(e))?;
+
+        catch_ffi_panic("ZWO::download_image", || {
+            self.camera.get_image_data(&mut image)
+        })
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::ImageReadFailed(e))?;
 
         self.buffer_to_frame(&image, width, height, config)
     }

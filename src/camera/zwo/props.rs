@@ -1,14 +1,10 @@
+use super::ffi_types::*;
+use super::shim::{Camera as ZwoShimCamera, CameraInfoASI};
 use crate::camera::types::{CameraInfo, ImageFormat, SensorType};
 use crate::CfaPattern;
-use super::shim::{Camera as ZwoShimCamera, CameraInfoASI};
-use super::ffi_types::*;
 
 /// Build CameraInfo from the available camera data
-pub(crate) fn build_camera_info(
-    cam: &ZwoShimCamera,
-    info: &CameraInfoASI,
-    id: i32,
-) -> CameraInfo {
+pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i32) -> CameraInfo {
     let bayer_pattern = match info.bayer_pattern {
         ASI_BAYER_PATTERN_ASI_BAYER_RG => Some(CfaPattern::Rggb),
         ASI_BAYER_PATTERN_ASI_BAYER_BG => Some(CfaPattern::Bggr),
@@ -20,7 +16,9 @@ pub(crate) fn build_camera_info(
     let mut supported_formats = Vec::new();
     for &fmt in &info.supported_video_format {
         match fmt {
-            ASI_IMG_TYPE_ASI_IMG_RAW8 | ASI_IMG_TYPE_ASI_IMG_Y8 => supported_formats.push(ImageFormat::Raw8),
+            ASI_IMG_TYPE_ASI_IMG_RAW8 | ASI_IMG_TYPE_ASI_IMG_Y8 => {
+                supported_formats.push(ImageFormat::Raw8)
+            }
             ASI_IMG_TYPE_ASI_IMG_RAW16 => supported_formats.push(ImageFormat::Raw16),
             ASI_IMG_TYPE_ASI_IMG_RGB24 => supported_formats.push(ImageFormat::Rgb24),
             _ => {}
@@ -47,7 +45,11 @@ pub(crate) fn build_camera_info(
         },
         bayer_pattern,
         has_cooler: info.is_cooler_cam,
-        min_temp_c: if info.is_cooler_cam { Some(-40.0) } else { None },
+        min_temp_c: if info.is_cooler_cam {
+            Some(-40.0)
+        } else {
+            None
+        },
         max_temp_c: if info.is_cooler_cam { Some(20.0) } else { None },
         has_shutter: info.mechanical_shutter,
         is_usb3: info.is_usb3_camera,

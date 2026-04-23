@@ -49,10 +49,7 @@ pub enum ServerEvent {
     },
 
     /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected)
-    CameraPhaseChanged {
-        name: String,
-        phase: CameraPhaseDto,
-    },
+    CameraPhaseChanged { name: String, phase: CameraPhaseDto },
 
     /// Error occurred
     Error { message: String },
@@ -459,13 +456,8 @@ mod tests {
 
     #[test]
     fn test_camera_status_updated_serialization() {
-        let event = ServerEvent::camera_status_updated(
-            "Test Cam",
-            -8.5,
-            Some(42.0),
-            true,
-            Some(-10.0),
-        );
+        let event =
+            ServerEvent::camera_status_updated("Test Cam", -8.5, Some(42.0), true, Some(-10.0));
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_status_updated");

@@ -9,13 +9,13 @@
 //! - [`PushToCatalogPlugin`] — catalog search, target selection, and database loading
 //! - [`PushToInstallerPlugin`] — ASTAP and catalog installation management
 
+pub mod download;
 pub mod error;
 pub mod progress;
-pub mod download;
 
+pub use download::download_file;
 pub use error::{PushToError, PushToResult};
 pub use progress::InstallProgress;
-pub use download::download_file;
 
 use crate::detection::StarDetector;
 use crate::frame::Frame;

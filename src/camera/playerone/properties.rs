@@ -1,6 +1,6 @@
-use crate::{CameraInfo, CfaPattern, ImageFormat, SensorType};
 use super::ffi_types::{POABayerPattern, POABool, POACameraProperties, POAImgFormat};
 use super::shim::CameraDescription;
+use crate::{CameraInfo, CfaPattern, ImageFormat, SensorType};
 
 pub fn camera_info_from_description(desc: &CameraDescription) -> CameraInfo {
     camera_info_from_properties(desc.properties())
@@ -58,7 +58,12 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
         has_shutter: false,
         is_usb3: props.isUSB3Speed == POABool::POA_TRUE,
         bit_depth: props.bitDepth as u8,
-        supported_bins: props.bins.iter().take_while(|&&b| b != 0).map(|&b| b as u8).collect(),
+        supported_bins: props
+            .bins
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as u8)
+            .collect(),
         supported_formats,
         min_exposure_us: 1,
         max_exposure_us: 3600_000_000,

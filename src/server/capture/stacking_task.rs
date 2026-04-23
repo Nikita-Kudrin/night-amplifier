@@ -67,12 +67,8 @@ pub fn run_stacking_task(
         last_stacking_type = settings.stacking_type;
 
         // Check frame dimension mismatch (e.g. after binning change)
-        let dimension_mismatch = check_dimension_mismatch(
-            &frame,
-            &stacking_ctx,
-            &comet_ctx,
-            &planetary_ctx,
-        );
+        let dimension_mismatch =
+            check_dimension_mismatch(&frame, &stacking_ctx, &comet_ctx, &planetary_ctx);
         if dimension_mismatch {
             info!("Frame dimensions changed (likely due to binning change), resetting stack");
             stacking_ctx = None;
@@ -92,14 +88,12 @@ pub fn run_stacking_task(
 
             // The pipeline functions expect &Frame — Arc<Frame> derefs transparently
             let (res_frame, matched) = match settings.stacking_type {
-                StackingType::Comet => {
-                    rt.block_on(pipeline::process_frame_with_comet_stacking(
-                        &frame,
-                        &settings,
-                        &mut comet_ctx,
-                        &mut stacking_failed,
-                    ))
-                }
+                StackingType::Comet => rt.block_on(pipeline::process_frame_with_comet_stacking(
+                    &frame,
+                    &settings,
+                    &mut comet_ctx,
+                    &mut stacking_failed,
+                )),
                 StackingType::Planetary => {
                     rt.block_on(pipeline::process_frame_with_planetary_stacking(
                         &frame,

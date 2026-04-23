@@ -1,20 +1,21 @@
 <script setup>
-import { computed, inject, ref, watch } from 'vue'
-import { updateSettings } from '../composables/api.js'
-import { useError } from '../composables/useError.js'
-import { BaseSlider, BaseToggle } from './ui'
-import { COOLER_TEMP_LIMITS, HELP_TEXTS } from '../constants'
+import {computed, inject, ref, watch} from 'vue'
+import {updateSettings} from '../composables/api.js'
+import {useError} from '../composables/useError.js'
+import {BaseSlider, BaseToggle} from './ui'
+import {COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants'
 
 const settings = inject('settings', ref(null))
-const refreshSettings = inject('refreshSettings', async () => {})
+const refreshSettings = inject('refreshSettings', async () => {
+})
 const cameras = inject('cameras', ref([]))
 const selectedCameraId = inject('selectedCamera', ref(null))
 const cameraStatus = inject('cameraStatus', ref({}))
 
-const { error, withErrorHandling } = useError()
+const {error, withErrorHandling} = useError()
 
 const currentCamera = computed(() =>
-  (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
+    (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
 )
 
 const hasCooler = computed(() => Boolean(currentCamera.value?.info?.has_cooler))
@@ -27,16 +28,16 @@ const localTargetTemp = ref(COOLER_TEMP_LIMITS.default)
 const localCoolerFastMode = ref(false)
 
 watch(
-  settings,
-  (newSettings) => {
-    if (!newSettings) return
-    localCoolerEnabled.value = newSettings.cooler_enabled ?? false
-    if (typeof newSettings.target_temp_c === 'number') {
-      localTargetTemp.value = newSettings.target_temp_c
-    }
-    localCoolerFastMode.value = newSettings.cooler_fast_mode ?? false
-  },
-  { immediate: true }
+    settings,
+    (newSettings) => {
+      if (!newSettings) return
+      localCoolerEnabled.value = newSettings.cooler_enabled ?? false
+      if (typeof newSettings.target_temp_c === 'number') {
+        localTargetTemp.value = newSettings.target_temp_c
+      }
+      localCoolerFastMode.value = newSettings.cooler_fast_mode ?? false
+    },
+    {immediate: true}
 )
 
 const liveStatus = computed(() => {
@@ -45,17 +46,17 @@ const liveStatus = computed(() => {
 })
 
 const statusBadge = computed(() => {
-  if (!liveStatus.value) return { label: 'Idle', tone: 'idle' }
-  if (!liveStatus.value.cooler_on) return { label: 'Off', tone: 'idle' }
+  if (!liveStatus.value) return {label: 'Idle', tone: 'idle'}
+  if (!liveStatus.value.cooler_on) return {label: 'Off', tone: 'idle'}
   if (typeof liveStatus.value.target_temp_c !== 'number') {
-    return { label: 'Cooling', tone: 'busy' }
+    return {label: 'Cooling', tone: 'busy'}
   }
   const delta = Math.abs(liveStatus.value.temperature_c - liveStatus.value.target_temp_c)
-  if (delta <= 0.5) return { label: 'Stable', tone: 'good' }
+  if (delta <= 0.5) return {label: 'Stable', tone: 'good'}
   if (liveStatus.value.temperature_c > liveStatus.value.target_temp_c) {
-    return { label: 'Cooling', tone: 'busy' }
+    return {label: 'Cooling', tone: 'busy'}
   }
-  return { label: 'Warming', tone: 'busy' }
+  return {label: 'Warming', tone: 'busy'}
 })
 
 let debounceTimer = null
@@ -74,17 +75,17 @@ function debouncedApply(payload) {
 
 function handleCoolerToggle(enabled) {
   localCoolerEnabled.value = enabled
-  applySetting({ cooler_enabled: enabled })
+  applySetting({cooler_enabled: enabled})
 }
 
 function handleTargetChange(value) {
   localTargetTemp.value = value
-  debouncedApply({ target_temp_c: value })
+  debouncedApply({target_temp_c: value})
 }
 
 function handleFastModeToggle(enabled) {
   localCoolerFastMode.value = enabled
-  applySetting({ cooler_fast_mode: enabled })
+  applySetting({cooler_fast_mode: enabled})
 }
 
 function formatTemp(v) {
@@ -104,48 +105,48 @@ function formatPower(v) {
 
     <div class="control-group">
       <BaseToggle
-        v-model="localCoolerEnabled"
-        label="Cooler Enabled"
-        :help="HELP_TEXTS.cooler_enabled"
-        @update:model-value="handleCoolerToggle"
+          v-model="localCoolerEnabled"
+          label="Cooler Enabled"
+          :help="HELP_TEXTS.cooler_enabled"
+          @update:model-value="handleCoolerToggle"
       />
     </div>
 
     <BaseSlider
-      v-if="localCoolerEnabled"
-      v-model="localTargetTemp"
-      label="Target Temperature"
-      :min="minTemp"
-      :max="maxTemp"
-      :step="1"
-      :format-value="formatTemp"
-      :help="HELP_TEXTS.target_temp_c"
-      @change="handleTargetChange"
+        v-if="localCoolerEnabled"
+        v-model="localTargetTemp"
+        label="Target Temperature"
+        :min="minTemp"
+        :max="maxTemp"
+        :step="1"
+        :format-value="formatTemp"
+        :help="HELP_TEXTS.target_temp_c"
+        @change="handleTargetChange"
     />
 
     <div class="control-group fast-mode-row">
       <BaseToggle
-        v-model="localCoolerFastMode"
-        label="Fast"
-        size="small"
-        :help="HELP_TEXTS.cooler_fast_mode"
-        @update:model-value="handleFastModeToggle"
+          v-model="localCoolerFastMode"
+          label="Fast"
+          size="small"
+          :help="HELP_TEXTS.cooler_fast_mode"
+          @update:model-value="handleFastModeToggle"
       >
         <template #label-extra>
           <svg
-            v-if="localCoolerFastMode"
-            class="fast-warning-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-label="Warning"
+              v-if="localCoolerFastMode"
+              class="fast-warning-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-label="Warning"
           >
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
         </template>
       </BaseToggle>

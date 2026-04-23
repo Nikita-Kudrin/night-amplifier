@@ -16,8 +16,6 @@ use crate::frame::Frame;
 /// Followed by LZ4-compressed RGB8 pixel data (3 bytes per pixel)
 pub const RGB8_MAGIC: u32 = 0x53413038; // "SA08" in little-endian
 
-
-
 /// Encode RGB8 data with LZ4 compression for high-speed streaming
 pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {
     use lz4_flex::block::{compress_into, get_maximum_output_size};

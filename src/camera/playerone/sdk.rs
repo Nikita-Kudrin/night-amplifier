@@ -44,7 +44,7 @@ impl PlayerOneSdk {
             } else {
                 "libPlayerOneCamera.so"
             };
-            
+
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
                     info!("PlayerOne SDK ({}) loaded successfully.", lib_name);

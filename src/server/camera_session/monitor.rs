@@ -77,7 +77,9 @@ impl RampState {
     /// Advance the commanded setpoint by `dt_sec * RAMP_RATE_C_PER_MIN / 60`,
     /// clamped to not overshoot `final_target_c`. Returns the new setpoint.
     fn step(&mut self, now: Instant) -> f64 {
-        let dt_sec = now.saturating_duration_since(self.last_tick_at).as_secs_f64();
+        let dt_sec = now
+            .saturating_duration_since(self.last_tick_at)
+            .as_secs_f64();
         self.last_tick_at = now;
         if dt_sec <= 0.0 {
             return self.current_setpoint_c;
@@ -332,12 +334,11 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
     };
 
     // Broadcast the sample for the UI.
-    let target = ctx
-        .rt
-        .block_on(ctx.state.settings.read())
-        .target_temp_c;
-    ctx.rt
-        .block_on(ctx.state.update_camera_status(&ctx.camera_name, status.clone(), target));
+    let target = ctx.rt.block_on(ctx.state.settings.read()).target_temp_c;
+    ctx.rt.block_on(
+        ctx.state
+            .update_camera_status(&ctx.camera_name, status.clone(), target),
+    );
 
     let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
 

@@ -146,9 +146,7 @@ pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32) -> Result<()>
     } else {
         let row_len = width * 3;
         data.par_chunks_mut(row_len).for_each(|row| {
-            apply_luminance_preserving_simd(row, |l| {
-                asinh(stretch_factor * l) * asinh_norm
-            });
+            apply_luminance_preserving_simd(row, |l| asinh(stretch_factor * l) * asinh_norm);
         });
     }
 
