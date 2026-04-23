@@ -177,10 +177,10 @@ export function useEventStream() {
 
     const solvingMessage = computed(() => {
         const {inProgress, lastResult, targetName} = plateSolving.value
-        const targetSuffix = targetName ? ` for ${targetName}` : ''
+        const targetSuffix = targetName ? ` : ${targetName}` : ''
 
         if (inProgress) {
-            return `Finding${targetSuffix}...`
+            return `Searching${targetSuffix}`
         }
 
         if (lastResult === 'success') {
