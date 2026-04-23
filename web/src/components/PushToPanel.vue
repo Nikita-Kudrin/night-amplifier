@@ -4,7 +4,7 @@ import {useError} from '../composables/useError.js'
 import {useCatalogSearch, getCatalogClass} from '../composables/useCatalogSearch.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
 import {useCoordinateInput, formatRA, formatDec} from '../composables/useCoordinates.js'
-import {BaseAlert, BaseToggle, BaseProLock} from './ui'
+import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 import EquipmentSection from './EquipmentSection.vue'
 import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
@@ -195,6 +195,13 @@ onUnmounted(() => {
           <line x1="12" y1="17" x2="12.01" y2="17"/>
         </svg>
       </button>
+
+      <BaseInfoIcon
+          v-if="!calculatedFov && hasProSolver"
+          type="warning"
+          message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can drastically increase the success rate of Push-To."
+          class="header-warning-icon"
+      />
     </div>
 
     <BaseAlert v-if="showFovWarning && fovWarning" type="warning" @dismiss="showFovWarning = false">
@@ -207,10 +214,6 @@ onUnmounted(() => {
     </BaseAlert>
 
     <div v-show="!collapsed" class="push-to-content">
-      <BaseAlert v-if="!calculatedFov && hasProSolver" type="warning" :dismissible="false"
-                 style="margin-bottom: 0.5rem">
-Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can drastically increase the success rate of Push-To.
-      </BaseAlert>
 
       <!-- Pro Only Overlay -->
       <div v-if="showProOverlay" class="pro-overlay">
@@ -700,5 +703,15 @@ Push-To might not work reliably. By specifying the focal length and sensor pixel
 
 .fov-warning-btn:hover {
   color: #d97706;
+}
+
+.header-warning-icon {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* If both are present, only the first one should have margin-left: auto */
+.fov-warning-btn + .header-warning-icon {
+  margin-left: 0.5rem;
 }
 </style>
