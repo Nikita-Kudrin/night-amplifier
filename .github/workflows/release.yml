@@ -23,21 +23,21 @@ jobs:
         include:
           # ── Linux x86_64 ───────────────────────────────────────────
           - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
             target_cpu: x86-64-v3
             artifact_name: linux-x64
             use_cross: false
 
           # ── Linux ARM64 (generic — all aarch64 devices) ────────────
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             target_cpu: generic
             artifact_name: linux-arm64-generic
             use_cross: false
 
           # ── Linux ARM64 (Pi5 / Orange Pi5 — Cortex-A76 optimized) ─
           - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             target_cpu: cortex-a76
             artifact_name: linux-arm64-pi5
             use_cross: false
@@ -150,7 +150,7 @@ jobs:
   # ── GitHub Release ───────────────────────────────────────────────
   release:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
