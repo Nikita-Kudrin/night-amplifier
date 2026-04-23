@@ -75,7 +75,11 @@ impl Camera for MockCamera {
 
     fn status(&self) -> CameraResult<CameraStatus> {
         let mut c = self.cooler.lock().unwrap();
-        let goal = if c.cooler_on { c.target_temp_c } else { c.ambient_c };
+        let goal = if c.cooler_on {
+            c.target_temp_c
+        } else {
+            c.ambient_c
+        };
         let diff = goal - c.current_temp_c;
         let step = c.step_per_tick.min(diff.abs());
         c.current_temp_c += diff.signum() * step;
@@ -107,8 +111,12 @@ impl Camera for MockCamera {
     }
 
     fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
-        Frame::zeros(self.info.max_width as usize, self.info.max_height as usize, 1)
-            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+        Frame::zeros(
+            self.info.max_width as usize,
+            self.info.max_height as usize,
+            1,
+        )
+        .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
     }
 
     fn cancel(&self) {
@@ -285,7 +293,10 @@ async fn warmup_finishes_and_disconnects() {
     .await
     .unwrap_or(false);
 
-    assert!(saw_disconnect, "Expected CameraDisconnected event after warmup");
+    assert!(
+        saw_disconnect,
+        "Expected CameraDisconnected event after warmup"
+    );
 
     let phase_after = state.camera_phase(&name).await;
     assert_eq!(phase_after, CameraPhase::Disconnected);
@@ -394,7 +405,11 @@ async fn live_target_temp_change_propagates_to_hardware() {
     };
     let _ = cam.set_cooler(true);
     let _ = cam.set_target_temperature(1.0);
-    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    state
+        .cameras
+        .write()
+        .await
+        .insert("mock_0".to_string(), connected_info);
     *state.selected_camera.write().await = Some("mock_0".to_string());
     *state.active_camera.lock().unwrap() = Some(Box::new(cam));
     state.set_camera_phase(&name, CameraPhase::Idle).await;
@@ -462,7 +477,11 @@ async fn live_cooler_disable_propagates_to_hardware() {
     };
     let _ = cam.set_cooler(true);
     let _ = cam.set_target_temperature(-5.0);
-    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    state
+        .cameras
+        .write()
+        .await
+        .insert("mock_0".to_string(), connected_info);
     *state.active_camera.lock().unwrap() = Some(Box::new(cam));
     state.set_camera_phase(&name, CameraPhase::Idle).await;
 
@@ -472,7 +491,10 @@ async fn live_cooler_disable_propagates_to_hardware() {
     }
     lifecycle::apply_cooler_settings(&state).await;
 
-    assert!(!cooler.lock().unwrap().cooler_on, "cooler should be off on hardware");
+    assert!(
+        !cooler.lock().unwrap().cooler_on,
+        "cooler should be off on hardware"
+    );
 
     lifecycle::finalize_disconnect(&state, &name).await;
 }
@@ -503,7 +525,11 @@ async fn live_cooler_apply_is_skipped_during_warmup() {
         index: 0,
         info: cam.info().clone(),
     };
-    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    state
+        .cameras
+        .write()
+        .await
+        .insert("mock_0".to_string(), connected_info);
     *state.active_camera.lock().unwrap() = Some(Box::new(cam));
     state.set_camera_phase(&name, CameraPhase::WarmingUp).await;
 
@@ -706,7 +732,11 @@ async fn cooldown_ramp_drives_setpoint_to_target() {
         index: 0,
         info: cam.info().clone(),
     };
-    state.cameras.write().await.insert("mock_0".to_string(), connected_info);
+    state
+        .cameras
+        .write()
+        .await
+        .insert("mock_0".to_string(), connected_info);
     *state.selected_camera.write().await = Some("mock_0".to_string());
     *state.active_camera.lock().unwrap() = Some(Box::new(cam));
     state.set_camera_phase(&name, CameraPhase::Precooling).await;
@@ -889,7 +919,10 @@ async fn fast_mode_warmup_disables_cooler_immediately() {
     loop {
         let off = {
             let guard = state.active_camera.lock().unwrap();
-            guard.as_ref().and_then(|cam| cam.status().ok()).map(|s| !s.cooler_on)
+            guard
+                .as_ref()
+                .and_then(|cam| cam.status().ok())
+                .map(|s| !s.cooler_on)
         };
         if off == Some(true) {
             break;

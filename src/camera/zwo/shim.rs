@@ -48,9 +48,21 @@ impl Camera {
             return Err(format!("ASIGetCameraProperty failed: {}", err));
         }
 
-        let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }.to_string_lossy().into_owned();
-        let supported_bins = info.SupportedBins.iter().take_while(|&&b| b != 0).map(|&b| b as i32).collect();
-        let supported_video_format = info.SupportedVideoFormat.iter().take_while(|&&f| f != ASI_IMG_TYPE_ASI_IMG_END).map(|&f| f).collect();
+        let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        let supported_bins = info
+            .SupportedBins
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b as i32)
+            .collect();
+        let supported_video_format = info
+            .SupportedVideoFormat
+            .iter()
+            .take_while(|&&f| f != ASI_IMG_TYPE_ASI_IMG_END)
+            .map(|&f| f)
+            .collect();
 
         let info_asi = CameraInfoASI {
             name,
@@ -77,89 +89,182 @@ impl Camera {
     pub fn close(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let err = unsafe { sdk.api.ASICloseCamera(self.camera_id) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASICloseCamera failed: {}", err)) }
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASICloseCamera failed: {}", err))
+        }
     }
 
-    pub fn set_control_value(&self, control_type: ASI_CONTROL_TYPE, value: c_long, auto: ASI_BOOL) -> Result<(), String> {
+    pub fn set_control_value(
+        &self,
+        control_type: ASI_CONTROL_TYPE,
+        value: c_long,
+        auto: ASI_BOOL,
+    ) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
-        let err = unsafe { sdk.api.ASISetControlValue(self.camera_id, control_type as c_int, value, auto) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASISetControlValue failed: {}", err)) }
+        let err = unsafe {
+            sdk.api
+                .ASISetControlValue(self.camera_id, control_type as c_int, value, auto)
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASISetControlValue failed: {}", err))
+        }
     }
 
-    pub fn get_control_value(&self, control_type: ASI_CONTROL_TYPE) -> Result<(c_long, ASI_BOOL), String> {
+    pub fn get_control_value(
+        &self,
+        control_type: ASI_CONTROL_TYPE,
+    ) -> Result<(c_long, ASI_BOOL), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let mut value: c_long = 0;
         let mut auto: ASI_BOOL = ASI_BOOL_ASI_FALSE;
-        let err = unsafe { sdk.api.ASIGetControlValue(self.camera_id, control_type as c_int, &mut value, &mut auto) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok((value, auto)) } else { Err(format!("ASIGetControlValue failed: {}", err)) }
+        let err = unsafe {
+            sdk.api
+                .ASIGetControlValue(self.camera_id, control_type as c_int, &mut value, &mut auto)
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok((value, auto))
+        } else {
+            Err(format!("ASIGetControlValue failed: {}", err))
+        }
     }
 
     pub fn set_exposure(&self, us: i64) -> Result<(), String> {
-        self.set_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE, us as c_long, ASI_BOOL_ASI_FALSE)
+        self.set_control_value(
+            ASI_CONTROL_TYPE_ASI_EXPOSURE,
+            us as c_long,
+            ASI_BOOL_ASI_FALSE,
+        )
     }
 
     pub fn set_gain_raw(&self, gain: i64) -> Result<(), String> {
-        self.set_control_value(ASI_CONTROL_TYPE_ASI_GAIN, gain as c_long, ASI_BOOL_ASI_FALSE)
+        self.set_control_value(
+            ASI_CONTROL_TYPE_ASI_GAIN,
+            gain as c_long,
+            ASI_BOOL_ASI_FALSE,
+        )
     }
 
     pub fn set_temperature(&self, temp_c: f32) -> Result<(), String> {
-        self.set_control_value(ASI_CONTROL_TYPE_ASI_TARGET_TEMP, temp_c as c_long, ASI_BOOL_ASI_FALSE)
+        self.set_control_value(
+            ASI_CONTROL_TYPE_ASI_TARGET_TEMP,
+            temp_c as c_long,
+            ASI_BOOL_ASI_FALSE,
+        )
     }
 
     pub fn set_cooler(&self, enabled: bool) -> Result<(), String> {
-        self.set_control_value(ASI_CONTROL_TYPE_ASI_COOLER_ON, if enabled { 1 } else { 0 }, ASI_BOOL_ASI_FALSE)
+        self.set_control_value(
+            ASI_CONTROL_TYPE_ASI_COOLER_ON,
+            if enabled { 1 } else { 0 },
+            ASI_BOOL_ASI_FALSE,
+        )
     }
 
     pub fn get_temperature(&self) -> Result<f32, String> {
-        self.get_control_value(ASI_CONTROL_TYPE_ASI_TEMPERATURE).map(|(v, _)| v as f32 / 10.0)
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_TEMPERATURE)
+            .map(|(v, _)| v as f32 / 10.0)
     }
 
     pub fn get_gain_raw(&self) -> Result<i64, String> {
-        self.get_control_value(ASI_CONTROL_TYPE_ASI_GAIN).map(|(v, _)| v as i64)
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_GAIN)
+            .map(|(v, _)| v as i64)
     }
 
     pub fn get_offset_raw(&self) -> Result<i64, String> {
-        self.get_control_value(ASI_CONTROL_TYPE_ASI_OFFSET).map(|(v, _)| v as i64)
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_OFFSET)
+            .map(|(v, _)| v as i64)
     }
 
     pub fn get_exposure(&self) -> Result<i64, String> {
-        self.get_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE).map(|(v, _)| v as i64)
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE)
+            .map(|(v, _)| v as i64)
     }
 
     pub fn get_cooler(&self) -> Result<bool, String> {
-        self.get_control_value(ASI_CONTROL_TYPE_ASI_COOLER_ON).map(|(v, _)| v != 0)
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_COOLER_ON)
+            .map(|(v, _)| v != 0)
     }
 
     pub fn set_image_fmt(&self, format: ASI_IMG_TYPE) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
-        let mut width = 0; let mut height = 0; let mut bin = 1; let mut old_format = ASI_IMG_TYPE_ASI_IMG_RAW8;
-        unsafe { sdk.api.ASIGetROIFormat(self.camera_id, &mut width, &mut height, &mut bin, &mut old_format) };
-        let err = unsafe { sdk.api.ASISetROIFormat(self.camera_id, width, height, bin, format) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASISetROIFormat failed: {}", err)) }
+        let mut width = 0;
+        let mut height = 0;
+        let mut bin = 1;
+        let mut old_format = ASI_IMG_TYPE_ASI_IMG_RAW8;
+        unsafe {
+            sdk.api.ASIGetROIFormat(
+                self.camera_id,
+                &mut width,
+                &mut height,
+                &mut bin,
+                &mut old_format,
+            )
+        };
+        let err = unsafe {
+            sdk.api
+                .ASISetROIFormat(self.camera_id, width, height, bin, format)
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASISetROIFormat failed: {}", err))
+        }
     }
 
     pub fn set_roi(&self, x: i32, y: i32, width: i32, height: i32, bin: i32) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
-        let mut old_width = 0; let mut old_height = 0; let mut old_bin = 1; let mut format = ASI_IMG_TYPE_ASI_IMG_RAW8;
-        unsafe { sdk.api.ASIGetROIFormat(self.camera_id, &mut old_width, &mut old_height, &mut old_bin, &mut format) };
-        
+        let mut old_width = 0;
+        let mut old_height = 0;
+        let mut old_bin = 1;
+        let mut format = ASI_IMG_TYPE_ASI_IMG_RAW8;
+        unsafe {
+            sdk.api.ASIGetROIFormat(
+                self.camera_id,
+                &mut old_width,
+                &mut old_height,
+                &mut old_bin,
+                &mut format,
+            )
+        };
+
         let err = unsafe { sdk.api.ASISetStartPos(self.camera_id, x, y) };
-        if err != ASI_ERROR_CODE_ASI_SUCCESS { return Err(format!("ASISetStartPos failed: {}", err)); }
-        
-        let err = unsafe { sdk.api.ASISetROIFormat(self.camera_id, width, height, bin, format) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASISetROIFormat failed: {}", err)) }
+        if err != ASI_ERROR_CODE_ASI_SUCCESS {
+            return Err(format!("ASISetStartPos failed: {}", err));
+        }
+
+        let err = unsafe {
+            sdk.api
+                .ASISetROIFormat(self.camera_id, width, height, bin, format)
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASISetROIFormat failed: {}", err))
+        }
     }
 
     pub fn start_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let err = unsafe { sdk.api.ASIStartExposure(self.camera_id, ASI_BOOL_ASI_FALSE) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASIStartExposure failed: {}", err)) }
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIStartExposure failed: {}", err))
+        }
     }
 
     pub fn stop_capture(&self) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let err = unsafe { sdk.api.ASIStopExposure(self.camera_id) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASIStopExposure failed: {}", err)) }
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIStopExposure failed: {}", err))
+        }
     }
 
     pub fn is_image_ready(&self) -> Result<bool, String> {
@@ -180,8 +285,18 @@ impl Camera {
 
     pub fn get_image_data(&self, buffer: &mut [u8]) -> Result<(), String> {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
-        let err = unsafe { sdk.api.ASIGetDataAfterExp(self.camera_id, buffer.as_mut_ptr() as *mut _, buffer.len() as c_long) };
-        if err == ASI_ERROR_CODE_ASI_SUCCESS { Ok(()) } else { Err(format!("ASIGetDataAfterExp failed: {}", err)) }
+        let err = unsafe {
+            sdk.api.ASIGetDataAfterExp(
+                self.camera_id,
+                buffer.as_mut_ptr() as *mut _,
+                buffer.len() as c_long,
+            )
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIGetDataAfterExp failed: {}", err))
+        }
     }
 }
 
@@ -197,13 +312,15 @@ pub fn get_camera_ids() -> Option<BTreeMap<i32, String>> {
     if count <= 0 {
         return Some(BTreeMap::new());
     }
-    
+
     let mut map = BTreeMap::new();
     for i in 0..count {
         let mut info: ASI_CAMERA_INFO = unsafe { std::mem::zeroed() };
         let err = unsafe { sdk.api.ASIGetCameraProperty(&mut info, i) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
-            let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }.to_string_lossy().into_owned();
+            let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
             map.insert(info.CameraID as i32, name);
         }
     }

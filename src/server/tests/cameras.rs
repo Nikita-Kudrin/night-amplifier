@@ -259,18 +259,15 @@ async fn test_disconnect_camera_broadcasts_event() {
 
     // Disconnect may emit CameraPhaseChanged before CameraDisconnected; loop
     // briefly until the disconnect event arrives.
-    let saw_disconnect = tokio::time::timeout(
-        tokio::time::Duration::from_millis(500),
-        async {
-            loop {
-                match events_rx.recv().await {
-                    Ok(ServerEvent::CameraDisconnected { .. }) => return true,
-                    Ok(_) => continue,
-                    Err(_) => return false,
-                }
+    let saw_disconnect = tokio::time::timeout(tokio::time::Duration::from_millis(500), async {
+        loop {
+            match events_rx.recv().await {
+                Ok(ServerEvent::CameraDisconnected { .. }) => return true,
+                Ok(_) => continue,
+                Err(_) => return false,
             }
-        },
-    )
+        }
+    })
     .await
     .unwrap_or(false);
 

@@ -131,7 +131,9 @@ fn apply_sensor_mode(camera: &mut POACamera, config: &CaptureConfig, info: &Came
                 warn!(?err, index, ?desired, "Failed to set sensor mode");
             }
         }
-        None => warn!(?desired, modes = ?info.sensor_modes, "Desired sensor mode not found on camera"),
+        None => {
+            warn!(?desired, modes = ?info.sensor_modes, "Desired sensor mode not found on camera")
+        }
     }
 }
 
@@ -143,7 +145,9 @@ fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {
             });
             match result {
                 Ok(Ok(())) => {}
-                Ok(Err(e)) => warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature"),
+                Ok(Err(e)) => {
+                    warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature")
+                }
                 Err(e) => warn!(error = %e, "Panic setting target temperature"),
             }
         }
@@ -153,7 +157,9 @@ fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {
     });
     match result {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state"),
+        Ok(Err(e)) => {
+            warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state")
+        }
         Err(e) => warn!(error = %e, "Panic setting cooler state"),
     }
 }

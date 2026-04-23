@@ -75,9 +75,5 @@ fn warp_rotation_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    warp_identity_benchmark,
-    warp_rotation_benchmark
-);
+criterion_group!(benches, warp_identity_benchmark, warp_rotation_benchmark);
 criterion_main!(benches);

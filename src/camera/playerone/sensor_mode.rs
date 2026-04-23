@@ -16,9 +16,7 @@
 
 use std::os::raw::c_int;
 
-use super::ffi_types::{
-    POAErrors, POASensorModeInfo,
-};
+use super::ffi_types::{POAErrors, POASensorModeInfo};
 use super::sdk::PlayerOneSdk;
 use tracing::warn;
 
@@ -69,7 +67,10 @@ fn fetch_sensor_mode_info(camera_id: i32, index: c_int) -> Option<SensorMode> {
             description: cstr_from_bytes(&info.desc),
         }),
         Ok((err, _)) => {
-            warn!(?err, camera_id, index, "POAGetSensorModeInfo returned error");
+            warn!(
+                ?err,
+                camera_id, index, "POAGetSensorModeInfo returned error"
+            );
             None
         }
         Err(e) => {
@@ -200,9 +201,6 @@ mod tests {
     #[test]
     fn returns_none_on_empty_mode_list() {
         let modes: Vec<SensorMode> = Vec::new();
-        assert_eq!(
-            resolve_mode_index(&modes, DualSamplingMode::Normal),
-            None
-        );
+        assert_eq!(resolve_mode_index(&modes, DualSamplingMode::Normal), None);
     }
 }

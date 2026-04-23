@@ -112,7 +112,6 @@ impl ServerConfig {
         self.enable_cors = enabled;
         self
     }
-
 }
 
 use crate::disk_writer::DiskWriter;

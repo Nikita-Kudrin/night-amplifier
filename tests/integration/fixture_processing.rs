@@ -5,13 +5,13 @@
 use std::io::{self, Write};
 use std::path::Path;
 
+use night_amplifier::camera::CaptureConfig;
+use night_amplifier::camera::{Camera, SimulatedCamera};
 use night_amplifier::{
     auto_stretch_default, compute_image_stats, debayer_auto, detect_cfa_pattern,
     subtract_background, CfaPattern, DebayerAlgorithm, DebayerConfig, DetectionConfig, Frame,
     PipelineConfig, StackingPipeline, StarDetector,
 };
-use night_amplifier::camera::{Camera, SimulatedCamera};
-use night_amplifier::camera::CaptureConfig;
 use serial_test::serial;
 
 use crate::integration::common::{
@@ -22,7 +22,6 @@ use crate::integration::common::{
 use crate::integration::image_loading::{
     load_image, load_images_from_paths, save_processed_frame_to_dir,
 };
-
 
 /// Process all fixture subdirectories and save results
 /// This is the main test that processes each fixture set and outputs stacked/stretched images
@@ -235,16 +234,18 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
     let mut frames_processed = 0;
 
     // Create production simulated camera
-    let mut camera = SimulatedCamera::new(fixture_set.path.clone())
-        .expect("Failed to create simulated camera");
+    let mut camera =
+        SimulatedCamera::new(fixture_set.path.clone()).expect("Failed to create simulated camera");
 
     // Use 1 microsecond exposure (per requirements)
     let capture_config = CaptureConfig::default().with_exposure_us(1);
 
     // Consume the first frame (which we already processed as reference)
-    let _ = camera.capture(&capture_config).expect("Failed to capture reference frame from simulated camera");
+    let _ = camera
+        .capture(&capture_config)
+        .expect("Failed to capture reference frame from simulated camera");
 
-    // Process remainder of frames 
+    // Process remainder of frames
     for _ in 0..(images.len() - 1) {
         let frame = match camera.capture(&capture_config) {
             Ok(f) => f,

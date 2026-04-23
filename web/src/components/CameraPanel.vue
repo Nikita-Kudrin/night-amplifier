@@ -1,5 +1,5 @@
 <script setup>
-import { ref, inject, computed, onMounted } from 'vue'
+import {ref, inject, computed, onMounted} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -7,20 +7,20 @@ import {
   getSimulatorConfig,
   removeSimulatedCamera,
 } from '../composables/api.js'
-import { useError } from '../composables/useError.js'
-import { BaseAlert, BaseInfoIcon } from './ui'
-import { CAPTURE_STATES } from '../constants'
+import {useError} from '../composables/useError.js'
+import {BaseAlert, BaseInfoIcon} from './ui'
+import {CAPTURE_STATES} from '../constants'
 
 const cameras = inject('cameras')
 const selectedCamera = inject('selectedCamera')
 const refreshCameras = inject('refreshCameras')
 const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
-const cameraStatus = inject('cameraStatus', { value: {} })
-const cameraPhase = inject('cameraPhase', { value: {} })
+const cameraStatus = inject('cameraStatus', {value: {}})
+const cameraPhase = inject('cameraPhase', {value: {}})
 const settings = inject('settings', ref(null))
 
-const { error, clearError, withErrorHandling } = useError()
+const {error, clearError, withErrorHandling} = useError()
 
 const isSimulatorEnabled = computed(() => simulatorEnabledRef?.value ?? false)
 
@@ -28,7 +28,7 @@ const connecting = ref(null)
 const camerasCollapsed = ref(false)
 
 // Simulator state
-const simulatorConfig = ref({ configured: false, directory: null, file_count: null })
+const simulatorConfig = ref({configured: false, directory: null, file_count: null})
 const configuringSimulator = ref(false)
 const showDirectoryInput = ref(false)
 const directoryPath = ref('')
@@ -113,7 +113,7 @@ function sensorModePill(cam) {
   if (!modes || modes.length === 0) return null
   const override = settings.value?.sensor_mode_override
   const desired =
-    override ?? (settings.value?.stacking_type === 'planetary' ? 'normal' : 'low_readout_noise')
+      override ?? (settings.value?.stacking_type === 'planetary' ? 'normal' : 'low_readout_noise')
   const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
   const match = modes.find((m) => needle.test(m.name))
   return (match ?? modes[0]).name
@@ -171,37 +171,37 @@ const HELP = {
   <div class="panel">
     <div class="panel-header">
       <button
-        class="collapse-toggle"
-        title="Toggle camera list"
-        @click="camerasCollapsed = !camerasCollapsed"
+          class="collapse-toggle"
+          title="Toggle camera list"
+          @click="camerasCollapsed = !camerasCollapsed"
       >
         <svg
-          :class="{ collapsed: camerasCollapsed }"
-          viewBox="0 0 24 24"
-          width="12"
-          height="12"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+            :class="{ collapsed: camerasCollapsed }"
+            viewBox="0 0 24 24"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
         >
-          <path d="M6 9l6 6 6-6" />
+          <path d="M6 9l6 6 6-6"/>
         </svg>
       </button>
       <h2>
         Camera
-        <BaseInfoIcon :message="HELP.cameras" />
+        <BaseInfoIcon :message="HELP.cameras"/>
       </h2>
       <button class="btn btn-sm" title="Refresh" @click="refreshCameras">
         <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+            viewBox="0 0 24 24"
+            width="14"
+            height="14"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
         >
-          <path d="M23 4v6h-6M1 20v-6h6" />
-          <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+          <path d="M23 4v6h-6M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
         </svg>
       </button>
     </div>
@@ -214,22 +214,22 @@ const HELP = {
       <div class="config-header">
         <span>
           Configure Simulator Directory
-          <BaseInfoIcon :message="HELP.simulator_dir" />
+          <BaseInfoIcon :message="HELP.simulator_dir"/>
         </span>
         <button class="btn-close" @click="showDirectoryInput = false">&times;</button>
       </div>
       <div class="config-body">
         <input
-          v-model="directoryPath"
-          type="text"
-          placeholder="Enter path to image directory..."
-          class="directory-input"
-          @keyup.enter="handleConfigureSimulator"
+            v-model="directoryPath"
+            type="text"
+            placeholder="Enter path to image directory..."
+            class="directory-input"
+            @keyup.enter="handleConfigureSimulator"
         />
         <button
-          class="btn btn-sm btn-primary"
-          :disabled="configuringSimulator"
-          @click="handleConfigureSimulator"
+            class="btn btn-sm btn-primary"
+            :disabled="configuringSimulator"
+            @click="handleConfigureSimulator"
         >
           {{ configuringSimulator ? '...' : 'Set' }}
         </button>
@@ -246,11 +246,11 @@ const HELP = {
         <h3 class="section-title">Connected</h3>
         <div class="camera-list">
           <div
-            v-for="cam in connectedCameras"
-            :key="cam.id"
-            class="camera-item"
-            :class="{ selected: cam.id === selectedCamera }"
-            @click="selectCamera(cam.id)"
+              v-for="cam in connectedCameras"
+              :key="cam.id"
+              class="camera-item"
+              :class="{ selected: cam.id === selectedCamera }"
+              @click="selectCamera(cam.id)"
           >
             <div class="camera-info">
               <span class="camera-name">{{ cam.name }}</span>
@@ -258,46 +258,46 @@ const HELP = {
                 {{ formatResolution(cam) }}
                 <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
                 <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
-                  sensorModePill(cam)
-                }}</span>
+                    sensorModePill(cam)
+                  }}</span>
                 <span v-if="temperaturePill(cam)" class="temp-pill">{{
-                  temperaturePill(cam)
-                }}</span>
+                    temperaturePill(cam)
+                  }}</span>
               </span>
             </div>
             <div class="camera-actions">
               <button
-                class="btn btn-sm btn-danger"
-                :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
-                :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
-                @click.stop="handleDisconnect(cam.id)"
+                  class="btn btn-sm btn-danger"
+                  :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
+                  :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
+                  @click.stop="handleDisconnect(cam.id)"
               >
                 <span v-if="isWarmingUp(cam)" class="spinner" aria-hidden="true"></span>
                 <span>{{
-                  connecting === cam.id
-                    ? '...'
-                    : isWarmingUp(cam)
-                      ? 'Warming up…'
-                      : 'Disconnect'
-                }}</span>
+                    connecting === cam.id
+                        ? '...'
+                        : isWarmingUp(cam)
+                            ? 'Warming up…'
+                            : 'Disconnect'
+                  }}</span>
               </button>
               <button
-                v-if="isSimulatedCamera(cam)"
-                class="btn btn-sm btn-icon"
-                :disabled="connecting === cam.id || isCapturing"
-                title="Remove simulated camera"
-                @click.stop="handleRemoveSimulatedCamera(cam)"
+                  v-if="isSimulatedCamera(cam)"
+                  class="btn btn-sm btn-icon"
+                  :disabled="connecting === cam.id || isCapturing"
+                  title="Remove simulated camera"
+                  @click.stop="handleRemoveSimulatedCamera(cam)"
               >
                 <svg
-                  viewBox="0 0 24 24"
-                  width="14"
-                  height="14"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
                 >
                   <path
-                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                      d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
                   />
                 </svg>
               </button>
@@ -317,29 +317,29 @@ const HELP = {
             </div>
             <div class="camera-actions">
               <button
-                class="btn btn-sm btn-primary"
-                :disabled="connecting === cam.id"
-                @click="handleConnect(cam.id)"
+                  class="btn btn-sm btn-primary"
+                  :disabled="connecting === cam.id"
+                  @click="handleConnect(cam.id)"
               >
                 {{ connecting === cam.id ? '...' : 'Connect' }}
               </button>
               <button
-                v-if="isSimulatedCamera(cam)"
-                class="btn btn-sm btn-icon"
-                :disabled="connecting === cam.id"
-                title="Remove simulated camera"
-                @click.stop="handleRemoveSimulatedCamera(cam)"
+                  v-if="isSimulatedCamera(cam)"
+                  class="btn btn-sm btn-icon"
+                  :disabled="connecting === cam.id"
+                  title="Remove simulated camera"
+                  @click.stop="handleRemoveSimulatedCamera(cam)"
               >
                 <svg
-                  viewBox="0 0 24 24"
-                  width="14"
-                  height="14"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
                 >
                   <path
-                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                      d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
                   />
                 </svg>
               </button>
@@ -363,8 +363,8 @@ const HELP = {
 
       <!-- No cameras -->
       <div
-        v-if="filteredCameras.length === 0 && (!isSimulatorEnabled || simulatorConfig.configured)"
-        class="empty-state"
+          v-if="filteredCameras.length === 0 && (!isSimulatorEnabled || simulatorConfig.configured)"
+          class="empty-state"
       >
         <p>No cameras found</p>
         <button class="btn btn-sm" @click="refreshCameras">Scan</button>
@@ -424,9 +424,8 @@ const HELP = {
   border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
+  transition: border-color 0.15s,
+  background 0.15s;
   min-height: 2.25rem;
 }
 
@@ -527,10 +526,9 @@ const HELP = {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition:
-    color 0.15s,
-    background 0.15s,
-    border-color 0.15s;
+  transition: color 0.15s,
+  background 0.15s,
+  border-color 0.15s;
 }
 
 .btn-icon:hover:not(:disabled) {
