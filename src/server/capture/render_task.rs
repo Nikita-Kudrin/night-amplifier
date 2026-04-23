@@ -31,12 +31,8 @@ pub fn run_render_task(
             settings,
         } = latest;
 
-        let _iter_span = tracing::info_span!(
-            "render_iteration",
-            frame_number,
-            was_stacked,
-        )
-        .entered();
+        let _iter_span =
+            tracing::info_span!("render_iteration", frame_number, was_stacked,).entered();
 
         // Process frame through unified render pipeline
         if let Err(e) = pipeline::process_preview_frame(&mut display_frame, &settings) {
@@ -54,9 +50,7 @@ pub fn run_render_task(
                 rt.block_on(state.set_latest_frame(encoded_data));
             }
             Err(e) => {
-                rt.block_on(
-                    state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)),
-                );
+                rt.block_on(state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)));
             }
         }
     }
@@ -69,10 +63,7 @@ pub fn run_render_task(
 /// Consumes all immediately available messages and returns the most recent
 /// one, discarding intermediate frames. This ensures the UI always shows
 /// the freshest available frame.
-fn drain_to_latest(
-    initial: StackedFrame,
-    rx: &mpsc::Receiver<StackedFrame>,
-) -> StackedFrame {
+fn drain_to_latest(initial: StackedFrame, rx: &mpsc::Receiver<StackedFrame>) -> StackedFrame {
     let mut latest = initial;
     while let Ok(newer) = rx.try_recv() {
         latest = newer;

@@ -33,8 +33,18 @@ pub fn subtract_rgb_clamp_simd(data: &mut [f32], offsets: &[f32; 3]) {
         let base = i * 12;
 
         let a = f32x4::new([data[base], data[base + 1], data[base + 2], data[base + 3]]);
-        let b = f32x4::new([data[base + 4], data[base + 5], data[base + 6], data[base + 7]]);
-        let c = f32x4::new([data[base + 8], data[base + 9], data[base + 10], data[base + 11]]);
+        let b = f32x4::new([
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+        ]);
+        let c = f32x4::new([
+            data[base + 8],
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+        ]);
 
         let ra = (a - off_a).max(zero).min(one);
         let rb = (b - off_b).max(zero).min(one);
@@ -82,9 +92,24 @@ pub fn multiply_rgb_clamp_simd(data: &mut [f32], multipliers: &[f32; 3]) {
         return;
     }
 
-    let mul_a = f32x4::new([multipliers[0], multipliers[1], multipliers[2], multipliers[0]]);
-    let mul_b = f32x4::new([multipliers[1], multipliers[2], multipliers[0], multipliers[1]]);
-    let mul_c = f32x4::new([multipliers[2], multipliers[0], multipliers[1], multipliers[2]]);
+    let mul_a = f32x4::new([
+        multipliers[0],
+        multipliers[1],
+        multipliers[2],
+        multipliers[0],
+    ]);
+    let mul_b = f32x4::new([
+        multipliers[1],
+        multipliers[2],
+        multipliers[0],
+        multipliers[1],
+    ]);
+    let mul_c = f32x4::new([
+        multipliers[2],
+        multipliers[0],
+        multipliers[1],
+        multipliers[2],
+    ]);
     let zero = f32x4::ZERO;
     let one = f32x4::ONE;
 
@@ -94,8 +119,18 @@ pub fn multiply_rgb_clamp_simd(data: &mut [f32], multipliers: &[f32; 3]) {
         let base = i * 12;
 
         let a = f32x4::new([data[base], data[base + 1], data[base + 2], data[base + 3]]);
-        let b = f32x4::new([data[base + 4], data[base + 5], data[base + 6], data[base + 7]]);
-        let c = f32x4::new([data[base + 8], data[base + 9], data[base + 10], data[base + 11]]);
+        let b = f32x4::new([
+            data[base + 4],
+            data[base + 5],
+            data[base + 6],
+            data[base + 7],
+        ]);
+        let c = f32x4::new([
+            data[base + 8],
+            data[base + 9],
+            data[base + 10],
+            data[base + 11],
+        ]);
 
         let ra = (a * mul_a).max(zero).min(one);
         let rb = (b * mul_b).max(zero).min(one);
@@ -181,10 +216,7 @@ pub fn subtract_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
 /// R' = (R * scale).clamp(0, 1)
 /// ```
 #[inline]
-pub fn apply_luminance_preserving_simd(
-    data: &mut [f32],
-    transform_fn: impl Fn(f32) -> f32,
-) {
+pub fn apply_luminance_preserving_simd(data: &mut [f32], transform_fn: impl Fn(f32) -> f32) {
     let len = data.len();
     if len < 12 {
         apply_luminance_preserving_scalar(data, &transform_fn);
@@ -206,8 +238,18 @@ pub fn apply_luminance_preserving_simd(
 
         // Gather R, G, B for 4 pixels
         let r = f32x4::new([data[base], data[base + 3], data[base + 6], data[base + 9]]);
-        let g = f32x4::new([data[base + 1], data[base + 4], data[base + 7], data[base + 10]]);
-        let b = f32x4::new([data[base + 2], data[base + 5], data[base + 8], data[base + 11]]);
+        let g = f32x4::new([
+            data[base + 1],
+            data[base + 4],
+            data[base + 7],
+            data[base + 10],
+        ]);
+        let b = f32x4::new([
+            data[base + 2],
+            data[base + 5],
+            data[base + 8],
+            data[base + 11],
+        ]);
 
         // Compute 4 luminances in SIMD
         let lum = wr * r + wg * g + wb * b;
@@ -253,10 +295,7 @@ pub fn apply_luminance_preserving_simd(
 }
 
 #[inline]
-fn apply_luminance_preserving_scalar(
-    data: &mut [f32],
-    transform_fn: &impl Fn(f32) -> f32,
-) {
+fn apply_luminance_preserving_scalar(data: &mut [f32], transform_fn: &impl Fn(f32) -> f32) {
     for pixel in data.chunks_exact_mut(3) {
         let r = pixel[0];
         let g = pixel[1];

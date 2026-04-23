@@ -41,7 +41,11 @@ async fn handle_stream(mut socket: WebSocket, state: Arc<AppState>) {
 
     // Send initial frame if available
     if let Some(frame_data) = state.get_latest_frame().await {
-        if socket.send(Message::Binary(frame_data.as_ref().clone().into())).await.is_err() {
+        if socket
+            .send(Message::Binary(frame_data.as_ref().clone().into()))
+            .await
+            .is_err()
+        {
             return;
         }
     }

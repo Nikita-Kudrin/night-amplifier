@@ -173,10 +173,22 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
 
 /// Default list of fixture datasets to download.
 pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
-    ("250mm-dob-imx464-orion-png", "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download"),
-    ("35mm-imx464-orion-tiff", "https://drive.google.com/uc?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download"),
-    ("130mm-imx464-dumbell-nebulae-png", "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download"),
-    ("130mm-imx464-ring-nebulae-png", "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download"),
+    (
+        "250mm-dob-imx464-orion-png",
+        "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download",
+    ),
+    (
+        "35mm-imx464-orion-tiff",
+        "https://drive.google.com/uc?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download",
+    ),
+    (
+        "130mm-imx464-dumbell-nebulae-png",
+        "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download",
+    ),
+    (
+        "130mm-imx464-ring-nebulae-png",
+        "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download",
+    ),
 ];
 
 /// Downloads and extracts test fixture datasets from Google Drive.
@@ -185,13 +197,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
 /// it is skipped. After downloading, the zip is extracted and removed.
 pub async fn ensure_fixtures(names: Option<&[&str]>) {
     use night_amplifier::push_to::download::download_file;
-    use tokio::sync::mpsc;
-    use std::path::Path;
     use std::fs;
     use std::io;
+    use std::path::Path;
+    use tokio::sync::mpsc;
 
     let fixtures: Vec<(&str, &str)> = if let Some(names) = names {
-        DEFAULT_FIXTURES.iter()
+        DEFAULT_FIXTURES
+            .iter()
             .filter(|(name, _)| names.contains(name))
             .copied()
             .collect()
@@ -207,9 +220,7 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
     let (tx, mut rx) = mpsc::channel(100);
 
     // Drain channel
-    tokio::spawn(async move {
-        while let Some(_) = rx.recv().await {}
-    });
+    tokio::spawn(async move { while let Some(_) = rx.recv().await {} });
 
     for (name, url) in fixtures {
         let dir_path = fixtures_dir.join(name);
@@ -237,7 +248,9 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             let mut archive = match zip::ZipArchive::new(file) {
                 Ok(a) => a,
                 Err(_) => {
-                    if dir_path.exists() { continue; }
+                    if dir_path.exists() {
+                        continue;
+                    }
                     panic!("Failed to open zip archive for {}", name);
                 }
             };
@@ -273,9 +286,9 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
 pub fn ensure_fixtures_sync() {
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(ensure_fixtures(
-            Some(&["250mm-dob-imx464-orion-png",
-                "130mm-imx464-dumbell-nebulae-png",
-                "130mm-imx464-ring-nebulae-png"])
-        ));
+        .block_on(ensure_fixtures(Some(&[
+            "250mm-dob-imx464-orion-png",
+            "130mm-imx464-dumbell-nebulae-png",
+            "130mm-imx464-ring-nebulae-png",
+        ])));
 }

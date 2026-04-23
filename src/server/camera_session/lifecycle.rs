@@ -20,10 +20,7 @@ use crate::telemetry::metrics as telemetry_metrics;
 /// Open a camera, store the handle long-term, and (optionally) begin
 /// pre-cooling. Replaces the old `CameraService::connect_camera` behavior
 /// that dropped the handle immediately after probing `CameraInfo`.
-pub async fn connect(
-    state: &Arc<AppState>,
-    camera_id: &str,
-) -> ApiResult<ConnectedCameraInfo> {
+pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<ConnectedCameraInfo> {
     // Already connected? Return the existing info — matches the prior
     // idempotent connect behavior.
     {
@@ -40,23 +37,25 @@ pub async fn connect(
     // Open the camera on a blocking task so the FFI call doesn't occupy a
     // tokio worker. Returned: the handle plus the canonical provider name
     // (case-corrected) plus the CameraInfo.
-    let open_result = tokio::task::spawn_blocking(move || -> Result<(Box<dyn Camera>, String), crate::camera::CameraError> {
-        let mut registry = CameraRegistry::new();
-        let _ = registry.register(crate::camera::PlayerOneProvider::new());
-        let _ = registry.register(crate::camera::ZwoProvider::new());
-        if use_simulated {
-            let _ = registry.register(crate::camera::SimulatedProvider::new());
-        }
-        let provider_registry_name = registry
-            .providers()
-            .into_iter()
-            .find(|name| name.to_lowercase() == provider_name.to_lowercase())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| provider_name.clone());
+    let open_result = tokio::task::spawn_blocking(
+        move || -> Result<(Box<dyn Camera>, String), crate::camera::CameraError> {
+            let mut registry = CameraRegistry::new();
+            let _ = registry.register(crate::camera::PlayerOneProvider::new());
+            let _ = registry.register(crate::camera::ZwoProvider::new());
+            if use_simulated {
+                let _ = registry.register(crate::camera::SimulatedProvider::new());
+            }
+            let provider_registry_name = registry
+                .providers()
+                .into_iter()
+                .find(|name| name.to_lowercase() == provider_name.to_lowercase())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| provider_name.clone());
 
-        let camera = registry.open_camera(&provider_registry_name, index)?;
-        Ok((camera, provider_registry_name))
-    })
+            let camera = registry.open_camera(&provider_registry_name, index)?;
+            Ok((camera, provider_registry_name))
+        },
+    )
     .await;
 
     let (mut camera, provider_registry_name) = match open_result {
@@ -106,32 +105,30 @@ pub async fn connect(
     // temperature and let the monitor ramp it toward the user's target at
     // `RAMP_RATE_C_PER_MIN`. In fast mode we push the final target directly,
     // restoring the old "snap to setpoint" behavior.
-    let (initial_phase, cooler_applied) = if info.has_cooler
-        && cooler_enabled
-        && target_temp_c.is_some()
-    {
-        let final_target = target_temp_c.expect("checked is_some above");
-        let initial_setpoint = if cooler_fast_mode {
-            final_target
+    let (initial_phase, cooler_applied) =
+        if info.has_cooler && cooler_enabled && target_temp_c.is_some() {
+            let final_target = target_temp_c.expect("checked is_some above");
+            let initial_setpoint = if cooler_fast_mode {
+                final_target
+            } else {
+                match camera.status() {
+                    Ok(s) => s.temperature_c,
+                    Err(_) => final_target,
+                }
+            };
+            let seed = camera
+                .set_target_temperature(initial_setpoint)
+                .and_then(|()| camera.set_cooler(true));
+            match seed {
+                Ok(()) => (CameraPhase::Precooling, true),
+                Err(e) => {
+                    warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
+                    (CameraPhase::Idle, false)
+                }
+            }
         } else {
-            match camera.status() {
-                Ok(s) => s.temperature_c,
-                Err(_) => final_target,
-            }
+            (CameraPhase::Idle, false)
         };
-        let seed = camera
-            .set_target_temperature(initial_setpoint)
-            .and_then(|()| camera.set_cooler(true));
-        match seed {
-            Ok(()) => (CameraPhase::Precooling, true),
-            Err(e) => {
-                warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
-                (CameraPhase::Idle, false)
-            }
-        }
-    } else {
-        (CameraPhase::Idle, false)
-    };
 
     let connected_info = ConnectedCameraInfo {
         id: camera_id.to_string(),
@@ -184,7 +181,9 @@ pub async fn connect(
         );
     }
 
-    let _ = state.events.send(ServerEvent::camera_connected(&camera_name));
+    let _ = state
+        .events
+        .send(ServerEvent::camera_connected(&camera_name));
 
     // Persist the (possibly new / clamped) camera profile to disk.
     state.save_settings().await;
@@ -423,7 +422,10 @@ pub async fn return_from_capture(
         }
         None => {
             // Capture thread crashed or returned without the handle.
-            warn!(camera_name, "Capture ended without returning handle; cleaning up");
+            warn!(
+                camera_name,
+                "Capture ended without returning handle; cleaning up"
+            );
             finalize_disconnect(state, camera_name).await;
         }
     }
@@ -482,7 +484,9 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str) {
     state
         .set_camera_phase(camera_name, CameraPhase::Disconnected)
         .await;
-    let _ = state.events.send(ServerEvent::camera_disconnected(camera_name));
+    let _ = state
+        .events
+        .send(ServerEvent::camera_disconnected(camera_name));
 
     info!(camera_name, "Camera disconnected");
 }

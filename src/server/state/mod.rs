@@ -141,9 +141,7 @@ impl AppState {
     }
 
     /// Create new application state with custom disk writer configuration
-    pub fn with_disk_writer_config(
-        disk_config: DiskWriterConfig,
-    ) -> (Self, DiskWriter) {
+    pub fn with_disk_writer_config(disk_config: DiskWriterConfig) -> (Self, DiskWriter) {
         let (events_tx, _) = broadcast::channel(256);
         let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
 
