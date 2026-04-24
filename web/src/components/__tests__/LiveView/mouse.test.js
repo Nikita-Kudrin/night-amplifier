@@ -1,6 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
 import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
+import LiveViewControls from '../../LiveViewControls.vue'
 
 describe('LiveView - Mouse Interactions', () => {
     let mocks
@@ -39,7 +40,9 @@ describe('LiveView - Mouse Interactions', () => {
         // Zoom in (negative deltaY)
         await liveView.trigger('wheel', {deltaY: -100, preventDefault: vi.fn()})
 
-        // Check zoom level increased
-        expect(wrapper.find('.zoom-level').text()).not.toBe('100%')
+        // Check scale changed in LiveViewControls
+        const controls = wrapper.findComponent(LiveViewControls)
+        expect(controls.props('scale')).not.toBe(1.0)
     })
 })
+

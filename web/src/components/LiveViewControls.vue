@@ -37,44 +37,17 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   <div class="controls-overlay">
     <div v-if="hasFrame" class="frame-info">
       <span class="frame-info-line">
-        <span class="zoom-level">{{ (scale * 100).toFixed(0) }}%</span>
         <span class="frame-number">Frame {{ frameNumber }}</span>
       </span>
       <span class="render-backend" :title="'Rendering: ' + backendLabel">{{ backendLabel }}</span>
     </div>
 
     <div class="zoom-controls">
-      <button class="btn btn-icon btn-overlay" title="Zoom in" @click="$emit('zoomIn')">
-        <svg
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <circle cx="11" cy="11" r="8"/>
-          <path d="M21 21l-4.35-4.35M11 8v6M8 11h6"/>
-        </svg>
-      </button>
-      <button class="btn btn-icon btn-overlay" title="Zoom out" @click="$emit('zoomOut')">
-        <svg
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <circle cx="11" cy="11" r="8"/>
-          <path d="M21 21l-4.35-4.35M8 11h6"/>
-        </svg>
-      </button>
       <button class="btn btn-icon btn-overlay" title="Fit to view" @click="$emit('fitToView')">
         <svg
             viewBox="0 0 24 24"
-            width="20"
-            height="20"
+            width="18"
+            height="18"
             fill="none"
             stroke="currentColor"
             stroke-width="2"
@@ -84,45 +57,28 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
           />
         </svg>
       </button>
-      <button class="btn btn-icon btn-overlay" title="Reset view" @click="$emit('resetView')">
-        <svg
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8"/>
-          <path d="M3 3v5h5"/>
-        </svg>
-      </button>
       <button class="btn btn-icon btn-overlay" title="Fullscreen" @click="$emit('toggleFullscreen')">
         <svg
             v-if="!isFullscreen"
             viewBox="0 0 24 24"
-            width="20"
-            height="20"
+            width="18"
+            height="18"
             fill="none"
             stroke="currentColor"
             stroke-width="2"
         >
-          <path
-              d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"
-          />
+          <path d="M15 3h6v6M9 21H3v-6M21 15v6h-6M3 9V3h6" />
         </svg>
         <svg
             v-else
             viewBox="0 0 24 24"
-            width="20"
-            height="20"
+            width="18"
+            height="18"
             fill="none"
             stroke="currentColor"
             stroke-width="2"
         >
-          <path
-              d="M8 3v3a2 2 0 01-2 2H3m18 0h-3a2 2 0 01-2-2V3m0 18v-3a2 2 0 012-2h3M3 16h3a2 2 0 012 2v3"
-          />
+          <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7" />
         </svg>
       </button>
       <!-- Comet ROI selection button -->
@@ -135,8 +91,8 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
       >
         <svg
             viewBox="0 0 24 24"
-            width="20"
-            height="20"
+            width="18"
+            height="18"
             fill="none"
             stroke="currentColor"
             stroke-width="2"
@@ -153,7 +109,7 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
 <style scoped>
 .controls-overlay {
   position: absolute;
-  bottom: 1rem;
+  bottom: 0.75rem;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -167,17 +123,17 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   display: flex;
   gap: 0.25rem;
   background: var(--surface-elevated);
-  border-radius: 8px;
-  padding: 0.25rem;
+  border-radius: 6px;
+  padding: 0.15rem;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .btn-overlay {
-  width: 36px;
-  height: 36px;
-  padding: 0.5rem;
+  width: 30px;
+  height: 30px;
+  padding: 0.35rem;
   background: transparent;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .btn-overlay:hover {
@@ -195,11 +151,11 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   align-items: flex-end;
   justify-content: center;
   gap: 0;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   color: var(--text-secondary);
   background: var(--surface-elevated);
-  padding: 0.25rem 0.5rem;
-  border-radius: 8px;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   white-space: nowrap;
 }
@@ -215,7 +171,7 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
 
 .render-backend {
   color: var(--text-muted);
-  font-size: 0.65rem;
+  font-size: 0.6rem;
 }
 
 @media (max-width: 768px) {
@@ -228,8 +184,9 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   }
 
   .btn-overlay {
-    width: 44px;
-    height: 44px;
+    width: 36px;
+    height: 36px;
   }
 }
 </style>
+
