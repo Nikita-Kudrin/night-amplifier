@@ -322,6 +322,9 @@ mod tests {
         fn set_cooler(&mut self, _: bool) -> CameraResult<()> {
             Ok(())
         }
+        fn set_dew_heater(&mut self, _: bool, _: i32) -> CameraResult<()> {
+            Ok(())
+        }
         fn capture(
             &mut self,
             _: &super::super::types::CaptureConfig,

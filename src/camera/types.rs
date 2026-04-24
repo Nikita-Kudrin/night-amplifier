@@ -124,6 +124,8 @@ pub struct CameraInfo {
     pub hcg_gain: i32,
     /// Sensor modes advertised by the camera. Empty when mode selection is not supported.
     pub sensor_modes: Vec<SensorMode>,
+    /// Whether the camera supports anti-dew heater
+    pub has_dew_heater: bool,
 }
 
 impl Default for CameraInfo {
@@ -152,6 +154,7 @@ impl Default for CameraInfo {
             unity_gain: 0,
             hcg_gain: 0,
             sensor_modes: Vec::new(),
+            has_dew_heater: false,
         }
     }
 }
@@ -432,6 +435,8 @@ pub struct CameraStatus {
     pub current_offset: i32,
     /// Current exposure time in microseconds
     pub current_exposure_us: u64,
+    /// Whether anti-dew heater is currently active
+    pub dew_heater_on: bool,
 }
 
 #[cfg(test)]

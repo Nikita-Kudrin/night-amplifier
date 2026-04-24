@@ -119,6 +119,15 @@ impl Camera {
             .map(|(v, _)| unsafe { v.boolValue } == POABool::POA_TRUE)
     }
 
+    pub fn dew_heater_power(&self) -> Result<i64, String> {
+        self.get_config(POAConfig::POA_HEATER_POWER)
+            .map(|(v, _)| unsafe { v.intValue } as i64)
+    }
+
+    pub fn is_config_supported(&self, conf_id: POAConfig) -> bool {
+        self.get_config(conf_id).is_ok()
+    }
+
     pub fn set_target_temperature(&mut self, temp: i64) -> Result<(), String> {
         self.set_config(
             POAConfig::POA_TARGET_TEMP,
@@ -138,6 +147,16 @@ impl Camera {
                 } else {
                     POABool::POA_FALSE
                 },
+            },
+            false,
+        )
+    }
+
+    pub fn set_dew_heater_power(&mut self, power: i64) -> Result<(), String> {
+        self.set_config(
+            POAConfig::POA_HEATER_POWER,
+            POAConfigValue {
+                intValue: power as std::os::raw::c_long,
             },
             false,
         )

@@ -60,6 +60,8 @@ pub async fn update_settings(
     let cooler_fields_changed = request.cooler_enabled.is_some()
         || request.target_temp_c.is_some()
         || request.cooler_fast_mode.is_some();
+    let dew_heater_fields_changed =
+        request.dew_heater_enabled.is_some() || request.dew_heater_power.is_some();
 
     // Resolve the active camera's profile key before taking `settings.write()`
     // so we never hold `settings.write()` while awaiting `cameras.read()` —
@@ -169,6 +171,12 @@ pub async fn update_settings(
         if let Some(sensor_mode) = request.sensor_mode_override {
             settings.sensor_mode_override = Some(sensor_mode);
         }
+        if let Some(dew_heater_enabled) = request.dew_heater_enabled {
+            settings.dew_heater_enabled = dew_heater_enabled;
+        }
+        if let Some(dew_heater_power) = request.dew_heater_power {
+            settings.dew_heater_power = dew_heater_power.clamp(0, 100);
+        }
 
         // Mirror the seven hardware-specific fields into the currently-
         // connected camera's profile. Skip when no camera is connected so we
@@ -183,6 +191,8 @@ pub async fn update_settings(
                 target_temp_c: settings.target_temp_c,
                 sensor_mode_override: settings.sensor_mode_override,
                 cooler_fast_mode: settings.cooler_fast_mode,
+                dew_heater_enabled: settings.dew_heater_enabled,
+                dew_heater_power: settings.dew_heater_power,
             };
             settings.camera_profiles.insert(key, snapshot);
         }
@@ -218,6 +228,10 @@ pub async fn update_settings(
     // capturing.
     if cooler_fields_changed {
         crate::server::camera_session::lifecycle::apply_cooler_settings(&state).await;
+    }
+
+    if dew_heater_fields_changed {
+        crate::server::camera_session::lifecycle::apply_dew_heater_settings(&state).await;
     }
 
     // Propagate telescope settings to plate solver for FOV calculation

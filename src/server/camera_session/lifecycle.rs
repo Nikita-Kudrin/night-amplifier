@@ -88,13 +88,15 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
     // before deciding precool — otherwise a cooled-camera's `cooler_enabled`
     // would leak into the next-connected uncooled camera.
     let profile_key = camera_profile_key(&provider_registry_name, &camera_name);
-    let (cooler_enabled, target_temp_c, cooler_fast_mode) = {
+    let (cooler_enabled, target_temp_c, cooler_fast_mode, dew_heater_enabled, dew_heater_power) = {
         let mut settings = state.settings.write().await;
         apply_camera_profile_on_connect(&mut settings, profile_key.clone(), &info);
         (
             settings.cooler_enabled,
             settings.target_temp_c,
             settings.cooler_fast_mode,
+            settings.dew_heater_enabled,
+            settings.dew_heater_power,
         )
     };
 
@@ -129,6 +131,11 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
         } else {
             (CameraPhase::Idle, false)
         };
+
+    // Apply initial dew heater state if supported.
+    if info.has_dew_heater {
+        let _ = camera.set_dew_heater(dew_heater_enabled, dew_heater_power);
+    }
 
     let connected_info = ConnectedCameraInfo {
         id: camera_id.to_string(),
@@ -585,6 +592,52 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>) {
         fast,
         "Live cooler settings applied"
     );
+}
+
+/// Push the current `dew_heater_enabled` / `dew_heater_power` settings to the
+/// active camera handle.
+pub async fn apply_dew_heater_settings(state: &Arc<AppState>) {
+    let (camera_name, has_dew_heater) = {
+        let cameras = state.cameras.read().await;
+        match cameras.values().next() {
+            Some(info) => (info.info.name.clone(), info.info.has_dew_heater),
+            None => return,
+        }
+    };
+    if !has_dew_heater {
+        return;
+    }
+
+    let phase = state.camera_phase(&camera_name).await;
+    if phase == CameraPhase::Capturing {
+        debug!(
+            camera_name = %camera_name,
+            "Skipping live dew heater apply — capture owns the handle"
+        );
+        return;
+    }
+
+    let (enabled, power) = {
+        let settings = state.settings.read().await;
+        (settings.dew_heater_enabled, settings.dew_heater_power)
+    };
+
+    let mut guard = state
+        .active_camera
+        .lock()
+        .expect("active_camera mutex poisoned");
+    if let Some(cam) = guard.as_mut() {
+        if let Err(e) = cam.set_dew_heater(enabled, power) {
+            warn!(error = %e, "Failed to apply live dew heater settings");
+        } else {
+            info!(
+                camera_name = %camera_name,
+                enabled,
+                power,
+                "Live dew heater settings applied"
+            );
+        }
+    }
 }
 
 /// Send a monitor command, swallowing failures if the monitor has exited.

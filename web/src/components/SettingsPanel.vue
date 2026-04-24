@@ -12,6 +12,7 @@ import {
   BaseProLock,
 } from './ui'
 import CoolerControl from './CoolerControl.vue'
+import DewHeaterControl from './DewHeaterControl.vue'
 import {
   SATURATION_BOOST_LIMITS,
   BINNING_OPTIONS,
@@ -105,6 +106,7 @@ const HELP = HELP_TEXTS
     </BaseAlert>
 
     <CoolerControl/>
+    <DewHeaterControl/>
 
     <!-- Processing settings -->
     <div class="settings-section">

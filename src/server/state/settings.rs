@@ -60,6 +60,10 @@ pub struct CaptureSettings {
     pub comet_roi: Option<AlignmentRoi>,
     /// Region of interest for planetary alignment
     pub planetary_roi: Option<AlignmentRoi>,
+    /// Whether anti-dew heater is enabled
+    pub dew_heater_enabled: bool,
+    /// Anti-dew heater power level (0-100)
+    pub dew_heater_power: i32,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
     /// Deduced field of view from successful plate solves
@@ -96,6 +100,18 @@ pub struct CameraCaptureProfile {
     pub sensor_mode_override: Option<DualSamplingMode>,
     #[serde(default)]
     pub cooler_fast_mode: bool,
+    #[serde(default = "default_dew_heater_enabled")]
+    pub dew_heater_enabled: bool,
+    #[serde(default = "default_dew_heater_power")]
+    pub dew_heater_power: i32,
+}
+
+fn default_dew_heater_enabled() -> bool {
+    true
+}
+
+fn default_dew_heater_power() -> i32 {
+    10
 }
 
 impl CameraCaptureProfile {
@@ -115,6 +131,11 @@ impl CameraCaptureProfile {
         } else {
             settings.sensor_mode_override
         };
+        let (dew_heater_enabled, dew_heater_power) = if info.has_dew_heater {
+            (settings.dew_heater_enabled, settings.dew_heater_power)
+        } else {
+            (false, 10)
+        };
         Self {
             exposure_us: settings.exposure_us,
             gain: settings.gain,
@@ -124,6 +145,8 @@ impl CameraCaptureProfile {
             target_temp_c,
             sensor_mode_override,
             cooler_fast_mode: settings.cooler_fast_mode,
+            dew_heater_enabled,
+            dew_heater_power,
         }
     }
 
@@ -137,6 +160,8 @@ impl CameraCaptureProfile {
         settings.target_temp_c = self.target_temp_c;
         settings.sensor_mode_override = self.sensor_mode_override;
         settings.cooler_fast_mode = self.cooler_fast_mode;
+        settings.dew_heater_enabled = self.dew_heater_enabled;
+        settings.dew_heater_power = self.dew_heater_power;
     }
 }
 
@@ -234,6 +259,8 @@ impl Default for CaptureSettings {
             sensor_mode_override: None,
             comet_roi: None,
             planetary_roi: None,
+            dew_heater_enabled: true,
+            dew_heater_power: 10,
             wanderer_mode: false,
             push_to_fov: None,
             eyepiece: EyepieceSettings::default(),

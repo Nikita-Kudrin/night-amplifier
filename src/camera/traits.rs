@@ -61,6 +61,16 @@ pub trait Camera: Send {
     /// # Errors
     /// Returns `CameraError::ParameterNotSupported` if camera has no cooler
     fn set_cooler(&mut self, enabled: bool) -> CameraResult<()>;
+    
+    /// Enable or disable anti-dew heater
+    ///
+    /// # Arguments
+    /// * `enabled` - Whether to enable the heater
+    /// * `power` - Power level percentage (0-100)
+    ///
+    /// # Errors
+    /// Returns `CameraError::ParameterNotSupported` if camera has no heater
+    fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()>;
 
     /// Capture an image with the given configuration
     ///
@@ -177,6 +187,7 @@ mod tests {
                     max_width: 1920,
                     max_height: 1080,
                     sensor_type: SensorType::Mono,
+                    has_dew_heater: false,
                     ..Default::default()
                 },
                 cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -206,6 +217,12 @@ mod tests {
         fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
             Err(super::super::error::CameraError::ParameterNotSupported(
                 "cooler".to_string(),
+            ))
+        }
+
+        fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
+            Err(super::super::error::CameraError::ParameterNotSupported(
+                "dew_heater".to_string(),
             ))
         }
 

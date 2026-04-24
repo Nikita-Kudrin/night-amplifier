@@ -53,6 +53,7 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
         sensor_type,
         bayer_pattern,
         has_cooler: props.isHasCooler == POABool::POA_TRUE,
+        has_dew_heater: false,
         min_temp_c,
         max_temp_c,
         has_shutter: false,

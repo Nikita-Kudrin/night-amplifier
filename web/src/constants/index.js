@@ -179,6 +179,8 @@ export const DEFAULT_SETTINGS = {
         screen_resolution_x: 2880,
         screen_resolution_y: 1440,
     },
+    dew_heater_enabled: true,
+    dew_heater_power: 10,
     telescope: {
         focal_length_mm: null,
         pixel_size_x_um: null,
@@ -243,4 +245,8 @@ export const HELP_TEXTS = {
         'Target sensor temperature in Celsius. Pick a value warm enough that your TEC can hold it consistently (typically 20-30°C below ambient).',
     cooler_fast_mode:
         'Skips the rate-limited temperature ramp (5°C/min) — the camera cools and warms up as fast as the hardware allows. Not recommended for long-term use: abrupt temperature swings can stress the sensor and risk condensation on the cover glass.',
+    dew_heater_enabled:
+        'Activates the anti-dew heater at the front of the camera sensor to prevent condensation on the optical window.',
+    dew_heater_power:
+        'Controls the power level of the anti-dew heater. Typically 10-30% is sufficient for most conditions.',
 }

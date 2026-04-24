@@ -95,6 +95,10 @@ impl Camera for ZwoCamera {
         Err(CameraError::SdkNotAvailable("ZWO".to_string()))
     }
 
+    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
+        Err(CameraError::SdkNotAvailable("ZWO".to_string()))
+    }
+
     fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
         Err(CameraError::SdkNotAvailable("ZWO".to_string()))
     }

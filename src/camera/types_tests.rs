@@ -83,6 +83,7 @@ fn test_capture_config_validation() {
         sensor_type: SensorType::Color,
         bayer_pattern: Some(CfaPattern::Rggb),
         has_cooler: false,
+        has_dew_heater: false,
         min_temp_c: None,
         max_temp_c: None,
         has_shutter: false,

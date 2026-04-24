@@ -45,6 +45,7 @@ pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i
         },
         bayer_pattern,
         has_cooler: info.is_cooler_cam,
+        has_dew_heater: cam.is_control_supported(ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER),
         min_temp_c: if info.is_cooler_cam {
             Some(-40.0)
         } else {

@@ -164,6 +164,14 @@ impl Camera {
         )
     }
 
+    pub fn set_anti_dew_heater(&self, enabled: bool) -> Result<(), String> {
+        self.set_control_value(
+            ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER,
+            if enabled { 1 } else { 0 },
+            ASI_BOOL_ASI_FALSE,
+        )
+    }
+
     pub fn get_temperature(&self) -> Result<f32, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_TEMPERATURE)
             .map(|(v, _)| v as f32 / 10.0)
@@ -187,6 +195,15 @@ impl Camera {
     pub fn get_cooler(&self) -> Result<bool, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_COOLER_ON)
             .map(|(v, _)| v != 0)
+    }
+
+    pub fn get_anti_dew_heater(&self) -> Result<bool, String> {
+        self.get_control_value(ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER)
+            .map(|(v, _)| v != 0)
+    }
+
+    pub fn is_control_supported(&self, control_type: ASI_CONTROL_TYPE) -> bool {
+        self.get_control_value(control_type).is_ok()
     }
 
     pub fn set_image_fmt(&self, format: ASI_IMG_TYPE) -> Result<(), String> {

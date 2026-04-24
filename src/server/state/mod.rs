@@ -543,6 +543,7 @@ mod tests {
             current_gain: 100,
             current_offset: 10,
             current_exposure_us: 1_000_000,
+            dew_heater_on: false,
         };
 
         state
