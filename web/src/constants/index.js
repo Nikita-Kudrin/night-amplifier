@@ -178,6 +178,7 @@ export const DEFAULT_SETTINGS = {
         screen_measurement: 'mm',
         screen_resolution_x: 2880,
         screen_resolution_y: 1440,
+        circular_view: true,
     },
     dew_heater_enabled: true,
     dew_heater_power: 10,
@@ -228,6 +229,8 @@ export const HELP_TEXTS = {
         'Splits the screen into two independent copies of the image based on physical screen dimensions and resolution.',
     eyepiece_screen_settings:
         'Configure physical screen dimensions and resolution to calculate accurate split for Binoview.',
+    eyepiece_circular_view:
+        'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     rejection_method:
         'Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\nChanges apply immediately to subsequent frames.',
     rejection_sigma:

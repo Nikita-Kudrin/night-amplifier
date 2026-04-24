@@ -213,6 +213,15 @@ const HELP = HELP_TEXTS
 
       <div class="control-group">
         <BaseToggle
+            v-model="localSettings.eyepiece.circular_view"
+            label="Circular view"
+            :help="HELP.eyepiece_circular_view"
+            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
+        />
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
             v-model="localSettings.eyepiece.binoview"
             label="Binoview"
             :help="HELP.eyepiece_binoview"

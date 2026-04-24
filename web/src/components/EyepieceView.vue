@@ -22,6 +22,7 @@ const webglSingle = useWebGLRenderer()
 const canvas2dSingle = useCanvas2DRenderer()
 
 const isBinoview = computed(() => settings.value?.eyepiece?.binoview ?? true)
+const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
@@ -91,15 +92,15 @@ onUnmounted(() => {
 
     <div v-show="hasFrame && isBinoview" class="binoview-container">
       <div class="eye left-eye">
-        <canvas ref="canvasLeftRef" class="live-canvas"></canvas>
+        <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
       </div>
       <div class="eye right-eye">
-        <canvas ref="canvasRightRef" class="live-canvas"></canvas>
+        <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
       </div>
     </div>
 
     <div v-show="hasFrame && !isBinoview" class="single-view">
-      <canvas ref="canvasSingleRef" class="live-canvas"></canvas>
+      <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
     </div>
   </div>
 </template>
@@ -150,5 +151,9 @@ onUnmounted(() => {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.live-canvas.circular {
+  clip-path: circle(closest-side at 50% 50%);
 }
 </style>
