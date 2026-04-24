@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 use std::os::raw::{c_char, c_int, c_long, c_uchar};
 use dlopen2::wrapper::{Container, WrapperApi};
 use std::sync::OnceLock;
