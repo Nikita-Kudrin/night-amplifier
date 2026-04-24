@@ -301,6 +301,7 @@ impl Camera for SimulatedCamera {
             current_gain: self.current_gain,
             current_offset: self.current_offset,
             current_exposure_us: self.current_exposure_us,
+            dew_heater_on: false,
         })
     }
 
@@ -315,6 +316,10 @@ impl Camera for SimulatedCamera {
         let mut cooler = self.cooler.lock().unwrap();
         cooler.advance();
         cooler.cooler_on = enabled;
+        Ok(())
+    }
+
+    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
         Ok(())
     }
 
@@ -399,6 +404,7 @@ pub fn create_camera_info(
         sensor_type: probe.sensor_type,
         bayer_pattern: probe.bayer_pattern,
         has_cooler: true,
+        has_dew_heater: false,
         min_temp_c: Some(SIM_AMBIENT_TEMP_C - SIM_MAX_DELTA_C),
         max_temp_c: Some(SIM_AMBIENT_TEMP_C),
         has_shutter: false,

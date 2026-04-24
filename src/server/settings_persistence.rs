@@ -89,9 +89,22 @@ pub struct PersistedSettings {
     /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
     #[serde(default)]
     pub cooler_fast_mode: bool,
-    /// Manual override for camera sensor mode (Player One dual sampling)
     #[serde(default)]
     pub sensor_mode_override: Option<DualSamplingMode>,
+    /// Whether anti-dew heater is enabled
+    #[serde(default = "default_dew_heater_enabled")]
+    pub dew_heater_enabled: bool,
+    /// Anti-dew heater power level (0-100)
+    #[serde(default = "default_dew_heater_power")]
+    pub dew_heater_power: i32,
+}
+
+fn default_dew_heater_enabled() -> bool {
+    true
+}
+
+fn default_dew_heater_power() -> i32 {
+    10
 }
 
 fn default_preload_images() -> usize {
@@ -144,6 +157,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             target_temp_c: settings.target_temp_c,
             cooler_fast_mode: settings.cooler_fast_mode,
             sensor_mode_override: settings.sensor_mode_override,
+            dew_heater_enabled: settings.dew_heater_enabled,
+            dew_heater_power: settings.dew_heater_power,
         }
     }
 }
@@ -183,6 +198,8 @@ impl From<PersistedSettings> for CaptureSettings {
             target_temp_c: persisted.target_temp_c,
             cooler_fast_mode: persisted.cooler_fast_mode,
             sensor_mode_override: persisted.sensor_mode_override,
+            dew_heater_enabled: persisted.dew_heater_enabled,
+            dew_heater_power: persisted.dew_heater_power,
         }
     }
 }
