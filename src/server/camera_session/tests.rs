@@ -97,6 +97,7 @@ impl Camera for MockCamera {
             current_gain: 0,
             current_offset: 0,
             current_exposure_us: 1_000_000,
+            dew_heater_on: false,
         })
     }
 
@@ -107,6 +108,10 @@ impl Camera for MockCamera {
 
     fn set_cooler(&mut self, enabled: bool) -> CameraResult<()> {
         self.cooler.lock().unwrap().cooler_on = enabled;
+        Ok(())
+    }
+
+    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
         Ok(())
     }
 
@@ -565,7 +570,7 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
 
 /// Shape a `CameraInfo` for the unit tests. Only the fields checked by
 /// `apply_camera_profile_on_connect` matter here.
-fn test_camera_info(has_cooler: bool, supports_sensor_modes: bool) -> CameraInfo {
+fn test_camera_info(has_cooler: bool, supports_sensor_modes: bool, has_dew_heater: bool) -> CameraInfo {
     use crate::camera::SensorMode;
     CameraInfo {
         name: "test".to_string(),
@@ -579,6 +584,7 @@ fn test_camera_info(has_cooler: bool, supports_sensor_modes: bool) -> CameraInfo
         } else {
             Vec::new()
         },
+        has_dew_heater,
         ..Default::default()
     }
 }
@@ -594,7 +600,7 @@ fn connect_seeds_profile_for_new_camera() {
     settings.target_temp_c = Some(-5.0);
 
     let key = "PlayerOne/Neptune-C II".to_string();
-    let info = test_camera_info(true, true);
+    let info = test_camera_info(true, true, true);
     lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
 
     // Flat fields unchanged when cooler and sensor modes are supported.
@@ -612,6 +618,8 @@ fn connect_seeds_profile_for_new_camera() {
     assert_eq!(profile.gain, 77);
     assert!(profile.cooler_enabled);
     assert_eq!(profile.target_temp_c, Some(-5.0));
+    assert!(profile.dew_heater_enabled);
+    assert_eq!(profile.dew_heater_power, 10);
 }
 
 #[test]
@@ -634,10 +642,12 @@ fn connect_loads_existing_profile() {
             target_temp_c: Some(-15.0),
             sensor_mode_override: None,
             cooler_fast_mode: false,
+            dew_heater_enabled: true,
+            dew_heater_power: 30,
         },
     );
 
-    let info = test_camera_info(true, true);
+    let info = test_camera_info(true, true, true);
     lifecycle::apply_camera_profile_on_connect(&mut settings, key, &info);
 
     assert_eq!(settings.exposure_us, 9_999);
@@ -658,7 +668,7 @@ fn connect_clamps_cooler_for_uncooled_camera() {
     settings.gain = 150;
 
     let key = "PlayerOne/Neptune-C II".to_string();
-    let info = test_camera_info(false, true);
+    let info = test_camera_info(false, true, false);
     lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
 
     // Flat fields clamped.
@@ -687,7 +697,7 @@ fn connect_clamps_sensor_mode_for_camera_without_modes() {
     settings.gain = 150;
 
     let key = "PlayerOne/Neptune-C II".to_string();
-    let info = test_camera_info(false, false);
+    let info = test_camera_info(false, false, false);
     lifecycle::apply_camera_profile_on_connect(&mut settings, key.clone(), &info);
 
     // Flat field + seeded profile both have the stale override cleared.

@@ -136,7 +136,8 @@ impl ZwoCamera {
                 .map_err(CameraError::from)?
                 .map_err(|e| CameraError::OpenFailed(e))?;
 
-        let info = build_camera_info(&camera, &camera_info_handle, camera_id);
+        let mut info = build_camera_info(&camera, &camera_info_handle, camera_id);
+        info.has_dew_heater = camera.is_control_supported(ffi_types::ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER);
 
         Ok(Self {
             camera,
@@ -345,8 +346,6 @@ impl Camera for ZwoCamera {
                 .map_err(CameraError::from)?
                 .unwrap_or(0) as u64;
 
-        let cooler_power = None; // ZWO SDK doesn't expose cooler power simply
-
         let cooler_on = if self.info.has_cooler {
             catch_ffi_panic("ZWO::get_cooler", || self.camera.get_cooler())
                 .map_err(CameraError::from)?
@@ -355,16 +354,23 @@ impl Camera for ZwoCamera {
             false
         };
 
-        let is_exposing = false;
+        let dew_heater_on = if self.info.has_dew_heater {
+            catch_ffi_panic("ZWO::get_anti_dew_heater", || self.camera.get_anti_dew_heater())
+                .map_err(CameraError::from)?
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         Ok(CameraStatus {
             temperature_c: temperature,
-            cooler_power,
+            cooler_power: None,
             cooler_on,
-            is_exposing,
+            is_exposing: false,
             current_gain,
             current_offset,
             current_exposure_us,
+            dew_heater_on,
         })
     }
 
@@ -387,6 +393,15 @@ impl Camera for ZwoCamera {
         catch_ffi_panic("ZWO::set_cooler", || self.camera.set_cooler(enabled))
             .map_err(CameraError::from)?
             .map_err(|e| CameraError::CoolingFailed(e))
+    }
+
+    fn set_dew_heater(&mut self, enabled: bool, _power: i32) -> CameraResult<()> {
+        if !self.info.has_dew_heater {
+            return Err(CameraError::ParameterNotSupported("dew_heater".to_string()));
+        }
+        catch_ffi_panic("ZWO::set_anti_dew_heater", || self.camera.set_anti_dew_heater(enabled))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ParameterNotSupported(format!("{:?}", e)))
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {

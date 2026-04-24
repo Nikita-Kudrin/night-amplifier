@@ -93,6 +93,7 @@ impl PlayerOneCamera {
             .map_err(|e| CameraError::OpenFailed(format!("{:?}", e)))?;
 
         info.sensor_modes = sensor_mode::list_sensor_modes(camera.id());
+        info.has_dew_heater = camera.is_config_supported(ffi_types::POAConfig::POA_HEATER_POWER);
 
         Ok(Self {
             camera,
@@ -158,6 +159,17 @@ impl Camera for PlayerOneCamera {
             false
         };
 
+        let dew_heater_on = if self.info.has_dew_heater {
+            catch_ffi_panic("PlayerOne::dew_heater_power", || {
+                self.camera.dew_heater_power()
+            })
+            .map_err(CameraError::from)?
+            .map(|p| p > 0)
+            .unwrap_or(false)
+        } else {
+            false
+        };
+
         Ok(CameraStatus {
             temperature_c: temperature,
             cooler_power,
@@ -166,6 +178,7 @@ impl Camera for PlayerOneCamera {
             current_gain,
             current_offset,
             current_exposure_us,
+            dew_heater_on,
         })
     }
 
@@ -187,6 +200,18 @@ impl Camera for PlayerOneCamera {
         catch_ffi_panic("PlayerOne::set_cooler", || self.camera.set_cooler(enabled))
             .map_err(CameraError::from)?
             .map_err(|e| CameraError::CoolingFailed(format!("{:?}", e)))
+    }
+
+    fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()> {
+        if !self.info.has_dew_heater {
+            return Err(CameraError::ParameterNotSupported("dew_heater".to_string()));
+        }
+        let power_val = if enabled { power as i64 } else { 0 };
+        catch_ffi_panic("PlayerOne::set_dew_heater_power", || {
+            self.camera.set_dew_heater_power(power_val)
+        })
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::ParameterNotSupported(format!("dew_heater: {:?}", e)))
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {

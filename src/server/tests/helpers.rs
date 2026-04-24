@@ -99,6 +99,7 @@ pub async fn add_mock_camera(state: &Arc<AppState>, camera_id: &str) {
         sensor_type: SensorType::Color,
         bayer_pattern: Some(CfaPattern::Rggb),
         has_cooler: true,
+        has_dew_heater: false,
         min_temp_c: Some(-40.0),
         max_temp_c: Some(20.0),
         has_shutter: false,

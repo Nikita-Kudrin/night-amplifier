@@ -92,7 +92,11 @@ impl Camera for PlayerOneCamera {
     }
 
     fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-        Err(CameraError::SdkNotAvailable("PlayerOne".to_string()))
+        Ok(())
+    }
+
+    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
+        Ok(())
     }
 
     fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {

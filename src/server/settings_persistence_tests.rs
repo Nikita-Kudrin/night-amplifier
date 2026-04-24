@@ -37,9 +37,11 @@ mod tests {
             use_simulated_camera: true,
             simulated_preload_images: 10,
             comet_roi: None,
+            planetary_roi: None,
+            dew_heater_enabled: true,
+            dew_heater_power: 30,
             wanderer_mode: true,
             push_to_fov: Some(2.5),
-            planetary_roi: None,
             eyepiece: EyepieceSettings {
                 binoview: true,
                 screen_width: 140.0,
@@ -79,6 +81,8 @@ mod tests {
                         target_temp_c: None,
                         sensor_mode_override: None,
                         cooler_fast_mode: false,
+                        dew_heater_enabled: true,
+                        dew_heater_power: 15,
                     },
                 ),
                 (
@@ -92,6 +96,8 @@ mod tests {
                         target_temp_c: Some(-10.0),
                         sensor_mode_override: None,
                         cooler_fast_mode: true,
+                        dew_heater_enabled: false,
+                        dew_heater_power: 0,
                     },
                 ),
             ]),
@@ -192,6 +198,8 @@ mod tests {
         assert_eq!(restored.last_camera_name, Some("Neptune-C II".to_string()));
         assert!(restored.cooler_enabled);
         assert_eq!(restored.target_temp_c, Some(-10.0));
+        assert!(restored.dew_heater_enabled);
+        assert_eq!(restored.dew_heater_power, 30);
     }
 
     #[test]
@@ -239,6 +247,8 @@ mod tests {
             target_temp_c: None,
             cooler_fast_mode: false,
             sensor_mode_override: None,
+            dew_heater_enabled: false,
+            dew_heater_power: 0,
         };
 
         persistence.save(&settings).unwrap();

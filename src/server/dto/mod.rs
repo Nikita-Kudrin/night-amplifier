@@ -242,6 +242,10 @@ pub struct SettingsResponse {
     /// When null, the mode is auto-selected based on `stacking_type`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensor_mode_override: Option<DualSamplingMode>,
+    /// Whether anti-dew heater is enabled
+    pub dew_heater_enabled: bool,
+    /// Anti-dew heater power level (0-100)
+    pub dew_heater_power: i32,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -278,6 +282,8 @@ impl From<&CaptureSettings> for SettingsResponse {
             target_temp_c: settings.target_temp_c,
             cooler_fast_mode: settings.cooler_fast_mode,
             sensor_mode_override: settings.sensor_mode_override,
+            dew_heater_enabled: settings.dew_heater_enabled,
+            dew_heater_power: settings.dew_heater_power,
         }
     }
 }
@@ -416,9 +422,14 @@ pub struct UpdateSettingsRequest {
     /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
     #[serde(default)]
     pub cooler_fast_mode: Option<bool>,
-    /// Manual override for camera sensor mode (Player One dual sampling)
     #[serde(default)]
     pub sensor_mode_override: Option<DualSamplingMode>,
+    /// Whether anti-dew heater is enabled
+    #[serde(default)]
+    pub dew_heater_enabled: Option<bool>,
+    /// Anti-dew heater power level (0-100)
+    #[serde(default)]
+    pub dew_heater_power: Option<i32>,
 }
 
 /// Configure simulated camera request
