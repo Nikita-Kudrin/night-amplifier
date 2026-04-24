@@ -2,7 +2,7 @@
 import {ref, provide, onMounted, watch} from 'vue'
 import {useEventStream} from './composables/useWebSocket.js'
 import {useAppState} from './composables/useAppState.js'
-import {getAstapStatus, getCatalogStatus, clearTarget} from './composables/api.js'
+import {getAstapStatus, getCatalogStatus} from './composables/api.js'
 
 import CameraPanel from './components/CameraPanel.vue'
 import CaptureControls from './components/CaptureControls.vue'
