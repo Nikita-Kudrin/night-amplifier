@@ -49,6 +49,7 @@ mod tests {
                 screen_measurement: "mm".to_string(),
                 screen_resolution_x: 2880,
                 screen_resolution_y: 1440,
+                circular_view: true,
             },
             telescope: TelescopeSettings {
                 focal_length_mm: Some(1000.0),
@@ -160,6 +161,10 @@ mod tests {
             settings.eyepiece.screen_resolution_y
         );
         assert_eq!(
+            restored.eyepiece.circular_view,
+            settings.eyepiece.circular_view
+        );
+        assert_eq!(
             restored.telescope.focal_length_mm,
             settings.telescope.focal_length_mm
         );
@@ -238,6 +243,7 @@ mod tests {
                 screen_measurement: "mm".to_string(),
                 screen_resolution_x: 2880,
                 screen_resolution_y: 1440,
+                circular_view: true,
             },
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
@@ -271,6 +277,7 @@ mod tests {
         assert_eq!(loaded.use_simulated_camera, settings.use_simulated_camera);
         assert_eq!(loaded.push_to_fov, settings.push_to_fov);
         assert_eq!(loaded.eyepiece.binoview, settings.eyepiece.binoview);
+        assert_eq!(loaded.eyepiece.circular_view, settings.eyepiece.circular_view);
     }
 
     #[test]

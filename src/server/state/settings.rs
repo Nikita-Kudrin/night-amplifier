@@ -216,6 +216,13 @@ pub struct EyepieceSettings {
     pub screen_resolution_x: u32,
     /// Screen resolution Y
     pub screen_resolution_y: u32,
+    /// Enable Circular view
+    #[serde(default = "default_circular_view")]
+    pub circular_view: bool,
+}
+
+fn default_circular_view() -> bool {
+    true
 }
 
 impl Default for EyepieceSettings {
@@ -227,6 +234,7 @@ impl Default for EyepieceSettings {
             screen_measurement: "mm".to_string(),
             screen_resolution_x: 2880,
             screen_resolution_y: 1440,
+            circular_view: true,
         }
     }
 }
