@@ -107,6 +107,7 @@ watch(
           temperature_c: event.temperature_c,
           cooler_power: event.cooler_power ?? null,
           cooler_on: event.cooler_on,
+          dew_heater_on: event.dew_heater_on,
           target_temp_c: event.target_temp_c ?? null,
         })
       }
