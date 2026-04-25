@@ -145,6 +145,7 @@ pub struct CameraInfoResponse {
     pub pixel_size_y_um: f64,
     pub sensor_type: String,
     pub has_cooler: bool,
+    pub has_dew_heater: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_temp_c: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,6 +171,7 @@ impl CameraInfoResponse {
             pixel_size_y_um: info.pixel_size_y_um,
             sensor_type: format!("{:?}", info.sensor_type),
             has_cooler: info.has_cooler,
+            has_dew_heater: info.has_dew_heater,
             min_temp_c: info.min_temp_c,
             max_temp_c: info.max_temp_c,
             bit_depth: info.bit_depth,
