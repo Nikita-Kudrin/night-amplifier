@@ -363,6 +363,7 @@ impl AppState {
             status.temperature_c,
             status.cooler_power,
             status.cooler_on,
+            status.dew_heater_on,
             target_temp_c,
         ));
     }
@@ -563,12 +564,14 @@ mod tests {
                 temperature_c,
                 cooler_power,
                 cooler_on,
+                dew_heater_on,
                 target_temp_c,
             } => {
                 assert_eq!(name, "Test Cam");
                 assert_eq!(temperature_c, -5.0);
                 assert_eq!(cooler_power, Some(60.0));
                 assert!(cooler_on);
+                assert!(!dew_heater_on);
                 assert_eq!(target_temp_c, Some(-10.0));
             }
             other => panic!("Unexpected event: {:?}", other),

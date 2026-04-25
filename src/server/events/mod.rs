@@ -44,6 +44,7 @@ pub enum ServerEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         cooler_power: Option<f64>,
         cooler_on: bool,
+        dew_heater_on: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         target_temp_c: Option<f64>,
     },
@@ -256,6 +257,7 @@ impl ServerEvent {
         temperature_c: f64,
         cooler_power: Option<f64>,
         cooler_on: bool,
+        dew_heater_on: bool,
         target_temp_c: Option<f64>,
     ) -> Self {
         ServerEvent::CameraStatusUpdated {
@@ -263,6 +265,7 @@ impl ServerEvent {
             temperature_c,
             cooler_power,
             cooler_on,
+            dew_heater_on,
             target_temp_c,
         }
     }
@@ -457,7 +460,7 @@ mod tests {
     #[test]
     fn test_camera_status_updated_serialization() {
         let event =
-            ServerEvent::camera_status_updated("Test Cam", -8.5, Some(42.0), true, Some(-10.0));
+            ServerEvent::camera_status_updated("Test Cam", -8.5, Some(42.0), true, true, Some(-10.0));
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_status_updated");
@@ -465,12 +468,13 @@ mod tests {
         assert_eq!(json["temperature_c"], -8.5);
         assert_eq!(json["cooler_power"], 42.0);
         assert_eq!(json["cooler_on"], true);
+        assert_eq!(json["dew_heater_on"], true);
         assert_eq!(json["target_temp_c"], -10.0);
     }
 
     #[test]
     fn test_camera_status_updated_omits_none_fields() {
-        let event = ServerEvent::camera_status_updated("Test Cam", 20.0, None, false, None);
+        let event = ServerEvent::camera_status_updated("Test Cam", 20.0, None, false, false, None);
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_status_updated");

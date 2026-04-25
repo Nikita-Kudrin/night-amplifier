@@ -99,6 +99,7 @@ pub struct SimulatedCamera {
     current_offset: i32,
     /// Simulated cooler state (always present so the simulator can model cooled cameras).
     cooler: Mutex<SimulatedCoolerState>,
+    dew_heater_on: AtomicBool,
 }
 
 impl SimulatedCamera {
@@ -163,6 +164,7 @@ impl SimulatedCamera {
             current_gain: 0,
             current_offset: 10,
             cooler: Mutex::new(SimulatedCoolerState::new()),
+            dew_heater_on: AtomicBool::new(false),
         })
     }
 
@@ -301,7 +303,7 @@ impl Camera for SimulatedCamera {
             current_gain: self.current_gain,
             current_offset: self.current_offset,
             current_exposure_us: self.current_exposure_us,
-            dew_heater_on: false,
+            dew_heater_on: self.dew_heater_on.load(Ordering::SeqCst),
         })
     }
 
@@ -319,7 +321,8 @@ impl Camera for SimulatedCamera {
         Ok(())
     }
 
-    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
+    fn set_dew_heater(&mut self, enabled: bool, _power: i32) -> CameraResult<()> {
+        self.dew_heater_on.store(enabled, Ordering::SeqCst);
         Ok(())
     }
 
@@ -404,7 +407,7 @@ pub fn create_camera_info(
         sensor_type: probe.sensor_type,
         bayer_pattern: probe.bayer_pattern,
         has_cooler: true,
-        has_dew_heater: false,
+        has_dew_heater: true,
         min_temp_c: Some(SIM_AMBIENT_TEMP_C - SIM_MAX_DELTA_C),
         max_temp_c: Some(SIM_AMBIENT_TEMP_C),
         has_shutter: false,
