@@ -115,3 +115,12 @@ harness = false
 [[bench]]
 name = "disk_writer_benchmark"
 harness = false
+
+[[bench]]
+name = "encoding_benchmark"
+harness = false
+
+[[bench]]
+name = "render_benchmark"
+harness = false
+

@@ -40,3 +40,6 @@
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 mod integration;
+mod encoding_tests {
+    include!("integration/encoding_tests.rs");
+}
