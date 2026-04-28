@@ -232,6 +232,11 @@ impl StackingPipeline {
     ///
     /// The frame can be dropped after this call - only pixel values
     /// needed for stacking are retained.
+    #[instrument(skip(self, frame), fields(
+        resolution = %format!("{}x{}", frame.width(), frame.height()),
+        stars_detected = tracing::field::Empty,
+        stacked = tracing::field::Empty
+    ))]
     pub fn process_frame(&mut self, frame: &Frame) -> FrameProcessingResult {
         self.stats.frames_received += 1;
 
@@ -302,6 +307,10 @@ impl StackingPipeline {
         }
 
         self.stats.frames_stacked += 1;
+
+        let span = tracing::Span::current();
+        span.record("stars_detected", stars_detected);
+        span.record("stacked", true);
 
         FrameProcessingResult {
             stacked: true,

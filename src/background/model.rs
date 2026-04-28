@@ -103,6 +103,7 @@ impl BackgroundModel {
 
         // Determine actual aggressiveness (auto-detect if -1.0)
         let aggressiveness = if self.aggressiveness < 0.0 {
+            let _span = tracing::info_span!("compute_auto_aggressiveness").entered();
             self.compute_auto_aggressiveness()
         } else {
             self.aggressiveness
@@ -111,6 +112,7 @@ impl BackgroundModel {
         // In gradient-only mode, find the reference level per channel using percentile
         // and subtract only the difference from that reference, scaled by aggressiveness
         let offsets: Vec<f32> = if self.gradient_only {
+            let _span = tracing::info_span!("compute_reference_levels").entered();
             (0..channels)
                 .map(|c| self.compute_reference_level(c))
                 .collect()
@@ -118,57 +120,64 @@ impl BackgroundModel {
             vec![0.0; channels]
         };
 
-        // Pre-calculate X and Y interpolation weights
-        let mut gx_weights = Vec::with_capacity(width);
-        for x in 0..width {
-            let gx = (x as f32 + 0.5) * self.grid_width as f32 / self.image_width as f32 - 0.5;
-            let gx0 = (gx.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
-            let gx1 = (gx0 + 1).min(self.grid_width - 1);
-            let fx = (gx - gx0 as f32).clamp(0.0, 1.0);
-            gx_weights.push((gx0, gx1, fx));
-        }
+        let (gx_weights, gy_weights) = {
+            let _span = tracing::info_span!("prepare_interpolation_weights").entered();
+            // Pre-calculate X and Y interpolation weights
+            let mut gx_weights = Vec::with_capacity(width);
+            for x in 0..width {
+                let gx = (x as f32 + 0.5) * self.grid_width as f32 / self.image_width as f32 - 0.5;
+                let gx0 = (gx.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
+                let gx1 = (gx0 + 1).min(self.grid_width - 1);
+                let fx = (gx - gx0 as f32).clamp(0.0, 1.0);
+                gx_weights.push((gx0, gx1, fx));
+            }
 
-        let mut gy_weights = Vec::with_capacity(self.image_height);
-        for y in 0..self.image_height {
-            let gy = (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
-            let gy0 = (gy.floor() as isize).clamp(0, self.grid_height as isize - 1) as usize;
-            let gy1 = (gy0 + 1).min(self.grid_height - 1);
-            let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
-            gy_weights.push((gy0, gy1, fy));
-        }
+            let mut gy_weights = Vec::with_capacity(self.image_height);
+            for y in 0..self.image_height {
+                let gy = (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
+                let gy0 = (gy.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
+                let gy1 = (gy0 + 1).min(self.grid_height - 1);
+                let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
+                gy_weights.push((gy0, gy1, fy));
+            }
+            (gx_weights, gy_weights)
+        };
 
         let data = frame.data_mut();
 
-        // Process in parallel by rows
-        data.par_chunks_mut(width * channels)
-            .enumerate()
-            .for_each(|(y, row)| {
-                let (gy0, gy1, fy) = gy_weights[y];
-                
-                for x in 0..width {
-                    let (gx0, gx1, fx) = gx_weights[x];
+        {
+            let _span = tracing::info_span!("apply_subtraction").entered();
+            // Process in parallel by rows
+            data.par_chunks_mut(width * channels)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    let (gy0, gy1, fy) = gy_weights[y];
                     
-                    for c in 0..channels {
-                        let idx = x * channels + c;
+                    for x in 0..width {
+                        let (gx0, gx1, fx) = gx_weights[x];
                         
-                        // Inline get_background logic using precalculated weights
-                        let grid = &self.grid_values[c];
-                        let v00 = grid[gy0 * self.grid_width + gx0];
-                        let v10 = grid[gy0 * self.grid_width + gx1];
-                        let v01 = grid[gy1 * self.grid_width + gx0];
-                        let v11 = grid[gy1 * self.grid_width + gx1];
-                        
-                        let v0 = v00 * (1.0 - fx) + v10 * fx;
-                        let v1 = v01 * (1.0 - fx) + v11 * fx;
-                        let bg = v0 * (1.0 - fy) + v1 * fy;
-                        
-                        // Subtract background minus offset, scaled by aggressiveness
-                        let gradient = bg - offsets[c];
-                        let subtraction = gradient * aggressiveness;
-                        row[idx] = (row[idx] - subtraction).max(0.0);
+                        for c in 0..channels {
+                            let idx = x * channels + c;
+                            
+                            // Inline get_background logic using precalculated weights
+                            let grid = &self.grid_values[c];
+                            let v00 = grid[gy0 * self.grid_width + gx0];
+                            let v10 = grid[gy0 * self.grid_width + gx1];
+                            let v01 = grid[gy1 * self.grid_width + gx0];
+                            let v11 = grid[gy1 * self.grid_width + gx1];
+                            
+                            let v0 = v00 * (1.0 - fx) + v10 * fx;
+                            let v1 = v01 * (1.0 - fx) + v11 * fx;
+                            let bg = v0 * (1.0 - fy) + v1 * fy;
+                            
+                            // Subtract background minus offset, scaled by aggressiveness
+                            let gradient = bg - offsets[c];
+                            let subtraction = gradient * aggressiveness;
+                            row[idx] = (row[idx] - subtraction).max(0.0);
+                        }
                     }
-                }
-            });
+                });
+        }
     }
 
     /// Compute reference level for a channel using the configured percentile
