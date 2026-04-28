@@ -83,6 +83,7 @@ impl RenderPipeline {
 
         // Stage 1: Background subtraction
         if self.config.background_subtraction {
+            let _span = tracing::info_span!("background_subtraction").entered();
             if let Err(e) =
                 subtract_background_with_config(frame, self.config.background_config.clone())
             {
@@ -95,6 +96,7 @@ impl RenderPipeline {
 
         // Stage 2: Auto-stretch
         if self.config.auto_stretch {
+            let _span = tracing::info_span!("auto_stretch").entered();
             match auto_stretch_frame(frame, self.config.stretch_config) {
                 Ok(stretch_result) => {
                     result.stretch_result = Some(stretch_result);
@@ -112,6 +114,7 @@ impl RenderPipeline {
 
         // Stage 3: Saturation boost (RGB only)
         if self.config.saturation_boost && channels == 3 {
+            let _span = tracing::info_span!("saturation_boost").entered();
             let mut sat_config = self.config.saturation_config;
             sat_config.enabled = true;
 
@@ -125,6 +128,7 @@ impl RenderPipeline {
 
         // Stage 4: Contrast adjustment (RGB only for now)
         if self.config.contrast && channels == 3 && !self.config.contrast_config.is_disabled() {
+            let _span = tracing::info_span!("contrast_adjustment").entered();
             if let Err(e) = apply_contrast_frame(frame, &self.config.contrast_config) {
                 warn!(error = %e, "Contrast adjustment failed");
             } else {

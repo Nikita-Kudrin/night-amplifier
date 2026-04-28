@@ -49,14 +49,20 @@ impl ImageRegistration {
     pub fn register(&self, ref_stars: &[Star], tgt_stars: &[Star]) -> Result<AffineTransform> {
         self.validate_input(ref_stars, tgt_stars)?;
 
-        let ref_triangles = self.matcher.generate_triangles_adaptive(ref_stars);
-        let tgt_triangles = self.matcher.generate_triangles_adaptive(tgt_stars);
+        let (ref_triangles, tgt_triangles) = {
+            let _span = tracing::info_span!("generate_triangles").entered();
+            let ref_tri = self.matcher.generate_triangles_adaptive(ref_stars);
+            let tgt_tri = self.matcher.generate_triangles_adaptive(tgt_stars);
+            (ref_tri, tgt_tri)
+        };
 
         self.validate_triangles(&ref_triangles, &tgt_triangles)?;
 
-        let triangle_matches = self
-            .matcher
-            .match_triangles_adaptive(&ref_triangles, &tgt_triangles);
+        let triangle_matches = {
+            let _span = tracing::info_span!("match_triangles").entered();
+            self.matcher
+                .match_triangles_adaptive(&ref_triangles, &tgt_triangles)
+        };
 
         if triangle_matches.is_empty() {
             return Err(StackError::Registration(
@@ -64,13 +70,16 @@ impl ImageRegistration {
             ));
         }
 
-        let correspondences = self.matcher.vote_correspondences(
-            ref_stars,
-            tgt_stars,
-            &ref_triangles,
-            &tgt_triangles,
-            &triangle_matches,
-        );
+        let correspondences = {
+            let _span = tracing::info_span!("vote_correspondences").entered();
+            self.matcher.vote_correspondences(
+                ref_stars,
+                tgt_stars,
+                &ref_triangles,
+                &tgt_triangles,
+                &triangle_matches,
+            )
+        };
 
         if correspondences.len() < self.config.min_matches {
             return Err(StackError::Registration(format!(
@@ -134,6 +143,7 @@ impl ImageRegistration {
         Ok(())
     }
 
+    #[instrument(skip(self, ref_stars, tgt_stars, correspondences))]
     fn estimate_with_optional_ransac(
         &self,
         ref_stars: &[Star],
@@ -148,6 +158,7 @@ impl ImageRegistration {
         }
     }
 
+    #[instrument(skip(self, ref_stars, tgt_stars, correspondences))]
     fn estimate_with_ransac(
         &self,
         ref_stars: &[Star],
@@ -177,6 +188,7 @@ impl ImageRegistration {
         }
     }
 
+    #[instrument(skip(self, ref_stars, tgt_stars, correspondences))]
     fn estimate_transform(
         &self,
         ref_stars: &[Star],

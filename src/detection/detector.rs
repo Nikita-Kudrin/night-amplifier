@@ -35,23 +35,38 @@ impl StarDetector {
         max_stars = ?self.config.max_stars
     ))]
     pub fn detect(&self, frame: &Frame) -> Result<Vec<Star>> {
-        let luminance = compute_luminance(frame);
+        let luminance = {
+            let _span = tracing::info_span!("compute_luminance").entered();
+            compute_luminance(frame)
+        };
         let width = frame.width();
         let height = frame.height();
 
-        let stats = BackgroundStats::estimate(&luminance, self.config.sigma_threshold);
-        let candidates = self.find_local_maxima(&luminance, width, height, &stats);
+        let stats = {
+            let _span = tracing::info_span!("background_stats").entered();
+            BackgroundStats::estimate(&luminance, self.config.sigma_threshold)
+        };
+        let candidates = {
+            let _span = tracing::info_span!("find_local_maxima").entered();
+            self.find_local_maxima(&luminance, width, height, &stats)
+        };
 
-        let mut stars: Vec<Star> = candidates
-            .into_iter()
-            .filter_map(|(x, y)| self.compute_centroid(&luminance, width, height, x, y, &stats))
-            .collect();
+        let mut stars: Vec<Star> = {
+            let _span = tracing::info_span!("compute_centroids", candidates = candidates.len()).entered();
+            candidates
+                .into_iter()
+                .filter_map(|(x, y)| self.compute_centroid(&luminance, width, height, x, y, &stats))
+                .collect()
+        };
 
-        stars.sort_by(|a, b| {
-            b.flux
-                .partial_cmp(&a.flux)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        {
+            let _span = tracing::info_span!("sort_stars").entered();
+            stars.sort_by(|a, b| {
+                b.flux
+                    .partial_cmp(&a.flux)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
 
         if let Some(max) = self.config.max_stars {
             stars.truncate(max);

@@ -144,7 +144,10 @@ pub fn encode_rgb8_lz4_chunked(frame: &Frame, chunk_count: usize) -> Result<Vec<
     use rayon::prelude::*;
 
     let chunk_count = chunk_count.max(1);
-    let (rgb8_data, width, height) = frame_to_rgb8(frame)?;
+    let (rgb8_data, width, height) = {
+        let _span = tracing::info_span!("frame_to_rgb8").entered();
+        frame_to_rgb8(frame)?
+    };
 
     let row_bytes = width as usize * 3;
     let total_rows = height as usize;
@@ -165,13 +168,16 @@ pub fn encode_rgb8_lz4_chunked(frame: &Frame, chunk_count: usize) -> Result<Vec<
     }
 
     // Compress each stripe in parallel
-    let compressed_chunks: Vec<Vec<u8>> = stripe_ranges
-        .par_iter()
-        .map(|&(start, end)| {
-            let stripe = &rgb8_data[start..end];
-            lz4_flex::compress(stripe)
-        })
-        .collect();
+    let compressed_chunks: Vec<Vec<u8>> = {
+        let _span = tracing::info_span!("lz4_compress_parallel", chunk_count).entered();
+        stripe_ranges
+            .par_iter()
+            .map(|&(start, end)| {
+                let stripe = &rgb8_data[start..end];
+                lz4_flex::compress(stripe)
+            })
+            .collect()
+    };
 
     // Compute output size
     let descriptors_size = chunk_count * SA09_CHUNK_DESCRIPTOR_SIZE;
