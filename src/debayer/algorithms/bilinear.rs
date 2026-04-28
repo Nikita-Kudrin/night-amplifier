@@ -45,21 +45,20 @@ pub fn debayer_bilinear_to_rgb8(frame: &Frame, pattern: CfaPattern) -> Result<Ve
     let height = frame.height();
     let input = frame.data();
 
-    // Allocate an uninitialized vector of the exact size needed, or just collect from par_chunks
-    // We will use collect to avoid zero-initialization overhead, similar to to_rgb8_fast
-    let output: Vec<u8> = (0..height)
-        .into_par_iter()
-        .flat_map_iter(|y| {
-            let mut row = Vec::with_capacity(width * 3);
+    let mut output = vec![0u8; width * height * 3];
+
+    output
+        .par_chunks_mut(width * 3)
+        .enumerate()
+        .for_each(|(y, row)| {
             for x in 0..width {
                 let (r, g, b) = bilinear_at(input, width, height, x, y, pattern);
-                row.push((r.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
-                row.push((g.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
-                row.push((b.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
+                let out_idx = x * 3;
+                row[out_idx] = (r.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                row[out_idx + 1] = (g.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                row[out_idx + 2] = (b.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
             }
-            row
-        })
-        .collect();
+        });
 
     Ok(output)
 }

@@ -135,9 +135,13 @@ impl BackgroundExtractor {
         buffer.clear();
 
         for y in y_start..y_end {
-            for x in x_start..x_end {
-                buffer.push(frame.get_pixel(x, y, channel));
-            }
+            let row_start = y * frame.width();
+            let start_idx = row_start + x_start;
+            let end_idx = row_start + x_end;
+            
+            // Frame is contiguous, we can extend from slice but wait, Frame's channel data might be interleaved
+            // For now, keep the simple loop or use extend with map
+            buffer.extend((x_start..x_end).map(|x| frame.get_pixel(x, y, channel)));
         }
 
         if buffer.is_empty() {
@@ -188,9 +192,7 @@ impl BackgroundExtractor {
             return 0.0;
         }
         deviations.clear();
-        for &v in values {
-            deviations.push((v - median).abs());
-        }
+        deviations.extend(values.iter().map(|&v| (v - median).abs()));
         Self::median(deviations)
     }
 
