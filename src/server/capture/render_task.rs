@@ -2,7 +2,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::server::encoding::encode_rgb8_lz4;
+use crate::server::encoding::encode_rgb8_lz4_chunked;
 use crate::server::state::AppState;
 
 use super::channel::StackedFrame;
@@ -11,14 +11,23 @@ use super::pipeline;
 /// Preview rendering and encoding, running on a dedicated OS thread.
 ///
 /// Drains the channel to the latest frame to keep the UI responsive.
-/// Runs `process_preview_frame()` + `encode_rgb8_lz4()` and pushes
+/// Runs `process_preview_frame()` + `encode_rgb8_lz4_chunked()` and pushes
 /// the encoded data to the WebSocket stream.
+///
+/// LZ4 chunk count is dynamic:
+/// - Live view (not stacking): max parallelism for responsive UI
+/// - Stacking active: single chunk to yield CPU cores to the stacking pipeline
 pub fn run_render_task(
     state: Arc<AppState>,
     render_rx: mpsc::Receiver<StackedFrame>,
     rt: tokio::runtime::Handle,
 ) {
     debug!("Render task started");
+
+    let max_chunks = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
 
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
@@ -40,10 +49,13 @@ pub fn run_render_task(
             continue;
         }
 
+        // Use max parallel chunks for live view, single chunk during stacking
+        let chunk_count = if was_stacked { 1 } else { max_chunks };
+
         // Encode frame as RGB8+LZ4 for streaming
         let encode_result = {
             let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
-            encode_rgb8_lz4(&display_frame)
+            encode_rgb8_lz4_chunked(&display_frame, chunk_count)
         };
         match encode_result {
             Ok(encoded_data) => {

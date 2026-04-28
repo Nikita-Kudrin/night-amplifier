@@ -9,6 +9,7 @@ export const WS_STATES = {
 }
 
 export const RGB8_MAGIC = 0x53413038 // "SA08"
+export const RGB8_CHUNKED_MAGIC = 0x53413039 // "SA09"
 export const RGB8_HEADER_SIZE = 16
 export const RGB8_BYTES_PER_PIXEL = 3
 
@@ -181,6 +182,65 @@ export function createInvalidMagicBuffer() {
     view.setUint32(8, 2, true)
     view.setUint32(12, 16, true)
     return buffer
+}
+
+const SA09_HEADER_SIZE = 20
+const SA09_CHUNK_DESCRIPTOR_SIZE = 8
+
+export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fillValue = 100) {
+    const lz4 = require('lz4js')
+    const rgb8Data = createRgb8PixelData(width, height, fillValue)
+    const rowBytes = width * RGB8_BYTES_PER_PIXEL
+    const totalRows = height
+    const rowsPerChunk = Math.floor(totalRows / chunkCount)
+    const remainderRows = totalRows % chunkCount
+
+    const chunks = []
+    let rowOffset = 0
+    for (let i = 0; i < chunkCount; i++) {
+        const rows = rowsPerChunk + (i < remainderRows ? 1 : 0)
+        const start = rowOffset * rowBytes
+        const end = (rowOffset + rows) * rowBytes
+        const stripe = rgb8Data.subarray(start, end)
+
+        const maxSize = lz4.compressBound(stripe.length)
+        const compressed = lz4.makeBuffer(maxSize)
+        const compressedSize = lz4.compressBlock(stripe, compressed, 0, stripe.length, [])
+        chunks.push({
+            compressed: compressed.subarray(0, compressedSize),
+            decompressedSize: stripe.length,
+        })
+        rowOffset += rows
+    }
+
+    const descriptorsSize = chunkCount * SA09_CHUNK_DESCRIPTOR_SIZE
+    const compressedTotal = chunks.reduce((sum, c) => sum + c.compressed.length, 0)
+    const payloadSize = descriptorsSize + compressedTotal
+    const totalSize = SA09_HEADER_SIZE + payloadSize
+
+    const result = new ArrayBuffer(totalSize)
+    const view = new DataView(result)
+
+    view.setUint32(0, RGB8_CHUNKED_MAGIC, true)
+    view.setUint32(4, width, true)
+    view.setUint32(8, height, true)
+    view.setUint32(12, payloadSize, true)
+    view.setUint32(16, chunkCount, true)
+
+    let descOffset = SA09_HEADER_SIZE
+    let dataOffset = SA09_HEADER_SIZE + descriptorsSize
+    const bytes = new Uint8Array(result)
+
+    for (const chunk of chunks) {
+        view.setUint32(descOffset, chunk.compressed.length, true)
+        view.setUint32(descOffset + 4, chunk.decompressedSize, true)
+        descOffset += SA09_CHUNK_DESCRIPTOR_SIZE
+
+        bytes.set(chunk.compressed, dataOffset)
+        dataOffset += chunk.compressed.length
+    }
+
+    return result
 }
 
 // --- Setup Global Mock ---
