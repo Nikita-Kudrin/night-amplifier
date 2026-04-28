@@ -155,7 +155,7 @@ pub fn run_stacking_task(
                     .unwrap_or(false),
             }
         } else {
-            true
+            false
         };
 
         // Trigger plate solving asynchronously
