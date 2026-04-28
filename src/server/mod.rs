@@ -41,7 +41,7 @@ mod ws;
 mod tests;
 
 pub use dto::*;
-pub use encoding::{encode_rgb8_lz4, RGB8_MAGIC};
+pub use encoding::{encode_rgb8_lz4, encode_rgb8_lz4_chunked, RGB8_CHUNKED_MAGIC, RGB8_MAGIC};
 pub use error::{ApiError, ApiResult, ServerError};
 pub use events::ServerEvent;
 pub use services::{CameraService, CaptureService};

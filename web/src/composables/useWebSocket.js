@@ -1,6 +1,6 @@
 import {ref, onUnmounted, shallowRef, computed} from 'vue'
 import {WS_RECONNECT} from '../constants'
-import {decodeRgb8Lz4} from '../utils/frameDecoder.js'
+import {decodeFrame} from '../utils/frameDecoder.js'
 
 /**
  * WebSocket connection manager composable
@@ -426,7 +426,7 @@ export function useImageStream() {
             }
 
             // Decode RGB8+LZ4 format
-            const decoded = decodeRgb8Lz4(buffer)
+            const decoded = decodeFrame(buffer)
 
             if (decoded) {
                 frameData.value = decoded.frameData
