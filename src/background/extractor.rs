@@ -65,6 +65,8 @@ impl BackgroundExtractor {
                     .par_chunks_mut(self.config.grid_width)
                     .enumerate()
                     .for_each(|(gy, row)| {
+                        let mut buffer = Vec::with_capacity(block_width * block_height);
+                        let mut mad_buffer = Vec::with_capacity(block_width * block_height);
                         for gx in 0..self.config.grid_width {
                             let x_start = gx * block_width;
                             let y_start = gy * block_height;
@@ -80,7 +82,7 @@ impl BackgroundExtractor {
                             };
 
                             row[gx] = self.compute_block_median(
-                                frame, x_start, y_start, x_end, y_end, channel,
+                                frame, x_start, y_start, x_end, y_end, channel, &mut buffer, &mut mad_buffer
                             );
                         }
                     });
@@ -127,33 +129,34 @@ impl BackgroundExtractor {
         x_end: usize,
         y_end: usize,
         channel: usize,
+        buffer: &mut Vec<f32>,
+        mad_buffer: &mut Vec<f32>,
     ) -> f32 {
-        // Collect all pixels in the block
-        let mut pixels: Vec<f32> = Vec::with_capacity((x_end - x_start) * (y_end - y_start));
+        buffer.clear();
 
         for y in y_start..y_end {
             for x in x_start..x_end {
-                pixels.push(frame.get_pixel(x, y, channel));
+                buffer.push(frame.get_pixel(x, y, channel));
             }
         }
 
-        if pixels.is_empty() {
+        if buffer.is_empty() {
             return 0.0;
         }
 
         // First pass: compute initial median and MAD
-        let initial_median = Self::median(&mut pixels);
-        let mad = Self::median_absolute_deviation(&pixels, initial_median);
+        let initial_median = Self::median(buffer);
+        let mad = Self::median_absolute_deviation(buffer, initial_median, mad_buffer);
 
         // Second pass: reject pixels above threshold (likely stars)
         let threshold = initial_median + self.config.star_rejection_sigma * mad * 1.4826; // 1.4826 scales MAD to std dev
 
-        pixels.retain(|&v| v <= threshold);
+        buffer.retain(|&v| v <= threshold);
 
-        if pixels.is_empty() {
+        if buffer.is_empty() {
             initial_median
         } else {
-            Self::median(&mut pixels)
+            Self::median(buffer)
         }
     }
 
@@ -180,12 +183,15 @@ impl BackgroundExtractor {
     }
 
     /// Compute Median Absolute Deviation
-    pub(crate) fn median_absolute_deviation(values: &[f32], median: f32) -> f32 {
+    pub(crate) fn median_absolute_deviation(values: &[f32], median: f32, deviations: &mut Vec<f32>) -> f32 {
         if values.is_empty() {
             return 0.0;
         }
-        let mut deviations: Vec<f32> = values.iter().map(|&v| (v - median).abs()).collect();
-        Self::median(&mut deviations)
+        deviations.clear();
+        for &v in values {
+            deviations.push((v - median).abs());
+        }
+        Self::median(deviations)
     }
 
     /// Estimate and subtract background in one step

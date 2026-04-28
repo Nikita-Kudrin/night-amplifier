@@ -6,7 +6,7 @@
 mod bilinear;
 mod vng;
 
-pub use bilinear::debayer_bilinear;
+pub use bilinear::{debayer_bilinear, debayer_bilinear_to_rgb8};
 pub use vng::debayer_vng;
 
 use crate::debayer::CfaPattern;
