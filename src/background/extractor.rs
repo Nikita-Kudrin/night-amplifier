@@ -56,37 +56,40 @@ impl BackgroundExtractor {
         let mut grid_values =
             vec![vec![0.0f32; self.config.grid_width * self.config.grid_height]; channels];
 
-        // Process channels in parallel, and rows within each channel in parallel
-        grid_values
-            .par_iter_mut()
-            .enumerate()
-            .for_each(|(channel, channel_grid)| {
-                channel_grid
-                    .par_chunks_mut(self.config.grid_width)
-                    .enumerate()
-                    .for_each(|(gy, row)| {
-                        let mut buffer = Vec::with_capacity(block_width * block_height);
-                        let mut mad_buffer = Vec::with_capacity(block_width * block_height);
-                        for gx in 0..self.config.grid_width {
-                            let x_start = gx * block_width;
-                            let y_start = gy * block_height;
-                            let x_end = if gx == self.config.grid_width - 1 {
-                                width
-                            } else {
-                                x_start + block_width
-                            };
-                            let y_end = if gy == self.config.grid_height - 1 {
-                                height
-                            } else {
-                                y_start + block_height
-                            };
+        {
+            let _span = tracing::info_span!("compute_grid_medians").entered();
+            // Process channels in parallel, and rows within each channel in parallel
+            grid_values
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(channel, channel_grid)| {
+                    channel_grid
+                        .par_chunks_mut(self.config.grid_width)
+                        .enumerate()
+                        .for_each(|(gy, row)| {
+                            let mut buffer = Vec::with_capacity(block_width * block_height);
+                            let mut mad_buffer = Vec::with_capacity(block_width * block_height);
+                            for gx in 0..self.config.grid_width {
+                                let x_start = gx * block_width;
+                                let y_start = gy * block_height;
+                                let x_end = if gx == self.config.grid_width - 1 {
+                                    width
+                                } else {
+                                    x_start + block_width
+                                };
+                                let y_end = if gy == self.config.grid_height - 1 {
+                                    height
+                                } else {
+                                    y_start + block_height
+                                };
 
-                            row[gx] = self.compute_block_median(
-                                frame, x_start, y_start, x_end, y_end, channel, &mut buffer, &mut mad_buffer
-                            );
-                        }
-                    });
-            });
+                                row[gx] = self.compute_block_median(
+                                    frame, x_start, y_start, x_end, y_end, channel, &mut buffer, &mut mad_buffer
+                                );
+                            }
+                        });
+                });
+        }
 
         match self.config.algorithm {
             BackgroundExtractionAlgorithm::GridBilinear => {

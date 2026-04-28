@@ -21,12 +21,19 @@ pub use ops::fast_median;
 use compute::compute_channel_stats;
 use ops::{compute_mad_in_place_simd, min_max_simd};
 
+use tracing::instrument;
+
 /// Compute robust image statistics (median and MAD) per channel
 pub fn compute_image_stats(frame: &Frame) -> Result<ImageStats> {
     compute_image_stats_with_config(frame, StatsConfig::default())
 }
 
 /// Compute image statistics with custom configuration
+#[instrument(skip(frame), fields(
+    resolution = %format!("{}x{}", frame.width(), frame.height()),
+    sample_count = tracing::field::Empty,
+    channels = frame.channels()
+))]
 pub fn compute_image_stats_with_config(frame: &Frame, config: StatsConfig) -> Result<ImageStats> {
     let width = frame.width();
     let height = frame.height();
@@ -47,6 +54,8 @@ pub fn compute_image_stats_with_config(frame: &Frame, config: StatsConfig) -> Re
     } else {
         total_pixels / sample_count
     };
+
+    tracing::Span::current().record("sample_count", sample_count);
 
     // Compute statistics for each channel in parallel
     let channel_stats: Vec<ChannelStats> = (0..channels)

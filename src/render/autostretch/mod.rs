@@ -36,18 +36,27 @@ pub fn auto_stretch_frame(
         )));
     }
 
-    let stats = compute_image_stats(frame)?;
+    let stats = {
+        let _span = tracing::info_span!("compute_image_stats").entered();
+        compute_image_stats(frame)?
+    };
     let result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
 
     if channels == 3 && config.per_channel_black_point {
         let bp_config = BlackPointConfig::new(config.black_point_sigma);
-        let black_points = calculate_black_points(frame, &stats, bp_config)?;
+        let black_points = {
+            let _span = tracing::info_span!("calculate_black_points").entered();
+            calculate_black_points(frame, &stats, bp_config)?
+        };
         subtract_black_point(frame, &black_points)?;
     } else {
         subtract_black_point_uniform(frame, result.black_point)?;
     }
 
-    apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor)?;
+    {
+        let _span = tracing::info_span!("apply_tone_mapping").entered();
+        apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor)?;
+    }
 
     Ok(result)
 }
