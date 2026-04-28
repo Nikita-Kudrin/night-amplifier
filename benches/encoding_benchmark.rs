@@ -19,8 +19,11 @@ fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
 }
 
 fn bench_encoding(c: &mut Criterion) {
-    // IMX464 resolution
-    let frame_imx464 = create_test_frame(2712, 1538, 3);
+    // IMX464 resolution (3 channels - fast path)
+    let frame_imx464_rgb = create_test_frame(2712, 1538, 3);
+    
+    // IMX464 resolution (1 channel - slow path with debayer)
+    let frame_imx464_mono = create_test_frame(2712, 1538, 1);
     
     // 4K resolution (to test downsampling threshold)
     let frame_4k = create_test_frame(3840, 2160, 3);
@@ -33,8 +36,12 @@ fn bench_encoding(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
 
-    group.bench_function("encode_imx464", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&frame_imx464)).unwrap())
+    group.bench_function("encode_imx464_rgb", |b| {
+        b.iter(|| encode_rgb8_lz4(black_box(&frame_imx464_rgb)).unwrap())
+    });
+
+    group.bench_function("encode_imx464_mono", |b| {
+        b.iter(|| encode_rgb8_lz4(black_box(&frame_imx464_mono)).unwrap())
     });
     
     group.bench_function("encode_4k", |b| {

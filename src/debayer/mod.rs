@@ -36,7 +36,7 @@ use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use tracing::instrument;
 
-use algorithms::{debayer_bilinear, debayer_vng};
+use algorithms::{debayer_bilinear, debayer_bilinear_to_rgb8, debayer_vng};
 
 /// Debayering algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -144,6 +144,11 @@ pub fn debayer_with_pattern(frame: &Frame, pattern: CfaPattern) -> Result<Frame>
 /// Convenience function to debayer with full configuration
 pub fn debayer_with_config(frame: &Frame, config: DebayerConfig) -> Result<Frame> {
     Debayerer::new(config).debayer(frame)
+}
+
+/// Fast path: Debayer with bilinear directly to RGB8
+pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
+    debayer_bilinear_to_rgb8(frame, pattern)
 }
 
 /// Debayer a frame with automatic CFA pattern detection

@@ -38,6 +38,32 @@ pub fn debayer_bilinear(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
     Frame::from_f32_vec(output, width, height, 3)
 }
 
+/// Perform bilinear debayering directly to a 8-bit RGB vector
+/// Bypasses intermediate f32 Frame allocations for encoding/streaming
+pub fn debayer_bilinear_to_rgb8(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
+    let width = frame.width();
+    let height = frame.height();
+    let input = frame.data();
+
+    // Allocate an uninitialized vector of the exact size needed, or just collect from par_chunks
+    // We will use collect to avoid zero-initialization overhead, similar to to_rgb8_fast
+    let output: Vec<u8> = (0..height)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let mut row = Vec::with_capacity(width * 3);
+            for x in 0..width {
+                let (r, g, b) = bilinear_at(input, width, height, x, y, pattern);
+                row.push((r.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
+                row.push((g.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
+                row.push((b.max(0.0).min(1.0) * 255.0 + 0.5) as u8);
+            }
+            row
+        })
+        .collect();
+
+    Ok(output)
+}
+
 /// Bilinear interpolation at a single pixel
 pub(crate) fn bilinear_at(
     data: &[f32],
