@@ -21,35 +21,70 @@ pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {
     use lz4_flex::block::{compress_into, get_maximum_output_size};
     use rayon::prelude::*;
 
-    let rgb8_data = if frame.channels() == 1 {
+    // Check if downsampling is needed (max 4K)
+    let (process_frame, width, height) = if frame.width() > 3840 || frame.height() > 2160 {
+        let aspect_ratio = frame.width() as f32 / frame.height() as f32;
+        let (target_width, target_height) = if frame.width() > frame.height() {
+            (3840, (3840.0 / aspect_ratio) as usize)
+        } else {
+            ((2160.0 * aspect_ratio) as usize, 2160)
+        };
+
+        let mut binned = Frame::zeros(target_width, target_height, frame.channels())
+            .map_err(|e| e.to_string())?;
+
+        let x_scale = frame.width() as f32 / target_width as f32;
+        let y_scale = frame.height() as f32 / target_height as f32;
+
+        binned
+            .data_mut()
+            .par_chunks_mut(target_width * frame.channels())
+            .enumerate()
+            .for_each(|(y, row)| {
+                let src_y = ((y as f32 + 0.5) * y_scale) as usize;
+                for x in 0..target_width {
+                    let src_x = ((x as f32 + 0.5) * x_scale) as usize;
+                    for c in 0..frame.channels() {
+                        let idx = x * frame.channels() + c;
+                        row[idx] = frame.get_pixel(src_x, src_y, c);
+                    }
+                }
+            });
+        (std::borrow::Cow::Owned(binned), target_width as u32, target_height as u32)
+    } else {
+        (std::borrow::Cow::Borrowed(frame), frame.width() as u32, frame.height() as u32)
+    };
+
+    let frame_ref = &*process_frame;
+
+    let rgb8_data = if frame_ref.channels() == 1 {
         // 1. Try to debayer
         match crate::debayer::debayer_auto_with_algorithm(
-            frame,
+            frame_ref,
             crate::debayer::DebayerAlgorithm::Bilinear,
         ) {
             Ok((rgb_frame, _)) => rgb_frame.to_rgb8_fast(),
             Err(_) => {
                 // 2. Fallback: Duplicate mono data to standard RGB8
-                let gray_data = frame.data();
-                let mut out = vec![0u8; gray_data.len() * 3];
-
-                out.par_chunks_exact_mut(3)
-                    .zip(gray_data.par_iter())
-                    .for_each(|(out_chunk, &v)| {
+                let gray_data = frame_ref.data();
+                let mut out = Vec::with_capacity(gray_data.len() * 3);
+                
+                // Using map instead of zip/for_each avoids zero-initialization of vec
+                let rgb_flat: Vec<u8> = gray_data
+                    .par_iter()
+                    .flat_map_iter(|&v| {
                         let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                        out_chunk[0] = val;
-                        out_chunk[1] = val;
-                        out_chunk[2] = val;
-                    });
+                        [val, val, val]
+                    })
+                    .collect();
+                out.extend_from_slice(&rgb_flat);
                 out
             }
         }
     } else {
-        frame.to_rgb8_fast()
+        frame_ref.to_rgb8_fast()
     };
 
-    let width = frame.width() as u32;
-    let height = frame.height() as u32;
     let uncompressed_len = rgb8_data.len() as u32;
     let max_compressed_len = get_maximum_output_size(rgb8_data.len());
 

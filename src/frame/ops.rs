@@ -19,15 +19,9 @@ impl Frame {
 
     /// Converts the frame to 8-bit output using Rayon parallelism
     pub fn to_rgb8_fast(&self) -> Vec<u8> {
-        let mut output = vec![0u8; self.data.len()];
-
-        output
-            .par_iter_mut()
-            .zip(self.data.par_iter())
-            .for_each(|(out, &v)| {
-                *out = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-            });
-
-        output
+        self.data
+            .par_iter()
+            .map(|&v| (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8)
+            .collect()
     }
 }
