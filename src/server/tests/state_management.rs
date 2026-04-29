@@ -210,9 +210,11 @@ async fn test_frame_captured_broadcasts_event() {
         ServerEvent::FrameCaptured {
             frame_number,
             stacked_count,
+            rejected_count,
         } => {
             assert_eq!(frame_number, 1);
             assert_eq!(stacked_count, 1);
+            assert_eq!(rejected_count, 0);
         }
         _ => panic!("Expected FrameCaptured event"),
     }
@@ -231,10 +233,12 @@ async fn test_frame_rejected_broadcasts_event() {
         ServerEvent::FrameRejected {
             frame_number,
             stacked_count,
+            rejected_count,
             reason,
         } => {
             assert_eq!(frame_number, 1);
             assert_eq!(stacked_count, 0);
+            assert_eq!(rejected_count, 1);
             assert_eq!(reason, "Test reason");
         }
         _ => panic!("Expected FrameRejected event"),

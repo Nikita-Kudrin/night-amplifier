@@ -40,7 +40,7 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
     <div v-if="hasFrame" class="frame-info">
       <span class="frame-info-line">
         <span class="fps-container">
-          <span class="frame-number">FPS {{ fps }}</span>
+          <span class="fps-display">FPS {{ fps }}</span>
           <BaseInfoIcon message="Frames Per Second (FPS) indicates how many images are being processed and displayed per second from the live stream." />
         </span>
       </span>
@@ -170,7 +170,7 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   gap: 0.5rem;
 }
 
-.zoom-level, .frame-number, .render-backend {
+.zoom-level, .fps-display, .render-backend {
   font-family: var(--font-mono);
 }
 

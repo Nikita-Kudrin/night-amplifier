@@ -166,6 +166,7 @@ export function useEventStream() {
     const captureState = ref('Idle')
     const frameCount = ref(0)
     const stackedCount = ref(0)
+    const rejectedCount = ref(0)
     const droppedCount = ref(0)
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
@@ -203,6 +204,7 @@ export function useEventStream() {
     function handleFrameEvent(data) {
         frameCount.value = data.frame_number
         stackedCount.value = data.stacked_count
+        rejectedCount.value = data.rejected_count
     }
 
     const eventHandlers = {
@@ -211,6 +213,7 @@ export function useEventStream() {
             if (data.state === 'Starting') {
                 frameCount.value = 0
                 stackedCount.value = 0
+                rejectedCount.value = 0
                 droppedCount.value = 0
             }
         },
@@ -365,6 +368,7 @@ export function useEventStream() {
         captureState,
         frameCount,
         stackedCount,
+        rejectedCount,
         droppedCount,
         lastError,
         diskWriterWarning,

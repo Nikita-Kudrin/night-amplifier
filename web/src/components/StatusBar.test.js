@@ -12,6 +12,7 @@ describe('StatusBar', () => {
                 captureState: ref('Idle'),
                 frameCount: ref(0),
                 stackedCount: ref(0),
+                rejectedCount: ref(0),
                 droppedCount: ref(0),
                 lastError: ref(null),
                 clearError: vi.fn(),
@@ -139,6 +140,7 @@ describe('StatusBar', () => {
                 eventStream: {
                     frameCount: ref(42),
                     stackedCount: ref(40),
+                    rejectedCount: ref(2),
                 },
             })
 
@@ -161,7 +163,22 @@ describe('StatusBar', () => {
             expect(frames.text()).toContain('Total 42')
             expect(frames.text()).not.toContain('Rejected')
         })
-    })
+
+        it('shows only total when stacking is disabled (Live View)', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    frameCount: ref(42),
+                    stackedCount: ref(0),
+                    rejectedCount: ref(0),
+                },
+            })
+
+            const frames = wrapper.find('.frames')
+            expect(frames.exists()).toBe(true)
+            expect(frames.text()).toContain('Total 42')
+            expect(frames.text()).not.toContain('Rejected')
+        })
+     })
 
     describe('Error Display', () => {
         it('does not show error when lastError is null', () => {

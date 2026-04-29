@@ -12,18 +12,20 @@ async fn test_event_to_json_all_variants() {
     assert_eq!(json["state"], "Capturing");
 
     // FrameCaptured
-    let event = ServerEvent::frame_captured(42, 10);
+    let event = ServerEvent::frame_captured(42, 10, 2);
     let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
     assert_eq!(json["type"], "frame_captured");
     assert_eq!(json["frame_number"], 42);
     assert_eq!(json["stacked_count"], 10);
+    assert_eq!(json["rejected_count"], 2);
 
     // FrameRejected
-    let event = ServerEvent::frame_rejected(5, 3, "Bad alignment");
+    let event = ServerEvent::frame_rejected(5, 3, 2, "Bad alignment");
     let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
     assert_eq!(json["type"], "frame_rejected");
     assert_eq!(json["frame_number"], 5);
     assert_eq!(json["stacked_count"], 3);
+    assert_eq!(json["rejected_count"], 2);
     assert_eq!(json["reason"], "Bad alignment");
 
     // SettingsUpdated
