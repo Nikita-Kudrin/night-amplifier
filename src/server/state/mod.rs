@@ -234,30 +234,41 @@ impl AppState {
 
     /// Increment frame count and broadcast event
     pub async fn frame_captured(&self, stacked: bool) {
-        let (frame_number, stacked_count) = {
+        let (frame_number, stacked_count, rejected_count) = {
             let mut session = self.session.write().await;
             session.frame_count += 1;
             if stacked {
                 session.stacked_count += 1;
+            } else {
+                let settings = self.settings.read().await;
+                if settings.stacking {
+                    session.rejected_count += 1;
+                }
             }
-            (session.frame_count, session.stacked_count)
+            (session.frame_count, session.stacked_count, session.rejected_count)
         };
         let _ = self
             .events
-            .send(ServerEvent::frame_captured(frame_number, stacked_count));
+            .send(ServerEvent::frame_captured(frame_number, stacked_count, rejected_count));
     }
 
     /// Record a rejected frame
     pub async fn frame_rejected(&self, reason: String) {
-        let (frame_number, stacked_count) = {
+        let (frame_number, stacked_count, rejected_count) = {
             let mut session = self.session.write().await;
             session.frame_count += 1;
-            session.rejected_count += 1;
-            (session.frame_count, session.stacked_count)
+            
+            let settings = self.settings.read().await;
+            if settings.stacking {
+                session.rejected_count += 1;
+            }
+            
+            (session.frame_count, session.stacked_count, session.rejected_count)
         };
         let _ = self.events.send(ServerEvent::frame_rejected(
             frame_number,
             stacked_count,
+            rejected_count,
             reason,
         ));
     }
