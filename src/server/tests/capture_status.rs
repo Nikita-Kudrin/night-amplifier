@@ -52,5 +52,5 @@ async fn test_capture_status_with_frame_counts() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["frame_count"], 4);
     assert_eq!(json["data"]["stacked_count"], 2);
-    assert_eq!(json["data"]["rejected_count"], 1);
+    assert_eq!(json["data"]["rejected_count"], 2);
 }

@@ -1,6 +1,7 @@
 <script setup>
 import {computed, inject} from 'vue'
 import {CAPTURE_STATES} from '../constants'
+import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 
 const eventStream = inject('eventStream')
 const selectedCamera = inject('selectedCamera')
@@ -45,9 +46,7 @@ const connectionStatus = computed(() => {
   return 'connected'
 })
 
-const rejectedCount = computed(() => {
-  return eventStream.frameCount.value - eventStream.stackedCount.value
-})
+const rejectedCount = computed(() => eventStream.rejectedCount.value)
 
 
 </script>
@@ -191,6 +190,11 @@ const rejectedCount = computed(() => {
       </svg>
       <span v-if="rejectedCount > 0">Rejected {{ rejectedCount }} | Total {{ eventStream.frameCount.value }}</span>
       <span v-else>Total {{ eventStream.frameCount.value }}</span>
+      
+      <BaseInfoIcon 
+        v-if="eventStream.frameCount.value > 0 || eventStream.droppedCount.value > 0"
+        message="Total: Frames captured and processed. Rejected: Captured frames that failed alignment or quality checks. Dropped: Frames discarded because the CPU was too busy to process them." 
+      />
     </div>
 
     <!-- Dropped frames counter -->

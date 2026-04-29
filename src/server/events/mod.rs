@@ -19,12 +19,14 @@ pub enum ServerEvent {
     FrameCaptured {
         frame_number: u64,
         stacked_count: u64,
+        rejected_count: u64,
     },
 
     /// Frame was rejected
     FrameRejected {
         frame_number: u64,
         stacked_count: u64,
+        rejected_count: u64,
         reason: String,
     },
 
@@ -225,21 +227,24 @@ impl ServerEvent {
         }
     }
 
-    pub fn frame_captured(frame_number: u64, stacked_count: u64) -> Self {
+    pub fn frame_captured(frame_number: u64, stacked_count: u64, rejected_count: u64) -> Self {
         ServerEvent::FrameCaptured {
             frame_number,
             stacked_count,
+            rejected_count,
         }
     }
 
     pub fn frame_rejected(
         frame_number: u64,
         stacked_count: u64,
+        rejected_count: u64,
         reason: impl Into<String>,
     ) -> Self {
         ServerEvent::FrameRejected {
             frame_number,
             stacked_count,
+            rejected_count,
             reason: reason.into(),
         }
     }
@@ -377,22 +382,24 @@ mod tests {
 
     #[test]
     fn test_frame_captured_serialization() {
-        let event = ServerEvent::frame_captured(42, 10);
+        let event = ServerEvent::frame_captured(42, 10, 2);
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "frame_captured");
         assert_eq!(json["frame_number"], 42);
         assert_eq!(json["stacked_count"], 10);
+        assert_eq!(json["rejected_count"], 2);
     }
 
     #[test]
     fn test_frame_rejected_serialization() {
-        let event = ServerEvent::frame_rejected(5, 3, "Bad alignment");
+        let event = ServerEvent::frame_rejected(5, 3, 2, "Bad alignment");
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "frame_rejected");
         assert_eq!(json["frame_number"], 5);
         assert_eq!(json["stacked_count"], 3);
+        assert_eq!(json["rejected_count"], 2);
         assert_eq!(json["reason"], "Bad alignment");
     }
 

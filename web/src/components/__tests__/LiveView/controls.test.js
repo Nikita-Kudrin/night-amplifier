@@ -38,15 +38,15 @@ describe('LiveView - Zoom Controls', () => {
         expect(wrapper.find('.zoom-level').exists()).toBe(false)
     })
 
-    it('displays frame number', async () => {
+    it('displays FPS', async () => {
         mocks.mockImageStream.frameData.value = createMockFrameData(2, 2)
         mocks.mockImageStream.dimensions.value = {width: 2, height: 2}
-        mocks.mockImageStream.frameNumber.value = 42
+        mocks.mockImageStream.fps.value = 42
         const wrapper = mountLiveView()
 
         await nextTick()
 
-        expect(wrapper.find('.frame-number').text()).toContain('42')
+        expect(wrapper.find('.fps-display').text()).toContain('FPS 42')
     })
 
     it('displays render backend info', async () => {

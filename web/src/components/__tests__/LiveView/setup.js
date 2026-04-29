@@ -127,6 +127,7 @@ export function createMockImageStream() {
         frameData: shallowRef(null),
         dimensions: ref({width: 0, height: 0}),
         frameNumber: ref(0),
+        fps: ref(0),
         decodeError: ref(null),
         connect: vi.fn(),
         disconnect: vi.fn(),
