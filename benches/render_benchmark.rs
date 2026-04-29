@@ -42,7 +42,8 @@ fn bench_subtract_from(c: &mut Criterion) {
 
 fn bench_auto_stretch(c: &mut Criterion) {
     let frame = create_test_frame(2712, 1538, 3);
-    let stretch_config = AutoStretchConfig::default();
+    use night_amplifier::render::ToneMappingAlgorithm;
+    let stretch_config = AutoStretchConfig::default().with_tone_mapping(ToneMappingAlgorithm::Mtf);
 
     let mut group = c.benchmark_group("auto_stretch");
     group.sample_size(10);
