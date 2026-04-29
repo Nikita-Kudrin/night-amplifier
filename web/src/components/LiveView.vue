@@ -13,7 +13,7 @@ import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 
-const {connected, frameData, dimensions, frameNumber, clearFrameData} = useImageStream()
+const {connected, frameData, dimensions, frameNumber, fps, clearFrameData} = useImageStream()
 
 const pushDirection = computed(() => eventStream.pushDirection.value)
 const currentTarget = computed(() => eventStream.currentTarget.value)
@@ -264,7 +264,7 @@ const backendLabel = computed(() => {
     <!-- Controls (Zoom, Frame Info) -->
     <LiveViewControls
         :scale="scale"
-        :frame-number="frameNumber"
+        :fps="fps"
         :backend-label="backendLabel"
         :is-fullscreen="isFullscreen"
         :has-frame="hasFrame"
