@@ -206,11 +206,12 @@ pub fn calculate_black_points(
         });
     }
 
-    Ok([
-        calculate_black_point(frame, 0, &stats.channels[0], config.sigma_factor),
-        calculate_black_point(frame, 1, &stats.channels[1], config.sigma_factor),
-        calculate_black_point(frame, 2, &stats.channels[2], config.sigma_factor),
-    ])
+    let mut bps = [0.0; 3];
+    bps.par_iter_mut().enumerate().for_each(|(i, bp)| {
+        *bp = calculate_black_point(frame, i, &stats.channels[i], config.sigma_factor);
+    });
+
+    Ok(bps)
 }
 
 /// Calculate a single (luminance-based) black point for all channels

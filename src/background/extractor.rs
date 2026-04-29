@@ -137,14 +137,13 @@ impl BackgroundExtractor {
     ) -> f32 {
         buffer.clear();
 
+        let channels_count = frame.channels();
+        let width = frame.width();
+        let data = frame.data();
+
         for y in y_start..y_end {
-            let row_start = y * frame.width();
-            let start_idx = row_start + x_start;
-            let end_idx = row_start + x_end;
-            
-            // Frame is contiguous, we can extend from slice but wait, Frame's channel data might be interleaved
-            // For now, keep the simple loop or use extend with map
-            buffer.extend((x_start..x_end).map(|x| frame.get_pixel(x, y, channel)));
+            let row_offset = y * width * channels_count;
+            buffer.extend((x_start..x_end).map(|x| data[row_offset + x * channels_count + channel]));
         }
 
         if buffer.is_empty() {
