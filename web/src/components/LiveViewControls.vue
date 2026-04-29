@@ -1,10 +1,12 @@
 <script setup>
+import BaseInfoIcon from './ui/BaseInfoIcon.vue'
+
 defineProps({
   scale: {
     type: Number,
     default: 1.0
   },
-  frameNumber: {
+  fps: {
     type: Number,
     default: 0
   },
@@ -37,7 +39,10 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   <div class="controls-overlay">
     <div v-if="hasFrame" class="frame-info">
       <span class="frame-info-line">
-        <span class="frame-number">Frame {{ frameNumber }}</span>
+        <span class="fps-container">
+          <span class="frame-number">FPS {{ fps }}</span>
+          <BaseInfoIcon message="Frames Per Second (FPS) indicates how many images are being processed and displayed per second from the live stream." />
+        </span>
       </span>
       <span class="render-backend" :title="'Rendering: ' + backendLabel">{{ backendLabel }}</span>
     </div>
@@ -167,6 +172,12 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
 
 .zoom-level, .frame-number, .render-backend {
   font-family: var(--font-mono);
+}
+
+.fps-container {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .render-backend {

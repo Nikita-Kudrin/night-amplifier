@@ -399,7 +399,11 @@ export function useImageStream() {
     const frameData = shallowRef(null)
     const dimensions = ref({width: 0, height: 0})
     const frameNumber = ref(0)
+    const fps = ref(0)
     const decodeError = ref(null)
+
+    let framesSinceLastFPS = 0
+    let fpsTimer = null
 
     /**
      * Clear frame data to reset the live view
@@ -409,10 +413,34 @@ export function useImageStream() {
         frameData.value = null
         dimensions.value = {width: 0, height: 0}
         frameNumber.value = 0
+        fps.value = 0
+        framesSinceLastFPS = 0
         decodeError.value = null
     }
 
+    function startFpsTimer() {
+        if (fpsTimer) return
+        fpsTimer = setInterval(() => {
+            fps.value = parseFloat((framesSinceLastFPS / 3).toFixed(1))
+            framesSinceLastFPS = 0
+        }, 3000)
+    }
+
+    function stopFpsTimer() {
+        if (fpsTimer) {
+            clearInterval(fpsTimer)
+            fpsTimer = null
+        }
+    }
+
     const {connected, error, connect, disconnect} = useWebSocket('/ws/stream', {
+        onOpen: () => {
+            startFpsTimer()
+        },
+        onClose: () => {
+            stopFpsTimer()
+            fps.value = 0
+        },
         onMessage: async (event) => {
             let buffer
 
@@ -432,11 +460,16 @@ export function useImageStream() {
                 frameData.value = decoded.frameData
                 dimensions.value = {width: decoded.width, height: decoded.height}
                 frameNumber.value++
+                framesSinceLastFPS++
                 decodeError.value = null
             } else {
                 decodeError.value = 'Failed to decode frame'
             }
         },
+    })
+
+    onUnmounted(() => {
+        stopFpsTimer()
     })
 
     return {
@@ -446,6 +479,7 @@ export function useImageStream() {
         frameData,
         dimensions,
         frameNumber,
+        fps,
         connect,
         disconnect,
         clearFrameData,
