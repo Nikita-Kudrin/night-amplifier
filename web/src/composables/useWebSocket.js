@@ -257,6 +257,7 @@ export function useEventStream() {
         },
         target_changed(data) {
             currentTarget.value = {
+                name: data.name,
                 designation: data.designation,
                 ra_degrees: data.ra_degrees,
                 dec_degrees: data.dec_degrees,

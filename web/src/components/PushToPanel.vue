@@ -134,7 +134,7 @@ function formatFov(deg) {
 async function selectTarget(entry) {
   // Clear search first (sets skipNextSearch flag), then set query
   clearSearch()
-  searchQuery.value = entry.designation
+  searchQuery.value = entry.name || entry.designation
   await selectTargetByName(entry.designation)
 }
 
@@ -233,7 +233,7 @@ onUnmounted(() => {
           <button class="btn-clear" title="Clear target" @click="clearTarget">&times;</button>
         </div>
         <div class="target-info">
-          <span class="target-name">{{ currentTarget.name || 'Custom' }}</span>
+          <span class="target-name">{{ currentTarget.name || currentTarget.designation || 'Custom' }}</span>
           <span v-if="currentTarget.designation" class="target-designation">{{
               currentTarget.designation
             }}</span>

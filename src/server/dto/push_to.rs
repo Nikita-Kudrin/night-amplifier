@@ -62,7 +62,7 @@ pub struct CoordinateResponse {
 pub struct CatalogEntryResponse {
     pub designation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub common_name: Option<String>,
+    pub name: Option<String>,
     pub catalog_type: String,
     pub ra_degrees: f64,
     pub dec_degrees: f64,
