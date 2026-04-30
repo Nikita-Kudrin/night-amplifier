@@ -24,6 +24,10 @@ pub struct BackgroundModel {
     reference_percentile: f32,
     /// Aggressiveness of subtraction (0.0 to 1.0, or -1.0 for auto)
     aggressiveness: f32,
+    /// Pixel X coordinates of grid columns (enables fast delta-stepping subtraction)
+    nodes_x: Option<Vec<usize>>,
+    /// Pixel Y coordinates of grid rows (enables fast delta-stepping subtraction)
+    nodes_y: Option<Vec<usize>>,
 }
 
 impl BackgroundModel {
@@ -49,6 +53,41 @@ impl BackgroundModel {
             gradient_only,
             reference_percentile,
             aggressiveness,
+            nodes_x: None,
+            nodes_y: None,
+        }
+    }
+
+    /// Create a model with explicit node coordinates for fast delta-stepping subtraction.
+    ///
+    /// When `nodes_x` and `nodes_y` are present, `subtract_from()` uses a scanline
+    /// delta-stepping inner loop instead of per-pixel weight lookups.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_node_coords(
+        grid_values: Vec<Vec<f32>>,
+        grid_width: usize,
+        grid_height: usize,
+        image_width: usize,
+        image_height: usize,
+        channels: usize,
+        gradient_only: bool,
+        reference_percentile: f32,
+        aggressiveness: f32,
+        nodes_x: Vec<usize>,
+        nodes_y: Vec<usize>,
+    ) -> Self {
+        Self {
+            grid_values,
+            grid_width,
+            grid_height,
+            image_width,
+            image_height,
+            channels,
+            gradient_only,
+            reference_percentile,
+            aggressiveness,
+            nodes_x: Some(nodes_x),
+            nodes_y: Some(nodes_y),
         }
     }
 
@@ -98,9 +137,6 @@ impl BackgroundModel {
         aggressiveness = self.aggressiveness
     ))]
     pub fn subtract_from(&self, frame: &mut Frame) {
-        let width = frame.width();
-        let channels = frame.channels();
-
         // Determine actual aggressiveness (auto-detect if -1.0)
         let aggressiveness = if self.aggressiveness < 0.0 {
             let _span = tracing::info_span!("compute_auto_aggressiveness").entered();
@@ -113,16 +149,112 @@ impl BackgroundModel {
         // and subtract only the difference from that reference, scaled by aggressiveness
         let offsets: Vec<f32> = if self.gradient_only {
             let _span = tracing::info_span!("compute_reference_levels").entered();
-            (0..channels)
+            (0..self.channels)
                 .map(|c| self.compute_reference_level(c))
                 .collect()
         } else {
-            vec![0.0; channels]
+            vec![0.0; self.channels]
         };
+
+        // Dispatch to the optimal subtraction path
+        if let (Some(nodes_x), Some(nodes_y)) = (&self.nodes_x, &self.nodes_y) {
+            let _span = tracing::info_span!("delta_stepping_subtraction").entered();
+            self.subtract_delta_stepping(frame, &offsets, aggressiveness, nodes_x, nodes_y);
+        } else {
+            let _span = tracing::info_span!("weight_based_subtraction").entered();
+            self.subtract_weight_based(frame, &offsets, aggressiveness);
+        }
+    }
+
+    /// Fast delta-stepping subtraction using boundary-hugging node coordinates.
+    ///
+    /// Iterates over grid bands, computing left/right edge values per scanline
+    /// and advancing via a constant delta — no per-pixel divisions or weight lookups.
+    fn subtract_delta_stepping(
+        &self,
+        frame: &mut Frame,
+        offsets: &[f32],
+        aggressiveness: f32,
+        nodes_x: &[usize],
+        nodes_y: &[usize],
+    ) {
+        let width = frame.width();
+        let channels = frame.channels();
+        let grid_cols = self.grid_width;
+        let grid_rows = self.grid_height;
+        let data = frame.data_mut();
+
+        // Process row bands in parallel
+        let band_indices: Vec<usize> = (0..grid_rows - 1).collect();
+        band_indices.into_par_iter().for_each(|j| {
+            let y_start = nodes_y[j];
+            // Half-open: include last pixel only in the final band
+            let y_end_loop = if j == grid_rows - 2 {
+                nodes_y[j + 1] + 1
+            } else {
+                nodes_y[j + 1]
+            };
+            let dy = (nodes_y[j + 1] - y_start) as f32;
+            let inv_dy = 1.0 / dy;
+
+            for y in y_start..y_end_loop {
+                let ty = (y - y_start) as f32 * inv_dy;
+
+                for i in 0..grid_cols - 1 {
+                    let x_start = nodes_x[i];
+                    let x_end_loop = if i == grid_cols - 2 {
+                        nodes_x[i + 1] + 1
+                    } else {
+                        nodes_x[i + 1]
+                    };
+                    let dx = (nodes_x[i + 1] - x_start) as f32;
+                    let inv_dx = 1.0 / dx;
+
+                    for c in 0..channels {
+                        let grid = &self.grid_values[c];
+                        let offset = offsets[c];
+
+                        let v_tl = grid[j * grid_cols + i];
+                        let v_bl = grid[(j + 1) * grid_cols + i];
+                        let v_tr = grid[j * grid_cols + i + 1];
+                        let v_br = grid[(j + 1) * grid_cols + i + 1];
+
+                        let v_left = v_tl + (v_bl - v_tl) * ty;
+                        let v_right = v_tr + (v_br - v_tr) * ty;
+                        let delta_x = (v_right - v_left) * inv_dx;
+
+                        let mut current_bg = v_left;
+                        for x in x_start..x_end_loop {
+                            let pixel_idx = y * width * channels + x * channels + c;
+                            let gradient = current_bg - offset;
+                            let subtraction = gradient * aggressiveness;
+                            // SAFETY: parallel bands don't overlap, so no data race.
+                            // We use raw pointer access to work around the borrow checker
+                            // since data is borrowed mutably once and partitioned by y.
+                            unsafe {
+                                let ptr = (data as *const [f32] as *mut f32).add(pixel_idx);
+                                *ptr = (*ptr - subtraction).max(0.0);
+                            }
+                            current_bg += delta_x;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Weight-based subtraction (existing approach, used by RBF path)
+    fn subtract_weight_based(
+        &self,
+        frame: &mut Frame,
+        offsets: &[f32],
+        aggressiveness: f32,
+    ) {
+        let width = frame.width();
+        let channels = frame.channels();
 
         let (gx_weights, gy_weights) = {
             let _span = tracing::info_span!("prepare_interpolation_weights").entered();
-            // Pre-calculate X and Y interpolation weights
             let mut gx_weights = Vec::with_capacity(width);
             for x in 0..width {
                 let gx = (x as f32 + 0.5) * self.grid_width as f32 / self.image_width as f32 - 0.5;
@@ -147,30 +279,27 @@ impl BackgroundModel {
 
         {
             let _span = tracing::info_span!("apply_subtraction").entered();
-            // Process in parallel by rows
             data.par_chunks_mut(width * channels)
                 .enumerate()
                 .for_each(|(y, row)| {
                     let (gy0, gy1, fy) = gy_weights[y];
-                    
+
                     for x in 0..width {
                         let (gx0, gx1, fx) = gx_weights[x];
-                        
+
                         for c in 0..channels {
                             let idx = x * channels + c;
-                            
-                            // Inline get_background logic using precalculated weights
+
                             let grid = &self.grid_values[c];
                             let v00 = grid[gy0 * self.grid_width + gx0];
                             let v10 = grid[gy0 * self.grid_width + gx1];
                             let v01 = grid[gy1 * self.grid_width + gx0];
                             let v11 = grid[gy1 * self.grid_width + gx1];
-                            
+
                             let v0 = v00 * (1.0 - fx) + v10 * fx;
                             let v1 = v01 * (1.0 - fx) + v11 * fx;
                             let bg = v0 * (1.0 - fy) + v1 * fy;
-                            
-                            // Subtract background minus offset, scaled by aggressiveness
+
                             let gradient = bg - offsets[c];
                             let subtraction = gradient * aggressiveness;
                             row[idx] = (row[idx] - subtraction).max(0.0);
