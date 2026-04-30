@@ -70,4 +70,37 @@ describe('useImageStream FPS calculation', () => {
 
         expect(fps.value).toBe(0)
     })
+
+    it('rounds FPS to the nearest whole number', async () => {
+        const {fps} = useImageStream()
+
+        await openWebSocket()
+
+        // Simulate 2 frames in 3 seconds (0.66 FPS -> 1 FPS)
+        for (let i = 0; i < 2; i++) {
+            getWebSocket().simulateMessage(createTestFrame())
+            vi.advanceTimersByTime(10)
+            await nextTick()
+        }
+        vi.advanceTimersByTime(3000)
+        expect(fps.value).toBe(1)
+
+        // Simulate 4 frames in 3 seconds (1.33 FPS -> 1 FPS)
+        for (let i = 0; i < 4; i++) {
+            getWebSocket().simulateMessage(createTestFrame())
+            vi.advanceTimersByTime(10)
+            await nextTick()
+        }
+        vi.advanceTimersByTime(3000)
+        expect(fps.value).toBe(1)
+
+        // Simulate 5 frames in 3 seconds (1.66 FPS -> 2 FPS)
+        for (let i = 0; i < 5; i++) {
+            getWebSocket().simulateMessage(createTestFrame())
+            vi.advanceTimersByTime(10)
+            await nextTick()
+        }
+        vi.advanceTimersByTime(3000)
+        expect(fps.value).toBe(2)
+    })
 })
