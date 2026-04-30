@@ -99,32 +99,18 @@ function formatPower(v) {
 
 <template>
   <div v-if="hasCooler" class="settings-section cooler-control">
-    <h3 class="section-title">Cooler</h3>
+    <h3 class="section-title">Camera cooler</h3>
 
     <div v-if="error" class="cooler-error">{{ error }}</div>
 
-    <div class="control-group">
+    <div class="toggles-row">
       <BaseToggle
           v-model="localCoolerEnabled"
-          label="Cooler Enabled"
+          label="Cool"
           :help="HELP_TEXTS.cooler_enabled"
           @update:model-value="handleCoolerToggle"
       />
-    </div>
 
-    <BaseSlider
-        v-if="localCoolerEnabled"
-        v-model="localTargetTemp"
-        label="Target Temperature"
-        :min="minTemp"
-        :max="maxTemp"
-        :step="1"
-        :format-value="formatTemp"
-        :help="HELP_TEXTS.target_temp_c"
-        @change="handleTargetChange"
-    />
-
-    <div class="control-group fast-mode-row">
       <BaseToggle
           v-model="localCoolerFastMode"
           label="Fast"
@@ -152,18 +138,32 @@ function formatPower(v) {
       </BaseToggle>
     </div>
 
+    <BaseSlider
+        v-if="localCoolerEnabled"
+        v-model="localTargetTemp"
+        label="Target Temperature"
+        :min="minTemp"
+        :max="maxTemp"
+        :step="1"
+        :format-value="formatTemp"
+        :help="HELP_TEXTS.target_temp_c"
+        @change="handleTargetChange"
+    />
+
+
+
     <div class="cooler-status">
-      <div class="status-row">
+      <div class="status-item">
         <span class="status-label">Sensor</span>
         <span class="status-value">
           {{ liveStatus ? formatTemp(liveStatus.temperature_c) : '—' }}
         </span>
       </div>
-      <div class="status-row">
-        <span class="status-label">Cooler power</span>
+      <div class="status-item">
+        <span class="status-label">Power</span>
         <span class="status-value">{{ formatPower(liveStatus?.cooler_power) }}</span>
       </div>
-      <div class="status-row">
+      <div class="status-item">
         <span class="status-label">State</span>
         <span class="status-pill" :class="`tone-${statusBadge.tone}`">
           {{ statusBadge.label }}
@@ -182,21 +182,28 @@ function formatPower(v) {
   margin-bottom: 0.625rem;
 }
 
+.toggles-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
 .cooler-status {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+  align-items: center;
+  justify-content: space-between;
   padding: 0.375rem 0.5rem;
   background: var(--surface-elevated);
   border-radius: 6px;
   margin-top: 0.5rem;
 }
 
-.status-row {
+.status-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 0.78rem;
+  gap: 0.375rem;
+  font-size: 0.75rem;
 }
 
 .status-label {
@@ -245,9 +252,7 @@ function formatPower(v) {
   margin-bottom: 0.5rem;
 }
 
-.fast-mode-row {
-  margin-top: 0.5rem;
-}
+
 
 .fast-warning-icon {
   width: 12px;
