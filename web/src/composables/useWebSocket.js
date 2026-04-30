@@ -181,15 +181,15 @@ export function useEventStream() {
         const targetSuffix = targetName ? ` : ${targetName}` : ''
 
         if (inProgress) {
-            return `Searching${targetSuffix}`
+            return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
 
         if (lastResult === 'success') {
-            return `Found${targetSuffix}`
+            return targetName ? `Found${targetSuffix}` : 'Position updated'
         }
 
         if (lastResult === 'failed') {
-            return `Failed to find${targetSuffix}`
+            return targetName ? `Failed to find${targetSuffix}` : 'Update failed'
         }
 
         return null
