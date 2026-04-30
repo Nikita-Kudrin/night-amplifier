@@ -32,6 +32,8 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
 
     // 2. Now check if solver is ready and target is set via plugin status
     let push_to_status = plugin.get_status().await;
+    let settings = state.settings.read().await.clone();
+    let wanderer_mode = settings.wanderer_mode;
 
     // Double check solving state from plugin just in case, and check target/ready
     let has_target = push_to_status.current_target.is_some();
@@ -52,7 +54,9 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
     }
 
     // Get target name for the event (prefer common name)
-    let target_name = push_to_status.current_target.map(|t| t.name.unwrap_or(t.designation));
+    let target_name = push_to_status
+        .current_target
+        .map(|t| t.name.unwrap_or(t.designation));
 
     // Mark as solving
     {
@@ -76,7 +80,9 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
 
         // Let the plugin do all the heavy lifting and math
         let plugin = crate::push_to::PUSH_TO_PLUGIN.get().unwrap();
-        let result = plugin.process_new_frame(&frame_clone, &detector).await;
+        let result = plugin
+            .process_new_frame(&frame_clone, &detector, wanderer_mode)
+            .await;
 
         {
             let mut push_to_guard = state_clone.push_to.write().await;
