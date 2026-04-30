@@ -100,6 +100,7 @@ pub enum ServerEvent {
 
     /// Target changed
     TargetChanged {
+        name: Option<String>,
         designation: Option<String>,
         ra_degrees: f64,
         dec_degrees: f64,
@@ -348,8 +349,14 @@ impl ServerEvent {
         }
     }
 
-    pub fn target_changed(designation: Option<String>, ra_degrees: f64, dec_degrees: f64) -> Self {
+    pub fn target_changed(
+        name: Option<String>,
+        designation: Option<String>,
+        ra_degrees: f64,
+        dec_degrees: f64,
+    ) -> Self {
         ServerEvent::TargetChanged {
+            name,
             designation,
             ra_degrees,
             dec_degrees,

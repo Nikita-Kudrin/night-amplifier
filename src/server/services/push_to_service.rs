@@ -72,11 +72,18 @@ impl PushToService {
 
     /// Set target by name
     pub async fn set_target_by_name(
-        _state: &AppState,
+        state: &AppState,
         name: &str,
     ) -> Result<CatalogEntryResponse, String> {
         if let Some(plugin) = PUSH_TO_PLUGIN.get() {
-            plugin.set_target_by_name(name).await
+            let result = plugin.set_target_by_name(name).await?;
+            let _ = state.events.send(ServerEvent::target_changed(
+                result.name.clone(),
+                Some(result.designation.clone()),
+                result.ra_degrees,
+                result.dec_degrees,
+            ));
+            Ok(result)
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
@@ -84,12 +91,20 @@ impl PushToService {
 
     /// Set target by coordinates
     pub async fn set_target_by_coords(
-        _state: &AppState,
+        state: &AppState,
         ra_degrees: f64,
         dec_degrees: f64,
     ) -> Result<CoordinateResponse, String> {
         if let Some(plugin) = PUSH_TO_PLUGIN.get() {
-            plugin.set_target_by_coords(ra_degrees, dec_degrees).await
+            let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
+            // For custom coordinates, name is usually the coordinate string
+            let _ = state.events.send(ServerEvent::target_changed(
+                Some(result.ra_string.clone() + " " + &result.dec_string),
+                None,
+                result.ra_degrees,
+                result.dec_degrees,
+            ));
+            Ok(result)
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
