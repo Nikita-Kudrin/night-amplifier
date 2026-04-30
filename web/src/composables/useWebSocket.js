@@ -425,7 +425,7 @@ export function useImageStream() {
     function startFpsTimer() {
         if (fpsTimer) return
         fpsTimer = setInterval(() => {
-            fps.value = parseFloat((framesSinceLastFPS / 3).toFixed(1))
+            fps.value = Math.round(framesSinceLastFPS / 3)
             framesSinceLastFPS = 0
         }, 3000)
     }
