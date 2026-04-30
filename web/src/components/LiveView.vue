@@ -13,7 +13,7 @@ import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 
-const {connected, frameData, dimensions, frameNumber, fps, clearFrameData} = useImageStream()
+const {connected, frameData, dimensions, fps, clearFrameData} = useImageStream()
 
 const pushDirection = computed(() => eventStream.pushDirection.value)
 const currentTarget = computed(() => eventStream.currentTarget.value)

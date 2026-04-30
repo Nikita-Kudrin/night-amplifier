@@ -1,11 +1,9 @@
 import {nextTick} from 'vue'
 import {
-    MockWebSocket,
     createTestContext,
     cleanupTestContext,
     getWebSocket,
     openWebSocket,
-    waitForAsyncProcessing,
     createTestFrame,
     setupGlobalWebSocketMock,
 } from './webSocketTestUtils.js'
