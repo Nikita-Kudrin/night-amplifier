@@ -95,6 +95,7 @@ pub trait PushToSolverPlugin: Send + Sync {
         &self,
         frame: &Frame,
         detector: &StarDetector,
+        wanderer_mode: bool,
     ) -> PushToResult<(
         Option<PushToPositionResponse>,
         Option<PushToDirectionResponse>,
