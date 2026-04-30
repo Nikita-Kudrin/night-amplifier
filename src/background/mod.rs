@@ -2,10 +2,12 @@
 //!
 //! This module estimates and removes the sky background gradient caused by
 //! light pollution. The algorithm:
-//! 1. Divides the image into a grid of blocks
-//! 2. Computes the median value per block, rejecting bright stars
-//! 3. Interpolates a smooth 2D background surface
-//! 4. Subtracts the background from the image
+//! 1. Overlays a boundary-hugging grid of sample nodes on the image
+//! 2. Extracts a star-free background estimate per node via iterative sigma clipping
+//! 3. Prunes nodes that landed on nebulosity (global + local neighbor rejection)
+//! 4. Inpaints rejected nodes via iterative 4-connected averaging
+//! 5. Interpolates a smooth 2D background surface using bilinear delta-stepping
+//! 6. Subtracts the background from the image
 
 mod config;
 mod extractor;
@@ -297,6 +299,110 @@ mod tests {
             "Gradient not removed: left={}, right={}",
             left_val,
             right_val
+        );
+    }
+
+    #[test]
+    fn test_boundary_hugging_grid() {
+        // Verify that the grid nodes span the full image boundaries
+        let frame = Frame::filled(256, 256, 1, 0.3).unwrap();
+        let config = BackgroundConfig::default().with_grid_size(8, 8);
+        let extractor = BackgroundExtractor::new(config);
+        let model = extractor.estimate(&frame).unwrap();
+
+        // The model should produce valid background values at all corners
+        let tl = model.get_background(0, 0, 0);
+        let tr = model.get_background(255, 0, 0);
+        let bl = model.get_background(0, 255, 0);
+        let br = model.get_background(255, 255, 0);
+
+        for (name, val) in [("TL", tl), ("TR", tr), ("BL", bl), ("BR", br)] {
+            assert!(
+                (val - 0.3).abs() < 0.02,
+                "{} corner should be ~0.3, got {}",
+                name,
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_nebulosity_pruning_with_inpaint() {
+        // Create a frame with uniform background + bright nebula region
+        let mut frame = Frame::filled(256, 256, 1, 0.1).unwrap();
+
+        // Paint a large "nebula" in the center (80x80 bright region)
+        for y in 88..168 {
+            for x in 88..168 {
+                frame.set_pixel(x, y, 0, 0.5);
+            }
+        }
+
+        let config = BackgroundConfig::default().with_grid_size(12, 12);
+        let extractor = BackgroundExtractor::new(config);
+        let model = extractor.estimate(&frame).unwrap();
+
+        // Background at the corner should be close to 0.1
+        let corner = model.get_background(5, 5, 0);
+        assert!(
+            (corner - 0.1).abs() < 0.05,
+            "Corner should be ~0.1, got {}",
+            corner
+        );
+
+        // Background in the nebula region should also be close to 0.1
+        // because nebula nodes were pruned and inpainted from neighbors
+        let center = model.get_background(128, 128, 0);
+        assert!(
+            (center - 0.1).abs() < 0.1,
+            "Center should be ~0.1 (nebula pruned + inpainted), got {}",
+            center
+        );
+    }
+
+    #[test]
+    fn test_flat_field_fallback() {
+        // Create a frame that is mostly bright (simulating a tightly cropped nebula)
+        let frame = Frame::filled(64, 64, 1, 0.8).unwrap();
+
+        // With a uniform bright frame, most/all nodes will have similar high values.
+        // The pruning should not crash even if aggressive pruning triggers the fallback.
+        let config = BackgroundConfig::default().with_grid_size(4, 4);
+        let extractor = BackgroundExtractor::new(config);
+        let result = extractor.estimate(&frame);
+
+        assert!(result.is_ok(), "Should not crash on all-bright frame");
+
+        let model = result.unwrap();
+        // The model should produce some background value (either original or fallback)
+        let bg = model.get_background(32, 32, 0);
+        assert!(bg > 0.0, "Background should be positive, got {}", bg);
+    }
+
+    #[test]
+    fn test_no_double_processing_at_boundaries() {
+        // Create a uniform frame and verify delta-stepping doesn't create grid-line artifacts
+        let mut frame = Frame::filled(128, 128, 1, 0.5).unwrap();
+
+        let config = BackgroundConfig::default()
+            .with_grid_size(8, 8)
+            .with_gradient_only(false);
+        let extractor = BackgroundExtractor::new(config);
+        extractor.subtract(&mut frame).unwrap();
+
+        // After subtracting a uniform background, all pixels should be ~0.0
+        // If boundaries were processed twice, those pixels would be negative (clamped to 0)
+        // while interior pixels would be slightly positive — creating visible lines.
+        let data = frame.data();
+        let max_val = data.iter().cloned().fold(0.0f32, f32::max);
+        let min_val = data.iter().cloned().fold(f32::MAX, f32::min);
+
+        // All values should be very close to each other (uniform after uniform subtraction)
+        assert!(
+            max_val - min_val < 0.02,
+            "Non-uniform result suggests double-processing: min={}, max={}",
+            min_val,
+            max_val
         );
     }
 }

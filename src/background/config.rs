@@ -74,9 +74,9 @@ impl BackgroundConfig {
     pub fn for_nebulae() -> Self {
         Self {
             algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 2,
-            grid_height: 2,
-            star_rejection_sigma: 2.0,
+            grid_width: 12,
+            grid_height: 12,
+            star_rejection_sigma: 2.5,
             gradient_only: true,
             reference_percentile: 0.1,
             aggressiveness: 0.7,
@@ -87,9 +87,9 @@ impl BackgroundConfig {
     pub fn for_galaxies() -> Self {
         Self {
             algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 2,
-            grid_height: 2,
-            star_rejection_sigma: 2.0,
+            grid_width: 12,
+            grid_height: 12,
+            star_rejection_sigma: 2.5,
             gradient_only: true,
             reference_percentile: 0.1,
             aggressiveness: 0.7,
@@ -100,8 +100,8 @@ impl BackgroundConfig {
     pub fn for_star_field() -> Self {
         Self {
             algorithm: BackgroundExtractionAlgorithm::default(),
-            grid_width: 6,
-            grid_height: 6,
+            grid_width: 16,
+            grid_height: 16,
             star_rejection_sigma: 2.5,
             gradient_only: true,
             reference_percentile: 0.1,
