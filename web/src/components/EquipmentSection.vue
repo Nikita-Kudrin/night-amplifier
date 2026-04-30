@@ -16,7 +16,7 @@ const emit = defineEmits(['fov-changed', 'database-select'])
 
 const {withErrorHandling} = useError()
 
-const equipmentCollapsed = ref(false)
+const equipmentCollapsed = ref(true)
 const manualSensorExpanded = ref(false)
 
 const {
