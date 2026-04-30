@@ -127,9 +127,16 @@ impl Server {
     /// Create a new server with the given configuration
     pub fn new(config: ServerConfig) -> Self {
         let (state, disk_writer) = AppState::new();
+        let state_arc = Arc::new(state);
+
+        // Initialize Push-To plugin if available
+        if let Some(plugin) = crate::push_to::PUSH_TO_PLUGIN.get() {
+            plugin.init(state_arc.events.clone());
+        }
+
         Self {
             config,
-            state: Arc::new(state),
+            state: state_arc,
             disk_writer: Some(disk_writer),
         }
     }

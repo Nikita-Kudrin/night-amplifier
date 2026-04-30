@@ -53,7 +53,7 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
         return;
     }
 
-    // Get target name for the event (prefer common name)
+    // Get target name for logging
     let target_name = push_to_status
         .current_target
         .map(|t| t.name.unwrap_or(t.designation));
@@ -65,11 +65,6 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
             pt.solving_in_progress = true;
         }
     }
-
-    info!(target_name = ?target_name, "Broadcasting plate_solving_started event");
-    let _ = state
-        .events
-        .send(ServerEvent::plate_solving_started(target_name.clone()));
 
     let frame_clone = frame.clone();
     let state_clone = Arc::clone(state);
