@@ -56,7 +56,8 @@ function handleChange(event) {
 <template>
   <div class="slider-control">
     <label v-if="label" class="control-label">
-      <span>
+      <span class="label-text-wrapper">
+        <slot name="label-left"></slot>
         {{ label }}
         <BaseInfoIcon v-if="help" :message="help"/>
         <slot name="label-extra"></slot>
@@ -100,6 +101,12 @@ function handleChange(event) {
 
 .current-value {
   font-size: 0.77rem;
+}
+
+.label-text-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .slider:disabled, .input:disabled {

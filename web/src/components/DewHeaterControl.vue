@@ -94,43 +94,19 @@ function formatPercent(v) {
         :format-value="formatPercent"
         :help="HELP_TEXTS.dew_heater_power"
         @change="handlePowerChange"
-    />
-
-    <div class="heater-status">
-      <div class="status-row">
-        <span class="status-label">Active</span>
+    >
+      <template #label-left>
         <span class="status-pill" :class="liveStatus?.dew_heater_on ? 'tone-good' : 'tone-idle'">
           {{ liveStatus?.dew_heater_on ? 'On' : 'Off' }}
         </span>
-      </div>
-    </div>
+      </template>
+    </BaseSlider>
   </div>
 </template>
 
 <style scoped>
 .dew-heater-control {
   margin-bottom: 0.625rem;
-}
-
-.heater-status {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.375rem 0.5rem;
-  background: var(--surface-elevated);
-  border-radius: 6px;
-  margin-top: 0.5rem;
-}
-
-.status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.78rem;
-}
-
-.status-label {
-  color: var(--text-secondary);
 }
 
 .status-pill {
