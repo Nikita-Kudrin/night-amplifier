@@ -89,6 +89,9 @@ impl InstallStage {
 /// Plate solving, position tracking, and direction calculation.
 #[async_trait]
 pub trait PushToSolverPlugin: Send + Sync {
+    /// Initialize the plugin with an event sender
+    fn init(&self, _events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>) {}
+
     /// Process a new frame for plate solving.
     /// Returns both the position result (if successful) and the direction result (if target is set)
     async fn process_new_frame(
