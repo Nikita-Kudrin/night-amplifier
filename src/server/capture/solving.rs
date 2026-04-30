@@ -51,8 +51,8 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
         return;
     }
 
-    // Get target name for the event
-    let target_name = push_to_status.current_target.map(|t| t.designation.clone());
+    // Get target name for the event (prefer common name)
+    let target_name = push_to_status.current_target.map(|t| t.name.unwrap_or(t.designation));
 
     // Mark as solving
     {
