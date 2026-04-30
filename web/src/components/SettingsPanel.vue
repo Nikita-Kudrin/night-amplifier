@@ -212,21 +212,22 @@ const HELP = HELP_TEXTS
       <h3 class="section-title">Eyepiece</h3>
 
       <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.eyepiece.circular_view"
-            label="Circular view"
-            :help="HELP.eyepiece_circular_view"
-            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-        />
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.eyepiece.binoview"
-            label="Binoview"
-            :help="HELP.eyepiece_binoview"
-            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-        />
+        <div class="control-row">
+          <BaseToggle
+              v-model="localSettings.eyepiece.binoview"
+              label="Binoview"
+              size="small"
+              :help="HELP.eyepiece_binoview"
+              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
+          />
+          <BaseToggle
+              v-model="localSettings.eyepiece.circular_view"
+              label="Circular view"
+              size="small"
+              :help="HELP.eyepiece_circular_view"
+              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
+          />
+        </div>
       </div>
 
       <div
