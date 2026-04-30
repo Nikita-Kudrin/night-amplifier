@@ -91,6 +91,9 @@ const emit = defineEmits(['update:modelValue'])
 .toggle-text {
   font-size: 0.825rem;
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 /* Small variant */
@@ -112,7 +115,6 @@ const emit = defineEmits(['update:modelValue'])
   font-size: 0.715rem;
   font-weight: 500;
   color: var(--text-secondary);
-  text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 

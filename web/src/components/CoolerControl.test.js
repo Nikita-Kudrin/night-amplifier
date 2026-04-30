@@ -74,7 +74,7 @@ describe('CoolerControl', () => {
         await flushPromises()
 
         expect(wrapper.find('.cooler-control').exists()).toBe(true)
-        expect(wrapper.text()).toContain('Cooler')
+        expect(wrapper.text()).toContain('Camera cooler')
         expect(wrapper.text()).toContain('Sensor')
     })
 
@@ -176,7 +176,7 @@ describe('CoolerControl', () => {
         })
         await flushPromises()
 
-        expect(wrapper.find('.fast-mode-row').exists()).toBe(true)
+        expect(wrapper.find('.toggles-row').exists()).toBe(true)
         expect(wrapper.text()).toContain('Fast')
     })
 
