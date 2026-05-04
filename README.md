@@ -46,15 +46,18 @@ Enable features for specific manufacturers when compiling:
 - **Stacking modes** - Deep Sky, Planetary (![Testing](https://img.shields.io/badge/🚀_Testing-green)) .
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
-- **Cooled camera control** - Target-temperature setpoint, live sensor temperature/cooler-power, monitoring,
-  rate-limited pre-cooling and warming-up (5 °C/min) to reduce mechanical stress and condensation risk
+- **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
+- **Eyepiece view** - Simulation of the eyepiece view (binocular/monocular)
 
 > [!NOTE]
 > Pro features are available in the 'Night Amplifier Pro' version:
-> - **Push-To Navigation System** (via ASTAP) - ![Testing](https://img.shields.io/badge/🚀_Testing-green)
-> - **Comet Stacking** - ![Testing](https://img.shields.io/badge/🚀_Testing-green)
-> - **Advanced Outlier Rejection** (Sigma Clipping)
-> - **RBF Background Extraction**
+> - **Push-To Navigation System** (via ASTAP) - provides real-time directional guidance to
+    help you manually center objects ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Comet Stacking** - tracks and aligns frames of the comet's
+    nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Advanced Outlier Rejection** - Removes satellites, planes, or hot pixels from the stack (Sigma clipping,
+    Winsorized, Min-Max)
+> - **Advanced Background Extraction** - background extraction for improved accuracy (Radial Basis Function method)
 
 ## Frame Storage
 

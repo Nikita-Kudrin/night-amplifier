@@ -233,7 +233,7 @@ export const HELP_TEXTS = {
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     rejection_method:
-        'Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\nChanges apply immediately to subsequent frames.',
+        'Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\n• Min-Max: Discards the highest and lowest pixel values. Simple and effective for sparse satellite trails.\nChanges apply immediately to subsequent frames.',
     rejection_sigma:
         'Controls the sensitivity of the rejection algorithm. Lower values (e.g., 2.0) are more aggressive; higher values (e.g., 4.0) preserve more signal. Changes apply immediately to subsequent frames.',
     telescope_focal_length: 'The focal length of your telescope in millimeters.',
