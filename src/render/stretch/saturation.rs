@@ -72,7 +72,7 @@ pub fn apply_shadow_saturation_boost(
         return Ok(());
     }
 
-    if let Some(plugin) = SATURATION_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&SATURATION_PLUGIN) {
         plugin.apply_boost(frame, config)
     } else {
         Err(StackError::InvalidConfiguration(

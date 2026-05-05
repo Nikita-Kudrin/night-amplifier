@@ -43,7 +43,7 @@ impl StackingContext {
             WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
         };
 
-        let rejection = if REJECTION_PLUGIN.get().is_some() {
+        let rejection = if crate::license::pro_plugin(&REJECTION_PLUGIN).is_some() {
             RejectionMethod::SigmaClip
         } else {
             RejectionMethod::None
@@ -247,7 +247,7 @@ impl PlanetaryStackingContext {
             WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
         };
 
-        let rejection = if REJECTION_PLUGIN.get().is_some() {
+        let rejection = if crate::license::pro_plugin(&REJECTION_PLUGIN).is_some() {
             RejectionMethod::SigmaClip
         } else {
             RejectionMethod::None

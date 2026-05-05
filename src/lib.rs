@@ -27,6 +27,7 @@ pub mod statistics;
 pub mod telemetry;
 
 pub mod app;
+pub mod license;
 pub mod server;
 
 pub use background::{
