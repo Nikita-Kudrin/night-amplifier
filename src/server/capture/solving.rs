@@ -25,9 +25,9 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
         }
     }
 
-    let plugin = match crate::push_to::PUSH_TO_PLUGIN.get() {
+    let plugin = match crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) {
         Some(p) => p,
-        None => return, // Do nothing if Push-To is not available
+        None => return,
     };
 
     // 2. Now check if solver is ready and target is set via plugin status
@@ -74,7 +74,7 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: &Frame) {
         let detector = StarDetector::new(DetectionConfig::sensitive().with_max_stars(200));
 
         // Let the plugin do all the heavy lifting and math
-        let plugin = crate::push_to::PUSH_TO_PLUGIN.get().unwrap();
+        let plugin = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).unwrap();
         let result = plugin
             .process_new_frame(&frame_clone, &detector, wanderer_mode)
             .await;

@@ -18,7 +18,7 @@ use crate::push_to::PUSH_TO_PLUGIN;
 ///
 /// Get ASTAP installation status
 pub async fn get_astap_status() -> impl IntoResponse {
-    if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         let status = plugin.get_astap_status().await;
         (StatusCode::OK, ApiResponse::ok(status))
     } else {
@@ -41,7 +41,7 @@ pub async fn get_astap_status() -> impl IntoResponse {
 ///
 /// Get available database types for installation (in display order)
 pub async fn get_astap_databases() -> impl IntoResponse {
-    if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         let databases = plugin.get_astap_databases().await;
         (StatusCode::OK, ApiResponse::ok(databases))
     } else {
@@ -60,7 +60,7 @@ pub async fn install_astap(
     Json(request): Json<AstapInstallRequest>,
 ) -> impl IntoResponse {
     let database_types = request.into_database_types();
-    if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         match plugin
             .install_astap(&database_types, _state.events.clone())
             .await
@@ -86,7 +86,7 @@ pub async fn install_astap(
 ///
 /// Get OpenNGC catalog installation status
 pub async fn get_catalog_status() -> impl IntoResponse {
-    if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         let status = plugin.get_catalog_status().await;
         (StatusCode::OK, ApiResponse::ok(status))
     } else {
@@ -107,7 +107,7 @@ pub async fn get_catalog_status() -> impl IntoResponse {
 ///
 /// Start OpenNGC catalog installation (downloads NGC.csv and addendum.csv)
 pub async fn install_catalog(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
-    if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         match plugin.install_catalog(_state.events.clone()).await {
             Ok(_) => (
                 StatusCode::ACCEPTED,

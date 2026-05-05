@@ -18,13 +18,13 @@ use crate::stacking::{COMET_PLUGIN, REJECTION_PLUGIN};
 ///
 /// Returns the current server capabilities based on registered plugins.
 pub async fn get_capabilities() -> impl IntoResponse {
-    let has_rejection = REJECTION_PLUGIN.get().is_some();
-    let has_background = BACKGROUND_PLUGIN.get().is_some();
-    let has_push_to = PUSH_TO_PLUGIN.get().is_some();
-    let has_saturation = SATURATION_PLUGIN.get().is_some();
-    let has_comet = COMET_PLUGIN.get().is_some();
+    let active = crate::license::is_pro_active();
+    let has_rejection = active && REJECTION_PLUGIN.get().is_some();
+    let has_background = active && BACKGROUND_PLUGIN.get().is_some();
+    let has_push_to = active && PUSH_TO_PLUGIN.get().is_some();
+    let has_saturation = active && SATURATION_PLUGIN.get().is_some();
+    let has_comet = active && COMET_PLUGIN.get().is_some();
 
-    // The server "has pro" if any pro plugin is registered
     let has_pro = has_rejection || has_background || has_push_to || has_saturation || has_comet;
 
     let response = CapabilitiesResponse {

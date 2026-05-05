@@ -120,7 +120,7 @@ pub async fn update_settings(
             settings.stretch_aggressiveness = stretch_aggressiveness;
         }
         if let Some(saturation_boost) = request.saturation_boost {
-            if saturation_boost && crate::render::SATURATION_PLUGIN.get().is_none() {
+            if saturation_boost && crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_none() {
                 return (
                     StatusCode::FORBIDDEN,
                     ApiResponse::err("Shadow Saturation Boost is a Pro feature"),

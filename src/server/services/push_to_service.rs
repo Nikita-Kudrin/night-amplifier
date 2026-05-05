@@ -18,7 +18,7 @@ pub struct PushToService;
 impl PushToService {
     /// Get the current Push-To status
     pub async fn get_status(_state: &AppState) -> PushToStatusResponse {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.get_status().await
         } else {
             PushToStatusResponse {
@@ -33,7 +33,7 @@ impl PushToService {
 
     /// Cancel current plate solving process
     pub async fn cancel_solve(state: &AppState) -> Result<(), String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.cancel_solve().await.map_err(|e| e.to_string());
             // Clear solving status on frontend immediately
             let _ = state
@@ -51,7 +51,7 @@ impl PushToService {
         query: &str,
         limit: usize,
     ) -> Vec<CatalogEntryResponse> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.search_catalog(query, limit).await
         } else {
             vec![]
@@ -63,7 +63,7 @@ impl PushToService {
         _state: &AppState,
         catalog_type_str: &str,
     ) -> Vec<CatalogEntryResponse> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.get_catalog_by_type(catalog_type_str).await
         } else {
             vec![]
@@ -75,7 +75,7 @@ impl PushToService {
         state: &AppState,
         name: &str,
     ) -> Result<CatalogEntryResponse, String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_name(name).await?;
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
@@ -95,7 +95,7 @@ impl PushToService {
         ra_degrees: f64,
         dec_degrees: f64,
     ) -> Result<CoordinateResponse, String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
@@ -112,7 +112,7 @@ impl PushToService {
 
     /// Clear the current target
     pub async fn clear_target(state: &AppState) -> Result<(), String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.clear_target().await;
             let _ = state.events.send(ServerEvent::target_cleared());
             result
@@ -123,7 +123,7 @@ impl PushToService {
 
     /// Get the push direction (if position and target are both set)
     pub async fn get_direction(_state: &AppState) -> Option<PushToDirectionResponse> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.get_direction().await
         } else {
             None
@@ -132,7 +132,7 @@ impl PushToService {
 
     /// Update the FOV hint for the solver
     pub async fn set_fov(_state: &AppState, fov_degrees: f32) -> Result<(), String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.set_fov(fov_degrees).await
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
@@ -144,7 +144,7 @@ impl PushToService {
         _state: &AppState,
         settings: TelescopeSettings,
     ) -> Result<(), String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.set_telescope_settings(settings).await
         } else {
             Ok(()) // No plugin available; not an error
@@ -153,7 +153,7 @@ impl PushToService {
 
     /// Load a solver database
     pub async fn load_database(_state: &AppState, path: &str) -> Result<(), String> {
-        if let Some(plugin) = PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.load_database(path).await
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())

@@ -93,7 +93,7 @@ pub async fn process_frame_with_comet_stacking(
 ) -> (Frame, bool) {
     // Initialize comet stacking context on first frame using plugin
     if comet_ctx.is_none() {
-        let plugin = COMET_PLUGIN.get();
+        let plugin = crate::license::pro_plugin(&COMET_PLUGIN);
         if let Some(plugin) = plugin {
             let ctx =
                 plugin.create_context(frame.width(), frame.height(), frame.channels(), settings);

@@ -130,7 +130,7 @@ impl Server {
         let state_arc = Arc::new(state);
 
         // Initialize Push-To plugin if available
-        if let Some(plugin) = crate::push_to::PUSH_TO_PLUGIN.get() {
+        if let Some(plugin) = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) {
             plugin.init(state_arc.events.clone());
         }
 
