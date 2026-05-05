@@ -83,7 +83,7 @@ impl BackgroundExtractor {
         match self.config.algorithm {
             BackgroundExtractionAlgorithm::GridBilinear => self.estimate_bilinear(frame),
             BackgroundExtractionAlgorithm::Rbf => {
-                if let Some(plugin) = super::BACKGROUND_PLUGIN.get() {
+                if let Some(plugin) = crate::license::pro_plugin(&super::BACKGROUND_PLUGIN) {
                     plugin.estimate_rbf(frame, &self.config)
                 } else {
                     Err(StackError::InvalidConfiguration(

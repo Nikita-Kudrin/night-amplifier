@@ -207,7 +207,7 @@ mod tests {
         assert!(result.stretch_result.is_some());
         assert_eq!(
             result.saturation_boosted,
-            crate::render::SATURATION_PLUGIN.get().is_some()
+            crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_some()
         );
     }
 }
