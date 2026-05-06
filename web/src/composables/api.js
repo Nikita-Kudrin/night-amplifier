@@ -370,4 +370,36 @@ export async function installCatalog() {
     })
 }
 
+// ============================================================================
+// License & About
+// ============================================================================
+
+/**
+ * Get the current license status and details
+ * @returns {Promise<{active: boolean, details: object|null}>}
+ */
+export async function getLicenseStatus() {
+    return request('/about/license')
+}
+
+/**
+ * Update the Pro license token
+ * @param {string} token 
+ * @returns {Promise<{active: boolean, details: object}>}
+ */
+export async function updateLicense(token) {
+    return request('/about/license', {
+        method: 'POST',
+        body: { token }
+    })
+}
+
+/**
+ * Get software licenses text (core and third party)
+ * @returns {Promise<{core_license: string, third_party_licenses: string|null}>}
+ */
+export async function getSoftwareLicenses() {
+    return request('/about/software-licenses')
+}
+
 // Type definitions are in api.types.js
