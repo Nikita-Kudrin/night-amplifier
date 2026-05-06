@@ -33,3 +33,4 @@ settings.json
 /web/dist/
 /tests.tar.zst
 /dist/
+/license*

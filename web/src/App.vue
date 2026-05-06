@@ -12,6 +12,7 @@ import LiveView from './components/LiveView.vue'
 import StatusBar from './components/StatusBar.vue'
 import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
+import AboutDialog from './components/AboutDialog.vue'
 
 // Routing
 const isEyepieceRoute = ref(window.location.pathname === '/eyepiece')
@@ -38,6 +39,7 @@ const showSettings = ref(false)
 const showPushTo = ref(false)
 const showPushToSetup = ref(false)
 const checkingSetup = ref(false)
+const showAbout = ref(false)
 
 // Event stream for real-time updates
 const eventStream = useEventStream()
@@ -134,6 +136,18 @@ onMounted(() => {
     <!-- Header -->
     <header class="header">
       <h1 class="logo">NightAmplifier</h1>
+      <button
+          class="btn btn-icon btn-header-icon"
+          title="About"
+          @click="showAbout = true"
+          style="margin-left: 0.25rem;"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 16v-4"/>
+          <path d="M12 8h.01"/>
+        </svg>
+      </button>
       <div class="header-spacer"></div>
       <button
           class="btn btn-icon btn-header-icon"
@@ -217,6 +231,12 @@ onMounted(() => {
         v-if="showPushToSetup"
         @close="showPushToSetup = false"
         @installed="handleSetupComplete"
+    />
+
+    <!-- About / License Dialog -->
+    <AboutDialog 
+        v-if="showAbout" 
+        @close="showAbout = false" 
     />
   </div>
 </template>

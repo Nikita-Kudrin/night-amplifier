@@ -10,6 +10,7 @@ pub mod install;
 pub mod push_to;
 pub mod settings;
 pub mod simulator;
+pub mod about;
 
 // Re-export all handlers to maintain backward compatibility for existing router definitions
 pub use cameras::*;
@@ -19,6 +20,7 @@ pub use install::*;
 pub use push_to::*;
 pub use settings::*;
 pub use simulator::*;
+pub use about::*;
 
 use crate::server::state::AppState;
 use axum::body::Body;
@@ -29,6 +31,9 @@ use std::sync::Arc;
 /// Assembles the full API router
 pub fn create_router() -> Router<Arc<AppState>> {
     Router::new()
+        // About & License
+        .route("/about/license", get(about::get_license).post(about::update_license))
+        .route("/about/software-licenses", get(about::get_software_licenses))
         // Capabilities
         .route("/capabilities", get(capabilities::get_capabilities))
         // Capture
