@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { getLicenseStatus, updateLicense, getSoftwareLicenses } from '../composables/api.js'
 
-const emit = defineEmits(['close'])
+defineEmits(['close'])
 
 const activeTab = ref('license') // 'license' | 'software'
 
@@ -91,7 +91,7 @@ onMounted(() => {
       <!-- Header -->
       <div class="overlay-header">
         <h2 class="overlay-title">About NightAmplifier</h2>
-        <button class="btn btn-icon close-btn" @click="$emit('close')" title="Close">
+        <button class="btn btn-icon close-btn" title="Close" @click="$emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18" />
             <line x1="6" y1="6" x2="18" y2="18" />
@@ -190,8 +190,8 @@ onMounted(() => {
             
             <button 
               class="btn btn-primary update-btn" 
-              @click="handleUpdateLicense"
               :disabled="!licenseToken.trim() || isUpdatingLicense"
+              @click="handleUpdateLicense"
             >
               <span v-if="isUpdatingLicense" class="btn-spinner"></span>
               <span v-else>Update License</span>
