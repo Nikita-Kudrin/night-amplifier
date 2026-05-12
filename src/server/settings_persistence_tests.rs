@@ -107,6 +107,7 @@ mod tests {
             target_temp_c: Some(-10.0),
             cooler_fast_mode: true,
             sensor_mode_override: Some(crate::camera::DualSamplingMode::LowReadoutNoise),
+            eula_accepted: false,
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -255,6 +256,7 @@ mod tests {
             sensor_mode_override: None,
             dew_heater_enabled: false,
             dew_heater_power: 0,
+            eula_accepted: false,
         };
 
         persistence.save(&settings).unwrap();

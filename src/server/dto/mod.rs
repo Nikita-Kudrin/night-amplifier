@@ -248,6 +248,8 @@ pub struct SettingsResponse {
     pub dew_heater_enabled: bool,
     /// Anti-dew heater power level (0-100)
     pub dew_heater_power: i32,
+    /// Whether the user has accepted the End User License Agreement
+    pub eula_accepted: bool,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -286,6 +288,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             sensor_mode_override: settings.sensor_mode_override,
             dew_heater_enabled: settings.dew_heater_enabled,
             dew_heater_power: settings.dew_heater_power,
+            eula_accepted: settings.eula_accepted,
         }
     }
 }
@@ -432,6 +435,9 @@ pub struct UpdateSettingsRequest {
     /// Anti-dew heater power level (0-100)
     #[serde(default)]
     pub dew_heater_power: Option<i32>,
+    /// Whether the user has accepted the End User License Agreement
+    #[serde(default)]
+    pub eula_accepted: Option<bool>,
 }
 
 /// Configure simulated camera request
