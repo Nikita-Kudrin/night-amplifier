@@ -184,6 +184,17 @@ function updateCameraPhase(name, phase) {
 }
 
 /**
+ * Merge an asynchronously discovered camera into the list.
+ * Avoids duplicates by checking the camera id.
+ */
+function addDiscoveredCamera(camera) {
+    const exists = cameras.value.some((c) => c.id === camera.id)
+    if (!exists) {
+        cameras.value = [...cameras.value, camera]
+    }
+}
+
+/**
  * Composable hook for app state
  */
 export function useAppState() {
@@ -216,6 +227,7 @@ export function useAppState() {
         setSimulatorEnabled,
         updateCameraStatus,
         updateCameraPhase,
+        addDiscoveredCamera,
 
         // Direct refs for provide/inject compatibility (temporary)
         _settingsRef: settings,

@@ -83,6 +83,10 @@ pub struct CaptureSettings {
     pub last_camera_name: Option<String>,
     /// Whether the user has accepted the End User License Agreement
     pub eula_accepted: bool,
+    /// INDI server host
+    pub indi_server_host: String,
+    /// INDI server port
+    pub indi_server_port: u16,
 }
 
 /// Hardware-specific capture settings scoped to a single camera
@@ -279,6 +283,8 @@ impl Default for CaptureSettings {
             camera_profiles: HashMap::new(),
             last_camera_name: None,
             eula_accepted: false,
+            indi_server_host: "127.0.0.1".to_string(),
+            indi_server_port: 7624,
         }
     }
 }

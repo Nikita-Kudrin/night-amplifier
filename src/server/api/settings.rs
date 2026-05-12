@@ -180,6 +180,12 @@ pub async fn update_settings(
         if let Some(eula_accepted) = request.eula_accepted {
             settings.eula_accepted = eula_accepted;
         }
+        if let Some(host) = request.indi_server_host {
+            settings.indi_server_host = host;
+        }
+        if let Some(port) = request.indi_server_port {
+            settings.indi_server_port = port;
+        }
 
         // Mirror the seven hardware-specific fields into the currently-
         // connected camera's profile. Skip when no camera is connected so we

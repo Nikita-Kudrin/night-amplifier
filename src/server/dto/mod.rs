@@ -116,7 +116,7 @@ impl From<&CaptureSession> for CaptureStatusResponse {
 }
 
 /// Camera sensor mode DTO (dual sampling mode slot)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SensorModeDto {
     pub index: u32,
     pub name: String,
@@ -135,7 +135,7 @@ impl From<&SensorMode> for SensorModeDto {
 }
 
 /// Camera info response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CameraInfoResponse {
     pub id: String,
     pub name: String,
@@ -250,6 +250,10 @@ pub struct SettingsResponse {
     pub dew_heater_power: i32,
     /// Whether the user has accepted the End User License Agreement
     pub eula_accepted: bool,
+    /// INDI server host
+    pub indi_server_host: String,
+    /// INDI server port
+    pub indi_server_port: u16,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -289,12 +293,14 @@ impl From<&CaptureSettings> for SettingsResponse {
             dew_heater_enabled: settings.dew_heater_enabled,
             dew_heater_power: settings.dew_heater_power,
             eula_accepted: settings.eula_accepted,
+            indi_server_host: settings.indi_server_host.clone(),
+            indi_server_port: settings.indi_server_port,
         }
     }
 }
 
 /// Camera list entry
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CameraListEntry {
     pub id: String,
     pub name: String,
@@ -438,6 +444,12 @@ pub struct UpdateSettingsRequest {
     /// Whether the user has accepted the End User License Agreement
     #[serde(default)]
     pub eula_accepted: Option<bool>,
+    /// INDI server host
+    #[serde(default)]
+    pub indi_server_host: Option<String>,
+    /// INDI server port
+    #[serde(default)]
+    pub indi_server_port: Option<u16>,
 }
 
 /// Configure simulated camera request

@@ -15,6 +15,8 @@ pub mod error;
 pub mod ffi_safety;
 pub mod fits;
 pub mod frame;
+#[cfg(feature = "indi")]
+pub mod indi;
 pub mod logging;
 pub mod planetary;
 pub mod process;

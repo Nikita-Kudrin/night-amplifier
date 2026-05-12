@@ -29,6 +29,7 @@ const {
   initializeState,
   updateCameraStatus,
   updateCameraPhase,
+  addDiscoveredCamera,
   _settingsRef,
   _camerasRef,
   _selectedCameraIdRef,
@@ -121,6 +122,9 @@ watch(
       if (event?.type === 'camera_disconnected') {
         updateCameraPhase(event.name, 'disconnected')
         refreshCameras()
+      }
+      if (event?.type === 'camera_discovered') {
+        addDiscoveredCamera(event.camera)
       }
     }
 )
