@@ -39,6 +39,9 @@ pub enum ServerEvent {
     /// Camera disconnected
     CameraDisconnected { name: String },
 
+    /// Camera discovered asynchronously (e.g. INDI)
+    CameraDiscovered { camera: crate::server::dto::CameraListEntry },
+
     /// Cooled camera status sample (sensor temperature, cooler power, cooler state)
     CameraStatusUpdated {
         name: String,
@@ -256,6 +259,10 @@ impl ServerEvent {
 
     pub fn camera_disconnected(name: impl Into<String>) -> Self {
         ServerEvent::CameraDisconnected { name: name.into() }
+    }
+
+    pub fn camera_discovered(camera: crate::server::dto::CameraListEntry) -> Self {
+        ServerEvent::CameraDiscovered { camera }
     }
 
     pub fn camera_status_updated(

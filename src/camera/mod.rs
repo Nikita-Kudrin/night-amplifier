@@ -53,6 +53,11 @@ mod zwo;
 #[cfg(not(feature = "zwo"))]
 mod zwo_stub;
 
+#[cfg(feature = "indi")]
+mod indi;
+#[cfg(not(feature = "indi"))]
+mod indi_stub;
+
 // Re-export everything
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
@@ -76,14 +81,15 @@ pub use playerone_stub::PlayerOneProvider;
 
 // ZWO provider re-exports
 #[cfg(feature = "zwo")]
-pub use zwo::ZwoCamera;
+pub use zwo::{ZwoCamera, ZwoProvider};
 #[cfg(not(feature = "zwo"))]
-pub use zwo_stub::ZwoCamera;
+pub use zwo_stub::{ZwoCamera, ZwoProvider};
 
-#[cfg(feature = "zwo")]
-pub use zwo::ZwoProvider;
-#[cfg(not(feature = "zwo"))]
-pub use zwo_stub::ZwoProvider;
+// INDI provider re-exports
+#[cfg(feature = "indi")]
+pub use indi::{IndiCamera, IndiProvider};
+#[cfg(not(feature = "indi"))]
+pub use indi_stub::{IndiCamera, IndiProvider};
 
 // Simulated camera
 pub use simulated::{

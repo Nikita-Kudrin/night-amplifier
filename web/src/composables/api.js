@@ -402,4 +402,21 @@ export async function getSoftwareLicenses() {
     return request('/about/software-licenses')
 }
 
+// ============================================================================
+// INDI
+// ============================================================================
+
+/**
+ * Test connection to an INDI server
+ * @param {string} host - INDI server host
+ * @param {number} port - INDI server port
+ * @returns {Promise<{success: boolean, message: string}>}
+ */
+export async function testIndiConnection(host, port) {
+    return request('/indi/test', {
+        method: 'POST',
+        body: {host, port},
+    })
+}
+
 // Type definitions are in api.types.js
