@@ -100,6 +100,18 @@ pub struct PersistedSettings {
     /// Whether the user has accepted the End User License Agreement
     #[serde(default)]
     pub eula_accepted: bool,
+    #[serde(default = "default_indi_server_host")]
+    pub indi_server_host: String,
+    #[serde(default = "default_indi_server_port")]
+    pub indi_server_port: u16,
+}
+
+fn default_indi_server_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_indi_server_port() -> u16 {
+    7624
 }
 
 fn default_dew_heater_enabled() -> bool {
@@ -163,6 +175,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             dew_heater_enabled: settings.dew_heater_enabled,
             dew_heater_power: settings.dew_heater_power,
             eula_accepted: settings.eula_accepted,
+            indi_server_host: settings.indi_server_host.clone(),
+            indi_server_port: settings.indi_server_port,
         }
     }
 }
@@ -205,6 +219,8 @@ impl From<PersistedSettings> for CaptureSettings {
             dew_heater_enabled: persisted.dew_heater_enabled,
             dew_heater_power: persisted.dew_heater_power,
             eula_accepted: persisted.eula_accepted,
+            indi_server_host: persisted.indi_server_host,
+            indi_server_port: persisted.indi_server_port,
         }
     }
 }

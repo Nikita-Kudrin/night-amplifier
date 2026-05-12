@@ -11,6 +11,7 @@ pub mod push_to;
 pub mod settings;
 pub mod simulator;
 pub mod about;
+pub mod indi;
 
 // Re-export all handlers to maintain backward compatibility for existing router definitions
 pub use cameras::*;
@@ -21,6 +22,7 @@ pub use push_to::*;
 pub use settings::*;
 pub use simulator::*;
 pub use about::*;
+pub use indi::*;
 
 use crate::server::state::AppState;
 use axum::body::Body;
@@ -60,6 +62,8 @@ pub fn create_router() -> Router<Arc<AppState>> {
             "/cameras/{camera_id}/disconnect",
             post(cameras::disconnect_camera),
         )
+        // INDI
+        .route("/indi/test", post(indi::test_connection))
         // Simulator
         .route("/simulator/configure", post(simulator::configure_simulator))
         .route("/simulator/config", get(simulator::get_simulator_config))

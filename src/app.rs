@@ -17,6 +17,8 @@ struct Args {
     telemetry: bool,
     #[cfg(feature = "telemetry")]
     otlp_endpoint: Option<String>,
+    indi_host: Option<String>,
+    indi_port: Option<u16>,
 }
 
 impl Args {
@@ -27,6 +29,8 @@ impl Args {
         let mut telemetry = TelemetryConfig::default_enabled();
         #[cfg(feature = "telemetry")]
         let mut otlp_endpoint = None;
+        let mut indi_host = None;
+        let mut indi_port = None;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -43,6 +47,26 @@ impl Args {
                     otlp_endpoint = args.next();
                     if otlp_endpoint.is_none() {
                         eprintln!("Error: --otlp-endpoint requires a value");
+                        std::process::exit(1);
+                    }
+                }
+                "--indi-host" => {
+                    indi_host = args.next();
+                    if indi_host.is_none() {
+                        eprintln!("Error: --indi-host requires a value");
+                        std::process::exit(1);
+                    }
+                }
+                "--indi-port" => {
+                    if let Some(port_str) = args.next() {
+                        if let Ok(p) = port_str.parse::<u16>() {
+                            indi_port = Some(p);
+                        } else {
+                            eprintln!("Error: Invalid port for --indi-port: {}", port_str);
+                            std::process::exit(1);
+                        }
+                    } else {
+                        eprintln!("Error: --indi-port requires a value");
                         std::process::exit(1);
                     }
                 }
@@ -66,6 +90,8 @@ impl Args {
             telemetry,
             #[cfg(feature = "telemetry")]
             otlp_endpoint,
+            indi_host,
+            indi_port,
         }
     }
 
@@ -92,6 +118,9 @@ impl Args {
             println!();
             println!("Note: OpenTelemetry support not compiled in. Build with --features telemetry to enable.");
         }
+        println!();
+        println!("  --indi-host HOST    INDI server host (overrides settings)");
+        println!("  --indi-port PORT    INDI server port (overrides settings)");
     }
 }
 
@@ -167,6 +196,18 @@ pub async fn run(register_plugins: impl FnOnce()) {
     info!("  WS   /ws/events            - Server events");
 
     let server = Server::new(config);
+
+    // Apply CLI overrides for INDI if present
+    if args.indi_host.is_some() || args.indi_port.is_some() {
+        let state = server.state();
+        let mut settings = state.settings.write().await;
+        if let Some(host) = args.indi_host {
+            settings.indi_server_host = host;
+        }
+        if let Some(port) = args.indi_port {
+            settings.indi_server_port = port;
+        }
+    }
 
     if let Err(e) = server.run().await {
         error!("Server error: {}", e);
