@@ -97,6 +97,9 @@ pub struct PersistedSettings {
     /// Anti-dew heater power level (0-100)
     #[serde(default = "default_dew_heater_power")]
     pub dew_heater_power: i32,
+    /// Whether the user has accepted the End User License Agreement
+    #[serde(default)]
+    pub eula_accepted: bool,
 }
 
 fn default_dew_heater_enabled() -> bool {
@@ -159,6 +162,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             sensor_mode_override: settings.sensor_mode_override,
             dew_heater_enabled: settings.dew_heater_enabled,
             dew_heater_power: settings.dew_heater_power,
+            eula_accepted: settings.eula_accepted,
         }
     }
 }
@@ -200,6 +204,7 @@ impl From<PersistedSettings> for CaptureSettings {
             sensor_mode_override: persisted.sensor_mode_override,
             dew_heater_enabled: persisted.dew_heater_enabled,
             dew_heater_power: persisted.dew_heater_power,
+            eula_accepted: persisted.eula_accepted,
         }
     }
 }

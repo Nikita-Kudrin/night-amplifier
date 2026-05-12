@@ -81,6 +81,8 @@ pub struct CaptureSettings {
     pub camera_profiles: HashMap<String, CameraCaptureProfile>,
     /// Name of the last active camera (for profile inheritance)
     pub last_camera_name: Option<String>,
+    /// Whether the user has accepted the End User License Agreement
+    pub eula_accepted: bool,
 }
 
 /// Hardware-specific capture settings scoped to a single camera
@@ -276,6 +278,7 @@ impl Default for CaptureSettings {
             camera_telescope_profiles: HashMap::new(),
             camera_profiles: HashMap::new(),
             last_camera_name: None,
+            eula_accepted: false,
         }
     }
 }

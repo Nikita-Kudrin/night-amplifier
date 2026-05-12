@@ -1,4 +1,16 @@
 ========================================================================
+DISCLAIMER OF LIABILITY FOR THIRD-PARTY COMPONENTS
+========================================================================
+The third-party software, libraries, and data catalogs listed below are
+provided "AS IS", without warranty of any kind by Nikita Kudrin. Any
+warranties, express or implied, regarding these third-party components
+are disclaimed. Nikita Kudrin shall not be liable for any damages arising
+from the use of these third-party components.
+
+The community edition of Night Amplifier source code is available at:
+https://github.com/Nikita-Kudrin/night-amplifier/
+
+========================================================================
 OPEN SOURCE LICENSES AND ATTRIBUTIONS
 ========================================================================
 This software, Night Amplifier, relies on several open-source projects,
@@ -64,6 +76,10 @@ target data provided by:
 
 This material is licensed under the Creative Commons Attribution-ShareAlike
 4.0 International Public License (CC BY-SA 4.0).
+
+The astronomical data provided by OpenNGC is for informational purposes only.
+The author makes no guarantees regarding the accuracy, completeness, or safety
+of navigating to the coordinates provided by this database.
 
 To view a full copy of the terms and conditions of this Public License,
 please visit: https://creativecommons.org/licenses/by-sa/4.0/

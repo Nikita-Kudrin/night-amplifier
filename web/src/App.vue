@@ -13,6 +13,7 @@ import StatusBar from './components/StatusBar.vue'
 import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
+import EulaModal from './components/EulaModal.vue'
 
 // Routing
 const isEyepieceRoute = ref(window.location.pathname === '/eyepiece')
@@ -22,6 +23,7 @@ const {
   loading,
   globalError: error,
   simulatorEnabled,
+  settings,
   refreshSettings,
   refreshCameras,
   initializeState,
@@ -123,6 +125,10 @@ watch(
     }
 )
 
+function handleEulaAccepted() {
+  refreshSettings()
+}
+
 // Initialize on mount
 onMounted(() => {
   initializeState()
@@ -131,6 +137,12 @@ onMounted(() => {
 
 <template>
   <EyepieceView v-if="isEyepieceRoute"/>
+
+  <!-- EULA gate - blocks entire app until accepted -->
+  <EulaModal
+    v-else-if="!loading && !error && settings?.eula_accepted === false"
+    @accepted="handleEulaAccepted"
+  />
 
   <div v-else class="app">
     <!-- Header -->

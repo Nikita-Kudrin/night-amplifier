@@ -177,6 +177,9 @@ pub async fn update_settings(
         if let Some(dew_heater_power) = request.dew_heater_power {
             settings.dew_heater_power = dew_heater_power.clamp(0, 100);
         }
+        if let Some(eula_accepted) = request.eula_accepted {
+            settings.eula_accepted = eula_accepted;
+        }
 
         // Mirror the seven hardware-specific fields into the currently-
         // connected camera's profile. Skip when no camera is connected so we
