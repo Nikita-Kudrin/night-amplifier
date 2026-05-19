@@ -35,7 +35,7 @@ impl CameraProvider for IndiProvider {
     }
 
     fn open(&self, _index: usize) -> CameraResult<Box<dyn Camera>> {
-        Err(CameraError::SdkNotAvailable("INDI"))
+        Err(CameraError::SdkNotAvailable("INDI".to_string()))
     }
 }
 
