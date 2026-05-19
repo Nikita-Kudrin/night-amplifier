@@ -80,9 +80,10 @@ urlencoding = "2.1.3"
 dlopen2 = "0.8.2"
 
 [features]
-default = ["playerone", "zwo", "indi"]
+default = ["playerone", "zwo", "indi", "qhy"]
 playerone = []
 zwo = []
+qhy = []
 indi = ["dep:quick-xml", "dep:base64"]
 # Bundle cfitsio from source (static link) for portable distribution.
 # Without this, the system libcfitsio-dev is required.

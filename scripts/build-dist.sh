@@ -224,6 +224,19 @@ cp "${BINARY_PATH}" "${DIST_DIR}/${OUT_BINARY_NAME}"
 cp "${PROJECT_ROOT}/LICENSE" "${DIST_DIR}/"
 cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
 
+# ── Optional: bundle QHY SDK (libqhyccd.so) ──────────────────────────
+for QHY_LIB in /usr/local/lib/libqhyccd.so /usr/lib/libqhyccd.so; do
+    if [[ -f "${QHY_LIB}" ]]; then
+        echo "Bundling QHY SDK: ${QHY_LIB}"
+        cp "${QHY_LIB}" "${DIST_DIR}/"
+        # Copy versioned symlink targets too (e.g. libqhyccd.so.20)
+        for VER_LIB in "${QHY_LIB}."*; do
+            [[ -f "${VER_LIB}" ]] && cp "${VER_LIB}" "${DIST_DIR}/"
+        done
+        break
+    fi
+done
+
 # Create archive
 cd "${PROJECT_ROOT}/dist"
 if [[ "${TARGET}" == *"-windows"* ]]; then

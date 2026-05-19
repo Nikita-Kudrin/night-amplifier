@@ -58,6 +58,11 @@ mod indi;
 #[cfg(not(feature = "indi"))]
 mod indi_stub;
 
+#[cfg(feature = "qhy")]
+mod qhy;
+#[cfg(not(feature = "qhy"))]
+mod qhy_stub;
+
 // Re-export everything
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
@@ -90,6 +95,12 @@ pub use zwo_stub::{ZwoCamera, ZwoProvider};
 pub use indi::{IndiCamera, IndiProvider};
 #[cfg(not(feature = "indi"))]
 pub use indi_stub::{IndiCamera, IndiProvider};
+
+// QHY provider re-exports
+#[cfg(feature = "qhy")]
+pub use qhy::{QhyCamera, QhyProvider};
+#[cfg(not(feature = "qhy"))]
+pub use qhy_stub::{QhyCamera, QhyProvider};
 
 // Simulated camera
 pub use simulated::{
