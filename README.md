@@ -34,7 +34,7 @@ Enable features for specific manufacturers when compiling:
 | ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | INDI           | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | Touptek        | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
-| QHYCCD         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| QHYCCD         | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | SVBony         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | Altair Astro   | *?*                                                                  | ...                                                       |
 | Atik           | *?*                                                                  | ...                                                       |
@@ -275,6 +275,53 @@ cargo build --release --features zwo
 
 # Build with both Player One and ZWO support
 cargo build --release --features playerone,zwo
+```
+
+#### QHY Setup
+
+**Runtime Prerequisites (Optional):**
+
+To use QHYCCD cameras, you must install the following system libraries:
+
+- **libusb-1.0**: Required by the QHYCCD SDK
+  ```bash
+  # Debian/Ubuntu/Raspberry Pi OS
+  sudo apt-get install libusb-1.0-0
+
+  # Fedora
+  sudo dnf install libusb-1.0
+
+  # Arch Linux/Manjaro
+  sudo pacman -S libusb
+  ```
+
+**Linux Installation:**
+
+1. Download the SDK from [QHYCCD Download](https://www.qhyccd.com/download/)
+2. Extract the archive and install udev rules (for USB permissions):
+   ```bash
+   sudo install sdk/linux/mac/rules/85-qhyccd.rules /lib/udev/rules.d/
+   sudo udevadm control --reload-rules
+   sudo udevadm trigger
+   ```
+3. Install the shared library:
+   ```bash
+   sudo cp sdk/linux/mac/lib/libqhyccd.so* /usr/local/lib/
+   sudo ldconfig
+   ```
+4. Unplug and replug the camera after installing udev rules
+
+**Verification:**
+
+```bash
+# Check if library is found
+ldconfig -p | grep qhyccd
+
+# Build with QHY support
+cargo build --release --features qhy
+
+# Build with all cameras supported
+cargo build --release --features playerone,zwo,qhy
 ```
 
 ### Web Server

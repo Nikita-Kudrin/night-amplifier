@@ -89,7 +89,7 @@ impl CameraRegistry {
         // Future providers will be added here:
         // let _ = self.register(super::SvbonyProvider::new());
         // let _ = self.register(super::TouptekProvider::new());
-        // let _ = self.register(super::QhyccdProvider::new());
+        let _ = self.register(super::QhyProvider::new());
     }
 
     /// Get a list of registered provider names
