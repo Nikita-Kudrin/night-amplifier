@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use super::super::dto::ApiResponse;
 use super::super::state::AppState;
-use crate::camera::CameraProvider;
 
 #[derive(Debug, Deserialize)]
 pub struct IndiTestRequest {
@@ -22,40 +21,40 @@ pub struct IndiTestResponse {
 
 /// POST /api/indi/test
 ///
-/// Test connection to an INDI server
+/// Test connection to an INDI server. Always returns HTTP 200; the `success`
+/// field in the body indicates whether the INDI server was reachable.
 pub async fn test_connection(
     State(_state): State<Arc<AppState>>,
     Json(request): Json<IndiTestRequest>,
 ) -> impl IntoResponse {
-    let host = request.host;
-    let port = request.port;
+    let response = probe_indi(request.host, request.port).await;
+    (StatusCode::OK, ApiResponse::ok(response))
+}
 
-    #[cfg(feature = "indi")]
-    {
-        let provider = crate::camera::IndiProvider::new(host.clone(), port);
-        match provider.list_cameras_async().await {
-            Ok(cameras) => {
-                let msg = format!("Successfully connected to INDI server at {}:{}. Found {} cameras.", host, port, cameras.len());
-                let response = IndiTestResponse {
-                    success: true,
-                    message: msg,
-                };
-                (StatusCode::OK, ApiResponse::ok(response))
-            }
-            Err(e) => {
-                let msg = format!("Failed to connect to INDI server at {}:{}. Error: {}", host, port, e);
-                let response = IndiTestResponse {
-                    success: false,
-                    message: msg.clone(),
-                };
-                (StatusCode::BAD_REQUEST, ApiResponse::err(msg))
-            }
-        }
+#[cfg(feature = "indi")]
+async fn probe_indi(host: String, port: u16) -> IndiTestResponse {
+    let provider = crate::camera::IndiProvider::new(host.clone(), port);
+    match provider.list_cameras_async().await {
+        Ok(cameras) => IndiTestResponse {
+            success: true,
+            message: format!(
+                "Connected to INDI server at {}:{}. Found {} camera(s).",
+                host,
+                port,
+                cameras.len()
+            ),
+        },
+        Err(e) => IndiTestResponse {
+            success: false,
+            message: format!("Cannot reach INDI server at {}:{}: {}", host, port, e),
+        },
     }
+}
 
-    #[cfg(not(feature = "indi"))]
-    {
-        let msg = "INDI support is not enabled in this build.".to_string();
-        (StatusCode::NOT_IMPLEMENTED, ApiResponse::err(msg))
+#[cfg(not(feature = "indi"))]
+async fn probe_indi(_host: String, _port: u16) -> IndiTestResponse {
+    IndiTestResponse {
+        success: false,
+        message: "INDI support is not compiled in this build.".to_string(),
     }
 }
