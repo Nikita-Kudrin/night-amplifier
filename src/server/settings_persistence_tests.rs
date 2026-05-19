@@ -108,6 +108,8 @@ mod tests {
             cooler_fast_mode: true,
             sensor_mode_override: Some(crate::camera::DualSamplingMode::LowReadoutNoise),
             eula_accepted: false,
+            indi_server_host: "127.0.0.1".to_string(),
+            indi_server_port: 7624,
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -257,6 +259,8 @@ mod tests {
             dew_heater_enabled: false,
             dew_heater_power: 0,
             eula_accepted: false,
+            indi_server_host: "127.0.0.1".to_string(),
+            indi_server_port: 7624,
         };
 
         persistence.save(&settings).unwrap();
