@@ -32,7 +32,7 @@ Enable features for specific manufacturers when compiling:
 |----------------|----------------------------------------------------------------------|-----------------------------------------------------------|
 | Player One     | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                         |
 | ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| INDI           | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| INDI           | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | Touptek        | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | QHYCCD         | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | SVBony         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
@@ -51,8 +51,8 @@ Enable features for specific manufacturers when compiling:
 
 > [!NOTE]
 > Pro features are available in the 'Night Amplifier Pro' version:
-> - **Push-To Navigation System** (via ASTAP) - provides real-time directional guidance to
-    help you manually center objects ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Push-To Navigation System** (via ASTAP) - provides real-time directional guidance to help you manually center
+    objects ![Testing](https://img.shields.io/badge/🚀_Testing-green)
 > - **Comet Stacking** - tracks and aligns frames of the comet's
     nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
 > - **Advanced Outlier Rejection** - Removes satellites, planes, or hot pixels from the stack (Sigma clipping,
@@ -104,13 +104,13 @@ write queue exceeds 5 frames. The queue depth is shown to help diagnose performa
 
 ## Distribution Builds
 
-Night Amplifier can be built as a self-contained single binary with the web UI embedded.
-No external files are needed to run the distribution binary.
+Night Amplifier can be built as a self-contained single binary with the web UI embedded. No external files are needed to
+run the distribution binary.
 
 ### Pre-built Downloads
 
-Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page
-for Linux (x86_64, ARM64) and Windows (x86_64, ARM64). Optimized builds for Raspberry Pi 5 / Orange Pi 5 are included.
+Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page for
+Linux (x86_64, ARM64) and Windows (x86_64, ARM64). Optimized builds for Raspberry Pi 5 / Orange Pi 5 are included.
 
 For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to
 run.
@@ -126,8 +126,8 @@ cd night-amplifier-*/
 
 ### Building Locally
 
-Local builds are optimized for your specific CPU architecture (`-C target-cpu=native`),
-which is critical for maximum performance on devices like Raspberry Pi 5 or Orange Pi 5.
+Local builds are optimized for your specific CPU architecture (`-C target-cpu=native`), which is critical for maximum
+performance on devices like Raspberry Pi 5 or Orange Pi 5.
 
 ```bash
 ./scripts/build-dist.sh
@@ -385,8 +385,7 @@ To add support for a new camera manufacturer:
 ### OpenTelemetry
 
 Night Amplifier supports optional OpenTelemetry integration for distributed tracing and metrics, useful for debugging
-and
-performance monitoring.
+and performance monitoring.
 
 **Building with telemetry support:**
 
@@ -440,8 +439,8 @@ cargo run --release --features telemetry -- --telemetry
 > **Traces vs Metrics:** Jaeger only shows traces (spans). To view gauges such as
 > `master_stack.memory_bytes` or `disk_writer.queue_depth`, use Prometheus or Grafana.
 
-To query a metric in Prometheus, open http://localhost:9090 and type the metric name
-(dots are converted to underscores, e.g. `master_stack_memory_bytes`).
+To query a metric in Prometheus, open http://localhost:9090 and type the metric name (dots are converted to underscores,
+e.g. `master_stack_memory_bytes`).
 
 ### Web Frontend
 
@@ -480,8 +479,8 @@ npm run format    # Format with Prettier
 - Comet Stacking specialized tracking and nucleus alignment (Available in Pro version)
 - Dark theme optimized for night use
 
-For production deployment, run `npm run build` then start the Rust server - it automatically
-serves the built frontend from `web/`.
+For production deployment, run `npm run build` then start the Rust server - it automatically serves the built frontend
+from `web/`.
 
 ## License
 
@@ -491,15 +490,13 @@ Licensed under GNU Affero General Public License as stated in the LICENSE:
 
 Copyright (c) 2026- Nikita Kudrin & other Night Amplifier contributors
 
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU Affero General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version.
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+version.
 
-This program is distributed in the hope that it will be useful, but WITHOUT
-ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more
 details.
 
-You should have received a copy of the GNU Affero General Public License along
-with this program. If not, see https://www.gnu.org/licenses/
+You should have received a copy of the GNU Affero General Public License along with this program. If not,
+see https://www.gnu.org/licenses/
