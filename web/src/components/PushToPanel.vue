@@ -250,7 +250,7 @@ onUnmounted(() => {
         <input
             v-model="searchQuery"
             type="text"
-            placeholder="Search Messier, NGC, IC..."
+            placeholder="Search Messier, NGC, Stars..."
             class="search-input"
             :disabled="isSolving"
             @focus="revealResults"
@@ -552,6 +552,11 @@ onUnmounted(() => {
 .badge-ic {
   background: #9f4aff30;
   color: #9f4aff;
+}
+
+.badge-star {
+  background: #facc1530;
+  color: #facc15;
 }
 
 .badge-other {
