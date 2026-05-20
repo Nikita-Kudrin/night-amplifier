@@ -51,7 +51,7 @@ function checkAllInstalled() {
 
       <div class="overlay-body">
         <p class="intro-text">
-          Push-To navigation requires ASTAP plate solver and the OpenNGC object catalog.
+          Push-To navigation requires ASTAP plate solver and the target catalogs.
         </p>
 
         <!-- Section 1: ASTAP Plate Solver -->
