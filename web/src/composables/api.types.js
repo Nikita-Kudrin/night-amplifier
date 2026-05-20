@@ -115,7 +115,7 @@
  * @typedef {object} CatalogEntry
  * @property {string} designation - Catalog designation (e.g., "M31", "NGC 224")
  * @property {string} name - Common name
- * @property {string} catalog_type - Catalog type (Messier, NGC, IC)
+ * @property {string} catalog_type - Catalog type (Messier, NGC, IC, Star)
  * @property {string} object_type - Object type (Galaxy, Nebula, etc.)
  * @property {string} constellation - Constellation
  * @property {number} ra_degrees - Right Ascension in degrees

@@ -17,6 +17,8 @@ export function getCatalogClass(type) {
             return 'badge-ngc'
         case 'ic':
             return 'badge-ic'
+        case 'star':
+            return 'badge-star'
         default:
             return 'badge-other'
     }
