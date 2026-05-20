@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use super::super::dto::{
-    ApiResponse, AstapInstallRequest, AstapStatusResponse, CatalogStatusResponse,
+    ApiResponse, AstapInstallRequest, AstapStatusResponse, CatalogInstallRequest, CatalogStatusResponse,
     DatabaseTypeResponse, MessageResponse,
 };
 use super::super::state::AppState;
@@ -97,6 +97,7 @@ pub async fn get_catalog_status() -> impl IntoResponse {
                 catalog_path: None,
                 ngc_file_exists: false,
                 addendum_file_exists: false,
+                hyg_file_exists: false,
                 object_count: None,
             }),
         )
@@ -106,9 +107,12 @@ pub async fn get_catalog_status() -> impl IntoResponse {
 /// POST /api/catalog/install
 ///
 /// Start OpenNGC catalog installation (downloads NGC.csv and addendum.csv)
-pub async fn install_catalog(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn install_catalog(
+    State(_state): State<Arc<AppState>>,
+    Json(request): Json<CatalogInstallRequest>,
+) -> impl IntoResponse {
     if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-        match plugin.install_catalog(_state.events.clone()).await {
+        match plugin.install_catalog(request.include_stars, _state.events.clone()).await {
             Ok(_) => (
                 StatusCode::ACCEPTED,
                 ApiResponse::ok(MessageResponse {

@@ -361,12 +361,14 @@ export async function getCatalogStatus() {
 }
 
 /**
- * Start OpenNGC catalog installation
+ * Start target catalogs installation
+ * @param {boolean} [includeStars=false] - Whether to include the HYG star database
  * @returns {Promise<{message: string}>}
  */
-export async function installCatalog() {
+export async function installCatalog(includeStars = false) {
     return request('/catalog/install', {
         method: 'POST',
+        body: { include_stars: includeStars },
     })
 }
 
