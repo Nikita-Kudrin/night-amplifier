@@ -9,6 +9,7 @@ const loading = ref(true)
 const error = ref(null)
 const status = ref(null)
 const installing = ref(false)
+const includeStars = ref(true)
 
 // Installation progress
 const progress = ref({
@@ -76,7 +77,7 @@ async function startInstall() {
   }
 
   try {
-    await installCatalog()
+    await installCatalog(includeStars.value)
   } catch (e) {
     error.value = e.message
     installing.value = false
@@ -186,6 +187,13 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
       <p class="section-hint">
         Downloads the OpenNGC and HYG target catalogs (~15MB compressed) with Messier, NGC, IC and other deep sky objects + 120k stars.
       </p>
+
+      <div class="checkbox-container">
+        <label class="checkbox-label">
+          <input type="checkbox" v-model="includeStars" :disabled="!canInstall" />
+          <span>Include HYG star catalog (~15MB)</span>
+        </label>
+      </div>
 
       <button
           class="btn btn-primary btn-block"
@@ -388,9 +396,32 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
   width: 100%;
 }
 
-.btn-primary {
-  background: var(--primary);
-  color: white;
-  border: none;
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover, #3a8ee8);
+}
+
+.checkbox-container {
+  margin-bottom: 1rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.checkbox-label input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

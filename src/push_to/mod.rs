@@ -165,6 +165,7 @@ pub trait PushToInstallerPlugin: Send + Sync {
     /// Start OpenNGC catalog installation
     async fn install_catalog(
         &self,
+        include_stars: bool,
         events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
     ) -> Result<(), String>;
 }

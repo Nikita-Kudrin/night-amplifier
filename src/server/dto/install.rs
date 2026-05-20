@@ -111,6 +111,14 @@ mod tests {
     }
 }
 
+/// Catalog installation request
+#[derive(Debug, Deserialize)]
+pub struct CatalogInstallRequest {
+    /// Whether to also download the HYG star database (~15MB compressed)
+    #[serde(default)]
+    pub include_stars: bool,
+}
+
 /// Catalog installation status response
 #[derive(Debug, Serialize)]
 pub struct CatalogStatusResponse {
@@ -123,6 +131,8 @@ pub struct CatalogStatusResponse {
     pub ngc_file_exists: bool,
     /// Whether addendum.csv exists
     pub addendum_file_exists: bool,
+    /// Whether hyg_stars.csv exists
+    pub hyg_file_exists: bool,
     /// Number of objects loaded (if catalog was parsed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub object_count: Option<usize>,
