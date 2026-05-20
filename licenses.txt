@@ -74,12 +74,17 @@ target data provided by:
   Creator: Mattia Verga and OpenNGC contributors
   Source: https://github.com/mattiaverga/OpenNGC
 
+* HYG Star Database
+  Creator: David Nash (astronexus) and HYG contributors
+  Source: https://github.com/astronexus/HYG-Database
+
 This material is licensed under the Creative Commons Attribution-ShareAlike
 4.0 International Public License (CC BY-SA 4.0).
 
-The astronomical data provided by OpenNGC is for informational purposes only.
-The author makes no guarantees regarding the accuracy, completeness, or safety
-of navigating to the coordinates provided by this database.
+The astronomical data provided by OpenNGC and the HYG Database is for
+informational purposes only. The authors make no guarantees regarding the
+accuracy, completeness, or safety of navigating to the coordinates provided
+by these databases.
 
 To view a full copy of the terms and conditions of this Public License,
 please visit: https://creativecommons.org/licenses/by-sa/4.0/
