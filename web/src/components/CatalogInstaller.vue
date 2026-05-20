@@ -128,7 +128,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
       <span class="section-number" :class="{ done: status?.installed }">
         {{ status?.installed ? '✓' : '2' }}
       </span>
-      <h3>Objects Catalog</h3>
+      <h3>Target Catalogs</h3>
     </div>
 
     <!-- Loading -->
@@ -146,7 +146,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
     <!-- Installed -->
     <div v-else-if="status?.installed" class="section-status installed">
       <span class="status-check">✓</span>
-      <span>Installed (OpenNGC)</span>
+      <span>Installed (Target Catalogs)</span>
     </div>
 
     <!-- Installing -->
@@ -175,10 +175,16 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
           </span>
           <span>addendum.csv</span>
         </div>
+        <div class="status-item">
+          <span class="status-icon" :class="{ installed: status?.hyg_file_exists }">
+            {{ status?.hyg_file_exists ? '✓' : '✗' }}
+          </span>
+          <span>hyg_stars.csv</span>
+        </div>
       </div>
 
       <p class="section-hint">
-        Downloads the OpenNGC catalog (~2MB) with Messier, NGC, IC and other deep sky objects.
+        Downloads the OpenNGC and HYG target catalogs (~15MB compressed) with Messier, NGC, IC and other deep sky objects + 120k stars.
       </p>
 
       <button
