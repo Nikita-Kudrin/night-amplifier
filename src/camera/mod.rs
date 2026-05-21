@@ -63,6 +63,11 @@ mod qhy;
 #[cfg(not(feature = "qhy"))]
 mod qhy_stub;
 
+#[cfg(feature = "touptek")]
+mod touptek;
+#[cfg(not(feature = "touptek"))]
+mod touptek_stub;
+
 // Re-export everything
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
@@ -101,6 +106,12 @@ pub use indi_stub::{IndiCamera, IndiProvider};
 pub use qhy::{QhyCamera, QhyProvider};
 #[cfg(not(feature = "qhy"))]
 pub use qhy_stub::{QhyCamera, QhyProvider};
+
+// ToupTek provider re-exports
+#[cfg(feature = "touptek")]
+pub use touptek::{TouptekCamera, TouptekProvider};
+#[cfg(not(feature = "touptek"))]
+pub use touptek_stub::{TouptekCamera, TouptekProvider};
 
 // Simulated camera
 pub use simulated::{

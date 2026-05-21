@@ -104,7 +104,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 | `background/`                 | Grid-based gradient extraction (gradient_only / adaptive modes)                      |
 | `render/`                     | Stretch (asinh/MTF), autostretch solver, white balance, black point, S-curve, output |
 | `statistics/`                 | Robust per-channel median/MAD (sampling-based)                                       |
-| `camera/`                     | Traits + ZWO/PlayerOne SDKs + simulator (see Camera Notes below)                     |
+| `camera/`                     | Traits + ZWO/PlayerOne/QHY/ToupTek SDKs + simulator (see Camera Notes below)         |
 | `planetary/`                  | Correlation-based alignment, percentile stacking (Moon/planets)                      |
 | `ser/`                        | SER video format (read/write) for planetary                                          |
 | `disk_writer/`                | Async bounded-queue frame writer                                                     |

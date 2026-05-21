@@ -33,7 +33,7 @@ Enable features for specific manufacturers when compiling:
 | Player One     | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                         |
 | ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | INDI           | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| Touptek        | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
+| ToupTek        | ToupTek SDK (libtoupcam)                                             | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | QHYCCD         | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | SVBony         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue) |
 | Altair Astro   | *?*                                                                  | ...                                                       |
@@ -321,7 +321,30 @@ ldconfig -p | grep qhyccd
 cargo build --release --features qhy
 
 # Build with all cameras supported
-cargo build --release --features playerone,zwo,qhy
+cargo build --release --features playerone,zwo,qhy,touptek
+```
+
+#### ToupTek Setup
+
+**Runtime Prerequisites (Optional):**
+
+To use ToupTek cameras, you must have the ToupTek SDK shared library (`libtoupcam.so`, `libtoupcam.dylib`, or `toupcam.dll`) installed on your system.
+
+**Linux Installation:**
+
+1. Download the SDK (`libtoupcam`) from the [ToupTek Download Page](http://www.touptek.com/download/) (look for the Linux SDK) or alternatively from the [INDIGO repository](https://github.com/indigo-astronomy/indigo/tree/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam) which maintains up-to-date binaries for all architectures.
+2. Install the shared library to a library path (e.g., `/usr/local/lib/` or `/usr/lib/`).
+3. Install udev rules for your ToupTek cameras (often provided by the manufacturer or INDI) to ensure proper USB permissions.
+4. Unplug and replug the camera after installing udev rules.
+
+**Verification:**
+
+```bash
+# Check if library is found
+ldconfig -p | grep toupcam
+
+# Build with ToupTek support
+cargo build --release --features touptek
 ```
 
 ### Web Server
