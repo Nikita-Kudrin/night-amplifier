@@ -113,6 +113,17 @@ pub use touptek::{TouptekCamera, TouptekProvider};
 #[cfg(not(feature = "touptek"))]
 pub use touptek_stub::{TouptekCamera, TouptekProvider};
 
+// SVBony provider re-exports
+#[cfg(feature = "svbony")]
+mod svbony;
+#[cfg(not(feature = "svbony"))]
+mod svbony_stub;
+
+#[cfg(feature = "svbony")]
+pub use svbony::{SvbonyCamera, SvbonyProvider};
+#[cfg(not(feature = "svbony"))]
+pub use svbony_stub::{SvbonyCamera, SvbonyProvider};
+
 // Simulated camera
 pub use simulated::{
     add_simulated_directory, clear_simulated_directories, clear_simulated_directory,

@@ -35,10 +35,7 @@ Enable features for specific manufacturers when compiling:
 | INDI           | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | ToupTek        | [ToupTek SDK](http://www.touptek.com/download/)                      | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | QHYCCD         | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| SVBony         | *Planned*                                                            | ![Planned](https://img.shields.io/badge/🏗️_Planned-blue)  |
-| Altair Astro   | *?*                                                                  | ...                                                       |
-| Atik           | *?*                                                                  | ...                                                       |
-| USB web camera | *?*                                                                  | ...                                                       |
+| SVBony         | [SVBony SDK](https://www.svbony.com/downloads)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 | Simulated      | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                        |
 
 ## Features
@@ -350,6 +347,30 @@ ldconfig -p | grep toupcam
 
 # Build with ToupTek support
 cargo build --release --features touptek
+```
+
+#### SVBony Setup
+
+**Runtime Prerequisites (Optional):**
+
+To use SVBony cameras, you must have the SVBony SDK shared library (`libSVBony.so`, `libSVBCameraSDK.dylib`, or
+`SVBony.dll`) installed on your system.
+
+**Linux Installation:**
+
+1. Download the SDK from the [SVBony Downloads Page](https://www.svbony.com/downloads).
+2. Install the shared library to a library path (e.g., `/usr/local/lib/` or `/usr/lib/`).
+3. Install udev rules for your SVBony cameras to ensure proper USB permissions.
+4. Unplug and replug the camera after installing udev rules.
+
+**Verification:**
+
+```bash
+# Check if library is found
+ldconfig -p | grep SVBony
+
+# Build with SVBony support
+cargo build --release --features svbony
 ```
 
 ### Web Server
