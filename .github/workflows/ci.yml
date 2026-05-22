@@ -110,7 +110,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Generate coverage
-        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        run: |
+          cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+          echo "### Rust Coverage" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cargo llvm-cov report >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
       - name: Upload coverage
         uses: actions/upload-artifact@v7
         with:
