@@ -11,7 +11,7 @@ jobs:
   rust-build-all:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
@@ -33,13 +33,13 @@ jobs:
           done
           tar czf bench-binaries.tar.gz bench-binaries/
       - name: Upload Test Archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tests-archive
           path: tests.tar.zst
           retention-days: 1
       - name: Upload Benchmark Binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-binaries-archive
           path: bench-binaries.tar.gz
@@ -49,13 +49,13 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download Archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tests-archive
       - name: Run unit tests
@@ -65,13 +65,13 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Install nextest
         uses: taiki-e/install-action@nextest
       - name: Download Archive
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: tests-archive
       - name: Run integration tests
@@ -85,7 +85,7 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Download Benchmark Binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bench-binaries-archive
       - name: Run benchmarks
@@ -102,7 +102,7 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libclang-dev libcfitsio-dev
       - name: Install cargo-llvm-cov
@@ -112,7 +112,7 @@ jobs:
       - name: Generate coverage
         run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: lcov.info
@@ -121,10 +121,10 @@ jobs:
   web-tests-and-lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
