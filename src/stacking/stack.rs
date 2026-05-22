@@ -192,6 +192,10 @@ impl MasterStack {
     }
 
     pub fn compute(&self) -> Result<Frame> {
+        if self.frame_count == 0 {
+            return Err(StackError::EmptyStack);
+        }
+
         let pixel_count = self.width * self.height * self.channels;
         let mut result = vec![0.0f32; pixel_count];
 

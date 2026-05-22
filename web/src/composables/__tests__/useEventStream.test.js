@@ -13,11 +13,30 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useEventStream} from '../useWebSocket.js'
+import {useEventStream as originalUseEventStream} from '../useWebSocket.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function useEventStream() {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUseEventStream()
+            return () => {}
+        }
+    })
+    return result
+}
 
 describe('useEventStream', () => {
     beforeEach(createTestContext)
-    afterEach(cleanupTestContext)
+    afterEach(() => {
+        cleanupTestContext()
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
+    })
 
     it('connects to /ws/events', () => {
         useEventStream()

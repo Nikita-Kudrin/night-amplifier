@@ -70,4 +70,24 @@ mod tests {
         let star2 = Star::new(3.0, 4.0, 100.0, 0.8, 15.0);
         assert!((star1.distance_to(&star2) - 5.0).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_star_distance_same_point() {
+        let star1 = Star::new(10.0, 10.0, 100.0, 0.8, 15.0);
+        let star2 = Star::new(10.0, 10.0, 100.0, 0.8, 15.0);
+        assert!((star1.distance_to(&star2) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_star_with_nan() {
+        let star1 = Star::new(f32::NAN, f32::NAN, 100.0, 0.8, 15.0);
+        let star2 = Star::new(10.0, 10.0, 100.0, 0.8, 15.0);
+        assert!(star1.distance_to(&star2).is_nan());
+    }
+
+    #[test]
+    fn test_star_with_fwhm() {
+        let star = Star::with_fwhm(10.0, 10.0, 100.0, 0.8, 15.0, 2.5);
+        assert_eq!(star.fwhm, Some(2.5));
+    }
 }

@@ -280,3 +280,22 @@ fn test_pro_rejection_initialization_gating() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn test_stack_dimension_mismatch() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(4, 4, 1, config).unwrap();
+
+    let frame = Frame::filled(5, 5, 1, 0.5).unwrap();
+    let result = stack.add_frame(&frame);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_stack_compute_empty() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let stack = MasterStack::new(4, 4, 1, config).unwrap();
+    
+    let result = stack.compute();
+    assert!(result.is_err());
+}

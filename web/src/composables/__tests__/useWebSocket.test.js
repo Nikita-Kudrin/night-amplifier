@@ -11,11 +11,30 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useWebSocket} from '../useWebSocket.js'
+import {useWebSocket as originalUseWebSocket} from '../useWebSocket.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function useWebSocket(...args) {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUseWebSocket(...args)
+            return () => {}
+        }
+    })
+    return result
+}
 
 describe('useWebSocket', () => {
     beforeEach(createTestContext)
-    afterEach(cleanupTestContext)
+    afterEach(() => {
+        cleanupTestContext()
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
+    })
 
     describe('connection management', () => {
         it('connects automatically when autoConnect is true', () => {

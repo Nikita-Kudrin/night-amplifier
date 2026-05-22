@@ -1,0 +1,12 @@
+---
+source: tests/integration/stacking_tests.rs
+expression: stretch_result
+---
+AutoStretchResult {
+    stretch_factor: 93.056435,
+    black_point: 0.0,
+    original_median: 0.005860806,
+    adjusted_median: 0.005860806,
+    iterations: 0,
+    converged: true,
+}

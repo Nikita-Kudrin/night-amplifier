@@ -305,4 +305,32 @@ mod tests {
         assert!((stats.global_min() - 0.1).abs() < 0.01);
         assert!((stats.global_max() - 0.9).abs() < 0.01);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_fast_median_preserves_length(mut data in prop::collection::vec(proptest::num::f32::NORMAL, 0..100)) {
+            let len = data.len();
+            let _ = fast_median(&mut data);
+            prop_assert_eq!(data.len(), len);
+        }
+
+        #[test]
+        fn prop_fast_median_no_panic(mut data in prop::collection::vec(proptest::num::f32::ANY, 0..1000)) {
+            let _ = fast_median(&mut data);
+        }
+
+        #[test]
+        fn prop_channel_stats_no_panic(
+            median in proptest::num::f32::ANY,
+            mad in proptest::num::f32::ANY,
+            min in proptest::num::f32::ANY,
+            max in proptest::num::f32::ANY
+        ) {
+            let ch = ChannelStats::new(median, mad, min, max);
+            let _ = ch.suggested_black_point(2.8);
+            let _ = ch.signal_range();
+        }
+    }
 }

@@ -343,4 +343,38 @@ mod tests {
             assert!(*val <= 1.5, "Value too large at index {}: {}", i, val); // Allow slight overshoot from interpolation
         }
     }
+
+    #[test]
+    fn test_debayer_pure_white_frame() {
+        let data = vec![1.0f32; 16];
+        let frame = Frame::from_f32_vec(data, 4, 4, 1).unwrap();
+        let result = debayer(&frame).unwrap();
+        for &v in result.data() {
+            assert!((v - 1.0).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_debayer_pure_black_frame() {
+        let data = vec![0.0f32; 16];
+        let frame = Frame::from_f32_vec(data, 4, 4, 1).unwrap();
+        let result = debayer(&frame).unwrap();
+        for &v in result.data() {
+            assert!(v.abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_debayer_1x1_frame() {
+        let data = vec![0.5f32; 1];
+        let frame = Frame::from_f32_vec(data, 1, 1, 1).unwrap();
+        let result = debayer(&frame).unwrap();
+        assert_eq!(result.width(), 1);
+        assert_eq!(result.height(), 1);
+        assert_eq!(result.channels(), 3);
+        // Fallback to scalar duplication
+        for &v in result.data() {
+            assert!((v - 0.5).abs() < 1e-6);
+        }
+    }
 }

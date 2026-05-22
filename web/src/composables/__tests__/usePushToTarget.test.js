@@ -1,5 +1,18 @@
 import {ref} from 'vue'
-import {usePushToTarget} from '../usePushToTarget.js'
+import {usePushToTarget as originalUsePushToTarget} from '../usePushToTarget.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function usePushToTarget(...args) {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUsePushToTarget(...args)
+            return () => {}
+        }
+    })
+    return result
+}
 import * as api from '../api.js'
 
 vi.mock('../api.js', () => ({
@@ -12,6 +25,13 @@ vi.mock('../api.js', () => ({
 describe('usePushToTarget', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+    })
+
+    afterEach(() => {
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
     })
 
     it('syncs with eventStream if provided', () => {

@@ -33,6 +33,7 @@ struct MockCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     cooler: Arc<Mutex<MockCoolerState>>,
+    fail_next_status: Arc<AtomicBool>,
 }
 
 impl MockCamera {
@@ -59,6 +60,7 @@ impl MockCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             cooler: Arc::clone(&cooler),
+            fail_next_status: Arc::new(AtomicBool::new(false)),
         };
         (cam, cooler)
     }
@@ -74,6 +76,10 @@ impl Camera for MockCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
+        if self.fail_next_status.swap(false, Ordering::SeqCst) {
+            return Err(CameraError::Disconnected);
+        }
+
         let mut c = self.cooler.lock().unwrap();
         let goal = if c.cooler_on {
             c.target_temp_c
@@ -562,6 +568,63 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
 
     assert_eq!(state.camera_phase(&name).await, CameraPhase::Disconnected);
     assert!(state.cameras.read().await.is_empty());
+}
+
+#[tokio::test]
+async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    
+    // Inject mock camera
+    let (cam, _) = MockCamera::new(true, 5.0);
+    let fail_flag = Arc::clone(&cam.fail_next_status);
+    let name = cam.info().name.clone();
+    
+    let connected_info = ConnectedCameraInfo {
+        id: "mock_0".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        info: cam.info().clone(),
+    };
+    
+    {
+        let mut cameras = state.cameras.write().await;
+        cameras.insert("mock_0".to_string(), connected_info);
+    }
+    *state.selected_camera.write().await = Some("mock_0".to_string());
+    *state.active_camera.lock().unwrap() = Some(Box::new(cam));
+    state.set_camera_phase(&name, CameraPhase::Idle).await;
+
+    let mut rx = state.subscribe_events();
+    
+    // Spawn monitor thread
+    let tx = monitor::spawn(Arc::clone(&state), name.clone(), tokio::runtime::Handle::current());
+    *state.camera_monitor_tx.lock().unwrap() = Some(tx);
+    
+    // Trigger error on next poll
+    fail_flag.store(true, Ordering::SeqCst);
+    
+    // Check if system raises a camera disconnect/error event within a reasonable time
+    let saw_disconnect = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Ok(ServerEvent::Error { message, .. }) => {
+                    if message.contains("Camera disconnected") {
+                        return true;
+                    }
+                }
+                Ok(ServerEvent::CameraDisconnected { .. }) => return true,
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(saw_disconnect, "Monitor should broadcast CameraError or CameraDisconnected on stall");
+    
+    lifecycle::finalize_disconnect(&state, &name).await;
 }
 
 // ----------------------------------------------------------------------------

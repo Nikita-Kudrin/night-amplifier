@@ -64,7 +64,16 @@ describe('Injection Resilience', () => {
             mount(PushToPanel, {
                 global: {
                     provide: {
-                        eventStream: {lastEvent: ref(null)},
+                        settings: ref({ telescope: {} }),
+                        eventStream: {
+                            lastEvent: ref(null),
+                            currentTarget: ref(null),
+                            pushDirection: ref(null),
+                            isSolving: ref(false),
+                            astapInstallProgress: ref(null),
+                            clearAstapInstallProgress: vi.fn(),
+                            clearPlateSolving: vi.fn(),
+                        },
                         // 'capabilities' is INTENTIONALLY MISSING
                     },
                     stubs: commonStubs,

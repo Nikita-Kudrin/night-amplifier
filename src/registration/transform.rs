@@ -195,4 +195,54 @@ mod tests {
         let residual = transform.residual(&src, &dst);
         assert!((residual - 5.0).abs() < 1e-5);
     }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_matrix_roundtrip(
+            rotation in -PI..PI,
+            scale in 0.1f32..10.0f32,
+            tx in -1000.0f32..1000.0f32,
+            ty in -1000.0f32..1000.0f32
+        ) {
+            let original = AffineTransform::new(rotation, scale, tx, ty);
+            let matrix = original.to_matrix();
+            let recovered = AffineTransform::from_matrix(&matrix);
+
+            let r_diff = (original.rotation - recovered.rotation).abs();
+            let r_diff = r_diff.min(2.0 * PI - r_diff);
+            prop_assert!(r_diff < 1e-3);
+            prop_assert!((original.scale - recovered.scale).abs() < 1e-3);
+            prop_assert!((original.tx - recovered.tx).abs() < 1e-3);
+            prop_assert!((original.ty - recovered.ty).abs() < 1e-3);
+        }
+
+        #[test]
+        fn prop_inverse_transform(
+            rotation in -PI..PI,
+            scale in 0.1f32..10.0f32,
+            tx in -1000.0f32..1000.0f32,
+            ty in -1000.0f32..1000.0f32,
+            px in -5000.0f32..5000.0f32,
+            py in -5000.0f32..5000.0f32
+        ) {
+            let transform = AffineTransform::new(rotation, scale, tx, ty);
+            let (x_t, y_t) = transform.transform_point(px, py);
+            let (x_orig, y_orig) = transform.inverse_transform_point(x_t, y_t);
+
+            prop_assert!((px - x_orig).abs() < 0.1);
+            prop_assert!((py - y_orig).abs() < 0.1);
+        }
+
+        #[test]
+        fn prop_nan_handling(
+            val in proptest::num::f32::ANY
+        ) {
+            let t = AffineTransform::new(f32::NAN, val, f32::INFINITY, f32::NEG_INFINITY);
+            let _ = t.to_matrix();
+            let _ = t.transform_point(val, val);
+            let _ = t.inverse_transform_point(val, val);
+        }
+    }
 }

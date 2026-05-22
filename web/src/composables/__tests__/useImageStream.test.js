@@ -15,11 +15,30 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useImageStream} from '../useWebSocket.js'
+import {useImageStream as originalUseImageStream} from '../useWebSocket.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function useImageStream() {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUseImageStream()
+            return () => {}
+        }
+    })
+    return result
+}
 
 describe('useImageStream', () => {
     beforeEach(createTestContextWithoutTimers)
-    afterEach(cleanupTestContextWithoutTimers)
+    afterEach(() => {
+        cleanupTestContextWithoutTimers()
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
+    })
 
     it('connects to /ws/stream', () => {
         useImageStream()
