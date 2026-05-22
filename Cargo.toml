@@ -101,6 +101,8 @@ tempfile = "3.26.0"   # For creating temporary test outputs
 image = "0.25.9"      # General image handling for test output
 tower = "0.5.3"       # For server endpoint testing (ServiceExt::oneshot)
 serial_test = "3.4.0" # Run integration tests sequentially
+proptest = "1.11.0"
+insta = "1.47.2"
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,30 @@
+---
+source: tests/integration/stacking_tests.rs
+expression: stats
+---
+ImageStats {
+    channels: [
+        ChannelStats {
+            median: 0.005750941,
+            mad: 5.7138037e-5,
+            sigma: 8.4712854e-5,
+            min: 0.0020412444,
+            max: 0.98197806,
+        },
+        ChannelStats {
+            median: 0.005768115,
+            mad: 5.8853766e-5,
+            sigma: 8.7256594e-5,
+            min: 0.00368419,
+            max: 0.9812515,
+        },
+        ChannelStats {
+            median: 0.005725054,
+            mad: 5.691382e-5,
+            sigma: 8.438043e-5,
+            min: 0.002312751,
+            max: 0.995397,
+        },
+    ],
+    sample_count: 100000,
+}

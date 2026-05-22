@@ -10,11 +10,30 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useImageStream} from '../useWebSocket.js'
+import {useImageStream as originalUseImageStream} from '../useWebSocket.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function useImageStream() {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUseImageStream()
+            return () => {}
+        }
+    })
+    return result
+}
 
 describe('useImageStream FPS calculation', () => {
     beforeEach(createTestContext)
-    afterEach(cleanupTestContext)
+    afterEach(() => {
+        cleanupTestContext()
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
+    })
 
     it('calculates FPS correctly over 3 second interval', async () => {
         const {fps} = useImageStream()

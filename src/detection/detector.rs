@@ -411,6 +411,29 @@ mod tests {
     }
 
     #[test]
+    fn test_sub_pixel_centroid_shift() {
+        let width = 50;
+        let height = 50;
+        let mut data = vec![0.05f32; width * height];
+        
+        // Generate a star centered exactly at 25.3, 25.0
+        add_gaussian_star(&mut data, width, 25.3, 25.0, 0.8, 2.0);
+
+        let frame = Frame::from_f32_vec(data, width, height, 1).unwrap();
+        let config = DetectionConfig::default().with_sigma(3.0).unlimited_stars();
+
+        let detector = StarDetector::new(config);
+        let stars = detector.detect(&frame).unwrap();
+
+        assert!(!stars.is_empty(), "Should detect the star");
+        let star = &stars[0];
+
+        // Ensure the centroid is detected at the sub-pixel coordinate correctly
+        assert!((star.x - 25.3).abs() < 0.1, "Centroid x should be ~25.3, got x={}", star.x);
+        assert!((star.y - 25.0).abs() < 0.1, "Centroid y should be ~25.0, got y={}", star.y);
+    }
+
+    #[test]
     fn test_multichannel_detection() {
         let width = 80;
         let height = 80;

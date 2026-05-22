@@ -1,5 +1,18 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {getCatalogClass, useCatalogSearch} from '../useCatalogSearch.js'
+import {getCatalogClass, useCatalogSearch as originalUseCatalogSearch} from '../useCatalogSearch.js'
+import { mount } from '@vue/test-utils'
+
+let currentApp = null;
+function useCatalogSearch() {
+    let result;
+    currentApp = mount({
+        setup() {
+            result = originalUseCatalogSearch()
+            return () => {}
+        }
+    })
+    return result
+}
 
 vi.mock('../api.js', () => ({
     searchCatalog: vi.fn(),
@@ -39,6 +52,10 @@ describe('useCatalogSearch', () => {
 
     afterEach(() => {
         vi.useRealTimers()
+        if (currentApp) {
+            currentApp.unmount()
+            currentApp = null
+        }
     })
 
     it('provides reactive search state', () => {

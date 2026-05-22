@@ -329,8 +329,26 @@ fn cancel_warmup(ctx: &mut MonitorCtx) {
 /// (handle closed during warmup).
 fn tick(ctx: &mut MonitorCtx) -> bool {
     let status = match read_status(ctx) {
-        Some(s) => s,
-        None => return true, // transient error; keep running
+        Ok(s) => s,
+        Err(crate::camera::CameraError::Disconnected) => {
+            warn!(camera_name = %ctx.camera_name, "Camera disconnected during monitor poll (USB stall)");
+            let state = Arc::clone(&ctx.state);
+            let name = ctx.camera_name.clone();
+            ctx.rt.block_on(async move {
+                state.send_error("Camera disconnected (USB stall)".to_string());
+                
+                let _ = state.events.send(crate::server::events::ServerEvent::camera_disconnected(
+                    name.clone(),
+                ));
+                
+                lifecycle::finalize_disconnect(&state, &name).await;
+            });
+            return false; // Stop monitor thread
+        }
+        Err(e) => {
+            debug!(camera_name = %ctx.camera_name, error = %e, "Transient error reading camera status");
+            return true; // transient error; keep running
+        }
     };
 
     // Broadcast the sample for the UI.
@@ -475,14 +493,14 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
     true
 }
 
-fn read_status(ctx: &MonitorCtx) -> Option<CameraStatus> {
+fn read_status(ctx: &MonitorCtx) -> Result<CameraStatus, crate::camera::CameraError> {
     let start = Instant::now();
     let mut guard = ctx
         .state
         .active_camera
         .lock()
         .expect("active_camera mutex poisoned");
-    let camera = guard.as_mut()?;
+    let camera = guard.as_mut().ok_or(crate::camera::CameraError::Disconnected)?;
     let result = camera.status();
     let elapsed = start.elapsed();
     if elapsed > Duration::from_millis(500) {
@@ -492,20 +510,14 @@ fn read_status(ctx: &MonitorCtx) -> Option<CameraStatus> {
             "camera.status() was slow"
         );
     }
-    match result {
-        Ok(status) => Some(status),
-        Err(e) => {
-            debug!(camera_name = %ctx.camera_name, error = %e, "Failed to read camera status");
-            None
-        }
-    }
+    result
 }
 
 /// Read the current sensor temperature for ramp seeding. Prefers a fresh
 /// hardware sample, falling back to the last cached status if the handle is
 /// unavailable (e.g. momentarily held by another path).
 fn current_sensor_temp(ctx: &MonitorCtx) -> Option<f64> {
-    if let Some(status) = read_status(ctx) {
+    if let Ok(status) = read_status(ctx) {
         return Some(status.temperature_c);
     }
     ctx.rt
