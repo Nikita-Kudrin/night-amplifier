@@ -58,6 +58,10 @@ pub enum StackError {
     /// FFI boundary error (panic in C/C++ library, null pointer, etc.)
     #[error("FFI error: {0}")]
     FfiBoundaryError(String),
+
+    /// Operation attempted on an empty stack
+    #[error("Cannot compute on an empty stack")]
+    EmptyStack,
 }
 
 impl From<FfiError> for StackError {

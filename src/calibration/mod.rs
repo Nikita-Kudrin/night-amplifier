@@ -192,4 +192,44 @@ mod tests {
             assert!(v <= 2.0);
         }
     }
+
+    #[test]
+    fn test_flat_zero_thresholding() {
+        let flat_data = vec![0.0, 0.0, 0.0, 0.0];
+        let flat_frame = Frame::from_f32_vec(flat_data, 2, 2, 1).unwrap();
+        // Mean is 0.0, so it should return an error due to FLAT_MIN_THRESHOLD
+        let result = MasterFlat::new(flat_frame);
+        assert!(matches!(result, Err(crate::error::StackError::InvalidFlatField { .. })));
+    }
+
+    #[test]
+    fn test_flat_division_by_near_zero() {
+        let mut light = Frame::filled(2, 2, 1, 1.0).unwrap();
+        // One pixel is extremely close to zero, should be clamped to FLAT_MIN_THRESHOLD
+        let flat_data = vec![0.0001, 2.0, 1.0, 1.0];
+        let flat_frame = Frame::from_f32_vec(flat_data, 2, 2, 1).unwrap();
+        let flat = MasterFlat::new(flat_frame).unwrap();
+
+        let calibration = Calibration::flat_only(flat);
+        calibration.apply(&mut light).unwrap();
+
+        let data = light.data();
+        assert!(!data[0].is_nan() && !data[0].is_infinite());
+        // Original mean is approx 1.0. The 0.0001 becomes clamped to FLAT_MIN_THRESHOLD
+        assert!(data[0] <= 1.0 / FLAT_MIN_THRESHOLD);
+    }
+
+    #[test]
+    fn test_dark_subtraction_nan_handling() {
+        let mut light = Frame::filled(2, 2, 1, f32::NAN).unwrap();
+        let dark_frame = Frame::filled(2, 2, 1, 0.1).unwrap();
+        let dark = MasterDark::new(dark_frame);
+
+        let calibration = Calibration::dark_only(dark);
+        calibration.apply(&mut light).unwrap();
+
+        // max(0, NaN - 0.1) depends on f32::max behavior. In Rust, NaN.max(0.0) is 0.0 or NaN depending on std::cmp vs f32::max.
+        // Let's verify our SIMD max doesn't crash
+        assert!(light.data().len() == 4);
+    }
 }

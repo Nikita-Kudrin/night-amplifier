@@ -43,6 +43,7 @@ pub mod background_tests;
 pub mod common;
 pub mod debayer_tests;
 pub mod detection_tests;
+pub mod encoding_tests;
 pub mod fixture_processing;
 pub mod image_loading;
 pub mod prefetch;

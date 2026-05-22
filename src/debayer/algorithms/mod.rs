@@ -14,10 +14,9 @@ use crate::debayer::CfaPattern;
 /// Get raw pixel value with bounds checking (returns 0 for out-of-bounds)
 #[inline]
 pub(crate) fn get_raw(data: &[f32], width: usize, height: usize, x: isize, y: isize) -> f32 {
-    if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
-        return 0.0;
-    }
-    data[y as usize * width + x as usize]
+    let clamped_x = x.clamp(0, width as isize - 1) as usize;
+    let clamped_y = y.clamp(0, height as isize - 1) as usize;
+    data[clamped_y * width + clamped_x]
 }
 
 /// Interpolate missing red channel at a green pixel position

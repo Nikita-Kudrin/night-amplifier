@@ -289,4 +289,27 @@ mod tests {
 
         assert_eq!(interleaved, expected);
     }
+
+    #[test]
+    fn test_load_nonexistent_fits() {
+        let result = load_fits(Path::new("this_file_does_not_exist_xyz.fits"));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), CameraError::ImageReadFailed(_)));
+    }
+
+    #[test]
+    fn test_load_corrupted_fits() {
+        use std::io::Write;
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join("test_corrupted_data.fits");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            // Write a tiny incomplete header
+            file.write_all(b"SIMPLE  =                    T").unwrap();
+        }
+        
+        let result = load_fits(&path);
+        assert!(result.is_err());
+        let _ = std::fs::remove_file(path);
+    }
 }
