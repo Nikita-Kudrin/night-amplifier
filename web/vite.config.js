@@ -23,6 +23,16 @@ export default defineConfig({
     test: {
         environment: 'happy-dom',
         globals: true,
-        include: ['src/**/*.{test,spec}.{js,ts}']
+        include: ['src/**/*.{test,spec}.{js,ts}'],
+        coverage: {
+            provider: 'v8',
+            reporter: ['text', 'html'],
+            thresholds: {
+                lines: 80,
+                branches: 80,
+                functions: 80,
+                statements: 80
+            }
+        }
     }
 })
