@@ -13,6 +13,8 @@ pub struct PlanetaryConfig {
     pub search_radius: usize,
     /// Region of interest for alignment (None = center crop)
     pub alignment_roi: Option<AlignmentRoi>,
+    /// Whether to automatically track the center of mass of the target
+    pub auto_tracking: bool,
     /// Stacking method (default: Percentile)
     pub stacking_method: PlanetaryStackMethod,
     /// Percentile to use for percentile stacking (default: 0.5 = median)
@@ -31,6 +33,7 @@ impl Default for PlanetaryConfig {
             max_frames: 0,
             search_radius: 50,
             alignment_roi: None,
+            auto_tracking: true,
             stacking_method: PlanetaryStackMethod::Percentile,
             percentile: 0.5,
             quality_metric: QualityMetric::Laplacian,

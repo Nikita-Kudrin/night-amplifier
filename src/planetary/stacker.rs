@@ -155,10 +155,24 @@ impl PlanetaryStacker {
 
     fn compute_frame_alignment(&self, frame: &Frame) -> (f32, f32) {
         let reference = self.reference.as_ref().unwrap();
-        let roi = self.config.alignment_roi.unwrap_or_else(|| {
-            let size = (self.width.min(self.height) / 2).max(64);
-            AlignmentRoi::centered(self.width, self.height, size)
-        });
+        
+        let roi = if self.config.auto_tracking {
+            let lum = super::quality::frame_to_luminance(frame);
+            let (cx, cy) = super::alignment::compute_centroid(&lum, self.width, self.height);
+            let (base_w, base_h) = match self.config.alignment_roi {
+                Some(r) => (r.width, r.height),
+                None => {
+                    let size = (self.width.min(self.height) / 2).max(64);
+                    (size, size)
+                }
+            };
+            AlignmentRoi::centered_at(cx, cy, base_w, base_h, self.width, self.height)
+        } else {
+            self.config.alignment_roi.unwrap_or_else(|| {
+                let size = (self.width.min(self.height) / 2).max(64);
+                AlignmentRoi::centered(self.width, self.height, size)
+            })
+        };
 
         let (dx, dy, ncc) = compute_alignment(
             reference,
