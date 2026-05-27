@@ -38,6 +38,8 @@ mod tests {
             simulated_preload_images: 10,
             comet_roi: None,
             planetary_roi: None,
+            planetary_auto_tracking: false,
+            planetary_multi_point_alignment: true,
             dew_heater_enabled: true,
             dew_heater_power: 30,
             wanderer_mode: true,
@@ -208,6 +210,14 @@ mod tests {
         assert_eq!(restored.target_temp_c, Some(-10.0));
         assert!(restored.dew_heater_enabled);
         assert_eq!(restored.dew_heater_power, 30);
+        assert_eq!(
+            restored.planetary_auto_tracking,
+            settings.planetary_auto_tracking
+        );
+        assert_eq!(
+            restored.planetary_multi_point_alignment,
+            settings.planetary_multi_point_alignment
+        );
     }
 
     #[test]
@@ -239,6 +249,8 @@ mod tests {
             wanderer_mode: true,
             push_to_fov: None,
             planetary_roi: None,
+            planetary_auto_tracking: true,
+            planetary_multi_point_alignment: false,
             eyepiece: EyepieceSettings {
                 binoview: true,
                 screen_width: 140.0,
@@ -284,6 +296,52 @@ mod tests {
         assert_eq!(loaded.push_to_fov, settings.push_to_fov);
         assert_eq!(loaded.eyepiece.binoview, settings.eyepiece.binoview);
         assert_eq!(loaded.eyepiece.circular_view, settings.eyepiece.circular_view);
+        assert_eq!(
+            loaded.planetary_auto_tracking,
+            settings.planetary_auto_tracking
+        );
+        assert_eq!(
+            loaded.planetary_multi_point_alignment,
+            settings.planetary_multi_point_alignment
+        );
+    }
+
+    #[test]
+    fn test_load_settings_without_planetary_fields() {
+        // Verify backward compatibility: a settings.json from before the planetary
+        // tracking commits (missing the fields) deserializes with correct defaults.
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": false,
+            "rejection_sigma": 2.5,
+            "rejection_method": "None",
+            "background_subtraction": true,
+            "background_extraction_algorithm": "grid_bilinear",
+            "save_raw_frames": false,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "weighting_preset": "balanced",
+            "stretch_aggressiveness": "medium",
+            "saturation_boost": false,
+            "saturation_boost_strength": 0.5,
+            "use_simulated_camera": false,
+            "simulated_preload_images": 5,
+            "wanderer_mode": false
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        assert!(
+            persisted.planetary_auto_tracking,
+            "Missing field should default to true"
+        );
+        assert!(
+            !persisted.planetary_multi_point_alignment,
+            "Missing field should default to false"
+        );
     }
 
     #[test]
