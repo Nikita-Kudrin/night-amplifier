@@ -63,6 +63,8 @@ watch(
           weighting_preset: newSettings.weighting_preset ?? DEFAULT_SETTINGS.weighting_preset,
           rejection_method: newSettings.rejection_method ?? DEFAULT_SETTINGS.rejection_method,
           rejection_sigma: newSettings.rejection_sigma ?? DEFAULT_SETTINGS.rejection_sigma,
+          planetary_auto_tracking: newSettings.planetary_auto_tracking ?? true,
+          planetary_multi_point_alignment: newSettings.planetary_multi_point_alignment ?? false,
           saturation_boost: newSettings.saturation_boost ?? DEFAULT_SETTINGS.saturation_boost,
           saturation_boost_strength:
               newSettings.saturation_boost_strength ?? DEFAULT_SETTINGS.saturation_boost_strength,
@@ -403,6 +405,32 @@ const HELP = HELP_TEXTS
           />
         </template>
       </BaseSlider>
+
+      <div class="control-group" v-if="settings?.stacking_type === 'planetary'">
+        <BaseToggle
+            v-model="localSettings.planetary_auto_tracking"
+            label="Planetary Auto Tracking"
+            help="Automatically track the planet's centroid in the ROI to prevent drift."
+            @update:model-value="applySetting('planetary_auto_tracking', $event)"
+        />
+      </div>
+
+      <div class="control-group" v-if="settings?.stacking_type === 'planetary'">
+        <BaseToggle
+            v-model="localSettings.planetary_multi_point_alignment"
+            label="Multi-Point Alignment"
+            help="Use Inverse Distance Weighting on multiple surface points to combat seeing distortion."
+            :disabled="!capabilities.planetary.advanced_stacking"
+            @update:model-value="applySetting('planetary_multi_point_alignment', $event)"
+        >
+          <template #label-extra>
+            <BaseProLock
+                v-if="!capabilities.planetary.advanced_stacking"
+                feature="Multi-Point Alignment"
+            />
+          </template>
+        </BaseToggle>
+      </div>
     </div>
 
     <!-- Advanced settings -->
