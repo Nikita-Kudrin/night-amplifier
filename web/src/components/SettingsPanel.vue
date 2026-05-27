@@ -405,17 +405,22 @@ const HELP = HELP_TEXTS
           />
         </template>
       </BaseSlider>
+    </div>
 
-      <div class="control-group" v-if="settings?.stacking_type === 'planetary'">
+    <!-- Planetary-specific settings -->
+    <div class="settings-section" v-if="localSettings.stacking && settings?.stacking_type === 'planetary'">
+      <h3 class="section-title">Planetary</h3>
+
+      <div class="control-group">
         <BaseToggle
             v-model="localSettings.planetary_auto_tracking"
-            label="Planetary Auto Tracking"
+            label="Auto Tracking"
             help="Automatically track the planet's centroid in the ROI to prevent drift."
             @update:model-value="applySetting('planetary_auto_tracking', $event)"
         />
       </div>
 
-      <div class="control-group" v-if="settings?.stacking_type === 'planetary'">
+      <div class="control-group">
         <BaseToggle
             v-model="localSettings.planetary_multi_point_alignment"
             label="Multi-Point Alignment"
