@@ -219,6 +219,10 @@ pub struct SettingsResponse {
     /// Region of interest for planetary alignment (used in Planetary stacking mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub planetary_roi: Option<AlignmentRoi>,
+    /// Enable auto tracking of planetary ROI
+    pub planetary_auto_tracking: bool,
+    /// Enable multi-point alignment for planetary (Pro only)
+    pub planetary_multi_point_alignment: bool,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
     pub eyepiece: EyepieceSettings,
@@ -280,6 +284,8 @@ impl From<&CaptureSettings> for SettingsResponse {
             simulated_preload_images: settings.simulated_preload_images,
             comet_roi: settings.comet_roi.clone(),
             planetary_roi: settings.planetary_roi.clone(),
+            planetary_auto_tracking: settings.planetary_auto_tracking,
+            planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             wanderer_mode: settings.wanderer_mode,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
@@ -403,6 +409,12 @@ pub struct UpdateSettingsRequest {
     /// Region of interest for planetary alignment (used in Planetary stacking mode)
     #[serde(default)]
     pub planetary_roi: Option<AlignmentRoi>,
+    /// Enable auto tracking of planetary ROI
+    #[serde(default)]
+    pub planetary_auto_tracking: Option<bool>,
+    /// Enable multi-point alignment for planetary (Pro only)
+    #[serde(default)]
+    pub planetary_multi_point_alignment: Option<bool>,
     /// Enable "Wanderer" mode
     #[serde(default)]
     pub wanderer_mode: Option<bool>,

@@ -60,6 +60,10 @@ pub struct CaptureSettings {
     pub comet_roi: Option<AlignmentRoi>,
     /// Region of interest for planetary alignment
     pub planetary_roi: Option<AlignmentRoi>,
+    /// Enable auto tracking of planetary ROI
+    pub planetary_auto_tracking: bool,
+    /// Enable multi-point alignment for planetary (Pro only)
+    pub planetary_multi_point_alignment: bool,
     /// Whether anti-dew heater is enabled
     pub dew_heater_enabled: bool,
     /// Anti-dew heater power level (0-100)
@@ -273,6 +277,8 @@ impl Default for CaptureSettings {
             sensor_mode_override: None,
             comet_roi: None,
             planetary_roi: None,
+            planetary_auto_tracking: true,
+            planetary_multi_point_alignment: false,
             dew_heater_enabled: true,
             dew_heater_power: 10,
             wanderer_mode: false,

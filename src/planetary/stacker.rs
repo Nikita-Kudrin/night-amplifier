@@ -15,8 +15,10 @@ use std::sync::OnceLock;
 
 /// PlanetaryStacker trait for the Pro plugin
 pub trait PlanetaryStackerPlugin: Send + Sync {
-    fn add_frame(&self, frame: &Frame, stacker: &mut PlanetaryStacker) -> Result<f32>;
-    fn stack(&self, stacker: &PlanetaryStacker) -> Result<Frame>;
+    /// Aligns and warps the frame against the reference using multi-point surface alignment
+    fn warp_frame(&self, frame: &Frame, reference: &Frame, roi: &AlignmentRoi, search_radius: usize) -> Result<Frame>;
+    /// Clears any cached alignment points when the reference frame changes
+    fn clear_cache(&self);
 }
 
 /// Global registry for the planetary stacking plugin

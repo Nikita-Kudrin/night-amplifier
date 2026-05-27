@@ -41,11 +41,11 @@ mod stacker;
 mod tests;
 
 // Re-export public types
-pub use alignment::compute_alignment;
+pub use alignment::{compute_alignment, compute_centroid};
 pub use config::{
     AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats, QualityMetric,
 };
-pub use quality::compute_quality;
+pub use quality::{compute_quality, frame_to_luminance};
 pub use stacker::{
     stack_planetary, PlanetaryStacker, PlanetaryStackerPlugin, ScoredFrame, PLANETARY_PLUGIN,
 };
