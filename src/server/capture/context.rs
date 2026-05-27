@@ -330,33 +330,28 @@ impl PlanetaryStackingContext {
         let search_radius = 50;
         let subpixel_factor = 2;
 
-        let mut final_frame_to_stack = frame;
-        let mut owned_warped_frame;
-        let mut transform = crate::registration::AffineTransform::from_translation(0.0, 0.0);
-        let mut computed_translation = false;
-
-        if settings.planetary_multi_point_alignment {
-            if let Some(plugin) = crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN) {
-                match plugin.warp_frame(frame, reference, &roi, search_radius) {
-                    Ok(warped) => {
-                        owned_warped_frame = warped;
-                        final_frame_to_stack = &owned_warped_frame;
-                        // For IDW warping, the transform is essentially identity from the perspective of the global stacker 
-                        // because the frame has already been locally translated to match the reference.
-                        let span = Span::current();
-                        span.record("dx", 0.0);
-                        span.record("dy", 0.0);
-                        span.record("ncc", 1.0);
-                        computed_translation = true;
+        // Try multi-point alignment via Pro plugin, falling back to single-point correlation.
+        let warped_frame: Option<Frame> = if settings.planetary_multi_point_alignment {
+            crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN)
+                .and_then(|plugin| {
+                    match plugin.warp_frame(frame, reference, &roi, search_radius) {
+                        Ok(warped) => Some(warped),
+                        Err(e) => {
+                            debug!(error = %e, "Multi-point planetary alignment failed, falling back");
+                            None
+                        }
                     }
-                    Err(e) => {
-                        debug!(error = %e, "Multi-point planetary alignment failed");
-                    }
-                }
-            }
-        }
+                })
+        } else {
+            None
+        };
 
-        if !computed_translation {
+        let transform = if warped_frame.is_some() {
+            Span::current().record("dx", 0.0);
+            Span::current().record("dy", 0.0);
+            Span::current().record("ncc", 1.0);
+            crate::registration::AffineTransform::from_translation(0.0, 0.0)
+        } else {
             let (dx, dy, ncc) = crate::planetary::compute_alignment(
                 reference,
                 frame,
@@ -369,16 +364,18 @@ impl PlanetaryStackingContext {
             Span::current().record("dx", dx);
             Span::current().record("dy", dy);
             Span::current().record("ncc", ncc);
-            
-            transform = crate::registration::AffineTransform::from_translation(dx, dy);
-        }
+
+            crate::registration::AffineTransform::from_translation(dx, dy)
+        };
+
+        let final_frame = warped_frame.as_ref().unwrap_or(frame);
 
         // Compute quality (standard FWHM/SNR or planetary-specific)
         let quality = FrameQuality::default();
 
         match self
             .stacker
-            .add_frame_with_quality(final_frame_to_stack, &transform, quality)
+            .add_frame_with_quality(final_frame, &transform, quality)
         {
             Ok(()) => {
                 Span::current().record("registered", true);
