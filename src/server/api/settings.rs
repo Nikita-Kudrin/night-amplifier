@@ -140,6 +140,21 @@ pub async fn update_settings(
         if let Some(comet_roi) = request.comet_roi {
             settings.comet_roi = Some(comet_roi);
         }
+        if let Some(planetary_roi) = request.planetary_roi {
+            settings.planetary_roi = Some(planetary_roi);
+        }
+        if let Some(auto_tracking) = request.planetary_auto_tracking {
+            settings.planetary_auto_tracking = auto_tracking;
+        }
+        if let Some(multi_point) = request.planetary_multi_point_alignment {
+            if multi_point && crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN).is_none() {
+                return (
+                    StatusCode::FORBIDDEN,
+                    ApiResponse::err("Multi-Point Planetary Alignment is a Pro feature"),
+                );
+            }
+            settings.planetary_multi_point_alignment = multi_point;
+        }
 
         if let Some(wanderer_mode) = request.wanderer_mode {
             settings.wanderer_mode = wanderer_mode;

@@ -64,6 +64,12 @@ pub struct PersistedSettings {
     /// Region of interest for planetary alignment
     #[serde(default)]
     pub planetary_roi: Option<AlignmentRoi>,
+    /// Enable auto tracking of planetary ROI
+    #[serde(default = "default_planetary_auto_tracking")]
+    pub planetary_auto_tracking: bool,
+    /// Enable multi-point alignment for planetary (Pro only)
+    #[serde(default)]
+    pub planetary_multi_point_alignment: bool,
     /// Deduced field of view from successful plate solves
     #[serde(default)]
     pub push_to_fov: Option<f32>,
@@ -130,6 +136,10 @@ fn default_saturation_strength() -> f32 {
     0.5
 }
 
+fn default_planetary_auto_tracking() -> bool {
+    true
+}
+
 impl From<&CaptureSettings> for PersistedSettings {
     fn from(settings: &CaptureSettings) -> Self {
         // Get current simulated directories from the registry
@@ -161,6 +171,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             simulated_directories,
             comet_roi: settings.comet_roi,
             planetary_roi: settings.planetary_roi,
+            planetary_auto_tracking: settings.planetary_auto_tracking,
+            planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             wanderer_mode: settings.wanderer_mode,
             push_to_fov: settings.push_to_fov,
             eyepiece: settings.eyepiece.clone(),
@@ -205,6 +217,8 @@ impl From<PersistedSettings> for CaptureSettings {
             simulated_preload_images: persisted.simulated_preload_images,
             comet_roi: persisted.comet_roi,
             planetary_roi: persisted.planetary_roi,
+            planetary_auto_tracking: persisted.planetary_auto_tracking,
+            planetary_multi_point_alignment: persisted.planetary_multi_point_alignment,
             wanderer_mode: persisted.wanderer_mode,
             push_to_fov: persisted.push_to_fov,
             eyepiece: persisted.eyepiece,

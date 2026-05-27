@@ -277,6 +277,10 @@ impl PlanetaryStackingContext {
     pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), String> {
         self.reference_frame = Some(frame.clone());
 
+        if let Some(plugin) = crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN) {
+            plugin.clear_cache();
+        }
+
         // Add reference frame with default quality
         let quality = FrameQuality::default();
 
@@ -302,49 +306,87 @@ impl PlanetaryStackingContext {
         let reference = self.reference_frame.as_ref().unwrap();
 
         // Use planetary alignment logic
-        let roi = settings.planetary_roi.unwrap_or_else(|| {
+        let mut roi = settings.planetary_roi.unwrap_or_else(|| {
             let width = frame.width();
             let height = frame.height();
             let size = (width.min(height) / 2).max(64);
             AlignmentRoi::centered(width, height, size)
         });
 
+        if settings.planetary_auto_tracking {
+            let lum = crate::planetary::frame_to_luminance(frame);
+            let (cx, cy) = crate::planetary::compute_centroid(&lum, frame.width(), frame.height());
+            let (base_w, base_h) = match settings.planetary_roi {
+                Some(ref r) => (r.width, r.height),
+                None => {
+                    let size = (frame.width().min(frame.height()) / 2).max(64);
+                    (size, size)
+                }
+            };
+            roi = AlignmentRoi::centered_at(cx, cy, base_w, base_h, frame.width(), frame.height());
+        }
+
         // Search radius and subpixel factor from planetary defaults
         let search_radius = 50;
         let subpixel_factor = 2;
 
-        let (dx, dy, ncc) = crate::planetary::compute_alignment(
-            reference,
-            frame,
-            &roi,
-            search_radius,
-            subpixel_factor,
-        );
+        let mut final_frame_to_stack = frame;
+        let mut owned_warped_frame;
+        let mut transform = crate::registration::AffineTransform::from_translation(0.0, 0.0);
+        let mut computed_translation = false;
 
-        debug!(dx, dy, ncc, "Planetary alignment results");
-        let span = Span::current();
-        span.record("dx", dx);
-        span.record("dy", dy);
-        span.record("ncc", ncc);
+        if settings.planetary_multi_point_alignment {
+            if let Some(plugin) = crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN) {
+                match plugin.warp_frame(frame, reference, &roi, search_radius) {
+                    Ok(warped) => {
+                        owned_warped_frame = warped;
+                        final_frame_to_stack = &owned_warped_frame;
+                        // For IDW warping, the transform is essentially identity from the perspective of the global stacker 
+                        // because the frame has already been locally translated to match the reference.
+                        let span = Span::current();
+                        span.record("dx", 0.0);
+                        span.record("dy", 0.0);
+                        span.record("ncc", 1.0);
+                        computed_translation = true;
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Multi-point planetary alignment failed");
+                    }
+                }
+            }
+        }
 
-        // Convert (dx, dy) translation to AffineTransform
-        // Note: Planetary alignment is currently translation-only
-        let transform = crate::registration::AffineTransform::from_translation(dx, dy);
+        if !computed_translation {
+            let (dx, dy, ncc) = crate::planetary::compute_alignment(
+                reference,
+                frame,
+                &roi,
+                search_radius,
+                subpixel_factor,
+            );
+
+            debug!(dx, dy, ncc, "Planetary alignment results");
+            Span::current().record("dx", dx);
+            Span::current().record("dy", dy);
+            Span::current().record("ncc", ncc);
+            
+            transform = crate::registration::AffineTransform::from_translation(dx, dy);
+        }
 
         // Compute quality (standard FWHM/SNR or planetary-specific)
         let quality = FrameQuality::default();
 
         match self
             .stacker
-            .add_frame_with_quality(frame, &transform, quality)
+            .add_frame_with_quality(final_frame_to_stack, &transform, quality)
         {
             Ok(()) => {
-                span.record("registered", true);
+                Span::current().record("registered", true);
                 Ok(true)
             }
             Err(e) => {
                 debug!(error = %e, "Failed to add frame to planetary stack");
-                span.record("registered", false);
+                Span::current().record("registered", false);
                 Ok(false)
             }
         }

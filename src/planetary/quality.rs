@@ -19,7 +19,7 @@ pub fn compute_quality(frame: &Frame, metric: QualityMetric) -> f32 {
 }
 
 /// Converts frame to luminance values
-pub(crate) fn frame_to_luminance(frame: &Frame) -> Vec<f32> {
+pub fn frame_to_luminance(frame: &Frame) -> Vec<f32> {
     let data = frame.data();
     let channels = frame.channels();
     let pixels = frame.width() * frame.height();
