@@ -23,8 +23,6 @@ SOLID Principles:
   it couples unrelated domains.
 - KISS (Keep It Simple, Stupid): Avoid over-engineering. Choose the simplest solution that effectively solves the
   problem.
-- YAGNI (You Aren't Gonna Need It): Do not build features, abstractions, or infrastructure for hypothetical future use
-  cases.
 
 When the file is too big (over 500 lines) consider refactoring and extracting functionality.
 Follow standard Rust code conventions for backend and JavaScript for frontend.
@@ -36,7 +34,7 @@ heavy operations should not be performed on the fly.
 Remember to optimize imports and remove unused code you have created.
 Try to avoid deep nesting. Use if+return to simplify the code.
 ALWAYS prefer editing an existing file to creating a new one.
-Proactively update documentation files (\*.md) or README files after changes.
+Proactively update documentation files (\\*.md, especially the VitePress user manual in `manual/`) or README files after changes in the code.
 After making big changes, run backend and frontend tests.
 
 ## Architecture
