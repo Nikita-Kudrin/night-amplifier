@@ -34,3 +34,10 @@ settings.json
 /tests.tar.zst
 /dist/
 /license*
+/manual/.vitepress/dist/assets/
+/manual/.vitepress/dist/404.html
+/manual/.vitepress/dist/getting-started.html
+/manual/.vitepress/dist/hashmap.json
+/manual/.vitepress/dist/index.html
+/manual/.vitepress/dist/stacking.html
+/manual/.vitepress/dist/vp-icons.css

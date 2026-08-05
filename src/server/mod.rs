@@ -27,6 +27,7 @@ mod camera_session;
 mod capture;
 mod dto;
 mod embedded_assets;
+mod embedded_manual;
 mod encoding;
 pub mod error;
 pub mod events;
@@ -159,9 +160,13 @@ impl Server {
             .route("/stream", get(ws::stream_handler))
             .route("/events", get(ws::events_handler));
 
+        let manual_routes = Router::new()
+            .fallback(get(embedded_manual::serve_manual));
+
         let app = Router::new()
             .nest("/api", api_routes)
-            .nest("/ws", ws_routes);
+            .nest("/ws", ws_routes)
+            .nest("/night-amplifier", manual_routes);
 
         // Add CORS if enabled
         let app = if self.config.enable_cors {

@@ -165,6 +165,22 @@ else
     fi
 fi
 
+# ── Step 1.5: Build manual ───────────────────────────────────────────
+echo ""
+echo "── Building VitePress manual ──"
+if [[ -d "${PROJECT_ROOT}/manual" ]]; then
+    cd "${PROJECT_ROOT}/manual"
+    # Source nvm if available
+    if [[ -f "$HOME/.nvm/nvm.sh" ]]; then
+        . "$HOME/.nvm/nvm.sh" 2>/dev/null || true
+    fi
+    npm ci --prefer-offline 2>/dev/null || npm install
+    npm run docs:build
+    echo "Manual built: ${PROJECT_ROOT}/manual/.vitepress/dist/"
+else
+    echo "WARNING: ${PROJECT_ROOT}/manual/ does not exist. Embedded manual will be missing." >&2
+fi
+
 # ── Step 2: Build Rust binary ────────────────────────────────────────
 echo ""
 echo "── Building Rust binary (release) ──"
