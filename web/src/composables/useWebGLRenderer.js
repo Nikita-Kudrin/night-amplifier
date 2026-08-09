@@ -206,11 +206,17 @@ export function useWebGLRenderer() {
 
         gl.bindTexture(gl.TEXTURE_2D, texture)
 
-        // Standard 8-bit texture upload — works identically on WebGL1 and WebGL2
-        gl.texImage2D(
-            gl.TEXTURE_2D, 0, gl.RGB, width, height, 0,
-            gl.RGB, gl.UNSIGNED_BYTE, frameData
-        )
+        if (typeof ImageBitmap !== 'undefined' && frameData instanceof ImageBitmap) {
+            gl.texImage2D(
+                gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameData
+            )
+        } else {
+            // Standard 8-bit texture upload — works identically on WebGL1 and WebGL2
+            gl.texImage2D(
+                gl.TEXTURE_2D, 0, gl.RGB, width, height, 0,
+                gl.RGB, gl.UNSIGNED_BYTE, frameData
+            )
+        }
 
         gl.viewport(0, 0, width, height)
         gl.clearColor(0, 0, 0, 1)

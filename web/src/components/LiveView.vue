@@ -98,13 +98,12 @@ function renderFrame() {
     // Decode JPEG blob into ImageBitmap and draw onto canvas (avoids blob URL
     // allocation churn and keeps pan/zoom working via the canvas path).
     window.createImageBitmap(frameData.value).then((bitmap) => {
-      canvas.width = bitmap.width
-      canvas.height = bitmap.height
-      const ctx = canvas.getContext('2d')
-      if (ctx) {
-        ctx.drawImage(bitmap, 0, 0)
-        bitmap.close()
+      if (webglRenderer.isInitialized()) {
+        webglRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
+      } else if (canvas2dRenderer.isInitialized()) {
+        canvas2dRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
       }
+      bitmap.close()
     }).catch(() => { /* frame was replaced before decode finished */ })
     return
   }
