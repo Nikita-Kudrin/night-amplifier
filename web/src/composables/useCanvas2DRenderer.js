@@ -39,6 +39,11 @@ export function useCanvas2DRenderer() {
             imageData = null
         }
 
+        if (typeof ImageBitmap !== 'undefined' && frameData instanceof ImageBitmap) {
+            ctx2d.drawImage(frameData, 0, 0)
+            return
+        }
+
         if (!imageData || imageData.width !== width || imageData.height !== height) {
             imageData = ctx2d.createImageData(width, height)
         }
