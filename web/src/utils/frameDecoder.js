@@ -1,5 +1,5 @@
 import lz4 from 'lz4js'
-import {RGB8_MAGIC, RGB8_CHUNKED_MAGIC} from '../constants'
+import {RGB8_MAGIC, RGB8_CHUNKED_MAGIC, SA10_MAGIC} from '../constants'
 
 /**
  * Decode a binary WebSocket frame, dispatching by magic number.
@@ -19,6 +19,10 @@ export function decodeFrame(buffer) {
 
     if (magic === RGB8_MAGIC) {
         return decodeRgb8Lz4(buffer, view)
+    }
+
+    if (magic === SA10_MAGIC) {
+        return decodeRgb8Jpeg(buffer, view)
     }
 
     console.error('Unknown frame magic number:', magic.toString(16))
@@ -123,4 +127,35 @@ export function decodeRgb8Lz4Chunked(buffer, view) {
     }
 
     return {width, height, frameData: output}
+}
+
+/**
+ * Decode dynamic resolution JPEG binary stream format (SA10)
+ *
+ * Header (16 bytes):
+ * - bytes 0-3:    Magic "SA10" (0x53413130 LE)
+ * - bytes 4-7:    Width (u32 LE)
+ * - bytes 8-11:   Height (u32 LE)
+ * - bytes 12-15:  Payload size (u32 LE)
+ *
+ * Followed by raw JPEG data
+ *
+ * @param {ArrayBuffer} buffer - Raw binary data from WebSocket
+ * @param {DataView} view - DataView over buffer
+ * @returns {object|null} Decoded frame { width, height, frameData: Blob, isJpeg: true } or null if invalid
+ */
+export function decodeRgb8Jpeg(buffer, view) {
+    if (!view) view = new DataView(buffer)
+    if (buffer.byteLength < 16) return null
+
+    const width = view.getUint32(4, true)
+    const height = view.getUint32(8, true)
+    const payloadSize = view.getUint32(12, true)
+
+    if (buffer.byteLength < 16 + payloadSize) return null
+
+    const jpegData = new Uint8Array(buffer, 16, payloadSize)
+    const blob = new Blob([jpegData], {type: 'image/jpeg'})
+
+    return {width, height, frameData: blob, isJpeg: true}
 }

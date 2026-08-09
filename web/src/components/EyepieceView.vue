@@ -6,7 +6,7 @@ import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 
 const settings = inject('settings')
 
-const {connected, frameData, dimensions} = useImageStream()
+const {connected, frameData, dimensions} = useImageStream({ endpoint: '/ws/eyepiece_quality' })
 
 const canvasLeftRef = ref(null)
 const canvasRightRef = ref(null)

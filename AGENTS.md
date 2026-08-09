@@ -64,6 +64,8 @@ Tests might run a minute or two - you should wait for them to finish. Benches mi
 
 ## Build & Test
 
+**System prerequisite:** `nasm` (required by `turbojpeg-sys` for libjpeg-turbo SIMD).
+
 ```bash
 cargo build --release
 cargo test                                                          # fast unit tests
@@ -115,7 +117,8 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 
 ### Server (src/server/)
 
-Axum-based. REST at `/api/*`, WebSocket at `/ws/stream` (binary frames) and `/ws/events` (JSON). Shared state via
+Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG),
+`/ws/eyepiece_quality` (lossless LZ4), and `/ws/events` (JSON). Shared state via
 `Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and event variants.
 
 ### Web Frontend (web/)
@@ -165,15 +168,26 @@ SER is the standard format for planetary imaging - uncompressed with per-frame t
 
 Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS/frame_NNNNNN.fits` and `captures/stacked/DD-MM-YYYY_HH-MM-SS.fits`.
 
-## Streaming Protocol (RGB8 + LZ4)
+## Streaming Protocols
 
-`/ws/stream` binary frames:
+### Dynamic JPEG (SA10) — `/ws/stream`, `/ws/eyepiece`
+
+Default streaming format. Server encodes JPEG via TurboJPEG (SIMD) at dynamic resolution
+(client sends `{width, height}` JSON). Cached per-resolution to support 10–15 concurrent clients.
+
+```
+Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
+```
+
+### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
+
+Full-resolution lossless path for the eyepiece quality view.
 
 ```
 Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload
 ```
 
-Payload is `compress_prepend_size`-prefixed LZ4 over `width × height × 3` bytes. Frontend renders via WebGL with
+SA09 is the chunked variant (parallel LZ4 compression). Frontend renders via WebGL with
 Canvas2D fallback.
 
 ## Adding a Stacking Type

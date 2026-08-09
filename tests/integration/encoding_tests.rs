@@ -1,7 +1,16 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
 use night_amplifier::frame::Frame;
-use night_amplifier::server::encode_rgb8_lz4;
+use night_amplifier::render::{RenderPipeline, RenderPipelineConfig};
+use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
+use night_amplifier::PixelFormat;
 use lz4_flex::decompress_size_prepended;
 use serial_test::serial;
+
+use crate::integration::common::FIXTURES_DIR;
+use crate::integration::image_loading::load_tiff;
 
 #[test]
 #[serial]
@@ -50,8 +59,367 @@ fn test_encode_8k_downsamples_to_4k() {
     
     let decompressed = decompress_size_prepended(&encoded[16..]).unwrap();
     assert_eq!(decompressed.len(), 3840 * 2160 * 3);
-    
+
     // The average of 0 and 1 should be around 0.5 (which scales to ~128)
     let val = decompressed[0];
     assert!((val as i32 - 128).abs() <= 1);
+}
+
+// ============================================================================
+// Live-view streaming baseline on real fixtures
+// ============================================================================
+
+/// Fixture sets used for the streaming baseline (raw mono Bayer frames).
+const BASELINE_FIXTURE_PREFIXES: &[&str] = &["35mm", "130mm", "250mm"];
+
+/// Assumed effective network throughput for the implied-fps column (megabits/s).
+const BASELINE_NETWORK_MBPS: f64 = 60.0;
+
+const ENCODE_TIMING_ITERATIONS: u32 = 5;
+
+fn baseline_fixture_dirs() -> Vec<PathBuf> {
+    let fixtures = Path::new(FIXTURES_DIR);
+    let mut dirs: Vec<PathBuf> = fs::read_dir(fixtures)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| BASELINE_FIXTURE_PREFIXES.iter().any(|p| name.starts_with(p)))
+                .unwrap_or(false)
+        })
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// Loads a grayscale PNG as a raw Bayer frame, matching the simulated-camera loader.
+fn load_png_mono(path: &Path) -> Result<Frame, String> {
+    let file = fs::File::open(path).map_err(|e| format!("open {:?}: {}", path, e))?;
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| format!("read PNG info {:?}: {}", path, e))?;
+    let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| format!("decode PNG {:?}: {}", path, e))?;
+
+    let (width, height) = (info.width as usize, info.height as usize);
+    let bytes = &buf[..info.buffer_size()];
+    match (info.color_type, info.bit_depth) {
+        (png::ColorType::Grayscale, png::BitDepth::Sixteen) => {
+            Frame::from_raw(bytes, width, height, 1, PixelFormat::Bayer16Be)
+        }
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => {
+            Frame::from_raw(bytes, width, height, 1, PixelFormat::Bayer8)
+        }
+        (ct, bd) => return Err(format!("unsupported PNG format {:?}/{:?} in {:?}", ct, bd, path)),
+    }
+    .map_err(|e| format!("create frame from {:?}: {}", path, e))
+}
+
+/// Loads the first frame (sorted by name) of a fixture directory.
+fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                Some("png") | Some("tif") | Some("tiff")
+            )
+        })
+        .collect();
+    files.sort();
+    let path = files.into_iter().next()?;
+
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    let frame = match ext.as_deref() {
+        Some("png") => load_png_mono(&path),
+        _ => load_tiff(&path).map(|img| img.frame),
+    };
+
+    match frame {
+        Ok(frame) => Some((path, frame)),
+        Err(e) => {
+            println!("  Failed to load {:?}: {}", path, e);
+            None
+        }
+    }
+}
+
+/// Encodes once for size, then times `ENCODE_TIMING_ITERATIONS` runs.
+/// Returns (avg_ms, encoded_wire_bytes).
+fn time_encode(frame: &Frame, chunks: usize) -> (f64, usize) {
+    let encoded = encode_rgb8_lz4_chunked(frame, chunks).expect("encode failed");
+    let size = encoded.len();
+
+    let start = Instant::now();
+    for _ in 0..ENCODE_TIMING_ITERATIONS {
+        let _ = encode_rgb8_lz4_chunked(frame, chunks).expect("encode failed");
+    }
+    let avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64;
+    (avg_ms, size)
+}
+
+struct BaselineRow {
+    name: String,
+    width: usize,
+    height: usize,
+    raw_rgb8_bytes: usize,
+    linear_wire_bytes: usize,
+    stretched_wire_bytes: usize,
+    render_ms: f64,
+    encode_ms_live: f64,
+    encode_ms_stacking: f64,
+}
+
+/// Baseline for the current live-view streaming path on real capture data.
+///
+/// Mirrors the production render task: raw mono Bayer frame → preview render
+/// (background subtraction + autostretch + contrast, i.e. default settings) →
+/// `encode_rgb8_lz4_chunked` (debayer + f32→RGB8 + LZ4 inside). Reports wire
+/// size, compression ratio and implied fps on a saturated link.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
+fn baseline_live_view_stream_encoding() {
+    println!("\n=== Live View Streaming Baseline (current RGB8+LZ4 approach) ===\n");
+
+    let dirs = baseline_fixture_dirs();
+    if dirs.is_empty() {
+        println!("No baseline fixture sets found in {}. Skipping.", FIXTURES_DIR);
+        return;
+    }
+
+    // Mirror render_task chunk selection: max parallelism live, 1 while stacking
+    let live_chunks = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+
+    let mut rows: Vec<BaselineRow> = Vec::new();
+
+    for dir in dirs {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let Some((path, frame)) = load_first_fixture_frame(&dir) else {
+            println!("{}: no loadable frame, skipping", name);
+            continue;
+        };
+        println!(
+            "{} ({:?}, {}x{}, {} ch)",
+            name,
+            path.file_name().unwrap_or_default(),
+            frame.width(),
+            frame.height(),
+            frame.channels()
+        );
+
+        // Encode of the *linear* (unstretched) frame — isolates how much the
+        // stretch costs in LZ4 compressibility.
+        let linear_encoded = encode_rgb8_lz4_chunked(&frame, live_chunks).expect("linear encode");
+
+        // Preview render with default capture settings (live-view path)
+        let mut preview = frame.clone();
+        let pipeline = RenderPipeline::new(
+            RenderPipelineConfig::new().with_background_subtraction(true),
+        );
+        let render_start = Instant::now();
+        pipeline.process(&mut preview).expect("preview render failed");
+        let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
+        let (encode_ms_live, stretched_wire_bytes) = time_encode(&preview, live_chunks);
+        let (encode_ms_stacking, _) = time_encode(&preview, 1);
+
+        rows.push(BaselineRow {
+            name,
+            width: frame.width(),
+            height: frame.height(),
+            raw_rgb8_bytes: frame.width() * frame.height() * 3,
+            linear_wire_bytes: linear_encoded.len(),
+            stretched_wire_bytes,
+            render_ms,
+            encode_ms_live,
+            encode_ms_stacking,
+        });
+    }
+
+    if rows.is_empty() {
+        println!("No fixture sets produced results.");
+        return;
+    }
+
+    let network_bytes_per_sec = BASELINE_NETWORK_MBPS * 1e6 / 8.0;
+    println!("\n--- Baseline Summary ({} chunks live / 1 chunk stacking) ---\n", live_chunks);
+    println!(
+        "{:<38} {:>10} {:>11} {:>11} {:>7} {:>9} {:>9} {:>10} {:>9}",
+        "fixture", "dims", "rawRGB8 MB", "wire MB", "ratio", "linear MB",
+        "render ms", "encode ms", "fps@60Mb"
+    );
+    for r in &rows {
+        let mb = |b: usize| b as f64 / 1e6;
+        println!(
+            "{:<38} {:>10} {:>11.2} {:>11.2} {:>7.2} {:>9.2} {:>9.1} {:>10.1} {:>9.2}",
+            r.name,
+            format!("{}x{}", r.width, r.height),
+            mb(r.raw_rgb8_bytes),
+            mb(r.stretched_wire_bytes),
+            r.raw_rgb8_bytes as f64 / r.stretched_wire_bytes as f64,
+            mb(r.linear_wire_bytes),
+            r.render_ms,
+            r.encode_ms_live,
+            network_bytes_per_sec / r.stretched_wire_bytes as f64,
+        );
+    }
+    println!(
+        "\nencode ms = SA09 encode (debayer + f32→RGB8 + LZ4), avg of {} runs, live chunk count.",
+        ENCODE_TIMING_ITERATIONS
+    );
+    for r in &rows {
+        println!(
+            "{:<38} 1-chunk (stacking) encode: {:.1} ms",
+            r.name, r.encode_ms_stacking
+        );
+    }
+    println!("\nfps@60Mb = frames/s that fit through a {} Mb/s link at the measured wire size.", BASELINE_NETWORK_MBPS);
+    println!("=== Baseline Complete ===\n");
+}
+
+// ============================================================================
+// Candidate probe: lossy JPEG vs the LZ4 baseline on the same fixtures
+// ============================================================================
+
+/// 2x2 box downsample of an RGB8 buffer (probe-only, approximates a
+/// phone-resolution stream at half linear resolution).
+fn downsample_rgb8_2x2(rgb8: &[u8], width: usize, height: usize) -> (Vec<u8>, usize, usize) {
+    let out_w = width / 2;
+    let out_h = height / 2;
+    let mut out = vec![0u8; out_w * out_h * 3];
+    for y in 0..out_h {
+        for x in 0..out_w {
+            for c in 0..3 {
+                let sum: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .iter()
+                    .map(|&(dx, dy)| rgb8[((y * 2 + dy) * width + x * 2 + dx) * 3 + c] as u32)
+                    .sum();
+                out[(y * out_w + x) * 3 + c] = (sum / 4) as u8;
+            }
+        }
+    }
+    (out, out_w, out_h)
+}
+
+/// Encodes RGB8 as JPEG at `quality`, returns (avg_ms, bytes).
+fn time_jpeg(rgb8: &[u8], width: usize, height: usize, quality: u8) -> (f64, usize) {
+    use image::codecs::jpeg::JpegEncoder;
+    use image::ExtendedColorType;
+
+    let encode = || {
+        let mut out = Vec::new();
+        let mut encoder = JpegEncoder::new_with_quality(&mut out, quality);
+        encoder
+            .encode(rgb8, width as u32, height as u32, ExtendedColorType::Rgb8)
+            .expect("jpeg encode failed");
+        out
+    };
+
+    let size = encode().len();
+    let start = Instant::now();
+    for _ in 0..ENCODE_TIMING_ITERATIONS {
+        let _ = encode();
+    }
+    let avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64;
+    (avg_ms, size)
+}
+
+/// Probes lossy JPEG (already a dependency via the `image` crate) against the
+/// LZ4 baseline on the same rendered fixtures: full resolution at q90/q80 and
+/// half resolution at q80 (phone-screen scenario).
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
+fn probe_jpeg_encoding_candidates() {
+    println!("\n=== Candidate Probe: JPEG vs RGB8+LZ4 baseline ===\n");
+
+    let dirs = baseline_fixture_dirs();
+    if dirs.is_empty() {
+        println!("No baseline fixture sets found in {}. Skipping.", FIXTURES_DIR);
+        return;
+    }
+
+    let live_chunks = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 8);
+    let network_bytes_per_sec = BASELINE_NETWORK_MBPS * 1e6 / 8.0;
+
+    println!(
+        "{:<38} {:>16} {:>10} {:>10} {:>9}",
+        "fixture", "candidate", "size MB", "enc ms", "fps@60Mb"
+    );
+
+    for dir in dirs {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let Some((_, frame)) = load_first_fixture_frame(&dir) else {
+            println!("{}: no loadable frame, skipping", name);
+            continue;
+        };
+
+        let mut preview = frame.clone();
+        let pipeline = RenderPipeline::new(
+            RenderPipelineConfig::new().with_background_subtraction(true),
+        );
+        pipeline.process(&mut preview).expect("preview render failed");
+
+        // Production debayer path (what frame_to_rgb8 does for 1-channel frames)
+        let rgb8 = if preview.channels() == 1 {
+            let detection =
+                night_amplifier::debayer::detect_cfa_pattern(&preview).expect("cfa detect");
+            night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(&preview, detection.pattern)
+                .expect("debayer")
+        } else {
+            preview.to_rgb8_fast()
+        };
+        let (w, h) = (preview.width(), preview.height());
+
+        let (lz4_ms, lz4_size) = time_encode(&preview, live_chunks);
+        let (half_rgb8, half_w, half_h) = downsample_rgb8_2x2(&rgb8, w, h);
+
+        let candidates: Vec<(String, f64, usize)> = vec![
+            (format!("LZ4 {}x{}", w, h), lz4_ms, lz4_size),
+            {
+                let (ms, size) = time_jpeg(&rgb8, w, h, 90);
+                (format!("JPEG q90 {}x{}", w, h), ms, size)
+            },
+            {
+                let (ms, size) = time_jpeg(&rgb8, w, h, 80);
+                (format!("JPEG q80 {}x{}", w, h), ms, size)
+            },
+            {
+                let (ms, size) = time_jpeg(&half_rgb8, half_w, half_h, 80);
+                (format!("JPEG q80 {}x{}", half_w, half_h), ms, size)
+            },
+        ];
+
+        for (label, ms, size) in candidates {
+            println!(
+                "{:<38} {:>16} {:>10.2} {:>10.1} {:>9.2}",
+                name,
+                label,
+                size as f64 / 1e6,
+                ms,
+                network_bytes_per_sec / size as f64,
+            );
+        }
+        println!();
+    }
+
+    println!("JPEG = single-threaded `image` crate encoder (pure Rust); libjpeg-turbo would be faster.");
+    println!("=== Probe Complete ===\n");
 }

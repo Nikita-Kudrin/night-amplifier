@@ -1,8 +1,13 @@
 use std::hint::black_box;
+use std::io::Cursor;
+use std::fs;
+use std::path::Path;
 use criterion::{criterion_group, criterion_main, Criterion};
-use night_amplifier::frame::Frame;
-use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use std::time::Duration;
+use image::{ColorType, ImageEncoder, codecs::{jpeg::JpegEncoder, png::{PngEncoder}}};
+use image::imageops::FilterType as ResizeFilterType;
+use night_amplifier::frame::Frame;
+use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked, encode_rgb8_jpeg_dynamic};
 
 fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     let mut frame = Frame::zeros(width, height, channels).unwrap();
@@ -97,7 +102,203 @@ fn bench_encoding(c: &mut Criterion) {
     });
 
     group_lz4.finish();
+
+    // --- Dynamic JPEG (SA10) ---
+    let mut group_jpeg = c.benchmark_group("encode_jpeg_dynamic");
+    group_jpeg.sample_size(10);
+    group_jpeg.warm_up_time(Duration::from_millis(500));
+    group_jpeg.measurement_time(Duration::from_secs(2));
+
+    group_jpeg.bench_function("imx464_rgb_to_1080p", |b| {
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), Some(1920), Some(1080)).unwrap())
+    });
+
+    group_jpeg.bench_function("imx464_rgb_to_720p", |b| {
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), Some(1280), Some(720)).unwrap())
+    });
+
+    group_jpeg.bench_function("imx464_rgb_full_res", |b| {
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), None, None).unwrap())
+    });
+
+    group_jpeg.finish();
 }
 
-criterion_group!(benches, bench_encoding);
+// ---------------------------------------------------------
+// EXTENDED BENCHMARKS
+// ---------------------------------------------------------
+
+fn save_output(picture_name: &str, resolution: &str, name: &str, ext: &str, data: &[u8]) {
+    let path_dir = Path::new("tests/fixtures/processed").join(picture_name).join(resolution);
+    fs::create_dir_all(&path_dir).unwrap();
+    let file_path = path_dir.join(format!("{}.{}", name, ext));
+    fs::write(file_path, data).unwrap();
+}
+
+fn load_and_resize_fixture(path: &str, width: u32, height: u32) -> Vec<u8> {
+    let img = image::open(path).expect(&format!("Failed to open {}", path));
+    let resized = img.resize_exact(width, height, ResizeFilterType::Lanczos3);
+    resized.to_rgb8().into_raw()
+}
+
+fn run_benchmarks(c: &mut Criterion, picture_name: &str, res_name: &str, rgb8_data: &[u8], width: usize, height: usize) {
+    let group_name = format!("{}_{}", picture_name, res_name);
+    
+    // Helper to get TurboJPEG size and save
+    let save_tj = |quality: i32| {
+        let mut compressor = turbojpeg::Compressor::new().unwrap();
+        compressor.set_quality(quality).unwrap();
+        compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2).unwrap();
+        let image_tj = turbojpeg::Image {
+            pixels: rgb8_data,
+            width,
+            pitch: 3 * width,
+            height,
+            format: turbojpeg::PixelFormat::RGB,
+        };
+        let out = compressor.compress_to_vec(image_tj).unwrap();
+        save_output(picture_name, res_name, &format!("turbojpeg_{}", quality), "jpg", &out);
+        out.len()
+    };
+
+    println!("\n=== {} ({}x{}) ===", group_name, width, height);
+    println!("turbojpeg_100 size: {} bytes", save_tj(100));
+    println!("turbojpeg_95 size: {} bytes", save_tj(95));
+    println!("turbojpeg_90 size: {} bytes", save_tj(90));
+    
+    let lz4_out = lz4_flex::compress_prepend_size(rgb8_data);
+    save_output(picture_name, res_name, "lz4_flex", "lz4", &lz4_out);
+    println!("lz4_flex size: {} bytes", lz4_out.len());
+    
+    let mut buf = Vec::new();
+    let mut cursor = Cursor::new(&mut buf);
+    let encoder = JpegEncoder::new_with_quality(&mut cursor, 95);
+    encoder.write_image(rgb8_data, width as u32, height as u32, ColorType::Rgb8.into()).unwrap();
+    save_output(picture_name, res_name, "image_jpeg_95", "jpg", &buf);
+    println!("image_jpeg_95 size: {} bytes", buf.len());
+    
+
+    
+    // PNG (Lossless, using default compression)
+    let mut buf = Vec::new();
+    let mut cursor = Cursor::new(&mut buf);
+    let encoder = PngEncoder::new(&mut cursor);
+    encoder.write_image(rgb8_data, width as u32, height as u32, ColorType::Rgb8.into()).unwrap();
+    save_output(picture_name, res_name, "image_png_lossless", "png", &buf);
+    println!("image_png_lossless size: {} bytes", buf.len());
+    
+    let mut group = c.benchmark_group(format!("encoding_comparison_{}", group_name));
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("turbojpeg_100", |b| {
+        b.iter(|| {
+            let mut compressor = turbojpeg::Compressor::new().unwrap();
+            let _ = compressor.set_quality(100);
+            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+            let image = turbojpeg::Image {
+                pixels: black_box(rgb8_data),
+                width,
+                pitch: 3 * width,
+                height,
+                format: turbojpeg::PixelFormat::RGB,
+            };
+            compressor.compress_to_vec(image).unwrap()
+        })
+    });
+
+    group.bench_function("turbojpeg_95", |b| {
+        b.iter(|| {
+            let mut compressor = turbojpeg::Compressor::new().unwrap();
+            let _ = compressor.set_quality(95);
+            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+            let image = turbojpeg::Image {
+                pixels: black_box(rgb8_data),
+                width,
+                pitch: 3 * width,
+                height,
+                format: turbojpeg::PixelFormat::RGB,
+            };
+            compressor.compress_to_vec(image).unwrap()
+        })
+    });
+
+    group.bench_function("turbojpeg_90", |b| {
+        b.iter(|| {
+            let mut compressor = turbojpeg::Compressor::new().unwrap();
+            let _ = compressor.set_quality(90);
+            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+            let image = turbojpeg::Image {
+                pixels: black_box(rgb8_data),
+                width,
+                pitch: 3 * width,
+                height,
+                format: turbojpeg::PixelFormat::RGB,
+            };
+            compressor.compress_to_vec(image).unwrap()
+        })
+    });
+
+    group.bench_function("lz4_flex", |b| {
+        b.iter(|| {
+            lz4_flex::compress_prepend_size(black_box(rgb8_data))
+        })
+    });
+
+    group.bench_function("image_jpeg_95", |b| {
+        b.iter(|| {
+            let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
+            let mut cursor = Cursor::new(&mut buffer);
+            let encoder = JpegEncoder::new_with_quality(&mut cursor, 95);
+            encoder.write_image(black_box(rgb8_data), width as u32, height as u32, ColorType::Rgb8.into()).unwrap();
+        })
+    });
+
+
+    group.bench_function("image_png_lossless", |b| {
+        b.iter(|| {
+            let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
+            let mut cursor = Cursor::new(&mut buffer);
+            let encoder = PngEncoder::new(&mut cursor);
+            encoder.write_image(black_box(rgb8_data), width as u32, height as u32, ColorType::Rgb8.into()).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+fn process_image(c: &mut Criterion, picture_name: &str, path: &str) {
+    // 1080p Downscale
+    let rgb8_1080p = load_and_resize_fixture(path, 1920, 1080);
+    run_benchmarks(c, picture_name, "1080p_downscale", &rgb8_1080p, 1920, 1080);
+
+    // Original Resolution
+    let rgb8_imx464 = load_and_resize_fixture(path, 2712, 1538);
+    run_benchmarks(c, picture_name, "original_resolution", &rgb8_imx464, 2712, 1538);
+
+    // 4K Upscale
+    let rgb8_4k = load_and_resize_fixture(path, 3840, 2160);
+    run_benchmarks(c, picture_name, "4K_upscale", &rgb8_4k, 3840, 2160);
+}
+
+fn bench_encoding_extended(c: &mut Criterion) {
+    // Ignore running on CI unless explicitly requested
+    if std::env::var("RUN_EXTENDED_ENCODING_BENCH").is_err() {
+        println!("Skipping extended encoding benchmarks. Set RUN_EXTENDED_ENCODING_BENCH=1 to run.");
+        return;
+    }
+
+    let images = [
+        ("Dumbbell", "tests/fixtures/stacked/09-08-2026_12-36-18_stretched.png"),
+        ("Orion_Wide", "tests/fixtures/stacked/09-08-2026_12-36-48_stretched.png"),
+        ("Orion", "tests/fixtures/stacked/09-08-2026_12-38-14_stretched.png"),
+    ];
+
+    for (name, path) in images.iter() {
+        process_image(c, name, path);
+    }
+}
+
+criterion_group!(benches, bench_encoding, bench_encoding_extended);
 criterion_main!(benches);
