@@ -334,6 +334,12 @@ impl AppState {
         telemetry_metrics::record_latest_frame_size(frame_size);
     }
 
+    /// Notify that a new frame is ready (increments counter and wakes waiters)
+    pub async fn notify_new_frame(&self) {
+        self.frame_counter.fetch_add(1, Ordering::SeqCst);
+        self.frame_ready.notify_waiters();
+    }
+
     /// Set the latest raw frame for dynamic encoding
     pub async fn set_latest_raw_frame(&self, frame: Arc<crate::frame::Frame>) {
         *self.latest_raw_frame.write().await = Some(frame);

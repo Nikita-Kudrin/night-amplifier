@@ -67,8 +67,13 @@ pub fn run_render_task(
                 }
                 Err(e) => {
                     rt.block_on(state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)));
+                    rt.block_on(state.notify_new_frame());
                 }
             }
+        } else {
+            // Even if we skip LZ4 encoding, we must notify that a frame is ready
+            // so JPEG clients can wake up and stream it.
+            rt.block_on(state.notify_new_frame());
         }
     }
 
@@ -145,5 +150,45 @@ mod tests {
         assert!(result.was_stacked);
         assert!(result.display_frame.get_pixel(0, 0, 0) > 0.9);
         drop(tx);
+    }
+
+    #[tokio::test]
+    async fn test_run_render_task_notifies_frame_ready_with_no_lz4_clients() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        
+        let (state, _disk_writer) = crate::server::state::AppState::new_for_testing();
+        let state = std::sync::Arc::new(state);
+        
+        // Ensure no LZ4 clients are connected (this is the default, but let's be explicit)
+        assert_eq!(state.lz4_clients.load(Ordering::SeqCst), 0);
+        
+        let initial_counter = state.frame_counter.load(Ordering::SeqCst);
+        
+        let (tx, rx) = std::sync::mpsc::channel();
+        let settings = crate::server::state::CaptureSettings::default();
+        
+        // Send a frame to be rendered
+        tx.send(super::StackedFrame {
+            display_frame: crate::frame::Frame::zeros(10, 10, 3).unwrap(),
+            was_stacked: false,
+            frame_number: 1,
+            settings,
+        }).unwrap();
+        
+        // Drop tx so the channel closes and run_render_task naturally exits
+        drop(tx);
+        
+        let rt = tokio::runtime::Handle::current();
+        
+        // Run the render task on a blocking thread to avoid 'Cannot start a runtime from within a runtime' panic
+        let state_clone = state.clone();
+        tokio::task::spawn_blocking(move || {
+            super::run_render_task(state_clone, rx, rt);
+        }).await.unwrap();
+        
+        // The frame_counter MUST have increased because notify_new_frame was called
+        let new_counter = state.frame_counter.load(Ordering::SeqCst);
+        assert_eq!(new_counter, initial_counter + 1, "frame_counter did not increment when lz4_clients was 0");
     }
 }

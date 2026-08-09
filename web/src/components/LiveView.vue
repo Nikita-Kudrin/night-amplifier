@@ -131,6 +131,13 @@ watch(frameData, () => {
   }
 })
 
+// Fit the view on the very first frame
+watch(hasFrame, (newHasFrame, oldHasFrame) => {
+  if (newHasFrame && !oldHasFrame) {
+    setTimeout(fitToView, 10)
+  }
+})
+
 // Watch for dimension changes to fit the view
 watch(dimensions, (newDims, oldDims) => {
   if (newDims.width !== oldDims?.width || newDims.height !== oldDims?.height) {
