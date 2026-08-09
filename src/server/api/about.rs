@@ -12,6 +12,7 @@ pub struct UpdateLicenseRequest {
 
 #[derive(Debug, Serialize)]
 pub struct SoftwareLicensesResponse {
+    pub version: String,
     pub core_license: String,
     pub third_party_licenses: Option<String>,
 }
@@ -74,9 +75,12 @@ pub async fn get_software_licenses() -> impl IntoResponse {
         Err(_) => None,
     };
 
+    let version = crate::app::APP_VERSION.get().map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
+
     (
         StatusCode::OK,
         ApiResponse::ok(SoftwareLicensesResponse {
+            version,
             core_license,
             third_party_licenses,
         }),

@@ -10,6 +10,8 @@ use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
 use tracing::{error, info};
 
+pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 /// Command line arguments
 struct Args {
     port: u16,
