@@ -398,7 +398,7 @@ export async function updateLicense(token) {
 
 /**
  * Get software licenses text (core and third party)
- * @returns {Promise<{core_license: string, third_party_licenses: string|null}>}
+ * @returns {Promise<{version: string, core_license: string, third_party_licenses: string|null}>}
  */
 export async function getSoftwareLicenses() {
     return request('/about/software-licenses')
