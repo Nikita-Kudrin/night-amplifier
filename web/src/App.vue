@@ -16,7 +16,7 @@ import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
 
 // Routing
-const isEyepieceRoute = ref(window.location.pathname === '/eyepiece')
+const isEyepieceRoute = ref(window.location.pathname === '/eyepiece' || window.location.pathname === '/eyepiece_quality')
 
 // Centralized state management
 const {
