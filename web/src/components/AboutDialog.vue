@@ -15,6 +15,7 @@ const licenseError = ref(null)
 const licenseSuccess = ref(false)
 
 // Software Licenses State
+const version = ref('')
 const coreLicense = ref('')
 const thirdPartyLicenses = ref('')
 const isLoadingSoftware = ref(true)
@@ -34,6 +35,7 @@ async function fetchSoftwareLicenses() {
   try {
     isLoadingSoftware.value = true
     const res = await getSoftwareLicenses()
+    version.value = res.version
     coreLicense.value = res.core_license
     thirdPartyLicenses.value = res.third_party_licenses
   } catch (err) {
@@ -90,7 +92,10 @@ onMounted(() => {
     <div class="overlay-panel about-panel">
       <!-- Header -->
       <div class="overlay-header">
-        <h2 class="overlay-title">About NightAmplifier</h2>
+        <h2 class="overlay-title">
+          About NightAmplifier
+          <span v-if="version" class="version-badge">v{{ version }}</span>
+        </h2>
         <button class="btn btn-icon close-btn" title="Close" @click="$emit('close')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18" />
@@ -265,6 +270,18 @@ onMounted(() => {
   font-size: 1.25rem;
   font-weight: 600;
   color: var(--text-primary);
+  display: flex;
+  align-items: center;
+}
+
+.version-badge {
+  font-size: 0.85rem;
+  font-weight: normal;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  margin-left: 0.75rem;
 }
 
 .close-btn {
