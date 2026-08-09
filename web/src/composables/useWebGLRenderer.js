@@ -1,5 +1,7 @@
 import {ref} from 'vue'
 
+/* global ImageBitmap */
+
 // WebGL1 Shaders (GLSL ES 1.0)
 const vertexShaderSourceGL1 = `
   attribute vec2 a_position;
