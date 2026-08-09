@@ -32,7 +32,7 @@ describe('LiveView - RGB8 Data Handling', () => {
     it('falls back to 8-bit when backend logic defaults to webgl2-8bit', async () => {
         mocks.mockWebGLRenderer.backend.value = 'webgl2-8bit'
 
-        const wrapper = mountLiveView()
+        mountLiveView()
         await nextTick()
 
         const pixelData = new Uint8Array(3) // 1 pixel * 3 bytes
