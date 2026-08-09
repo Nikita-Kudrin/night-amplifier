@@ -52,17 +52,22 @@ pub fn run_render_task(
         // Use max parallel chunks for live view, single chunk during stacking
         let chunk_count = if was_stacked { 1 } else { max_chunks };
 
-        // Encode frame as RGB8+LZ4 for streaming
-        let encode_result = {
-            let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
-            encode_rgb8_lz4_chunked(&display_frame, chunk_count)
-        };
-        match encode_result {
-            Ok(encoded_data) => {
-                rt.block_on(state.set_latest_frame(encoded_data));
-            }
-            Err(e) => {
-                rt.block_on(state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)));
+        let raw_frame = Arc::new(display_frame);
+        rt.block_on(state.set_latest_raw_frame(Arc::clone(&raw_frame)));
+
+        if state.lz4_clients.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            // Encode frame as RGB8+LZ4 for streaming
+            let encode_result = {
+                let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
+                encode_rgb8_lz4_chunked(&raw_frame, chunk_count)
+            };
+            match encode_result {
+                Ok(encoded_data) => {
+                    rt.block_on(state.set_latest_frame(encoded_data));
+                }
+                Err(e) => {
+                    rt.block_on(state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)));
+                }
             }
         }
     }

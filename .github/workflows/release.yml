@@ -102,16 +102,16 @@ jobs:
 
       - name: Install system deps (Linux)
         if: "!matrix.use_cross && runner.os == 'Linux'"
-        run: sudo apt-get update && sudo apt-get install -y libcfitsio-dev
+        run: sudo apt-get update && sudo apt-get install -y nasm libcfitsio-dev
 
       - name: Install system deps (macOS)
         if: runner.os == 'macOS'
-        run: brew install libusb
+        run: brew install nasm libusb
 
       - name: Install system deps (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install pkgconfiglite
+          choco install pkgconfiglite nasm
           $triplet = "${{ matrix.target == 'aarch64-pc-windows-msvc' && 'arm64' || 'x64' }}-windows-static"
           vcpkg install cfitsio:$triplet
           $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet"

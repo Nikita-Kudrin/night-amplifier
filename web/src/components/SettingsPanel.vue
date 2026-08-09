@@ -408,7 +408,7 @@ const HELP = HELP_TEXTS
     </div>
 
     <!-- Planetary-specific settings -->
-    <div class="settings-section" v-if="localSettings.stacking && settings?.stacking_type === 'planetary'">
+    <div v-if="localSettings.stacking && settings?.stacking_type === 'planetary'" class="settings-section">
       <h3 class="section-title">Planetary</h3>
 
       <div class="control-group">

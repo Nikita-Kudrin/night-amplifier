@@ -24,6 +24,43 @@ pub use session::{CaptureSession, ConnectedCameraInfo};
 pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 pub use types::{CameraPhase, CaptureState};
 
+/// Cache for recently encoded JPEG frames, keyed by output resolution.
+/// Avoids redundant encodes when multiple clients request the same resolution.
+pub struct JpegCache {
+    frame_counter: u64,
+    entries: HashMap<(u32, u32), bytes::Bytes>,
+}
+
+impl JpegCache {
+    fn new() -> Self {
+        Self {
+            frame_counter: 0,
+            entries: HashMap::new(),
+        }
+    }
+
+    /// Look up a cached JPEG for the given frame counter and resolution.
+    /// Returns `None` if the frame has advanced or the resolution is not cached.
+    pub fn get(&self, counter: u64, max_w: u32, max_h: u32) -> Option<bytes::Bytes> {
+        if counter != self.frame_counter {
+            return None;
+        }
+        self.entries.get(&(max_w, max_h)).cloned()
+    }
+
+    /// Insert an encoded JPEG into the cache. Clears stale entries if the
+    /// frame counter has advanced since the last insertion.
+    pub fn insert(&mut self, counter: u64, max_w: u32, max_h: u32, data: Vec<u8>) -> bytes::Bytes {
+        if counter != self.frame_counter {
+            self.entries.clear();
+            self.frame_counter = counter;
+        }
+        let b = bytes::Bytes::from(data);
+        self.entries.insert((max_w, max_h), b.clone());
+        b
+    }
+}
+
 /// The main application state shared across all handlers
 pub struct AppState {
     /// Currently connected cameras info (camera_id -> info)
@@ -34,8 +71,10 @@ pub struct AppState {
     pub session: RwLock<CaptureSession>,
     /// Capture settings
     pub settings: RwLock<CaptureSettings>,
-    /// Latest rendered frame (for streaming)
-    pub latest_frame: RwLock<Option<Arc<Vec<u8>>>>,
+    /// Latest rendered frame (LZ4 compressed for streaming)
+    pub latest_frame: RwLock<Option<bytes::Bytes>>,
+    /// Latest raw frame (uncompressed, for dynamic JPEG encoding)
+    pub latest_raw_frame: RwLock<Option<Arc<crate::frame::Frame>>>,
     /// Frame counter (for change detection)
     pub frame_counter: AtomicU64,
     /// Cancellation flag for capture loop
@@ -66,6 +105,10 @@ pub struct AppState {
     /// Sender used by `lifecycle` to issue commands to the running monitor
     /// thread. `None` when no monitor is running.
     pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
+    /// Shared JPEG encode cache (avoids redundant encodes for same resolution)
+    pub jpeg_cache: RwLock<JpegCache>,
+    /// Number of active LZ4 stream clients
+    pub lz4_clients: std::sync::atomic::AtomicUsize,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -121,6 +164,7 @@ impl AppState {
             session: RwLock::new(CaptureSession::default()),
             settings: RwLock::new(settings),
             latest_frame: RwLock::new(None),
+            latest_raw_frame: RwLock::new(None),
             frame_counter: AtomicU64::new(0),
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
@@ -135,6 +179,8 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
+            jpeg_cache: RwLock::new(JpegCache::new()),
+            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
         };
 
         (state, disk_writer)
@@ -159,6 +205,7 @@ impl AppState {
             session: RwLock::new(CaptureSession::default()),
             settings: RwLock::new(settings),
             latest_frame: RwLock::new(None),
+            latest_raw_frame: RwLock::new(None),
             frame_counter: AtomicU64::new(0),
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
@@ -173,6 +220,8 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
+            jpeg_cache: RwLock::new(JpegCache::new()),
+            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
         };
 
         (state, disk_writer)
@@ -199,6 +248,7 @@ impl AppState {
             session: RwLock::new(CaptureSession::default()),
             settings: RwLock::new(CaptureSettings::default()),
             latest_frame: RwLock::new(None),
+            latest_raw_frame: RwLock::new(None),
             frame_counter: AtomicU64::new(0),
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
@@ -213,6 +263,8 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
+            jpeg_cache: RwLock::new(JpegCache::new()),
+            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
         };
 
         (state, disk_writer)
@@ -276,15 +328,35 @@ impl AppState {
     /// Set the latest rendered frame for streaming
     pub async fn set_latest_frame(&self, frame_data: Vec<u8>) {
         let frame_size = frame_data.len() as u64;
-        *self.latest_frame.write().await = Some(Arc::new(frame_data));
+        *self.latest_frame.write().await = Some(bytes::Bytes::from(frame_data));
         self.frame_counter.fetch_add(1, Ordering::SeqCst);
         self.frame_ready.notify_waiters();
         telemetry_metrics::record_latest_frame_size(frame_size);
     }
 
+    /// Set the latest raw frame for dynamic encoding
+    pub async fn set_latest_raw_frame(&self, frame: Arc<crate::frame::Frame>) {
+        *self.latest_raw_frame.write().await = Some(frame);
+    }
+
     /// Get the latest frame if available
-    pub async fn get_latest_frame(&self) -> Option<Arc<Vec<u8>>> {
+    pub async fn get_latest_frame(&self) -> Option<bytes::Bytes> {
         self.latest_frame.read().await.clone()
+    }
+
+    /// Get the latest raw frame if available
+    pub async fn get_latest_raw_frame(&self) -> Option<Arc<crate::frame::Frame>> {
+        self.latest_raw_frame.read().await.clone()
+    }
+
+    /// Look up a cached JPEG encode for the given frame and resolution.
+    pub async fn get_cached_jpeg(&self, counter: u64, max_w: u32, max_h: u32) -> Option<bytes::Bytes> {
+        self.jpeg_cache.read().await.get(counter, max_w, max_h)
+    }
+
+    /// Insert an encoded JPEG into the shared cache.
+    pub async fn cache_jpeg(&self, counter: u64, max_w: u32, max_h: u32, data: Vec<u8>) -> bytes::Bytes {
+        self.jpeg_cache.write().await.insert(counter, max_w, max_h, data)
     }
 
     /// Subscribe to events

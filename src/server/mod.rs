@@ -42,7 +42,10 @@ mod ws;
 mod tests;
 
 pub use dto::*;
-pub use encoding::{encode_rgb8_lz4, encode_rgb8_lz4_chunked, RGB8_CHUNKED_MAGIC, RGB8_MAGIC};
+pub use encoding::{
+    encode_rgb8_jpeg_dynamic, encode_rgb8_lz4, encode_rgb8_lz4_chunked, JPEG_MAGIC,
+    RGB8_CHUNKED_MAGIC, RGB8_MAGIC,
+};
 pub use error::{ApiError, ApiResult, ServerError};
 pub use events::ServerEvent;
 pub use services::{CameraService, CaptureService};
@@ -157,6 +160,8 @@ impl Server {
         let api_routes = api::create_router();
 
         let ws_routes = Router::new()
+            .route("/eyepiece_quality", get(ws::eyepiece_quality_handler))
+            .route("/eyepiece", get(ws::stream_handler))
             .route("/stream", get(ws::stream_handler))
             .route("/events", get(ws::events_handler));
 

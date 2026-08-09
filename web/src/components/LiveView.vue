@@ -13,7 +13,10 @@ import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 
-const {connected, frameData, dimensions, fps, clearFrameData} = useImageStream()
+const {connected, frameData, isJpeg, dimensions, fps, clearFrameData, sendResolution} = useImageStream({
+  width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
+  height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
+})
 
 const pushDirection = computed(() => eventStream.pushDirection.value)
 const currentTarget = computed(() => eventStream.currentTarget.value)
@@ -64,6 +67,7 @@ const {
 
 // Active renderer backend
 const renderBackend = computed(() => {
+  if (isJpeg.value) return 'jpeg'
   if (webglRenderer.isInitialized()) {
     return webglRenderer.backend.value
   }
@@ -87,7 +91,23 @@ function initRenderer() {
 function renderFrame() {
   if (!frameData.value) return
   const canvas = canvasRef.value
+  if (!canvas) return
   const {width, height} = dimensions.value
+
+  if (isJpeg.value) {
+    // Decode JPEG blob into ImageBitmap and draw onto canvas (avoids blob URL
+    // allocation churn and keeps pan/zoom working via the canvas path).
+    window.createImageBitmap(frameData.value).then((bitmap) => {
+      canvas.width = bitmap.width
+      canvas.height = bitmap.height
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(bitmap, 0, 0)
+        bitmap.close()
+      }
+    }).catch(() => { /* frame was replaced before decode finished */ })
+    return
+  }
   if (webglRenderer.isInitialized()) {
     webglRenderer.render(canvas, frameData.value, width, height)
   } else if (canvas2dRenderer.isInitialized()) {
@@ -101,11 +121,14 @@ function cleanupRenderer() {
 }
 
 function fitToView() {
-  if (!containerRef.value || !canvasRef.value) return
+  if (!containerRef.value) return
   const container = containerRef.value.getBoundingClientRect()
+  // Use canvas intrinsic dimensions when available, otherwise use stream dimensions
   const canvas = canvasRef.value
-  if (canvas.width && canvas.height) {
-    fitToViewBase(container, canvas.width, canvas.height)
+  const imgW = (canvas && canvas.width) || dimensions.value.width
+  const imgH = (canvas && canvas.height) || dimensions.value.height
+  if (imgW && imgH) {
+    fitToViewBase(container, imgW, imgH)
   }
 }
 
@@ -140,6 +163,16 @@ watch([scale, frameData, hasFrame], () => {
 })
 
 let resizeObserver = null
+let windowResizeTimeout = null
+
+function handleWindowResize() {
+  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
+  windowResizeTimeout = setTimeout(() => {
+    const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
+    const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
+    sendResolution(newWidth, newHeight)
+  }, 200)
+}
 
 function updateContainerSize() {
   if (containerRef.value) {
@@ -167,6 +200,7 @@ function updateContainerSize() {
 
 onMounted(() => {
   document.addEventListener('fullscreenchange', handleFullscreenChange)
+  window.addEventListener('resize', handleWindowResize)
   initRenderer()
   updateContainerSize()
   resizeObserver = new ResizeObserver(updateContainerSize)
@@ -177,6 +211,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  window.removeEventListener('resize', handleWindowResize)
+  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -187,6 +223,7 @@ onUnmounted(() => {
 // Map backend names to user-friendly labels
 const backendLabel = computed(() => {
   const labels = {
+    jpeg: 'Dynamic JPEG (SIMD)',
     'webgl2-16bit': 'WebGL2 16-bit',
     'webgl2-8bit': 'WebGL2 8-bit',
     webgl1: 'WebGL1',
@@ -234,7 +271,7 @@ const backendLabel = computed(() => {
       <p v-else>Waiting for frames...</p>
     </div>
 
-    <!-- Canvas for rendering -->
+    <!-- Canvas for rendering (used for both LZ4 and JPEG paths) -->
     <canvas v-show="hasFrame" ref="canvasRef" :style="canvasStyle" class="live-canvas"/>
 
     <!-- Guide arrow -->

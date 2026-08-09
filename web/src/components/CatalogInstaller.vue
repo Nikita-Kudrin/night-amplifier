@@ -190,7 +190,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
 
       <div class="checkbox-container">
         <label class="checkbox-label">
-          <input type="checkbox" v-model="includeStars" :disabled="!canInstall" />
+          <input v-model="includeStars" type="checkbox" :disabled="!canInstall" />
           <span>Include HYG star catalog (~15MB)</span>
         </label>
       </div>
