@@ -46,19 +46,6 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     vi.resetModules()
   })
 
-  function mountEyepieceView() {
-    return mount(async () => {
-      const EyepieceView = (await import('../EyepieceView.vue')).default
-      return EyepieceView
-    }, {
-      global: {
-        provide: {
-          settings: ref({ eyepiece: { binoview: true, circular_view: true } })
-        }
-      }
-    })
-  }
-
   it('uses /ws/eyepiece when path is /eyepiece (JPEG streaming)', async () => {
     window.location = { ...originalLocation, pathname: '/eyepiece' }
     
