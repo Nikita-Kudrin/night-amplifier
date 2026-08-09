@@ -32,20 +32,31 @@ pub const RGB8_MAGIC: u32 = 0x53413038; // "SA08" in little-endian
 /// Followed by concatenated compressed chunk data
 pub const RGB8_CHUNKED_MAGIC: u32 = 0x53413039; // "SA09" in little-endian
 
+/// Binary header magic number for JPEG stream format (SA10)
+///
+/// Header (16 bytes):
+/// - bytes 0-3:    Magic "SA10" (0x53413130)
+/// - bytes 4-7:    Width (u32 LE)
+/// - bytes 8-11:   Height (u32 LE)
+/// - bytes 12-15:  Payload size (u32 LE)
+/// Followed by raw JPEG bytes
+pub const JPEG_MAGIC: u32 = 0x53413130; // "SA10" in little-endian
+
 const SA09_HEADER_SIZE: usize = 20;
 const SA09_CHUNK_DESCRIPTOR_SIZE: usize = 8;
+const SA10_HEADER_SIZE: usize = 16;
 
 /// Convert a Frame to RGB8 data, handling downsampling and debayering
-fn frame_to_rgb8(frame: &Frame) -> Result<(Vec<u8>, u32, u32), String> {
+fn frame_to_rgb8(frame: &Frame, max_width: u32, max_height: u32) -> Result<(Vec<u8>, u32, u32), String> {
     use rayon::prelude::*;
 
-    // Check if downsampling is needed (max 4K)
-    let (process_frame, width, height) = if frame.width() > 3840 || frame.height() > 2160 {
+    // Check if downsampling is needed
+    let (process_frame, width, height) = if frame.width() > max_width as usize || frame.height() > max_height as usize {
         let aspect_ratio = frame.width() as f32 / frame.height() as f32;
-        let (target_width, target_height) = if frame.width() > frame.height() {
-            (3840, (3840.0 / aspect_ratio) as usize)
+        let (target_width, target_height) = if frame.width() as f32 / max_width as f32 > frame.height() as f32 / max_height as f32 {
+            (max_width as usize, (max_width as f32 / aspect_ratio) as usize)
         } else {
-            ((2160.0 * aspect_ratio) as usize, 2160)
+            ((max_height as f32 * aspect_ratio) as usize, max_height as usize)
         };
 
         let mut binned = Frame::zeros(target_width, target_height, frame.channels())
@@ -54,17 +65,34 @@ fn frame_to_rgb8(frame: &Frame) -> Result<(Vec<u8>, u32, u32), String> {
         let x_scale = frame.width() as f32 / target_width as f32;
         let y_scale = frame.height() as f32 / target_height as f32;
 
+        let src_data = frame.data();
+        let src_stride = frame.width() * frame.channels();
+        let channels = frame.channels();
+
         binned
             .data_mut()
-            .par_chunks_mut(target_width * frame.channels())
+            .par_chunks_mut(target_width * channels)
             .enumerate()
             .for_each(|(y, row)| {
-                let src_y = ((y as f32 + 0.5) * y_scale) as usize;
+                let src_y0 = (y as f32 * y_scale) as usize;
+                let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(frame.height());
+                let y_count = (src_y1 - src_y0).max(1);
+
                 for x in 0..target_width {
-                    let src_x = ((x as f32 + 0.5) * x_scale) as usize;
-                    for c in 0..frame.channels() {
-                        let idx = x * frame.channels() + c;
-                        row[idx] = frame.get_pixel(src_x, src_y, c);
+                    let src_x0 = (x as f32 * x_scale) as usize;
+                    let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(frame.width());
+                    let x_count = (src_x1 - src_x0).max(1);
+                    let area = (y_count * x_count) as f32;
+
+                    for c in 0..channels {
+                        let mut sum = 0.0f32;
+                        for sy in src_y0..src_y1 {
+                            let row_start = sy * src_stride;
+                            for sx in src_x0..src_x1 {
+                                sum += src_data[row_start + sx * channels + c];
+                            }
+                        }
+                        row[x * channels + c] = sum / area;
                     }
                 }
             });
@@ -112,7 +140,7 @@ fn frame_to_rgb8(frame: &Frame) -> Result<(Vec<u8>, u32, u32), String> {
 pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {
     use lz4_flex::block::{compress_into, get_maximum_output_size};
 
-    let (rgb8_data, width, height) = frame_to_rgb8(frame)?;
+    let (rgb8_data, width, height) = frame_to_rgb8(frame, 3840, 2160)?;
 
     let uncompressed_len = rgb8_data.len() as u32;
     let max_compressed_len = get_maximum_output_size(rgb8_data.len());
@@ -146,7 +174,7 @@ pub fn encode_rgb8_lz4_chunked(frame: &Frame, chunk_count: usize) -> Result<Vec<
     let chunk_count = chunk_count.max(1);
     let (rgb8_data, width, height) = {
         let _span = tracing::info_span!("frame_to_rgb8").entered();
-        frame_to_rgb8(frame)?
+        frame_to_rgb8(frame, 3840, 2160)?
     };
 
     let row_bytes = width as usize * 3;
@@ -212,6 +240,67 @@ pub fn encode_rgb8_lz4_chunked(frame: &Frame, chunk_count: usize) -> Result<Vec<
         output[data_offset..data_offset + compressed.len()].copy_from_slice(compressed);
         data_offset += compressed.len();
     }
+
+    Ok(output)
+}
+
+fn calculate_dynamic_jpeg_quality(width: u32, height: u32) -> i32 {
+    let smallest_side = width.min(height);
+    // If resolution is lower than 2K (1440p), use 95% quality.
+    // Otherwise, default to 90% quality.
+    if smallest_side < 1440 {
+        95
+    } else {
+        90
+    }
+}
+
+/// Encode frame as JPEG with dynamic resolution (SA10 format)
+pub fn encode_rgb8_jpeg_dynamic(
+    frame: &Frame,
+    req_w: Option<u32>,
+    req_h: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    let mut max_w = req_w.unwrap_or(1920);
+    let mut max_h = req_h.unwrap_or(1080);
+
+    // Upper limit: 4K (3840x2160)
+    max_w = max_w.min(3840);
+    max_h = max_h.min(2160);
+
+    // Lower limit: 1080p (1920x1080)
+    max_w = max_w.max(1920);
+    max_h = max_h.max(1080);
+
+    let (rgb8_data, width, height) = {
+        let _span = tracing::info_span!("frame_to_rgb8").entered();
+        frame_to_rgb8(frame, max_w, max_h)?
+    };
+
+    let _span = tracing::info_span!("jpeg_compress").entered();
+    let mut compressor = turbojpeg::Compressor::new().map_err(|e| e.to_string())?;
+    let quality = calculate_dynamic_jpeg_quality(width, height);
+    compressor.set_quality(quality).map_err(|e| format!("TurboJPEG set_quality failed: {}", e))?;
+    compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2).map_err(|e| format!("TurboJPEG set_subsamp failed: {}", e))?;
+
+    let image = turbojpeg::Image {
+        pixels: rgb8_data.as_slice(),
+        width: width as usize,
+        pitch: 3 * width as usize,
+        height: height as usize,
+        format: turbojpeg::PixelFormat::RGB,
+    };
+
+    let compressed = compressor.compress_to_vec(image).map_err(|e| e.to_string())?;
+    let payload_size = compressed.len() as u32;
+    let total_size = SA10_HEADER_SIZE + compressed.len();
+
+    let mut output = Vec::with_capacity(total_size);
+    output.extend_from_slice(&JPEG_MAGIC.to_le_bytes());
+    output.extend_from_slice(&width.to_le_bytes());
+    output.extend_from_slice(&height.to_le_bytes());
+    output.extend_from_slice(&payload_size.to_le_bytes());
+    output.extend_from_slice(&compressed);
 
     Ok(output)
 }
@@ -451,5 +540,52 @@ mod tests {
         let (_, _, sa09_pixels) = decode_sa09(&sa09);
 
         assert_eq!(sa08_pixels, sa09_pixels);
+    }
+
+    #[test]
+    fn test_calculate_dynamic_jpeg_quality() {
+        // 1080p (smallest side 1080) -> < 1440, should be 95
+        assert_eq!(calculate_dynamic_jpeg_quality(1920, 1080), 95);
+        // Small (640x480) -> < 1440, should be 95
+        assert_eq!(calculate_dynamic_jpeg_quality(640, 480), 95);
+        // 1440p (2560x1440) -> >= 1440, should be 90
+        assert_eq!(calculate_dynamic_jpeg_quality(2560, 1440), 90);
+        // 4K (3840x2160) -> >= 1440, should be 90
+        assert_eq!(calculate_dynamic_jpeg_quality(3840, 2160), 90);
+        // Odd portrait orientation
+        assert_eq!(calculate_dynamic_jpeg_quality(1080, 1920), 95);
+        assert_eq!(calculate_dynamic_jpeg_quality(2160, 3840), 90);
+    }
+
+    #[test]
+    fn test_jpeg_encode_4k_clamp() {
+        // Mock a massive 5000x5000 frame
+        let frame = Frame::zeros(5000, 5000, 3).unwrap();
+        // Request 5000x5000
+        let encoded = encode_rgb8_jpeg_dynamic(&frame, Some(5000), Some(5000)).unwrap();
+        
+        let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
+        
+        // It should clamp to the 4K bounding box (3840x2160).
+        // Since aspect ratio is 1:1, fitting into 3840x2160 means 2160x2160.
+        assert_eq!(width, 2160);
+        assert_eq!(height, 2160);
+    }
+
+    #[test]
+    fn test_jpeg_encode_1080p_clamp() {
+        // Mock a 2000x2000 frame
+        let frame = Frame::zeros(2000, 2000, 3).unwrap();
+        // Request a tiny 640x480 stream
+        let encoded = encode_rgb8_jpeg_dynamic(&frame, Some(640), Some(480)).unwrap();
+        
+        let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
+        
+        // It should clamp up to the 1080p bounding box (1920x1080).
+        // Since aspect ratio is 1:1, fitting into 1920x1080 means 1080x1080.
+        assert_eq!(width, 1080);
+        assert_eq!(height, 1080);
     }
 }

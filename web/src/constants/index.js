@@ -139,6 +139,7 @@ export const ZOOM_LIMITS = {
 // RGB8+LZ4 stream magic numbers
 export const RGB8_MAGIC = 0x53413038 // "SA08" — legacy single-block
 export const RGB8_CHUNKED_MAGIC = 0x53413039 // "SA09" — parallel chunked
+export const SA10_MAGIC = 0x53413130 // "SA10" — dynamic resolution JPEG
 
 // Cooler temperature defaults (used as a fallback when the camera does not advertise its range)
 export const COOLER_TEMP_LIMITS = {

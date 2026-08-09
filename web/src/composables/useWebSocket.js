@@ -397,11 +397,23 @@ export function useEventStream() {
  * - rgb16Data: Raw 16-bit RGB pixel data for WebGL rendering
  * - dimensions: { width, height } of the current frame
  *
+ * @param {object} options - Stream options
+ * @param {string} options.endpoint - WebSocket endpoint (default: '/ws/stream')
+ * @param {number|null} options.width - Requested stream width (default: null for 1080p fallback)
+ * @param {number|null} options.height - Requested stream height (default: null for 1080p fallback)
  * @returns {object} Image stream state and methods
  */
-export function useImageStream() {
+export function useImageStream(options = {}) {
+    const endpoint = options.endpoint || '/ws/stream'
+    const width = options.width || null
+    const height = options.height || null
+
+    // JPEG endpoints support dynamic resolution; the LZ4 endpoint does not
+    const isDynamicJpeg = endpoint !== '/ws/eyepiece_quality'
+
     // Use shallowRef for large binary data to avoid deep reactivity overhead
     const frameData = shallowRef(null)
+    const isJpeg = ref(isDynamicJpeg)
     const dimensions = ref({width: 0, height: 0})
     const frameNumber = ref(0)
     const fps = ref(0)
@@ -438,9 +450,12 @@ export function useImageStream() {
         }
     }
 
-    const {connected, error, connect, disconnect} = useWebSocket('/ws/stream', {
+    const {connected, error, connect, disconnect, send} = useWebSocket(endpoint, {
         onOpen: () => {
             startFpsTimer()
+            if (isDynamicJpeg) {
+                send(JSON.stringify({width, height}))
+            }
         },
         onClose: () => {
             stopFpsTimer()
@@ -458,11 +473,12 @@ export function useImageStream() {
                 return // Ignore non-binary messages
             }
 
-            // Decode RGB8+LZ4 format
+            // Decode frame (dispatches by magic number)
             const decoded = decodeFrame(buffer)
 
             if (decoded) {
                 frameData.value = decoded.frameData
+                isJpeg.value = decoded.isJpeg || isDynamicJpeg
                 dimensions.value = {width: decoded.width, height: decoded.height}
                 frameNumber.value++
                 framesSinceLastFPS++
@@ -477,16 +493,28 @@ export function useImageStream() {
         stopFpsTimer()
     })
 
+    /**
+     * Send a resolution update to the server (JPEG endpoints only)
+     */
+    function sendResolution(w, h) {
+        if (isDynamicJpeg) {
+            send(JSON.stringify({width: w, height: h}))
+        }
+    }
+
     return {
         connected,
         error,
         decodeError,
         frameData,
+        isJpeg,
+        isDynamicJpeg,
         dimensions,
         frameNumber,
         fps,
         connect,
         disconnect,
         clearFrameData,
+        sendResolution,
     }
 }

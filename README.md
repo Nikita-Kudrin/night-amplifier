@@ -151,6 +151,23 @@ The archive is created in `dist/`. Extract and run `./night-amplifier`.
 
 ## Building from Source
 
+**System prerequisites:**
+
+- **nasm** — required by `turbojpeg-sys` (libjpeg-turbo SIMD acceleration)
+  ```bash
+  # Debian/Ubuntu/Raspberry Pi OS
+  sudo apt-get install nasm
+
+  # Fedora
+  sudo dnf install nasm
+
+  # macOS
+  brew install nasm
+
+  # Windows
+  choco install nasm
+  ```
+
 ```bash
 cargo build
 
@@ -401,7 +418,9 @@ The server provides:
 | `/api/capture/status`          | GET    | Get capture status                |
 | `/api/settings`                | GET    | Get current settings              |
 | `/api/settings`                | POST   | Update settings                   |
-| `/ws/stream`                   | WS     | Live image stream (binary frames) |
+| `/ws/stream`                   | WS     | Live image stream (dynamic JPEG) |
+| `/ws/eyepiece`                 | WS     | Eyepiece image stream (dynamic JPEG) |
+| `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8) |
 | `/ws/events`                   | WS     | Server events (JSON)              |
 
 > [!IMPORTANT]
@@ -521,7 +540,7 @@ npm run format    # Format with Prettier
 **Features:**
 
 - Mobile-first responsive design (phone + desktop)
-- Real-time WebSocket streaming (RGB8+LZ4 for high performance and compatibility)
+- Real-time WebSocket streaming (dynamic JPEG for WiFi, LZ4 for lossless eyepiece)
 - WebGL-accelerated image rendering with Canvas2D fallback
 - Touch support with pinch-to-zoom on live view
 - Push-To navigation panel for manual telescope pointing (Available in Pro version)
