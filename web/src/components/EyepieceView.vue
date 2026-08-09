@@ -6,7 +6,9 @@ import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 
 const settings = inject('settings')
 
-const {connected, frameData, dimensions} = useImageStream({ endpoint: '/ws/eyepiece_quality' })
+const routePath = window.location.pathname
+const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
+const {connected, frameData, dimensions, isJpeg} = useImageStream({ endpoint })
 
 const canvasLeftRef = ref(null)
 const canvasRightRef = ref(null)
@@ -41,6 +43,23 @@ function initRenderer() {
 function renderFrame() {
   if (!frameData.value) return
   const {width, height} = dimensions.value
+
+  if (isJpeg.value) {
+    window.createImageBitmap(frameData.value).then((bitmap) => {
+      if (isBinoview.value) {
+        if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
+        else if (canvas2dLeft.isInitialized()) canvas2dLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
+    
+        if (webglRight.isInitialized()) webglRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
+        else if (canvas2dRight.isInitialized()) canvas2dRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
+      } else {
+        if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
+        else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
+      }
+      bitmap.close()
+    }).catch(() => { /* frame was replaced before decode finished */ })
+    return
+  }
 
   if (isBinoview.value) {
     if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, frameData.value, width, height)
@@ -133,6 +152,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   border-right: 1px solid #333;
+  container-type: size;
 }
 
 .eye:last-child {
@@ -145,6 +165,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+  container-type: size;
 }
 
 .live-canvas {
@@ -155,5 +176,8 @@ onUnmounted(() => {
 
 .live-canvas.circular {
   clip-path: circle(closest-side at 50% 50%);
+  width: 100cqmin;
+  height: 100cqmin;
+  object-fit: cover;
 }
 </style>
