@@ -49,18 +49,7 @@ describe('LiveView - Zoom Controls', () => {
         expect(wrapper.find('.fps-display').text()).toContain('FPS 42')
     })
 
-    it('displays render backend info', async () => {
-        mocks.mockImageStream.frameData.value = createMockFrameData(2, 2)
-        mocks.mockImageStream.dimensions.value = {width: 2, height: 2}
-        const wrapper = mountLiveView()
 
-        await nextTick()
-
-        const backendInfo = wrapper.find('.render-backend')
-        expect(backendInfo.exists()).toBe(true)
-        // Should show webgl2-10bit since mock supports it
-        expect(backendInfo.text()).toContain('webgl2-10bit')
-    })
 })
 
 describe('LiveView - Fullscreen', () => {

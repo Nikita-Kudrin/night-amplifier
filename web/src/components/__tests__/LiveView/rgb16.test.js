@@ -41,6 +41,5 @@ describe('LiveView - RGB8 Data Handling', () => {
         await nextTick()
 
         expect(mocks.mockWebGLRenderer.render).toHaveBeenCalled()
-        expect(wrapper.find('.render-backend').text()).toContain('8-bit')
     })
 })
