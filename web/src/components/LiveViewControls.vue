@@ -10,10 +10,6 @@ defineProps({
     type: Number,
     default: 0
   },
-  backendLabel: {
-    type: String,
-    default: 'Canvas2D'
-  },
   isFullscreen: {
     type: Boolean,
     default: false
@@ -44,7 +40,6 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
           <BaseInfoIcon message="Frames Per Second (FPS) indicates how many images are being processed and displayed per second from the live stream." />
         </span>
       </span>
-      <span class="render-backend" :title="'Rendering: ' + backendLabel">{{ backendLabel }}</span>
     </div>
 
     <div class="zoom-controls">
@@ -170,7 +165,7 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   gap: 0.5rem;
 }
 
-.zoom-level, .fps-display, .render-backend {
+.zoom-level, .fps-display {
   font-family: var(--font-mono);
 }
 
@@ -178,11 +173,6 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
   display: flex;
   align-items: center;
   gap: 2px;
-}
-
-.render-backend {
-  color: var(--text-muted);
-  font-size: 0.6rem;
 }
 
 @media (max-width: 768px) {
