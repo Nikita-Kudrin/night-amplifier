@@ -4,6 +4,7 @@
 
 #[tokio::main]
 async fn main() {
-    night_amplifier::app::APP_VERSION.set(env!("CARGO_PKG_VERSION").to_string()).ok();
+    let version = option_env!("NIGHT_AMPLIFIER_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    night_amplifier::app::APP_VERSION.set(version.to_string()).ok();
     night_amplifier::app::run(|| {}).await;
 }
