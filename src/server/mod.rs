@@ -43,7 +43,8 @@ mod tests;
 
 pub use dto::*;
 pub use encoding::{
-    encode_rgb8_jpeg_dynamic, encode_rgb8_lz4, encode_rgb8_lz4_chunked, JPEG_MAGIC,
+    clamp_client_resolution, encode_rgb8_jpeg_bounded, encode_rgb8_jpeg_dynamic, encode_rgb8_lz4,
+    encode_rgb8_lz4_chunked, JPEG_MAGIC, JPEG_MAX_BOUNDING_BOX, JPEG_MIN_BOUNDING_BOX,
     RGB8_CHUNKED_MAGIC, RGB8_MAGIC,
 };
 pub use error::{ApiError, ApiResult, ServerError};

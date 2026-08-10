@@ -35,11 +35,12 @@ async fn test_app_state_frame_counter() {
     let initial = state
         .frame_counter
         .load(std::sync::atomic::Ordering::SeqCst);
-    state.set_latest_frame(vec![1, 2, 3]).await;
+    let claimed = state.begin_frame();
     let after = state
         .frame_counter
         .load(std::sync::atomic::Ordering::SeqCst);
 
+    assert_eq!(claimed, initial + 1);
     assert_eq!(after, initial + 1);
 }
 
@@ -284,13 +285,17 @@ async fn test_frame_counter_increments() {
         .frame_counter
         .load(std::sync::atomic::Ordering::SeqCst);
 
+    state.begin_frame();
     state.set_latest_frame(vec![1]).await;
+    state.publish_frame();
     let after_first = state
         .frame_counter
         .load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(after_first, initial + 1);
 
+    state.begin_frame();
     state.set_latest_frame(vec![2]).await;
+    state.publish_frame();
     let after_second = state
         .frame_counter
         .load(std::sync::atomic::Ordering::SeqCst);

@@ -3,8 +3,8 @@
 //! This module contains the shared state that is accessed by all request handlers.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::warn;
 
@@ -15,51 +15,16 @@ use crate::camera::{Camera, CameraStatus};
 use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use crate::telemetry::metrics as telemetry_metrics;
 
+mod jpeg_tiers;
 mod session;
 mod settings;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
+pub use jpeg_tiers::{JpegTier, JpegTierCache, JpegTierClientGuard};
 pub use session::{CaptureSession, ConnectedCameraInfo};
 pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 pub use types::{CameraPhase, CaptureState};
-
-/// Cache for recently encoded JPEG frames, keyed by output resolution.
-/// Avoids redundant encodes when multiple clients request the same resolution.
-pub struct JpegCache {
-    frame_counter: u64,
-    entries: HashMap<(u32, u32), bytes::Bytes>,
-}
-
-impl JpegCache {
-    fn new() -> Self {
-        Self {
-            frame_counter: 0,
-            entries: HashMap::new(),
-        }
-    }
-
-    /// Look up a cached JPEG for the given frame counter and resolution.
-    /// Returns `None` if the frame has advanced or the resolution is not cached.
-    pub fn get(&self, counter: u64, max_w: u32, max_h: u32) -> Option<bytes::Bytes> {
-        if counter != self.frame_counter {
-            return None;
-        }
-        self.entries.get(&(max_w, max_h)).cloned()
-    }
-
-    /// Insert an encoded JPEG into the cache. Clears stale entries if the
-    /// frame counter has advanced since the last insertion.
-    pub fn insert(&mut self, counter: u64, max_w: u32, max_h: u32, data: Vec<u8>) -> bytes::Bytes {
-        if counter != self.frame_counter {
-            self.entries.clear();
-            self.frame_counter = counter;
-        }
-        let b = bytes::Bytes::from(data);
-        self.entries.insert((max_w, max_h), b.clone());
-        b
-    }
-}
 
 /// The main application state shared across all handlers
 pub struct AppState {
@@ -105,10 +70,13 @@ pub struct AppState {
     /// Sender used by `lifecycle` to issue commands to the running monitor
     /// thread. `None` when no monitor is running.
     pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
-    /// Shared JPEG encode cache (avoids redundant encodes for same resolution)
-    pub jpeg_cache: RwLock<JpegCache>,
+    /// Number of active JPEG clients per resolution tier. The render task only
+    /// encodes tiers somebody is watching.
+    pub jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
+    /// JPEG payloads pre-encoded by the render task, one slot per tier.
+    pub jpeg_tier_cache: StdRwLock<JpegTierCache>,
     /// Number of active LZ4 stream clients
-    pub lz4_clients: std::sync::atomic::AtomicUsize,
+    pub lz4_clients: AtomicUsize,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -147,57 +115,31 @@ pub enum MonitorCmd {
 impl AppState {
     /// Create new application state
     pub fn new() -> (Self, DiskWriter) {
-        let (events_tx, _) = broadcast::channel(256);
-        let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
-
-        let push_to_state = Some(PushToState::default());
-        let settings_persistence = SettingsPersistence::default();
-        let settings = settings_persistence.load().unwrap_or_default();
-
-        if let Some(_) = &push_to_state {
-            // Fov handled by plugin async initialization later if necessary or at configuration load time.
-        }
-
-        let state = Self {
-            cameras: RwLock::new(HashMap::new()),
-            selected_camera: RwLock::new(None),
-            session: RwLock::new(CaptureSession::default()),
-            settings: RwLock::new(settings),
-            latest_frame: RwLock::new(None),
-            latest_raw_frame: RwLock::new(None),
-            frame_counter: AtomicU64::new(0),
-            cancel_flag: AtomicBool::new(false),
-            events: events_tx,
-            capture_lock: Mutex::new(()),
-            frame_ready: Arc::new(tokio::sync::Notify::new()),
-            disk_writer: disk_writer_handle,
-            push_to: RwLock::new(push_to_state),
-            settings_persistence,
-            active_camera_cancel_token: RwLock::new(None),
-            dropped_frames: AtomicU64::new(0),
-            latest_camera_status: RwLock::new(HashMap::new()),
-            active_camera: StdMutex::new(None),
-            camera_phase: RwLock::new(HashMap::new()),
-            camera_monitor_tx: StdMutex::new(None),
-            jpeg_cache: RwLock::new(JpegCache::new()),
-            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
-        };
-
-        (state, disk_writer)
+        Self::with_disk_writer_config(DiskWriterConfig::default())
     }
 
     /// Create new application state with custom disk writer configuration
     pub fn with_disk_writer_config(disk_config: DiskWriterConfig) -> (Self, DiskWriter) {
-        let (events_tx, _) = broadcast::channel(256);
-        let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
-
-        let push_to_state = Some(PushToState::default());
         let settings_persistence = SettingsPersistence::default();
         let settings = settings_persistence.load().unwrap_or_default();
+        Self::build(
+            disk_config,
+            settings_persistence,
+            settings,
+            Some(PushToState::default()),
+        )
+    }
 
-        if let Some(_) = &push_to_state {
-            // Fov handled by plugin async initialization later if necessary or at configuration load time.
-        }
+    /// Assemble the state. Every constructor funnels through here so a new
+    /// field only has to be initialized once.
+    fn build(
+        disk_config: DiskWriterConfig,
+        settings_persistence: SettingsPersistence,
+        settings: CaptureSettings,
+        push_to: Option<PushToState>,
+    ) -> (Self, DiskWriter) {
+        let (events_tx, _) = broadcast::channel(256);
+        let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
 
         let state = Self {
             cameras: RwLock::new(HashMap::new()),
@@ -212,7 +154,7 @@ impl AppState {
             capture_lock: Mutex::new(()),
             frame_ready: Arc::new(tokio::sync::Notify::new()),
             disk_writer: disk_writer_handle,
-            push_to: RwLock::new(push_to_state),
+            push_to: RwLock::new(push_to),
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
@@ -220,8 +162,9 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
-            jpeg_cache: RwLock::new(JpegCache::new()),
-            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
+            jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
+            jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
+            lz4_clients: AtomicUsize::new(0),
         };
 
         (state, disk_writer)
@@ -238,36 +181,12 @@ impl AppState {
     /// Create new application state for testing
     #[cfg(test)]
     pub fn new_for_testing() -> (Self, DiskWriter) {
-        let (events_tx, _) = broadcast::channel(256);
-        let (disk_writer, disk_writer_handle) = DiskWriter::new(DiskWriterConfig::default());
-        let settings_persistence = SettingsPersistence::new("/nonexistent/test/settings.json");
-
-        let state = Self {
-            cameras: RwLock::new(HashMap::new()),
-            selected_camera: RwLock::new(None),
-            session: RwLock::new(CaptureSession::default()),
-            settings: RwLock::new(CaptureSettings::default()),
-            latest_frame: RwLock::new(None),
-            latest_raw_frame: RwLock::new(None),
-            frame_counter: AtomicU64::new(0),
-            cancel_flag: AtomicBool::new(false),
-            events: events_tx,
-            capture_lock: Mutex::new(()),
-            frame_ready: Arc::new(tokio::sync::Notify::new()),
-            disk_writer: disk_writer_handle,
-            push_to: RwLock::new(None),
-            settings_persistence,
-            active_camera_cancel_token: RwLock::new(None),
-            dropped_frames: AtomicU64::new(0),
-            latest_camera_status: RwLock::new(HashMap::new()),
-            active_camera: StdMutex::new(None),
-            camera_phase: RwLock::new(HashMap::new()),
-            camera_monitor_tx: StdMutex::new(None),
-            jpeg_cache: RwLock::new(JpegCache::new()),
-            lz4_clients: std::sync::atomic::AtomicUsize::new(0),
-        };
-
-        (state, disk_writer)
+        Self::build(
+            DiskWriterConfig::default(),
+            SettingsPersistence::new("/nonexistent/test/settings.json"),
+            CaptureSettings::default(),
+            None,
+        )
     }
 
     /// Get the current capture state
@@ -325,19 +244,28 @@ impl AppState {
         ));
     }
 
-    /// Set the latest rendered frame for streaming
+    /// Claim the frame counter for the frame currently being rendered.
+    ///
+    /// The render task stores every payload for a frame (LZ4 blob, per-tier
+    /// JPEGs) against the returned counter and then calls
+    /// [`AppState::publish_frame`]. Splitting the two means a woken client never
+    /// observes a counter whose payloads are still missing.
+    pub fn begin_frame(&self) -> u64 {
+        self.frame_counter.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Wake every stream client waiting on a new frame.
+    pub fn publish_frame(&self) {
+        self.frame_ready.notify_waiters();
+    }
+
+    /// Store the LZ4-encoded payload for the lossless stream.
+    ///
+    /// Storing does not advance the frame counter — see [`AppState::begin_frame`].
     pub async fn set_latest_frame(&self, frame_data: Vec<u8>) {
         let frame_size = frame_data.len() as u64;
         *self.latest_frame.write().await = Some(bytes::Bytes::from(frame_data));
-        self.frame_counter.fetch_add(1, Ordering::SeqCst);
-        self.frame_ready.notify_waiters();
         telemetry_metrics::record_latest_frame_size(frame_size);
-    }
-
-    /// Notify that a new frame is ready (increments counter and wakes waiters)
-    pub async fn notify_new_frame(&self) {
-        self.frame_counter.fetch_add(1, Ordering::SeqCst);
-        self.frame_ready.notify_waiters();
     }
 
     /// Set the latest raw frame for dynamic encoding
@@ -355,14 +283,31 @@ impl AppState {
         self.latest_raw_frame.read().await.clone()
     }
 
-    /// Look up a cached JPEG encode for the given frame and resolution.
-    pub async fn get_cached_jpeg(&self, counter: u64, max_w: u32, max_h: u32) -> Option<bytes::Bytes> {
-        self.jpeg_cache.read().await.get(counter, max_w, max_h)
+    /// Number of clients currently watching a resolution tier.
+    pub fn jpeg_tier_client_count(&self, tier: JpegTier) -> usize {
+        self.jpeg_tier_clients[tier as usize].load(Ordering::SeqCst)
     }
 
-    /// Insert an encoded JPEG into the shared cache.
-    pub async fn cache_jpeg(&self, counter: u64, max_w: u32, max_h: u32, data: Vec<u8>) -> bytes::Bytes {
-        self.jpeg_cache.write().await.insert(counter, max_w, max_h, data)
+    /// Look up the pre-encoded JPEG for a tier at the given frame.
+    pub fn get_tier_jpeg(&self, tier: JpegTier, counter: u64) -> Option<bytes::Bytes> {
+        self.jpeg_tier_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(tier, counter)
+    }
+
+    /// Publish a pre-encoded JPEG for a tier and return a shareable handle,
+    /// which the render task reuses for tiers that produce the same output.
+    pub fn set_tier_jpeg(
+        &self,
+        tier: JpegTier,
+        counter: u64,
+        data: impl Into<bytes::Bytes>,
+    ) -> bytes::Bytes {
+        self.jpeg_tier_cache
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(tier, counter, data)
     }
 
     /// Subscribe to events
@@ -592,6 +537,34 @@ mod tests {
         state.set_latest_frame(vec![1, 2, 3, 4]).await;
         let frame = state.get_latest_frame().await.unwrap();
         assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
+    }
+
+    /// Storing payloads must not advance the counter — only `begin_frame` does,
+    /// so clients cannot wake on a frame whose payloads are still being written.
+    #[tokio::test]
+    async fn test_begin_frame_owns_the_counter() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+
+        state.set_latest_frame(vec![1]).await;
+        assert_eq!(state.frame_counter.load(Ordering::SeqCst), 0);
+
+        assert_eq!(state.begin_frame(), 1);
+        assert_eq!(state.begin_frame(), 2);
+        assert_eq!(state.frame_counter.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_tier_jpeg_publish_and_lookup() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+
+        assert!(state.get_tier_jpeg(JpegTier::Hd1080, 1).is_none());
+
+        state.set_tier_jpeg(JpegTier::Hd1080, 1, vec![7, 8, 9]);
+        assert_eq!(
+            state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap().as_ref(),
+            &[7, 8, 9]
+        );
+        assert!(state.get_tier_jpeg(JpegTier::Hd1080, 2).is_none());
     }
 
     #[tokio::test]

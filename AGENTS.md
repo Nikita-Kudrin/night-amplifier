@@ -172,12 +172,45 @@ Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS/frame_NNNNNN.fits` and `capt
 
 ### Dynamic JPEG (SA10) — `/ws/stream`, `/ws/eyepiece`
 
-Default streaming format. Server encodes JPEG via TurboJPEG (SIMD) at dynamic resolution
-(client sends `{width, height}` JSON). Cached per-resolution to support 10–15 concurrent clients.
+Default streaming format. Encoded via TurboJPEG (SIMD) in the render task, not in the
+WebSocket handlers — see *Demand-driven resolution tiers* below.
 
 ```
 Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
 ```
+
+#### Demand-driven resolution tiers
+
+Clients send `{width, height}` JSON. The tier is selected from the viewport's **shorter edge**
+clamped to 1080 … 2160 — its display-resolution class — not by fitting both edges into a box:
+
+| Tier       | Bounding box  | Serves class | IMX464 (2712×1538) output |
+|------------|---------------|--------------|---------------------------|
+| `Hd1080`   | 1920×1080     | ≤ 1080       | 1904×1080                 |
+| `Qhd1440`  | 2560×1440     | ≤ 1440       | 2539×1440                 |
+| `Uhd2160`  | 3840×2160     | ≤ 2160       | 2712×1538 (no downsample) |
+| `Original` | unbounded     | —            | 2712×1538                 |
+
+Short-edge selection is deliberate and load-bearing. Frames are fitted to the viewport with their
+aspect ratio intact, so the usable pixels are bounded by the shorter edge in either orientation.
+Testing both edges against a 16:9 box would put a portrait 1080×2220 phone in the 4K tier — a
+2× bandwidth increase to display 1080 px of a full-resolution frame. Rotating a device must not
+change which tier it uses.
+
+`clamp_client_resolution` still clamps per axis, but only for `encode_rgb8_jpeg_dynamic`; tier
+selection does not go through it.
+
+Each tier has an `AtomicUsize` client counter in `AppState.jpeg_tier_clients`, held by a
+`JpegTierClientGuard` for the lifetime of a connection. The render task encodes one payload per
+tier that has clients and caches it in `AppState.jpeg_tier_cache`; tiers that do not downsample
+the frame share a single encode (for sub-4K sensors that collapses `Uhd2160` and `Original`).
+Handlers wake on `frame_ready` and write the cached payload — no encoding, no `spawn_blocking`.
+The exception is a client that has just connected or changed tier: it encodes once inline so the
+view is not blank until the next frame, and publishes the result for others on that tier.
+
+Frame publication is split so this stays race-free: the render task calls `begin_frame()` to claim
+the counter, stores every payload against it, then `publish_frame()` to wake clients. A woken
+client therefore never sees a counter whose payloads are still missing.
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
