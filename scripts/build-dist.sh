@@ -29,6 +29,7 @@ BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
 # Default features for distribution: include camera support
 EXTRA_FEATURES="playerone,zwo"
+OVERRIDE_VERSION=""
 
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -39,8 +40,9 @@ while [[ $# -gt 0 ]]; do
         --no-frontend)  BUILD_FRONTEND=false; shift ;;
         --appimage)     BUILD_APPIMAGE=true; shift ;;
         --features)     EXTRA_FEATURES="$2"; shift 2 ;;
+        --version)      OVERRIDE_VERSION="$2"; shift 2 ;;
         --help|-h)
-            head -16 "$0" | tail -14
+            head -17 "$0" | tail -15
             exit 0
             ;;
         *)
@@ -59,7 +61,12 @@ else
 fi
 
 # ── Resolve version and package from Cargo.toml ──────────────────────
-VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+if [[ -n "${OVERRIDE_VERSION}" ]]; then
+    VERSION="${OVERRIDE_VERSION}"
+else
+    VERSION=$(grep '^version' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+fi
+export NIGHT_AMPLIFIER_VERSION="${VERSION}"
 PACKAGE_NAME=$(grep '^name' "${PROJECT_ROOT}/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 # ── Select default features ──────────────────────────────────────────
