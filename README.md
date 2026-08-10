@@ -440,6 +440,15 @@ The server provides:
 
 Static files are served from the `web/` directory (Vue 3 frontend included).
 
+#### Live Stream Scaling
+
+The JPEG streams are encoded once per frame in the render task rather than once per connected
+client. Clients announce their viewport (`{width, height}` JSON) and are mapped to the nearest of
+four fixed resolution tiers — 1920×1080, 2560×1440, 3840×2160, and native sensor resolution. Only
+tiers with at least one connected client are encoded, and tiers that would not downsample the frame
+share a single encode. Ten phones on the same tier therefore cost one JPEG encode per frame, and a
+tier nobody is watching costs nothing.
+
 #### Adding New Camera Providers
 
 To add support for a new camera manufacturer:

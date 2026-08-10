@@ -46,6 +46,25 @@ const SA09_HEADER_SIZE: usize = 20;
 const SA09_CHUNK_DESCRIPTOR_SIZE: usize = 8;
 const SA10_HEADER_SIZE: usize = 16;
 
+/// Smallest bounding box a JPEG client may ask for.
+pub const JPEG_MIN_BOUNDING_BOX: (u32, u32) = (1920, 1080);
+/// Largest bounding box a JPEG client may ask for.
+pub const JPEG_MAX_BOUNDING_BOX: (u32, u32) = (3840, 2160);
+
+/// Clamp a client-requested viewport to the streamable JPEG range.
+///
+/// Single source of truth for the bounds: resolution tiers and the encoder
+/// both derive from it, so a request always maps to the tier that is actually
+/// encoded.
+pub fn clamp_client_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, u32) {
+    let (min_w, min_h) = JPEG_MIN_BOUNDING_BOX;
+    let (max_w, max_h) = JPEG_MAX_BOUNDING_BOX;
+    (
+        req_w.unwrap_or(min_w).clamp(min_w, max_w),
+        req_h.unwrap_or(min_h).clamp(min_h, max_h),
+    )
+}
+
 /// Convert a Frame to RGB8 data, handling downsampling and debayering
 fn frame_to_rgb8(frame: &Frame, max_width: u32, max_height: u32) -> Result<(Vec<u8>, u32, u32), String> {
     use rayon::prelude::*;
@@ -255,47 +274,78 @@ fn calculate_dynamic_jpeg_quality(width: u32, height: u32) -> i32 {
     }
 }
 
-/// Encode frame as JPEG with dynamic resolution (SA10 format)
-pub fn encode_rgb8_jpeg_dynamic(
-    frame: &Frame,
-    req_w: Option<u32>,
-    req_h: Option<u32>,
-) -> Result<Vec<u8>, String> {
-    let mut max_w = req_w.unwrap_or(1920);
-    let mut max_h = req_h.unwrap_or(1080);
+thread_local! {
+    /// Reused TurboJPEG compressor. The render task encodes one payload per
+    /// active resolution tier per frame, so keeping the compressor alive avoids
+    /// re-allocating libjpeg-turbo's internal buffers on every encode.
+    static JPEG_COMPRESSOR: std::cell::RefCell<Option<turbojpeg::Compressor>> =
+        const { std::cell::RefCell::new(None) };
+}
 
-    // Upper limit: 4K (3840x2160)
-    max_w = max_w.min(3840);
-    max_h = max_h.min(2160);
+fn configure_compressor(
+    compressor: &mut turbojpeg::Compressor,
+    quality: i32,
+) -> Result<(), String> {
+    compressor
+        .set_quality(quality)
+        .map_err(|e| format!("TurboJPEG set_quality failed: {}", e))?;
+    compressor
+        .set_subsamp(turbojpeg::Subsamp::Sub2x2)
+        .map_err(|e| format!("TurboJPEG set_subsamp failed: {}", e))
+}
 
-    // Lower limit: 1080p (1920x1080)
-    max_w = max_w.max(1920);
-    max_h = max_h.max(1080);
-
-    let (rgb8_data, width, height) = {
-        let _span = tracing::info_span!("frame_to_rgb8").entered();
-        frame_to_rgb8(frame, max_w, max_h)?
-    };
-
-    let _span = tracing::info_span!("jpeg_compress").entered();
-    let mut compressor = turbojpeg::Compressor::new().map_err(|e| e.to_string())?;
+fn compress_rgb8_to_jpeg(rgb8_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     let quality = calculate_dynamic_jpeg_quality(width, height);
-    compressor.set_quality(quality).map_err(|e| format!("TurboJPEG set_quality failed: {}", e))?;
-    compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2).map_err(|e| format!("TurboJPEG set_subsamp failed: {}", e))?;
-
     let image = turbojpeg::Image {
-        pixels: rgb8_data.as_slice(),
+        pixels: rgb8_data,
         width: width as usize,
         pitch: 3 * width as usize,
         height: height as usize,
         format: turbojpeg::PixelFormat::RGB,
     };
 
-    let compressed = compressor.compress_to_vec(image).map_err(|e| e.to_string())?;
-    let payload_size = compressed.len() as u32;
-    let total_size = SA10_HEADER_SIZE + compressed.len();
+    JPEG_COMPRESSOR.with(|slot| {
+        // A re-entrant call would find the slot already borrowed; fall back to a
+        // throwaway compressor instead of panicking.
+        let Ok(mut borrowed) = slot.try_borrow_mut() else {
+            let mut compressor = turbojpeg::Compressor::new().map_err(|e| e.to_string())?;
+            configure_compressor(&mut compressor, quality)?;
+            return compressor.compress_to_vec(image).map_err(|e| e.to_string());
+        };
 
-    let mut output = Vec::with_capacity(total_size);
+        if borrowed.is_none() {
+            *borrowed = Some(turbojpeg::Compressor::new().map_err(|e| e.to_string())?);
+        }
+        let Some(compressor) = borrowed.as_mut() else {
+            return Err("TurboJPEG compressor unavailable".to_string());
+        };
+        configure_compressor(compressor, quality)?;
+        compressor.compress_to_vec(image).map_err(|e| e.to_string())
+    })
+}
+
+/// Encode a frame as JPEG (SA10 format) fitted into an exact bounding box.
+///
+/// The box is used verbatim, which lets the `Original` resolution tier stream a
+/// frame at its native size. Clients go through [`encode_rgb8_jpeg_dynamic`],
+/// which clamps the request first.
+pub fn encode_rgb8_jpeg_bounded(
+    frame: &Frame,
+    max_w: u32,
+    max_h: u32,
+) -> Result<Vec<u8>, String> {
+    let (rgb8_data, width, height) = {
+        let _span = tracing::info_span!("frame_to_rgb8").entered();
+        frame_to_rgb8(frame, max_w, max_h)?
+    };
+
+    let compressed = {
+        let _span = tracing::info_span!("jpeg_compress").entered();
+        compress_rgb8_to_jpeg(&rgb8_data, width, height)?
+    };
+
+    let payload_size = compressed.len() as u32;
+    let mut output = Vec::with_capacity(SA10_HEADER_SIZE + compressed.len());
     output.extend_from_slice(&JPEG_MAGIC.to_le_bytes());
     output.extend_from_slice(&width.to_le_bytes());
     output.extend_from_slice(&height.to_le_bytes());
@@ -303,6 +353,16 @@ pub fn encode_rgb8_jpeg_dynamic(
     output.extend_from_slice(&compressed);
 
     Ok(output)
+}
+
+/// Encode frame as JPEG at a client-requested resolution (SA10 format)
+pub fn encode_rgb8_jpeg_dynamic(
+    frame: &Frame,
+    req_w: Option<u32>,
+    req_h: Option<u32>,
+) -> Result<Vec<u8>, String> {
+    let (max_w, max_h) = clamp_client_resolution(req_w, req_h);
+    encode_rgb8_jpeg_bounded(frame, max_w, max_h)
 }
 
 
@@ -579,13 +639,63 @@ mod tests {
         let frame = Frame::zeros(2000, 2000, 3).unwrap();
         // Request a tiny 640x480 stream
         let encoded = encode_rgb8_jpeg_dynamic(&frame, Some(640), Some(480)).unwrap();
-        
+
         let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
-        
+
         // It should clamp up to the 1080p bounding box (1920x1080).
         // Since aspect ratio is 1:1, fitting into 1920x1080 means 1080x1080.
         assert_eq!(width, 1080);
         assert_eq!(height, 1080);
+    }
+
+    #[test]
+    fn test_clamp_client_resolution() {
+        assert_eq!(clamp_client_resolution(None, None), (1920, 1080));
+        assert_eq!(clamp_client_resolution(Some(1280), Some(720)), (1920, 1080));
+        assert_eq!(clamp_client_resolution(Some(2560), Some(1440)), (2560, 1440));
+        assert_eq!(clamp_client_resolution(Some(5000), Some(3000)), (3840, 2160));
+    }
+
+    #[test]
+    fn test_jpeg_encode_bounded_keeps_native_resolution() {
+        let frame = Frame::zeros(200, 120, 3).unwrap();
+        let encoded = encode_rgb8_jpeg_bounded(&frame, u32::MAX, u32::MAX).unwrap();
+
+        let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
+        assert_eq!(magic, JPEG_MAGIC);
+        let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
+        assert_eq!(width, 200);
+        assert_eq!(height, 120);
+
+        let payload_size = u32::from_le_bytes([encoded[12], encoded[13], encoded[14], encoded[15]]);
+        assert_eq!(payload_size as usize, encoded.len() - SA10_HEADER_SIZE);
+    }
+
+    #[test]
+    fn test_jpeg_encode_bounded_downsamples_to_box() {
+        let frame = Frame::zeros(2712, 1538, 3).unwrap();
+        let encoded = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
+
+        let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
+        let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
+        assert!(width <= 1920 && height <= 1080);
+        assert_eq!(height, 1080);
+    }
+
+    /// The thread-local compressor is reused across calls, so settings from one
+    /// encode must not leak into the next. 1500x1500 native encodes at quality
+    /// 90 while the 1080p-boxed encode uses 95.
+    #[test]
+    fn test_jpeg_encode_reused_compressor_does_not_leak_quality() {
+        let frame = Frame::filled(1500, 1500, 3, 0.4).unwrap();
+
+        let boxed = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
+        let native = encode_rgb8_jpeg_bounded(&frame, u32::MAX, u32::MAX).unwrap();
+        let boxed_again = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
+
+        assert_eq!(boxed, boxed_again);
+        assert_ne!(boxed.len(), native.len());
     }
 }
