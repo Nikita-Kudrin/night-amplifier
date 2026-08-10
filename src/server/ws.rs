@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::events::ServerEvent;
-use super::state::AppState;
+use super::state::{AppState, JpegTier, JpegTierClientGuard};
 
 /// WebSocket handler for raw image streaming (eyepiece quality)
 ///
@@ -110,76 +110,31 @@ struct ResolutionRequest {
     height: Option<u32>,
 }
 
-/// Clamp requested dimensions to the same bounds used by
-/// `encode_rgb8_jpeg_dynamic` so cache keys match actual output.
-fn clamp_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, u32) {
-    let w = req_w.unwrap_or(1920).clamp(1920, 3840);
-    let h = req_h.unwrap_or(1080).clamp(1080, 2160);
-    (w, h)
-}
-
-/// Encode a raw frame as JPEG (with cache) and send it over the WebSocket.
+/// Fetch the payload a freshly-arrived (or freshly-retiered) client should see.
 ///
-/// Returns the frame counter of the frame that was encoded, or `Err` if the
-/// socket should be closed.
-async fn encode_jpeg_and_send(
-    socket: &mut WebSocket,
+/// The render task does not know about a tier until it has a client, so on
+/// connect there is usually nothing cached yet. Rather than leave the view empty
+/// until the next frame — which can be a whole exposure away — encode once here
+/// and publish it so other clients arriving on the same tier reuse it.
+async fn payload_for_new_client(
     state: &Arc<AppState>,
-    client_width: Option<u32>,
-    client_height: Option<u32>,
-) -> Result<u64, ()> {
+    tier: JpegTier,
+) -> Option<(u64, bytes::Bytes)> {
     let counter = state.frame_counter.load(Ordering::SeqCst);
-    let (max_w, max_h) = clamp_resolution(client_width, client_height);
-
-    // Check cache first — another client may have already encoded this frame
-    if let Some(cached) = state.get_cached_jpeg(counter, max_w, max_h).await {
-        return if socket
-            .send(Message::Binary(cached.clone()))
-            .await
-            .is_ok()
-        {
-            Ok(counter)
-        } else {
-            Err(())
-        };
+    if let Some(cached) = state.get_tier_jpeg(tier, counter) {
+        return Some((counter, cached));
     }
 
-    let Some(frame) = state.get_latest_raw_frame().await else {
-        return Ok(counter);
-    };
-
-    let frame_clone = frame.clone();
-    let cw = client_width;
-    let ch = client_height;
-    let encoded_result = tokio::task::spawn_blocking(move || {
-        crate::server::encoding::encode_rgb8_jpeg_dynamic(&frame_clone, cw, ch)
+    let frame = state.get_latest_raw_frame().await?;
+    let (max_w, max_h) = tier.bounding_box();
+    let encoded = tokio::task::spawn_blocking(move || {
+        crate::server::encoding::encode_rgb8_jpeg_bounded(&frame, max_w, max_h)
     })
     .await
-    .unwrap_or_else(|_| Err("Task panicked".to_string()));
+    .ok()?
+    .ok()?;
 
-    let Ok(encoded) = encoded_result else {
-        return Ok(counter);
-    };
-
-    // Frame-skip: if a newer frame arrived while we were encoding, discard
-    // this stale result and let the caller loop to encode the fresher frame.
-    let current_counter = state.frame_counter.load(Ordering::SeqCst);
-    if current_counter > counter {
-        return Ok(counter);
-    }
-
-    // Store in cache for other clients at the same resolution
-    let cached = state.cache_jpeg(counter, max_w, max_h, encoded).await;
-
-    if socket
-        .send(Message::Binary(cached))
-        .await
-        .is_err()
-    {
-        return Err(());
-    }
-
-    Ok(counter)
+    Some((counter, state.set_tier_jpeg(tier, counter, encoded)))
 }
 
 /// WebSocket handler for JPEG streaming (dynamic resolution).
@@ -194,18 +149,22 @@ pub async fn stream_handler(
     ws.on_upgrade(move |socket| handle_dynamic_jpeg_stream(socket, state))
 }
 
-/// Handle dynamic JPEG image streaming with client-specified resolution
+/// Handle dynamic JPEG image streaming with client-specified resolution.
+///
+/// The client's requested viewport selects a fixed resolution tier; the render
+/// task encodes that tier for as long as this handler holds its guard. Steady
+/// state is therefore a cache read and a socket write, with no encoding on the
+/// per-client path.
 async fn handle_dynamic_jpeg_stream(mut socket: WebSocket, state: Arc<AppState>) {
-    let mut last_frame_counter: u64 = state.frame_counter.load(Ordering::SeqCst);
-    let mut client_width: Option<u32> = None;
-    let mut client_height: Option<u32> = None;
+    let mut tier_guard =
+        JpegTierClientGuard::new(Arc::clone(&state), JpegTier::for_request(None, None));
+    let mut last_frame_counter: u64 = 0;
 
-    // Send initial frame if available
-    if state.get_latest_raw_frame().await.is_some() {
-        match encode_jpeg_and_send(&mut socket, &state, client_width, client_height).await {
-            Ok(counter) => last_frame_counter = counter,
-            Err(()) => return,
+    if let Some((counter, payload)) = payload_for_new_client(&state, tier_guard.tier()).await {
+        if socket.send(Message::Binary(payload)).await.is_err() {
+            return;
         }
+        last_frame_counter = counter;
     }
 
     loop {
@@ -218,16 +177,24 @@ async fn handle_dynamic_jpeg_stream(mut socket: WebSocket, state: Arc<AppState>)
                             if socket.send(Message::Text("pong".into())).await.is_err() {
                                 break;
                             }
-                        } else if let Ok(req) = serde_json::from_str::<ResolutionRequest>(&text) {
-                            client_width = req.width;
-                            client_height = req.height;
-                            // Re-send the latest frame immediately at the new resolution
-                            if state.get_latest_raw_frame().await.is_some() {
-                                match encode_jpeg_and_send(&mut socket, &state, client_width, client_height).await {
-                                    Ok(counter) => last_frame_counter = counter,
-                                    Err(()) => break,
-                                }
+                            continue;
+                        }
+
+                        let Ok(req) = serde_json::from_str::<ResolutionRequest>(&text) else {
+                            continue;
+                        };
+                        let requested = JpegTier::for_request(req.width, req.height);
+                        // Most viewport changes stay inside the same tier, in which
+                        // case the client already has the right resolution.
+                        if requested == tier_guard.tier() {
+                            continue;
+                        }
+                        tier_guard.set_tier(requested);
+                        if let Some((counter, payload)) = payload_for_new_client(&state, requested).await {
+                            if socket.send(Message::Binary(payload)).await.is_err() {
+                                break;
                             }
+                            last_frame_counter = counter;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -243,14 +210,16 @@ async fn handle_dynamic_jpeg_stream(mut socket: WebSocket, state: Arc<AppState>)
             // Send frames when a new one is ready
             _ = state.frame_ready.notified() => {
                 let current_counter = state.frame_counter.load(Ordering::SeqCst);
-
-                // Only send if there's a new frame
-                if current_counter > last_frame_counter {
-                    match encode_jpeg_and_send(&mut socket, &state, client_width, client_height).await {
-                        Ok(counter) => last_frame_counter = counter,
-                        Err(()) => break,
-                    }
+                if current_counter <= last_frame_counter {
+                    continue;
                 }
+                let Some(payload) = state.get_tier_jpeg(tier_guard.tier(), current_counter) else {
+                    continue;
+                };
+                if socket.send(Message::Binary(payload)).await.is_err() {
+                    break;
+                }
+                last_frame_counter = current_counter;
             }
         }
     }
