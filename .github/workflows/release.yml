@@ -5,7 +5,8 @@ env:
 
 on:
   push:
-    tags: [ 'v*' ]
+    tags: 
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -129,9 +130,13 @@ jobs:
       - name: Build distribution archive
         shell: bash
         run: |
+          REF_NAME="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${REF_NAME#v}"
+          
           ./scripts/build-dist.sh \
             --target ${{ matrix.target }} \
             --target-cpu ${{ matrix.target_cpu }} \
+            --version "${VERSION}" \
             --no-frontend \
             ${{ runner.os == 'Linux' && '--appimage' || '' }} \
             ${{ matrix.use_cross && '--cross' || '' }}
