@@ -21,6 +21,7 @@ struct Args {
     otlp_endpoint: Option<String>,
     indi_host: Option<String>,
     indi_port: Option<u16>,
+    span_timings: bool,
 }
 
 impl Args {
@@ -33,6 +34,7 @@ impl Args {
         let mut otlp_endpoint = None;
         let mut indi_host = None;
         let mut indi_port = None;
+        let mut span_timings = false;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -40,6 +42,7 @@ impl Args {
                     Self::print_help();
                     std::process::exit(0);
                 }
+                "--span-timings" => span_timings = true,
                 #[cfg(feature = "telemetry")]
                 "--telemetry" => telemetry = true,
                 #[cfg(feature = "telemetry")]
@@ -94,6 +97,7 @@ impl Args {
             otlp_endpoint,
             indi_host,
             indi_port,
+            span_timings,
         }
     }
 
@@ -107,6 +111,9 @@ impl Args {
         println!();
         println!("Options:");
         println!("  -h, --help          Show this help message");
+        println!(
+            "  --span-timings      Log per-stage durations (capture, debayer, stack, render, encode)"
+        );
         #[cfg(feature = "telemetry")]
         {
             println!(
@@ -157,16 +164,22 @@ pub async fn run(register_plugins: impl FnOnce()) {
         } else {
             None
         };
-        LogConfig::default().with_telemetry(telemetry_config)
+        LogConfig::default()
+            .with_telemetry(telemetry_config)
+            .with_span_events(args.span_timings)
     };
 
     #[cfg(not(feature = "telemetry"))]
-    let log_config = LogConfig::default();
+    let log_config = LogConfig::default().with_span_events(args.span_timings);
 
     // Initialize logging - keep the guard alive for the duration of main
     let _log_guard = init_logging(log_config).expect("Failed to initialize logging");
 
     info!("Night Amplifier - EAA Live Stacking Server");
+
+    if args.span_timings {
+        info!("Span timings enabled - per-stage durations are logged on span close");
+    }
 
     #[cfg(feature = "telemetry")]
     if args.telemetry {

@@ -29,8 +29,12 @@ pub enum FrameType {
 /// A request to write a frame to disk
 #[derive(Debug, Clone)]
 pub struct WriteRequest {
-    /// The frame data to write
-    pub frame: Frame,
+    /// The frame data to write.
+    ///
+    /// Shared rather than owned so the capture pipeline can hand the disk
+    /// writer the same allocation it already holds instead of copying a
+    /// full-resolution frame per saved exposure.
+    pub frame: std::sync::Arc<Frame>,
     /// Type of frame
     pub frame_type: FrameType,
     /// Frame number (for raw frames)

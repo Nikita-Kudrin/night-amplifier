@@ -75,6 +75,10 @@ cargo bench --bench <name>                                          # benchmarks
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 
+# Performance investigation
+cargo run --release -- --span-timings                               # log per-stage durations on span close
+cargo build --profile profiling                                     # release codegen with symbols, for `perf`
+
 # Frontend (from web/)
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm install && npm run dev      # dev server on :5173, proxies to :8080
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run build                    # production build to web/dist/
@@ -336,3 +340,25 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 
 `RUST_LOG` overrides levels. `tracing` + daily file rotation via `tracing-appender`. Telemetry via `--telemetry` /
 `OTEL_EXPORTER_OTLP_ENDPOINT` when built with `--features telemetry`.
+
+### Pipeline performance instrumentation
+
+`--span-timings` turns on `FmtSpan::NEW | CLOSE`, so every stage span (`camera_capture`, `Debayerer::debayer`,
+`stacking_iteration`, `render_iteration`, `process_preview_frame`, `encode_jpeg_tiers`) logs its duration. This is
+the on-device breakdown — no OTLP collector required.
+
+With `--features telemetry`, the same stages also export OTel histograms from `telemetry::metrics`:
+`frame.capture_ms`, `frame.debayer_ms`, `frame.stack_ms`, `frame.render_ms`, `frame.encode_lz4_ms`,
+`frame.encode_jpeg_ms` (attribute `tier`), plus counters `frame.published` (rate = delivered FPS),
+`frame.dropped` and `frame.render_skipped` (render stage falling behind).
+
+Two rules for anything added here:
+
+- **Stage granularity only.** Per-row or per-pixel instrumentation distorts what it measures.
+- **Cache the instrument.** The session-scoped `record_*` helpers rebuild their meter and instrument per call,
+  which is fine at their cadence but must never be copied for a per-frame metric. Follow `pipeline_histogram` /
+  `frame_counter`, which cache in a `OnceLock` and only populate it once the meter provider exists.
+
+For `perf`, build with `--profile profiling`: the `release` profile sets `strip = true` and profiles otherwise show
+raw addresses. Note that rayon worker threads inherit the name of the thread that first used the global pool, so
+rayon work is attributed to `tokio-rt-worker` in `perf` output.

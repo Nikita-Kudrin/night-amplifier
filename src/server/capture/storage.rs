@@ -97,7 +97,7 @@ pub async fn initialize_capture_session(state: &AppState) -> Result<(), String> 
 /// Save a frame to disk and handle queue warnings
 pub async fn save_frame_to_disk(
     state: &AppState,
-    frame: &Frame,
+    frame: &Arc<Frame>,
     frame_number: u64,
     settings: &CaptureSettings,
     camera_info: &ConnectedCameraInfo,
@@ -108,7 +108,7 @@ pub async fn save_frame_to_disk(
     use crate::fits::FitsMetadata;
     use chrono::Utc;
 
-    let raw_frame = frame.clone();
+    let raw_frame = Arc::clone(frame);
     let mut metadata = FitsMetadata::new()
         .with_exposure_us(settings.exposure_us)
         .with_gain(settings.gain)
@@ -213,7 +213,7 @@ pub async fn save_stacked_result(
             }
         }
 
-        if let Err(e) = state.disk_writer.queue_stacked_frame(fits_frame, metadata) {
+        if let Err(e) = state.disk_writer.queue_stacked_frame(Arc::new(fits_frame), metadata) {
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
@@ -225,7 +225,7 @@ pub async fn save_stacked_result(
 
         if let Err(e) = state
             .disk_writer
-            .queue_stacked_png(stretched_frame, stacked_count)
+            .queue_stacked_png(Arc::new(stretched_frame), stacked_count)
         {
             warn!(error = %e, "Failed to queue stretched PNG for saving");
         }

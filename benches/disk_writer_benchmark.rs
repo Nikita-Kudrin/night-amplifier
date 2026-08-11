@@ -13,7 +13,7 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    let frame = Frame::filled(1280, 960, 1, 0.42).unwrap();
+    let frame = std::sync::Arc::new(Frame::filled(1280, 960, 1, 0.42).unwrap());
     let metadata = FitsMetadata::new();
     let num_frames: u64 = 20;
 
@@ -30,7 +30,7 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..num_frames {
-                let _ = handle.queue_raw_frame(black_box(frame.clone()), i, metadata.clone());
+                let _ = handle.queue_raw_frame(black_box(std::sync::Arc::clone(&frame)), i, metadata.clone());
             }
 
             // Wait for queue to drain
@@ -53,7 +53,7 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    let frame = Frame::filled(1280, 960, 1, 0.42).unwrap();
+    let frame = std::sync::Arc::new(Frame::filled(1280, 960, 1, 0.42).unwrap());
     let metadata = FitsMetadata::new();
 
     fn cpu_work(frame: &Frame) -> f32 {
@@ -78,7 +78,7 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..10u64 {
-                let _ = handle.queue_raw_frame(frame.clone(), i, metadata.clone());
+                let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone());
             }
 
             // CPU work on the main thread while disk I/O is happening

@@ -159,7 +159,7 @@ impl DiskWriterHandle {
     /// Queue a raw frame for writing
     pub fn queue_raw_frame(
         &self,
-        frame: Frame,
+        frame: std::sync::Arc<Frame>,
         frame_number: u64,
         metadata: FitsMetadata,
     ) -> Result<bool, DiskWriterError> {
@@ -174,7 +174,7 @@ impl DiskWriterHandle {
     /// Queue a stacked result for writing (FITS format)
     pub fn queue_stacked_frame(
         &self,
-        frame: Frame,
+        frame: std::sync::Arc<Frame>,
         metadata: FitsMetadata,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {
@@ -188,7 +188,7 @@ impl DiskWriterHandle {
     /// Queue a stretched stacked frame for writing (PNG format for sharing)
     pub fn queue_stacked_png(
         &self,
-        frame: Frame,
+        frame: std::sync::Arc<Frame>,
         stacked_count: u64,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {

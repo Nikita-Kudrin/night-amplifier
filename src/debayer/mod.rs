@@ -124,6 +124,12 @@ impl Debayerer {
             });
         }
 
+        // Timed here rather than in each camera provider: every colour camera
+        // and the simulator funnel through this one call.
+        let _timer = crate::telemetry::metrics::time_stage(
+            crate::telemetry::metrics::FrameStage::Debayer,
+        );
+
         match self.config.algorithm {
             DebayerAlgorithm::Bilinear => debayer_bilinear(frame, self.config.pattern),
             DebayerAlgorithm::Vng => debayer_vng(frame, self.config.pattern),

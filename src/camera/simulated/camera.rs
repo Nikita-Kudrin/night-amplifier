@@ -1,5 +1,6 @@
 //! Simulated camera implementation
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -89,8 +90,10 @@ pub struct SimulatedCamera {
     files: Vec<PathBuf>,
     current_index: usize,
     /// Ring-buffer holding at most LOOKAHEAD decoded (and debayered) frames.
-    /// `cache[i]` corresponds to file index `cache_start + i`.
-    cache: Vec<Frame>,
+    /// `cache[i]` corresponds to file index `(cache_start + i) % files.len()`.
+    /// A `VecDeque` so the served frame can be moved out of the front instead
+    /// of copied.
+    cache: VecDeque<Frame>,
     cache_start: usize,
     debayerer: Option<Debayerer>,
     cancel_flag: Arc<AtomicBool>,
@@ -156,7 +159,7 @@ impl SimulatedCamera {
             directory,
             files,
             current_index: 0,
-            cache: Vec::with_capacity(MAX_PRELOAD_IMAGES),
+            cache: VecDeque::with_capacity(MAX_PRELOAD_IMAGES),
             cache_start: 0,
             debayerer,
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -206,7 +209,8 @@ impl SimulatedCamera {
                     let file_idx = (needed_start + i) % file_count;
                     self.decode_frame(file_idx)
                 })
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()?
+                .into();
 
             debug!(
                 cache_start = self.cache_start,
@@ -217,26 +221,36 @@ impl SimulatedCamera {
             return Ok(());
         }
 
-        // Slide: drop frames before current_index, append new ones ahead
-        let drop_count = needed_start - self.cache_start;
-        if drop_count > 0 {
-            let start = Instant::now();
-            self.cache.drain(..drop_count);
+        // Slide: drop any frames before current_index. Serving a frame already
+        // removes it from the front, so this usually has nothing to do — it
+        // only bites when the caller jumps `current_index` forward by hand.
+        // If they jumped backwards or completely outside the cache window,
+        // we must invalidate the cache completely.
+        if needed_start < self.cache_start || needed_start >= self.cache_start + self.cache.len() {
+            self.cache.clear();
             self.cache_start = needed_start;
-
-            // Fill up to lookahead
-            let current_len = self.cache.len();
-            let target_len = lookahead.min(file_count);
-            if current_len < target_len {
-                let mut new_frames = (0..(target_len - current_len))
-                    .into_par_iter()
-                    .map(|i| {
-                        let file_idx = (self.cache_start + current_len + i) % file_count;
-                        self.decode_frame(file_idx)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                self.cache.append(&mut new_frames);
+        } else {
+            let drop_count = needed_start - self.cache_start;
+            if drop_count > 0 {
+                self.cache.drain(..drop_count);
+                self.cache_start = needed_start;
             }
+        }
+
+        // Top the window back up. Outside the `drop_count` branch, because the
+        // window shrinks by one on every capture whether or not it slid.
+        let current_len = self.cache.len();
+        let target_len = lookahead.min(file_count);
+        if current_len < target_len {
+            let start = Instant::now();
+            let new_frames = (0..(target_len - current_len))
+                .into_par_iter()
+                .map(|i| {
+                    let file_idx = (self.cache_start + current_len + i) % file_count;
+                    self.decode_frame(file_idx)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            self.cache.extend(new_frames);
 
             debug!(
                 cache_start = self.cache_start,
@@ -249,7 +263,13 @@ impl SimulatedCamera {
         Ok(())
     }
 
-    /// Return a clone of the current frame and advance to the next.
+    /// Hand out the current frame and advance to the next.
+    ///
+    /// `fill_cache` leaves the window starting at `current_index`, so the frame
+    /// we want is always at the front. It is moved out rather than cloned: the
+    /// sliding window would evict this entry on the next call anyway, and a
+    /// full-resolution frame is tens of megabytes — enough that cloning it once
+    /// per capture measurably cuts into live-view throughput.
     fn load_current_frame(&mut self, lookahead: usize) -> CameraResult<Frame> {
         if self.files.is_empty() {
             return Err(CameraError::ImageReadFailed(
@@ -259,8 +279,9 @@ impl SimulatedCamera {
 
         self.fill_cache(lookahead)?;
 
-        let cache_offset = self.current_index - self.cache_start;
-        let frame = self.cache[cache_offset].clone();
+        let frame = self.cache.pop_front().ok_or_else(|| {
+            CameraError::ImageReadFailed("Frame cache empty after fill".to_string())
+        })?;
 
         debug!(
             index = self.current_index,
@@ -269,6 +290,9 @@ impl SimulatedCamera {
         );
 
         self.current_index = (self.current_index + 1) % self.files.len();
+        // Keep the window anchored on the frame we will serve next, so the
+        // remaining entries still satisfy `cache[i] == file cache_start + i`.
+        self.cache_start = self.current_index;
 
         Ok(frame)
     }
@@ -455,27 +479,65 @@ mod tests {
         // Initial state: cache should be empty
         assert!(camera.cache.is_empty());
 
-        // First capture should fill cache (lookahead = 5)
+        // First capture fills the window to `lookahead` and then hands out the
+        // front entry, so `lookahead - 1` frames stay prefetched ahead of the
+        // next capture. The window is always anchored on the next frame to serve.
         let config = CaptureConfig::default().with_simulated_preload_images(5);
         let _ = camera.capture(&config).unwrap();
 
-        assert_eq!(camera.cache.len(), 5);
-        assert_eq!(camera.cache_start, 0);
+        assert_eq!(camera.cache.len(), 4);
+        assert_eq!(camera.cache_start, 1);
         assert_eq!(camera.current_index, 1);
 
-        // Next capture should still have 5 in cache, current_index advanced
-        // It should have dropped index 0 and loaded index 5
+        // Next capture tops the window back up (decoding index 5) rather than
+        // re-decoding the frames already cached, then serves index 1.
         let _ = camera.capture(&config).unwrap();
-        assert_eq!(camera.cache.len(), 5);
-        assert_eq!(camera.cache_start, 1);
+        assert_eq!(camera.cache.len(), 4);
+        assert_eq!(camera.cache_start, 2);
         assert_eq!(camera.current_index, 2);
 
-        // Advance to near end
+        // Jumping outside the cached window forces a full reload at the new
+        // position; the refill wraps around the end of the file list.
         camera.current_index = 8;
         let _ = camera.capture(&config).unwrap();
-        assert_eq!(camera.cache_start, 8);
-        assert_eq!(camera.cache.len(), 5); // 8, 9, 0, 1, 2 (wrap around)
+        assert_eq!(camera.cache_start, 9);
+        assert_eq!(camera.cache.len(), 4); // 9, 0, 1, 2 remain after serving 8
         assert_eq!(camera.current_index, 9);
+    }
+
+    /// The served frame must be moved out of the cache, not copied: a
+    /// full-resolution frame is tens of megabytes and this runs per capture.
+    #[test]
+    fn test_simulated_camera_moves_frame_out_of_cache() {
+        let dir = tempdir().unwrap();
+        let png_data = [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xd7, 0x63, 0xf8, 0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xdc, 0x44, 0x74,
+            0x8e, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        for i in 0..4 {
+            let file_path = dir.path().join(format!("frame_{:03}.png", i));
+            std::fs::File::create(file_path)
+                .unwrap()
+                .write_all(&png_data)
+                .unwrap();
+        }
+
+        let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
+        let config = CaptureConfig::default().with_simulated_preload_images(3);
+
+        // Prime the cache and note where the next frame's pixels live.
+        let _ = camera.capture(&config).unwrap();
+        let queued_addr = camera.cache.front().unwrap().data().as_ptr() as usize;
+
+        let served = camera.capture(&config).unwrap();
+        assert_eq!(
+            served.data().as_ptr() as usize,
+            queued_addr,
+            "cached frame was copied on the way out instead of moved"
+        );
     }
 
     #[test]

@@ -17,9 +17,17 @@ pub struct PushToService;
 
 impl PushToService {
     /// Get the current Push-To status
-    pub async fn get_status(_state: &AppState) -> PushToStatusResponse {
+    pub async fn get_status(state: &AppState) -> PushToStatusResponse {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            plugin.get_status().await
+            let status = plugin.get_status().await;
+            {
+                let mut guard = state.push_to.write().await;
+                if let Some(ref mut pt) = *guard {
+                    pt.has_target = status.current_target.is_some();
+                    pt.solving_in_progress = status.is_solving;
+                }
+            }
+            status
         } else {
             PushToStatusResponse {
                 solver_ready: false,
@@ -77,6 +85,12 @@ impl PushToService {
     ) -> Result<CatalogEntryResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_name(name).await?;
+            {
+                let mut guard = state.push_to.write().await;
+                if let Some(ref mut pt) = *guard {
+                    pt.has_target = true;
+                }
+            }
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
                 Some(result.designation.clone()),
@@ -97,6 +111,12 @@ impl PushToService {
     ) -> Result<CoordinateResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
+            {
+                let mut guard = state.push_to.write().await;
+                if let Some(ref mut pt) = *guard {
+                    pt.has_target = true;
+                }
+            }
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
                 Some(result.ra_string.clone() + " " + &result.dec_string),
@@ -114,6 +134,12 @@ impl PushToService {
     pub async fn clear_target(state: &AppState) -> Result<(), String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.clear_target().await;
+            {
+                let mut guard = state.push_to.write().await;
+                if let Some(ref mut pt) = *guard {
+                    pt.has_target = false;
+                }
+            }
             let _ = state.events.send(ServerEvent::target_cleared());
             result
         } else {
@@ -164,12 +190,14 @@ impl PushToService {
 /// Dummy state for compatibility with AppState
 pub struct PushToState {
     pub solving_in_progress: bool,
+    pub has_target: bool,
 }
 
 impl Default for PushToState {
     fn default() -> Self {
         Self {
             solving_in_progress: false,
+            has_target: false,
         }
     }
 }

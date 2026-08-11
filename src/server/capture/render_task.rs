@@ -5,6 +5,7 @@ use tracing::{debug, warn};
 use crate::frame::Frame;
 use crate::server::encoding::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4_chunked};
 use crate::server::state::{AppState, JpegTier};
+use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::StackedFrame;
 use super::pipeline;
@@ -35,10 +36,11 @@ pub fn run_render_task(
 
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
-        let latest = drain_to_latest(msg, &render_rx);
+        let (latest, skipped) = drain_to_latest(msg, &render_rx);
+        telemetry_metrics::record_frames_skipped_to_latest(skipped);
 
         let StackedFrame {
-            mut display_frame,
+            display_frame,
             was_stacked,
             frame_number,
             settings,
@@ -47,8 +49,22 @@ pub fn run_render_task(
         let _iter_span =
             tracing::info_span!("render_iteration", frame_number, was_stacked,).entered();
 
+        // The preview pipeline mutates in place. Reclaim the allocation when we
+        // hold the only handle — the usual case, since the capture thread has
+        // moved on and plate solving is only spawned when it can actually run.
+        // A live second holder (raw-frame disk saving, an in-flight solve)
+        // forces the copy we would otherwise have paid unconditionally.
+        let mut display_frame = Arc::try_unwrap(display_frame).unwrap_or_else(|shared| {
+            debug!("Preview frame still shared, copying before render");
+            (*shared).clone()
+        });
+
         // Process frame through unified render pipeline
-        if let Err(e) = pipeline::process_preview_frame(&mut display_frame, &settings) {
+        let render_result = {
+            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Render);
+            pipeline::process_preview_frame(&mut display_frame, &settings)
+        };
+        if let Err(e) = render_result {
             state.send_error(format!("Preview processing failed: {}", e));
             continue;
         }
@@ -67,6 +83,8 @@ pub fn run_render_task(
             // Encode frame as RGB8+LZ4 for streaming
             let encode_result = {
                 let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
+                let _timer =
+                    telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
                 encode_rgb8_lz4_chunked(&raw_frame, chunk_count)
             };
             match encode_result {
@@ -109,7 +127,13 @@ fn encode_jpeg_tiers(state: &AppState, frame: &Frame, counter: u64) {
         }
 
         let (max_w, max_h) = tier.bounding_box();
-        match encode_rgb8_jpeg_bounded(frame, max_w, max_h) {
+        let started = std::time::Instant::now();
+        let encoded = encode_rgb8_jpeg_bounded(frame, max_w, max_h);
+        telemetry_metrics::record_jpeg_encode_ms(
+            tier.metric_label(),
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+        match encoded {
             Ok(encoded) => {
                 let stored = state.set_tier_jpeg(tier, counter, encoded);
                 if !downsamples {
@@ -123,15 +147,20 @@ fn encode_jpeg_tiers(state: &AppState, frame: &Frame, counter: u64) {
 
 /// Drain the receiver, keeping only the latest message.
 ///
-/// Consumes all immediately available messages and returns the most recent
-/// one, discarding intermediate frames. This ensures the UI always shows
-/// the freshest available frame.
-fn drain_to_latest(initial: StackedFrame, rx: &mpsc::Receiver<StackedFrame>) -> StackedFrame {
+/// Consumes all immediately available messages and returns the most recent one
+/// along with how many were discarded, so a backed-up render stage is visible
+/// in telemetry. This ensures the UI always shows the freshest available frame.
+fn drain_to_latest(
+    initial: StackedFrame,
+    rx: &mpsc::Receiver<StackedFrame>,
+) -> (StackedFrame, u64) {
     let mut latest = initial;
+    let mut skipped = 0;
     while let Ok(newer) = rx.try_recv() {
         latest = newer;
+        skipped += 1;
     }
-    latest
+    (latest, skipped)
 }
 
 #[cfg(test)]
@@ -143,15 +172,16 @@ mod tests {
         let settings = crate::server::state::CaptureSettings::default();
         let frame = crate::frame::Frame::zeros(4, 4, 3).unwrap();
         let msg = super::StackedFrame {
-            display_frame: frame,
+            display_frame: std::sync::Arc::new(frame),
             was_stacked: true,
             frame_number: 1,
             settings,
         };
 
         // No extra messages — should return initial
-        let result = super::drain_to_latest(msg, &rx);
+        let (result, skipped) = super::drain_to_latest(msg, &rx);
         assert!(result.was_stacked);
+        assert_eq!(skipped, 0);
         drop(tx);
     }
 
@@ -161,7 +191,7 @@ mod tests {
 
         let settings = crate::server::state::CaptureSettings::default();
         let initial = super::StackedFrame {
-            display_frame: crate::frame::Frame::zeros(4, 4, 3).unwrap(),
+            display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
             was_stacked: false,
             frame_number: 0,
             settings: settings.clone(),
@@ -170,7 +200,7 @@ mod tests {
         // Queue additional frames
         for n in 0..3 {
             let msg = super::StackedFrame {
-                display_frame: crate::frame::Frame::zeros(4, 4, 3).unwrap(),
+                display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
                 was_stacked: false,
                 frame_number: n + 1,
                 settings: settings.clone(),
@@ -179,17 +209,19 @@ mod tests {
         }
         // Last frame is the "latest"
         let last = super::StackedFrame {
-            display_frame: crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap(),
+            display_frame: Arc::new(crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap()),
             was_stacked: true,
             frame_number: 4,
             settings: settings.clone(),
         };
         tx.send(last).unwrap();
 
-        let result = super::drain_to_latest(initial, &rx);
+        let (result, skipped) = super::drain_to_latest(initial, &rx);
         // Should get the last frame (was_stacked = true, filled with 1.0)
         assert!(result.was_stacked);
         assert!(result.display_frame.get_pixel(0, 0, 0) > 0.9);
+        // The initial frame plus the three queued ones were all superseded.
+        assert_eq!(skipped, 4);
         drop(tx);
     }
 
@@ -205,7 +237,7 @@ mod tests {
     async fn render_one_frame(state: Arc<AppState>, frame: crate::frame::Frame) {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(super::StackedFrame {
-            display_frame: frame,
+            display_frame: std::sync::Arc::new(frame),
             was_stacked: false,
             frame_number: 1,
             settings: CaptureSettings::default(),
@@ -218,6 +250,83 @@ mod tests {
         tokio::task::spawn_blocking(move || super::run_render_task(state, rx, rt))
             .await
             .unwrap();
+    }
+
+    /// Settings that make the preview pipeline a no-op, so a test observes only
+    /// how the frame buffer is handled and not what the render stages do to it.
+    fn passthrough_settings() -> CaptureSettings {
+        CaptureSettings {
+            auto_stretch: false,
+            background_subtraction: false,
+            saturation_boost: false,
+            ..CaptureSettings::default()
+        }
+    }
+
+    /// Run one frame through the render task, returning the pixel buffer address
+    /// the frame ended up at. `extra_holder` simulates another stage (disk
+    /// saving, an in-flight plate solve) still holding the frame.
+    async fn render_and_report_buffer_addr(
+        frame: crate::frame::Frame,
+        keep_extra_handle: bool,
+    ) -> (usize, usize) {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+
+        let shared = Arc::new(frame);
+        let addr_in = shared.data().as_ptr() as usize;
+        let extra_handle = keep_extra_handle.then(|| Arc::clone(&shared));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(super::StackedFrame {
+            display_frame: shared,
+            was_stacked: false,
+            frame_number: 1,
+            settings: passthrough_settings(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let rt = tokio::runtime::Handle::current();
+        let task_state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+            .await
+            .unwrap();
+        drop(extra_handle);
+
+        let addr_out = state
+            .get_latest_raw_frame()
+            .await
+            .expect("render task published a frame")
+            .data()
+            .as_ptr() as usize;
+        (addr_in, addr_out)
+    }
+
+    /// The whole point of `StackedFrame` carrying an `Arc`: when the render task
+    /// holds the only handle it must reuse the buffer, not copy 50 MB.
+    #[tokio::test]
+    async fn test_render_task_reuses_uniquely_held_frame_buffer() {
+        let (addr_in, addr_out) =
+            render_and_report_buffer_addr(crate::frame::Frame::zeros(64, 48, 3).unwrap(), false)
+                .await;
+        assert_eq!(
+            addr_in, addr_out,
+            "uniquely-held frame was copied instead of moved into the render pipeline"
+        );
+    }
+
+    /// When another stage still holds the frame, the render task must fall back
+    /// to a copy rather than mutating a buffer someone else is reading.
+    #[tokio::test]
+    async fn test_render_task_copies_frame_still_held_elsewhere() {
+        let (addr_in, addr_out) =
+            render_and_report_buffer_addr(crate::frame::Frame::zeros(64, 48, 3).unwrap(), true)
+                .await;
+        assert_ne!(
+            addr_in, addr_out,
+            "shared frame must be copied before the preview pipeline mutates it"
+        );
     }
 
     #[tokio::test]

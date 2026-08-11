@@ -143,9 +143,9 @@ mod tests {
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
-        let frame = Frame::filled(10, 10, 1, 0.5).unwrap();
+        let frame = std::sync::Arc::new(Frame::filled(10, 10, 1, 0.5).unwrap());
         for i in 0..3 {
-            let _ = handle.queue_raw_frame(frame.clone(), i, FitsMetadata::new());
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, FitsMetadata::new());
         }
 
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -167,9 +167,9 @@ mod tests {
             .unwrap();
         assert!(!handle.has_queue_warning());
 
-        let frame = Frame::filled(10, 10, 1, 0.5).unwrap();
+        let frame = std::sync::Arc::new(Frame::filled(10, 10, 1, 0.5).unwrap());
         for i in 0..(QUEUE_WARNING_THRESHOLD + 2) {
-            let _ = handle.queue_raw_frame(frame.clone(), i as u64, FitsMetadata::new());
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i as u64, FitsMetadata::new());
         }
 
         assert!(handle.has_queue_warning());
@@ -190,12 +190,12 @@ mod tests {
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
-        let frame = Frame::filled(32, 32, 1, 0.5).unwrap();
+        let frame = std::sync::Arc::new(Frame::filled(32, 32, 1, 0.5).unwrap());
         let mut metadata = FitsMetadata::new();
         metadata.camera = Some("Test Camera".to_string());
 
         for i in 0..5 {
-            let _ = handle.queue_raw_frame(frame.clone(), i, metadata.clone());
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone());
         }
 
         // Give it some time to process
