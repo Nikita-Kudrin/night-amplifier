@@ -69,90 +69,128 @@ pub fn clamp_client_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, 
 fn frame_to_rgb8(frame: &Frame, max_width: u32, max_height: u32) -> Result<(Vec<u8>, u32, u32), String> {
     use rayon::prelude::*;
 
+    let width = frame.width();
+    let height = frame.height();
+
     // Check if downsampling is needed
-    let (process_frame, width, height) = if frame.width() > max_width as usize || frame.height() > max_height as usize {
-        let aspect_ratio = frame.width() as f32 / frame.height() as f32;
-        let (target_width, target_height) = if frame.width() as f32 / max_width as f32 > frame.height() as f32 / max_height as f32 {
+    if width > max_width as usize || height > max_height as usize {
+        let (process_frame, width, height) = if frame.channels() == 1 {
+            if let Ok(detection) = crate::debayer::detect_cfa_pattern(frame) {
+                let rgb_frame = crate::debayer::debayer_bilinear(frame, detection.pattern)
+                    .map_err(|e| e.to_string())?;
+                (std::borrow::Cow::Owned(rgb_frame), frame.width(), frame.height())
+            } else {
+                (std::borrow::Cow::Borrowed(frame), frame.width(), frame.height())
+            }
+        } else {
+            (std::borrow::Cow::Borrowed(frame), frame.width(), frame.height())
+        };
+
+        let frame_ref = &*process_frame;
+        let channels = frame_ref.channels();
+        if channels != 1 && channels != 3 {
+            return Err(format!("Unsupported channel count for downsampling: {}", channels));
+        }
+
+        let aspect_ratio = width as f32 / height as f32;
+        let (target_width, target_height) = if width as f32 / max_width as f32 > height as f32 / max_height as f32 {
             (max_width as usize, (max_width as f32 / aspect_ratio) as usize)
         } else {
             ((max_height as f32 * aspect_ratio) as usize, max_height as usize)
         };
 
-        let mut binned = Frame::zeros(target_width, target_height, frame.channels())
-            .map_err(|e| e.to_string())?;
+        let target_width = target_width.max(1);
+        let target_height = target_height.max(1);
 
-        let x_scale = frame.width() as f32 / target_width as f32;
-        let y_scale = frame.height() as f32 / target_height as f32;
+        let mut output = vec![0u8; target_width * target_height * 3];
 
-        let src_data = frame.data();
-        let src_stride = frame.width() * frame.channels();
-        let channels = frame.channels();
+        let x_scale = width as f32 / target_width as f32;
+        let y_scale = height as f32 / target_height as f32;
 
-        binned
-            .data_mut()
-            .par_chunks_mut(target_width * channels)
+        let src_data = frame_ref.data();
+        let src_stride = width * channels;
+
+        // Precompute column ranges
+        let mut col_ranges = Vec::with_capacity(target_width);
+        for x in 0..target_width {
+            let src_x0 = (x as f32 * x_scale) as usize;
+            let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(width);
+            let x_count = (src_x1 - src_x0).max(1);
+            col_ranges.push((src_x0, src_x1, x_count));
+        }
+
+        output
+            .par_chunks_mut(target_width * 3)
             .enumerate()
-            .for_each(|(y, row)| {
+            .for_each(|(y, row_out)| {
                 let src_y0 = (y as f32 * y_scale) as usize;
-                let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(frame.height());
-                let y_count = (src_y1 - src_y0).max(1);
+                let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(height);
+                let y_count = (src_y1 - src_y0).max(1) as f32;
 
-                for x in 0..target_width {
-                    let src_x0 = (x as f32 * x_scale) as usize;
-                    let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(frame.width());
-                    let x_count = (src_x1 - src_x0).max(1);
-                    let area = (y_count * x_count) as f32;
+                for (x, &(src_x0, src_x1, x_count)) in col_ranges.iter().enumerate() {
+                    let area = y_count * x_count as f32;
+                    let inv_area = 1.0 / area;
 
-                    for c in 0..channels {
+                    if channels == 1 {
                         let mut sum = 0.0f32;
                         for sy in src_y0..src_y1 {
                             let row_start = sy * src_stride;
                             for sx in src_x0..src_x1 {
-                                sum += src_data[row_start + sx * channels + c];
+                                sum += src_data[row_start + sx];
                             }
                         }
-                        row[x * channels + c] = sum / area;
+                        let val = ((sum * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                        let out_idx = x * 3;
+                        row_out[out_idx] = val;
+                        row_out[out_idx + 1] = val;
+                        row_out[out_idx + 2] = val;
+                    } else {
+                        // channels is exactly 3 due to the earlier check
+                        let mut sum_r = 0.0f32;
+                        let mut sum_g = 0.0f32;
+                        let mut sum_b = 0.0f32;
+                        for sy in src_y0..src_y1 {
+                            let row_start = sy * src_stride;
+                            for sx in src_x0..src_x1 {
+                                let pixel_start = row_start + sx * 3;
+                                sum_r += src_data[pixel_start];
+                                sum_g += src_data[pixel_start + 1];
+                                sum_b += src_data[pixel_start + 2];
+                            }
+                        }
+                        let out_idx = x * 3;
+                        row_out[out_idx] = ((sum_r * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                        row_out[out_idx + 1] = ((sum_g * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                        row_out[out_idx + 2] = ((sum_b * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
                     }
                 }
             });
-        (std::borrow::Cow::Owned(binned), target_width as u32, target_height as u32)
+
+        Ok((output, target_width as u32, target_height as u32))
     } else {
-        (std::borrow::Cow::Borrowed(frame), frame.width() as u32, frame.height() as u32)
-    };
-
-    let frame_ref = &*process_frame;
-
-    let rgb8_data = if frame_ref.channels() == 1 {
-        match crate::debayer::detect_cfa_pattern(frame_ref) {
-            Ok(detection) => {
-                crate::debayer::debayer_bilinear_to_rgb8_fast(frame_ref, detection.pattern)
-                    .unwrap_or_else(|_| {
-                        let gray_data = frame_ref.data();
-                        gray_data
-                            .par_iter()
-                            .flat_map_iter(|&v| {
-                                let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                                [val, val, val]
-                            })
-                            .collect()
-                    })
+        // Fast path: no downsampling
+        let rgb8_data = if frame.channels() == 1 {
+            match crate::debayer::detect_cfa_pattern(frame) {
+                Ok(detection) => {
+                    crate::debayer::debayer_bilinear_to_rgb8_fast(frame, detection.pattern)
+                        .map_err(|e| e.to_string())?
+                }
+                Err(_) => {
+                    let gray_data = frame.data();
+                    gray_data
+                        .par_iter()
+                        .flat_map_iter(|&v| {
+                            let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                            [val, val, val]
+                        })
+                        .collect()
+                }
             }
-            Err(_) => {
-                let gray_data = frame_ref.data();
-                gray_data
-                    .par_iter()
-                    .flat_map_iter(|&v| {
-                        let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                        [val, val, val]
-                    })
-                    .collect()
-            }
-        }
-    } else {
-        frame_ref.to_rgb8_fast()
-    };
-
-    Ok((rgb8_data, width, height))
+        } else {
+            frame.to_rgb8_fast()
+        };
+        Ok((rgb8_data, width as u32, height as u32))
+    }
 }
 
 /// Encode RGB8 data with LZ4 compression for high-speed streaming (legacy SA08 format)

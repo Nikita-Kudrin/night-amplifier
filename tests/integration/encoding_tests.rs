@@ -527,60 +527,9 @@ fn probe_render_task_stage_breakdown() {
                 BASELINE_NETWORK_MBPS as u32
             );
         }
-
-        // What if the stretch ran on 1080p pixels instead of full sensor pixels?
-        let small = {
-            let payload = encode_rgb8_jpeg_bounded(&rgb, 1920, 1080).unwrap();
-            let w = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
-            let h = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
-            (w, h)
-        };
-        let downsampled = box_downsample(&rgb, small.0, small.1);
-        let small_render_ms = time_ms(Box::new({
-            let downsampled = downsampled.clone();
-            move || {
-                let mut preview = downsampled.clone();
-                RenderPipeline::new(live_config()).process(&mut preview).unwrap();
-            }
-        }));
-        println!(
-            "  preview render at {}x{} instead      {:>8.1} ms   ({:.1}x cheaper)\n",
-            small.0,
-            small.1,
-            small_render_ms,
-            (render_ms - clone_ms) / small_render_ms.max(0.001)
-        );
     }
 
     println!("=== Breakdown Complete ===\n");
-}
-
-/// Area-average downsample, mirroring `frame_to_rgb8`'s box filter.
-fn box_downsample(frame: &Frame, target_w: usize, target_h: usize) -> Frame {
-    let channels = frame.channels();
-    let mut out = Frame::zeros(target_w, target_h, channels).unwrap();
-    let x_scale = frame.width() as f32 / target_w as f32;
-    let y_scale = frame.height() as f32 / target_h as f32;
-    for y in 0..target_h {
-        let sy0 = (y as f32 * y_scale) as usize;
-        let sy1 = (((y + 1) as f32 * y_scale) as usize).min(frame.height());
-        for x in 0..target_w {
-            let sx0 = (x as f32 * x_scale) as usize;
-            let sx1 = (((x + 1) as f32 * x_scale) as usize).min(frame.width());
-            for c in 0..channels {
-                let mut sum = 0.0f32;
-                let mut n = 0.0f32;
-                for sy in sy0..sy1.max(sy0 + 1) {
-                    for sx in sx0..sx1.max(sx0 + 1) {
-                        sum += frame.get_pixel(sx, sy, c);
-                        n += 1.0;
-                    }
-                }
-                out.set_pixel(x, y, c, sum / n.max(1.0));
-            }
-        }
-    }
-    out
 }
 
 // ============================================================================
