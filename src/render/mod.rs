@@ -22,7 +22,7 @@ pub use black_point::{
     BlackPointConfig,
 };
 pub use output::{
-    apply_contrast_frame, apply_s_curve, downsample, finalize_for_display, frame_to_rgb8,
+    apply_contrast_frame, apply_s_curve, finalize_for_display, frame_to_rgb8,
     frame_to_rgb8_simple, frame_to_rgb8_with_contrast, ContrastConfig, OutputConfig,
 };
 pub use stretch::{

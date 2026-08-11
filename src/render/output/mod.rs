@@ -9,11 +9,9 @@ use rayon::prelude::*;
 
 mod contrast;
 mod dither;
-mod sampling;
 
 pub use contrast::{apply_contrast_frame, apply_s_curve, ContrastConfig};
 use dither::apply_ordered_dither;
-pub use sampling::downsample;
 
 /// Configuration for the final output conversion
 #[derive(Debug, Clone, Copy)]
