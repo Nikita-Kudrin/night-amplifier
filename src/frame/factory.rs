@@ -85,69 +85,7 @@ impl Frame {
         debayerer.debayer(&mono_frame)
     }
 
-    /// Creates a new RGB Frame from raw Bayer pattern data with custom debayer config
-    pub fn from_bayer_with_config(
-        raw: &[u8],
-        width: usize,
-        height: usize,
-        format: PixelFormat,
-        config: DebayerConfig,
-    ) -> Result<Self> {
-        if !format.is_bayer() {
-            return Err(StackError::InvalidConfiguration(
-                "from_bayer_with_config requires a Bayer pixel format".to_string(),
-            ));
-        }
 
-        let mono_frame = Self::from_raw(raw, width, height, 1, format)?;
-        let debayerer = Debayerer::new(config);
-        debayerer.debayer(&mono_frame)
-    }
-
-    /// Creates a new RGB Frame from raw Bayer data with automatic pattern detection
-    #[instrument(skip(raw), fields(format = ?format, resolution = %format!("{}x{}", width, height)))]
-    pub fn from_bayer_auto(
-        raw: &[u8],
-        width: usize,
-        height: usize,
-        format: PixelFormat,
-    ) -> Result<(Self, PatternDetectionResult)> {
-        if !format.is_bayer() {
-            return Err(StackError::InvalidConfiguration(
-                "from_bayer_auto requires a Bayer pixel format".to_string(),
-            ));
-        }
-
-        let mono_frame = Self::from_raw(raw, width, height, 1, format)?;
-        let detection = detect_cfa_pattern(&mono_frame)?;
-        let debayerer = Debayerer::new(DebayerConfig::new(detection.pattern));
-        let rgb_frame = debayerer.debayer(&mono_frame)?;
-
-        Ok((rgb_frame, detection))
-    }
-
-    /// Creates a new RGB Frame from raw Bayer data with auto-detection and specified algorithm
-    pub fn from_bayer_auto_with_algorithm(
-        raw: &[u8],
-        width: usize,
-        height: usize,
-        format: PixelFormat,
-        algorithm: DebayerAlgorithm,
-    ) -> Result<(Self, PatternDetectionResult)> {
-        if !format.is_bayer() {
-            return Err(StackError::InvalidConfiguration(
-                "from_bayer_auto_with_algorithm requires a Bayer pixel format".to_string(),
-            ));
-        }
-
-        let mono_frame = Self::from_raw(raw, width, height, 1, format)?;
-        let detection = detect_cfa_pattern(&mono_frame)?;
-        let config = DebayerConfig::new(detection.pattern).with_algorithm(algorithm);
-        let debayerer = Debayerer::new(config);
-        let rgb_frame = debayerer.debayer(&mono_frame)?;
-
-        Ok((rgb_frame, detection))
-    }
 
     /// Creates a new Frame filled with zeros (black frame)
     pub fn zeros(width: usize, height: usize, channels: usize) -> Result<Self> {
