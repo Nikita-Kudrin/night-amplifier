@@ -61,6 +61,7 @@ When designing new features or refactoring, adhere to the following architectura
 
 If you can't fix the test, don't try to simplify if by removing the idea of the test.
 Tests might run a minute or two - you should wait for them to finish. Benches migth run even longer.
+**Do not run benchmarks at the same time with other tests and tasks - this may affect the performance metrics.**
 
 ## Build & Test
 
