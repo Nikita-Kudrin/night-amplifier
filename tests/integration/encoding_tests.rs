@@ -582,3 +582,169 @@ fn box_downsample(frame: &Frame, target_w: usize, target_h: usize) -> Frame {
     }
     out
 }
+
+// ============================================================================
+// Fused render kernel — intermediate clamp impact
+// ============================================================================
+
+/// Quantifies what the user would actually see if the fused stretch+contrast
+/// kernel (Phase 2 of the live-view performance plan) drops the intermediate
+/// per-channel clamp between the two stages.
+///
+/// Today: `clamp(clamp(c * s_stretch) * s_contrast)`.
+/// Fused without the intermediate clamp: `clamp(c * s_stretch * s_contrast)`.
+///
+/// The two can only diverge where a channel exceeds 1.0 *between* the stages,
+/// so this reports how many pixels are affected, by how much, and in which
+/// direction — the inputs needed to decide whether the clamp is worth keeping.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
+fn probe_fused_render_clamp_difference() {
+    use night_amplifier::render::{
+        apply_contrast_frame, apply_s_curve, apply_tone_mapping, auto_stretch_frame,
+        AutoStretchConfig, ContrastConfig, StretchAggressiveness, ToneMappingAlgorithm,
+    };
+
+    const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
+    println!("\n=== Fused render kernel: dropping the intermediate clamp ===\n");
+
+    for dir in baseline_fixture_dirs() {
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let Some((_, bayer)) = load_first_fixture_frame(&dir) else {
+            continue;
+        };
+        let Ok((rgb, _)) = night_amplifier::debayer::debayer_auto(&bayer) else {
+            continue;
+        };
+
+        let stretch_config =
+            AutoStretchConfig::from_profile(false, StretchAggressiveness::High);
+        let contrast_config = ContrastConfig::default();
+
+        // Reference: exactly what RenderPipeline does today.
+        let mut reference = rgb.clone();
+        let stretch = auto_stretch_frame(&mut reference, stretch_config, None).unwrap();
+        apply_contrast_frame(&mut reference, &contrast_config).unwrap();
+
+        // Recover the exact tone curve production uses — including its own
+        // 65536-entry LUT quantisation — by running the real tone mapper over a
+        // ramp, rather than re-deriving the MTF formula here and risking drift.
+        let midtone = stretch.stretch_factor;
+        let black_point = stretch.black_point;
+        let mut ramp = Frame::from_f32_vec(
+            (0..65536).map(|i| i as f32 / 65535.0).collect(),
+            65536,
+            1,
+            1,
+        )
+        .unwrap();
+        apply_tone_mapping(&mut ramp, ToneMappingAlgorithm::Mtf, midtone).unwrap();
+        let tone_lut: Vec<f32> = ramp.data().to_vec();
+        let tone = |l: f32| tone_lut[((l.clamp(0.0, 1.0) * 65535.0) as usize).min(65535)];
+        let mut fused = rgb.clone();
+        {
+            let data = fused.data_mut();
+            for px in data.chunks_exact_mut(3) {
+                let c: [f32; 3] = [
+                    (px[0] - black_point).clamp(0.0, 1.0),
+                    (px[1] - black_point).clamp(0.0, 1.0),
+                    (px[2] - black_point).clamp(0.0, 1.0),
+                ];
+                let lum = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
+                let scale = if lum > 1e-8 {
+                    apply_s_curve(tone(lum), &contrast_config) / lum
+                } else {
+                    0.0
+                };
+                for i in 0..3 {
+                    px[i] = (c[i] * scale).clamp(0.0, 1.0);
+                }
+            }
+        }
+
+        // Compare in 8-bit, which is what the JPEG stream actually carries.
+        let a = reference.data();
+        let b = fused.data();
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 as i32;
+
+        let (mut changed_px, mut max_delta, mut sum_delta, mut changed_samples) = (0u64, 0i32, 0i64, 0u64);
+        let (mut brighter, mut darker) = (0u64, 0u64);
+        let mut delta_hist = [0u64; 5]; // 1, 2, 3-4, 5-8, >8
+        let total_px = (a.len() / 3) as u64;
+
+        for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
+            let mut px_changed = false;
+            for i in 0..3 {
+                let d = to_u8(pb[i]) - to_u8(pa[i]);
+                if d != 0 {
+                    px_changed = true;
+                    changed_samples += 1;
+                    sum_delta += d as i64;
+                    if d > 0 { brighter += 1 } else { darker += 1 }
+                    let m = d.abs();
+                    max_delta = max_delta.max(m);
+                    let bucket = match m {
+                        1 => 0,
+                        2 => 1,
+                        3..=4 => 2,
+                        5..=8 => 3,
+                        _ => 4,
+                    };
+                    delta_hist[bucket] += 1;
+                }
+            }
+            if px_changed {
+                changed_px += 1;
+            }
+        }
+
+        // How bright are the affected pixels? Report the reference luminance
+        // distribution of what changed, to confirm it is confined to highlights.
+        let mut min_lum_changed = f32::MAX;
+        for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
+            let differs = (0..3).any(|i| to_u8(pb[i]) != to_u8(pa[i]));
+            if differs {
+                let lum = LUMA[0] * pa[0] + LUMA[1] * pa[1] + LUMA[2] * pa[2];
+                min_lum_changed = min_lum_changed.min(lum);
+            }
+        }
+
+        println!("{} — {}x{}", name, rgb.width(), rgb.height());
+        println!(
+            "  midtone {:.4}  black_point {:.4}",
+            midtone, black_point
+        );
+        println!(
+            "  pixels changed: {} of {} ({:.4} %)",
+            changed_px,
+            total_px,
+            changed_px as f64 / total_px as f64 * 100.0
+        );
+        if changed_px > 0 {
+            println!(
+                "  max delta {} / 255   mean signed delta {:+.3} LSB   brighter {} / darker {}",
+                max_delta,
+                sum_delta as f64 / changed_samples as f64,
+                brighter,
+                darker
+            );
+            println!(
+                "  delta histogram (LSB):  1:{}  2:{}  3-4:{}  5-8:{}  >8:{}",
+                delta_hist[0], delta_hist[1], delta_hist[2], delta_hist[3], delta_hist[4]
+            );
+            println!(
+                "  dimmest affected pixel sits at luminance {:.3} (1.0 = clipped white)",
+                min_lum_changed
+            );
+        }
+        println!();
+    }
+
+    println!("=== Probe Complete ===\n");
+}

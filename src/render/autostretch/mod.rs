@@ -23,10 +23,11 @@ use super::black_point::{
 use super::stretch::apply_tone_mapping;
 
 /// Automatically stretch a frame to target background level
-#[tracing::instrument(skip(frame))]
+#[tracing::instrument(skip(frame, contrast_config))]
 pub fn auto_stretch_frame(
     frame: &mut Frame,
     config: AutoStretchConfig,
+    contrast_config: Option<&crate::render::output::ContrastConfig>,
 ) -> Result<AutoStretchResult> {
     let channels = frame.channels();
     if channels != 1 && channels != 3 {
@@ -49,11 +50,14 @@ pub fn auto_stretch_frame(
             calculate_black_points(frame, &stats, bp_config)?
         };
         subtract_black_point(frame, &black_points)?;
+        
+        let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+        crate::render::stretch::apply_fused_stretch_frame(frame, 0.0, config.tone_mapping, result.stretch_factor, contrast_config)?;
+    } else if channels == 3 {
+        let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+        crate::render::stretch::apply_fused_stretch_frame(frame, result.black_point, config.tone_mapping, result.stretch_factor, contrast_config)?;
     } else {
         subtract_black_point_uniform(frame, result.black_point)?;
-    }
-
-    {
         let _span = tracing::info_span!("apply_tone_mapping").entered();
         apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor)?;
     }
@@ -63,7 +67,7 @@ pub fn auto_stretch_frame(
 
 /// Automatically stretch a frame with default configuration
 pub fn auto_stretch_default(frame: &mut Frame) -> Result<AutoStretchResult> {
-    auto_stretch_frame(frame, AutoStretchConfig::default())
+    auto_stretch_frame(frame, AutoStretchConfig::default(), None)
 }
 
 #[cfg(test)]
@@ -93,7 +97,7 @@ mod tests {
 
         let mut frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
         let config = AutoStretchConfig::new().with_target_background(0.15);
-        let result = auto_stretch_frame(&mut frame, config).unwrap();
+        let result = auto_stretch_frame(&mut frame, config, None).unwrap();
 
         assert!(result.converged);
         let bg = frame.get_pixel(0, 0, 0);
@@ -116,7 +120,7 @@ mod tests {
         data[idx + 2] = 0.2;
 
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
-        auto_stretch_frame(&mut frame, AutoStretchConfig::default()).unwrap();
+        auto_stretch_frame(&mut frame, AutoStretchConfig::default(), None).unwrap();
 
         let star_r = frame.get_pixel(16, 16, 0);
         let star_g = frame.get_pixel(16, 16, 1);
@@ -129,7 +133,7 @@ mod tests {
     #[test]
     fn test_auto_stretch_frame_wrong_channels() {
         let mut frame = Frame::filled(10, 10, 2, 0.5).unwrap();
-        let result = auto_stretch_frame(&mut frame, AutoStretchConfig::default());
+        let result = auto_stretch_frame(&mut frame, AutoStretchConfig::default(), None);
         assert!(matches!(result, Err(StackError::InvalidConfiguration(_))));
     }
 

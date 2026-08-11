@@ -95,9 +95,15 @@ impl RenderPipeline {
         }
 
         // Stage 2: Auto-stretch
+        let contrast_config = if self.config.contrast && channels == 3 && !self.config.contrast_config.is_disabled() && !self.config.saturation_boost {
+            Some(&self.config.contrast_config)
+        } else {
+            None
+        };
+
         if self.config.auto_stretch {
             let _span = tracing::info_span!("auto_stretch").entered();
-            match auto_stretch_frame(frame, self.config.stretch_config) {
+            match auto_stretch_frame(frame, self.config.stretch_config, contrast_config) {
                 Ok(stretch_result) => {
                     result.stretch_result = Some(stretch_result);
                     debug!(
@@ -128,12 +134,18 @@ impl RenderPipeline {
 
         // Stage 4: Contrast adjustment (RGB only for now)
         if self.config.contrast && channels == 3 && !self.config.contrast_config.is_disabled() {
-            let _span = tracing::info_span!("contrast_adjustment").entered();
-            if let Err(e) = apply_contrast_frame(frame, &self.config.contrast_config) {
-                warn!(error = %e, "Contrast adjustment failed");
-            } else {
+            if contrast_config.is_some() && result.stretch_result.is_some() {
+                // Already fused in the stretch stage
                 result.contrast_applied = true;
-                debug!("Contrast adjustment applied");
+                debug!("Contrast adjustment applied (fused)");
+            } else {
+                let _span = tracing::info_span!("contrast_adjustment").entered();
+                if let Err(e) = apply_contrast_frame(frame, &self.config.contrast_config) {
+                    warn!(error = %e, "Contrast adjustment failed");
+                } else {
+                    result.contrast_applied = true;
+                    debug!("Contrast adjustment applied (separate pass)");
+                }
             }
         }
 

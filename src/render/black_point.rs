@@ -110,7 +110,8 @@ pub fn estimate_channel_mode(frame: &Frame, channel_index: usize) -> f32 {
 /// This prevents large nebulae from skewing the background estimate.
 ///
 /// Uses a smoothed histogram approach to find the true background peak, which is more robust against noise spikes.
-pub fn estimate_background_mode(frame: &Frame) -> f32 {
+/// Returns a tuple of (mode, histogram) so the histogram can be reused.
+pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
     let data = frame.data();
     let channels = frame.channels();
 
@@ -179,7 +180,8 @@ pub fn estimate_background_mode(frame: &Frame) -> f32 {
         }
     }
 
-    peak_bin as f32 / (NUM_BINS - 1) as f32
+    let mode = peak_bin as f32 / (NUM_BINS - 1) as f32;
+    (mode, histogram)
 }
 
 /// Calculate per-channel black points from image statistics
@@ -232,7 +234,7 @@ pub fn calculate_luminance_black_point(
     stats: &ImageStats,
     config: BlackPointConfig,
 ) -> f32 {
-    let mode = estimate_background_mode(frame);
+    let (mode, _) = estimate_background_mode(frame);
     let mean_sigma = stats.mean_sigma();
     (mode - config.sigma_factor * mean_sigma).max(0.0)
 }
@@ -278,6 +280,10 @@ pub fn subtract_black_point(frame: &mut Frame, black_points: &[f32; 3]) -> Resul
 /// * `frame` - Mutable reference to a frame (any number of channels)
 /// * `black_point` - The black point value to subtract from all pixels
 pub fn subtract_black_point_uniform(frame: &mut Frame, black_point: f32) -> Result<()> {
+    if black_point <= 0.0 {
+        return Ok(());
+    }
+
     let row_len = frame.width() * frame.channels();
     let data = frame.data_mut();
 
