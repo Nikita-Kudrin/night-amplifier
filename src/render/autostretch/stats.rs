@@ -1,4 +1,4 @@
-use crate::frame::Frame;
+
 
 /// Result of the autostretch solver
 #[derive(Debug, Clone, Copy)]
@@ -12,35 +12,17 @@ pub struct AutoStretchResult {
 }
 
 /// Estimate the fraction of pixels that likely contain signal (stars/nebulae)
-pub fn estimate_signal_fraction(frame: &Frame, background_mode: f32, sigma: f32) -> f32 {
-    let data = frame.data();
-    let channels = frame.channels();
-    let num_pixels = data.len() / channels;
-    let step = (num_pixels / 20000).max(1);
-
+pub fn estimate_signal_fraction(histogram: &[u32], background_mode: f32, sigma: f32) -> f32 {
     let threshold = background_mode + 2.0 * sigma;
+    let threshold_bin = (threshold * (histogram.len() - 1) as f32).clamp(0.0, histogram.len() as f32) as usize;
 
-    let mut signal_count = 0usize;
-    let mut total_count = 0usize;
+    let mut signal_count = 0u64;
+    let mut total_count = 0u64;
 
-    if channels == 3 {
-        for i in (0..num_pixels).step_by(step) {
-            let idx = i * 3;
-            if idx + 2 < data.len() {
-                let lum = 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2];
-                total_count += 1;
-                if lum > threshold {
-                    signal_count += 1;
-                }
-            }
-        }
-    } else {
-        for i in (0..num_pixels).step_by(step) {
-            let lum = data[i];
-            total_count += 1;
-            if lum > threshold {
-                signal_count += 1;
-            }
+    for (i, &count) in histogram.iter().enumerate() {
+        total_count += count as u64;
+        if i > threshold_bin {
+            signal_count += count as u64;
         }
     }
 

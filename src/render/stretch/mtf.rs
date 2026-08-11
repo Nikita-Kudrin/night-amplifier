@@ -43,6 +43,10 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32) -> (f3
 
 /// Apply MTF to an entire frame in-place
 pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
+    if (midtone - 0.5).abs() < 1e-6 {
+        return Ok(());
+    }
+
     let channels = frame.channels();
     if channels != 1 && channels != 3 {
         return Err(StackError::InvalidConfiguration(format!(

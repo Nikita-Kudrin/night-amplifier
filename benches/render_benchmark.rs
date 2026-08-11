@@ -53,7 +53,7 @@ fn bench_auto_stretch(c: &mut Criterion) {
     group.bench_function("auto_stretch_frame", |b| {
         b.iter(|| {
             let mut test_frame = frame.clone();
-            let _ = auto_stretch_frame(black_box(&mut test_frame), stretch_config);
+            let _ = auto_stretch_frame(black_box(&mut test_frame), stretch_config, None);
         })
     });
 

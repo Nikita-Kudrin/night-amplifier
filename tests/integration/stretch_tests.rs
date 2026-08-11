@@ -38,7 +38,7 @@ fn test_stretch_pipeline_single_image() {
     for (name, config) in presets {
         let mut test_frame = img.frame.clone();
 
-        match auto_stretch_frame(&mut test_frame, config) {
+        match auto_stretch_frame(&mut test_frame, config, None) {
             Ok(result) => {
                 println!("{} preset:", name);
                 println!("  Stretch factor: {:.2}", result.stretch_factor);

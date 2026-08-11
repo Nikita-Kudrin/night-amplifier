@@ -1,3 +1,4 @@
+use rayon::prelude::*;
 use wide::f32x4;
 
 /// SIMD-optimized min/max computation
@@ -54,46 +55,80 @@ pub(crate) fn min_max_simd(values: &[f32]) -> (f32, f32) {
 pub(crate) fn compute_mad_in_place_simd(values: &mut [f32], median: f32) {
     let len = values.len();
 
-    if len < 8 {
-        // Scalar for small arrays
-        for v in values.iter_mut() {
+    if len < 4096 {
+        // Sequential for small arrays
+        if len < 8 {
+            for v in values.iter_mut() {
+                *v = (*v - median).abs();
+            }
+            return;
+        }
+
+        let median_vec = f32x4::splat(median);
+        let chunks = len / 4;
+        for i in 0..chunks {
+            let idx = i * 4;
+            let v = f32x4::new([
+                values[idx],
+                values[idx + 1],
+                values[idx + 2],
+                values[idx + 3],
+            ]);
+            let diff = v - median_vec;
+            let abs_diff = diff.abs();
+            let result = abs_diff.to_array();
+            values[idx] = result[0];
+            values[idx + 1] = result[1];
+            values[idx + 2] = result[2];
+            values[idx + 3] = result[3];
+        }
+
+        for v in values[chunks * 4..].iter_mut() {
             *v = (*v - median).abs();
         }
         return;
     }
 
-    // Process in chunks of 4 using SIMD
-    let median_vec = f32x4::splat(median);
+    // Process in parallel chunks using SIMD
+    let chunk_size = 4096;
+    values.par_chunks_mut(chunk_size).for_each(|chunk| {
+        let chunk_len = chunk.len();
+        if chunk_len < 8 {
+            for v in chunk.iter_mut() {
+                *v = (*v - median).abs();
+            }
+            return;
+        }
 
-    // Safe SIMD processing of complete chunks
-    let chunks = len / 4;
-    for i in 0..chunks {
-        let idx = i * 4;
-        let v = f32x4::new([
-            values[idx],
-            values[idx + 1],
-            values[idx + 2],
-            values[idx + 3],
-        ]);
-        let diff = v - median_vec;
-        let abs_diff = diff.abs();
-        let result = abs_diff.to_array();
-        values[idx] = result[0];
-        values[idx + 1] = result[1];
-        values[idx + 2] = result[2];
-        values[idx + 3] = result[3];
-    }
+        let median_vec = f32x4::splat(median);
+        let chunks = chunk_len / 4;
+        for i in 0..chunks {
+            let idx = i * 4;
+            let v = f32x4::new([
+                chunk[idx],
+                chunk[idx + 1],
+                chunk[idx + 2],
+                chunk[idx + 3],
+            ]);
+            let diff = v - median_vec;
+            let abs_diff = diff.abs();
+            let result = abs_diff.to_array();
+            chunk[idx] = result[0];
+            chunk[idx + 1] = result[1];
+            chunk[idx + 2] = result[2];
+            chunk[idx + 3] = result[3];
+        }
 
-    // Handle remainder
-    for v in values[chunks * 4..].iter_mut() {
-        *v = (*v - median).abs();
-    }
+        for v in chunk[chunks * 4..].iter_mut() {
+            *v = (*v - median).abs();
+        }
+    });
 }
 
-/// Fast median computation using partial sort
+/// Fast median computation using partial sort or parallel full sort
 ///
-/// For median, we only need the middle element(s), not full sort.
-/// Uses `select_nth_unstable` which is O(n) average case vs O(n log n) for full sort.
+/// Uses `select_nth_unstable` for small arrays and Rayon's `par_sort_unstable_by` 
+/// for large arrays to utilize multiple cores.
 #[inline]
 pub fn fast_median(values: &mut [f32]) -> f32 {
     let len = values.len();
@@ -105,21 +140,27 @@ pub fn fast_median(values: &mut [f32]) -> f32 {
     }
 
     let mid = len / 2;
-
-    // Handle NaN values by treating them as large values
     let compare = |a: &f32, b: &f32| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater);
 
-    if len % 2 == 1 {
-        // Odd length: return middle element
-        values.select_nth_unstable_by(mid, compare);
-        values[mid]
+    if len < 4096 {
+        if len % 2 == 1 {
+            // Odd length: return middle element
+            values.select_nth_unstable_by(mid, compare);
+            values[mid]
+        } else {
+            // Even length: return average of two middle elements
+            values.select_nth_unstable_by(mid, compare);
+            let upper = values[mid];
+            let lower = values[..mid].iter().copied().fold(f32::MIN, f32::max);
+            (lower + upper) / 2.0
+        }
     } else {
-        // Even length: return average of two middle elements
-        values.select_nth_unstable_by(mid, compare);
-        let upper = values[mid];
-
-        let lower = values[..mid].iter().copied().fold(f32::MIN, f32::max);
-
-        (lower + upper) / 2.0
+        // Parallel full sort for large arrays
+        values.par_sort_unstable_by(compare);
+        if len % 2 == 1 {
+            values[mid]
+        } else {
+            (values[mid - 1] + values[mid]) / 2.0
+        }
     }
 }
