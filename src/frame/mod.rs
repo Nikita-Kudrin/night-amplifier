@@ -98,6 +98,95 @@ impl Frame {
     pub fn dimensions_match(&self, other: &Frame) -> bool {
         self.width == other.width && self.height == other.height && self.channels == other.channels
     }
+
+    /// Area-average downsample by a given factor
+    pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {
+        use rayon::prelude::*;
+
+        if factor == 0 {
+            return Err(crate::error::StackError::InvalidConfiguration(
+                "Downsample factor must be > 0".into(),
+            ));
+        }
+
+        if factor == 1 {
+            return Ok(self.clone());
+        }
+
+        let src_width = self.width;
+        let src_height = self.height;
+        let channels = self.channels;
+
+        let dst_width = src_width / factor;
+        let dst_height = src_height / factor;
+
+        if dst_width == 0 || dst_height == 0 {
+            return Err(crate::error::StackError::InvalidConfiguration(
+                "Downsample factor too large for image dimensions".into(),
+            ));
+        }
+
+        let inv_area = 1.0 / (factor * factor) as f32;
+        let mut output = vec![0.0f32; dst_width * dst_height * channels];
+        let src_data = self.data.as_slice();
+        let src_width = self.width;
+
+        output
+            .par_chunks_mut(dst_width * channels)
+            .enumerate()
+            .for_each(|(dst_y, row)| {
+                let src_y_start = dst_y * factor;
+                for dst_x in 0..dst_width {
+                    let src_x_start = dst_x * factor;
+                    
+                    if channels == 1 {
+                        let mut sum = 0.0f32;
+                        for sy in 0..factor {
+                            let row_start = (src_y_start + sy) * src_width;
+                            for sx in 0..factor {
+                                sum += src_data[row_start + src_x_start + sx];
+                            }
+                        }
+                        row[dst_x] = sum * inv_area;
+                    } else if channels == 3 {
+                        let mut sum_r = 0.0f32;
+                        let mut sum_g = 0.0f32;
+                        let mut sum_b = 0.0f32;
+                        for sy in 0..factor {
+                            let row_start = (src_y_start + sy) * src_width * 3;
+                            for sx in 0..factor {
+                                let pixel_start = row_start + (src_x_start + sx) * 3;
+                                sum_r += src_data[pixel_start];
+                                sum_g += src_data[pixel_start + 1];
+                                sum_b += src_data[pixel_start + 2];
+                            }
+                        }
+                        let out_idx = dst_x * 3;
+                        row[out_idx] = sum_r * inv_area;
+                        row[out_idx + 1] = sum_g * inv_area;
+                        row[out_idx + 2] = sum_b * inv_area;
+                    } else {
+                        // Fallback for other channel counts
+                        let mut sums = vec![0.0f32; channels];
+                        for sy in 0..factor {
+                            let row_start = (src_y_start + sy) * src_width * channels;
+                            for sx in 0..factor {
+                                let pixel_start = row_start + (src_x_start + sx) * channels;
+                                for c in 0..channels {
+                                    sums[c] += src_data[pixel_start + c];
+                                }
+                            }
+                        }
+                        let out_idx = dst_x * channels;
+                        for c in 0..channels {
+                            row[out_idx + c] = sums[c] * inv_area;
+                        }
+                    }
+                }
+            });
+
+        Self::from_f32_vec(output, dst_width, dst_height, channels)
+    }
 }
 
 #[cfg(test)]
