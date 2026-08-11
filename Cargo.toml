@@ -115,6 +115,14 @@ lto = true
 codegen-units = 1
 strip = true
 
+# Release codegen with symbols retained, so `perf` can attribute samples to
+# functions. `strip = true` on the release profile otherwise leaves the binary
+# with no symbol table and profiles show raw addresses.
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1
+
 [[bench]]
 name = "debayer_benchmark"
 harness = false

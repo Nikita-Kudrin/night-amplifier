@@ -85,6 +85,16 @@ impl JpegTier {
             .unwrap_or(Self::Original)
     }
 
+    /// Stable label for telemetry attributes.
+    pub const fn metric_label(self) -> &'static str {
+        match self {
+            Self::Hd1080 => "hd1080",
+            Self::Qhd1440 => "qhd1440",
+            Self::Uhd2160 => "uhd2160",
+            Self::Original => "original",
+        }
+    }
+
     /// True when encoding at this tier shrinks the frame. Tiers that do not
     /// downsample all produce the same native-resolution payload, which lets
     /// the render task encode once and share the result.

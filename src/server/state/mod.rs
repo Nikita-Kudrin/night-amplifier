@@ -256,6 +256,7 @@ impl AppState {
 
     /// Wake every stream client waiting on a new frame.
     pub fn publish_frame(&self) {
+        telemetry_metrics::record_frame_published();
         self.frame_ready.notify_waiters();
     }
 
@@ -438,6 +439,7 @@ impl AppState {
 
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
+        telemetry_metrics::record_frame_dropped();
         let count = self.dropped_frames.fetch_add(1, Ordering::SeqCst) + 1;
         let _ = self.events.send(ServerEvent::frame_dropped(count));
         count
