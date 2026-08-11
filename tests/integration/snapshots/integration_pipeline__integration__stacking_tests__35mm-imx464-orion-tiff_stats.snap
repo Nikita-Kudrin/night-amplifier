@@ -1,29 +1,30 @@
 ---
 source: tests/integration/stacking_tests.rs
+assertion_line: 251
 expression: stats
 ---
 ImageStats {
     channels: [
         ChannelStats {
-            median: 0.00575327,
-            mad: 5.7055382e-5,
-            sigma: 8.4590305e-5,
-            min: 0.004464835,
-            max: 0.9818219,
+            median: 0.005754453,
+            mad: 5.6762714e-5,
+            sigma: 8.4156396e-5,
+            min: 0.0044465805,
+            max: 0.9810068,
         },
         ChannelStats {
-            median: 0.0057674935,
-            mad: 5.8832113e-5,
-            sigma: 8.7224485e-5,
-            min: 0.004553033,
-            max: 0.98126256,
+            median: 0.005766822,
+            mad: 5.8610458e-5,
+            sigma: 8.689587e-5,
+            min: 0.004553699,
+            max: 0.98059875,
         },
         ChannelStats {
-            median: 0.005725015,
-            mad: 5.6942226e-5,
-            sigma: 8.442254e-5,
-            min: 0.004026811,
-            max: 0.9952964,
+            median: 0.005720897,
+            mad: 5.652383e-5,
+            sigma: 8.380223e-5,
+            min: 0.0040217023,
+            max: 0.99526364,
         },
     ],
     sample_count: 100000,

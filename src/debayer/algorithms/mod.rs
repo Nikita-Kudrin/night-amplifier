@@ -30,9 +30,9 @@ pub(crate) fn interpolate_red_at_green(
     red_horizontal: bool,
 ) -> f32 {
     if red_horizontal {
-        (get_raw(data, width, height, xi - 1, yi) + get_raw(data, width, height, xi + 1, yi)) / 2.0
+        (get_raw(data, width, height, xi - 1, yi) + get_raw(data, width, height, xi + 1, yi)) * 0.5
     } else {
-        (get_raw(data, width, height, xi, yi - 1) + get_raw(data, width, height, xi, yi + 1)) / 2.0
+        (get_raw(data, width, height, xi, yi - 1) + get_raw(data, width, height, xi, yi + 1)) * 0.5
     }
 }
 
@@ -47,9 +47,9 @@ pub(crate) fn interpolate_blue_at_green(
     blue_horizontal: bool,
 ) -> f32 {
     if blue_horizontal {
-        (get_raw(data, width, height, xi - 1, yi) + get_raw(data, width, height, xi + 1, yi)) / 2.0
+        (get_raw(data, width, height, xi - 1, yi) + get_raw(data, width, height, xi + 1, yi)) * 0.5
     } else {
-        (get_raw(data, width, height, xi, yi - 1) + get_raw(data, width, height, xi, yi + 1)) / 2.0
+        (get_raw(data, width, height, xi, yi - 1) + get_raw(data, width, height, xi, yi + 1)) * 0.5
     }
 }
 
@@ -66,7 +66,7 @@ pub(crate) fn interpolate_green_cardinal(
         + get_raw(data, width, height, xi + 1, yi)
         + get_raw(data, width, height, xi, yi - 1)
         + get_raw(data, width, height, xi, yi + 1))
-        / 4.0
+        * 0.25
 }
 
 /// Interpolate a channel from 4 diagonal neighbors
@@ -82,50 +82,27 @@ pub(crate) fn interpolate_diagonal(
         + get_raw(data, width, height, xi + 1, yi - 1)
         + get_raw(data, width, height, xi - 1, yi + 1)
         + get_raw(data, width, height, xi + 1, yi + 1))
-        / 4.0
+        * 0.25
 }
 
 /// Determine R/B horizontal orientation at a green pixel for a given pattern
 #[inline]
-pub(crate) fn get_rb_orientation(pattern: CfaPattern, x: usize, y: usize) -> (bool, bool) {
-    let x_odd = x & 1;
+pub(crate) fn get_rb_orientation(pattern: CfaPattern, _x: usize, y: usize) -> (bool, bool) {
     let y_odd = y & 1;
 
     match pattern {
-        CfaPattern::Rggb => {
+        CfaPattern::Rggb | CfaPattern::Grbg => {
             if y_odd == 0 {
-                (true, false) // R horizontal, B vertical
+                (true, false) // R is horizontal, B is vertical
             } else {
-                (false, true) // R vertical, B horizontal
+                (false, true) // B is horizontal, R is vertical
             }
         }
-        CfaPattern::Bggr => {
+        CfaPattern::Bggr | CfaPattern::Gbrg => {
             if y_odd == 0 {
-                (false, true) // B horizontal, R vertical
+                (false, true) // B is horizontal, R is vertical
             } else {
-                (true, false) // R horizontal, B vertical
-            }
-        }
-        CfaPattern::Grbg => {
-            if x_odd == 0 {
-                if y_odd == 0 {
-                    (true, false) // G in R row
-                } else {
-                    (false, true) // G in B row
-                }
-            } else {
-                (false, false) // This is R or B position, not G
-            }
-        }
-        CfaPattern::Gbrg => {
-            if x_odd == 0 {
-                if y_odd == 0 {
-                    (false, true) // G in B row
-                } else {
-                    (true, false) // G in R row
-                }
-            } else {
-                (false, false) // This is R or B position, not G
+                (true, false) // R is horizontal, B is vertical
             }
         }
     }

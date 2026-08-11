@@ -274,7 +274,7 @@ impl TriangleMatcher {
         tgt_count: usize,
     ) -> Vec<(usize, usize)> {
         let mut vote_list: Vec<_> = votes.into_iter().collect();
-        vote_list.sort_by(|a, b| b.1.cmp(&a.1));
+        vote_list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
         let mut ref_used = vec![false; ref_count];
         let mut tgt_used = vec![false; tgt_count];
