@@ -37,6 +37,7 @@ use super::state::{AppState, CaptureState, StackingType};
 
 use crate::frame::Frame;
 use crate::stacking::CometContext;
+use crate::telemetry::metrics as telemetry_metrics;
 pub use context::{PlanetaryStackingContext, StackingContext};
 
 use channel::{max_queue_capacity, CapturedFrame, StackedFrame};
@@ -375,6 +376,7 @@ fn run_capture_task(
                 bin = capture_config.bin,
             )
             .entered();
+            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Capture);
             camera.capture(&capture_config)
         };
         let frame = match capture_result {

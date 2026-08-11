@@ -5,6 +5,7 @@ use tracing::{debug, info};
 use crate::frame::Frame;
 use crate::server::state::{AppState, StackingType};
 use crate::stacking::CometContext;
+use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, StackedFrame};
 use super::context::{PlanetaryStackingContext, StackingContext};
@@ -48,6 +49,7 @@ pub fn run_stacking_task(
             stacking_enabled,
         )
         .entered();
+        let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Stack);
         let stacking_type_changed = settings.stacking_type != last_stacking_type;
 
         if (stacking_enabled && !was_stacking_enabled)
@@ -110,7 +112,7 @@ pub fn run_stacking_task(
                 )),
             };
             registration_succeeded = matched;
-            res_frame
+            Arc::new(res_frame)
         } else {
             debug!(
                 stacking = settings.stacking,
@@ -119,13 +121,13 @@ pub fn run_stacking_task(
                 "Stacking disabled or failed, using raw frame"
             );
             registration_succeeded = false;
-            frame.as_ref().clone()
+            Arc::clone(&frame)
         };
 
         // Fallback to raw frame for live view when registration fails
         if stacking_enabled && !registration_succeeded {
             debug!("Registration failed, falling back to raw frame for live view");
-            display_frame = frame.as_ref().clone();
+            display_frame = Arc::clone(&frame);
         }
 
         // Wanderer mode: reset stack if movement detected
@@ -135,7 +137,7 @@ pub fn run_stacking_task(
             comet_ctx = None;
             planetary_ctx = None;
             rt.block_on(state.reset_counters());
-            display_frame = frame.as_ref().clone();
+            display_frame = Arc::clone(&frame);
         }
 
         // Track whether this frame was successfully stacked
@@ -158,17 +160,29 @@ pub fn run_stacking_task(
             false
         };
 
-        // Trigger plate solving asynchronously
-        rt.spawn({
-            let state = Arc::clone(&state);
-            let solve_frame = display_frame.clone();
-            async move {
-                solving::try_plate_solve(&state, &solve_frame).await;
-            }
-        });
+        // Trigger plate solving asynchronously. Gated up front: without the
+        // Push-To plugin the solve is a no-op, and spawning it would keep a
+        // second handle on the frame alive long enough to make the render
+        // task's `Arc::try_unwrap` fail and copy instead.
+        if solving::plate_solve_available(&state) {
+            rt.spawn({
+                let state = Arc::clone(&state);
+                let solve_frame = Arc::clone(&display_frame);
+                async move {
+                    solving::try_plate_solve(&state, solve_frame).await;
+                }
+            });
+        }
 
         // Update frame counters
         rt.block_on(state.frame_captured(was_stacked));
+
+        // Release our handle on the captured frame before handing the display
+        // frame downstream. On the raw-fallback paths the two are the same
+        // allocation, and holding this binding until the end of the iteration
+        // would leave the render task looking at a shared `Arc` — making it
+        // copy the very frame this indirection exists to avoid.
+        drop(frame);
 
         // Send to render channel (non-blocking — skip if render is busy)
         let render_msg = StackedFrame {

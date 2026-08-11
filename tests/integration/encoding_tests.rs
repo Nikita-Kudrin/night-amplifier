@@ -423,3 +423,162 @@ fn probe_jpeg_encoding_candidates() {
     println!("JPEG = single-threaded `image` crate encoder (pure Rust); libjpeg-turbo would be faster.");
     println!("=== Probe Complete ===\n");
 }
+
+// ============================================================================
+// Render-task stage breakdown
+// ============================================================================
+
+/// Times each stage the render task runs per frame, to locate the live-view FPS
+/// ceiling once bandwidth is no longer the constraint (e.g. ethernet).
+///
+/// Mirrors production live view: debayered 3-channel frame → `process_preview_frame`
+/// (autostretch + contrast, background subtraction off) → per-tier JPEG encode.
+/// Also times the pipeline on a pre-downsampled frame to size up how much of the
+/// stretch cost is spent on pixels no client ever sees.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
+fn probe_render_task_stage_breakdown() {
+    use night_amplifier::render::{AutoStretchConfig, StretchAggressiveness};
+    use night_amplifier::server::encode_rgb8_jpeg_bounded;
+
+    println!("\n=== Render Task Stage Breakdown (live view, per frame) ===\n");
+
+    // Live-view UI settings: Auto Stretch High, background subtraction off.
+    let live_config = || {
+        RenderPipelineConfig::new()
+            .with_background_subtraction(false)
+            .with_stretch_config(AutoStretchConfig::from_profile(
+                false,
+                StretchAggressiveness::High,
+            ))
+            .with_auto_stretch(true)
+            .with_contrast(true)
+    };
+
+    let time_ms = |mut f: Box<dyn FnMut()>| {
+        f();
+        let start = Instant::now();
+        for _ in 0..ENCODE_TIMING_ITERATIONS {
+            f();
+        }
+        start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64
+    };
+
+    for dir in baseline_fixture_dirs() {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let Some((_, bayer)) = load_first_fixture_frame(&dir) else {
+            continue;
+        };
+        let Ok((rgb, _)) = night_amplifier::debayer::debayer_auto(&bayer) else {
+            println!("{}: debayer failed, skipping", name);
+            continue;
+        };
+
+        println!("{} — {}x{} x{} ch", name, rgb.width(), rgb.height(), rgb.channels());
+
+        let render_ms = time_ms(Box::new({
+            let rgb = rgb.clone();
+            move || {
+                let mut preview = rgb.clone();
+                RenderPipeline::new(live_config()).process(&mut preview).unwrap();
+            }
+        }));
+        let clone_ms = time_ms(Box::new({
+            let rgb = rgb.clone();
+            move || {
+                let _ = rgb.clone();
+            }
+        }));
+
+        // Rendered frame is what the JPEG tiers actually encode.
+        let mut rendered = rgb.clone();
+        RenderPipeline::new(live_config()).process(&mut rendered).unwrap();
+
+        println!(
+            "  preview render (autostretch+contrast) {:>8.1} ms   (frame clone alone {:.1} ms)",
+            render_ms - clone_ms,
+            clone_ms
+        );
+
+        for (label, (bw, bh)) in [
+            ("Hd1080  (S22)", (1920u32, 1080u32)),
+            ("Qhd1440", (2560, 1440)),
+            ("Uhd2160 (native here)", (3840, 2160)),
+        ] {
+            let payload = encode_rgb8_jpeg_bounded(&rendered, bw, bh).unwrap();
+            let w = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+            let h = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+            let ms = time_ms(Box::new({
+                let rendered = rendered.clone();
+                move || {
+                    let _ = encode_rgb8_jpeg_bounded(&rendered, bw, bh).unwrap();
+                }
+            }));
+            let mbits = payload.len() as f64 * 8.0 / 1e6;
+            println!(
+                "  tier {:<22} {:>4}x{:<4} {:>7.1} ms  {:>6.2} MB   link-bound {:>5.1} fps @ {} Mb/s",
+                label,
+                w,
+                h,
+                ms,
+                payload.len() as f64 / 1e6,
+                BASELINE_NETWORK_MBPS / mbits,
+                BASELINE_NETWORK_MBPS as u32
+            );
+        }
+
+        // What if the stretch ran on 1080p pixels instead of full sensor pixels?
+        let small = {
+            let payload = encode_rgb8_jpeg_bounded(&rgb, 1920, 1080).unwrap();
+            let w = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+            let h = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
+            (w, h)
+        };
+        let downsampled = box_downsample(&rgb, small.0, small.1);
+        let small_render_ms = time_ms(Box::new({
+            let downsampled = downsampled.clone();
+            move || {
+                let mut preview = downsampled.clone();
+                RenderPipeline::new(live_config()).process(&mut preview).unwrap();
+            }
+        }));
+        println!(
+            "  preview render at {}x{} instead      {:>8.1} ms   ({:.1}x cheaper)\n",
+            small.0,
+            small.1,
+            small_render_ms,
+            (render_ms - clone_ms) / small_render_ms.max(0.001)
+        );
+    }
+
+    println!("=== Breakdown Complete ===\n");
+}
+
+/// Area-average downsample, mirroring `frame_to_rgb8`'s box filter.
+fn box_downsample(frame: &Frame, target_w: usize, target_h: usize) -> Frame {
+    let channels = frame.channels();
+    let mut out = Frame::zeros(target_w, target_h, channels).unwrap();
+    let x_scale = frame.width() as f32 / target_w as f32;
+    let y_scale = frame.height() as f32 / target_h as f32;
+    for y in 0..target_h {
+        let sy0 = (y as f32 * y_scale) as usize;
+        let sy1 = (((y + 1) as f32 * y_scale) as usize).min(frame.height());
+        for x in 0..target_w {
+            let sx0 = (x as f32 * x_scale) as usize;
+            let sx1 = (((x + 1) as f32 * x_scale) as usize).min(frame.width());
+            for c in 0..channels {
+                let mut sum = 0.0f32;
+                let mut n = 0.0f32;
+                for sy in sy0..sy1.max(sy0 + 1) {
+                    for sx in sx0..sx1.max(sx0 + 1) {
+                        sum += frame.get_pixel(sx, sy, c);
+                        n += 1.0;
+                    }
+                }
+                out.set_pixel(x, y, c, sum / n.max(1.0));
+            }
+        }
+    }
+    out
+}

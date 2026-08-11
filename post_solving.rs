@@ -12,23 +12,8 @@ use crate::server::state::AppState;
 /// edition, or Pro with no target set — costs an atomic load instead of a
 /// full-frame copy. Only covers the checks that are cheap and synchronous; the
 /// rest still happen inside [`try_plate_solve`].
-pub fn plate_solve_available(state: &Arc<AppState>) -> bool {
-    if crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_none() {
-        return false;
-    }
-
-    // Check local state via try_read to avoid blocking the stacking pipeline.
-    // If we have no target or are already solving, we can safely skip spawning
-    // the heavy tokio task and save the 50MB frame clone.
-    if let Ok(guard) = state.push_to.try_read() {
-        if let Some(ref pt) = *guard {
-            if pt.solving_in_progress || !pt.has_target {
-                return false;
-            }
-        }
-    }
-
-    true
+pub fn plate_solve_available() -> bool {
+    crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_some()
 }
 
 /// Try to plate solve if a target is set and solver is ready
