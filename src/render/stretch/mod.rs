@@ -48,6 +48,106 @@ pub fn apply_tone_mapping(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LutCacheKey {
+    algorithm: ToneMappingAlgorithm,
+    black_point: i32,
+    strength: i32,
+    contrast_strength: i32,
+    contrast_midpoint: i32,
+}
+
+impl LutCacheKey {
+    fn new(
+        algorithm: ToneMappingAlgorithm,
+        black_point: f32,
+        strength: f32,
+        contrast: Option<&crate::render::output::ContrastConfig>,
+    ) -> Self {
+        // Quantize parameters to avoid recalculating on tiny float jitter
+        // 10000.0 gives 4 decimals of precision, which is plenty for these params
+        let quantize = |v: f32| (v * 10000.0).round() as i32;
+        let (cs, cm) = match contrast {
+            Some(c) => (quantize(c.strength), quantize(c.midpoint)),
+            None => (0, 0),
+        };
+        Self {
+            algorithm,
+            black_point: quantize(black_point),
+            strength: quantize(strength),
+            contrast_strength: cs,
+            contrast_midpoint: cm,
+        }
+    }
+}
+
+struct LutCache {
+    key: Option<LutCacheKey>,
+    lut: std::sync::Arc<Vec<f32>>,
+}
+
+fn get_lut_cache() -> &'static std::sync::Mutex<LutCache> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<LutCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::sync::Mutex::new(LutCache {
+            key: None,
+            lut: std::sync::Arc::new(vec![0.0f32; 8192]),
+        })
+    })
+}
+
+/// Fused stretch and contrast function
+///
+/// Builds a LUT combining tone mapping and contrast curve, and applies it in a single pass.
+pub fn apply_fused_stretch_frame(
+    frame: &mut Frame,
+    black_point: f32,
+    algorithm: ToneMappingAlgorithm,
+    strength: f32,
+    contrast: Option<&crate::render::output::ContrastConfig>,
+) -> Result<()> {
+    if frame.channels() != 3 {
+        return Err(crate::error::StackError::InvalidConfiguration(
+            "Fused stretch requires 3 channels".into(),
+        ));
+    }
+
+    const LUT_SIZE: usize = 8192;
+    let cache_key = LutCacheKey::new(algorithm, black_point, strength, contrast);
+
+    let scale_lut = {
+        let mut cache = get_lut_cache().lock().unwrap();
+        if cache.key != Some(cache_key) {
+            let mut new_lut = vec![0.0f32; LUT_SIZE];
+            new_lut[0] = 0.0;
+            
+            for i in 1..LUT_SIZE {
+                let l_in = i as f32 / (LUT_SIZE - 1) as f32;
+                
+                let mut l_stretched = match algorithm {
+                    ToneMappingAlgorithm::Asinh => asinh::asinh_stretch(l_in, strength),
+                    ToneMappingAlgorithm::Mtf => mtf::mtf(l_in, strength),
+                };
+                
+                if let Some(config) = contrast {
+                    l_stretched = crate::render::output::apply_s_curve(l_stretched, config);
+                }
+                
+                new_lut[i] = l_stretched / l_in;
+            }
+            
+            cache.lut = std::sync::Arc::new(new_lut);
+            cache.key = Some(cache_key);
+        }
+        std::sync::Arc::clone(&cache.lut)
+    };
+
+    let data = frame.data_mut();
+    crate::render::simd::apply_luminance_scale_lut_simd(data, black_point, &scale_lut);
+    
+    Ok(())
+}
+
 /// Estimate the strength parameter to achieve target background brightness
 ///
 /// # Arguments

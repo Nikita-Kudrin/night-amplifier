@@ -85,19 +85,11 @@ pub fn compute_luminance_stats(data: &[f32]) -> Result<ChannelStats> {
     let mut samples = if step == 1 {
         data.to_vec()
     } else {
-        // Batch sampling for better cache efficiency
-        let estimated_size = data.len() / step + 1;
-        let mut samples = Vec::with_capacity(estimated_size);
-
-        // Collect samples in batches
-        let batch_size = 256;
-        let indices: Vec<usize> = (0..data.len()).step_by(step).collect();
-
-        for batch in indices.chunks(batch_size) {
-            for &idx in batch {
-                samples.push(data[idx]);
-            }
-        }
+        let samples: Vec<f32> = (0..data.len())
+            .into_par_iter()
+            .step_by(step)
+            .map(|i| data[i])
+            .collect();
         samples
     };
 

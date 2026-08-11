@@ -200,6 +200,108 @@ pub fn subtract_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
     }
 }
 
+/// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
+///
+/// Fuses black point subtraction, luminance calculation, and tone mapping/contrast scaling
+/// into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a scale factor.
+#[inline]
+pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
+    let len = data.len();
+    if len < 12 {
+        apply_luminance_scale_lut_scalar(data, black_point, scale_lut);
+        return;
+    }
+
+    let wr = f32x4::splat(0.2126);
+    let wg = f32x4::splat(0.7152);
+    let wb = f32x4::splat(0.0722);
+    let zero = f32x4::ZERO;
+    let bp = f32x4::splat(black_point);
+    let one = f32x4::ONE;
+
+    let lut_len = scale_lut.len();
+    let lut_max = (lut_len - 1) as f32;
+
+    let num_pixels = len / 3;
+    let chunks = num_pixels / 4;
+
+    for i in 0..chunks {
+        let base = i * 12;
+
+        let r = f32x4::new([data[base], data[base + 3], data[base + 6], data[base + 9]]);
+        let g = f32x4::new([
+            data[base + 1],
+            data[base + 4],
+            data[base + 7],
+            data[base + 10],
+        ]);
+        let b = f32x4::new([
+            data[base + 2],
+            data[base + 5],
+            data[base + 8],
+            data[base + 11],
+        ]);
+
+        let r_sub = (r - bp).max(zero);
+        let g_sub = (g - bp).max(zero);
+        let b_sub = (b - bp).max(zero);
+
+        let lum = wr * r_sub + wg * g_sub + wb * b_sub;
+        let lum_arr = lum.to_array();
+
+        // 4 scalar LUT lookups
+        let mut scale_arr = [0.0f32; 4];
+        for j in 0..4 {
+            let idx = (lum_arr[j] * lut_max) as usize;
+            scale_arr[j] = scale_lut[idx.min(lut_len - 1)];
+        }
+        let scale = f32x4::new(scale_arr);
+
+        let r_out = (r_sub * scale).min(one);
+        let g_out = (g_sub * scale).min(one);
+        let b_out = (b_sub * scale).min(one);
+
+        let r_arr = r_out.to_array();
+        let g_arr = g_out.to_array();
+        let b_arr = b_out.to_array();
+
+        data[base] = r_arr[0];
+        data[base + 1] = g_arr[0];
+        data[base + 2] = b_arr[0];
+        data[base + 3] = r_arr[1];
+        data[base + 4] = g_arr[1];
+        data[base + 5] = b_arr[1];
+        data[base + 6] = r_arr[2];
+        data[base + 7] = g_arr[2];
+        data[base + 8] = b_arr[2];
+        data[base + 9] = r_arr[3];
+        data[base + 10] = g_arr[3];
+        data[base + 11] = b_arr[3];
+    }
+
+    apply_luminance_scale_lut_scalar(&mut data[chunks * 12..], black_point, scale_lut);
+}
+
+#[inline]
+fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
+    let lut_len = scale_lut.len();
+    let lut_max = (lut_len - 1) as f32;
+
+    for pixel in data.chunks_exact_mut(3) {
+        let r = (pixel[0] - black_point).max(0.0);
+        let g = (pixel[1] - black_point).max(0.0);
+        let b = (pixel[2] - black_point).max(0.0);
+
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let idx = (luminance * lut_max) as usize;
+        let scale = scale_lut[idx.min(lut_len - 1)];
+
+        pixel[0] = (r * scale).min(1.0);
+        pixel[1] = (g * scale).min(1.0);
+        pixel[2] = (b * scale).min(1.0);
+    }
+}
+
 /// SIMD-optimized luminance-preserving transform for RGB pixel data.
 ///
 /// Applies a scalar transform function to the luminance of each pixel,
@@ -404,5 +506,36 @@ mod tests {
         let new_rb = data[0] / data[2];
         assert!((orig_rg - new_rg).abs() < 1e-4);
         assert!((orig_rb - new_rb).abs() < 1e-4);
+    }
+    #[test]
+    fn test_luminance_scale_lut_simd() {
+        let mut data = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9, 0.7, 0.2, 0.3, 0.4, 0.05, 0.05, 0.05];
+        let original = data.clone();
+        
+        let black_point = 0.1;
+        let mut scale_lut = vec![2.0; 8192];
+        scale_lut[0] = 0.0;
+        
+        apply_luminance_scale_lut_simd(&mut data, black_point, &scale_lut);
+        
+        // Pixel 1: [0.1, 0.2, 0.3] -> sub bp -> [0.0, 0.1, 0.2]. Lum > 0 so scale = 2.0. Out = [0.0, 0.2, 0.4]
+        assert!((data[0] - 0.0).abs() < 1e-5);
+        assert!((data[1] - 0.2).abs() < 1e-5);
+        assert!((data[2] - 0.4).abs() < 1e-5);
+        
+        // Pixel 2: [0.4, 0.5, 0.6] -> sub bp -> [0.3, 0.4, 0.5]. Scale = 2.0. Out = [0.6, 0.8, 1.0]
+        assert!((data[3] - 0.6).abs() < 1e-5);
+        assert!((data[4] - 0.8).abs() < 1e-5);
+        assert!((data[5] - 1.0).abs() < 1e-5);
+        
+        // Pixel 3: [0.8, 0.9, 0.7] -> sub bp -> [0.7, 0.8, 0.6]. Scale = 2.0. Out = min([1.4, 1.6, 1.2], 1.0) = [1.0, 1.0, 1.0]
+        assert!((data[6] - 1.0).abs() < 1e-5);
+        assert!((data[7] - 1.0).abs() < 1e-5);
+        assert!((data[8] - 1.0).abs() < 1e-5);
+        
+        // Pixel 5: [0.05, 0.05, 0.05] -> sub bp -> [0.0, 0.0, 0.0]. Scale = 0.0. Out = [0.0, 0.0, 0.0]
+        assert!((data[12] - 0.0).abs() < 1e-5);
+        assert!((data[13] - 0.0).abs() < 1e-5);
+        assert!((data[14] - 0.0).abs() < 1e-5);
     }
 }
