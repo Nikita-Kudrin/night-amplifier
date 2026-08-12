@@ -73,6 +73,7 @@ cargo test                                                          # fast unit 
 # These are ignored by default and must be run explicitly:
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
 cargo bench --bench <name>                                          # benchmarks — keep each bench binary ≤ ~30 s on CI; use `sample_size(10)`, short warm-up (~500 ms), and 1–2 s `measurement_time` (see `benches/background_benchmark.rs`).
+cargo bench --bench <name> -- --noplot                              # ~4x faster wall clock: without gnuplot installed, criterion's plotters fallback dominates the run (debayer_benchmark: 95 s -> 22 s) while the measurements are identical. Prefer this unless you want the HTML report.
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 
@@ -259,6 +260,16 @@ Converts mono Bayer pattern (CFA) data into full RGB color.
 - Auto-detects patterns (RGGB, BGGR, GRBG, GBRG).
 - Bilinear Algorithm: Fast interpolation for live preview or less critical data.
 - VNG (Variable Number of Gradients): High-quality interpolation avoiding color artifacts on edge transitions.
+
+Non-obvious invariant, and the source of a fixed GRBG colour bug: at a green pixel, whether red is
+interpolated horizontally or vertically depends on the **row only, never the column**. A green pixel
+sits either in a red-and-green row or in a blue-and-green row, and its horizontal neighbours are
+whichever colour the row carries. That is why `get_rb_orientation` keys on `y & 1` alone and why RGGB
+and GRBG share an arm (as do BGGR and GBRG) despite their green pixels sitting at opposite column
+parities. Keying it on `x` too used to send GRBG's odd-row greens down a "not a green position" path
+that filled blue from the two *red* neighbours above and below — a quarter of every GRBG frame.
+`test_debayer_reproduces_constant_colour_planes` pins this against ground truth for all four
+patterns; keep it passing rather than adjusting it.
 
 ### Phase 3: Star Detection & Centroiding
 
