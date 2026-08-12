@@ -25,18 +25,24 @@ fn generate_bayer_frame(width: usize, height: usize) -> Frame {
     Frame::from_f32_vec(data, width, height, 1).expect("Failed to create frame")
 }
 
+/// `2712x1538` is the IMX464, the sensor the live-view work is tuned against — non-square, odd
+/// height, and the geometry whose rayon task count the chunk granularity actually has to serve.
+/// Squares alone hid a 10 % granularity loss.
+const BILINEAR_SIZES: [(usize, usize); 3] = [(1024, 1024), (2048, 2048), (2712, 1538)];
+
 fn debayer_bilinear_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_bilinear");
     group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(1));
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
 
-    for size in [1024, 2048].iter() {
-        let frame = generate_bayer_frame(*size, *size);
+    for (width, height) in BILINEAR_SIZES.iter() {
+        let frame = generate_bayer_frame(*width, *height);
         let config =
             DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Bilinear);
 
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}", size, size)),
+            BenchmarkId::from_parameter(format!("{}x{}", width, height)),
             &frame,
             |b, frame| {
                 b.iter(|| {
@@ -47,13 +53,29 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
         );
     }
 
+    // GRBG puts green at both column parities and interpolates red and blue on the opposite axes
+    // from RGGB, so it exercises the other half of the per-row layout.
+    let frame = generate_bayer_frame(2712, 1538);
+    let config = DebayerConfig::new(CfaPattern::Grbg).with_algorithm(DebayerAlgorithm::Bilinear);
+    group.bench_with_input(
+        BenchmarkId::from_parameter("2712x1538_grbg"),
+        &frame,
+        |b, frame| {
+            b.iter(|| {
+                night_amplifier::debayer_with_config(black_box(frame), config.clone())
+                    .expect("Debayer failed")
+            })
+        },
+    );
+
     group.finish();
 }
 
 fn debayer_vng_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_vng");
     group.sample_size(20);
-    group.warm_up_time(Duration::from_secs(1));
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
 
     for size in [1024, 2048].iter() {
         let frame = generate_bayer_frame(*size, *size);
