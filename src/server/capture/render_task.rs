@@ -40,7 +40,7 @@ pub fn run_render_task(
         telemetry_metrics::record_frames_skipped_to_latest(skipped);
 
         let StackedFrame {
-            display_frame,
+            mut display_frame,
             was_stacked,
             frame_number,
             settings,
@@ -49,20 +49,26 @@ pub fn run_render_task(
         let _iter_span =
             tracing::info_span!("render_iteration", frame_number, was_stacked,).entered();
 
-        // The preview pipeline mutates in place. Reclaim the allocation when we
-        // hold the only handle — the usual case, since the capture thread has
-        // moved on and plate solving is only spawned when it can actually run.
-        // A live second holder (raw-frame disk saving, an in-flight solve)
-        // forces the copy we would otherwise have paid unconditionally.
-        let mut display_frame = Arc::try_unwrap(display_frame).unwrap_or_else(|shared| {
+        // The preview pipeline mutates in place. `make_mut` hands back the
+        // buffer untouched when we hold the only handle — the usual case, since
+        // the capture thread has moved on and plate solving is only spawned when
+        // it can actually run. A live second holder (raw-frame disk saving, an
+        // in-flight solve) forces the copy we would otherwise have paid
+        // unconditionally. Staying inside the `Arc` also means the rendered
+        // frame reaches `latest_raw_frame` without being re-wrapped.
+        //
+        // The log predicts `make_mut`'s decision rather than observing it, so a
+        // holder that drops in between turns it into a false positive. That is
+        // the harmless direction: no handle can be *acquired* once the frame is
+        // here, so silence still proves the frame was not copied.
+        if Arc::get_mut(&mut display_frame).is_none() {
             debug!("Preview frame still shared, copying before render");
-            (*shared).clone()
-        });
+        }
 
         // Process frame through unified render pipeline
         let render_result = {
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Render);
-            pipeline::process_preview_frame(&mut display_frame, &settings)
+            pipeline::process_preview_frame(Arc::make_mut(&mut display_frame), &settings)
         };
         if let Err(e) = render_result {
             state.send_error(format!("Preview processing failed: {}", e));
@@ -72,7 +78,7 @@ pub fn run_render_task(
         // Use max parallel chunks for live view, single chunk during stacking
         let chunk_count = if was_stacked { 1 } else { max_chunks };
 
-        let raw_frame = Arc::new(display_frame);
+        let raw_frame = display_frame;
         rt.block_on(state.set_latest_raw_frame(Arc::clone(&raw_frame)));
 
         // Claim the counter before encoding so every payload below is filed
