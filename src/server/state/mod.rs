@@ -437,6 +437,17 @@ impl AppState {
             .unwrap_or(CameraPhase::Disconnected)
     }
 
+    /// Update the cached "plugin holds a target" flag. No-op without Push-To.
+    ///
+    /// A cache, not the source of truth — see [`PushToState`]. Written by the
+    /// target mutations in `PushToService` and re-synced from `try_plate_solve`,
+    /// so that the stacking thread can gate plate solving synchronously.
+    pub async fn set_push_to_has_target(&self, has_target: bool) {
+        if let Some(ref mut pt) = *self.push_to.write().await {
+            pt.has_target = has_target;
+        }
+    }
+
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
         telemetry_metrics::record_frame_dropped();

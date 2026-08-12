@@ -224,17 +224,11 @@ impl SimulatedCamera {
         // Slide: drop any frames before current_index. Serving a frame already
         // removes it from the front, so this usually has nothing to do — it
         // only bites when the caller jumps `current_index` forward by hand.
-        // If they jumped backwards or completely outside the cache window,
-        // we must invalidate the cache completely.
-        if needed_start < self.cache_start || needed_start >= self.cache_start + self.cache.len() {
-            self.cache.clear();
+        // Jumps backwards, or clean outside the window, took the reset above.
+        let drop_count = needed_start - self.cache_start;
+        if drop_count > 0 {
+            self.cache.drain(..drop_count);
             self.cache_start = needed_start;
-        } else {
-            let drop_count = needed_start - self.cache_start;
-            if drop_count > 0 {
-                self.cache.drain(..drop_count);
-                self.cache_start = needed_start;
-            }
         }
 
         // Top the window back up. Outside the `drop_count` branch, because the
@@ -270,6 +264,11 @@ impl SimulatedCamera {
     /// sliding window would evict this entry on the next call anyway, and a
     /// full-resolution frame is tens of megabytes — enough that cloning it once
     /// per capture measurably cuts into live-view throughput.
+    ///
+    /// The single-file directory is the one exception. There the window can only
+    /// ever hold that one image, so moving it out empties the cache and forces a
+    /// decode (file read + debayer) on the next capture — strictly worse than the
+    /// copy it saves. Clone the cached entry instead and leave the window intact.
     fn load_current_frame(&mut self, lookahead: usize) -> CameraResult<Frame> {
         if self.files.is_empty() {
             return Err(CameraError::ImageReadFailed(
@@ -279,7 +278,12 @@ impl SimulatedCamera {
 
         self.fill_cache(lookahead)?;
 
-        let frame = self.cache.pop_front().ok_or_else(|| {
+        let frame = if self.files.len() == 1 {
+            self.cache.front().cloned()
+        } else {
+            self.cache.pop_front()
+        };
+        let frame = frame.ok_or_else(|| {
             CameraError::ImageReadFailed("Frame cache empty after fill".to_string())
         })?;
 
@@ -455,24 +459,29 @@ mod tests {
     use std::io::Write;
     use tempfile::tempdir;
 
+    /// Minimal valid 1x1 PNG.
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xdc, 0x44, 0x74, 0x8e, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// Populate a directory with `count` decodable frames.
+    fn write_frames(dir: &std::path::Path, count: usize) {
+        for i in 0..count {
+            std::fs::File::create(dir.join(format!("frame_{:03}.png", i)))
+                .unwrap()
+                .write_all(PNG_1X1)
+                .unwrap();
+        }
+    }
+
     #[test]
     fn test_simulated_camera_preloading() {
         let dir = tempdir().unwrap();
-
-        // Minimal valid 1x1 PNG data
-        let png_data = [
-            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
-            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
-            0xd7, 0x63, 0xf8, 0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xdc, 0x44, 0x74,
-            0x8e, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-        ];
-
-        for i in 0..10 {
-            let file_path = dir.path().join(format!("frame_{:03}.png", i));
-            let mut file = std::fs::File::create(file_path).unwrap();
-            file.write_all(&png_data).unwrap();
-        }
+        write_frames(dir.path(), 10);
 
         let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
 
@@ -510,20 +519,7 @@ mod tests {
     #[test]
     fn test_simulated_camera_moves_frame_out_of_cache() {
         let dir = tempdir().unwrap();
-        let png_data = [
-            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
-            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-            0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08,
-            0xd7, 0x63, 0xf8, 0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xdc, 0x44, 0x74,
-            0x8e, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-        ];
-        for i in 0..4 {
-            let file_path = dir.path().join(format!("frame_{:03}.png", i));
-            std::fs::File::create(file_path)
-                .unwrap()
-                .write_all(&png_data)
-                .unwrap();
-        }
+        write_frames(dir.path(), 4);
 
         let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
         let config = CaptureConfig::default().with_simulated_preload_images(3);
@@ -538,6 +534,34 @@ mod tests {
             queued_addr,
             "cached frame was copied on the way out instead of moved"
         );
+    }
+
+    /// A one-image directory is the exception to the move-out rule: every cache
+    /// slot is the same file, so handing the entry away would empty the window
+    /// and make the next capture re-decode. Keep it cached and copy instead.
+    #[test]
+    fn test_simulated_camera_single_file_keeps_frame_cached() {
+        let dir = tempdir().unwrap();
+        write_frames(dir.path(), 1);
+
+        let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
+        let config = CaptureConfig::default().with_simulated_preload_images(5);
+
+        let _ = camera.capture(&config).unwrap();
+        let cached_addr = camera.cache.front().map(|f| f.data().as_ptr() as usize);
+        assert_eq!(camera.cache.len(), 1, "the only frame must stay cached");
+        assert_eq!(camera.current_index, 0);
+        assert_eq!(camera.cache_start, 0);
+
+        // A second capture must be served from that same cached allocation
+        // rather than triggering a fresh decode.
+        let _ = camera.capture(&config).unwrap();
+        assert_eq!(
+            camera.cache.front().map(|f| f.data().as_ptr() as usize),
+            cached_addr,
+            "single cached frame was evicted and re-decoded"
+        );
+        assert_eq!(camera.cache.len(), 1);
     }
 
     #[test]
