@@ -1,9 +1,6 @@
 use super::format::PixelFormat;
 use super::Frame;
-use crate::debayer::{
-    detect_cfa_pattern, CfaPattern, DebayerAlgorithm, DebayerConfig, Debayerer,
-    PatternDetectionResult,
-};
+use crate::debayer::{CfaPattern, DebayerConfig, Debayerer};
 use crate::error::{Result, StackError};
 use tracing::instrument;
 
@@ -84,8 +81,6 @@ impl Frame {
         let debayerer = Debayerer::new(DebayerConfig::new(pattern));
         debayerer.debayer(&mono_frame)
     }
-
-
 
     /// Creates a new Frame filled with zeros (black frame)
     pub fn zeros(width: usize, height: usize, channels: usize) -> Result<Self> {
