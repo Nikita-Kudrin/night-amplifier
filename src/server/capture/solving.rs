@@ -67,6 +67,11 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
     let solver_ready = push_to_status.solver_ready;
     let plugin_is_solving = push_to_status.is_solving;
 
+    // This is the authoritative read of the plugin's target state, so use it to
+    // correct the cached flag `plate_solve_available` gates on. Without this the
+    // mirror could only ever be repaired by an API call.
+    state.set_push_to_has_target(has_target).await;
+
     if !has_target {
         debug!("Plate solving skipped: no target set");
         return;
