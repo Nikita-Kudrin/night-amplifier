@@ -2,11 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use lz4_flex::decompress_size_prepended;
 use night_amplifier::frame::Frame;
 use night_amplifier::render::{RenderPipeline, RenderPipelineConfig};
 use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use night_amplifier::PixelFormat;
-use lz4_flex::decompress_size_prepended;
 use serial_test::serial;
 
 use crate::integration::common::FIXTURES_DIR;
@@ -20,15 +20,15 @@ fn test_encode_imx464_no_downsample() {
     let width = 2712;
     let height = 1538;
     let frame = Frame::zeros(width, height, 3).unwrap();
-    
+
     let encoded = encode_rgb8_lz4(&frame).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
-    
+
     // IMX464 should not be downsampled since it is < 3840x2160
     assert_eq!(enc_width as usize, width);
     assert_eq!(enc_height as usize, height);
-    
+
     let decompressed = decompress_size_prepended(&encoded[16..]).unwrap();
     assert_eq!(decompressed.len(), width * height * 3);
 }
@@ -41,22 +41,22 @@ fn test_encode_8k_downsamples_to_4k() {
     let width = 7680;
     let height = 4320;
     let mut frame = Frame::zeros(width, height, 3).unwrap();
-    
+
     // Set a known pattern to verify downsampling math
     for y in 0..height {
         for x in 0..width {
             frame.set_pixel(x, y, 0, 0.5);
         }
     }
-    
+
     let encoded = encode_rgb8_lz4(&frame).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
-    
+
     // 8K should be downsampled by 2x to 4K (3840x2160)
     assert_eq!(enc_width as usize, 3840);
     assert_eq!(enc_height as usize, 2160);
-    
+
     let decompressed = decompress_size_prepended(&encoded[16..]).unwrap();
     assert_eq!(decompressed.len(), 3840 * 2160 * 3);
 
@@ -89,7 +89,11 @@ fn baseline_fixture_dirs() -> Vec<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|n| n.to_str())
-                .map(|name| BASELINE_FIXTURE_PREFIXES.iter().any(|p| name.starts_with(p)))
+                .map(|name| {
+                    BASELINE_FIXTURE_PREFIXES
+                        .iter()
+                        .any(|p| name.starts_with(p))
+                })
                 .unwrap_or(false)
         })
         .collect();
@@ -118,7 +122,12 @@ fn load_png_mono(path: &Path) -> Result<Frame, String> {
         (png::ColorType::Grayscale, png::BitDepth::Eight) => {
             Frame::from_raw(bytes, width, height, 1, PixelFormat::Bayer8)
         }
-        (ct, bd) => return Err(format!("unsupported PNG format {:?}/{:?} in {:?}", ct, bd, path)),
+        (ct, bd) => {
+            return Err(format!(
+                "unsupported PNG format {:?}/{:?} in {:?}",
+                ct, bd, path
+            ))
+        }
     }
     .map_err(|e| format!("create frame from {:?}: {}", path, e))
 }
@@ -131,7 +140,10 @@ fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
         .map(|entry| entry.path())
         .filter(|path| {
             matches!(
-                path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).as_deref(),
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .as_deref(),
                 Some("png") | Some("tif") | Some("tiff")
             )
         })
@@ -139,7 +151,10 @@ fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
     files.sort();
     let path = files.into_iter().next()?;
 
-    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
     let frame = match ext.as_deref() {
         Some("png") => load_png_mono(&path),
         _ => load_tiff(&path).map(|img| img.frame),
@@ -194,7 +209,10 @@ fn baseline_live_view_stream_encoding() {
 
     let dirs = baseline_fixture_dirs();
     if dirs.is_empty() {
-        println!("No baseline fixture sets found in {}. Skipping.", FIXTURES_DIR);
+        println!(
+            "No baseline fixture sets found in {}. Skipping.",
+            FIXTURES_DIR
+        );
         return;
     }
 
@@ -207,7 +225,11 @@ fn baseline_live_view_stream_encoding() {
     let mut rows: Vec<BaselineRow> = Vec::new();
 
     for dir in dirs {
-        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let Some((path, frame)) = load_first_fixture_frame(&dir) else {
             println!("{}: no loadable frame, skipping", name);
             continue;
@@ -227,11 +249,12 @@ fn baseline_live_view_stream_encoding() {
 
         // Preview render with default capture settings (live-view path)
         let mut preview = frame.clone();
-        let pipeline = RenderPipeline::new(
-            RenderPipelineConfig::new().with_background_subtraction(true),
-        );
+        let pipeline =
+            RenderPipeline::new(RenderPipelineConfig::new().with_background_subtraction(true));
         let render_start = Instant::now();
-        pipeline.process(&mut preview).expect("preview render failed");
+        pipeline
+            .process(&mut preview)
+            .expect("preview render failed");
         let render_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
         let (encode_ms_live, stretched_wire_bytes) = time_encode(&preview, live_chunks);
@@ -256,11 +279,21 @@ fn baseline_live_view_stream_encoding() {
     }
 
     let network_bytes_per_sec = BASELINE_NETWORK_MBPS * 1e6 / 8.0;
-    println!("\n--- Baseline Summary ({} chunks live / 1 chunk stacking) ---\n", live_chunks);
+    println!(
+        "\n--- Baseline Summary ({} chunks live / 1 chunk stacking) ---\n",
+        live_chunks
+    );
     println!(
         "{:<38} {:>10} {:>11} {:>11} {:>7} {:>9} {:>9} {:>10} {:>9}",
-        "fixture", "dims", "rawRGB8 MB", "wire MB", "ratio", "linear MB",
-        "render ms", "encode ms", "fps@60Mb"
+        "fixture",
+        "dims",
+        "rawRGB8 MB",
+        "wire MB",
+        "ratio",
+        "linear MB",
+        "render ms",
+        "encode ms",
+        "fps@60Mb"
     );
     for r in &rows {
         let mb = |b: usize| b as f64 / 1e6;
@@ -287,7 +320,10 @@ fn baseline_live_view_stream_encoding() {
             r.name, r.encode_ms_stacking
         );
     }
-    println!("\nfps@60Mb = frames/s that fit through a {} Mb/s link at the measured wire size.", BASELINE_NETWORK_MBPS);
+    println!(
+        "\nfps@60Mb = frames/s that fit through a {} Mb/s link at the measured wire size.",
+        BASELINE_NETWORK_MBPS
+    );
     println!("=== Baseline Complete ===\n");
 }
 
@@ -349,7 +385,10 @@ fn probe_jpeg_encoding_candidates() {
 
     let dirs = baseline_fixture_dirs();
     if dirs.is_empty() {
-        println!("No baseline fixture sets found in {}. Skipping.", FIXTURES_DIR);
+        println!(
+            "No baseline fixture sets found in {}. Skipping.",
+            FIXTURES_DIR
+        );
         return;
     }
 
@@ -365,17 +404,22 @@ fn probe_jpeg_encoding_candidates() {
     );
 
     for dir in dirs {
-        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let Some((_, frame)) = load_first_fixture_frame(&dir) else {
             println!("{}: no loadable frame, skipping", name);
             continue;
         };
 
         let mut preview = frame.clone();
-        let pipeline = RenderPipeline::new(
-            RenderPipelineConfig::new().with_background_subtraction(true),
-        );
-        pipeline.process(&mut preview).expect("preview render failed");
+        let pipeline =
+            RenderPipeline::new(RenderPipelineConfig::new().with_background_subtraction(true));
+        pipeline
+            .process(&mut preview)
+            .expect("preview render failed");
 
         // Production debayer path (what frame_to_rgb8 does for 1-channel frames)
         let rgb8 = if preview.channels() == 1 {
@@ -420,7 +464,9 @@ fn probe_jpeg_encoding_candidates() {
         println!();
     }
 
-    println!("JPEG = single-threaded `image` crate encoder (pure Rust); libjpeg-turbo would be faster.");
+    println!(
+        "JPEG = single-threaded `image` crate encoder (pure Rust); libjpeg-turbo would be faster."
+    );
     println!("=== Probe Complete ===\n");
 }
 
@@ -466,7 +512,11 @@ fn probe_render_task_stage_breakdown() {
     };
 
     for dir in baseline_fixture_dirs() {
-        let name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let Some((_, bayer)) = load_first_fixture_frame(&dir) else {
             continue;
         };
@@ -475,13 +525,21 @@ fn probe_render_task_stage_breakdown() {
             continue;
         };
 
-        println!("{} — {}x{} x{} ch", name, rgb.width(), rgb.height(), rgb.channels());
+        println!(
+            "{} — {}x{} x{} ch",
+            name,
+            rgb.width(),
+            rgb.height(),
+            rgb.channels()
+        );
 
         let render_ms = time_ms(Box::new({
             let rgb = rgb.clone();
             move || {
                 let mut preview = rgb.clone();
-                RenderPipeline::new(live_config()).process(&mut preview).unwrap();
+                RenderPipeline::new(live_config())
+                    .process(&mut preview)
+                    .unwrap();
             }
         }));
         let clone_ms = time_ms(Box::new({
@@ -493,7 +551,9 @@ fn probe_render_task_stage_breakdown() {
 
         // Rendered frame is what the JPEG tiers actually encode.
         let mut rendered = rgb.clone();
-        RenderPipeline::new(live_config()).process(&mut rendered).unwrap();
+        RenderPipeline::new(live_config())
+            .process(&mut rendered)
+            .unwrap();
 
         println!(
             "  preview render (autostretch+contrast) {:>8.1} ms   (frame clone alone {:.1} ms)",
@@ -536,28 +596,34 @@ fn probe_render_task_stage_breakdown() {
 // Fused render kernel — intermediate clamp impact
 // ============================================================================
 
-/// Quantifies what the user would actually see if the fused stretch+contrast
-/// kernel (Phase 2 of the live-view performance plan) drops the intermediate
-/// per-channel clamp between the two stages.
+/// Quantifies, on real fixtures, how far the shipped fused stretch+contrast kernel
+/// (Phase 2 of the live-view performance plan) diverges from the three separate passes
+/// it replaces.
 ///
-/// Today: `clamp(clamp(c * s_stretch) * s_contrast)`.
-/// Fused without the intermediate clamp: `clamp(c * s_stretch * s_contrast)`.
+/// Three passes: `clamp(clamp(c * s_stretch) * s_contrast)`.
+/// Fused:        `clamp(c * s_stretch * s_contrast)`, scale read from an interpolated LUT.
 ///
-/// The two can only diverge where a channel exceeds 1.0 *between* the stages,
-/// so this reports how many pixels are affected, by how much, and in which
-/// direction — the inputs needed to decide whether the clamp is worth keeping.
+/// Two distinct sources of difference, reported separately because they carry completely
+/// different weight:
+///
+/// - **Clipping pixels** — a channel exceeded 1.0 *between* the stages, so the reference
+///   fed a clamped (and therefore too dark) luminance into contrast. This is the accepted
+///   trade of the fusion and can move a blown star core by tens of LSB.
+/// - **Everything else** — pure LUT quantisation, which must stay under a single LSB.
+///   This is the number that regresses if the LUT loses interpolation or if entry 0 stops
+///   carrying the curve's `L -> 0` limit.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
 fn probe_fused_render_clamp_difference() {
     use night_amplifier::render::{
-        apply_contrast_frame, apply_s_curve, apply_tone_mapping, auto_stretch_frame,
-        AutoStretchConfig, ContrastConfig, StretchAggressiveness, ToneMappingAlgorithm,
+        apply_contrast_frame, auto_stretch_frame, AutoStretchConfig, ContrastConfig,
+        StretchAggressiveness,
     };
 
     const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
-    println!("\n=== Fused render kernel: dropping the intermediate clamp ===\n");
+    println!("\n=== Fused render kernel vs. the three passes it replaces ===\n");
 
     for dir in baseline_fixture_dirs() {
         let name = dir
@@ -572,126 +638,130 @@ fn probe_fused_render_clamp_difference() {
             continue;
         };
 
-        let stretch_config =
-            AutoStretchConfig::from_profile(false, StretchAggressiveness::High);
+        let stretch_config = AutoStretchConfig::from_profile(false, StretchAggressiveness::High);
         let contrast_config = ContrastConfig::default();
 
-        // Reference: exactly what RenderPipeline does today.
+        // Reference: the three separate passes, i.e. stretch with no contrast fused in,
+        // then contrast as its own luminance-preserving pass. The intermediate is captured
+        // so we can tell which pixels the stretch stage clamped.
         let mut reference = rgb.clone();
         let stretch = auto_stretch_frame(&mut reference, stretch_config, None).unwrap();
+        let after_stretch = reference.data().to_vec();
         apply_contrast_frame(&mut reference, &contrast_config).unwrap();
 
-        // Recover the exact tone curve production uses — including its own
-        // 65536-entry LUT quantisation — by running the real tone mapper over a
-        // ramp, rather than re-deriving the MTF formula here and risking drift.
+        // Fused: the shipped kernel, driven exactly as RenderPipeline drives it. Running the
+        // real code rather than a hand-written model of it is the point — a reimplementation
+        // here would measure an implementation nobody ships.
+        let mut fused = rgb.clone();
+        auto_stretch_frame(&mut fused, stretch_config, Some(&contrast_config)).unwrap();
+
         let midtone = stretch.stretch_factor;
         let black_point = stretch.black_point;
-        let mut ramp = Frame::from_f32_vec(
-            (0..65536).map(|i| i as f32 / 65535.0).collect(),
-            65536,
-            1,
-            1,
-        )
-        .unwrap();
-        apply_tone_mapping(&mut ramp, ToneMappingAlgorithm::Mtf, midtone).unwrap();
-        let tone_lut: Vec<f32> = ramp.data().to_vec();
-        let tone = |l: f32| tone_lut[((l.clamp(0.0, 1.0) * 65535.0) as usize).min(65535)];
-        let mut fused = rgb.clone();
-        {
-            let data = fused.data_mut();
-            for px in data.chunks_exact_mut(3) {
-                let c: [f32; 3] = [
-                    (px[0] - black_point).clamp(0.0, 1.0),
-                    (px[1] - black_point).clamp(0.0, 1.0),
-                    (px[2] - black_point).clamp(0.0, 1.0),
-                ];
-                let lum = LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
-                let scale = if lum > 1e-8 {
-                    apply_s_curve(tone(lum), &contrast_config) / lum
-                } else {
-                    0.0
-                };
-                for i in 0..3 {
-                    px[i] = (c[i] * scale).clamp(0.0, 1.0);
-                }
-            }
-        }
 
         // Compare in 8-bit, which is what the JPEG stream actually carries.
-        let a = reference.data();
-        let b = fused.data();
         let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 as i32;
 
-        let (mut changed_px, mut max_delta, mut sum_delta, mut changed_samples) = (0u64, 0i32, 0i64, 0u64);
-        let (mut brighter, mut darker) = (0u64, 0u64);
-        let mut delta_hist = [0u64; 5]; // 1, 2, 3-4, 5-8, >8
-        let total_px = (a.len() / 3) as u64;
+        let mut clipped_px = 0u64;
+        let mut clipped_changed_px = 0u64;
+        let mut clipped_max_delta = 0i32;
+        let mut clipped_sum_delta = 0i64;
+        let mut clipped_changed_samples = 0u64;
+        let mut clipped_brighter = 0u64;
+        let mut clipped_darker = 0u64;
 
-        for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
+        let mut clean_changed_px = 0u64;
+        let mut clean_changed_samples = 0u64;
+        let mut clean_max_delta = 0i32;
+        let mut clean_min_lum = f32::MAX;
+
+        let total_px = (reference.data().len() / 3) as u64;
+
+        for ((pa, pb), mid) in reference
+            .data()
+            .chunks_exact(3)
+            .zip(fused.data().chunks_exact(3))
+            .zip(after_stretch.chunks_exact(3))
+        {
+            // Clipping is a per-pixel property: one clamped channel drags down the
+            // luminance the reference feeds into contrast, moving all three channels.
+            let clipped = mid.iter().any(|&v| v >= 1.0);
             let mut px_changed = false;
+            let mut px_max = 0i32;
+
             for i in 0..3 {
                 let d = to_u8(pb[i]) - to_u8(pa[i]);
-                if d != 0 {
-                    px_changed = true;
-                    changed_samples += 1;
-                    sum_delta += d as i64;
-                    if d > 0 { brighter += 1 } else { darker += 1 }
-                    let m = d.abs();
-                    max_delta = max_delta.max(m);
-                    let bucket = match m {
-                        1 => 0,
-                        2 => 1,
-                        3..=4 => 2,
-                        5..=8 => 3,
-                        _ => 4,
-                    };
-                    delta_hist[bucket] += 1;
+                if d == 0 {
+                    continue;
+                }
+                px_changed = true;
+                px_max = px_max.max(d.abs());
+                if clipped {
+                    clipped_changed_samples += 1;
+                    clipped_sum_delta += d as i64;
+                    if d > 0 {
+                        clipped_brighter += 1
+                    } else {
+                        clipped_darker += 1
+                    }
+                } else {
+                    clean_changed_samples += 1;
                 }
             }
-            if px_changed {
-                changed_px += 1;
-            }
-        }
 
-        // How bright are the affected pixels? Report the reference luminance
-        // distribution of what changed, to confirm it is confined to highlights.
-        let mut min_lum_changed = f32::MAX;
-        for (pa, pb) in a.chunks_exact(3).zip(b.chunks_exact(3)) {
-            let differs = (0..3).any(|i| to_u8(pb[i]) != to_u8(pa[i]));
-            if differs {
+            if clipped {
+                clipped_px += 1;
+                if px_changed {
+                    clipped_changed_px += 1;
+                    clipped_max_delta = clipped_max_delta.max(px_max);
+                }
+            } else if px_changed {
+                clean_changed_px += 1;
+                clean_max_delta = clean_max_delta.max(px_max);
                 let lum = LUMA[0] * pa[0] + LUMA[1] * pa[1] + LUMA[2] * pa[2];
-                min_lum_changed = min_lum_changed.min(lum);
+                clean_min_lum = clean_min_lum.min(lum);
             }
         }
 
         println!("{} — {}x{}", name, rgb.width(), rgb.height());
+        println!("  midtone {:.4}  black_point {:.4}", midtone, black_point);
         println!(
-            "  midtone {:.4}  black_point {:.4}",
-            midtone, black_point
-        );
-        println!(
-            "  pixels changed: {} of {} ({:.4} %)",
-            changed_px,
+            "  clipping between stages: {} of {} px ({:.4} %) — accepted divergence",
+            clipped_px,
             total_px,
-            changed_px as f64 / total_px as f64 * 100.0
+            clipped_px as f64 / total_px as f64 * 100.0
         );
-        if changed_px > 0 {
+        if clipped_changed_px > 0 {
             println!(
-                "  max delta {} / 255   mean signed delta {:+.3} LSB   brighter {} / darker {}",
-                max_delta,
-                sum_delta as f64 / changed_samples as f64,
-                brighter,
-                darker
-            );
-            println!(
-                "  delta histogram (LSB):  1:{}  2:{}  3-4:{}  5-8:{}  >8:{}",
-                delta_hist[0], delta_hist[1], delta_hist[2], delta_hist[3], delta_hist[4]
-            );
-            println!(
-                "  dimmest affected pixel sits at luminance {:.3} (1.0 = clipped white)",
-                min_lum_changed
+                "    changed {} px, max delta {} / 255, mean signed {:+.3} LSB, \
+                 brighter {} / darker {}",
+                clipped_changed_px,
+                clipped_max_delta,
+                clipped_sum_delta as f64 / clipped_changed_samples as f64,
+                clipped_brighter,
+                clipped_darker
             );
         }
+        println!(
+            "  non-clipping: {} of {} px changed ({:.4} %) — LUT quantisation only",
+            clean_changed_px,
+            total_px - clipped_px,
+            clean_changed_px as f64 / (total_px - clipped_px).max(1) as f64 * 100.0
+        );
+        if clean_changed_px > 0 {
+            println!(
+                "    {} samples, max delta {} / 255, dimmest affected luminance {:.4}",
+                clean_changed_samples, clean_max_delta, clean_min_lum
+            );
+        }
+
+        // The whole point of interpolating the LUT: away from clipping the fused kernel has
+        // to be indistinguishable from the exact three-pass math at 8-bit output.
+        assert!(
+            clean_max_delta <= 1,
+            "{}: non-clipping pixels differ by up to {} LSB — LUT accuracy regressed",
+            name,
+            clean_max_delta
+        );
         println!();
     }
 

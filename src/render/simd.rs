@@ -200,14 +200,41 @@ pub fn subtract_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
     }
 }
 
+/// Linearly interpolated lookup into a scale LUT indexed by luminance in `[0, 1]`.
+///
+/// Interpolating rather than truncating matters because the tone curves are steepest
+/// exactly where the sky background sits. With an 8192-entry table a truncated lookup
+/// is off by up to ~8 LSB of 8-bit output at aggressive midtones (m ≈ 0.001); with
+/// interpolation the worst case drops below 0.15 LSB.
+///
+/// `lum` is clamped into the table, so a luminance above 1.0 (possible after
+/// calibration overshoot) saturates at the last entry instead of extrapolating, and a
+/// NaN resolves to the last entry rather than wrapping to index 0.
+#[inline(always)]
+fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
+    let lut_max = (scale_lut.len() - 1) as f32;
+    let pos = (lum * lut_max).min(lut_max);
+    // len >= 2 is guaranteed by the callers; clamping to len-2 keeps `i0 + 1` in range
+    // and turns pos == lut_max into frac == 1.0, i.e. exactly the last entry.
+    let i0 = (pos as usize).min(scale_lut.len() - 2);
+    let frac = pos - i0 as f32;
+    let lo = scale_lut[i0];
+    lo + (scale_lut[i0 + 1] - lo) * frac
+}
+
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
 ///
 /// Fuses black point subtraction, luminance calculation, and tone mapping/contrast scaling
-/// into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a scale factor.
+/// into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a scale factor
+/// and hold at least two entries; `scale_lut[0]` must be the `L → 0` limit of the curve's
+/// scale factor, not zero, or the faintest signal is crushed to pure black.
+///
+/// This operates on whatever slice it is given, so callers are expected to drive it over
+/// `par_chunks_mut` of whole rows — see `apply_fused_stretch_frame`.
 #[inline]
 pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
     let len = data.len();
-    if len < 12 {
+    if len < 12 || scale_lut.len() < 2 {
         apply_luminance_scale_lut_scalar(data, black_point, scale_lut);
         return;
     }
@@ -218,9 +245,6 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
     let zero = f32x4::ZERO;
     let bp = f32x4::splat(black_point);
     let one = f32x4::ONE;
-
-    let lut_len = scale_lut.len();
-    let lut_max = (lut_len - 1) as f32;
 
     let num_pixels = len / 3;
     let chunks = num_pixels / 4;
@@ -252,8 +276,7 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
         // 4 scalar LUT lookups
         let mut scale_arr = [0.0f32; 4];
         for j in 0..4 {
-            let idx = (lum_arr[j] * lut_max) as usize;
-            scale_arr[j] = scale_lut[idx.min(lut_len - 1)];
+            scale_arr[j] = scale_lut_lookup(scale_lut, lum_arr[j]);
         }
         let scale = f32x4::new(scale_arr);
 
@@ -284,8 +307,9 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
 
 #[inline]
 fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
-    let lut_len = scale_lut.len();
-    let lut_max = (lut_len - 1) as f32;
+    if scale_lut.len() < 2 {
+        return;
+    }
 
     for pixel in data.chunks_exact_mut(3) {
         let r = (pixel[0] - black_point).max(0.0);
@@ -293,8 +317,7 @@ fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lu
         let b = (pixel[2] - black_point).max(0.0);
 
         let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let idx = (luminance * lut_max) as usize;
-        let scale = scale_lut[idx.min(lut_len - 1)];
+        let scale = scale_lut_lookup(scale_lut, luminance);
 
         pixel[0] = (r * scale).min(1.0);
         pixel[1] = (g * scale).min(1.0);
@@ -509,33 +532,141 @@ mod tests {
     }
     #[test]
     fn test_luminance_scale_lut_simd() {
-        let mut data = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9, 0.7, 0.2, 0.3, 0.4, 0.05, 0.05, 0.05];
-        let original = data.clone();
-        
+        // 5 pixels: 4 go through the SIMD block, the 5th through the scalar tail.
+        let mut data = vec![
+            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9, 0.7, 0.2, 0.3, 0.4, 0.05, 0.05, 0.05,
+        ];
+
         let black_point = 0.1;
-        let mut scale_lut = vec![2.0; 8192];
-        scale_lut[0] = 0.0;
-        
+        let scale_lut = vec![2.0; 8192];
+
         apply_luminance_scale_lut_simd(&mut data, black_point, &scale_lut);
-        
-        // Pixel 1: [0.1, 0.2, 0.3] -> sub bp -> [0.0, 0.1, 0.2]. Lum > 0 so scale = 2.0. Out = [0.0, 0.2, 0.4]
+
+        // Pixel 1: [0.1, 0.2, 0.3] -> sub bp -> [0.0, 0.1, 0.2]. Scale = 2.0. Out = [0.0, 0.2, 0.4]
         assert!((data[0] - 0.0).abs() < 1e-5);
         assert!((data[1] - 0.2).abs() < 1e-5);
         assert!((data[2] - 0.4).abs() < 1e-5);
-        
+
         // Pixel 2: [0.4, 0.5, 0.6] -> sub bp -> [0.3, 0.4, 0.5]. Scale = 2.0. Out = [0.6, 0.8, 1.0]
         assert!((data[3] - 0.6).abs() < 1e-5);
         assert!((data[4] - 0.8).abs() < 1e-5);
         assert!((data[5] - 1.0).abs() < 1e-5);
-        
-        // Pixel 3: [0.8, 0.9, 0.7] -> sub bp -> [0.7, 0.8, 0.6]. Scale = 2.0. Out = min([1.4, 1.6, 1.2], 1.0) = [1.0, 1.0, 1.0]
+
+        // Pixel 3: [0.8, 0.9, 0.7] -> sub bp -> [0.7, 0.8, 0.6]. Out = min([1.4, 1.6, 1.2], 1.0)
         assert!((data[6] - 1.0).abs() < 1e-5);
         assert!((data[7] - 1.0).abs() < 1e-5);
         assert!((data[8] - 1.0).abs() < 1e-5);
-        
-        // Pixel 5: [0.05, 0.05, 0.05] -> sub bp -> [0.0, 0.0, 0.0]. Scale = 0.0. Out = [0.0, 0.0, 0.0]
+
+        // Pixel 4: [0.2, 0.3, 0.4] -> sub bp -> [0.1, 0.2, 0.3]. Out = [0.2, 0.4, 0.6]
+        assert!((data[9] - 0.2).abs() < 1e-5);
+        assert!((data[10] - 0.4).abs() < 1e-5);
+        assert!((data[11] - 0.6).abs() < 1e-5);
+
+        // Pixel 5 (scalar tail): [0.05, 0.05, 0.05] -> sub bp -> [0.0, 0.0, 0.0]
         assert!((data[12] - 0.0).abs() < 1e-5);
         assert!((data[13] - 0.0).abs() < 1e-5);
         assert!((data[14] - 0.0).abs() < 1e-5);
+    }
+
+    /// A ramp LUT makes truncation visible: with truncation every luminance inside a bin
+    /// collapses to that bin's entry, so a mid-bin sample reads back the bin's left edge
+    /// instead of the interpolated value.
+    #[test]
+    fn test_luminance_scale_lut_interpolates_between_entries() {
+        const N: usize = 8192;
+        // scale_lut[i] = i, so the exact scale at luminance L is L * (N - 1).
+        let scale_lut: Vec<f32> = (0..N).map(|i| i as f32).collect();
+
+        // Land exactly halfway between entry 10 and 11.
+        let lum = 10.5 / (N - 1) as f32;
+        // A grey pixel has luminance equal to its channel value (weights sum to 1.0).
+        let mut data = vec![lum; 3];
+        apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut);
+
+        let interpolated = (lum * 10.5).min(1.0);
+        let truncated = (lum * 10.0).min(1.0);
+        assert!(
+            (data[0] - interpolated).abs() < 1e-6,
+            "expected interpolated {interpolated}, got {} (truncated would be {truncated})",
+            data[0]
+        );
+    }
+
+    /// Regression guard for the shadow-crush bug: `scale_lut[0]` must carry the `L -> 0`
+    /// limit of the curve, not 0.0, or every pixel below one bin width goes pure black.
+    #[test]
+    fn test_luminance_scale_lut_does_not_crush_faint_signal() {
+        const N: usize = 8192;
+        // A steep MTF-like scale curve: large near zero, falling to 1.0 at white.
+        let scale_lut: Vec<f32> = (0..N)
+            .map(|i| {
+                let l = (i as f32 / (N - 1) as f32).max(1e-7);
+                (0.02f32 / l).clamp(1.0, 200.0)
+            })
+            .collect();
+
+        // Half a bin width: below the first entry, where truncation used to hit index 0.
+        let lum = 0.5 / (N - 1) as f32;
+        let mut data = vec![lum; 3];
+        apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut);
+
+        assert!(
+            data[0] > 0.0,
+            "sub-bin luminance was crushed to pure black: {}",
+            data[0]
+        );
+        assert!((data[0] - data[1]).abs() < 1e-9 && (data[1] - data[2]).abs() < 1e-9);
+    }
+
+    /// The fused kernel is driven over `par_chunks_mut` of whole rows, so it has to give
+    /// the same answer whether it sees the buffer whole or split. This is the guard for the
+    /// parallelisation of `apply_fused_stretch_frame`.
+    #[test]
+    fn test_luminance_scale_lut_is_invariant_to_row_splitting() {
+        const N: usize = 4096;
+        let scale_lut: Vec<f32> = (0..N)
+            .map(|i| 1.0 + (i as f32 / (N - 1) as f32) * 3.0)
+            .collect();
+
+        // 7 pixels per row exercises both the 4-pixel SIMD block and the scalar tail.
+        let row_pixels = 7;
+        let rows = 5;
+        let mut seed = 0x9E37_79B9u32;
+        let base: Vec<f32> = (0..row_pixels * rows * 3)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 8) as f32 / 16_777_216.0
+            })
+            .collect();
+
+        let mut whole = base.clone();
+        apply_luminance_scale_lut_simd(&mut whole, 0.05, &scale_lut);
+
+        let mut split = base.clone();
+        for row in split.chunks_mut(row_pixels * 3) {
+            apply_luminance_scale_lut_simd(row, 0.05, &scale_lut);
+        }
+
+        assert_eq!(whole, split, "row splitting changed the result");
+    }
+
+    /// Out-of-range and NaN luminance must saturate inside the table rather than
+    /// extrapolate off the end or wrap to index 0.
+    #[test]
+    fn test_luminance_scale_lut_handles_out_of_range_input() {
+        const N: usize = 256;
+        let scale_lut: Vec<f32> = (0..N).map(|i| 1.0 + i as f32).collect();
+
+        // Luminance well above 1.0 must clamp to the last entry, not extrapolate.
+        let mut data = vec![5.0f32; 3];
+        apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut);
+        for v in &data {
+            assert!(v.is_finite() && *v <= 1.0, "got {v}");
+        }
+
+        // NaN must not panic or index out of bounds.
+        let mut data = vec![f32::NAN, 0.5, 0.5, 0.1, 0.1, 0.1];
+        apply_luminance_scale_lut_simd(&mut data, 0.0, &scale_lut);
+        assert!(data[3].is_finite());
     }
 }

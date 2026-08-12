@@ -348,6 +348,12 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 `stacking_iteration`, `render_iteration`, `process_preview_frame`, `encode_jpeg_tiers`) logs its duration. This is
 the on-device breakdown — no OTLP collector required.
 
+Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping and
+S-curve contrast run as a single pass under `auto_stretch` → `apply_fused_stretch_frame`. There is no
+`contrast_adjustment` span on that path. Contrast falls back to its own `contrast_adjustment` pass only when
+`saturation_boost` is on (saturation sits between stretch and contrast and is a cross-channel op that breaks the
+fusion) or when auto-stretch is off or failed.
+
 With `--features telemetry`, the same stages also export OTel histograms from `telemetry::metrics`:
 `frame.capture_ms`, `frame.debayer_ms`, `frame.stack_ms`, `frame.render_ms`, `frame.encode_lz4_ms`,
 `frame.encode_jpeg_ms` (attribute `tier`), plus counters `frame.published` (rate = delivered FPS),

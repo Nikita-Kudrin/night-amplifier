@@ -106,12 +106,27 @@ pub fn estimate_channel_mode(frame: &Frame, channel_index: usize) -> f32 {
     peak_bin as f32 / 65535.0
 }
 
+/// Background mode plus the luminance samples it was derived from.
+///
+/// Carrying the samples lets callers compute further luminance statistics — notably
+/// `estimate_signal_fraction` — without walking the full frame a second time. The
+/// samples are what the mode was actually measured on, so derived statistics are
+/// consistent with it by construction.
+#[derive(Debug, Clone)]
+pub struct BackgroundEstimate {
+    /// Mode (peak) of the luminance histogram: the sky pedestal.
+    pub mode: f32,
+    /// Sampled luminances, in frame order. Roughly 50k entries.
+    pub luminance_samples: Vec<f32>,
+}
+
 /// Finds the Mode (peak) of the image histogram for luminance to accurately find the sky pedestal
 /// This prevents large nebulae from skewing the background estimate.
 ///
 /// Uses a smoothed histogram approach to find the true background peak, which is more robust against noise spikes.
-/// Returns a tuple of (mode, histogram) so the histogram can be reused.
-pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
+/// Returns the mode together with the luminance samples it was computed from, so callers
+/// needing further luminance statistics do not have to traverse the frame again.
+pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
     let data = frame.data();
     let channels = frame.channels();
 
@@ -122,6 +137,7 @@ pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
     let num_pixels = data.len() / channels;
     // Sample more pixels for better accuracy (up to 50k)
     let step = (num_pixels / 50000).max(1);
+    let mut luminance_samples = Vec::with_capacity(num_pixels / step + 1);
 
     if channels == 3 {
         for i in (0..num_pixels).step_by(step) {
@@ -130,6 +146,7 @@ pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
                 let lum = 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2];
                 let bin = (lum * (NUM_BINS - 1) as f32) as usize;
                 histogram[bin.clamp(0, NUM_BINS - 1)] += 1;
+                luminance_samples.push(lum);
             }
         }
     } else {
@@ -137,6 +154,7 @@ pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
             let lum = data[i];
             let bin = (lum * (NUM_BINS - 1) as f32) as usize;
             histogram[bin.clamp(0, NUM_BINS - 1)] += 1;
+            luminance_samples.push(lum);
         }
     }
 
@@ -180,8 +198,10 @@ pub fn estimate_background_mode(frame: &Frame) -> (f32, Vec<u32>) {
         }
     }
 
-    let mode = peak_bin as f32 / (NUM_BINS - 1) as f32;
-    (mode, histogram)
+    BackgroundEstimate {
+        mode: peak_bin as f32 / (NUM_BINS - 1) as f32,
+        luminance_samples,
+    }
 }
 
 /// Calculate per-channel black points from image statistics
@@ -234,7 +254,7 @@ pub fn calculate_luminance_black_point(
     stats: &ImageStats,
     config: BlackPointConfig,
 ) -> f32 {
-    let (mode, _) = estimate_background_mode(frame);
+    let mode = estimate_background_mode(frame).mode;
     let mean_sigma = stats.mean_sigma();
     (mode - config.sigma_factor * mean_sigma).max(0.0)
 }
@@ -280,7 +300,11 @@ pub fn subtract_black_point(frame: &mut Frame, black_points: &[f32; 3]) -> Resul
 /// * `frame` - Mutable reference to a frame (any number of channels)
 /// * `black_point` - The black point value to subtract from all pixels
 pub fn subtract_black_point_uniform(frame: &mut Frame, black_point: f32) -> Result<()> {
-    if black_point <= 0.0 {
+    // The autostretch solver returns exactly 0.0 whenever the adjusted median is
+    // negligible, which is common, and subtracting zero from in-range pixel data is a
+    // no-op. Guard on equality only: a negative black point still has to run, since
+    // there it brightens the frame rather than doing nothing.
+    if black_point == 0.0 {
         return Ok(());
     }
 

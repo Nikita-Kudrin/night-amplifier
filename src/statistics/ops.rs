@@ -104,12 +104,7 @@ pub(crate) fn compute_mad_in_place_simd(values: &mut [f32], median: f32) {
         let chunks = chunk_len / 4;
         for i in 0..chunks {
             let idx = i * 4;
-            let v = f32x4::new([
-                chunk[idx],
-                chunk[idx + 1],
-                chunk[idx + 2],
-                chunk[idx + 3],
-            ]);
+            let v = f32x4::new([chunk[idx], chunk[idx + 1], chunk[idx + 2], chunk[idx + 3]]);
             let diff = v - median_vec;
             let abs_diff = diff.abs();
             let result = abs_diff.to_array();
@@ -127,7 +122,7 @@ pub(crate) fn compute_mad_in_place_simd(values: &mut [f32], median: f32) {
 
 /// Fast median computation using partial sort or parallel full sort
 ///
-/// Uses `select_nth_unstable` for small arrays and Rayon's `par_sort_unstable_by` 
+/// Uses `select_nth_unstable` for small arrays and Rayon's `par_sort_unstable_by`
 /// for large arrays to utilize multiple cores.
 #[inline]
 pub fn fast_median(values: &mut [f32]) -> f32 {

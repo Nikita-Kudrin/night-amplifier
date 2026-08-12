@@ -20,10 +20,11 @@ pub fn compute_auto_stretch_with_algorithm(
     config: AutoStretchConfig,
     algorithm: ToneMappingAlgorithm,
 ) -> AutoStretchResult {
-    let (mode, histogram) = estimate_background_mode(frame);
+    let background = estimate_background_mode(frame);
+    let mode = background.mode;
     let mean_sigma = stats.mean_sigma();
 
-    let signal_fraction = estimate_signal_fraction(&histogram, mode, mean_sigma);
+    let signal_fraction = estimate_signal_fraction(&background.luminance_samples, mode, mean_sigma);
 
     let adaptive_sigma = if signal_fraction > 0.4 {
         (config.black_point_sigma * 0.6).max(1.5)
