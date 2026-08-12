@@ -95,7 +95,11 @@ impl RenderPipeline {
         }
 
         // Stage 2: Auto-stretch
-        let contrast_config = if self.config.contrast && channels == 3 && !self.config.contrast_config.is_disabled() && !self.config.saturation_boost {
+        let contrast_config = if self.config.contrast
+            && channels == 3
+            && !self.config.contrast_config.is_disabled()
+            && !self.config.saturation_boost
+        {
             Some(&self.config.contrast_config)
         } else {
             None
