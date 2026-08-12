@@ -42,6 +42,11 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32) -> (f3
 }
 
 /// Apply MTF to an entire frame in-place
+///
+/// `midtone == 0.5` is the identity (see `mtf`), so it skips the pass entirely. That also
+/// skips the incidental `[0, 1]` clamp the pass would have applied, which is safe because
+/// pixel data is normalised to `[0, 1]` by contract; the 1e-6 window keeps any residual
+/// curve error four orders of magnitude below one 8-bit LSB.
 pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
     if (midtone - 0.5).abs() < 1e-6 {
         return Ok(());
@@ -113,7 +118,7 @@ mod tests {
         let m = 0.2; // Shadow boost
         assert!((mtf(0.0, m) - 0.0).abs() < 1e-6);
         assert!((mtf(1.0, m) - 1.0).abs() < 1e-6);
-        
+
         let mid = mtf(0.1, m);
         assert!(mid > 0.1); // Shadows boosted
 

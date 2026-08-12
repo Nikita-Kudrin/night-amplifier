@@ -11,14 +11,10 @@ pub(crate) fn compute_channel_stats(frame: &Frame, channel: usize, step: usize) 
     let data = frame.data();
     let total_pixels = width * height;
 
-    // Estimate sample count and pre-allocate
-    let estimated_samples = total_pixels / step + 1;
-    let mut samples = Vec::with_capacity(estimated_samples);
-
     // For step=1 (full sampling), use optimized contiguous access
     if step == 1 && channels == 1 {
         // Monochrome with full sampling: data is contiguous
-        samples.extend_from_slice(data);
+        let mut samples = data.to_vec();
         let (min_val, max_val) = min_max_simd(&samples);
         let median = fast_median(&mut samples);
         compute_mad_in_place_simd(&mut samples, median);
@@ -26,7 +22,8 @@ pub(crate) fn compute_channel_stats(frame: &Frame, channel: usize, step: usize) 
         return ChannelStats::new(median, mad, min_val, max_val);
     }
 
-    // Collect samples in parallel
+    // Collect samples in parallel. The gather is strided, so every read is a cache miss
+    // regardless; splitting it across cores hides that latency.
     let mut samples: Vec<f32> = (0..total_pixels)
         .into_par_iter()
         .step_by(step)
