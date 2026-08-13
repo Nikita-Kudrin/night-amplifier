@@ -78,6 +78,18 @@ pub enum ServerEvent {
     /// Plate solving started
     PlateSolvingStarted { target_name: Option<String> },
 
+    /// Progress within a plate solve that is trying several strategies in turn.
+    ///
+    /// A cold solve works down an ordered list of attempts, and the last of those can
+    /// legitimately run for a minute or more. Without this the UI cannot tell a slow
+    /// solve from a hung one. `stage` is a human-readable description supplied by the
+    /// solver, not an enum, so the strategy list can change without a protocol change.
+    PlateSolvingProgress {
+        stage: String,
+        attempt: usize,
+        total: usize,
+    },
+
     /// Position solved successfully
     PositionSolved {
         ra_degrees: f64,
@@ -312,6 +324,18 @@ impl ServerEvent {
 
     pub fn plate_solving_started(target_name: Option<String>) -> Self {
         ServerEvent::PlateSolvingStarted { target_name }
+    }
+
+    pub fn plate_solving_progress(
+        stage: impl Into<String>,
+        attempt: usize,
+        total: usize,
+    ) -> Self {
+        ServerEvent::PlateSolvingProgress {
+            stage: stage.into(),
+            attempt,
+            total,
+        }
     }
 
     pub fn position_solved(

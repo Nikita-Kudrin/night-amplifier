@@ -62,7 +62,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::info;
+use tracing::{info, warn};
 
 /// Server configuration
 #[derive(Debug, Clone)]
@@ -213,6 +213,8 @@ impl Server {
                 .expect("failed to spawn disk writer thread");
         }
 
+        self.propagate_telescope_settings().await;
+
         let app = self.build_router();
         let listener = tokio::net::TcpListener::bind(self.config.bind_addr)
             .await
@@ -225,6 +227,28 @@ impl Server {
             .map_err(|e| ServerError::ServeFailed(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Hand the persisted telescope configuration to the Push-To plugin at startup.
+    ///
+    /// `POST /api/settings` already does this on every change, but nothing did it on
+    /// boot, so a fresh process ran with the solver's compiled-in default field of
+    /// view until the user happened to touch a setting. On a narrow field that default
+    /// is not merely imprecise — it is unusable, and the wasted attempt is what forces
+    /// the slow blind fallback. `Server::new` cannot do it because reading settings is
+    /// async; here it is, and settings are already loaded by `AppState::new`.
+    async fn propagate_telescope_settings(&self) {
+        if crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_none() {
+            return;
+        }
+
+        let telescope = self.state.settings.read().await.telescope.clone();
+        if let Err(e) =
+            crate::server::services::PushToService::set_telescope_settings(&self.state, telescope)
+                .await
+        {
+            warn!(error = %e, "Could not apply telescope settings to the Push-To solver at startup");
+        }
     }
 }
 

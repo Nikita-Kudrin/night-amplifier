@@ -70,9 +70,10 @@ pub struct PersistedSettings {
     /// Enable multi-point alignment for planetary (Pro only)
     #[serde(default)]
     pub planetary_multi_point_alignment: bool,
-    /// Deduced field of view from successful plate solves
-    #[serde(default)]
-    pub push_to_fov: Option<f32>,
+    // NOTE: `push_to_fov` used to live here. Plate solving is a Pro feature and now
+    // persists its own solver state (position + per-rig FOV) in `push_to_state.json`,
+    // which the Pro plugin owns end to end. Files written by older versions still
+    // contain the key; serde ignores it, and Pro relearns the FOV on its first solve.
     #[serde(default)]
     pub eyepiece: EyepieceSettings,
     #[serde(default)]
@@ -174,7 +175,6 @@ impl From<&CaptureSettings> for PersistedSettings {
             planetary_auto_tracking: settings.planetary_auto_tracking,
             planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             wanderer_mode: settings.wanderer_mode,
-            push_to_fov: settings.push_to_fov,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
@@ -220,7 +220,6 @@ impl From<PersistedSettings> for CaptureSettings {
             planetary_auto_tracking: persisted.planetary_auto_tracking,
             planetary_multi_point_alignment: persisted.planetary_multi_point_alignment,
             wanderer_mode: persisted.wanderer_mode,
-            push_to_fov: persisted.push_to_fov,
             eyepiece: persisted.eyepiece,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
