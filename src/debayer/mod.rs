@@ -36,7 +36,7 @@ use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use tracing::instrument;
 
-pub use algorithms::{debayer_bilinear, debayer_bilinear_to_rgb8, debayer_vng};
+use algorithms::{debayer_bilinear, debayer_bilinear_to_rgb8, debayer_vng};
 
 /// Debayering algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
