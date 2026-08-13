@@ -8,6 +8,7 @@ mod format;
 mod ops;
 
 pub use format::PixelFormat;
+pub(crate) use ops::sample_to_u8;
 
 /// A frame of image data stored as normalized f32 values in [0.0, 1.0]
 #[derive(Debug, Clone)]
@@ -99,7 +100,21 @@ impl Frame {
         self.width == other.width && self.height == other.height && self.channels == other.channels
     }
 
-    /// Area-average downsample by a given factor
+    /// Area-average downsample by an integer factor, preserving f32 precision.
+    ///
+    /// **This has no call sites in this crate — it is used by the Pro plate-solve
+    /// plugin**, which bins a frame before handing it to ASTAP. It was once
+    /// deleted here as "dead code, no call sites anywhere", which broke the Pro
+    /// build; a dead-code claim about a `pub` item is not verifiable from this
+    /// repository alone. Keep it, or update `night-amplifier-pro` in the same
+    /// change.
+    ///
+    /// Distinct from the streaming encoder's box filter in `server::encoding`,
+    /// which takes an arbitrary target size and emits `u8`. This one takes an
+    /// integer factor and stays in f32 because the solver needs the precision.
+    ///
+    /// Trailing pixels are dropped: output is `width / factor` by
+    /// `height / factor`.
     pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {
         use rayon::prelude::*;
 
@@ -129,7 +144,6 @@ impl Frame {
         let inv_area = 1.0 / (factor * factor) as f32;
         let mut output = vec![0.0f32; dst_width * dst_height * channels];
         let src_data = self.data.as_slice();
-        let src_width = self.width;
 
         output
             .par_chunks_mut(dst_width * channels)
@@ -138,7 +152,7 @@ impl Frame {
                 let src_y_start = dst_y * factor;
                 for dst_x in 0..dst_width {
                     let src_x_start = dst_x * factor;
-                    
+
                     if channels == 1 {
                         let mut sum = 0.0f32;
                         for sy in 0..factor {
@@ -166,20 +180,21 @@ impl Frame {
                         row[out_idx + 1] = sum_g * inv_area;
                         row[out_idx + 2] = sum_b * inv_area;
                     } else {
-                        // Fallback for other channel counts
-                        let mut sums = vec![0.0f32; channels];
+                        // Fallback for other channel counts. Accumulates straight
+                        // into the (zero-initialised) output row: a scratch `Vec`
+                        // here would be one allocation per output pixel.
+                        let out_idx = dst_x * channels;
                         for sy in 0..factor {
                             let row_start = (src_y_start + sy) * src_width * channels;
                             for sx in 0..factor {
                                 let pixel_start = row_start + (src_x_start + sx) * channels;
                                 for c in 0..channels {
-                                    sums[c] += src_data[pixel_start + c];
+                                    row[out_idx + c] += src_data[pixel_start + c];
                                 }
                             }
                         }
-                        let out_idx = dst_x * channels;
                         for c in 0..channels {
-                            row[out_idx + c] = sums[c] * inv_area;
+                            row[out_idx + c] *= inv_area;
                         }
                     }
                 }
@@ -241,5 +256,145 @@ mod tests {
     fn test_memory_size() {
         let frame = Frame::zeros(1920, 1080, 3).unwrap();
         assert_eq!(frame.memory_size(), 1920 * 1080 * 3 * 4);
+    }
+
+    // ------------------------------------------------------------------
+    // downsample
+    //
+    // No call sites in this crate (the Pro plate solver is the only caller),
+    // so without these tests `cargo test` here exercises none of the three
+    // channel branches. A silent indexing error would corrupt astrometry.
+    // ------------------------------------------------------------------
+
+    /// Distinct value per (x, y, channel) so a transposition or a channel mix-up
+    /// cannot survive. Deliberately not a simple ramp in `x`: a channel swap on
+    /// `c * 0.1` alone would be caught, but a row/column swap would not.
+    fn gradient_frame(width: usize, height: usize, channels: usize) -> Frame {
+        let mut data = vec![0.0f32; width * height * channels];
+        for y in 0..height {
+            for x in 0..width {
+                for c in 0..channels {
+                    let idx = (y * width + x) * channels + c;
+                    data[idx] = (x as f32 * 3.0 + y as f32 * 7.0 + c as f32 * 100.0) / 1000.0;
+                }
+            }
+        }
+        Frame::from_f32_vec(data, width, height, channels).unwrap()
+    }
+
+    /// Straightforward scalar box average, independent of the parallel/branched
+    /// production code.
+    fn reference_downsample(frame: &Frame, factor: usize) -> Frame {
+        let (dst_w, dst_h) = (frame.width() / factor, frame.height() / factor);
+        let mut out = Frame::zeros(dst_w, dst_h, frame.channels()).unwrap();
+        for dy in 0..dst_h {
+            for dx in 0..dst_w {
+                for c in 0..frame.channels() {
+                    let mut sum = 0.0f32;
+                    for sy in 0..factor {
+                        for sx in 0..factor {
+                            sum += frame.get_pixel(dx * factor + sx, dy * factor + sy, c);
+                        }
+                    }
+                    out.set_pixel(dx, dy, c, sum / (factor * factor) as f32);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_downsample_rejects_zero_factor() {
+        let frame = Frame::zeros(8, 8, 3).unwrap();
+        assert!(frame.downsample(0).is_err());
+    }
+
+    #[test]
+    fn test_downsample_rejects_factor_larger_than_image() {
+        let frame = Frame::zeros(4, 4, 3).unwrap();
+        assert!(frame.downsample(8).is_err());
+    }
+
+    #[test]
+    fn test_downsample_by_one_is_identity() {
+        let frame = gradient_frame(6, 5, 3);
+        let out = frame.downsample(1).unwrap();
+        assert_eq!(out.data(), frame.data());
+    }
+
+    /// Covers all three branches (1, 3 and the general fallback) against an
+    /// independent reference.
+    #[test]
+    fn test_downsample_matches_reference_for_every_channel_branch() {
+        for channels in [1, 3, 2, 4] {
+            for factor in [2, 3, 4] {
+                let frame = gradient_frame(24, 18, channels);
+                let got = frame.downsample(factor).unwrap();
+                let want = reference_downsample(&frame, factor);
+
+                assert_eq!(
+                    got.width(),
+                    want.width(),
+                    "channels={channels} factor={factor}"
+                );
+                assert_eq!(
+                    got.height(),
+                    want.height(),
+                    "channels={channels} factor={factor}"
+                );
+                assert_eq!(got.channels(), channels);
+
+                for (i, (&g, &w)) in got.data().iter().zip(want.data()).enumerate() {
+                    assert!(
+                        (g - w).abs() < 1e-6,
+                        "channels={channels} factor={factor} sample {i}: {g} != {w}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A uniform frame averages to itself no matter how wrong the weights are,
+    /// so pin the area divisor with a frame whose mean is known but not constant.
+    #[test]
+    fn test_downsample_averages_rather_than_subsamples() {
+        // 2x2 block of 0.0, 0.2, 0.4, 0.6 -> mean 0.3
+        let data = vec![0.0, 0.2, 0.4, 0.6];
+        let frame = Frame::from_f32_vec(data, 2, 2, 1).unwrap();
+        let out = frame.downsample(2).unwrap();
+        assert_eq!(out.width(), 1);
+        assert_eq!(out.height(), 1);
+        assert!((out.get_pixel(0, 0, 0) - 0.3).abs() < 1e-6);
+    }
+
+    /// Non-multiple dimensions drop the trailing partial block rather than
+    /// reading past the row.
+    #[test]
+    fn test_downsample_truncates_trailing_partial_blocks() {
+        let frame = gradient_frame(7, 5, 3);
+        let out = frame.downsample(2).unwrap();
+        assert_eq!((out.width(), out.height()), (3, 2));
+
+        let want = reference_downsample(&frame, 2);
+        for (&g, &w) in out.data().iter().zip(want.data()) {
+            assert!((g - w).abs() < 1e-6);
+        }
+    }
+
+    /// The row-chunked rayon split must not change results.
+    #[test]
+    fn test_downsample_is_invariant_to_thread_count() {
+        let frame = gradient_frame(64, 48, 3);
+        let single = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| frame.downsample(3).unwrap());
+        let many = rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build()
+            .unwrap()
+            .install(|| frame.downsample(3).unwrap());
+        assert_eq!(single.data(), many.data());
     }
 }

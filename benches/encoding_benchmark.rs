@@ -26,13 +26,18 @@ fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
 fn bench_encoding(c: &mut Criterion) {
     // IMX464 resolution (3 channels - fast path)
     let frame_imx464_rgb = create_test_frame(2712, 1538, 3);
-    
-    // IMX464 resolution (1 channel - slow path with debayer)
+
+    // IMX464 resolution (1 channel — mono sensor, no downsampling at 4K box)
     let frame_imx464_mono = create_test_frame(2712, 1538, 1);
-    
+
+    // ASI1600MM (4656x3520 mono) — a large mono sensor, so the JPEG tiers must
+    // box-average it down. This is the case that used to debayer at full
+    // resolution into a ~196 MB f32 RGB frame before emitting grey pixels.
+    let frame_mono_large = create_test_frame(4656, 3520, 1);
+
     // 4K resolution (to test downsampling threshold)
     let frame_4k = create_test_frame(3840, 2160, 3);
-    
+
     // 8K resolution (simulating a very large sensor that will trigger downsampling)
     let frame_8k = create_test_frame(7680, 4320, 3);
 
@@ -80,7 +85,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_rgb), 8).unwrap())
     });
 
-    // mono debayer path with 4 chunks
+    // mono grey-replication path with 4 chunks
     group_chunked.bench_function("imx464_mono_4chunks", |b| {
         b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_mono), 4).unwrap())
     });
@@ -119,6 +124,14 @@ fn bench_encoding(c: &mut Criterion) {
 
     group_jpeg.bench_function("imx464_rgb_full_res", |b| {
         b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), None, None).unwrap())
+    });
+
+    // Mono sensor large enough to need downsampling — the path that previously
+    // ran a full-resolution debayer to produce grey output.
+    group_jpeg.bench_function("mono_asi1600mm_to_1080p", |b| {
+        b.iter(|| {
+            encode_rgb8_jpeg_dynamic(black_box(&frame_mono_large), Some(1920), Some(1080)).unwrap()
+        })
     });
 
     group_jpeg.finish();

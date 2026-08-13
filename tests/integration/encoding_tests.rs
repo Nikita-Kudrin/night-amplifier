@@ -421,12 +421,18 @@ fn probe_jpeg_encoding_candidates() {
             .process(&mut preview)
             .expect("preview render failed");
 
-        // Production debayer path (what frame_to_rgb8 does for 1-channel frames)
+        // Mirrors what `frame_to_rgb8` does: a 1-channel frame at encode time is
+        // genuine monochrome (colour is debayered at capture), so the channel is
+        // replicated across RGB rather than debayered.
         let rgb8 = if preview.channels() == 1 {
-            let detection =
-                night_amplifier::debayer::detect_cfa_pattern(&preview).expect("cfa detect");
-            night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(&preview, detection.pattern)
-                .expect("debayer")
+            preview
+                .data()
+                .iter()
+                .flat_map(|&v| {
+                    let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                    [val, val, val]
+                })
+                .collect()
         } else {
             preview.to_rgb8_fast()
         };

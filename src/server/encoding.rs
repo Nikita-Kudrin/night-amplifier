@@ -3,7 +3,7 @@
 //! This module provides encoding functions for streaming image data
 //! to WebSocket clients in various formats.
 
-use crate::frame::Frame;
+use crate::frame::{sample_to_u8, Frame};
 
 /// Binary header magic number for RGB8+LZ4 stream format (legacy single-block)
 ///
@@ -65,132 +65,161 @@ pub fn clamp_client_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, 
     )
 }
 
-/// Convert a Frame to RGB8 data, handling downsampling and debayering
-fn frame_to_rgb8(frame: &Frame, max_width: u32, max_height: u32) -> Result<(Vec<u8>, u32, u32), String> {
+/// Convert a Frame to RGB8 data, box-averaging down to a bounding box if needed.
+///
+/// # Why there is no debayering here
+///
+/// A 1-channel frame reaching this function is genuine monochrome, never a raw
+/// CFA mosaic: every provider debayers colour sensors at capture — `from_bayer`
+/// in `camera/{zwo,qhy,playerone,svbony,touptek}` and `SerColorId::is_bayer` in
+/// `ser/reader.rs` — while mono sensors take the `from_raw` path at
+/// `channels = 1`, and the simulator only builds a `Debayerer` for
+/// `SensorType::Color`. Nothing between capture and here changes the channel
+/// count.
+///
+/// So mono channels are replicated across RGB. The previous code instead ran
+/// `detect_cfa_pattern` (which never errors for a 1-channel frame ≥ 4x4, and
+/// whose confidence was discarded) and debayered unconditionally, which cost a
+/// full-resolution f32 RGB frame — 3x the mono source, ~196 MB on an
+/// ASI1600MM — per tier per frame, and put colour fringing on grey data.
+fn frame_to_rgb8(
+    frame: &Frame,
+    max_width: u32,
+    max_height: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let width = frame.width();
+    let height = frame.height();
+    let channels = frame.channels();
+
+    if channels != 1 && channels != 3 {
+        return Err(format!(
+            "Unsupported channel count for RGB8 conversion: {}",
+            channels
+        ));
+    }
+
+    if width <= max_width as usize && height <= max_height as usize {
+        return Ok((expand_to_rgb8(frame), width as u32, height as u32));
+    }
+
+    let aspect_ratio = width as f32 / height as f32;
+    let (target_width, target_height) =
+        if width as f32 / max_width as f32 > height as f32 / max_height as f32 {
+            (
+                max_width as usize,
+                (max_width as f32 / aspect_ratio) as usize,
+            )
+        } else {
+            (
+                (max_height as f32 * aspect_ratio) as usize,
+                max_height as usize,
+            )
+        };
+    let target_width = target_width.max(1);
+    let target_height = target_height.max(1);
+
+    let rgb8 = box_downsample_to_rgb8(frame, target_width, target_height);
+    Ok((rgb8, target_width as u32, target_height as u32))
+}
+
+/// Convert a frame to RGB8 at its native size, replicating a mono channel.
+fn expand_to_rgb8(frame: &Frame) -> Vec<u8> {
+    use rayon::prelude::*;
+
+    if frame.channels() == 1 {
+        frame
+            .data()
+            .par_iter()
+            .flat_map_iter(|&v| {
+                let val = sample_to_u8(v);
+                [val, val, val]
+            })
+            .collect()
+    } else {
+        frame.to_rgb8_fast()
+    }
+}
+
+/// Box-average `frame` to `target_width` x `target_height`, emitting RGB8 directly.
+///
+/// Folding the f32 → u8 conversion into the accumulation pass keeps the
+/// intermediate downsampled frame from ever materialising, which is the point of
+/// the exercise: it was a 24.7 MB write plus a 24.7 MB read per frame.
+///
+/// Caller guarantees `channels` is 1 or 3, and that both target dimensions are
+/// non-zero and no larger than the source, so every source range is non-empty.
+fn box_downsample_to_rgb8(frame: &Frame, target_width: usize, target_height: usize) -> Vec<u8> {
     use rayon::prelude::*;
 
     let width = frame.width();
     let height = frame.height();
+    let channels = frame.channels();
+    let src_data = frame.data();
+    let src_stride = width * channels;
 
-    // Check if downsampling is needed
-    if width > max_width as usize || height > max_height as usize {
-        let (process_frame, width, height) = if frame.channels() == 1 {
-            if let Ok(detection) = crate::debayer::detect_cfa_pattern(frame) {
-                let rgb_frame = crate::debayer::debayer_bilinear(frame, detection.pattern)
-                    .map_err(|e| e.to_string())?;
-                (std::borrow::Cow::Owned(rgb_frame), frame.width(), frame.height())
-            } else {
-                (std::borrow::Cow::Borrowed(frame), frame.width(), frame.height())
-            }
-        } else {
-            (std::borrow::Cow::Borrowed(frame), frame.width(), frame.height())
-        };
+    let x_scale = width as f32 / target_width as f32;
+    let y_scale = height as f32 / target_height as f32;
 
-        let frame_ref = &*process_frame;
-        let channels = frame_ref.channels();
-        if channels != 1 && channels != 3 {
-            return Err(format!("Unsupported channel count for downsampling: {}", channels));
-        }
-
-        let aspect_ratio = width as f32 / height as f32;
-        let (target_width, target_height) = if width as f32 / max_width as f32 > height as f32 / max_height as f32 {
-            (max_width as usize, (max_width as f32 / aspect_ratio) as usize)
-        } else {
-            ((max_height as f32 * aspect_ratio) as usize, max_height as usize)
-        };
-
-        let target_width = target_width.max(1);
-        let target_height = target_height.max(1);
-
-        let mut output = vec![0u8; target_width * target_height * 3];
-
-        let x_scale = width as f32 / target_width as f32;
-        let y_scale = height as f32 / target_height as f32;
-
-        let src_data = frame_ref.data();
-        let src_stride = width * channels;
-
-        // Precompute column ranges
-        let mut col_ranges = Vec::with_capacity(target_width);
-        for x in 0..target_width {
+    // Column ranges are identical for every row, so resolve them once per frame
+    // rather than once per output sample. The reciprocal is stored instead of the
+    // count so the per-pixel area factor is a multiply rather than a divide —
+    // that is ~2 M divides saved per 1080p tier per frame.
+    let col_ranges: Vec<(usize, usize, f32)> = (0..target_width)
+        .map(|x| {
             let src_x0 = (x as f32 * x_scale) as usize;
             let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(width);
-            let x_count = (src_x1 - src_x0).max(1);
-            col_ranges.push((src_x0, src_x1, x_count));
-        }
+            (src_x0, src_x1, 1.0 / (src_x1 - src_x0).max(1) as f32)
+        })
+        .collect();
 
-        output
-            .par_chunks_mut(target_width * 3)
-            .enumerate()
-            .for_each(|(y, row_out)| {
-                let src_y0 = (y as f32 * y_scale) as usize;
-                let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(height);
-                let y_count = (src_y1 - src_y0).max(1) as f32;
+    let mut output = vec![0u8; target_width * target_height * 3];
 
-                for (x, &(src_x0, src_x1, x_count)) in col_ranges.iter().enumerate() {
-                    let area = y_count * x_count as f32;
-                    let inv_area = 1.0 / area;
+    output
+        .par_chunks_mut(target_width * 3)
+        .enumerate()
+        .for_each(|(y, row_out)| {
+            let src_y0 = (y as f32 * y_scale) as usize;
+            let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(height);
+            let inv_y_count = 1.0 / (src_y1 - src_y0).max(1) as f32;
 
-                    if channels == 1 {
-                        let mut sum = 0.0f32;
-                        for sy in src_y0..src_y1 {
-                            let row_start = sy * src_stride;
-                            for sx in src_x0..src_x1 {
-                                sum += src_data[row_start + sx];
-                            }
+            for (x, &(src_x0, src_x1, inv_x_count)) in col_ranges.iter().enumerate() {
+                let inv_area = inv_y_count * inv_x_count;
+                let out_idx = x * 3;
+
+                if channels == 1 {
+                    let mut sum = 0.0f32;
+                    for sy in src_y0..src_y1 {
+                        let row_start = sy * src_stride;
+                        for sx in src_x0..src_x1 {
+                            sum += src_data[row_start + sx];
                         }
-                        let val = ((sum * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                        let out_idx = x * 3;
-                        row_out[out_idx] = val;
-                        row_out[out_idx + 1] = val;
-                        row_out[out_idx + 2] = val;
-                    } else {
-                        // channels is exactly 3 due to the earlier check
-                        let mut sum_r = 0.0f32;
-                        let mut sum_g = 0.0f32;
-                        let mut sum_b = 0.0f32;
-                        for sy in src_y0..src_y1 {
-                            let row_start = sy * src_stride;
-                            for sx in src_x0..src_x1 {
-                                let pixel_start = row_start + sx * 3;
-                                sum_r += src_data[pixel_start];
-                                sum_g += src_data[pixel_start + 1];
-                                sum_b += src_data[pixel_start + 2];
-                            }
-                        }
-                        let out_idx = x * 3;
-                        row_out[out_idx] = ((sum_r * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                        row_out[out_idx + 1] = ((sum_g * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                        row_out[out_idx + 2] = ((sum_b * inv_area).max(0.0).min(1.0) * 255.0 + 0.5) as u8;
                     }
-                }
-            });
-
-        Ok((output, target_width as u32, target_height as u32))
-    } else {
-        // Fast path: no downsampling
-        let rgb8_data = if frame.channels() == 1 {
-            match crate::debayer::detect_cfa_pattern(frame) {
-                Ok(detection) => {
-                    crate::debayer::debayer_bilinear_to_rgb8_fast(frame, detection.pattern)
-                        .map_err(|e| e.to_string())?
-                }
-                Err(_) => {
-                    let gray_data = frame.data();
-                    gray_data
-                        .par_iter()
-                        .flat_map_iter(|&v| {
-                            let val = (v.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
-                            [val, val, val]
-                        })
-                        .collect()
+                    let val = sample_to_u8(sum * inv_area);
+                    row_out[out_idx] = val;
+                    row_out[out_idx + 1] = val;
+                    row_out[out_idx + 2] = val;
+                } else {
+                    // channels is exactly 3 — see the caller's guarantee
+                    let mut sum_r = 0.0f32;
+                    let mut sum_g = 0.0f32;
+                    let mut sum_b = 0.0f32;
+                    for sy in src_y0..src_y1 {
+                        let row_start = sy * src_stride;
+                        for sx in src_x0..src_x1 {
+                            let pixel_start = row_start + sx * 3;
+                            sum_r += src_data[pixel_start];
+                            sum_g += src_data[pixel_start + 1];
+                            sum_b += src_data[pixel_start + 2];
+                        }
+                    }
+                    row_out[out_idx] = sample_to_u8(sum_r * inv_area);
+                    row_out[out_idx + 1] = sample_to_u8(sum_g * inv_area);
+                    row_out[out_idx + 2] = sample_to_u8(sum_b * inv_area);
                 }
             }
-        } else {
-            frame.to_rgb8_fast()
-        };
-        Ok((rgb8_data, width as u32, height as u32))
-    }
+        });
+
+    output
 }
 
 /// Encode RGB8 data with LZ4 compression for high-speed streaming (legacy SA08 format)
@@ -735,5 +764,208 @@ mod tests {
 
         assert_eq!(boxed, boxed_again);
         assert_ne!(boxed.len(), native.len());
+    }
+
+    // ==================================================================
+    // frame_to_rgb8 — the fused box downsample
+    //
+    // The pre-existing tests here feed `Frame::zeros` or a uniform fill, which
+    // average to themselves whatever the weights are, so none of them can see
+    // an arithmetic error. These use non-uniform data and an independent
+    // reference.
+    // ==================================================================
+
+    /// Distinct value per (x, y, channel), non-separable so a row/column swap or
+    /// a channel mix-up cannot survive. Values stay inside [0, 1].
+    fn gradient_frame(width: usize, height: usize, channels: usize) -> Frame {
+        let mut data = vec![0.0f32; width * height * channels];
+        for y in 0..height {
+            for x in 0..width {
+                for c in 0..channels {
+                    let idx = (y * width + x) * channels + c;
+                    let v = (x * 7 + y * 13 + c * 71) % 251;
+                    data[idx] = v as f32 / 250.0;
+                }
+            }
+        }
+        Frame::from_f32_vec(data, width, height, channels).unwrap()
+    }
+
+    /// The pre-rewrite algorithm: box-average into f32 with a real division, then
+    /// convert. This is the "current implementation" the ±1 LSB bound is against.
+    fn reference_downsample_to_rgb8(frame: &Frame, target_w: usize, target_h: usize) -> Vec<u8> {
+        let (w, h, channels) = (frame.width(), frame.height(), frame.channels());
+        let x_scale = w as f32 / target_w as f32;
+        let y_scale = h as f32 / target_h as f32;
+        let mut out = vec![0u8; target_w * target_h * 3];
+
+        for y in 0..target_h {
+            let sy0 = (y as f32 * y_scale) as usize;
+            let sy1 = (((y + 1) as f32 * y_scale) as usize).min(h);
+            let y_count = (sy1 - sy0).max(1);
+            for x in 0..target_w {
+                let sx0 = (x as f32 * x_scale) as usize;
+                let sx1 = (((x + 1) as f32 * x_scale) as usize).min(w);
+                let x_count = (sx1 - sx0).max(1);
+                let area = (y_count * x_count) as f32;
+
+                let mut avg = [0.0f32; 3];
+                for c in 0..channels {
+                    let mut sum = 0.0f32;
+                    for sy in sy0..sy1 {
+                        for sx in sx0..sx1 {
+                            sum += frame.get_pixel(sx, sy, c);
+                        }
+                    }
+                    avg[c] = sum / area;
+                }
+                if channels == 1 {
+                    avg[1] = avg[0];
+                    avg[2] = avg[0];
+                }
+
+                let idx = (y * target_w + x) * 3;
+                for c in 0..3 {
+                    out[idx + c] = (avg[c].max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                }
+            }
+        }
+        out
+    }
+
+    /// The bound the plan asks for: the fused kernel replaced `sum / area` with
+    /// `sum * (1/y_count) * (1/x_count)`, so results may differ by a rounding
+    /// step but must never differ visibly.
+    #[test]
+    fn test_downsample_matches_reference_within_1_lsb() {
+        // Non-integer scale factors so `x_count`/`y_count` vary across the row and
+        // the area divisor is exercised at more than one value.
+        for (w, h, box_w, box_h) in [
+            (400, 300, 137, 111),
+            (271, 153, 96, 54),
+            (300, 400, 111, 137),
+        ] {
+            let frame = gradient_frame(w, h, 3);
+            let (got, gw, gh) = frame_to_rgb8(&frame, box_w, box_h).unwrap();
+            let want = reference_downsample_to_rgb8(&frame, gw as usize, gh as usize);
+
+            assert_eq!(got.len(), want.len(), "{w}x{h} -> {box_w}x{box_h}");
+
+            // Guard against a vacuous pass: two all-zero buffers also agree.
+            let distinct: std::collections::HashSet<u8> = got.iter().copied().collect();
+            assert!(
+                distinct.len() > 16,
+                "{w}x{h} -> {box_w}x{box_h}: output has only {} distinct values, \
+                 the comparison is not exercising anything",
+                distinct.len()
+            );
+
+            let mut differing = 0usize;
+            for (i, (&g, &r)) in got.iter().zip(&want).enumerate() {
+                let delta = (g as i32 - r as i32).abs();
+                assert!(
+                    delta <= 1,
+                    "{w}x{h} -> {box_w}x{box_h}: sample {i} differs by {delta} ({g} vs {r})"
+                );
+                if delta != 0 {
+                    differing += 1;
+                }
+            }
+            // Informational: the reciprocal is exact whenever both counts are
+            // powers of two, so most samples match bit for bit.
+            println!(
+                "{w}x{h} -> {gw}x{gh}: {differing}/{} samples differ by 1",
+                got.len()
+            );
+        }
+    }
+
+    /// Regression guard for the mono fix. A 1-channel frame here is genuine
+    /// monochrome — every provider debayers colour at capture — so it must come
+    /// out grey. The previous code ran `detect_cfa_pattern` (which never fails)
+    /// and debayered, which tinted grey data and allocated a full-resolution f32
+    /// RGB frame to do it.
+    #[test]
+    fn test_mono_frame_downsamples_to_grey_not_false_colour() {
+        let frame = gradient_frame(400, 300, 1);
+        let (rgb, w, h) = frame_to_rgb8(&frame, 137, 111).unwrap();
+
+        assert_eq!(rgb.len(), w as usize * h as usize * 3);
+        for (i, px) in rgb.chunks_exact(3).enumerate() {
+            assert_eq!(
+                (px[0], px[1], px[2]),
+                (px[0], px[0], px[0]),
+                "pixel {i} is not grey: {px:?}"
+            );
+        }
+
+        let want = reference_downsample_to_rgb8(&frame, w as usize, h as usize);
+        for (&g, &r) in rgb.iter().zip(&want) {
+            assert!((g as i32 - r as i32).abs() <= 1);
+        }
+    }
+
+    /// Same property on the no-downsample path, which had the identical defect.
+    #[test]
+    fn test_mono_frame_stays_grey_at_native_size() {
+        let frame = gradient_frame(64, 48, 1);
+        let (rgb, w, h) = frame_to_rgb8(&frame, 1920, 1080).unwrap();
+
+        assert_eq!((w, h), (64, 48));
+        assert_eq!(rgb.len(), 64 * 48 * 3);
+        for (px, &src) in rgb.chunks_exact(3).zip(frame.data()) {
+            let expected = (src.max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+            assert_eq!(px, [expected, expected, expected]);
+        }
+    }
+
+    /// `par_chunks_mut` over output rows must not make the result depend on how
+    /// rayon splits the work.
+    #[test]
+    fn test_downsample_is_invariant_to_thread_count() {
+        let frame = gradient_frame(271, 153, 3);
+        let run = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| frame_to_rgb8(&frame, 96, 54).unwrap().0)
+        };
+        let single = run(1);
+        assert_eq!(single, run(3));
+        assert_eq!(single, run(8));
+    }
+
+    /// The channel guard applies to both paths. It used to sit inside the
+    /// downsample branch only, so an unsupported count silently produced a
+    /// wrongly sized buffer at native resolution.
+    #[test]
+    fn test_unsupported_channel_count_is_rejected_on_both_paths() {
+        let small = Frame::zeros(64, 48, 2).unwrap();
+        assert!(frame_to_rgb8(&small, 1920, 1080).is_err(), "native path");
+
+        let large = Frame::zeros(4000, 3000, 4).unwrap();
+        assert!(
+            frame_to_rgb8(&large, 1920, 1080).is_err(),
+            "downsample path"
+        );
+    }
+
+    /// Output length must always be `w * h * 3` — `encode_rgb8_lz4_chunked`
+    /// slices it as `width * 3` per row and would silently drop the tail.
+    #[test]
+    fn test_output_length_always_matches_reported_dimensions() {
+        for channels in [1, 3] {
+            for (box_w, box_h) in [(1920, 1080), (u32::MAX, u32::MAX), (37, 29)] {
+                let frame = gradient_frame(271, 153, channels);
+                let (rgb, w, h) = frame_to_rgb8(&frame, box_w, box_h).unwrap();
+                assert_eq!(
+                    rgb.len(),
+                    w as usize * h as usize * 3,
+                    "channels={channels} box={box_w}x{box_h}"
+                );
+                assert!(w <= box_w.max(271) && h <= box_h.max(153));
+            }
+        }
     }
 }
