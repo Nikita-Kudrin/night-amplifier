@@ -43,7 +43,6 @@ mod tests {
             dew_heater_enabled: true,
             dew_heater_power: 30,
             wanderer_mode: true,
-            push_to_fov: Some(2.5),
             eyepiece: EyepieceSettings {
                 binoview: true,
                 screen_width: 140.0,
@@ -143,7 +142,6 @@ mod tests {
                 < f32::EPSILON
         );
         assert_eq!(restored.use_simulated_camera, settings.use_simulated_camera);
-        assert_eq!(restored.push_to_fov, settings.push_to_fov);
         assert_eq!(restored.eyepiece.binoview, settings.eyepiece.binoview);
         assert_eq!(
             restored.eyepiece.screen_width,
@@ -247,7 +245,6 @@ mod tests {
             simulated_preload_images: 12,
             comet_roi: None,
             wanderer_mode: true,
-            push_to_fov: None,
             planetary_roi: None,
             planetary_auto_tracking: true,
             planetary_multi_point_alignment: false,
@@ -293,7 +290,6 @@ mod tests {
                 < f32::EPSILON
         );
         assert_eq!(loaded.use_simulated_camera, settings.use_simulated_camera);
-        assert_eq!(loaded.push_to_fov, settings.push_to_fov);
         assert_eq!(loaded.eyepiece.binoview, settings.eyepiece.binoview);
         assert_eq!(loaded.eyepiece.circular_view, settings.eyepiece.circular_view);
         assert_eq!(
@@ -376,5 +372,42 @@ mod tests {
 
         // Verify it's valid JSON
         let _: serde_json::Value = serde_json::from_str(&contents).unwrap();
+    }
+
+    #[test]
+    fn settings_written_by_an_older_version_still_load() {
+        // `push_to_fov` was removed when Push-To moved its solver state into the Pro
+        // plugin's own file. Every existing installation has that key on disk, so
+        // loading must ignore it rather than fall back to defaults and silently wipe
+        // the user's configuration. This is the guarantee to keep if `PersistedSettings`
+        // ever gains `#[serde(deny_unknown_fields)]`.
+        let temp_file = NamedTempFile::new().unwrap();
+        let persistence = SettingsPersistence::new(temp_file.path());
+        persistence.save(&CaptureSettings::default()).unwrap();
+
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(temp_file.path()).unwrap()).unwrap();
+        json["push_to_fov"] = serde_json::json!(0.2032);
+        json["some_future_unknown_key"] = serde_json::json!("whatever");
+        json["exposure_us"] = serde_json::json!(1_234_567u64);
+        std::fs::write(temp_file.path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+
+        let loaded = persistence
+            .load()
+            .expect("settings containing a removed key must still load");
+        assert_eq!(loaded.exposure_us, 1_234_567);
+    }
+
+    #[test]
+    fn saved_settings_no_longer_carry_push_to_fov() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let persistence = SettingsPersistence::new(temp_file.path());
+        persistence.save(&CaptureSettings::default()).unwrap();
+
+        let contents = std::fs::read_to_string(temp_file.path()).unwrap();
+        assert!(
+            !contents.contains("push_to_fov"),
+            "Pro solver state must not leak back into the Community settings file"
+        );
     }
 }

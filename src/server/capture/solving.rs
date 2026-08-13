@@ -145,20 +145,10 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
                         pos.rotation_deg,
                     ));
 
-                    let pos_fov = pos.fov_deg;
-                    // If FOV was unknown, save it to settings now that we have it
-                    if pos_fov > 0.0 {
-                        tokio::spawn({
-                            let state = Arc::clone(&state_clone);
-                            async move {
-                                {
-                                    let mut settings = state.settings.write().await;
-                                    settings.push_to_fov = Some(pos_fov as f32);
-                                }
-                                state.save_settings().await;
-                            }
-                        });
-                    }
+                    // The solved FOV is not persisted here. Plate solving is a Pro
+                    // feature and the plugin keeps its own solver state, so this stays
+                    // out of the Community settings file — it also avoids rewriting
+                    // settings.json on every solved frame.
                 }
 
                 if let Some(dir) = dir_opt {

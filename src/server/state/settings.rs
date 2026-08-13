@@ -70,8 +70,6 @@ pub struct CaptureSettings {
     pub dew_heater_power: i32,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
-    /// Deduced field of view from successful plate solves
-    pub push_to_fov: Option<f32>,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -282,7 +280,6 @@ impl Default for CaptureSettings {
             dew_heater_enabled: true,
             dew_heater_power: 10,
             wanderer_mode: false,
-            push_to_fov: None,
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
