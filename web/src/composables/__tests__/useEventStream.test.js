@@ -248,6 +248,54 @@ describe('useEventStream', () => {
             expect(plateSolving.value.targetName).toBe('M31')
         })
 
+        it('names the current strategy while a multi-attempt solve runs', async () => {
+            // A cold solve works down several strategies, the last of which can run for
+            // a minute. The status line has to move, or a slow solve reads as a hang.
+            const {plateSolving, solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({
+                type: 'plate_solving_progress',
+                stage: 'last known pointing',
+                attempt: 2,
+                total: 4,
+            })
+
+            expect(plateSolving.value.inProgress).toBe(true)
+            expect(plateSolving.value.targetName).toBe('M31')
+            expect(solvingMessage.value).toBe('Searching (2/4: last known pointing) : M31')
+        })
+
+        it('does not clutter the status line when there is only one attempt', async () => {
+            const {solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({
+                type: 'plate_solving_progress',
+                stage: 'full sky (blind FOV)',
+                attempt: 1,
+                total: 1,
+            })
+
+            expect(solvingMessage.value).toBe('Searching : M31')
+        })
+
+        it('drops the strategy label once the solve finishes', async () => {
+            const {plateSolving, solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({
+                type: 'plate_solving_progress', stage: 'selected target', attempt: 2, total: 3,
+            })
+            await sendEvent({type: 'position_solved'})
+
+            expect(plateSolving.value.stage).toBe(null)
+            expect(solvingMessage.value).toBe('Found : M31')
+        })
+
         it('clears plateSolving on target_cleared event', async () => {
             const {plateSolving} = useEventStream()
 

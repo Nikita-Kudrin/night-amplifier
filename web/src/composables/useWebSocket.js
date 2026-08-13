@@ -174,13 +174,18 @@ export function useEventStream() {
     // Push-To state
     const pushDirection = ref(null)
     const currentTarget = ref(null)
-    const plateSolving = ref({inProgress: false, targetName: null, lastResult: null})
+    const plateSolving = ref({inProgress: false, targetName: null, lastResult: null, stage: null})
 
     const solvingMessage = computed(() => {
-        const {inProgress, lastResult, targetName} = plateSolving.value
+        const {inProgress, lastResult, targetName, stage} = plateSolving.value
         const targetSuffix = targetName ? ` : ${targetName}` : ''
 
         if (inProgress) {
+            // Name the strategy in flight once there is more than one to distinguish;
+            // a single-attempt solve returns before anyone could read it anyway.
+            if (stage && stage.total > 1) {
+                return `Searching (${stage.attempt}/${stage.total}: ${stage.label})${targetSuffix}`
+            }
             return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
 
@@ -234,16 +239,29 @@ export function useEventStream() {
             droppedCount.value = data.dropped_count
         },
         plate_solving_started(data) {
-            plateSolving.value = {inProgress: true, targetName: data.target_name, lastResult: null}
+            plateSolving.value = {
+                inProgress: true, targetName: data.target_name, lastResult: null, stage: null,
+            }
+        },
+        plate_solving_progress(data) {
+            // A cold solve works down several strategies and the last one can run for
+            // a minute. Without the stage the indicator is indistinguishable from a hang.
+            plateSolving.value = {
+                ...plateSolving.value,
+                inProgress: true,
+                stage: {label: data.stage, attempt: data.attempt, total: data.total},
+            }
         },
         position_solved() {
             plateSolving.value = {
-                inProgress: false, targetName: plateSolving.value.targetName, lastResult: 'success',
+                inProgress: false, targetName: plateSolving.value.targetName,
+                lastResult: 'success', stage: null,
             }
         },
         position_solve_failed() {
             plateSolving.value = {
-                inProgress: false, targetName: plateSolving.value.targetName, lastResult: 'failed',
+                inProgress: false, targetName: plateSolving.value.targetName,
+                lastResult: 'failed', stage: null,
             }
         },
         push_direction_updated(data) {
@@ -351,7 +369,7 @@ export function useEventStream() {
     }
 
     function clearPlateSolving() {
-        plateSolving.value = {inProgress: false, targetName: null, lastResult: null}
+        plateSolving.value = {inProgress: false, targetName: null, lastResult: null, stage: null}
     }
 
     function clearAstapInstallProgress() {
