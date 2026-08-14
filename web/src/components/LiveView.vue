@@ -113,8 +113,8 @@ function fitToView() {
   const container = containerRef.value.getBoundingClientRect()
   // Use canvas intrinsic dimensions when available, otherwise use stream dimensions
   const canvas = canvasRef.value
-  const imgW = (canvas && canvas.width) || dimensions.value.width
-  const imgH = (canvas && canvas.height) || dimensions.value.height
+  const imgW = dimensions.value.width || (canvas && canvas.width)
+  const imgH = dimensions.value.height || (canvas && canvas.height)
   if (imgW && imgH) {
     fitToViewBase(container, imgW, imgH)
   }
