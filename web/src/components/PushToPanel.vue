@@ -199,7 +199,7 @@ onUnmounted(() => {
       <BaseInfoIcon
           v-if="!calculatedFov && hasProSolver"
           type="warning"
-          message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can drastically increase the success rate of Push-To."
+          message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can increase the success rate of Push-To."
           class="header-warning-icon"
       />
     </div>
