@@ -252,6 +252,26 @@ const HELP = {
               :class="{ selected: cam.id === selectedCamera }"
               @click="selectCamera(cam.id)"
           >
+            <button
+                v-if="isSimulatedCamera(cam)"
+                class="btn btn-sm btn-icon"
+                :disabled="connecting === cam.id || isCapturing"
+                title="Remove simulated camera"
+                @click.stop="handleRemoveSimulatedCamera(cam)"
+            >
+              <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+              >
+                <path
+                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                />
+              </svg>
+            </button>
             <div class="camera-info">
               <span class="camera-name">{{ cam.name }}</span>
               <span class="camera-details">
@@ -281,26 +301,6 @@ const HELP = {
                             : 'Disconnect'
                   }}</span>
               </button>
-              <button
-                  v-if="isSimulatedCamera(cam)"
-                  class="btn btn-sm btn-icon"
-                  :disabled="connecting === cam.id || isCapturing"
-                  title="Remove simulated camera"
-                  @click.stop="handleRemoveSimulatedCamera(cam)"
-              >
-                <svg
-                    viewBox="0 0 24 24"
-                    width="14"
-                    height="14"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                >
-                  <path
-                      d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
-                  />
-                </svg>
-              </button>
             </div>
           </div>
         </div>
@@ -311,6 +311,26 @@ const HELP = {
         <h3 class="section-title">Available</h3>
         <div class="camera-list">
           <div v-for="cam in availableCameras" :key="cam.id" class="camera-item available">
+            <button
+                v-if="isSimulatedCamera(cam)"
+                class="btn btn-sm btn-icon"
+                :disabled="connecting === cam.id"
+                title="Remove simulated camera"
+                @click.stop="handleRemoveSimulatedCamera(cam)"
+            >
+              <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+              >
+                <path
+                    d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                />
+              </svg>
+            </button>
             <div class="camera-info">
               <span class="camera-name">{{ cam.name }}</span>
               <span class="camera-details">{{ formatResolution(cam) }}</span>
@@ -322,26 +342,6 @@ const HELP = {
                   @click="handleConnect(cam.id)"
               >
                 {{ connecting === cam.id ? '...' : 'Connect' }}
-              </button>
-              <button
-                  v-if="isSimulatedCamera(cam)"
-                  class="btn btn-sm btn-icon"
-                  :disabled="connecting === cam.id"
-                  title="Remove simulated camera"
-                  @click.stop="handleRemoveSimulatedCamera(cam)"
-              >
-                <svg
-                    viewBox="0 0 24 24"
-                    width="14"
-                    height="14"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                >
-                  <path
-                      d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
-                  />
-                </svg>
               </button>
             </div>
           </div>
@@ -419,6 +419,7 @@ const HELP = {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.375rem;
   padding: 0.375rem 0.5rem;
   background: var(--surface-elevated);
   border-radius: 6px;
@@ -448,7 +449,6 @@ const HELP = {
   gap: 0;
   min-width: 0;
   flex: 1;
-  margin-right: 0.375rem;
 }
 
 .camera-name {
