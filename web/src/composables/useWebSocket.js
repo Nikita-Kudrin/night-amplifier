@@ -478,6 +478,7 @@ export function useImageStream(options = {}) {
         onClose: () => {
             stopFpsTimer()
             fps.value = 0
+            clearFrameData()
         },
         onMessage: async (event) => {
             let buffer
