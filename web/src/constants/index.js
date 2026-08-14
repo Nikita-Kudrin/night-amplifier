@@ -94,7 +94,7 @@ export const REJECTION_METHOD_OPTIONS = [
 // Background extraction algorithm options
 export const BACKGROUND_ALGORITHM_OPTIONS = [
     {value: 'grid_bilinear', label: 'Grid (Fast)'},
-    {value: 'rbf', label: 'RBF (High Quality)', pro: true},
+    {value: 'rbf', label: 'RBF (Quality)', pro: true},
 ]
 
 // Telescope setup limits

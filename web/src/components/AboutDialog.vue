@@ -169,8 +169,8 @@ onMounted(() => {
               Pro License Not Active
             </div>
             <p class="community-text">
-              You are currently using the Community Edition. Upgrade to Pro for advanced features like 
-              Push-To plate solving, advanced rejection stacking, RBF background extraction, and more.
+              You are currently using the Community Edition. Upgrade to Pro for advanced features like
+              advanced stacking, better background extraction, Push-To plate solving and more.
             </p>
           </div>
 
