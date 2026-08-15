@@ -64,6 +64,46 @@ const PERSISTENT_FAULT_THRESHOLD: u32 = 3;
 /// last resort does. See `capture_frame_bounded`.
 const CAPTURE_WATCHDOG_SLACK: Duration = Duration::from_secs(10);
 
+/// Floor for `capture_watchdog_margin` at (near-)zero exposure — e.g. a 10ms
+/// live-view frame. Set comfortably above the normal jitter ceiling observed
+/// for healthy captures (up to ~1.6s) so it doesn't false-positive on
+/// ordinary variance, while still catching a multi-second stall quickly
+/// instead of only after the full long-exposure budget.
+const CAPTURE_WATCHDOG_MIN_MARGIN: Duration = Duration::from_secs(5);
+
+/// Exposure length at which `capture_watchdog_margin` finishes ramping up to
+/// the full `config.timeout + CAPTURE_WATCHDOG_SLACK` ceiling. Set above
+/// typical EAA live-stacking sub-exposure lengths (commonly single-digit to
+/// ~20s), so most live-stacking sessions get meaningfully tighter, scaled
+/// protection instead of the flat long-exposure budget — while exposures at
+/// or beyond this (long deep-sky subs, the actual reason for a generous
+/// ceiling) get full trust.
+const CAPTURE_WATCHDOG_RAMP_EXPOSURE: Duration = Duration::from_secs(30);
+
+/// Watchdog margin added on top of the exposure itself to get
+/// `capture_frame_bounded`'s timeout — scaled down for short exposures so a
+/// stall gets caught in seconds during live view instead of only after the
+/// full ~130s long-exposure budget, while long deep-sky exposures keep their
+/// existing tolerance unchanged. Pure/deterministic so it's directly
+/// unit-testable without threads or real time.
+///
+/// Ramps linearly from `CAPTURE_WATCHDOG_MIN_MARGIN` (at zero exposure) to
+/// `config_timeout + CAPTURE_WATCHDOG_SLACK` (at or beyond
+/// `CAPTURE_WATCHDOG_RAMP_EXPOSURE`), where it holds flat.
+fn capture_watchdog_margin(exposure_us: u64, config_timeout: Duration) -> Duration {
+    // `.max(...)` guards against a degenerate/misconfigured tiny
+    // `config_timeout` ever producing a ceiling below the floor.
+    let max_margin = (config_timeout + CAPTURE_WATCHDOG_SLACK).max(CAPTURE_WATCHDOG_MIN_MARGIN);
+    let exposure = Duration::from_micros(exposure_us);
+    if exposure >= CAPTURE_WATCHDOG_RAMP_EXPOSURE {
+        return max_margin;
+    }
+    let fraction = exposure.as_secs_f64() / CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_secs_f64();
+    let min = CAPTURE_WATCHDOG_MIN_MARGIN.as_secs_f64();
+    let max = max_margin.as_secs_f64();
+    Duration::from_secs_f64(min + (max - min) * fraction)
+}
+
 /// Clear a camera's consecutive-watchdog-timeout streak. Called whenever any
 /// bounded SDK call — status or capture — returns within its budget, since
 /// that proves the camera is currently responding regardless of which
@@ -428,9 +468,8 @@ fn run_capture_task(
 
         // Capture a frame (blocking FFI call, bounded so a stuck SDK call
         // can't freeze the pipeline indefinitely — see capture_frame_bounded).
-        let watchdog_timeout = capture_config.timeout
-            + Duration::from_micros(capture_config.exposure_us)
-            + CAPTURE_WATCHDOG_SLACK;
+        let watchdog_timeout = Duration::from_micros(capture_config.exposure_us)
+            + capture_watchdog_margin(capture_config.exposure_us, capture_config.timeout);
         let (new_camera, capture_result) = match capture_frame_bounded(
             camera,
             capture_config,
@@ -670,10 +709,14 @@ enum CaptureOutcome {
 /// USB-level stall inside, say, PlayerOne's `is_image_ready()` poll blocks the
 /// whole loop indefinitely, exactly as observed in the field: a ~3 minute
 /// freeze, unresponsive to a Stop click partway through, before the SDK
-/// finally reported `POA_ERROR_INVALID_ID`. `watchdog_timeout` should be set
-/// to slightly more than that same internal budget, so the backend's own
-/// graceful timeout-and-cleanup gets the first chance to run, and this
-/// watchdog only acts as the last resort when even that gets bypassed.
+/// finally reported `POA_ERROR_INVALID_ID`. For a long exposure,
+/// `watchdog_timeout` is set to slightly more than that same internal budget,
+/// so the backend's own graceful timeout-and-cleanup gets the first chance to
+/// run and this watchdog only acts as the last resort when even that gets
+/// bypassed. For a short exposure (live view, planetary) that full budget is
+/// far too tolerant — a multi-second stall is already abnormal long before
+/// ~130s — so the caller scales `watchdog_timeout` down via
+/// `capture_watchdog_margin` instead of always using the full budget.
 ///
 /// Caveat: if cancellation is requested while `capture()` is already stuck,
 /// and this watchdog fires before the backend's own cancel-flag check would
@@ -1100,5 +1143,82 @@ mod watchdog_tests {
             !saw_persistent,
             "a successful capture in between should have reset the timeout streak"
         );
+    }
+
+    #[test]
+    fn capture_watchdog_margin_floors_at_zero_exposure() {
+        let margin = capture_watchdog_margin(0, Duration::from_secs(120));
+        assert_eq!(margin, CAPTURE_WATCHDOG_MIN_MARGIN);
+    }
+
+    #[test]
+    fn capture_watchdog_margin_is_tight_for_live_view_exposure() {
+        // 10ms — the actual live-view exposure from the field incident.
+        let margin = capture_watchdog_margin(10_000, Duration::from_secs(120));
+        assert!(
+            margin > CAPTURE_WATCHDOG_MIN_MARGIN
+                && margin < CAPTURE_WATCHDOG_MIN_MARGIN + Duration::from_millis(100),
+            "expected a margin just barely above the floor for a 10ms exposure, got {margin:?}"
+        );
+        // The whole point: this must be short enough that a repeat of the
+        // 6.96s field incident would actually trip it.
+        assert!(
+            Duration::from_micros(10_000) + margin < Duration::from_secs_f64(6.96),
+            "a 10ms-exposure watchdog timeout of {:?} would not have caught the 6.96s incident",
+            Duration::from_micros(10_000) + margin
+        );
+    }
+
+    #[test]
+    fn capture_watchdog_margin_is_midpoint_at_half_ramp() {
+        let config_timeout = Duration::from_secs(120);
+        let max_margin = config_timeout + CAPTURE_WATCHDOG_SLACK;
+        let half_ramp = CAPTURE_WATCHDOG_RAMP_EXPOSURE / 2;
+
+        let margin = capture_watchdog_margin(half_ramp.as_micros() as u64, config_timeout);
+        let expected = CAPTURE_WATCHDOG_MIN_MARGIN + (max_margin - CAPTURE_WATCHDOG_MIN_MARGIN) / 2;
+        let diff = margin.as_secs_f64() - expected.as_secs_f64();
+        assert!(diff.abs() < 0.01, "expected ~{expected:?}, got {margin:?}");
+    }
+
+    #[test]
+    fn capture_watchdog_margin_reaches_and_holds_full_budget_past_ramp() {
+        let config_timeout = Duration::from_secs(120);
+        let max_margin = config_timeout + CAPTURE_WATCHDOG_SLACK;
+
+        let at_ramp = capture_watchdog_margin(
+            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
+            config_timeout,
+        );
+        assert_eq!(at_ramp, max_margin);
+
+        // A long deep-sky sub (5 minutes) must get exactly the same, unchanged
+        // budget as before this change — no regression for long exposures.
+        let long_exposure = capture_watchdog_margin(300_000_000, config_timeout);
+        assert_eq!(long_exposure, max_margin);
+    }
+
+    #[test]
+    fn capture_watchdog_margin_ceiling_tracks_config_timeout() {
+        // The ceiling must follow a non-default config_timeout, not a
+        // hardcoded constant.
+        let config_timeout = Duration::from_secs(60);
+        let margin = capture_watchdog_margin(
+            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
+            config_timeout,
+        );
+        assert_eq!(margin, config_timeout + CAPTURE_WATCHDOG_SLACK);
+    }
+
+    #[test]
+    fn capture_watchdog_margin_guards_against_inverted_range() {
+        // A pathologically small config_timeout must not produce a ceiling
+        // below the floor.
+        let config_timeout = Duration::from_secs(1);
+        let margin = capture_watchdog_margin(
+            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
+            config_timeout,
+        );
+        assert!(margin >= CAPTURE_WATCHDOG_MIN_MARGIN);
     }
 }
