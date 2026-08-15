@@ -156,7 +156,7 @@ pub async fn run(register_plugins: impl FnOnce()) {
     #[cfg(feature = "telemetry")]
     let log_config = {
         let telemetry_config = if args.telemetry {
-            let mut config = TelemetryConfig::default().with_enabled(true);
+            let mut config = TelemetryConfig::from_env().with_enabled(true);
             if let Some(endpoint) = args.otlp_endpoint {
                 config = config.with_endpoint(endpoint);
             }
