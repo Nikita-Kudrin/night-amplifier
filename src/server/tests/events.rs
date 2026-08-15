@@ -50,4 +50,11 @@ async fn test_event_to_json_all_variants() {
     let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
     assert_eq!(json["type"], "error");
     assert_eq!(json["message"], "Something went wrong");
+
+    // CameraPersistentlyUnresponsive
+    let event = ServerEvent::camera_persistently_unresponsive("Test Camera", 3);
+    let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+    assert_eq!(json["type"], "camera_persistently_unresponsive");
+    assert_eq!(json["name"], "Test Camera");
+    assert_eq!(json["consecutive_timeouts"], 3);
 }

@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use super::encoding::encode_rgb8_lz4;
+use super::events::ServerEvent;
 use super::state::{AppState, CaptureState, StackingType};
 
 use crate::frame::Frame;
@@ -43,7 +44,19 @@ pub use context::{PlanetaryStackingContext, StackingContext};
 use channel::{max_queue_capacity, CapturedFrame, StackedFrame};
 
 /// Cadence for polling cooled-camera status from the capture thread.
-const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Hard bound on a single `camera.status()` call (see `poll_camera_status_bounded`).
+/// If it doesn't return within this, the handle is abandoned rather than left
+/// to block frame delivery indefinitely — no vendor SDK call other than the
+/// image-data read exposes a timeout of its own.
+const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Consecutive watchdog timeouts against the same camera before escalating
+/// from an ordinary disconnect to a distinct "persistently unresponsive"
+/// signal (`ServerEvent::CameraPersistentlyUnresponsive`) — see
+/// `AppState.consecutive_watchdog_timeouts`.
+const PERSISTENT_FAULT_THRESHOLD: u32 = 3;
 
 /// Override the capture format with the best raw format advertised by the
 /// camera (`Raw16` preferred, `Raw8` as fallback). Leaves the config untouched
@@ -416,8 +429,16 @@ fn run_capture_task(
         }
 
         if camera.info().has_cooler && last_status_at.elapsed() >= STATUS_POLL_INTERVAL {
-            poll_camera_status(&state, camera.as_ref(), settings.target_temp_c, &rt);
-            last_status_at = Instant::now();
+            camera = match poll_camera_status_bounded(camera, &state, settings.target_temp_c, &rt) {
+                StatusPollOutcome::Completed(camera) => {
+                    last_status_at = Instant::now();
+                    camera
+                }
+                // The handle is gone — moved into a detached thread that
+                // didn't return in time. Nothing left to close() or return;
+                // `stacking_tx`/`storage_tx` still drop normally on the way out.
+                StatusPollOutcome::TimedOut => return None,
+            };
         }
 
         frame_number += 1;
@@ -462,25 +483,339 @@ fn run_capture_task(
     }
 }
 
-/// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated` event.
+/// Outcome of a bounded `camera.status()` call — see `poll_camera_status_bounded`.
+enum StatusPollOutcome {
+    /// The call returned in time. The camera handle is returned so the
+    /// capture loop can keep using it.
+    Completed(Box<dyn crate::camera::Camera>),
+    /// The call did not return within `STATUS_POLL_TIMEOUT`. The camera
+    /// handle is gone for good — see the function doc for why.
+    TimedOut,
+}
+
+/// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated`
+/// event — bounded by `STATUS_POLL_TIMEOUT`.
 ///
-/// Status reads run from inside the capture thread, naturally serialized with
-/// `camera.capture()` calls — this avoids contention with vendor SDKs that
-/// require a single handle per device. Errors are logged and swallowed because
-/// status reporting is best-effort and must not interrupt capture.
-fn poll_camera_status(
+/// The camera handle is owned by exactly one thread at a time — never touched
+/// concurrently, which is what avoids contention with vendor SDKs that require
+/// a single handle per device. Historically that one thread was always the
+/// capture thread itself; now it's temporarily a detached watchdog thread
+/// instead, for exactly the duration of this one call, so a stuck read can't
+/// block frame delivery. No vendor SDK call other than the image-data read
+/// exposes a timeout of its own, so without this bound a USB-level hiccup
+/// inside `camera.status()` could block the entire live view silently, for as
+/// long as the underlying call took to return (observed: several seconds to
+/// indefinitely).
+///
+/// The call runs on that detached helper thread while this function waits up
+/// to `STATUS_POLL_TIMEOUT` on a channel. If it returns in time, the handle
+/// comes back and capture continues normally. If not, the handle is abandoned
+/// for good: every backend's underlying type implements `Drop`, so the SDK
+/// resource is still released whenever that thread eventually unwinds — there
+/// is no way to forcibly cancel a stuck synchronous FFI call in Rust, so
+/// "abandon and disconnect" is the safe alternative to "wait forever." The
+/// caller must treat `TimedOut` the same as a real disconnect.
+///
+/// Also tracks consecutive timeouts per camera (`AppState.consecutive_watchdog_timeouts`)
+/// to distinguish an isolated USB hiccup from a persistent hardware fault — see
+/// `PERSISTENT_FAULT_THRESHOLD` and `ServerEvent::CameraPersistentlyUnresponsive`.
+fn poll_camera_status_bounded(
+    camera: Box<dyn crate::camera::Camera>,
     state: &Arc<AppState>,
-    camera: &dyn crate::camera::Camera,
     target_temp_c: Option<f64>,
     rt: &tokio::runtime::Handle,
-) {
-    match camera.status() {
-        Ok(status) => {
-            let name = camera.info().name.clone();
-            rt.block_on(state.update_camera_status(&name, status, target_temp_c));
+) -> StatusPollOutcome {
+    let (tx, rx) = mpsc::channel();
+    let camera_name = camera.info().name.clone();
+    // `std::thread::spawn` does not carry over the calling thread's tracing
+    // context, so `camera_status_poll` would otherwise show up as a root span
+    // with no relation to whatever surrounds this call — capture and re-enter
+    // it explicitly.
+    let parent_span = tracing::Span::current();
+
+    if let Err(e) = std::thread::Builder::new()
+        .name("status-poll-watchdog".into())
+        .spawn(move || {
+            let _parent_guard = parent_span.enter();
+            let _span = tracing::info_span!("camera_status_poll").entered();
+            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::StatusPoll);
+            let start = Instant::now();
+            let result = camera.status();
+            let _ = tx.send((camera, result, start.elapsed()));
+        })
+    {
+        // `camera` was moved into the closure above and is gone with it — an
+        // OS-level thread-spawn failure is rare enough that treating it the
+        // same as a timeout (abandon the handle, disconnect) is simplest.
+        error!(camera_name = %camera_name, error = %e, "Failed to spawn status-poll watchdog thread");
+        return StatusPollOutcome::TimedOut;
+    }
+
+    match rx.recv_timeout(STATUS_POLL_TIMEOUT) {
+        Ok((camera, result, elapsed)) => {
+            // A response arrived within budget — whatever it says, the camera
+            // is currently communicating, so any prior timeout streak no
+            // longer indicates an active fault.
+            state
+                .consecutive_watchdog_timeouts
+                .lock()
+                .expect("consecutive_watchdog_timeouts mutex poisoned")
+                .remove(&camera_name);
+
+            if elapsed > Duration::from_millis(500) {
+                warn!(
+                    camera_name = %camera_name,
+                    elapsed_ms = elapsed.as_millis(),
+                    "camera.status() was slow"
+                );
+            }
+            match result {
+                Ok(status) => {
+                    rt.block_on(state.update_camera_status(&camera_name, status, target_temp_c));
+                }
+                Err(e) => debug!(error = %e, "Failed to read camera status"),
+            }
+            StatusPollOutcome::Completed(camera)
         }
-        Err(e) => {
-            debug!(error = %e, "Failed to read camera status");
+        Err(_) => {
+            error!(
+                camera_name = %camera_name,
+                timeout = ?STATUS_POLL_TIMEOUT,
+                "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
+            );
+
+            let consecutive_timeouts = {
+                let mut counts = state
+                    .consecutive_watchdog_timeouts
+                    .lock()
+                    .expect("consecutive_watchdog_timeouts mutex poisoned");
+                let count = counts.entry(camera_name.clone()).or_insert(0);
+                *count += 1;
+                *count
+            };
+            if consecutive_timeouts >= PERSISTENT_FAULT_THRESHOLD {
+                error!(
+                    camera_name = %camera_name,
+                    consecutive_timeouts,
+                    "Camera appears persistently unresponsive across repeated reconnects"
+                );
+                let _ = state.events.send(ServerEvent::camera_persistently_unresponsive(
+                    camera_name.clone(),
+                    consecutive_timeouts,
+                ));
+            }
+
+            state.send_error(format!(
+                "Camera '{}' stopped responding (status read timed out) — disconnecting",
+                camera_name
+            ));
+            StatusPollOutcome::TimedOut
         }
+    }
+}
+
+#[cfg(test)]
+mod status_poll_tests {
+    use super::*;
+    use crate::server::state::AppState;
+    use std::sync::atomic::AtomicBool;
+
+    /// Minimal `Camera` double whose `status()` can simulate a stuck SDK call.
+    struct TestCamera {
+        info: crate::camera::CameraInfo,
+        status_delay: Duration,
+        cancel_flag: Arc<AtomicBool>,
+    }
+
+    impl TestCamera {
+        fn new(status_delay: Duration) -> Self {
+            Self {
+                info: crate::camera::CameraInfo {
+                    name: "Test Cam".to_string(),
+                    ..Default::default()
+                },
+                status_delay,
+                cancel_flag: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl crate::camera::Camera for TestCamera {
+        fn info(&self) -> &crate::camera::CameraInfo {
+            &self.info
+        }
+        fn gain_presets(&self) -> crate::camera::CameraResult<crate::camera::GainPresets> {
+            Ok(crate::camera::GainPresets::default())
+        }
+        fn status(&self) -> crate::camera::CameraResult<crate::camera::CameraStatus> {
+            if !self.status_delay.is_zero() {
+                std::thread::sleep(self.status_delay);
+            }
+            Ok(crate::camera::CameraStatus::default())
+        }
+        fn set_target_temperature(&mut self, _temp_c: f64) -> crate::camera::CameraResult<()> {
+            Ok(())
+        }
+        fn set_cooler(&mut self, _enabled: bool) -> crate::camera::CameraResult<()> {
+            Ok(())
+        }
+        fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> crate::camera::CameraResult<()> {
+            Ok(())
+        }
+        fn capture(
+            &mut self,
+            _config: &crate::camera::CaptureConfig,
+        ) -> crate::camera::CameraResult<crate::frame::Frame> {
+            crate::frame::Frame::zeros(4, 4, 1)
+                .map_err(|e| crate::camera::CameraError::ImageReadFailed(e.to_string()))
+        }
+        fn cancel(&self) {
+            self.cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn cancel_token(&self) -> Arc<AtomicBool> {
+            Arc::clone(&self.cancel_flag)
+        }
+        fn close(&mut self) -> crate::camera::CameraResult<()> {
+            Ok(())
+        }
+        fn provider_name(&self) -> &'static str {
+            "Test"
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_camera_status_bounded_completes_when_fast() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(Duration::ZERO));
+        let rt = tokio::runtime::Handle::current();
+
+        let outcome = tokio::task::spawn_blocking({
+            let state = Arc::clone(&state);
+            move || poll_camera_status_bounded(camera, &state, None, &rt)
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(outcome, StatusPollOutcome::Completed(_)),
+            "expected Completed for a fast status() call"
+        );
+    }
+
+    /// The whole point of the watchdog: a stuck `status()` call must not block
+    /// the caller past `STATUS_POLL_TIMEOUT`, even though the underlying call
+    /// (and its thread) keeps running in the background afterward.
+    #[tokio::test]
+    async fn poll_camera_status_bounded_times_out_on_stuck_call() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let camera: Box<dyn crate::camera::Camera> =
+            Box::new(TestCamera::new(STATUS_POLL_TIMEOUT + Duration::from_secs(5)));
+        let rt = tokio::runtime::Handle::current();
+
+        let start = Instant::now();
+        let outcome = tokio::task::spawn_blocking({
+            let state = Arc::clone(&state);
+            move || poll_camera_status_bounded(camera, &state, None, &rt)
+        })
+        .await
+        .unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(matches!(outcome, StatusPollOutcome::TimedOut));
+        assert!(
+            elapsed < STATUS_POLL_TIMEOUT + Duration::from_secs(2),
+            "poll_camera_status_bounded should return around STATUS_POLL_TIMEOUT, \
+             not wait for the stuck call; took {:?}",
+            elapsed
+        );
+    }
+
+    /// Run one bounded status poll against a camera that never responds in
+    /// time, returning once the call has been dispatched (it will show up as
+    /// a `TimedOut` outcome, same as the dedicated timeout test above).
+    async fn stuck_poll(state: &Arc<AppState>, rt: &tokio::runtime::Handle) {
+        let camera: Box<dyn crate::camera::Camera> =
+            Box::new(TestCamera::new(STATUS_POLL_TIMEOUT + Duration::from_secs(5)));
+        let state = Arc::clone(state);
+        let rt = rt.clone();
+        tokio::task::spawn_blocking(move || poll_camera_status_bounded(camera, &state, None, &rt))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_camera_status_bounded_escalates_after_persistent_timeouts() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let rt = tokio::runtime::Handle::current();
+
+        for i in 1..=PERSISTENT_FAULT_THRESHOLD {
+            let mut subscriber = state.subscribe_events();
+            stuck_poll(&state, &rt).await;
+
+            let mut saw_persistent = false;
+            while let Ok(event) = subscriber.try_recv() {
+                if let ServerEvent::CameraPersistentlyUnresponsive {
+                    consecutive_timeouts,
+                    ..
+                } = event
+                {
+                    assert_eq!(
+                        consecutive_timeouts, i,
+                        "escalation event should report the current streak length"
+                    );
+                    saw_persistent = true;
+                }
+            }
+            assert_eq!(
+                saw_persistent,
+                i >= PERSISTENT_FAULT_THRESHOLD,
+                "persistent-unresponsive event should only fire from the threshold-th \
+                 consecutive timeout onward (iteration {i})"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_camera_status_bounded_resets_streak_on_success() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let rt = tokio::runtime::Handle::current();
+
+        // One timeout short of the threshold.
+        for _ in 0..(PERSISTENT_FAULT_THRESHOLD - 1) {
+            stuck_poll(&state, &rt).await;
+        }
+
+        // A fast, successful poll should clear the streak.
+        let fast_camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(Duration::ZERO));
+        let outcome = {
+            let state = Arc::clone(&state);
+            let rt = rt.clone();
+            tokio::task::spawn_blocking(move || {
+                poll_camera_status_bounded(fast_camera, &state, None, &rt)
+            })
+            .await
+            .unwrap()
+        };
+        assert!(matches!(outcome, StatusPollOutcome::Completed(_)));
+
+        // One more timeout after the reset must look like "1 consecutive,"
+        // not continue the earlier streak — must not escalate.
+        let mut subscriber = state.subscribe_events();
+        stuck_poll(&state, &rt).await;
+
+        let mut saw_persistent = false;
+        while let Ok(event) = subscriber.try_recv() {
+            if matches!(event, ServerEvent::CameraPersistentlyUnresponsive { .. }) {
+                saw_persistent = true;
+            }
+        }
+        assert!(
+            !saw_persistent,
+            "a successful poll in between should have reset the timeout streak"
+        );
     }
 }

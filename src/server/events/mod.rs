@@ -57,6 +57,12 @@ pub enum ServerEvent {
     /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected)
     CameraPhaseChanged { name: String, phase: CameraPhaseDto },
 
+    /// The camera hit a run of consecutive status-poll watchdog timeouts across
+    /// reconnects — likely a persistent hardware/USB fault rather than an
+    /// isolated hiccup. Sent in addition to (not instead of) the ordinary
+    /// `Error` event that accompanies every individual timeout.
+    CameraPersistentlyUnresponsive { name: String, consecutive_timeouts: u32 },
+
     /// Error occurred
     Error { message: String },
 
@@ -299,6 +305,16 @@ impl ServerEvent {
         ServerEvent::CameraPhaseChanged {
             name: name.into(),
             phase: phase.into(),
+        }
+    }
+
+    pub fn camera_persistently_unresponsive(
+        name: impl Into<String>,
+        consecutive_timeouts: u32,
+    ) -> Self {
+        ServerEvent::CameraPersistentlyUnresponsive {
+            name: name.into(),
+            consecutive_timeouts,
         }
     }
 

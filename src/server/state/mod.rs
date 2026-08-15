@@ -22,7 +22,9 @@ mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use jpeg_tiers::{JpegTier, JpegTierCache, JpegTierClientGuard};
-pub use session::{CaptureSession, ConnectedCameraInfo};
+pub use session::{
+    CaptureSession, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD, REJECTION_RATE_WINDOW,
+};
 pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 pub use types::{CameraPhase, CaptureState};
 
@@ -70,6 +72,11 @@ pub struct AppState {
     /// Sender used by `lifecycle` to issue commands to the running monitor
     /// thread. `None` when no monitor is running.
     pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
+    /// Consecutive watchdog-timeout status-poll failures, keyed by camera
+    /// name. Incremented on a watchdog timeout, reset to 0 by any poll that
+    /// returns within its timeout — distinguishes an isolated USB hiccup from
+    /// a persistent hardware fault. See `capture::PERSISTENT_FAULT_THRESHOLD`.
+    pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, u32>>,
     /// Number of active JPEG clients per resolution tier. The render task only
     /// encodes tiers somebody is watching.
     pub jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
@@ -162,6 +169,7 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
+            consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
             jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
             lz4_clients: AtomicUsize::new(0),
@@ -223,17 +231,24 @@ impl AppState {
             .send(ServerEvent::frame_captured(frame_number, stacked_count, rejected_count));
     }
 
-    /// Record a rejected frame
+    /// Record a rejected frame (a camera-capture failure — see
+    /// [`CaptureSession::record_rejection`] for how this feeds the
+    /// current-failure-burst detection used by `should_stop_on_errors`).
     pub async fn frame_rejected(&self, reason: String) {
         let (frame_number, stacked_count, rejected_count) = {
             let mut session = self.session.write().await;
             session.frame_count += 1;
-            
+
             let settings = self.settings.read().await;
             if settings.stacking {
                 session.rejected_count += 1;
             }
-            
+            drop(settings);
+
+            // Tracked regardless of `settings.stacking` — this is about
+            // whether the camera itself is responding, not about stacking.
+            session.record_rejection(std::time::Instant::now());
+
             (session.frame_count, session.stacked_count, session.rejected_count)
         };
         let _ = self.events.send(ServerEvent::frame_rejected(
@@ -344,6 +359,7 @@ impl AppState {
         session.frame_count = 0;
         session.stacked_count = 0;
         session.rejected_count = 0;
+        session.rejection_timestamps.clear();
         session.last_error = None;
         session.started_at = Some(
             std::time::SystemTime::now()
@@ -361,6 +377,7 @@ impl AppState {
         session.frame_count = 0;
         session.stacked_count = 0;
         session.rejected_count = 0;
+        session.rejection_timestamps.clear();
         drop(session);
         self.dropped_frames.store(0, Ordering::SeqCst);
     }
