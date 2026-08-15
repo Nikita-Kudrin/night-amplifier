@@ -58,6 +58,53 @@ const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(3);
 /// `AppState.consecutive_watchdog_timeouts`.
 const PERSISTENT_FAULT_THRESHOLD: u32 = 3;
 
+/// Added on top of a capture attempt's own `config.timeout + exposure` budget
+/// to get `capture_frame_bounded`'s watchdog timeout — gives the backend's own
+/// internal timeout-and-cleanup the first chance to fire before this external
+/// last resort does. See `capture_frame_bounded`.
+const CAPTURE_WATCHDOG_SLACK: Duration = Duration::from_secs(10);
+
+/// Clear a camera's consecutive-watchdog-timeout streak. Called whenever any
+/// bounded SDK call — status or capture — returns within its budget, since
+/// that proves the camera is currently responding regardless of which
+/// specific watchdog was in play.
+fn clear_watchdog_timeout_streak(state: &Arc<AppState>, camera_name: &str) {
+    state
+        .consecutive_watchdog_timeouts
+        .lock()
+        .expect("consecutive_watchdog_timeouts mutex poisoned")
+        .remove(camera_name);
+}
+
+/// Record a watchdog timeout for a camera — a status-poll timeout and a
+/// capture timeout are equally strong evidence of the same underlying
+/// hardware/USB fault, so both feed this one counter. Once
+/// `PERSISTENT_FAULT_THRESHOLD` consecutive timeouts have accumulated,
+/// escalates with a distinct event on top of whatever per-incident error the
+/// caller already sends.
+fn record_watchdog_timeout(state: &Arc<AppState>, camera_name: &str) {
+    let consecutive_timeouts = {
+        let mut counts = state
+            .consecutive_watchdog_timeouts
+            .lock()
+            .expect("consecutive_watchdog_timeouts mutex poisoned");
+        let count = counts.entry(camera_name.to_string()).or_insert(0);
+        *count += 1;
+        *count
+    };
+    if consecutive_timeouts >= PERSISTENT_FAULT_THRESHOLD {
+        error!(
+            camera_name = %camera_name,
+            consecutive_timeouts,
+            "Camera appears persistently unresponsive across repeated reconnects"
+        );
+        let _ = state.events.send(ServerEvent::camera_persistently_unresponsive(
+            camera_name.to_string(),
+            consecutive_timeouts,
+        ));
+    }
+}
+
 /// Override the capture format with the best raw format advertised by the
 /// camera (`Raw16` preferred, `Raw8` as fallback). Leaves the config untouched
 /// if neither is advertised, letting the provider surface a clear SDK error.
@@ -379,19 +426,26 @@ fn run_capture_task(
             &camera.info().name,
         );
 
-        // Capture a frame (blocking FFI call)
-        let capture_result = {
-            let _span = tracing::info_span!(
-                "camera_capture",
-                frame_number = frame_number + 1,
-                exposure_us = capture_config.exposure_us,
-                gain = capture_config.gain,
-                bin = capture_config.bin,
-            )
-            .entered();
-            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Capture);
-            camera.capture(&capture_config)
+        // Capture a frame (blocking FFI call, bounded so a stuck SDK call
+        // can't freeze the pipeline indefinitely — see capture_frame_bounded).
+        let watchdog_timeout = capture_config.timeout
+            + Duration::from_micros(capture_config.exposure_us)
+            + CAPTURE_WATCHDOG_SLACK;
+        let (new_camera, capture_result) = match capture_frame_bounded(
+            camera,
+            capture_config,
+            frame_number + 1,
+            watchdog_timeout,
+            &state,
+        ) {
+            CaptureOutcome::Completed(cam, result) => (cam, result),
+            // The handle is gone — moved into a detached thread that didn't
+            // return in time. Nothing left to close() or return;
+            // `stacking_tx`/`storage_tx` still drop normally on the way out.
+            CaptureOutcome::TimedOut => return None,
         };
+        camera = new_camera;
+
         let frame = match capture_result {
             Ok(f) => f,
             Err(e) => {
@@ -556,11 +610,7 @@ fn poll_camera_status_bounded(
             // A response arrived within budget — whatever it says, the camera
             // is currently communicating, so any prior timeout streak no
             // longer indicates an active fault.
-            state
-                .consecutive_watchdog_timeouts
-                .lock()
-                .expect("consecutive_watchdog_timeouts mutex poisoned")
-                .remove(&camera_name);
+            clear_watchdog_timeout_streak(state, &camera_name);
 
             if elapsed > Duration::from_millis(500) {
                 warn!(
@@ -583,28 +633,7 @@ fn poll_camera_status_bounded(
                 timeout = ?STATUS_POLL_TIMEOUT,
                 "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-
-            let consecutive_timeouts = {
-                let mut counts = state
-                    .consecutive_watchdog_timeouts
-                    .lock()
-                    .expect("consecutive_watchdog_timeouts mutex poisoned");
-                let count = counts.entry(camera_name.clone()).or_insert(0);
-                *count += 1;
-                *count
-            };
-            if consecutive_timeouts >= PERSISTENT_FAULT_THRESHOLD {
-                error!(
-                    camera_name = %camera_name,
-                    consecutive_timeouts,
-                    "Camera appears persistently unresponsive across repeated reconnects"
-                );
-                let _ = state.events.send(ServerEvent::camera_persistently_unresponsive(
-                    camera_name.clone(),
-                    consecutive_timeouts,
-                ));
-            }
-
+            record_watchdog_timeout(state, &camera_name);
             state.send_error(format!(
                 "Camera '{}' stopped responding (status read timed out) — disconnecting",
                 camera_name
@@ -614,27 +643,135 @@ fn poll_camera_status_bounded(
     }
 }
 
+/// Outcome of a bounded `camera.capture()` call — see `capture_frame_bounded`.
+enum CaptureOutcome {
+    /// The call returned in time — successfully or with an error either way,
+    /// so the caller can still see what `capture()` reported while getting
+    /// the handle back to keep using.
+    Completed(
+        Box<dyn crate::camera::Camera>,
+        crate::camera::CameraResult<Frame>,
+    ),
+    /// The call did not return within `watchdog_timeout`. The camera handle
+    /// is gone for good — see `poll_camera_status_bounded`'s doc for why this
+    /// is safe (every backend's handle type implements `Drop`) and why there
+    /// is no alternative for a stuck synchronous FFI call.
+    TimedOut,
+}
+
+/// Run `camera.capture(&config)` bounded by `watchdog_timeout`, the same way
+/// `poll_camera_status_bounded` bounds `camera.status()`.
+///
+/// Every backend's own internal capture loop already computes a "total
+/// budget" of `config.timeout + exposure duration` and self-enforces it
+/// *between* the individual blocking SDK calls that make up one capture
+/// attempt (confirmed identical across PlayerOne/ZWO/SVBony/QHY/ToupTek). That
+/// self-check cannot fire if one of those individual calls itself hangs — a
+/// USB-level stall inside, say, PlayerOne's `is_image_ready()` poll blocks the
+/// whole loop indefinitely, exactly as observed in the field: a ~3 minute
+/// freeze, unresponsive to a Stop click partway through, before the SDK
+/// finally reported `POA_ERROR_INVALID_ID`. `watchdog_timeout` should be set
+/// to slightly more than that same internal budget, so the backend's own
+/// graceful timeout-and-cleanup gets the first chance to run, and this
+/// watchdog only acts as the last resort when even that gets bypassed.
+///
+/// Caveat: if cancellation is requested while `capture()` is already stuck,
+/// and this watchdog fires before the backend's own cancel-flag check would
+/// have noticed, the session ends as a disconnect rather than a clean stop.
+/// There is no way to do better without the vendor SDK supporting real
+/// cancellation of an in-flight call — still strictly better than hanging
+/// indefinitely.
+fn capture_frame_bounded(
+    camera: Box<dyn crate::camera::Camera>,
+    config: crate::camera::CaptureConfig,
+    frame_number: u64,
+    watchdog_timeout: Duration,
+    state: &Arc<AppState>,
+) -> CaptureOutcome {
+    let (tx, rx) = mpsc::channel();
+    let camera_name = camera.info().name.clone();
+    let parent_span = tracing::Span::current();
+
+    if let Err(e) = std::thread::Builder::new()
+        .name("capture-watchdog".into())
+        .spawn(move || {
+            let mut camera = camera;
+            let _parent_guard = parent_span.enter();
+            let _span = tracing::info_span!(
+                "camera_capture",
+                frame_number,
+                exposure_us = config.exposure_us,
+                gain = config.gain,
+                bin = config.bin,
+            )
+            .entered();
+            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Capture);
+            let result = camera.capture(&config);
+            let _ = tx.send((camera, result));
+        })
+    {
+        // `camera` was moved into the closure above and is gone with it —
+        // same reasoning as poll_camera_status_bounded's spawn-failure branch.
+        error!(camera_name = %camera_name, error = %e, "Failed to spawn capture watchdog thread");
+        return CaptureOutcome::TimedOut;
+    }
+
+    match rx.recv_timeout(watchdog_timeout) {
+        Ok((camera, result)) => {
+            // A response arrived within budget — regardless of whether
+            // `result` itself is Ok or Err, the camera is currently
+            // communicating, so any prior timeout streak no longer applies.
+            clear_watchdog_timeout_streak(state, &camera_name);
+            CaptureOutcome::Completed(camera, result)
+        }
+        Err(_) => {
+            error!(
+                camera_name = %camera_name,
+                timeout = ?watchdog_timeout,
+                "camera.capture() did not return in time — abandoning camera handle (suspected USB stall)"
+            );
+            record_watchdog_timeout(state, &camera_name);
+            state.send_error(format!(
+                "Camera '{}' stopped responding (capture timed out) — disconnecting",
+                camera_name
+            ));
+            CaptureOutcome::TimedOut
+        }
+    }
+}
+
 #[cfg(test)]
-mod status_poll_tests {
+mod watchdog_tests {
     use super::*;
     use crate::server::state::AppState;
     use std::sync::atomic::AtomicBool;
 
-    /// Minimal `Camera` double whose `status()` can simulate a stuck SDK call.
+    /// Minimal `Camera` double whose `status()`/`capture()` can each
+    /// independently simulate a stuck SDK call.
     struct TestCamera {
         info: crate::camera::CameraInfo,
         status_delay: Duration,
+        capture_delay: Duration,
         cancel_flag: Arc<AtomicBool>,
     }
 
     impl TestCamera {
         fn new(status_delay: Duration) -> Self {
+            Self::with_delays(status_delay, Duration::ZERO)
+        }
+
+        fn with_capture_delay(capture_delay: Duration) -> Self {
+            Self::with_delays(Duration::ZERO, capture_delay)
+        }
+
+        fn with_delays(status_delay: Duration, capture_delay: Duration) -> Self {
             Self {
                 info: crate::camera::CameraInfo {
                     name: "Test Cam".to_string(),
                     ..Default::default()
                 },
                 status_delay,
+                capture_delay,
                 cancel_flag: Arc::new(AtomicBool::new(false)),
             }
         }
@@ -666,6 +803,9 @@ mod status_poll_tests {
             &mut self,
             _config: &crate::camera::CaptureConfig,
         ) -> crate::camera::CameraResult<crate::frame::Frame> {
+            if !self.capture_delay.is_zero() {
+                std::thread::sleep(self.capture_delay);
+            }
             crate::frame::Frame::zeros(4, 4, 1)
                 .map_err(|e| crate::camera::CameraError::ImageReadFailed(e.to_string()))
         }
@@ -816,6 +956,149 @@ mod status_poll_tests {
         assert!(
             !saw_persistent,
             "a successful poll in between should have reset the timeout streak"
+        );
+    }
+
+    /// Watchdog timeout used across the `capture_frame_bounded` tests below —
+    /// short so the "stuck" tests stay fast, distinct from any production
+    /// constant since the real timeout is computed dynamically per-attempt.
+    const TEST_CAPTURE_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn capture_frame_bounded_completes_when_fast() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let camera: Box<dyn crate::camera::Camera> =
+            Box::new(TestCamera::with_capture_delay(Duration::ZERO));
+
+        let outcome = capture_frame_bounded(
+            camera,
+            crate::camera::CaptureConfig::default(),
+            1,
+            TEST_CAPTURE_WATCHDOG_TIMEOUT,
+            &state,
+        );
+
+        assert!(
+            matches!(outcome, CaptureOutcome::Completed(_, Ok(_))),
+            "expected a completed, successful capture for a fast camera"
+        );
+    }
+
+    /// The whole point of the watchdog: a stuck `capture()` call must not
+    /// block the caller past its timeout, even though the underlying call
+    /// (and its thread) keeps running in the background afterward.
+    #[test]
+    fn capture_frame_bounded_times_out_on_stuck_call() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::with_capture_delay(
+            TEST_CAPTURE_WATCHDOG_TIMEOUT + Duration::from_secs(5),
+        ));
+
+        let start = Instant::now();
+        let outcome = capture_frame_bounded(
+            camera,
+            crate::camera::CaptureConfig::default(),
+            1,
+            TEST_CAPTURE_WATCHDOG_TIMEOUT,
+            &state,
+        );
+        let elapsed = start.elapsed();
+
+        assert!(matches!(outcome, CaptureOutcome::TimedOut));
+        assert!(
+            elapsed < TEST_CAPTURE_WATCHDOG_TIMEOUT + Duration::from_secs(2),
+            "capture_frame_bounded should return around its watchdog timeout, \
+             not wait for the stuck call; took {:?}",
+            elapsed
+        );
+    }
+
+    fn stuck_capture(state: &Arc<AppState>) {
+        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::with_capture_delay(
+            TEST_CAPTURE_WATCHDOG_TIMEOUT + Duration::from_secs(5),
+        ));
+        capture_frame_bounded(
+            camera,
+            crate::camera::CaptureConfig::default(),
+            1,
+            TEST_CAPTURE_WATCHDOG_TIMEOUT,
+            state,
+        );
+    }
+
+    /// Capture timeouts feed the *same* persistent-fault counter as status
+    /// timeouts (`PERSISTENT_FAULT_THRESHOLD` is shared) — a stuck capture is
+    /// equally strong evidence of a hardware/USB fault.
+    #[test]
+    fn capture_frame_bounded_escalates_after_persistent_timeouts() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+
+        for i in 1..=PERSISTENT_FAULT_THRESHOLD {
+            let mut subscriber = state.subscribe_events();
+            stuck_capture(&state);
+
+            let mut saw_persistent = false;
+            while let Ok(event) = subscriber.try_recv() {
+                if let ServerEvent::CameraPersistentlyUnresponsive {
+                    consecutive_timeouts,
+                    ..
+                } = event
+                {
+                    assert_eq!(
+                        consecutive_timeouts, i,
+                        "escalation event should report the current streak length"
+                    );
+                    saw_persistent = true;
+                }
+            }
+            assert_eq!(
+                saw_persistent,
+                i >= PERSISTENT_FAULT_THRESHOLD,
+                "persistent-unresponsive event should only fire from the threshold-th \
+                 consecutive timeout onward (iteration {i})"
+            );
+        }
+    }
+
+    #[test]
+    fn capture_frame_bounded_resets_streak_on_success() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+
+        // One timeout short of the threshold.
+        for _ in 0..(PERSISTENT_FAULT_THRESHOLD - 1) {
+            stuck_capture(&state);
+        }
+
+        // A fast, successful capture should clear the streak.
+        let fast_camera: Box<dyn crate::camera::Camera> =
+            Box::new(TestCamera::with_capture_delay(Duration::ZERO));
+        let outcome = capture_frame_bounded(
+            fast_camera,
+            crate::camera::CaptureConfig::default(),
+            1,
+            TEST_CAPTURE_WATCHDOG_TIMEOUT,
+            &state,
+        );
+        assert!(matches!(outcome, CaptureOutcome::Completed(_, Ok(_))));
+
+        // One more timeout after the reset must look like "1 consecutive,"
+        // not continue the earlier streak — must not escalate.
+        let mut subscriber = state.subscribe_events();
+        stuck_capture(&state);
+
+        let mut saw_persistent = false;
+        while let Ok(event) = subscriber.try_recv() {
+            if matches!(event, ServerEvent::CameraPersistentlyUnresponsive { .. }) {
+                saw_persistent = true;
+            }
+        }
+        assert!(
+            !saw_persistent,
+            "a successful capture in between should have reset the timeout streak"
         );
     }
 }

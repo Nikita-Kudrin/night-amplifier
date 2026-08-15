@@ -8,7 +8,7 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -133,6 +133,54 @@ impl Args {
     }
 }
 
+/// Best-effort startup check: warn immediately if the configured OTLP
+/// endpoint isn't reachable, rather than letting the user discover it later
+/// from an empty Jaeger UI and a stream of repeated background export
+/// failures (`BatchSpanProcessor.ExportError`, once per batch, forever).
+/// Telemetry stays enabled either way — the collector may come up shortly
+/// after this check, and the OTLP client already retries on its own; this
+/// only makes the "nothing is arriving" case obvious right away instead of
+/// having to infer it from silence.
+#[cfg(feature = "telemetry")]
+async fn check_otlp_reachable(endpoint: &str) {
+    let Some((host, port)) = parse_host_port(endpoint) else {
+        return;
+    };
+    let connect = tokio::net::TcpStream::connect((host.as_str(), port));
+    match tokio::time::timeout(std::time::Duration::from_millis(500), connect).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => warn!(
+            endpoint,
+            error = %e,
+            "OTLP collector unreachable — traces/metrics will not export until it is. \
+             Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
+             than this app (the default only works when both are on the same machine)."
+        ),
+        Err(_) => warn!(
+            endpoint,
+            "OTLP collector did not respond within 500ms — traces/metrics may not export. \
+             Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
+             than this app (the default only works when both are on the same machine)."
+        ),
+    }
+}
+
+/// Extract `(host, port)` from an OTLP endpoint URL like `http://host:4317`.
+/// Deliberately simple string parsing rather than a full URL parser — good
+/// enough for the plain `scheme://host:port` shape this endpoint always has
+/// in practice. Does not handle bracketed IPv6 literals.
+#[cfg(feature = "telemetry")]
+fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
+    let without_scheme = endpoint
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(endpoint);
+    let host_port = without_scheme.split('/').next()?;
+    let (host, port_str) = host_port.rsplit_once(':')?;
+    let port = port_str.parse().ok()?;
+    Some((host.to_string(), port))
+}
+
 /// Run the Night Amplifier server.
 ///
 /// Call `register_plugins` before logging is initialized to register Pro plugin
@@ -154,7 +202,10 @@ pub async fn run(register_plugins: impl FnOnce()) {
 
     // Build logging configuration
     #[cfg(feature = "telemetry")]
-    let log_config = {
+    let (log_config, telemetry_endpoint) = {
+        // `from_env()` picks up `OTEL_EXPORTER_OTLP_ENDPOINT` /
+        // `OTEL_SERVICE_NAME` / `OTEL_ENABLED`; `--otlp-endpoint` overrides on
+        // top when given — CLI > env > default.
         let telemetry_config = if args.telemetry {
             let mut config = TelemetryConfig::from_env().with_enabled(true);
             if let Some(endpoint) = args.otlp_endpoint {
@@ -164,9 +215,17 @@ pub async fn run(register_plugins: impl FnOnce()) {
         } else {
             None
         };
-        LogConfig::default()
+
+        // Captured here (before `with_telemetry` consumes `telemetry_config`)
+        // so `check_otlp_reachable` can be called *after* `init_logging()`
+        // below — calling it here, before any subscriber exists, would mean
+        // its `warn!` has nothing to record it and is silently dropped.
+        let endpoint = telemetry_config.as_ref().map(|c| c.endpoint.clone());
+
+        let log_config = LogConfig::default()
             .with_telemetry(telemetry_config)
-            .with_span_events(args.span_timings)
+            .with_span_events(args.span_timings);
+        (log_config, endpoint)
     };
 
     #[cfg(not(feature = "telemetry"))]
@@ -186,6 +245,9 @@ pub async fn run(register_plugins: impl FnOnce()) {
         info!("OpenTelemetry tracing and metrics enabled");
         info!("View traces at http://localhost:16686 (Jaeger), metrics at http://localhost:9090 (Prometheus) or http://localhost:3000 (Grafana)");
         info!("Start the full stack: docker compose -f docker-compose.telemetry.yml up -d");
+        if let Some(endpoint) = telemetry_endpoint {
+            check_otlp_reachable(&endpoint).await;
+        }
     }
 
     let port = args.port;
