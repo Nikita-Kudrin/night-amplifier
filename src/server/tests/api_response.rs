@@ -92,6 +92,7 @@ fn test_capture_status_response_from_session() {
         started_at: Some(1234567890),
         exposure_us: 2_000_000,
         gain: 150,
+        ..Default::default()
     };
 
     let response = CaptureStatusResponse::from(&session);

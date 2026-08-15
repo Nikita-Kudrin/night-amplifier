@@ -8,7 +8,9 @@ use super::channel::CapturedFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo};
+use crate::server::state::{
+    AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD,
+};
 use crate::stacking::StackingType;
 
 /// Dedicated storage task running on its own OS thread.
@@ -153,10 +155,58 @@ pub async fn save_frame_to_disk(
     (queue_warning_active, last_warning_time)
 }
 
-/// Check if we should stop due to too many errors
+/// Check if we should stop due to a burst of *current* camera-capture failures.
+///
+/// Uses a sliding window (`CaptureSession::record_rejection`) rather than the
+/// lifetime-cumulative `rejected_count`, so a camera that failed sporadically
+/// across an otherwise-healthy multi-hour session never trips this — only a
+/// real, currently-active failure burst does (e.g. ~10 capture failures within
+/// a second, consistent with a genuine disconnect rather than a hiccup).
 pub async fn should_stop_on_errors(state: &AppState) -> bool {
     let session: RwLockReadGuard<'_, CaptureSession> = state.session.read().await;
-    session.rejected_count > 10 && session.stacked_count == 0
+    session.rejection_rate_exceeded() && session.stacked_count == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn should_stop_on_errors_false_when_healthy() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        assert!(!should_stop_on_errors(&state).await);
+    }
+
+    #[tokio::test]
+    async fn should_stop_on_errors_true_on_burst_with_no_stacked_frames() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        {
+            let mut session = state.session.write().await;
+            let now = Instant::now();
+            for i in 0..REJECTION_RATE_THRESHOLD {
+                session.record_rejection(now + Duration::from_millis(i as u64));
+            }
+        }
+        assert!(should_stop_on_errors(&state).await);
+    }
+
+    /// The `stacked_count == 0` gate must survive the switch from a lifetime
+    /// count to a windowed one — a session that has stacked at least one
+    /// frame should never auto-stop on a rejection burst.
+    #[tokio::test]
+    async fn should_stop_on_errors_false_once_a_frame_has_stacked() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        {
+            let mut session = state.session.write().await;
+            let now = Instant::now();
+            for i in 0..REJECTION_RATE_THRESHOLD {
+                session.record_rejection(now + Duration::from_millis(i as u64));
+            }
+            session.stacked_count = 1;
+        }
+        assert!(!should_stop_on_errors(&state).await);
+    }
 }
 
 /// Save stacked result if stacking was enabled and we have frames

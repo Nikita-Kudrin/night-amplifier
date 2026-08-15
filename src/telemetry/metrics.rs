@@ -223,6 +223,9 @@ pub enum FrameStage {
     Render,
     /// LZ4 encode for the lossless eyepiece stream.
     EncodeLz4,
+    /// Inline cooled-camera status poll on the capture thread (`camera.status()`).
+    /// Fires once per `STATUS_POLL_INTERVAL`, not per frame.
+    StatusPoll,
 }
 
 impl FrameStage {
@@ -233,6 +236,7 @@ impl FrameStage {
             Self::Stack => "frame.stack_ms",
             Self::Render => "frame.render_ms",
             Self::EncodeLz4 => "frame.encode_lz4_ms",
+            Self::StatusPoll => "frame.status_poll_ms",
         }
     }
 }
@@ -293,6 +297,7 @@ fn pipeline_histogram(
     static STACK: OnceLock<Histogram<f64>> = OnceLock::new();
     static RENDER: OnceLock<Histogram<f64>> = OnceLock::new();
     static ENCODE_LZ4: OnceLock<Histogram<f64>> = OnceLock::new();
+    static STATUS_POLL: OnceLock<Histogram<f64>> = OnceLock::new();
 
     let cell = match stage {
         FrameStage::Capture => &CAPTURE,
@@ -300,6 +305,7 @@ fn pipeline_histogram(
         FrameStage::Stack => &STACK,
         FrameStage::Render => &RENDER,
         FrameStage::EncodeLz4 => &ENCODE_LZ4,
+        FrameStage::StatusPoll => &STATUS_POLL,
     };
 
     if let Some(histogram) = cell.get() {
