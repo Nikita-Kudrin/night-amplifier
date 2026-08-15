@@ -124,7 +124,7 @@ impl Camera for PlayerOneCamera {
     fn status(&self) -> CameraResult<CameraStatus> {
         let temperature = catch_ffi_panic("PlayerOne::temperature", || self.camera.temperature())
             .map_err(CameraError::from)?
-            .map(|t| t as f64 / 10.0)
+            .map(|t| t as f64)
             .unwrap_or(0.0);
 
         let current_gain = catch_ffi_panic("PlayerOne::gain", || self.camera.gain())
