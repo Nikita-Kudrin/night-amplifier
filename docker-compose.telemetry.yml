@@ -12,6 +12,14 @@ services:
       - "4317:4317"     # OTLP gRPC receiver (app sends here)
     depends_on:
       - jaeger
+    # night_amplifier defaults to sending traces/metrics to http://localhost:4317,
+    # which only works when the app runs on THIS SAME machine as this compose
+    # stack. If the app runs elsewhere (e.g. the Orange Pi, while this stack runs
+    # on your workstation), point it at this host's LAN IP instead:
+    #   night_amplifier --telemetry --otlp-endpoint http://<this-host-ip>:4317
+    # or set OTEL_EXPORTER_OTLP_ENDPOINT=http://<this-host-ip>:4317 in its
+    # environment. Otherwise every export silently fails with connection-refused
+    # and nothing shows up in Jaeger/Prometheus/Grafana below.
 
   prometheus:
     image: prom/prometheus:latest
