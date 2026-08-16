@@ -292,11 +292,22 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
     apply_sensor_mode_support_override(&mut capture_config, &camera_info.info, &camera_name);
-    let probe_frame = match camera.capture(&capture_config) {
+    let probe_raw = match camera.capture(&capture_config) {
         Ok(f) => f,
         Err(e) => {
             error!(error = %e, "Failed to capture probe frame for pipeline setup");
             state.send_error(format!("Failed to capture initial frame: {}", e));
+            state.clear_active_camera_token().await;
+            lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
+            state.set_capture_state(CaptureState::Idle).await;
+            return;
+        }
+    };
+    let probe_frame = match probe_raw.to_frame(&camera_info.info) {
+        Ok(f) => f,
+        Err(e) => {
+            error!(error = %e, "Failed to decode probe frame");
+            state.send_error(format!("Failed to decode initial frame: {}", e));
             state.clear_active_camera_token().await;
             lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
             state.set_capture_state(CaptureState::Idle).await;
@@ -321,15 +332,15 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     let (render_tx, render_rx) = mpsc::sync_channel::<StackedFrame>(channel_capacity);
 
     // Send the probe frame as the first frame through the pipeline
-    let first_frame = Arc::new(probe_frame);
+    let first_raw = Arc::new(probe_raw);
     let first_msg = CapturedFrame {
-        frame: Arc::clone(&first_frame),
+        frame: Arc::clone(&first_raw),
         frame_number: 1,
         settings: settings.clone(),
         camera_info: camera_info.clone(),
     };
     let first_msg_storage = CapturedFrame {
-        frame: first_frame,
+        frame: first_raw,
         frame_number: 1,
         settings: settings.clone(),
         camera_info: camera_info.clone(),
@@ -490,7 +501,7 @@ fn run_capture_task(
         };
         camera = new_camera;
 
-        let frame = match capture_result {
+        let raw_frame = match capture_result {
             Ok(f) => f,
             Err(e) => {
                 if let crate::camera::CameraError::Cancelled = e {
@@ -532,15 +543,12 @@ fn run_capture_task(
                     last_status_at = Instant::now();
                     camera
                 }
-                // The handle is gone — moved into a detached thread that
-                // didn't return in time. Nothing left to close() or return;
-                // `stacking_tx`/`storage_tx` still drop normally on the way out.
                 StatusPollOutcome::TimedOut => return None,
             };
         }
-
+        
         frame_number += 1;
-        let arc_frame = Arc::new(frame);
+        let arc_frame = Arc::new(raw_frame);
 
         // Send to stacking channel (non-blocking — drop frame if full)
         let stacking_msg = CapturedFrame {
@@ -694,7 +702,7 @@ enum CaptureOutcome {
     /// the handle back to keep using.
     Completed(
         Box<dyn crate::camera::Camera>,
-        crate::camera::CameraResult<Frame>,
+        crate::camera::CameraResult<crate::camera::RawFrame>,
     ),
     /// The call did not return within `watchdog_timeout`. The camera handle
     /// is gone for good — see `poll_camera_status_bounded`'s doc for why this
@@ -788,6 +796,7 @@ fn capture_frame_bounded(
     }
 }
 
+
 #[cfg(test)]
 mod watchdog_tests {
     use super::*;
@@ -850,12 +859,16 @@ mod watchdog_tests {
         fn capture(
             &mut self,
             _config: &crate::camera::CaptureConfig,
-        ) -> crate::camera::CameraResult<crate::frame::Frame> {
+        ) -> crate::camera::CameraResult<crate::camera::RawFrame> {
             if !self.capture_delay.is_zero() {
                 std::thread::sleep(self.capture_delay);
             }
-            crate::frame::Frame::zeros(4, 4, 1)
-                .map_err(|e| crate::camera::CameraError::ImageReadFailed(e.to_string()))
+            Ok(crate::camera::RawFrame {
+                data: vec![0; 4 * 4].into(),
+                width: 4,
+                height: 4,
+                format: crate::camera::ImageFormat::Raw8,
+            })
         }
         fn cancel(&self) {
             self.cancel_flag.store(true, std::sync::atomic::Ordering::SeqCst);

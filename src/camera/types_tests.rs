@@ -223,3 +223,39 @@ fn should_reapply_true_on_any_field_change() {
         .with_sensor_mode(DualSamplingMode::LowReadoutNoise)
         .should_reapply(Some(&cached)));
 }
+
+#[test]
+fn test_buffer_pool_recycling() {
+    let pool = BufferPool::new();
+    
+    // Get a buffer, capacity should be at least 100
+    let buf1 = pool.get(100);
+    assert_eq!(buf1.len(), 100);
+    
+    // Drop it to return it to the pool
+    drop(buf1);
+    
+    // Get another buffer, should reuse the pooled one and resize to 200
+    let buf2 = pool.get(200);
+    assert_eq!(buf2.len(), 200);
+    
+    // Clone it - should create a new buffer but also be pooled when both are dropped
+    let buf3 = buf2.clone();
+    assert_eq!(buf3.len(), 200);
+    
+    drop(buf2);
+    drop(buf3);
+}
+
+#[test]
+fn test_pooled_buffer_deref() {
+    let pool = BufferPool::new();
+    let mut buf = pool.get(5);
+    
+    buf[0] = 42;
+    buf[4] = 99;
+    
+    assert_eq!(buf[0], 42);
+    assert_eq!(buf[4], 99);
+    assert_eq!(buf.len(), 5);
+}

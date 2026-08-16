@@ -58,6 +58,14 @@ pub struct ZwoSdkApi {
     ) -> ASI_ERROR_CODE,
     ASIStartExposure: unsafe extern "C" fn(iCameraID: c_int, bIsDark: ASI_BOOL) -> ASI_ERROR_CODE,
     ASIStopExposure: unsafe extern "C" fn(iCameraID: c_int) -> ASI_ERROR_CODE,
+    ASIStartVideoCapture: unsafe extern "C" fn(iCameraID: c_int) -> ASI_ERROR_CODE,
+    ASIStopVideoCapture: unsafe extern "C" fn(iCameraID: c_int) -> ASI_ERROR_CODE,
+    ASIGetVideoData: unsafe extern "C" fn(
+        iCameraID: c_int,
+        pBuffer: *mut c_uchar,
+        lBuffSize: c_long,
+        iWaitms: c_int,
+    ) -> ASI_ERROR_CODE,
     ASIGetExpStatus: unsafe extern "C" fn(
         iCameraID: c_int,
         pExpStatus: *mut ASI_EXPOSURE_STATUS,

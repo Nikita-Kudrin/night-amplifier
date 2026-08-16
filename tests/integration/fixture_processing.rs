@@ -247,13 +247,15 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
 
     // Process remainder of frames
     for _ in 0..(images.len() - 1) {
-        let frame = match camera.capture(&capture_config) {
+        let raw_frame = match camera.capture(&capture_config) {
             Ok(f) => f,
             Err(e) => {
                 println!("        Failed to capture frame: {}", e);
                 break;
             }
         };
+
+        let frame = raw_frame.to_frame(&camera.info()).unwrap();
 
         // Process through the pipeline
         let _result = pipeline.process_frame(&frame);

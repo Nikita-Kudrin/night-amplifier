@@ -1,6 +1,8 @@
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
+use crate::camera::RawFrame;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Maximum queue depth before warning
 pub const QUEUE_WARNING_THRESHOLD: usize = 5;
@@ -15,32 +17,30 @@ pub enum WritingSessionType {
     VideoContainer,
 }
 
-/// Type of frame being saved
+/// Type of frame being saved, along with its payload
 #[derive(Debug, Clone)]
 pub enum FrameType {
     /// Raw captured frame (FITS or SER depending on session type)
-    Raw,
+    Raw(Arc<RawFrame>),
     /// Stacked result frame (FITS)
-    Stacked,
+    Stacked(Arc<Frame>),
     /// Stretched stacked frame (PNG for sharing)
-    StackedPng,
+    StackedPng(Arc<Frame>),
 }
 
 /// A request to write a frame to disk
 #[derive(Debug, Clone)]
 pub struct WriteRequest {
-    /// The frame data to write.
-    ///
-    /// Shared rather than owned so the capture pipeline can hand the disk
-    /// writer the same allocation it already holds instead of copying a
-    /// full-resolution frame per saved exposure.
-    pub frame: std::sync::Arc<Frame>,
-    /// Type of frame
+    /// Type of frame and its payload
     pub frame_type: FrameType,
     /// Frame number (for raw frames)
     pub frame_number: u64,
     /// Metadata for FITS headers
     pub metadata: FitsMetadata,
+    /// Sensor type of the camera that captured this frame
+    pub sensor_type: crate::camera::SensorType,
+    /// Bayer pattern of the camera that captured this frame (if applicable)
+    pub bayer_pattern: Option<crate::CfaPattern>,
 }
 
 /// Message sent to the disk writer worker

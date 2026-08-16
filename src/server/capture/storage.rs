@@ -7,6 +7,7 @@ use tracing::{debug, info, warn};
 use super::channel::CapturedFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
+use crate::camera::RawFrame;
 use crate::server::events::ServerEvent;
 use crate::server::state::{
     AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD,
@@ -99,7 +100,7 @@ pub async fn initialize_capture_session(state: &AppState) -> Result<(), String> 
 /// Save a frame to disk and handle queue warnings
 pub async fn save_frame_to_disk(
     state: &AppState,
-    frame: &Arc<Frame>,
+    frame: &Arc<RawFrame>,
     frame_number: u64,
     settings: &CaptureSettings,
     camera_info: &ConnectedCameraInfo,
@@ -131,7 +132,7 @@ pub async fn save_frame_to_disk(
 
     if let Err(e) = state
         .disk_writer
-        .queue_raw_frame(raw_frame, frame_number, metadata)
+        .queue_raw_frame(raw_frame, frame_number, metadata, camera_info.info.sensor_type, camera_info.info.bayer_pattern)
     {
         warn!(error = %e, frame_number = frame_number, "Failed to queue frame for saving");
     }
