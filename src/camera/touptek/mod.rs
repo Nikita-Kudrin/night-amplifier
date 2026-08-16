@@ -76,6 +76,8 @@ pub struct TouptekCamera {
     cancel_flag: Arc<AtomicBool>,
     cooler_on: bool,
     last_applied_config: Option<CaptureConfig>,
+    /// Reused across frames instead of allocating fresh every capture.
+    capture_buffer: Vec<u8>,
 }
 
 impl TouptekCamera {
@@ -126,6 +128,7 @@ impl TouptekCamera {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             cooler_on: false,
             last_applied_config: None,
+            capture_buffer: Vec::new(),
         })
     }
 }
@@ -288,7 +291,7 @@ impl Camera for TouptekCamera {
             ImageFormat::Rgb24 => 3,
         };
         let buf_size = (w as usize) * (h as usize) * bytes_per_pixel;
-        let mut buffer = vec![0u8; buf_size];
+        self.capture_buffer.resize(buf_size, 0);
 
         // Calculate timeout: exposure + margin
         let exposure_duration = Duration::from_micros(config.exposure_us);
@@ -319,7 +322,7 @@ impl Camera for TouptekCamera {
             // Try to pull with a short wait — allows cancel checks
             let chunk_wait = 500u32.min(wait_ms);
             match catch_ffi_panic("ToupTek::wait_image", || {
-                self.handle.wait_image_raw(chunk_wait, &mut buffer)
+                self.handle.wait_image_raw(chunk_wait, &mut self.capture_buffer)
             }) {
                 Ok(Ok(info)) => break info,
                 Ok(Err(_)) => continue, // Not ready yet
@@ -358,10 +361,10 @@ impl Camera for TouptekCamera {
 
         if is_color {
             let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            Frame::from_bayer(&buffer, actual_w, actual_h, pixel_format, pattern)
+            Frame::from_bayer(&self.capture_buffer, actual_w, actual_h, pixel_format, pattern)
                 .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         } else {
-            Frame::from_raw(&buffer, actual_w, actual_h, 1, pixel_format)
+            Frame::from_raw(&self.capture_buffer, actual_w, actual_h, 1, pixel_format)
                 .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         }
     }
