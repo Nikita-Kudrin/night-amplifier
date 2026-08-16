@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use crate::frame::Frame;
+use crate::camera::RawFrame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
 
 /// Maximum memory budget for in-flight frame queues (2 GB).
@@ -38,8 +39,8 @@ pub fn max_queue_capacity(frame_memory_bytes: usize) -> usize {
 /// Uses `Arc<Frame>` so the same allocation is shared between the stacking
 /// and storage channels without cloning the pixel data.
 pub struct CapturedFrame {
-    /// The captured frame data (shared reference).
-    pub frame: Arc<Frame>,
+    /// The captured raw frame data (shared reference).
+    pub frame: Arc<RawFrame>,
     /// Sequential frame number within the capture session.
     pub frame_number: u64,
     /// Snapshot of capture settings at the time of capture.

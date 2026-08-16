@@ -143,9 +143,17 @@ mod tests {
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
-        let frame = std::sync::Arc::new(Frame::filled(10, 10, 1, 0.5).unwrap());
-        for i in 0..3 {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, FitsMetadata::new());
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(200);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 10,
+            height: 10,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        
+        for i in 0..5 {
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, FitsMetadata::new(), crate::camera::SensorType::Mono, None);
         }
 
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -167,9 +175,16 @@ mod tests {
             .unwrap();
         assert!(!handle.has_queue_warning());
 
-        let frame = std::sync::Arc::new(Frame::filled(10, 10, 1, 0.5).unwrap());
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(200);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 10,
+            height: 10,
+            format: crate::camera::ImageFormat::Raw16,
+        });
         for i in 0..(QUEUE_WARNING_THRESHOLD + 2) {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i as u64, FitsMetadata::new());
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i as u64, FitsMetadata::new(), crate::camera::SensorType::Mono, None);
         }
 
         assert!(handle.has_queue_warning());
@@ -190,12 +205,19 @@ mod tests {
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
-        let frame = std::sync::Arc::new(Frame::filled(32, 32, 1, 0.5).unwrap());
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(32 * 32 * 2);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
         let mut metadata = FitsMetadata::new();
         metadata.camera = Some("Test Camera".to_string());
 
         for i in 0..5 {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone());
+            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone(), crate::camera::SensorType::Mono, None);
         }
 
         // Give it some time to process

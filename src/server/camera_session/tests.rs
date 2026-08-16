@@ -121,13 +121,13 @@ impl Camera for MockCamera {
         Ok(())
     }
 
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
-        Frame::zeros(
-            self.info.max_width as usize,
-            self.info.max_height as usize,
-            1,
-        )
-        .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<crate::camera::RawFrame> {
+        Ok(crate::camera::RawFrame {
+            data: vec![0; (self.info.max_width * self.info.max_height) as usize].into(),
+            width: self.info.max_width,
+            height: self.info.max_height,
+            format: crate::camera::ImageFormat::Raw8,
+        })
     }
 
     fn cancel(&self) {

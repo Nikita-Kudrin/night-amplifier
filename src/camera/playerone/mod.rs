@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame, BufferPool};
 use crate::ffi_safety::catch_ffi_panic;
 use crate::Frame;
 
@@ -70,9 +70,8 @@ pub struct PlayerOneCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
-    /// Reused across frames instead of allocating fresh every capture — see
-    /// `capture::run_capture`, which resizes this in place.
-    capture_buffer: Vec<u8>,
+    buffer_pool: BufferPool,
+    stream_running: bool,
 }
 
 impl PlayerOneCamera {
@@ -104,7 +103,8 @@ impl PlayerOneCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
-            capture_buffer: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            stream_running: false,
         })
     }
 }
@@ -220,12 +220,16 @@ impl Camera for PlayerOneCamera {
         .map_err(|e| CameraError::ParameterNotSupported(format!("dew_heater: {:?}", e)))
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         if config.should_reapply(self.last_applied_config.as_ref()) {
             let _span =
                 tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
                     .entered();
+            if self.stream_running {
+                let _ = catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure());
+                self.stream_running = false;
+            }
             capture::apply_config(&mut self.camera, config, &self.info)?;
             self.last_applied_config = Some(config.clone());
         }
@@ -235,7 +239,8 @@ impl Camera for PlayerOneCamera {
             &self.info,
             config,
             &self.cancel_flag,
-            &mut self.capture_buffer,
+            &self.buffer_pool,
+            &mut self.stream_running,
         )
     }
 

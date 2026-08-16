@@ -105,3 +105,17 @@ pub enum ControlId {
     ImageStabilization = 1028,
     GaindB = 1029,
 }
+
+#[link(name = "qhyccd")]
+extern "C" {
+    pub fn BeginQHYCCDLive(handle: QhyccdHandle) -> u32;
+    pub fn StopQHYCCDLive(handle: QhyccdHandle) -> u32;
+    pub fn GetQHYCCDLiveFrame(
+        handle: QhyccdHandle,
+        w: *mut u32,
+        h: *mut u32,
+        bpp: *mut u32,
+        channels: *mut u32,
+        imgdata: *mut u8,
+    ) -> u32;
+}

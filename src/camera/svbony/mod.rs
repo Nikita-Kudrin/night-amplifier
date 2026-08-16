@@ -15,7 +15,7 @@ use shim::{enumerate_devices, get_camera_property, get_camera_property_ex, parse
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
 
 use ffi_types::*;
 
@@ -81,8 +81,8 @@ pub struct SvbonyCamera {
     /// re-deriving an unrounded value from `config`. Always `Some` exactly
     /// when `last_applied_config` is `Some` — the two are written together.
     last_resolved_roi: Option<(c_int, c_int, c_int, c_int)>,
-    /// Reused across frames instead of allocating fresh every capture.
-    capture_buffer: Vec<u8>,
+    buffer_pool: BufferPool,
+    stream_running: bool,
 }
 
 impl SvbonyCamera {
@@ -125,7 +125,8 @@ impl SvbonyCamera {
             cooler_on: false,
             last_applied_config: None,
             last_resolved_roi: None,
-            capture_buffer: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            stream_running: false,
         })
     }
 }
@@ -237,7 +238,7 @@ impl Camera for SvbonyCamera {
         Err(CameraError::ParameterNotSupported("dew_heater".to_string()))
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -307,6 +308,10 @@ impl Camera for SvbonyCamera {
 
             self.last_applied_config = Some(config.clone());
             self.last_resolved_roi = Some(resolved);
+            if self.stream_running {
+                let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                self.stream_running = false;
+            }
             (resolved.2, resolved.3)
         } else {
             let (_, _, w, h) = self
@@ -316,13 +321,28 @@ impl Camera for SvbonyCamera {
         };
 
         let buffer_size = (w as usize) * (h as usize) * bytes_per_pixel;
-        self.capture_buffer.resize(buffer_size, 0);
+        let mut buffer = self.buffer_pool.get(buffer_size);
 
-        catch_ffi_panic("SVBony::start_capture", || {
-            self.handle.start_video_capture()
-        })
-        .map_err(CameraError::from)?
-        .map_err(CameraError::ExposureFailed)?;
+        let is_continuous = config.is_continuous();
+
+        if !is_continuous {
+            if self.stream_running {
+                let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                self.stream_running = false;
+            }
+            catch_ffi_panic("SVBony::start_capture", || {
+                self.handle.start_video_capture()
+            })
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)?;
+        } else if !self.stream_running {
+            catch_ffi_panic("SVBony::start_capture", || {
+                self.handle.start_video_capture()
+            })
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)?;
+            self.stream_running = true;
+        }
 
         let exposure_duration = Duration::from_micros(config.exposure_us);
         let total_timeout = config.timeout + exposure_duration + Duration::from_millis(1000);
@@ -332,15 +352,23 @@ impl Camera for SvbonyCamera {
         // Fetch frame
         let result = loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
+                if is_continuous {
+                    let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                    self.stream_running = false;
+                }
                 break Err(CameraError::Cancelled);
             }
             if start.elapsed() > total_timeout {
+                if is_continuous {
+                    let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                    self.stream_running = false;
+                }
                 break Err(CameraError::ExposureTimeout(total_timeout));
             }
 
             match catch_ffi_panic("SVBony::get_video_data", || {
                 // Short wait to allow cancellation
-                self.handle.get_video_data(&mut self.capture_buffer, 500.min(timeout_ms))
+                self.handle.get_video_data(&mut *buffer, 500.min(timeout_ms))
             }) {
                 Ok(Ok(())) => break Ok(()),
                 Ok(Err(e)) => {
@@ -348,50 +376,39 @@ impl Camera for SvbonyCamera {
                         // Timeout code from SDK, retry if we haven't hit our total timeout
                         continue;
                     }
+                    if is_continuous {
+                        let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                        self.stream_running = false;
+                    }
                     break Err(CameraError::ExposureFailed(e));
                 }
-                Err(e) => break Err(CameraError::ExposureFailed(e.to_string())),
+                Err(e) => {
+                    if is_continuous {
+                        let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                        self.stream_running = false;
+                    }
+                    break Err(CameraError::ExposureFailed(e.to_string()));
+                }
             }
         };
 
-        let _ = catch_ffi_panic("SVBony::stop_capture", || {
-            self.handle.stop_video_capture()
-        });
+        if !is_continuous {
+            let _ = catch_ffi_panic("SVBony::stop_capture", || {
+                self.handle.stop_video_capture()
+            });
+        }
 
         result?;
 
         let actual_w = w as usize;
         let actual_h = h as usize;
 
-        let pixel_format = match config.format {
-            ImageFormat::Raw8 => {
-                if is_color {
-                    PixelFormat::Bayer8
-                } else {
-                    PixelFormat::Rgb8
-                }
-            }
-            ImageFormat::Raw16 => {
-                if is_color {
-                    PixelFormat::Bayer16
-                } else {
-                    PixelFormat::Rgb16
-                }
-            }
-            ImageFormat::Rgb24 => PixelFormat::Rgb8,
-        };
-
-        if is_color {
-            // Note: Hardware binning on SVBONY might alter the bayer pattern.
-            // Some models fall back to mono on bin2, or shift the matrix. 
-            // Currently using the default pattern. 
-            let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            Frame::from_bayer(&self.capture_buffer, actual_w, actual_h, pixel_format, pattern)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        } else {
-            Frame::from_raw(&self.capture_buffer, actual_w, actual_h, 1, pixel_format)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        }
+        Ok(RawFrame {
+            data: buffer,
+            width: actual_w as u32,
+            height: actual_h as u32,
+            format: config.format,
+        })
     }
 
     fn invalidate_config_cache(&mut self) {

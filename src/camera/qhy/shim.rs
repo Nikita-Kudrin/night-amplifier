@@ -45,6 +45,16 @@ impl QhyHandle {
         Ok(Self { handle })
     }
 
+    pub fn init(&self) -> Result<(), String> {
+        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let res = unsafe { sdk.api.InitQHYCCD(self.handle) };
+        if res == QHYCCD_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("InitQHYCCD failed: {}", res))
+        }
+    }
+
     pub fn close(&self) -> Result<(), String> {
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
         let res = unsafe { sdk.api.CloseQHYCCD(self.handle) };
@@ -226,6 +236,53 @@ impl QhyHandle {
             Err("QHYCCD_ERROR".to_string())
         } else {
             Err(format!("GetQHYCCDSingleFrame failed: {}", res))
+        }
+    }
+
+    pub fn start_live(&self) -> Result<(), String> {
+        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let res = unsafe { sdk.api.BeginQHYCCDLive(self.handle) };
+        if res == QHYCCD_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("BeginQHYCCDLive failed: {}", res))
+        }
+    }
+
+    pub fn stop_live(&self) -> Result<(), String> {
+        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let res = unsafe { sdk.api.StopQHYCCDLive(self.handle) };
+        if res == QHYCCD_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("StopQHYCCDLive failed: {}", res))
+        }
+    }
+
+    pub fn get_live_frame(&self, buf: &mut [u8]) -> Result<(u32, u32), String> {
+        let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
+        let mut w = 0;
+        let mut h = 0;
+        let mut bpp = 0;
+        let mut channels = 0;
+
+        let res = unsafe {
+            sdk.api.GetQHYCCDLiveFrame(
+                self.handle,
+                &mut w,
+                &mut h,
+                &mut bpp,
+                &mut channels,
+                buf.as_mut_ptr(),
+            )
+        };
+
+        if res == QHYCCD_SUCCESS {
+            Ok((w, h))
+        } else if res == QHYCCD_READ_DIRECTLY || res == QHYCCD_ERROR {
+            Err(res.to_string())
+        } else {
+            Err(format!("GetQHYCCDLiveFrame failed: {}", res))
         }
     }
 

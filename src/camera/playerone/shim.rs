@@ -233,9 +233,10 @@ impl Camera {
         }
     }
 
-    pub fn start_exposure(&mut self) -> Result<(), String> {
+    pub fn start_exposure(&mut self, is_single: bool) -> Result<(), String> {
         let sdk = PlayerOneSdk::try_load().unwrap();
-        let err = unsafe { sdk.api.POAStartExposure(self.id, POABool::POA_TRUE) };
+        let flag = if is_single { POABool::POA_TRUE } else { POABool::POA_FALSE };
+        let err = unsafe { sdk.api.POAStartExposure(self.id, flag) };
         if err == POAErrors::POA_OK {
             Ok(())
         } else {

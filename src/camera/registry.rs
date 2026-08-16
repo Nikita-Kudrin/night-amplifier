@@ -330,9 +330,13 @@ mod tests {
         fn capture(
             &mut self,
             _: &super::super::types::CaptureConfig,
-        ) -> CameraResult<crate::Frame> {
-            crate::Frame::zeros(100, 100, 1)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+        ) -> CameraResult<crate::camera::RawFrame> {
+            Ok(crate::camera::RawFrame {
+                data: vec![0; 100 * 100].into(),
+                width: 100,
+                height: 100,
+                format: crate::camera::ImageFormat::Raw8,
+            })
         }
         fn cancel(&self) {}
         fn cancel_token(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {

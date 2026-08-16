@@ -15,7 +15,7 @@ use ffi_types::ControlId;
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
 
 /// QHY camera provider
 pub struct QhyProvider;
@@ -112,8 +112,8 @@ pub struct QhyCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
-    /// Reused across frames instead of allocating fresh every capture.
-    capture_buffer: Vec<u8>,
+    buffer_pool: BufferPool,
+    stream_running: bool,
 }
 
 impl QhyCamera {
@@ -177,7 +177,8 @@ impl QhyCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
-            capture_buffer: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            stream_running: false,
         };
 
         // Initialize defaults
@@ -359,7 +360,7 @@ impl Camera for QhyCamera {
         Err(CameraError::ParameterNotSupported("dew_heater".to_string()))
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -376,6 +377,12 @@ impl Camera for QhyCamera {
         };
 
         if config.should_reapply(self.last_applied_config.as_ref()) {
+            if self.stream_running {
+                let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(0));
+                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
+                self.stream_running = false;
+            }
             self.apply_capture_config(config.exposure_us, config.gain, config.offset, x, y, w, h, bin, bits)?;
             self.last_applied_config = Some(config.clone());
         }
@@ -384,63 +391,96 @@ impl Camera for QhyCamera {
         let total_timeout = config.timeout + exposure_duration;
         let start = Instant::now();
 
-        catch_ffi_panic("QHY::start_single", || self.camera.start_single_frame())
-            .map_err(CameraError::from)?
-            .map_err(CameraError::ExposureFailed)?;
+        let is_continuous = config.is_continuous();
+
+        if !is_continuous {
+            if self.stream_running {
+                let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(0));
+                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
+                self.stream_running = false;
+            }
+            catch_ffi_panic("QHY::start_single", || self.camera.start_single_frame())
+                .map_err(CameraError::from)?
+                .map_err(CameraError::ExposureFailed)?;
+        } else {
+            if !self.stream_running {
+                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(1));
+                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
+                catch_ffi_panic("QHY::start_live", || self.camera.start_live())
+                    .map_err(CameraError::from)?
+                    .map_err(CameraError::ExposureFailed)?;
+                self.stream_running = true;
+            }
+        }
 
         let mut buf_len = (w * h * (bits / 8)) as usize;
         if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 {
             buf_len *= 3;
         }
-        self.capture_buffer.resize(buf_len, 0);
+        let mut buffer = self.buffer_pool.get(buf_len);
 
         loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
-                let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
+                if is_continuous {
+                    let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                    self.stream_running = false;
+                } else {
+                    let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
+                }
                 return Err(CameraError::Cancelled);
             }
 
             if start.elapsed() > total_timeout {
-                let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
+                if is_continuous {
+                    let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                    self.stream_running = false;
+                } else {
+                    let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
+                }
                 return Err(CameraError::ExposureTimeout(total_timeout));
             }
 
-            let ready = catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(&mut self.capture_buffer));
+            let ready = if is_continuous {
+                catch_ffi_panic("QHY::get_live", || self.camera.get_live_frame(&mut *buffer))
+            } else {
+                catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(&mut *buffer))
+            };
+
             match ready {
                 Ok(Ok((bw, bh))) => {
-                    let channels = if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 { 3 } else { 1 };
-                    let pixel_format = match config.format {
-                        ImageFormat::Raw8 => if channels == 1 && self.info.sensor_type == SensorType::Color { PixelFormat::Bayer8 } else { PixelFormat::Rgb8 },
-                        ImageFormat::Raw16 => if channels == 1 && self.info.sensor_type == SensorType::Color { PixelFormat::Bayer16 } else { PixelFormat::Rgb16 },
-                        ImageFormat::Rgb24 => PixelFormat::Rgb8,
-                    };
-
-                    if self.info.sensor_type == SensorType::Color && channels == 1 {
-                        let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-                        return Frame::from_bayer(&self.capture_buffer, bw as usize, bh as usize, pixel_format, pattern)
-                            .map_err(|e| CameraError::ImageReadFailed(e.to_string()));
-                    } else {
-                        return Frame::from_raw(&self.capture_buffer, bw as usize, bh as usize, channels, pixel_format)
-                            .map_err(|e| CameraError::ImageReadFailed(e.to_string()));
-                    }
+                    return Ok(RawFrame {
+                        data: buffer,
+                        width: bw as u32,
+                        height: bh as u32,
+                        format: config.format,
+                    });
                 }
                 Ok(Err(e)) => {
                     // QHY GetQHYCCDSingleFrame usually returns READ_DIRECTLY or ERROR if it's not ready yet.
-                    if e == "QHYCCD_READ_DIRECTLY" || e == "QHYCCD_ERROR" {
+                    if e == "QHYCCD_READ_DIRECTLY" || e == "QHYCCD_ERROR" || e == "4294967295" {
                         let elapsed = start.elapsed();
                         if elapsed < exposure_duration.saturating_sub(Duration::from_millis(50)) {
                             // Initial backoff: sleep until 50ms before exposure ends, max 100ms at a time
                             let remaining = exposure_duration - elapsed - Duration::from_millis(50);
                             std::thread::sleep(remaining.min(Duration::from_millis(100)));
                         } else {
-                            std::thread::sleep(Duration::from_millis(10));
+                            std::thread::sleep(Duration::from_millis(5));
                         }
                         continue;
                     } else {
+                        if is_continuous {
+                            let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                            self.stream_running = false;
+                        }
                         return Err(CameraError::ExposureFailed(e));
                     }
                 }
                 Err(e) => {
+                    if is_continuous {
+                        let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+                        self.stream_running = false;
+                    }
                     return Err(CameraError::ExposureFailed(e.to_string()));
                 }
             }

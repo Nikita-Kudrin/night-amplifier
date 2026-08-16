@@ -1,6 +1,6 @@
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 
 pub struct SvbonyProvider;
 
@@ -67,7 +67,7 @@ impl Camera for SvbonyCamera {
         unimplemented!()
     }
 
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<crate::Frame> {
+    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
         unimplemented!()
     }
 

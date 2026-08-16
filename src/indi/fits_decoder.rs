@@ -4,7 +4,7 @@ use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
 use std::collections::HashMap;
 
-use crate::frame::Frame;
+use crate::camera::{ImageFormat, RawFrame};
 use crate::indi::error::{IndiError, Result};
 
 pub struct FitsDecoder;
@@ -21,8 +21,8 @@ impl FitsDecoder {
         Ok(())
     }
 
-    /// Parses a raw FITS buffer (in memory) and returns a Frame.
-    pub fn parse_fits_buffer(buffer: &[u8]) -> Result<Frame> {
+    /// Parses a raw FITS buffer (in memory) and returns a RawFrame.
+    pub fn parse_fits_buffer(buffer: &[u8], pool: &mut crate::camera::BufferPool) -> Result<RawFrame> {
         let mut header_map = HashMap::new();
         let mut data_start = 0;
 
@@ -85,36 +85,42 @@ impl FitsDecoder {
 
         let pixel_count = (width * height) as usize;
         let raw_data = &buffer[data_start..];
-        let mut pixels = vec![0.0; pixel_count];
+        let format = match bitpix {
+            8 => ImageFormat::Raw8,
+            16 => ImageFormat::Raw16,
+            _ => return Err(IndiError::DeviceNotFound(format!("Unsupported BITPIX: {}", bitpix))),
+        };
 
+        let bytes_needed = pixel_count * (bitpix as usize / 8);
+        let mut data = pool.get(bytes_needed);
         match bitpix {
             8 => {
                 if raw_data.len() < pixel_count {
                     return Err(IndiError::DeviceNotFound("Truncated 8-bit FITS data".to_string()));
                 }
-                for i in 0..pixel_count {
-                    pixels[i] = raw_data[i] as f32 / 255.0;
-                }
+                data.copy_from_slice(&raw_data[..pixel_count]);
             }
             16 => {
                 if raw_data.len() < pixel_count * 2 {
                     return Err(IndiError::DeviceNotFound("Truncated 16-bit FITS data".to_string()));
                 }
+                // FITS is big-endian, RawFrame expects little-endian
                 for i in 0..pixel_count {
-                    let idx = i * 2;
-                    let val = u16::from_be_bytes([raw_data[idx], raw_data[idx + 1]]);
-                    pixels[i] = val as f32 / 65535.0;
+                    let val = u16::from_be_bytes([raw_data[i * 2], raw_data[i * 2 + 1]]);
+                    let le_bytes = val.to_le_bytes();
+                    data[i * 2] = le_bytes[0];
+                    data[i * 2 + 1] = le_bytes[1];
                 }
             }
-            _ => {
-                return Err(IndiError::DeviceNotFound(format!("Unsupported BITPIX: {}", bitpix)));
-            }
+            _ => unreachable!(),
         }
 
-        let frame = Frame::from_f32_vec(pixels, width as usize, height as usize, 1)
-            .map_err(|e| IndiError::DeviceNotFound(format!("Frame creation failed: {:?}", e)))?;
-
-        Ok(frame)
+        Ok(RawFrame {
+            data,
+            width,
+            height,
+            format,
+        })
     }
 }
 
