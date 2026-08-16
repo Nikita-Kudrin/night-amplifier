@@ -7,7 +7,7 @@ use crate::Frame;
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 
 /// ToupTek camera provider (stub)
 pub struct TouptekProvider;
@@ -94,7 +94,7 @@ impl Camera for TouptekCamera {
         Err(CameraError::SdkNotAvailable("ToupTek".to_string()))
     }
 
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
         Err(CameraError::SdkNotAvailable("ToupTek".to_string()))
     }
 

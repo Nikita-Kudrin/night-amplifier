@@ -17,6 +17,7 @@ use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
 use super::sensor_mode;
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
+use crate::camera::types::RawFrame;
 
 pub fn apply_config(
     camera: &mut POACamera,
@@ -249,8 +250,9 @@ pub fn run_capture(
     info: &CameraInfo,
     config: &CaptureConfig,
     cancel_flag: &AtomicBool,
-    buffer: &mut Vec<u8>,
-) -> CameraResult<Frame> {
+    buffer_pool: &crate::camera::types::BufferPool,
+    stream_running: &mut bool,
+) -> CameraResult<RawFrame> {
     // Reset cancel flag
     cancel_flag.store(false, Ordering::SeqCst);
 
@@ -270,27 +272,43 @@ pub fn run_capture(
     let buffer_len = (width as usize)
         .saturating_mul(height as usize)
         .saturating_mul(bytes_per_pixel);
-    buffer.resize(buffer_len, 0);
+    let mut buffer = buffer_pool.get(buffer_len);
 
     // Calculate timeout
     let exposure_duration = Duration::from_micros(config.exposure_us);
     let total_timeout = config.timeout + exposure_duration;
     let start = Instant::now();
+    let is_continuous = config.is_continuous();
 
-    // Start exposure
-    catch_ffi_panic("PlayerOne::start_exposure", || camera.start_exposure())
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+    // Start exposure if not already running in continuous mode
+    if is_continuous {
+        if !*stream_running {
+            catch_ffi_panic("PlayerOne::start_exposure(false)", || camera.start_exposure(false))
+                .map_err(CameraError::from)?
+                .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+            *stream_running = true;
+        }
+    } else {
+        if *stream_running {
+            let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
+            *stream_running = false;
+        }
+        catch_ffi_panic("PlayerOne::start_exposure(true)", || camera.start_exposure(true))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+    }
 
     // Wait for image to be ready
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
+            if is_continuous { *stream_running = false; }
             return Err(CameraError::Cancelled);
         }
 
         if start.elapsed() > total_timeout {
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
+            if is_continuous { *stream_running = false; }
             return Err(CameraError::ExposureTimeout(total_timeout));
         }
 
@@ -300,10 +318,11 @@ pub fn run_capture(
         match ready_result {
             Ok(true) => break,
             Ok(false) => {
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(Duration::from_millis(5));
             }
             Err(e) => {
                 let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
+                if is_continuous { *stream_running = false; }
                 return Err(CameraError::ExposureFailed(format!("{:?}", e)));
             }
         }
@@ -311,15 +330,22 @@ pub fn run_capture(
 
     // Get image data
     catch_ffi_panic("PlayerOne::get_image_data", || {
-        camera.get_image_data(buffer, Some(500))
+        camera.get_image_data(&mut *buffer, Some(500))
     })
     .map_err(CameraError::from)?
     .map_err(|e| CameraError::ImageReadFailed(format!("{:?}", e)))?;
 
-    // Stop exposure
-    catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure())
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+    // Stop exposure if not continuous
+    if !is_continuous {
+        catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure())
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+    }
 
-    buffer_to_frame(info, buffer, width, height, config)
+    Ok(RawFrame {
+        data: buffer,
+        width,
+        height,
+        format: config.format,
+    })
 }

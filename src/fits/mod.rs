@@ -17,7 +17,7 @@ mod writers;
 
 pub use metadata::FitsMetadata;
 
-use writers::{write_fits_u16_primary, write_mono_fits, write_rgb_fits};
+use writers::{write_fits_u16_primary, write_mono_fits, write_rgb_fits, write_fits_raw};
 
 /// Write a Frame to a FITS file
 #[instrument(skip(frame, metadata), fields(
@@ -106,6 +106,29 @@ pub fn write_fits_u16(
     };
 
     write_fits_u16_primary(&u16_data, width, height, channels, path, metadata)
+}
+
+/// Write a raw captured frame directly to FITS
+#[instrument(skip(frame, metadata), fields(
+    path = %path.as_ref().display(),
+    resolution = %format!("{}x{}", frame.width, frame.height),
+    format = "raw"
+))]
+pub fn write_fits_from_raw(
+    frame: &crate::camera::RawFrame,
+    path: impl AsRef<Path>,
+    metadata: Option<&FitsMetadata>,
+) -> Result<()> {
+    let path = path.as_ref();
+
+    if path.exists() {
+        std::fs::remove_file(path).map_err(|e| StackError::ArithmeticError {
+            message: format!("Failed to remove existing file: {}", e),
+        })?;
+    }
+
+    debug!(path = ?path, "Writing FITS file from raw buffer");
+    write_fits_raw(frame, path, metadata)
 }
 
 #[cfg(test)]

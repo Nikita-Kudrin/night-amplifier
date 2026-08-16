@@ -33,11 +33,24 @@ pub fn run_stacking_task(
 
     while let Ok(msg) = stacking_rx.recv() {
         let CapturedFrame {
-            frame,
+            frame: raw_frame,
             frame_number,
             settings,
-            ..
+            camera_info,
         } = msg;
+
+        // Perform debayering/conversion in the stacking task to keep the camera thread responsive
+        let frame = {
+            let _span = tracing::info_span!("frame_conversion").entered();
+            match raw_frame.to_frame(&camera_info.info) {
+                Ok(f) => Arc::new(f),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Frame conversion failed");
+                    rt.block_on(state.frame_rejected(format!("Conversion failed: {}", e)));
+                    continue;
+                }
+            }
+        };
 
         // Detect when stacking is toggled on or stacking type changes — reset context
         let stacking_enabled = settings.stacking && settings.stacking_type.supports_stacking();

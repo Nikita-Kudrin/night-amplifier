@@ -74,7 +74,7 @@ pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};
 pub use types::{
     CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets, ImageFormat,
-    SensorMode, SensorType,
+    SensorMode, SensorType, RawFrame, BufferPool, PooledBuffer,
 };
 
 // Provider-specific re-exports

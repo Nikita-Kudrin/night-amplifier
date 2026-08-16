@@ -7,7 +7,7 @@ use crate::Frame;
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 
 /// Player One camera provider (stub)
 pub struct PlayerOneProvider;
@@ -99,7 +99,7 @@ impl Camera for PlayerOneCamera {
         Ok(())
     }
 
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
         Err(CameraError::SdkNotAvailable("PlayerOne".to_string()))
     }
 

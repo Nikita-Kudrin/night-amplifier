@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::Frame;
 
 use super::error::CameraResult;
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 
 /// Core trait for camera operations
 ///
@@ -21,7 +21,7 @@ use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets};
 /// ```no_run
 /// use night_amplifier::camera::{Camera, CaptureConfig};
 ///
-/// fn capture_image(camera: &mut dyn Camera) -> night_amplifier::camera::CameraResult<night_amplifier::Frame> {
+/// fn capture_image(camera: &mut dyn Camera) -> night_amplifier::camera::CameraResult<night_amplifier::camera::RawFrame> {
 ///     let config = CaptureConfig::default()
 ///         .with_exposure_us(2_000_000)
 ///         .with_gain(100);
@@ -81,13 +81,13 @@ pub trait Camera: Send {
     /// * `config` - Capture configuration (exposure, gain, binning, etc.)
     ///
     /// # Returns
-    /// The captured image as a `Frame`
+    /// The captured image as a `RawFrame`
     ///
     /// # Errors
     /// - `CameraError::ExposureTimeout` - Exposure exceeded timeout
     /// - `CameraError::Cancelled` - Exposure was cancelled
     /// - `CameraError::Disconnected` - Camera was disconnected
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame>;
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame>;
 
     /// Reset any cached "last applied to hardware" state.
     ///
@@ -238,13 +238,13 @@ mod tests {
             ))
         }
 
-        fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<Frame> {
-            Frame::zeros(
-                self.info.max_width as usize,
-                self.info.max_height as usize,
-                1,
-            )
-            .map_err(|e| super::super::error::CameraError::ImageReadFailed(e.to_string()))
+        fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
+            Ok(RawFrame {
+                data: vec![0; (self.info.max_width * self.info.max_height) as usize].into(),
+                width: self.info.max_width,
+                height: self.info.max_height,
+                format: config.format,
+            })
         }
 
         fn cancel(&self) {
@@ -282,8 +282,8 @@ mod tests {
         let frame = camera.capture(&config);
         assert!(frame.is_ok());
         let frame = frame.unwrap();
-        assert_eq!(frame.width(), 1920);
-        assert_eq!(frame.height(), 1080);
+        assert_eq!(frame.width, 1920);
+        assert_eq!(frame.height, 1080);
     }
 
     #[test]

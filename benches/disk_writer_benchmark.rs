@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use night_amplifier::disk_writer::WritingSessionType;
-use night_amplifier::frame::Frame;
+use night_amplifier::camera::{BufferPool, ImageFormat, RawFrame, SensorType};
 use night_amplifier::{DiskWriter, DiskWriterConfig, FitsMetadata};
 use std::hint::black_box;
 use std::time::Duration;
@@ -13,7 +13,14 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    let frame = std::sync::Arc::new(Frame::filled(1280, 960, 1, 0.42).unwrap());
+    let pool = BufferPool::new();
+    let buf = pool.get(1280 * 960 * 2);
+    let frame = std::sync::Arc::new(RawFrame {
+        data: buf,
+        width: 1280,
+        height: 960,
+        format: ImageFormat::Raw16,
+    });
     let metadata = FitsMetadata::new();
     let num_frames: u64 = 20;
 
@@ -30,7 +37,7 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..num_frames {
-                let _ = handle.queue_raw_frame(black_box(std::sync::Arc::clone(&frame)), i, metadata.clone());
+                let _ = handle.queue_raw_frame(black_box(std::sync::Arc::clone(&frame)), i, metadata.clone(), SensorType::Mono, None);
             }
 
             // Wait for queue to drain
@@ -53,14 +60,21 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    let frame = std::sync::Arc::new(Frame::filled(1280, 960, 1, 0.42).unwrap());
+    let pool = BufferPool::new();
+    let buf = pool.get(1280 * 960 * 2);
+    let frame = std::sync::Arc::new(RawFrame {
+        data: buf,
+        width: 1280,
+        height: 960,
+        format: ImageFormat::Raw16,
+    });
     let metadata = FitsMetadata::new();
 
-    fn cpu_work(frame: &Frame) -> f32 {
-        let data = frame.data();
+    fn cpu_work(frame: &RawFrame) -> f32 {
+        let data = frame.data_slice();
         let mut sum = 0.0f32;
         for &v in data.iter() {
-            sum += v;
+            sum += v as f32;
         }
         sum
     }
@@ -78,7 +92,7 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..10u64 {
-                let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone());
+                let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone(), SensorType::Mono, None);
             }
 
             // CPU work on the main thread while disk I/O is happening

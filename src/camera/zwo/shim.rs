@@ -315,6 +315,43 @@ impl Camera {
             Err(format!("ASIGetDataAfterExp failed: {}", err))
         }
     }
+
+    pub fn start_video_capture(&self) -> Result<(), String> {
+        let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        let err = unsafe { sdk.api.ASIStartVideoCapture(self.camera_id) };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIStartVideoCapture failed: {}", err))
+        }
+    }
+
+    pub fn stop_video_capture(&self) -> Result<(), String> {
+        let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        let err = unsafe { sdk.api.ASIStopVideoCapture(self.camera_id) };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIStopVideoCapture failed: {}", err))
+        }
+    }
+
+    pub fn get_video_data(&self, buffer: &mut [u8], wait_ms: i32) -> Result<(), String> {
+        let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
+        let err = unsafe {
+            sdk.api.ASIGetVideoData(
+                self.camera_id,
+                buffer.as_mut_ptr() as *mut _,
+                buffer.len() as c_long,
+                wait_ms,
+            )
+        };
+        if err == ASI_ERROR_CODE_ASI_SUCCESS {
+            Ok(())
+        } else {
+            Err(format!("ASIGetVideoData failed: {}", err))
+        }
+    }
 }
 
 impl Drop for Camera {

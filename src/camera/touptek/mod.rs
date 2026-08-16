@@ -15,7 +15,7 @@ use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
 
 use ffi_types::*;
 
@@ -76,8 +76,8 @@ pub struct TouptekCamera {
     cancel_flag: Arc<AtomicBool>,
     cooler_on: bool,
     last_applied_config: Option<CaptureConfig>,
-    /// Reused across frames instead of allocating fresh every capture.
-    capture_buffer: Vec<u8>,
+    buffer_pool: BufferPool,
+    stream_running: bool,
 }
 
 impl TouptekCamera {
@@ -128,7 +128,8 @@ impl TouptekCamera {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             cooler_on: false,
             last_applied_config: None,
-            capture_buffer: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            stream_running: false,
         })
     }
 }
@@ -213,7 +214,7 @@ impl Camera for TouptekCamera {
         ))
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -268,12 +269,29 @@ impl Camera for TouptekCamera {
             }
 
             self.last_applied_config = Some(config.clone());
+            if self.stream_running {
+                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                self.stream_running = false;
+            }
         }
 
+        let is_continuous = config.is_continuous();
+
         // Start pull mode
-        catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
-            .map_err(CameraError::from)?
-            .map_err(CameraError::ExposureFailed)?;
+        if !is_continuous {
+            if self.stream_running {
+                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                self.stream_running = false;
+            }
+            catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
+                .map_err(CameraError::from)?
+                .map_err(CameraError::ExposureFailed)?;
+        } else if !self.stream_running {
+            catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
+                .map_err(CameraError::from)?
+                .map_err(CameraError::ExposureFailed)?;
+            self.stream_running = true;
+        }
 
         // Calculate buffer size
         let (w, h) = catch_ffi_panic("ToupTek::get_size", || self.handle.get_resolution())
@@ -291,7 +309,7 @@ impl Camera for TouptekCamera {
             ImageFormat::Rgb24 => 3,
         };
         let buf_size = (w as usize) * (h as usize) * bytes_per_pixel;
-        self.capture_buffer.resize(buf_size, 0);
+        let mut buffer = self.buffer_pool.get(buf_size);
 
         // Calculate timeout: exposure + margin
         let exposure_duration = Duration::from_micros(config.exposure_us);
@@ -305,68 +323,61 @@ impl Camera for TouptekCamera {
         // Wait for the image
         let frame_info = loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
-                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                if is_continuous {
+                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                    self.stream_running = false;
+                }
                 return Err(CameraError::Cancelled);
             }
 
             if start.elapsed() > total_timeout {
-                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                if is_continuous {
+                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                    self.stream_running = false;
+                }
                 return Err(CameraError::ExposureTimeout(total_timeout));
             }
 
             if fatal_error.load(Ordering::SeqCst) {
-                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                if is_continuous {
+                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                    self.stream_running = false;
+                }
                 return Err(CameraError::ExposureFailed("Camera reported a hardware error or disconnect during capture".to_string()));
             }
 
             // Try to pull with a short wait — allows cancel checks
             let chunk_wait = 500u32.min(wait_ms);
             match catch_ffi_panic("ToupTek::wait_image", || {
-                self.handle.wait_image_raw(chunk_wait, &mut self.capture_buffer)
+                self.handle.wait_image_raw(chunk_wait, &mut *buffer)
             }) {
                 Ok(Ok(info)) => break info,
                 Ok(Err(_)) => continue, // Not ready yet
                 Err(e) => {
-                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                    if is_continuous {
+                        let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+                        self.stream_running = false;
+                    }
                     return Err(CameraError::ExposureFailed(e.to_string()));
                 }
             }
         };
 
-        // Stop pull mode
-        let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+        // Stop pull mode if not continuous
+        if !is_continuous {
+            let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+        }
 
         // Build Frame
         let actual_w = frame_info.width as usize;
         let actual_h = frame_info.height as usize;
 
-        let is_color = self.info.sensor_type == SensorType::Color;
-        let pixel_format = match config.format {
-            ImageFormat::Raw8 => {
-                if is_color {
-                    PixelFormat::Bayer8
-                } else {
-                    PixelFormat::Rgb8
-                }
-            }
-            ImageFormat::Raw16 => {
-                if is_color {
-                    PixelFormat::Bayer16
-                } else {
-                    PixelFormat::Rgb16
-                }
-            }
-            ImageFormat::Rgb24 => PixelFormat::Rgb8,
-        };
-
-        if is_color {
-            let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            Frame::from_bayer(&self.capture_buffer, actual_w, actual_h, pixel_format, pattern)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        } else {
-            Frame::from_raw(&self.capture_buffer, actual_w, actual_h, 1, pixel_format)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        }
+        Ok(RawFrame {
+            data: buffer,
+            width: actual_w as u32,
+            height: actual_h as u32,
+            format: config.format,
+        })
     }
 
     fn invalidate_config_cache(&mut self) {

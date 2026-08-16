@@ -16,7 +16,7 @@ use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
 
 mod props;
 
@@ -82,8 +82,8 @@ pub struct ZwoCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
-    /// Reused across frames instead of allocating fresh every capture.
-    capture_buffer: Vec<u8>,
+    buffer_pool: BufferPool,
+    stream_running: bool,
 }
 
 impl ZwoCamera {
@@ -147,7 +147,8 @@ impl ZwoCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
-            capture_buffer: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            stream_running: false,
         })
     }
 
@@ -171,7 +172,8 @@ impl ZwoCamera {
                     info,
                     cancel_flag: Arc::new(AtomicBool::new(false)),
                     last_applied_config: None,
-                    capture_buffer: Vec::new(),
+                    buffer_pool: BufferPool::new(),
+                    stream_running: false,
                 });
             }
         }
@@ -411,50 +413,15 @@ impl Camera for ZwoCamera {
             .map_err(|e| CameraError::ParameterNotSupported(format!("{:?}", e)))
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
-        if config.should_reapply(self.last_applied_config.as_ref()) {
-            self.apply_config(config)?;
-            self.last_applied_config = Some(config.clone());
-        }
-
         let exposure_duration = Duration::from_micros(config.exposure_us);
         let total_timeout = config.timeout + exposure_duration;
         let start = Instant::now();
-
-        catch_ffi_panic("ZWO::start_exposure", || self.camera.start_capture())
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::ExposureFailed(e))?;
-
-        loop {
-            if self.cancel_flag.load(Ordering::SeqCst) {
-                let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                return Err(CameraError::Cancelled);
-            }
-
-            if start.elapsed() > total_timeout {
-                let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                return Err(CameraError::ExposureTimeout(total_timeout));
-            }
-
-            let ready_result = catch_ffi_panic("ZWO::image_ready", || self.camera.is_image_ready())
-                .map_err(CameraError::from)?;
-
-            match ready_result {
-                Ok(true) => break,
-                Ok(false) => {
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => {
-                    let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                    return Err(CameraError::ExposureFailed(e));
-                }
-            }
-        }
+        let is_continuous = config.is_continuous();
 
         let (width, height) = self.get_capture_dimensions(config);
-
         let channels = match config.format {
             ImageFormat::Raw8 | ImageFormat::Raw16 => 1,
             ImageFormat::Rgb24 => 3,
@@ -463,17 +430,120 @@ impl Camera for ZwoCamera {
             ImageFormat::Raw8 | ImageFormat::Rgb24 => 1,
             ImageFormat::Raw16 => 2,
         };
+        
+        let required_size = (width * height * channels * bytes_per_channel) as usize;
+        let mut buffer = self.buffer_pool.get(required_size);
 
-        self.capture_buffer
-            .resize((width * height * channels * bytes_per_channel) as usize, 0);
+        if config.should_reapply(self.last_applied_config.as_ref()) {
+            if self.stream_running {
+                let _ = catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture());
+                self.stream_running = false;
+            }
+            self.apply_config(config)?;
+            self.last_applied_config = Some(config.clone());
+        }
 
-        catch_ffi_panic("ZWO::download_image", || {
-            self.camera.get_image_data(&mut self.capture_buffer)
+        if is_continuous {
+            if !self.stream_running {
+                catch_ffi_panic("ZWO::start_video_capture", || self.camera.start_video_capture())
+                    .map_err(CameraError::from)?
+                    .map_err(|e| CameraError::ExposureFailed(e))?;
+                self.stream_running = true;
+            }
+
+            // Loop just to allow cancellation while waiting for blocking ASIGetVideoData
+            // Actually, ASIGetVideoData is a single blocking call. To allow cancellation,
+            // we'd need to either use a shorter timeout and loop, or wait in a thread.
+            // ZWO SDK video capture timeout is in milliseconds.
+            // We can pass a shorter timeout (e.g. 100ms) and loop, checking cancel_flag.
+            let mut got_frame = false;
+            while start.elapsed() <= total_timeout {
+                if self.cancel_flag.load(Ordering::SeqCst) {
+                    let _ = catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture());
+                    self.stream_running = false;
+                    return Err(CameraError::Cancelled);
+                }
+
+                let wait_ms = 100.min(
+                    total_timeout
+                        .saturating_sub(start.elapsed())
+                        .as_millis() as i32
+                );
+
+                match catch_ffi_panic("ZWO::get_video_data", || {
+                    self.camera.get_video_data(&mut *buffer, wait_ms.max(10))
+                }) {
+                    Ok(Ok(())) => {
+                        got_frame = true;
+                        break;
+                    }
+                    Ok(Err(_)) => {
+                        // Timeout or error, loop and retry if time remains. Avoid 100% CPU spin-loop
+                        // if the SDK returns immediately on error.
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => {
+                        let _ = catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture());
+                        self.stream_running = false;
+                        return Err(CameraError::ImageReadFailed(e.to_string()));
+                    }
+                }
+            }
+            if !got_frame {
+                let _ = catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture());
+                self.stream_running = false;
+                return Err(CameraError::ExposureTimeout(total_timeout));
+            }
+        } else {
+            if self.stream_running {
+                let _ = catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture());
+                self.stream_running = false;
+            }
+
+            catch_ffi_panic("ZWO::start_exposure", || self.camera.start_capture())
+                .map_err(CameraError::from)?
+                .map_err(|e| CameraError::ExposureFailed(e))?;
+
+            loop {
+                if self.cancel_flag.load(Ordering::SeqCst) {
+                    let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
+                    return Err(CameraError::Cancelled);
+                }
+
+                if start.elapsed() > total_timeout {
+                    let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
+                    return Err(CameraError::ExposureTimeout(total_timeout));
+                }
+
+                let ready_result = catch_ffi_panic("ZWO::image_ready", || self.camera.is_image_ready())
+                    .map_err(CameraError::from)?;
+
+                match ready_result {
+                    Ok(true) => break,
+                    Ok(false) => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
+                        return Err(CameraError::ExposureFailed(e));
+                    }
+                }
+            }
+
+            catch_ffi_panic("ZWO::download_image", || {
+                self.camera.get_image_data(&mut *buffer)
+            })
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ImageReadFailed(e))?;
+        }
+
+        Ok(RawFrame {
+            data: buffer,
+            width,
+            height,
+            format: config.format,
         })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::ImageReadFailed(e))?;
-
-        self.buffer_to_frame(&self.capture_buffer, width, height, config)
     }
 
     fn invalidate_config_cache(&mut self) {

@@ -188,3 +188,105 @@ pub(crate) fn write_fits_u16_primary(
 
     Ok(())
 }
+
+/// Write raw camera data directly to PRIMARY HDU
+pub(crate) fn write_fits_raw(
+    frame: &crate::camera::RawFrame,
+    path: &std::path::Path,
+    metadata: Option<&crate::fits::FitsMetadata>,
+) -> crate::error::Result<()> {
+    use crate::camera::ImageFormat;
+    
+    // Build FITS header
+    let mut header = Vec::new();
+
+    write_fits_keyword(&mut header, "SIMPLE", "T", "file conforms to FITS standard");
+    
+    let is_16bit = frame.format == ImageFormat::Raw16;
+    let bitpix = if is_16bit { "16" } else { "8" };
+    write_fits_keyword(&mut header, "BITPIX", bitpix, "number of bits per data pixel");
+
+    let channels = if frame.format == ImageFormat::Rgb24 { 3 } else { 1 };
+    let naxis = if channels == 1 { 2 } else { 3 };
+    write_fits_keyword(
+        &mut header,
+        "NAXIS",
+        &naxis.to_string(),
+        "number of array dimensions",
+    );
+    write_fits_keyword(&mut header, "NAXIS1", &frame.width.to_string(), "width");
+    write_fits_keyword(&mut header, "NAXIS2", &frame.height.to_string(), "height");
+    if channels > 1 {
+        write_fits_keyword(
+            &mut header,
+            "NAXIS3",
+            &channels.to_string(),
+            "color channels",
+        );
+    }
+
+    if is_16bit {
+        write_fits_keyword(&mut header, "BZERO", "32768", "offset for unsigned 16-bit");
+        write_fits_keyword(&mut header, "BSCALE", "1", "scale factor");
+    }
+
+    if let Some(meta) = metadata {
+        if let Some(exp) = meta.exposure_s {
+            write_fits_keyword(
+                &mut header,
+                "EXPTIME",
+                &format!("{:.6}", exp),
+                "exposure time in seconds",
+            );
+        }
+        if let Some(gain) = meta.gain {
+            write_fits_keyword(&mut header, "GAIN", &gain.to_string(), "gain value");
+        }
+        if let Some(ref camera) = meta.camera {
+            write_fits_keyword_string(&mut header, "INSTRUME", camera, "camera name");
+        }
+        if let Some(ref sw) = meta.software {
+            write_fits_keyword_string(&mut header, "SOFTWARE", sw, "software name");
+        }
+    }
+
+    header.extend_from_slice(b"END");
+    header.extend(std::iter::repeat(b' ').take(80 - 3));
+
+    let header_blocks = (header.len() + 2879) / 2880;
+    header.resize(header_blocks * 2880, b' ');
+
+    let data = frame.data_slice();
+    let mut data_bytes = Vec::with_capacity(data.len());
+    
+    if is_16bit {
+        let u16_len = data.len() / 2;
+        for i in 0..u16_len {
+            let val = u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]);
+            let signed = (val as i32 - 32768) as i16;
+            data_bytes.extend_from_slice(&signed.to_be_bytes());
+        }
+    } else {
+        data_bytes.extend_from_slice(data);
+    }
+
+    let data_blocks = (data_bytes.len() + 2879) / 2880;
+    data_bytes.resize(data_blocks * 2880, 0);
+
+    let mut file = std::fs::File::create(path).map_err(|e| crate::error::StackError::ArithmeticError {
+        message: format!("Failed to create FITS file: {}", e),
+    })?;
+
+    use std::io::Write;
+    file.write_all(&header)
+        .map_err(|e| crate::error::StackError::ArithmeticError {
+            message: format!("Failed to write FITS header: {}", e),
+        })?;
+
+    file.write_all(&data_bytes)
+        .map_err(|e| crate::error::StackError::ArithmeticError {
+            message: format!("Failed to write FITS data: {}", e),
+        })?;
+
+    Ok(())
+}

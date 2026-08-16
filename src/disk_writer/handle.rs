@@ -10,6 +10,7 @@ use super::config::{
 use super::error::DiskWriterError;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
+use crate::camera::RawFrame;
 use crate::telemetry::metrics as telemetry_metrics;
 
 /// Handle to the disk writer for sending write requests
@@ -159,43 +160,46 @@ impl DiskWriterHandle {
     /// Queue a raw frame for writing
     pub fn queue_raw_frame(
         &self,
-        frame: std::sync::Arc<Frame>,
+        frame: std::sync::Arc<RawFrame>,
         frame_number: u64,
         metadata: FitsMetadata,
+        sensor_type: crate::camera::SensorType,
+        bayer_pattern: Option<crate::CfaPattern>,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {
-            frame,
-            frame_type: FrameType::Raw,
+            frame_type: FrameType::Raw(frame),
             frame_number,
             metadata,
+            sensor_type,
+            bayer_pattern,
         })
     }
 
-    /// Queue a stacked result for writing (FITS format)
     pub fn queue_stacked_frame(
         &self,
         frame: std::sync::Arc<Frame>,
         metadata: FitsMetadata,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {
-            frame,
-            frame_type: FrameType::Stacked,
+            frame_type: FrameType::Stacked(frame),
             frame_number: 0,
             metadata,
+            sensor_type: crate::camera::SensorType::Color,
+            bayer_pattern: None,
         })
     }
 
-    /// Queue a stretched stacked frame for writing (PNG format for sharing)
     pub fn queue_stacked_png(
         &self,
         frame: std::sync::Arc<Frame>,
         stacked_count: u64,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {
-            frame,
-            frame_type: FrameType::StackedPng,
+            frame_type: FrameType::StackedPng(frame),
             frame_number: stacked_count,
             metadata: FitsMetadata::new(),
+            sensor_type: crate::camera::SensorType::Color,
+            bayer_pattern: None,
         })
     }
 }

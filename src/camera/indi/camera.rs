@@ -6,7 +6,7 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::camera::{Camera, CameraError, CameraInfo, CameraResult, CameraStatus, CaptureConfig};
-use crate::frame::Frame;
+use crate::camera::RawFrame;
 use crate::indi::client::IndiClient;
 use crate::indi::fits_decoder::FitsDecoder;
 use crate::indi::xml::{BlobEnable, SwitchState};
@@ -18,6 +18,8 @@ pub struct IndiCamera {
     cancel_flag: Arc<AtomicBool>,
     decode_buffer: Vec<u8>,
     last_applied_config: Option<CaptureConfig>,
+    stream_running: bool,
+    pool: crate::camera::BufferPool,
 }
 
 impl IndiCamera {
@@ -81,6 +83,8 @@ impl IndiCamera {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             decode_buffer: Vec::new(),
             last_applied_config: None,
+            stream_running: false,
+            pool: crate::camera::BufferPool::new(),
         })
     }
 
@@ -135,7 +139,7 @@ impl Camera for IndiCamera {
         })
     }
 
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -143,10 +147,46 @@ impl Camera for IndiCamera {
             tokio::runtime::Handle::current().block_on(async {
                 self.check_connection().await?;
 
+                let is_continuous = config.is_continuous();
+                let mut supports_video = false;
+                if let Some(dev) = self.client.get_device(&self.device_name).await {
+                    supports_video = dev.properties.contains_key("CCD_VIDEO_STREAM");
+                }
+
                 if config.should_reapply(self.last_applied_config.as_ref()) {
+                    if self.stream_running && supports_video {
+                        let _ = self.client.set_switch(&self.device_name, "CCD_VIDEO_STREAM", vec![("STREAM_ON", SwitchState::Off), ("STREAM_OFF", SwitchState::On)]).await;
+                        self.stream_running = false;
+                    }
+                    // Set Frame Type
+                    let _ = self.client.set_switch(&self.device_name, "CCD_FRAME_TYPE", vec![
+                        ("FRAME_LIGHT", SwitchState::On),
+                        ("FRAME_BIAS", SwitchState::Off),
+                        ("FRAME_DARK", SwitchState::Off),
+                        ("FRAME_FLAT", SwitchState::Off),
+                    ]).await;
+
                     // Set Binning
                     let bin = config.bin as f64;
                     let _ = self.client.set_number(&self.device_name, "CCD_BINNING", vec![("HOR_BIN", bin), ("VER_BIN", bin)]).await;
+
+                    // Set ROI
+                    if let Some((x, y, w, h)) = config.roi {
+                        let _ = self.client.set_number(&self.device_name, "CCD_FRAME", vec![
+                            ("X", x as f64),
+                            ("Y", y as f64),
+                            ("WIDTH", w as f64),
+                            ("HEIGHT", h as f64),
+                        ]).await;
+                    } else {
+                        // Reset to full frame
+                        let _ = self.client.set_number(&self.device_name, "CCD_FRAME", vec![
+                            ("X", 0.0),
+                            ("Y", 0.0),
+                            ("WIDTH", self.info.max_width as f64),
+                            ("HEIGHT", self.info.max_height as f64),
+                        ]).await;
+                    }
 
                     // Set Gain
                     let _ = self.client.set_number(&self.device_name, "CCD_GAIN", vec![("GAIN", config.gain as f64)]).await;
@@ -157,11 +197,24 @@ impl Camera for IndiCamera {
                     self.last_applied_config = Some(config.clone());
                 }
 
-                // Trigger exposure
                 let exp_s = config.exposure_us as f64 / 1_000_000.0;
-                self.client.set_number(&self.device_name, "CCD_EXPOSURE", vec![("CCD_EXPOSURE_VALUE", exp_s)])
-                    .await
-                    .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
+
+                if !is_continuous || !supports_video {
+                    if self.stream_running && supports_video {
+                        let _ = self.client.set_switch(&self.device_name, "CCD_VIDEO_STREAM", vec![("STREAM_ON", SwitchState::Off), ("STREAM_OFF", SwitchState::On)]).await;
+                        self.stream_running = false;
+                    }
+                    // Trigger exposure
+                    self.client.set_number(&self.device_name, "CCD_EXPOSURE", vec![("CCD_EXPOSURE_VALUE", exp_s)])
+                        .await
+                        .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
+                } else if !self.stream_running {
+                    let _ = self.client.set_switch(&self.device_name, "CCD_VIDEO_STREAM", vec![("STREAM_ON", SwitchState::On), ("STREAM_OFF", SwitchState::Off)]).await;
+                    self.client.set_number(&self.device_name, "CCD_EXPOSURE", vec![("CCD_EXPOSURE_VALUE", exp_s)])
+                        .await
+                        .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
+                    self.stream_running = true;
+                }
 
                 let timeout = Duration::from_micros(config.exposure_us as u64) + Duration::from_secs(5);
                 
@@ -169,17 +222,21 @@ impl Camera for IndiCamera {
                 loop {
                     if self.cancel_flag.load(Ordering::SeqCst) {
                         // Abort exposure
+                        if self.stream_running && supports_video {
+                            let _ = self.client.set_switch(&self.device_name, "CCD_VIDEO_STREAM", vec![("STREAM_ON", SwitchState::Off), ("STREAM_OFF", SwitchState::On)]).await;
+                            self.stream_running = false;
+                        }
                         let _ = self.client.set_switch(&self.device_name, "CCD_ABORT_EXPOSURE", vec![("ABORT", SwitchState::On)]).await;
                         return Err(CameraError::Cancelled);
                     }
 
-                    match tokio::time::timeout(Duration::from_millis(100), self.client.wait_for_blob(&self.device_name, "CCD1", timeout)).await {
+                    match tokio::time::timeout(Duration::from_millis(5), self.client.wait_for_blob(&self.device_name, "CCD1", timeout)).await {
                         Ok(Ok(blob)) => {
                             // Decode blob using pre-allocated buffer
                             FitsDecoder::decode_base64_blob(&blob.value, &mut self.decode_buffer)
                                 .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
 
-                            return FitsDecoder::parse_fits_buffer(&self.decode_buffer)
+                            return FitsDecoder::parse_fits_buffer(&self.decode_buffer, &mut self.pool)
                                 .map_err(|e| CameraError::ExposureFailed(e.to_string()));
                         }
                         Ok(Err(e)) => {

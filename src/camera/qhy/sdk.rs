@@ -45,6 +45,16 @@ pub struct QhySdkApi {
         img_data: *mut u8,
     ) -> u32,
     CancelQHYCCDExposingAndReadout: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
+    BeginQHYCCDLive: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
+    StopQHYCCDLive: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
+    GetQHYCCDLiveFrame: unsafe extern "C" fn(
+        handle: QhyccdHandle,
+        w: *mut u32,
+        h: *mut u32,
+        bpp: *mut u32,
+        channels: *mut u32,
+        img_data: *mut u8,
+    ) -> u32,
     GetQHYCCDChipInfo: unsafe extern "C" fn(
         handle: QhyccdHandle,
         chip_w: *mut f64,
