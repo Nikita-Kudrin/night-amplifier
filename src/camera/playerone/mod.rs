@@ -223,7 +223,9 @@ impl Camera for PlayerOneCamera {
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
         config.validate(&self.info)?;
         if config.should_reapply(self.last_applied_config.as_ref()) {
-            let _span = tracing::info_span!("configure_camera").entered();
+            let _span =
+                tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
+                    .entered();
             capture::apply_config(&mut self.camera, config, &self.info)?;
             self.last_applied_config = Some(config.clone());
         }

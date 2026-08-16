@@ -39,6 +39,7 @@ describe('CameraPanel', () => {
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
             cameraStatus: ref(overrides.cameraStatus ?? {}),
             cameraPhase: ref(overrides.cameraPhase ?? {}),
+            settings: ref(overrides.settings ?? null),
         }
     }
 
@@ -440,6 +441,78 @@ describe('CameraPanel', () => {
 
             expect(wrapper.find('.phase-pill').exists()).toBe(false)
             expect(wrapper.find('.btn-danger').text()).toBe('Disconnect')
+        })
+    })
+
+    describe('Sensor mode pill display', () => {
+        // Mirrors the real Ares-C PRO's advertised modes (see
+        // camera/playerone/sensor_mode.rs's resolve_mode_index tests).
+        const dualSamplingCamera = {
+            id: 'cam1',
+            name: 'Ares-C PRO',
+            connected: true,
+            info: {
+                max_width: 3008,
+                max_height: 3008,
+                sensor_modes: [
+                    {index: 0, name: 'Normal', description: ''},
+                    {index: 1, name: 'Low Noise', description: ''},
+                ],
+            },
+        }
+
+        it('shows Low Noise for Deep Sky while actively stacking', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [dualSamplingCamera],
+                settings: {stacking: true, stacking_type: 'deep_sky', sensor_mode_override: null},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').text()).toBe('Low Noise')
+        })
+
+        it('shows Normal for Deep Sky when not stacking (live view)', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [dualSamplingCamera],
+                settings: {stacking: false, stacking_type: 'deep_sky', sensor_mode_override: null},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').text()).toBe('Normal')
+        })
+
+        it('shows Low Noise for Comet while actively stacking', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [dualSamplingCamera],
+                settings: {stacking: true, stacking_type: 'comet', sensor_mode_override: null},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').text()).toBe('Low Noise')
+        })
+
+        it('shows Normal for Planetary regardless of stacking', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [dualSamplingCamera],
+                settings: {stacking: true, stacking_type: 'planetary', sensor_mode_override: null},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').text()).toBe('Normal')
+        })
+
+        it('sensor_mode_override wins regardless of stacking state', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [dualSamplingCamera],
+                settings: {stacking: false, stacking_type: 'deep_sky', sensor_mode_override: 'low_readout_noise'},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').text()).toBe('Low Noise')
+        })
+
+        it('omits the pill when the camera advertises no sensor modes', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [{...dualSamplingCamera, info: {max_width: 1920, max_height: 1080, sensor_modes: []}}],
+                settings: {stacking: true, stacking_type: 'deep_sky', sensor_mode_override: null},
+            })
+
+            expect(wrapper.find('.sensor-mode-pill').exists()).toBe(false)
         })
     })
 

@@ -10,7 +10,7 @@ pub struct ROI {
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::super::error::{CameraError, CameraResult};
 use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
@@ -129,6 +129,28 @@ fn apply_sensor_mode(camera: &mut POACamera, config: &CaptureConfig, info: &Came
         Some(index) => {
             if let Err(err) = sensor_mode::set_sensor_mode(camera_id, index) {
                 warn!(?err, index, ?desired, "Failed to set sensor mode");
+                return;
+            }
+            // `set_sensor_mode` reported success, but the SDK call is
+            // documented as a no-op if issued at the wrong moment (e.g.
+            // while an exposure is in progress) — read the mode back so a
+            // silent no-take isn't just trusted and cached forever by
+            // `should_reapply` (see `Camera::invalidate_config_cache` docs).
+            match sensor_mode::current_sensor_mode(camera_id) {
+                Some(actual) if actual == index => {
+                    debug!(index, ?desired, "Sensor mode applied and verified");
+                }
+                Some(actual) => {
+                    warn!(
+                        requested = index,
+                        actual,
+                        ?desired,
+                        "Sensor mode set call succeeded but camera reports a different mode — hardware did not take the change"
+                    );
+                }
+                None => {
+                    warn!(index, ?desired, "Could not read back sensor mode to verify apply");
+                }
             }
         }
         None => {

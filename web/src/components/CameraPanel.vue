@@ -112,8 +112,19 @@ function sensorModePill(cam) {
   const modes = cam?.info?.sensor_modes
   if (!modes || modes.length === 0) return null
   const override = settings.value?.sensor_mode_override
-  const desired =
-      override ?? (settings.value?.stacking_type === 'planetary' ? 'normal' : 'low_readout_noise')
+  // Mirrors the backend's `is_actively_stacking` gate in
+  // `to_capture_config()` (server/state/settings.rs): Low Noise is only
+  // worth its frame-rate cost while frames are actually being integrated.
+  // `stacking_type !== 'planetary'` stands in for "DeepSky or Comet" —
+  // `StackingType::supports_stacking()` is `true` for every variant today,
+  // so the Rust condition reduces to exactly this. `wanderer_mode` doesn't
+  // need to appear here either: the UI always sets `stacking: true`
+  // alongside `wanderer_mode: true` (see `applyStackingMode` in
+  // CaptureControls.vue), so `stacking` alone already covers "Stacking or
+  // Wanderer".
+  const isActivelyStacking =
+      settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
+  const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
   const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
   const match = modes.find((m) => needle.test(m.name))
   return (match ?? modes[0]).name
