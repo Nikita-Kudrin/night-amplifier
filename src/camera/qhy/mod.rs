@@ -111,6 +111,7 @@ pub struct QhyCamera {
     camera: QhyHandle,
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
+    last_applied_config: Option<CaptureConfig>,
 }
 
 impl QhyCamera {
@@ -173,6 +174,7 @@ impl QhyCamera {
             camera,
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            last_applied_config: None,
         };
 
         // Initialize defaults
@@ -370,7 +372,10 @@ impl Camera for QhyCamera {
             (0, 0, self.info.max_width / bin, self.info.max_height / bin)
         };
 
-        self.apply_capture_config(config.exposure_us, config.gain, config.offset, x, y, w, h, bin, bits)?;
+        if config.should_reapply(self.last_applied_config.as_ref()) {
+            self.apply_capture_config(config.exposure_us, config.gain, config.offset, x, y, w, h, bin, bits)?;
+            self.last_applied_config = Some(config.clone());
+        }
 
         let exposure_duration = Duration::from_micros(config.exposure_us);
         let total_timeout = config.timeout + exposure_duration;
@@ -437,6 +442,10 @@ impl Camera for QhyCamera {
                 }
             }
         }
+    }
+
+    fn invalidate_config_cache(&mut self) {
+        self.last_applied_config = None;
     }
 
     fn cancel(&self) {
