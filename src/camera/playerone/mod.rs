@@ -69,6 +69,7 @@ pub struct PlayerOneCamera {
     camera: POACamera,
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
+    last_applied_config: Option<CaptureConfig>,
 }
 
 impl PlayerOneCamera {
@@ -99,6 +100,7 @@ impl PlayerOneCamera {
             camera,
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            last_applied_config: None,
         })
     }
 }
@@ -216,8 +218,17 @@ impl Camera for PlayerOneCamera {
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
         config.validate(&self.info)?;
-        capture::apply_config(&mut self.camera, config, &self.info)?;
+        if config.should_reapply(self.last_applied_config.as_ref()) {
+            let _span = tracing::info_span!("configure_camera").entered();
+            capture::apply_config(&mut self.camera, config, &self.info)?;
+            self.last_applied_config = Some(config.clone());
+        }
+        let _span = tracing::info_span!("read_frame").entered();
         capture::run_capture(&mut self.camera, &self.info, config, &self.cancel_flag)
+    }
+
+    fn invalidate_config_cache(&mut self) {
+        self.last_applied_config = None;
     }
 
     fn cancel(&self) {

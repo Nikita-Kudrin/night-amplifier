@@ -75,6 +75,7 @@ pub struct TouptekCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     cooler_on: bool,
+    last_applied_config: Option<CaptureConfig>,
 }
 
 impl TouptekCamera {
@@ -124,6 +125,7 @@ impl TouptekCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             cooler_on: false,
+            last_applied_config: None,
         })
     }
 }
@@ -214,51 +216,55 @@ impl Camera for TouptekCamera {
 
         let bin = config.bin;
 
-        // Set exposure
-        catch_ffi_panic("ToupTek::set_expo", || {
-            self.handle.set_exposure_us(config.exposure_us as u32)
-        })
-        .map_err(CameraError::from)?
-        .map_err(CameraError::ExposureFailed)?;
+        if config.should_reapply(self.last_applied_config.as_ref()) {
+            // Set exposure
+            catch_ffi_panic("ToupTek::set_expo", || {
+                self.handle.set_exposure_us(config.exposure_us as u32)
+            })
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)?;
 
-        // Set gain (Camera trait uses i32, ToupTek SDK uses u16 percent)
-        catch_ffi_panic("ToupTek::set_gain", || {
-            self.handle.set_gain(config.gain as u16)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set gain: {}", e),
-        })?;
-
-        // Set binning
-        if bin > 1 {
-            catch_ffi_panic("ToupTek::set_bin", || self.handle.set_binning(bin))
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::SdkError {
-                    code: -1,
-                    message: format!("Failed to set binning: {}", e),
-                })?;
-        }
-
-        // Set ROI or full resolution
-        if let Some((x, y, w, h)) = config.roi {
-            catch_ffi_panic("ToupTek::set_roi", || self.handle.set_roi(x, y, w, h))
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::SdkError {
-                    code: -1,
-                    message: format!("Failed to set ROI: {}", e),
-                })?;
-        } else {
-            // Full frame at index 0 (highest resolution)
-            catch_ffi_panic("ToupTek::set_esize", || {
-                self.handle.set_resolution_index(0)
+            // Set gain (Camera trait uses i32, ToupTek SDK uses u16 percent)
+            catch_ffi_panic("ToupTek::set_gain", || {
+                self.handle.set_gain(config.gain as u16)
             })
             .map_err(CameraError::from)?
             .map_err(|e| CameraError::SdkError {
                 code: -1,
-                message: format!("Failed to set resolution: {}", e),
+                message: format!("Failed to set gain: {}", e),
             })?;
+
+            // Set binning
+            if bin > 1 {
+                catch_ffi_panic("ToupTek::set_bin", || self.handle.set_binning(bin))
+                    .map_err(CameraError::from)?
+                    .map_err(|e| CameraError::SdkError {
+                        code: -1,
+                        message: format!("Failed to set binning: {}", e),
+                    })?;
+            }
+
+            // Set ROI or full resolution
+            if let Some((x, y, w, h)) = config.roi {
+                catch_ffi_panic("ToupTek::set_roi", || self.handle.set_roi(x, y, w, h))
+                    .map_err(CameraError::from)?
+                    .map_err(|e| CameraError::SdkError {
+                        code: -1,
+                        message: format!("Failed to set ROI: {}", e),
+                    })?;
+            } else {
+                // Full frame at index 0 (highest resolution)
+                catch_ffi_panic("ToupTek::set_esize", || {
+                    self.handle.set_resolution_index(0)
+                })
+                .map_err(CameraError::from)?
+                .map_err(|e| CameraError::SdkError {
+                    code: -1,
+                    message: format!("Failed to set resolution: {}", e),
+                })?;
+            }
+
+            self.last_applied_config = Some(config.clone());
         }
 
         // Start pull mode
@@ -358,6 +364,10 @@ impl Camera for TouptekCamera {
             Frame::from_raw(&buffer, actual_w, actual_h, 1, pixel_format)
                 .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         }
+    }
+
+    fn invalidate_config_cache(&mut self) {
+        self.last_applied_config = None;
     }
 
     fn cancel(&self) {

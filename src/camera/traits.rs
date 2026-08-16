@@ -89,6 +89,18 @@ pub trait Camera: Send {
     /// - `CameraError::Disconnected` - Camera was disconnected
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame>;
 
+    /// Reset any cached "last applied to hardware" state.
+    ///
+    /// Called once when a backend's handle is handed off for a new capture
+    /// session (see `server/capture/mod.rs`), so the first frame of every
+    /// session always gets a full `CaptureConfig` reapply regardless of any
+    /// out-of-band mutation (cooler toggles, temperature ramps) that happened
+    /// while idle.
+    ///
+    /// Default no-op: correct for implementations with no expensive
+    /// per-frame SDK calls to skip (`SimulatedCamera`, test doubles).
+    fn invalidate_config_cache(&mut self) {}
+
     /// Cancel an ongoing exposure
     ///
     /// This is safe to call from another thread while `capture()` is blocking.
@@ -281,5 +293,12 @@ mod tests {
         assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
         camera.cancel();
         assert!(token.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn invalidate_config_cache_default_is_safe_through_trait_object() {
+        let mut camera: Box<dyn Camera> = Box::new(MockCamera::new());
+        camera.invalidate_config_cache();
+        assert!(camera.capture(&CaptureConfig::default()).is_ok());
     }
 }

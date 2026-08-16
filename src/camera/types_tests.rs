@@ -192,3 +192,34 @@ fn test_gain_presets_struct() {
     assert_eq!(presets.unity, 100);
     assert_eq!(presets.hcg, 120);
 }
+
+#[test]
+fn should_reapply_true_when_no_cache() {
+    assert!(CaptureConfig::default().should_reapply(None));
+}
+
+#[test]
+fn should_reapply_false_when_identical() {
+    let config = CaptureConfig::default()
+        .with_exposure_us(2_000_000)
+        .with_gain(50);
+    let cached = config.clone();
+    assert!(!config.should_reapply(Some(&cached)));
+}
+
+#[test]
+fn should_reapply_true_on_any_field_change() {
+    let cached = CaptureConfig::default();
+    assert!(cached
+        .clone()
+        .with_gain(cached.gain + 1)
+        .should_reapply(Some(&cached)));
+    assert!(cached
+        .clone()
+        .with_cooler(!cached.cooler_enabled)
+        .should_reapply(Some(&cached)));
+    assert!(cached
+        .clone()
+        .with_sensor_mode(DualSamplingMode::LowReadoutNoise)
+        .should_reapply(Some(&cached)));
+}

@@ -281,6 +281,11 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     // Register active camera cancel token in state
     state.set_active_camera_token(camera.cancel_token()).await;
 
+    // New session: force a full CaptureConfig reapply on the very next
+    // capture() regardless of any out-of-band mutation (cooler/target-temp)
+    // that happened while this handle was idle between sessions.
+    camera.invalidate_config_cache();
+
     // Capture a probe frame to determine dimensions and channel capacities
     let settings = state.settings.read().await.clone();
     let mut capture_config = settings.to_capture_config();
