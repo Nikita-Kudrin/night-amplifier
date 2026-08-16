@@ -227,13 +227,18 @@ pub fn run_capture(
     info: &CameraInfo,
     config: &CaptureConfig,
     cancel_flag: &AtomicBool,
+    buffer: &mut Vec<u8>,
 ) -> CameraResult<Frame> {
     // Reset cancel flag
     cancel_flag.store(false, Ordering::SeqCst);
 
-    // Allocate a buffer that exactly matches the selected format and capture
-    // dimensions. `Frame::from_raw` enforces buffer length equality, so an
-    // over-allocated worst-case buffer would be rejected downstream.
+    // Resize the (persistent, caller-owned) buffer to exactly match the
+    // selected format and capture dimensions. `Frame::from_raw` enforces
+    // buffer length equality, so an over-allocated worst-case buffer would
+    // be rejected downstream. `resize` is a no-op when the length is already
+    // correct (the common case, frame to frame), and only zero-fills the
+    // newly added tail when growing — no full reallocation/memset every
+    // frame the way a fresh `vec![0u8; buffer_len]` would need.
     let (width, height) = get_capture_dimensions(info, config);
     let bytes_per_pixel = match config.format {
         ImageFormat::Raw8 => 1,
@@ -243,7 +248,7 @@ pub fn run_capture(
     let buffer_len = (width as usize)
         .saturating_mul(height as usize)
         .saturating_mul(bytes_per_pixel);
-    let mut buffer = vec![0u8; buffer_len];
+    buffer.resize(buffer_len, 0);
 
     // Calculate timeout
     let exposure_duration = Duration::from_micros(config.exposure_us);
@@ -284,7 +289,7 @@ pub fn run_capture(
 
     // Get image data
     catch_ffi_panic("PlayerOne::get_image_data", || {
-        camera.get_image_data(&mut buffer, Some(500))
+        camera.get_image_data(buffer, Some(500))
     })
     .map_err(CameraError::from)?
     .map_err(|e| CameraError::ImageReadFailed(format!("{:?}", e)))?;
@@ -294,5 +299,5 @@ pub fn run_capture(
         .map_err(CameraError::from)?
         .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
 
-    buffer_to_frame(info, &buffer, width, height, config)
+    buffer_to_frame(info, buffer, width, height, config)
 }
