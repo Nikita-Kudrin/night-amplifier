@@ -98,7 +98,6 @@ pub fn set_sensor_mode(camera_id: i32, index: u32) -> Result<(), POAErrors> {
 
 /// Read the currently active sensor mode index. Returns `None` when unsupported
 /// or when the FFI call fails.
-#[allow(dead_code)]
 pub fn current_sensor_mode(camera_id: i32) -> Option<u32> {
     let sdk = PlayerOneSdk::try_load().expect("SDK must be loaded to get sensor mode");
     let result = catch_ffi_panic("PlayerOne::POAGetSensorMode", || {
