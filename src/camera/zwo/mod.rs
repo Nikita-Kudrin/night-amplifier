@@ -81,6 +81,7 @@ pub struct ZwoCamera {
     camera: ZwoShimCamera,
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
+    last_applied_config: Option<CaptureConfig>,
 }
 
 impl ZwoCamera {
@@ -143,6 +144,7 @@ impl ZwoCamera {
             camera,
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            last_applied_config: None,
         })
     }
 
@@ -165,6 +167,7 @@ impl ZwoCamera {
                     camera,
                     info,
                     cancel_flag: Arc::new(AtomicBool::new(false)),
+                    last_applied_config: None,
                 });
             }
         }
@@ -407,7 +410,10 @@ impl Camera for ZwoCamera {
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
-        self.apply_config(config)?;
+        if config.should_reapply(self.last_applied_config.as_ref()) {
+            self.apply_config(config)?;
+            self.last_applied_config = Some(config.clone());
+        }
 
         let exposure_duration = Duration::from_micros(config.exposure_us);
         let total_timeout = config.timeout + exposure_duration;
@@ -463,6 +469,10 @@ impl Camera for ZwoCamera {
         .map_err(|e| CameraError::ImageReadFailed(e))?;
 
         self.buffer_to_frame(&image, width, height, config)
+    }
+
+    fn invalidate_config_cache(&mut self) {
+        self.last_applied_config = None;
     }
 
     fn cancel(&self) {

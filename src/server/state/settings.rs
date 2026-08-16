@@ -309,9 +309,24 @@ impl CaptureSettings {
 
     /// Convert to camera capture config
     pub fn to_capture_config(&self) -> CaptureConfig {
-        let sensor_mode = self
-            .sensor_mode_override
-            .unwrap_or_else(|| self.stacking_type.desired_sensor_mode());
+        // "Low Noise" dual-sampling trades frame rate for read noise, so it's
+        // only worth selecting while frames are actually being integrated —
+        // not during a raw live-view feed under a stacking-capable target
+        // type. `stacking` alone covers both the "Stacking" and "Wanderer"
+        // UI modes: the frontend always sets `stacking: true` whenever it
+        // sets `wanderer_mode: true` (see `CaptureControls.vue`'s
+        // `applyStackingMode`), so there's no case Wanderer needs to add here
+        // — and OR-ing `wanderer_mode` in directly would be wrong for the
+        // orthogonal-misuse case of `stacking: false, wanderer_mode: true`
+        // (no frames integrated there either).
+        let is_actively_stacking = self.stacking && self.stacking_type.supports_stacking();
+        let sensor_mode = self.sensor_mode_override.unwrap_or_else(|| {
+            if is_actively_stacking {
+                self.stacking_type.desired_sensor_mode()
+            } else {
+                DualSamplingMode::Normal
+            }
+        });
         let mut config = CaptureConfig::new()
             .with_exposure_us(self.exposure_us)
             .with_gain(self.gain)
@@ -365,6 +380,55 @@ mod tests {
     fn sensor_mode_override_trumps_stacking_type_auto() {
         let settings = CaptureSettings {
             stacking_type: StackingType::Planetary,
+            sensor_mode_override: Some(DualSamplingMode::LowReadoutNoise),
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    #[test]
+    fn capture_config_picks_normal_for_deep_sky_when_not_stacking() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::DeepSky,
+            stacking: false,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::Normal));
+    }
+
+    #[test]
+    fn capture_config_picks_normal_for_comet_when_not_stacking() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::Comet,
+            stacking: false,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::Normal));
+    }
+
+    #[test]
+    fn capture_config_picks_lrn_for_deep_sky_in_wanderer_mode() {
+        // Wanderer mode always sets `stacking: true` alongside `wanderer_mode:
+        // true` (enforced by the frontend, see `CaptureControls.vue`) — this
+        // pins that "Stacking or Wanderer" both resolve through `stacking`.
+        let settings = CaptureSettings {
+            stacking_type: StackingType::DeepSky,
+            stacking: true,
+            wanderer_mode: true,
+            ..CaptureSettings::default()
+        };
+        let config = settings.to_capture_config();
+        assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    #[test]
+    fn sensor_mode_override_wins_even_when_not_stacking() {
+        let settings = CaptureSettings {
+            stacking_type: StackingType::DeepSky,
+            stacking: false,
             sensor_mode_override: Some(DualSamplingMode::LowReadoutNoise),
             ..CaptureSettings::default()
         };

@@ -17,6 +17,7 @@ pub struct IndiCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     decode_buffer: Vec<u8>,
+    last_applied_config: Option<CaptureConfig>,
 }
 
 impl IndiCamera {
@@ -79,6 +80,7 @@ impl IndiCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             decode_buffer: Vec::new(),
+            last_applied_config: None,
         })
     }
 
@@ -134,21 +136,26 @@ impl Camera for IndiCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<Frame> {
+        config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
                 self.check_connection().await?;
 
-                // Set Binning
-                let bin = config.bin as f64;
-                let _ = self.client.set_number(&self.device_name, "CCD_BINNING", vec![("HOR_BIN", bin), ("VER_BIN", bin)]).await;
+                if config.should_reapply(self.last_applied_config.as_ref()) {
+                    // Set Binning
+                    let bin = config.bin as f64;
+                    let _ = self.client.set_number(&self.device_name, "CCD_BINNING", vec![("HOR_BIN", bin), ("VER_BIN", bin)]).await;
 
-                // Set Gain
-                let _ = self.client.set_number(&self.device_name, "CCD_GAIN", vec![("GAIN", config.gain as f64)]).await;
+                    // Set Gain
+                    let _ = self.client.set_number(&self.device_name, "CCD_GAIN", vec![("GAIN", config.gain as f64)]).await;
 
-                // Set Offset
-                let _ = self.client.set_number(&self.device_name, "CCD_OFFSET", vec![("OFFSET", config.offset as f64)]).await;
+                    // Set Offset
+                    let _ = self.client.set_number(&self.device_name, "CCD_OFFSET", vec![("OFFSET", config.offset as f64)]).await;
+
+                    self.last_applied_config = Some(config.clone());
+                }
 
                 // Trigger exposure
                 let exp_s = config.exposure_us as f64 / 1_000_000.0;
@@ -190,6 +197,10 @@ impl Camera for IndiCamera {
                 }
             })
         })
+    }
+
+    fn invalidate_config_cache(&mut self) {
+        self.last_applied_config = None;
     }
 
     fn cancel(&self) {
