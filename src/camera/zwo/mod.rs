@@ -82,6 +82,8 @@ pub struct ZwoCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
+    /// Reused across frames instead of allocating fresh every capture.
+    capture_buffer: Vec<u8>,
 }
 
 impl ZwoCamera {
@@ -145,6 +147,7 @@ impl ZwoCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
+            capture_buffer: Vec::new(),
         })
     }
 
@@ -168,6 +171,7 @@ impl ZwoCamera {
                     info,
                     cancel_flag: Arc::new(AtomicBool::new(false)),
                     last_applied_config: None,
+                    capture_buffer: Vec::new(),
                 });
             }
         }
@@ -460,15 +464,16 @@ impl Camera for ZwoCamera {
             ImageFormat::Raw16 => 2,
         };
 
-        let mut image = vec![0u8; (width * height * channels * bytes_per_channel) as usize];
+        self.capture_buffer
+            .resize((width * height * channels * bytes_per_channel) as usize, 0);
 
         catch_ffi_panic("ZWO::download_image", || {
-            self.camera.get_image_data(&mut image)
+            self.camera.get_image_data(&mut self.capture_buffer)
         })
         .map_err(CameraError::from)?
         .map_err(|e| CameraError::ImageReadFailed(e))?;
 
-        self.buffer_to_frame(&image, width, height, config)
+        self.buffer_to_frame(&self.capture_buffer, width, height, config)
     }
 
     fn invalidate_config_cache(&mut self) {

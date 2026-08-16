@@ -81,6 +81,8 @@ pub struct SvbonyCamera {
     /// re-deriving an unrounded value from `config`. Always `Some` exactly
     /// when `last_applied_config` is `Some` — the two are written together.
     last_resolved_roi: Option<(c_int, c_int, c_int, c_int)>,
+    /// Reused across frames instead of allocating fresh every capture.
+    capture_buffer: Vec<u8>,
 }
 
 impl SvbonyCamera {
@@ -123,6 +125,7 @@ impl SvbonyCamera {
             cooler_on: false,
             last_applied_config: None,
             last_resolved_roi: None,
+            capture_buffer: Vec::new(),
         })
     }
 }
@@ -313,7 +316,7 @@ impl Camera for SvbonyCamera {
         };
 
         let buffer_size = (w as usize) * (h as usize) * bytes_per_pixel;
-        let mut buffer = vec![0u8; buffer_size];
+        self.capture_buffer.resize(buffer_size, 0);
 
         catch_ffi_panic("SVBony::start_capture", || {
             self.handle.start_video_capture()
@@ -337,7 +340,7 @@ impl Camera for SvbonyCamera {
 
             match catch_ffi_panic("SVBony::get_video_data", || {
                 // Short wait to allow cancellation
-                self.handle.get_video_data(&mut buffer, 500.min(timeout_ms))
+                self.handle.get_video_data(&mut self.capture_buffer, 500.min(timeout_ms))
             }) {
                 Ok(Ok(())) => break Ok(()),
                 Ok(Err(e)) => {
@@ -383,10 +386,10 @@ impl Camera for SvbonyCamera {
             // Some models fall back to mono on bin2, or shift the matrix. 
             // Currently using the default pattern. 
             let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            Frame::from_bayer(&buffer, actual_w, actual_h, pixel_format, pattern)
+            Frame::from_bayer(&self.capture_buffer, actual_w, actual_h, pixel_format, pattern)
                 .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         } else {
-            Frame::from_raw(&buffer, actual_w, actual_h, 1, pixel_format)
+            Frame::from_raw(&self.capture_buffer, actual_w, actual_h, 1, pixel_format)
                 .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         }
     }

@@ -70,6 +70,9 @@ pub struct PlayerOneCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
+    /// Reused across frames instead of allocating fresh every capture — see
+    /// `capture::run_capture`, which resizes this in place.
+    capture_buffer: Vec<u8>,
 }
 
 impl PlayerOneCamera {
@@ -101,6 +104,7 @@ impl PlayerOneCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
+            capture_buffer: Vec::new(),
         })
     }
 }
@@ -224,7 +228,13 @@ impl Camera for PlayerOneCamera {
             self.last_applied_config = Some(config.clone());
         }
         let _span = tracing::info_span!("read_frame").entered();
-        capture::run_capture(&mut self.camera, &self.info, config, &self.cancel_flag)
+        capture::run_capture(
+            &mut self.camera,
+            &self.info,
+            config,
+            &self.cancel_flag,
+            &mut self.capture_buffer,
+        )
     }
 
     fn invalidate_config_cache(&mut self) {

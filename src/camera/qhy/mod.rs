@@ -112,6 +112,8 @@ pub struct QhyCamera {
     info: CameraInfo,
     cancel_flag: Arc<AtomicBool>,
     last_applied_config: Option<CaptureConfig>,
+    /// Reused across frames instead of allocating fresh every capture.
+    capture_buffer: Vec<u8>,
 }
 
 impl QhyCamera {
@@ -175,6 +177,7 @@ impl QhyCamera {
             info,
             cancel_flag: Arc::new(AtomicBool::new(false)),
             last_applied_config: None,
+            capture_buffer: Vec::new(),
         };
 
         // Initialize defaults
@@ -389,7 +392,7 @@ impl Camera for QhyCamera {
         if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 {
             buf_len *= 3;
         }
-        let mut buffer = vec![0u8; buf_len];
+        self.capture_buffer.resize(buf_len, 0);
 
         loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
@@ -402,7 +405,7 @@ impl Camera for QhyCamera {
                 return Err(CameraError::ExposureTimeout(total_timeout));
             }
 
-            let ready = catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(&mut buffer));
+            let ready = catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(&mut self.capture_buffer));
             match ready {
                 Ok(Ok((bw, bh))) => {
                     let channels = if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 { 3 } else { 1 };
@@ -414,10 +417,10 @@ impl Camera for QhyCamera {
 
                     if self.info.sensor_type == SensorType::Color && channels == 1 {
                         let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-                        return Frame::from_bayer(&buffer, bw as usize, bh as usize, pixel_format, pattern)
+                        return Frame::from_bayer(&self.capture_buffer, bw as usize, bh as usize, pixel_format, pattern)
                             .map_err(|e| CameraError::ImageReadFailed(e.to_string()));
                     } else {
-                        return Frame::from_raw(&buffer, bw as usize, bh as usize, channels, pixel_format)
+                        return Frame::from_raw(&self.capture_buffer, bw as usize, bh as usize, channels, pixel_format)
                             .map_err(|e| CameraError::ImageReadFailed(e.to_string()));
                     }
                 }
