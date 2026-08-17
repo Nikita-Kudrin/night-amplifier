@@ -3,6 +3,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use night_amplifier::background::{BackgroundConfig, BackgroundExtractor};
 use night_amplifier::frame::Frame;
 use night_amplifier::{auto_stretch_frame, AutoStretchConfig};
+use night_amplifier::render::stretch::apply_fused_stretch_frame;
 use std::time::Duration;
 
 fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
@@ -60,5 +61,73 @@ fn bench_auto_stretch(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_subtract_from, bench_auto_stretch);
+fn bench_scale_lut(c: &mut Criterion) {
+    let data = vec![0.5f32; 2712 * 1538 * 3];
+    
+    let mut scale_lut = vec![0.0f32; 8192];
+    for (i, v) in scale_lut.iter_mut().enumerate() {
+        *v = 1.0 + (i as f32 / 8191.0);
+    }
+
+    let mut group = c.benchmark_group("scale_lut");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("simd", |b| {
+        b.iter(|| {
+            let mut test_data = data.clone();
+            night_amplifier::render::simd::apply_luminance_scale_lut_simd(
+                black_box(&mut test_data),
+                0.05,
+                black_box(&scale_lut)
+            );
+        })
+    });
+
+    group.bench_function("scalar", |b| {
+        b.iter(|| {
+            let mut test_data = data.clone();
+            night_amplifier::render::simd::apply_luminance_scale_lut_scalar(
+                black_box(&mut test_data),
+                0.05,
+                black_box(&scale_lut)
+            );
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_fused_stretch(c: &mut Criterion) {
+    let frame = create_test_frame(2712, 1538, 3);
+
+    let mut group = c.benchmark_group("apply_fused_stretch");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(2));
+
+    group.bench_function("fused_stretch_frame", |b| {
+        b.iter(|| {
+            let mut test_frame = frame.clone();
+            apply_fused_stretch_frame(
+                black_box(&mut test_frame),
+                0.05,
+                night_amplifier::render::ToneMappingAlgorithm::Mtf,
+                0.15,
+                None,
+            ).unwrap();
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_subtract_from,
+    bench_auto_stretch,
+    bench_fused_stretch,
+    bench_scale_lut
+);
 criterion_main!(benches);

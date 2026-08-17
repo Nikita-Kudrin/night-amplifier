@@ -3,12 +3,12 @@
 //! This module provides the final step in the EAA pipeline: converting the
 //! 32-bit floating-point stacked image into a visually pleasing 8-bit output.
 
-mod autostretch;
+pub mod autostretch;
 mod black_point;
-mod output;
+pub mod output;
 pub mod pipeline;
 pub mod simd;
-mod stretch;
+pub mod stretch;
 mod white_balance;
 
 // Re-export all public items from submodules

@@ -117,10 +117,18 @@ impl BufferPool {
 }
 
 /// A buffer that automatically returns to its pool when dropped
-#[derive(Debug)]
 pub struct PooledBuffer {
     data: Option<Vec<u8>>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+impl std::fmt::Debug for PooledBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let len = self.data.as_ref().map_or(0, |v| v.len());
+        f.debug_struct("PooledBuffer")
+            .field("len", &len)
+            .finish()
+    }
 }
 
 impl Clone for PooledBuffer {
@@ -169,7 +177,7 @@ impl From<Vec<u8>> for PooledBuffer {
 }
 
 /// Raw image data returned by a camera before Bayer or format conversion.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RawFrame {
     /// The raw byte buffer straight from the camera SDK.
     pub data: PooledBuffer,
@@ -179,6 +187,17 @@ pub struct RawFrame {
     pub height: u32,
     /// The image format (Raw8, Raw16, Rgb24).
     pub format: ImageFormat,
+}
+
+impl std::fmt::Debug for RawFrame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawFrame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("format", &self.format)
+            .field("data_len", &self.data.len())
+            .finish()
+    }
 }
 
 impl RawFrame {

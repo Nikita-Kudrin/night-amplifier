@@ -10,7 +10,7 @@ use rayon::prelude::*;
 mod contrast;
 mod dither;
 
-pub use contrast::{apply_contrast_frame, apply_s_curve, ContrastConfig};
+pub use contrast::{apply_contrast_frame, apply_contrast_slice, apply_s_curve, ContrastConfig};
 use dither::apply_ordered_dither;
 
 /// Configuration for the final output conversion

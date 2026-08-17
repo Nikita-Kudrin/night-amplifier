@@ -1,3 +1,16 @@
+
+fn to_ready_frame(frame: &night_amplifier::frame::Frame) -> night_amplifier::server::state::RenderReadyFrame {
+    let mut config = night_amplifier::render::RenderPipelineConfig::default();
+    config.contrast = false;
+    config.auto_stretch = false;
+    config.saturation_boost = false;
+    night_amplifier::server::state::RenderReadyFrame {
+        linear_frame: std::sync::Arc::new(frame.clone()),
+        pipeline_config: config,
+        stretch_result: None,
+    }
+}
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -21,7 +34,7 @@ fn test_encode_imx464_no_downsample() {
     let height = 1538;
     let frame = Frame::zeros(width, height, 3).unwrap();
 
-    let encoded = encode_rgb8_lz4(&frame).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
 
@@ -49,7 +62,7 @@ fn test_encode_8k_downsamples_to_4k() {
         }
     }
 
-    let encoded = encode_rgb8_lz4(&frame).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
 
@@ -172,12 +185,12 @@ fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
 /// Encodes once for size, then times `ENCODE_TIMING_ITERATIONS` runs.
 /// Returns (avg_ms, encoded_wire_bytes).
 fn time_encode(frame: &Frame, chunks: usize) -> (f64, usize) {
-    let encoded = encode_rgb8_lz4_chunked(frame, chunks).expect("encode failed");
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).expect("encode failed");
     let size = encoded.len();
 
     let start = Instant::now();
     for _ in 0..ENCODE_TIMING_ITERATIONS {
-        let _ = encode_rgb8_lz4_chunked(frame, chunks).expect("encode failed");
+        let _ = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).expect("encode failed");
     }
     let avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64;
     (avg_ms, size)
@@ -245,7 +258,7 @@ fn baseline_live_view_stream_encoding() {
 
         // Encode of the *linear* (unstretched) frame — isolates how much the
         // stretch costs in LZ4 compressibility.
-        let linear_encoded = encode_rgb8_lz4_chunked(&frame, live_chunks).expect("linear encode");
+        let linear_encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), live_chunks).expect("linear encode");
 
         // Preview render with default capture settings (live-view path)
         let mut preview = frame.clone();
@@ -572,13 +585,13 @@ fn probe_render_task_stage_breakdown() {
             ("Qhd1440", (2560, 1440)),
             ("Uhd2160 (native here)", (3840, 2160)),
         ] {
-            let payload = encode_rgb8_jpeg_bounded(&rendered, bw, bh).unwrap();
+            let payload = encode_rgb8_jpeg_bounded(&to_ready_frame(&rendered), bw, bh).unwrap();
             let w = u32::from_le_bytes(payload[4..8].try_into().unwrap());
             let h = u32::from_le_bytes(payload[8..12].try_into().unwrap());
             let ms = time_ms(Box::new({
                 let rendered = rendered.clone();
                 move || {
-                    let _ = encode_rgb8_jpeg_bounded(&rendered, bw, bh).unwrap();
+                    let _ = encode_rgb8_jpeg_bounded(&to_ready_frame(&rendered), bw, bh).unwrap();
                 }
             }));
             let mbits = payload.len() as f64 * 8.0 / 1e6;

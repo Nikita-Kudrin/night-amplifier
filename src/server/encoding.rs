@@ -3,7 +3,7 @@
 //! This module provides encoding functions for streaming image data
 //! to WebSocket clients in various formats.
 
-use crate::frame::{sample_to_u8, Frame};
+use crate::frame::sample_to_u8;
 
 /// Binary header magic number for RGB8+LZ4 stream format (legacy single-block)
 ///
@@ -82,11 +82,12 @@ pub fn clamp_client_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, 
 /// whose confidence was discarded) and debayered unconditionally, which cost a
 /// full-resolution f32 RGB frame — 3x the mono source, ~196 MB on an
 /// ASI1600MM — per tier per frame, and put colour fringing on grey data.
-fn frame_to_rgb8(
-    frame: &Frame,
+pub fn frame_to_rgb8_downsampled(
+    ready_frame: &crate::server::state::RenderReadyFrame,
     max_width: u32,
     max_height: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    let frame = &ready_frame.linear_frame;
     let width = frame.width();
     let height = frame.height();
     let channels = frame.channels();
@@ -99,7 +100,7 @@ fn frame_to_rgb8(
     }
 
     if width <= max_width as usize && height <= max_height as usize {
-        return Ok((expand_to_rgb8(frame), width as u32, height as u32));
+        return Ok((expand_to_rgb8_fused(ready_frame), width as u32, height as u32));
     }
 
     let aspect_ratio = width as f32 / height as f32;
@@ -118,115 +119,15 @@ fn frame_to_rgb8(
     let target_width = target_width.max(1);
     let target_height = target_height.max(1);
 
-    let rgb8 = box_downsample_to_rgb8(frame, target_width, target_height);
+    let rgb8 = box_downsample_to_rgb8_fused(ready_frame, target_width, target_height);
     Ok((rgb8, target_width as u32, target_height as u32))
 }
 
-/// Convert a frame to RGB8 at its native size, replicating a mono channel.
-fn expand_to_rgb8(frame: &Frame) -> Vec<u8> {
-    use rayon::prelude::*;
-
-    if frame.channels() == 1 {
-        frame
-            .data()
-            .par_iter()
-            .flat_map_iter(|&v| {
-                let val = sample_to_u8(v);
-                [val, val, val]
-            })
-            .collect()
-    } else {
-        frame.to_rgb8_fast()
-    }
-}
-
-/// Box-average `frame` to `target_width` x `target_height`, emitting RGB8 directly.
-///
-/// Folding the f32 → u8 conversion into the accumulation pass keeps the
-/// intermediate downsampled frame from ever materialising, which is the point of
-/// the exercise: it was a 24.7 MB write plus a 24.7 MB read per frame.
-///
-/// Caller guarantees `channels` is 1 or 3, and that both target dimensions are
-/// non-zero and no larger than the source, so every source range is non-empty.
-fn box_downsample_to_rgb8(frame: &Frame, target_width: usize, target_height: usize) -> Vec<u8> {
-    use rayon::prelude::*;
-
-    let width = frame.width();
-    let height = frame.height();
-    let channels = frame.channels();
-    let src_data = frame.data();
-    let src_stride = width * channels;
-
-    let x_scale = width as f32 / target_width as f32;
-    let y_scale = height as f32 / target_height as f32;
-
-    // Column ranges are identical for every row, so resolve them once per frame
-    // rather than once per output sample. The reciprocal is stored instead of the
-    // count so the per-pixel area factor is a multiply rather than a divide —
-    // that is ~2 M divides saved per 1080p tier per frame.
-    let col_ranges: Vec<(usize, usize, f32)> = (0..target_width)
-        .map(|x| {
-            let src_x0 = (x as f32 * x_scale) as usize;
-            let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(width);
-            (src_x0, src_x1, 1.0 / (src_x1 - src_x0).max(1) as f32)
-        })
-        .collect();
-
-    let mut output = vec![0u8; target_width * target_height * 3];
-
-    output
-        .par_chunks_mut(target_width * 3)
-        .enumerate()
-        .for_each(|(y, row_out)| {
-            let src_y0 = (y as f32 * y_scale) as usize;
-            let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(height);
-            let inv_y_count = 1.0 / (src_y1 - src_y0).max(1) as f32;
-
-            for (x, &(src_x0, src_x1, inv_x_count)) in col_ranges.iter().enumerate() {
-                let inv_area = inv_y_count * inv_x_count;
-                let out_idx = x * 3;
-
-                if channels == 1 {
-                    let mut sum = 0.0f32;
-                    for sy in src_y0..src_y1 {
-                        let row_start = sy * src_stride;
-                        for sx in src_x0..src_x1 {
-                            sum += src_data[row_start + sx];
-                        }
-                    }
-                    let val = sample_to_u8(sum * inv_area);
-                    row_out[out_idx] = val;
-                    row_out[out_idx + 1] = val;
-                    row_out[out_idx + 2] = val;
-                } else {
-                    // channels is exactly 3 — see the caller's guarantee
-                    let mut sum_r = 0.0f32;
-                    let mut sum_g = 0.0f32;
-                    let mut sum_b = 0.0f32;
-                    for sy in src_y0..src_y1 {
-                        let row_start = sy * src_stride;
-                        for sx in src_x0..src_x1 {
-                            let pixel_start = row_start + sx * 3;
-                            sum_r += src_data[pixel_start];
-                            sum_g += src_data[pixel_start + 1];
-                            sum_b += src_data[pixel_start + 2];
-                        }
-                    }
-                    row_out[out_idx] = sample_to_u8(sum_r * inv_area);
-                    row_out[out_idx + 1] = sample_to_u8(sum_g * inv_area);
-                    row_out[out_idx + 2] = sample_to_u8(sum_b * inv_area);
-                }
-            }
-        });
-
-    output
-}
-
 /// Encode RGB8 data with LZ4 compression for high-speed streaming (legacy SA08 format)
-pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {
+pub fn encode_rgb8_lz4(ready_frame: &crate::server::state::RenderReadyFrame) -> Result<Vec<u8>, String> {
     use lz4_flex::block::{compress_into, get_maximum_output_size};
 
-    let (rgb8_data, width, height) = frame_to_rgb8(frame, 3840, 2160)?;
+    let (rgb8_data, width, height) = frame_to_rgb8_downsampled(ready_frame, 3840, 2160)?;
 
     let uncompressed_len = rgb8_data.len() as u32;
     let max_compressed_len = get_maximum_output_size(rgb8_data.len());
@@ -254,14 +155,23 @@ pub fn encode_rgb8_lz4(frame: &Frame) -> Result<Vec<u8>, String> {
 /// Splits the image into `chunk_count` horizontal row-stripes and compresses
 /// each independently via Rayon. When `chunk_count == 1`, produces a single
 /// chunk (sequential, yields CPU to other tasks like stacking).
-pub fn encode_rgb8_lz4_chunked(frame: &Frame, chunk_count: usize) -> Result<Vec<u8>, String> {
+pub fn encode_rgb8_lz4_chunked(ready_frame: &crate::server::state::RenderReadyFrame, chunk_count: usize) -> Result<Vec<u8>, String> {
     use rayon::prelude::*;
 
     let chunk_count = chunk_count.max(1);
     let (rgb8_data, width, height) = {
         let _span = tracing::info_span!("frame_to_rgb8").entered();
-        frame_to_rgb8(frame, 3840, 2160)?
+        frame_to_rgb8_downsampled(ready_frame, 3840, 2160)?
     };
+
+    encode_rgb8_lz4_chunked_from_u8(&rgb8_data, width, height, chunk_count)
+}
+
+/// Encode already-converted RGB8 data with parallel chunked LZ4 compression (SA09 format)
+pub fn encode_rgb8_lz4_chunked_from_u8(rgb8_data: &[u8], width: u32, height: u32, chunk_count: usize) -> Result<Vec<u8>, String> {
+    use rayon::prelude::*;
+
+    let chunk_count = chunk_count.max(1);
 
     let row_bytes = width as usize * 3;
     let total_rows = height as usize;
@@ -397,14 +307,24 @@ fn compress_rgb8_to_jpeg(rgb8_data: &[u8], width: u32, height: u32) -> Result<Ve
 /// frame at its native size. Clients go through [`encode_rgb8_jpeg_dynamic`],
 /// which clamps the request first.
 pub fn encode_rgb8_jpeg_bounded(
-    frame: &Frame,
+    ready_frame: &crate::server::state::RenderReadyFrame,
     max_w: u32,
     max_h: u32,
 ) -> Result<Vec<u8>, String> {
     let (rgb8_data, width, height) = {
         let _span = tracing::info_span!("frame_to_rgb8").entered();
-        frame_to_rgb8(frame, max_w, max_h)?
+        frame_to_rgb8_downsampled(ready_frame, max_w, max_h)?
     };
+
+    encode_rgb8_jpeg_bounded_from_u8(&rgb8_data, width, height)
+}
+
+/// Encode already-converted RGB8 data as JPEG (SA10 format)
+pub fn encode_rgb8_jpeg_bounded_from_u8(
+    rgb8_data: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, String> {
 
     let compressed = {
         let _span = tracing::info_span!("jpeg_compress").entered();
@@ -424,23 +344,57 @@ pub fn encode_rgb8_jpeg_bounded(
 
 /// Encode frame as JPEG at a client-requested resolution (SA10 format)
 pub fn encode_rgb8_jpeg_dynamic(
-    frame: &Frame,
+    ready_frame: &crate::server::state::RenderReadyFrame,
     req_w: Option<u32>,
     req_h: Option<u32>,
 ) -> Result<Vec<u8>, String> {
     let (max_w, max_h) = clamp_client_resolution(req_w, req_h);
-    encode_rgb8_jpeg_bounded(frame, max_w, max_h)
+    encode_rgb8_jpeg_bounded(ready_frame, max_w, max_h)
 }
 
 
 #[cfg(test)]
 mod tests {
+    use crate::frame::Frame;
+
+fn to_ready_frame(frame: &Frame) -> crate::server::state::RenderReadyFrame {
+    let mut config = crate::render::RenderPipelineConfig::default();
+    config.contrast = false;
+    config.auto_stretch = false;
+    config.saturation_boost = false;
+    crate::server::state::RenderReadyFrame {
+        linear_frame: std::sync::Arc::new(frame.clone()),
+        pipeline_config: config,
+        stretch_result: None,
+    }
+}
+
+/// Like `to_ready_frame`, but with `auto_stretch` actually enabled and a real
+/// `StretchResult` attached — every fused-kernel test up to this point runs with
+/// stretch/saturation/contrast all disabled, so the scale-LUT application branch in
+/// `expand_to_rgb8_fused`/`box_downsample_to_rgb8_fused` had no coverage at all.
+fn to_ready_frame_with_stretch(
+    frame: &Frame,
+    black_point: f32,
+    scale_lut: std::sync::Arc<Vec<f32>>,
+) -> crate::server::state::RenderReadyFrame {
+    let mut config = crate::render::RenderPipelineConfig::default();
+    config.contrast = false;
+    config.auto_stretch = true;
+    config.saturation_boost = false;
+    crate::server::state::RenderReadyFrame {
+        linear_frame: std::sync::Arc::new(frame.clone()),
+        pipeline_config: config,
+        stretch_result: Some(crate::server::state::StretchResult { black_point, scale_lut }),
+    }
+}
+
     use super::*;
 
     #[test]
     fn test_rgb8_lz4_encode_header_format() {
         let frame = Frame::filled(2, 2, 3, 0.5).unwrap();
-        let encoded = encode_rgb8_lz4(&frame).unwrap();
+        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
 
         assert!(encoded.len() >= 16);
         let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
@@ -462,7 +416,7 @@ mod tests {
         frame.set_pixel(1, 1, 1, 0.5);
         frame.set_pixel(2, 2, 2, 0.25);
 
-        let encoded = encode_rgb8_lz4(&frame).unwrap();
+        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
         let compressed_data = &encoded[16..];
         let decompressed = decompress_size_prepended(compressed_data).unwrap();
 
@@ -492,7 +446,7 @@ mod tests {
     #[test]
     fn test_rgb8_lz4_compression_ratio() {
         let frame = Frame::filled(100, 100, 3, 0.01).unwrap();
-        let encoded = encode_rgb8_lz4(&frame).unwrap();
+        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
 
         let raw_size = 100 * 100 * 3;
         let compressed_size = encoded.len() - 16;
@@ -504,7 +458,7 @@ mod tests {
         let test_cases = [(1, 1), (10, 10), (100, 50), (1920, 1080)];
         for (width, height) in test_cases {
             let frame = Frame::zeros(width, height, 3).unwrap();
-            let encoded = encode_rgb8_lz4(&frame).unwrap();
+            let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
             let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
             let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
             assert_eq!(enc_width, width as u32);
@@ -516,7 +470,7 @@ mod tests {
     fn test_rgb8_lz4_grayscale_to_rgb_conversion() {
         use lz4_flex::decompress_size_prepended;
         let frame = Frame::filled(8, 8, 1, 0.5).unwrap();
-        let encoded = encode_rgb8_lz4(&frame).unwrap();
+        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
 
         let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
@@ -580,7 +534,7 @@ mod tests {
     #[test]
     fn test_sa09_header_format() {
         let frame = Frame::filled(4, 4, 3, 0.5).unwrap();
-        let encoded = encode_rgb8_lz4_chunked(&frame, 2).unwrap();
+        let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 2).unwrap();
 
         assert!(encoded.len() >= SA09_HEADER_SIZE);
         let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
@@ -602,7 +556,7 @@ mod tests {
         frame.set_pixel(3, 3, 1, 0.5);
         frame.set_pixel(7, 7, 2, 0.25);
 
-        let encoded = encode_rgb8_lz4_chunked(&frame, 4).unwrap();
+        let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4).unwrap();
         let (width, height, decompressed) = decode_sa09(&encoded);
 
         assert_eq!(width, 8);
@@ -626,7 +580,7 @@ mod tests {
     #[test]
     fn test_sa09_single_chunk() {
         let frame = Frame::filled(10, 10, 3, 0.3).unwrap();
-        let encoded = encode_rgb8_lz4_chunked(&frame, 1).unwrap();
+        let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 1).unwrap();
 
         let chunk_count = u32::from_le_bytes([encoded[16], encoded[17], encoded[18], encoded[19]]);
         assert_eq!(chunk_count, 1);
@@ -643,7 +597,7 @@ mod tests {
         let frame = Frame::filled(100, 100, 3, 0.42).unwrap();
 
         for chunks in [1, 2, 3, 4, 7, 8] {
-            let encoded = encode_rgb8_lz4_chunked(&frame, chunks).unwrap();
+            let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).unwrap();
             let (w, h, decompressed) = decode_sa09(&encoded);
             assert_eq!(w, 100);
             assert_eq!(h, 100);
@@ -660,10 +614,10 @@ mod tests {
 
         let frame = Frame::filled(20, 20, 3, 0.7).unwrap();
 
-        let sa08 = encode_rgb8_lz4(&frame).unwrap();
+        let sa08 = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
         let sa08_pixels = decompress_size_prepended(&sa08[16..]).unwrap();
 
-        let sa09 = encode_rgb8_lz4_chunked(&frame, 4).unwrap();
+        let sa09 = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4).unwrap();
         let (_, _, sa09_pixels) = decode_sa09(&sa09);
 
         assert_eq!(sa08_pixels, sa09_pixels);
@@ -689,7 +643,7 @@ mod tests {
         // Mock a massive 5000x5000 frame
         let frame = Frame::zeros(5000, 5000, 3).unwrap();
         // Request 5000x5000
-        let encoded = encode_rgb8_jpeg_dynamic(&frame, Some(5000), Some(5000)).unwrap();
+        let encoded = encode_rgb8_jpeg_dynamic(&to_ready_frame(&frame), Some(5000), Some(5000)).unwrap();
         
         let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
@@ -705,7 +659,7 @@ mod tests {
         // Mock a 2000x2000 frame
         let frame = Frame::zeros(2000, 2000, 3).unwrap();
         // Request a tiny 640x480 stream
-        let encoded = encode_rgb8_jpeg_dynamic(&frame, Some(640), Some(480)).unwrap();
+        let encoded = encode_rgb8_jpeg_dynamic(&to_ready_frame(&frame), Some(640), Some(480)).unwrap();
 
         let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
@@ -727,7 +681,7 @@ mod tests {
     #[test]
     fn test_jpeg_encode_bounded_keeps_native_resolution() {
         let frame = Frame::zeros(200, 120, 3).unwrap();
-        let encoded = encode_rgb8_jpeg_bounded(&frame, u32::MAX, u32::MAX).unwrap();
+        let encoded = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), u32::MAX, u32::MAX).unwrap();
 
         let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
         assert_eq!(magic, JPEG_MAGIC);
@@ -743,7 +697,7 @@ mod tests {
     #[test]
     fn test_jpeg_encode_bounded_downsamples_to_box() {
         let frame = Frame::zeros(2712, 1538, 3).unwrap();
-        let encoded = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
+        let encoded = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), 1920, 1080).unwrap();
 
         let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
@@ -758,9 +712,9 @@ mod tests {
     fn test_jpeg_encode_reused_compressor_does_not_leak_quality() {
         let frame = Frame::filled(1500, 1500, 3, 0.4).unwrap();
 
-        let boxed = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
-        let native = encode_rgb8_jpeg_bounded(&frame, u32::MAX, u32::MAX).unwrap();
-        let boxed_again = encode_rgb8_jpeg_bounded(&frame, 1920, 1080).unwrap();
+        let boxed = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), 1920, 1080).unwrap();
+        let native = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), u32::MAX, u32::MAX).unwrap();
+        let boxed_again = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), 1920, 1080).unwrap();
 
         assert_eq!(boxed, boxed_again);
         assert_ne!(boxed.len(), native.len());
@@ -846,7 +800,7 @@ mod tests {
             (300, 400, 111, 137),
         ] {
             let frame = gradient_frame(w, h, 3);
-            let (got, gw, gh) = frame_to_rgb8(&frame, box_w, box_h).unwrap();
+            let (got, gw, gh) = frame_to_rgb8_downsampled(&to_ready_frame(&frame), box_w, box_h).unwrap();
             let want = reference_downsample_to_rgb8(&frame, gw as usize, gh as usize);
 
             assert_eq!(got.len(), want.len(), "{w}x{h} -> {box_w}x{box_h}");
@@ -888,7 +842,7 @@ mod tests {
     #[test]
     fn test_mono_frame_downsamples_to_grey_not_false_colour() {
         let frame = gradient_frame(400, 300, 1);
-        let (rgb, w, h) = frame_to_rgb8(&frame, 137, 111).unwrap();
+        let (rgb, w, h) = frame_to_rgb8_downsampled(&to_ready_frame(&frame), 137, 111).unwrap();
 
         assert_eq!(rgb.len(), w as usize * h as usize * 3);
         for (i, px) in rgb.chunks_exact(3).enumerate() {
@@ -909,7 +863,7 @@ mod tests {
     #[test]
     fn test_mono_frame_stays_grey_at_native_size() {
         let frame = gradient_frame(64, 48, 1);
-        let (rgb, w, h) = frame_to_rgb8(&frame, 1920, 1080).unwrap();
+        let (rgb, w, h) = frame_to_rgb8_downsampled(&to_ready_frame(&frame), 1920, 1080).unwrap();
 
         assert_eq!((w, h), (64, 48));
         assert_eq!(rgb.len(), 64 * 48 * 3);
@@ -929,7 +883,7 @@ mod tests {
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| frame_to_rgb8(&frame, 96, 54).unwrap().0)
+                .install(|| frame_to_rgb8_downsampled(&to_ready_frame(&frame), 96, 54).unwrap().0)
         };
         let single = run(1);
         assert_eq!(single, run(3));
@@ -942,11 +896,11 @@ mod tests {
     #[test]
     fn test_unsupported_channel_count_is_rejected_on_both_paths() {
         let small = Frame::zeros(64, 48, 2).unwrap();
-        assert!(frame_to_rgb8(&small, 1920, 1080).is_err(), "native path");
+        assert!(frame_to_rgb8_downsampled(&to_ready_frame(&small), 1920, 1080).is_err(), "native path");
 
         let large = Frame::zeros(4000, 3000, 4).unwrap();
         assert!(
-            frame_to_rgb8(&large, 1920, 1080).is_err(),
+            frame_to_rgb8_downsampled(&to_ready_frame(&large), 1920, 1080).is_err(),
             "downsample path"
         );
     }
@@ -958,7 +912,7 @@ mod tests {
         for channels in [1, 3] {
             for (box_w, box_h) in [(1920, 1080), (u32::MAX, u32::MAX), (37, 29)] {
                 let frame = gradient_frame(271, 153, channels);
-                let (rgb, w, h) = frame_to_rgb8(&frame, box_w, box_h).unwrap();
+                let (rgb, w, h) = frame_to_rgb8_downsampled(&to_ready_frame(&frame), box_w, box_h).unwrap();
                 assert_eq!(
                     rgb.len(),
                     w as usize * h as usize * 3,
@@ -968,4 +922,280 @@ mod tests {
             }
         }
     }
+
+    /// Every test above this point runs with `auto_stretch = false`, so the scale-LUT
+    /// branch inside `expand_to_rgb8_fused` (black point subtraction + tone-curve scale)
+    /// had zero coverage. Uses a flat LUT so the expected output is trivial to hand-verify
+    /// — the point here is "does the kernel read and apply `stretch_result` at all",
+    /// not "is the curve math correct" (covered exhaustively by `render::simd`'s own tests).
+    #[test]
+    fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
+        // R=G=B per pixel, so luminance equals the shared channel value regardless of
+        // the 0.2126/0.7152/0.0722 weighting, keeping the expected values simple.
+        let data = vec![
+            0.2, 0.2, 0.2, 0.05, 0.05, 0.05, //
+            0.9, 0.9, 0.9, 0.0, 0.0, 0.0,
+        ];
+        let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
+        let scale_lut = std::sync::Arc::new(vec![2.0f32; 8192]); // flat 2x scale
+        let ready = to_ready_frame_with_stretch(&frame, 0.1, scale_lut);
+
+        let rgb8 = expand_to_rgb8_fused(&ready);
+
+        // (0,0): (0.2 - 0.1).max(0) * 2.0 = 0.2 -> u8 51
+        assert_eq!(&rgb8[0..3], &[51, 51, 51]);
+        // (1,0): (0.05 - 0.1).max(0) = 0.0 -> below black point, clamped to 0
+        assert_eq!(&rgb8[3..6], &[0, 0, 0]);
+        // (0,1): (0.9 - 0.1).max(0) * 2.0 = 1.6, clamped to 1.0 -> u8 255
+        assert_eq!(&rgb8[6..9], &[255, 255, 255]);
+        // (1,1): (0.0 - 0.1).max(0) = 0.0 -> 0
+        assert_eq!(&rgb8[9..12], &[0, 0, 0]);
+    }
+
+    /// Pins the ordering documented on `box_downsample_to_rgb8_fused`: for a concave
+    /// tone curve, averaging in linear light and *then* stretching must never come out
+    /// dimmer than stretching each source pixel first and averaging the results
+    /// afterward — see that function's doc comment for the Jensen's-inequality argument.
+    /// `curve(l) = sqrt(l)` is used here as a simple, clearly concave stand-in for the
+    /// real asinh/MTF curves.
+    #[test]
+    fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample() {
+        const N: usize = 8192;
+        // scale_lut(l) * l == sqrt(l), i.e. scale_lut(l) = 1/sqrt(l).
+        let scale_lut: Vec<f32> = (0..N)
+            .map(|i| {
+                let l = (i as f32 / (N - 1) as f32).max(1e-6); // avoid 1/0 at index 0
+                1.0 / l.sqrt()
+            })
+            .collect();
+        let scale_lut = std::sync::Arc::new(scale_lut);
+
+        // 2x2 box: two dim (0.0) pixels, two bright (0.8) pixels. R=G=B per pixel.
+        let data = vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
+            0.8, 0.8, 0.8, 0.8, 0.8, 0.8,
+        ];
+        let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
+        let ready = to_ready_frame_with_stretch(&frame, 0.0, scale_lut);
+
+        let actual = box_downsample_to_rgb8_fused(&ready, 1, 1);
+
+        // Production order (downsample-then-stretch): average = 0.4, curve(0.4) =
+        // sqrt(0.4) ~= 0.632456 -> u8 ~= 161 (+-1 for LUT interpolation error).
+        assert!(
+            (actual[0] as i32 - 161).abs() <= 1,
+            "expected ~161, got {:?}",
+            actual
+        );
+
+        // Reference order (stretch-then-downsample, computed by hand, NOT via the
+        // kernel): curve(0.0)=0.0 (x2), curve(0.8)=sqrt(0.8)~=0.894427 (x2);
+        // average = 0.447214 -> u8 = 114. The gap (47 LSB) comfortably absorbs the
+        // ~0.15 LSB interpolation error documented on `scale_lut_lookup`.
+        let reference_u8 = 114;
+        assert!(
+            actual[0] as i32 > reference_u8,
+            "downsample-then-stretch ({}) should be brighter than stretch-then-downsample \
+             ({reference_u8}) for a concave curve — the ordering guarantee has regressed",
+            actual[0]
+        );
+    }
 }
+
+pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame) -> Vec<u8> {
+    use rayon::prelude::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static ROW_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    let frame = &ready_frame.linear_frame;
+    let width = frame.width() as usize;
+    let height = frame.height() as usize;
+    let channels = frame.channels();
+    let src_data = frame.data();
+
+    let config = &ready_frame.pipeline_config;
+    let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
+    let has_saturate = config.saturation_boost;
+    let has_contrast = config.contrast;
+
+    let (black_point, scale_lut) = if has_stretch {
+        let sr = ready_frame.stretch_result.as_ref().unwrap();
+        (sr.black_point, sr.scale_lut.clone())
+    } else {
+        (0.0, std::sync::Arc::new(vec![]))
+    };
+
+    let row_len = width * 3;
+    let mut output = vec![0u8; width * height * 3];
+
+    output
+        .par_chunks_mut(row_len)
+        .with_min_len(32)
+        .enumerate()
+        .for_each(|(y, row_out)| {
+            ROW_BUF.with(|cell| {
+                let mut f32_row = cell.borrow_mut();
+                f32_row.resize(row_len, 0.0);
+
+                let row_start = y * width * channels;
+
+                for x in 0..width {
+                    let out_idx = x * 3;
+                    if channels == 1 {
+                        let val = src_data[row_start + x];
+                        f32_row[out_idx] = val;
+                        f32_row[out_idx + 1] = val;
+                        f32_row[out_idx + 2] = val;
+                    } else {
+                        let in_idx = row_start + x * channels;
+                        f32_row[out_idx] = src_data[in_idx];
+                        f32_row[out_idx + 1] = src_data[in_idx + 1];
+                        f32_row[out_idx + 2] = src_data[in_idx + 2];
+                    }
+                }
+
+                if has_stretch {
+                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut);
+                }
+                if has_saturate {
+                    if let Some(plugin) = crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN) {
+                        plugin.apply_boost_slice(&mut f32_row, &config.saturation_config);
+                    }
+                }
+                if has_contrast {
+                    crate::render::output::apply_contrast_slice(&mut f32_row, &config.contrast_config);
+                }
+
+                for i in 0..row_len {
+                    row_out[i] = sample_to_u8(f32_row[i]);
+                }
+            });
+        });
+
+    output
+}
+
+/// Box-average `frame` to `target_width` x `target_height` in **linear light**, then apply
+/// the tone-curve stretch (+ saturation/contrast) to the averaged result.
+///
+/// # Why stretch happens after downsampling, not before
+///
+/// This resamples before applying the non-linear, shadow-boosting tone curve, rather than
+/// the reverse (which is what the pre-fusion pipeline did: stretch once at full resolution,
+/// then downsample the already-stretched result). Because the stretch curves used here
+/// (asinh, MTF) are concave, Jensen's inequality guarantees `curve(average(pixels)) >=
+/// average(curve(pixels))` for any box of source pixels — so this order can only preserve
+/// or brighten faint detail in a downsampled tier relative to the old order, never dim it.
+/// See `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample` for a
+/// pinned numerical example.
+pub fn box_downsample_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame, target_width: usize, target_height: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static DS_ROW_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    let frame = &ready_frame.linear_frame;
+    let width = frame.width();
+    let height = frame.height();
+    let channels = frame.channels();
+    let src_data = frame.data();
+    let src_stride = width * channels;
+
+    let config = &ready_frame.pipeline_config;
+    let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
+    let has_saturate = config.saturation_boost;
+    let has_contrast = config.contrast;
+
+    let (black_point, scale_lut) = if has_stretch {
+        let sr = ready_frame.stretch_result.as_ref().unwrap();
+        (sr.black_point, sr.scale_lut.clone())
+    } else {
+        (0.0, std::sync::Arc::new(vec![]))
+    };
+
+    let x_scale = width as f32 / target_width as f32;
+    let y_scale = height as f32 / target_height as f32;
+
+    let col_ranges: Vec<(usize, usize, f32)> = (0..target_width)
+        .map(|x| {
+            let src_x0 = (x as f32 * x_scale) as usize;
+            let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(width);
+            (src_x0, src_x1, 1.0 / (src_x1 - src_x0).max(1) as f32)
+        })
+        .collect();
+
+    let row_len = target_width * 3;
+    let mut output = vec![0u8; target_width * target_height * 3];
+
+    output
+        .par_chunks_mut(row_len)
+        .with_min_len(32)
+        .enumerate()
+        .for_each(|(y, row_out)| {
+            DS_ROW_BUF.with(|cell| {
+                let mut f32_row = cell.borrow_mut();
+                f32_row.resize(row_len, 0.0);
+
+                let src_y0 = (y as f32 * y_scale) as usize;
+                let src_y1 = (((y + 1) as f32 * y_scale) as usize).min(height);
+                let row_inv_area = 1.0 / (src_y1 - src_y0).max(1) as f32;
+
+                for tgt_x in 0..target_width {
+                    let (src_x0, src_x1, col_inv_area) = col_ranges[tgt_x];
+                    let inv_area = row_inv_area * col_inv_area;
+
+                    let mut acc = [0.0f32; 3];
+
+                    for src_y in src_y0..src_y1 {
+                        let row_start = src_y * src_stride;
+                        for src_x in src_x0..src_x1 {
+                            let src_idx = row_start + src_x * channels;
+                            if channels == 1 {
+                                acc[0] += src_data[src_idx];
+                            } else {
+                                acc[0] += src_data[src_idx];
+                                acc[1] += src_data[src_idx + 1];
+                                acc[2] += src_data[src_idx + 2];
+                            }
+                        }
+                    }
+
+                    let out_idx = tgt_x * 3;
+                    if channels == 1 {
+                        let val = acc[0] * inv_area;
+                        f32_row[out_idx] = val;
+                        f32_row[out_idx + 1] = val;
+                        f32_row[out_idx + 2] = val;
+                    } else {
+                        f32_row[out_idx] = acc[0] * inv_area;
+                        f32_row[out_idx + 1] = acc[1] * inv_area;
+                        f32_row[out_idx + 2] = acc[2] * inv_area;
+                    }
+                }
+
+                if has_stretch {
+                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut);
+                }
+                if has_saturate {
+                    if let Some(plugin) = crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN) {
+                        plugin.apply_boost_slice(&mut f32_row, &config.saturation_config);
+                    }
+                }
+                if has_contrast {
+                    crate::render::output::apply_contrast_slice(&mut f32_row, &config.contrast_config);
+                }
+
+                for i in 0..row_len {
+                    row_out[i] = sample_to_u8(f32_row[i]);
+                }
+            });
+        });
+
+    output
+}
+
