@@ -101,6 +101,8 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
     let state_clone = Arc::clone(state);
 
     tokio::spawn(async move {
+        let _timer = crate::telemetry::metrics::time_stage(crate::telemetry::metrics::FrameStage::PlateSolving);
+
         // Plate solving consistent detector
         let detector = StarDetector::new(DetectionConfig::sensitive().with_max_stars(200));
 

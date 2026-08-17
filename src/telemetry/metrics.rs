@@ -226,6 +226,10 @@ pub enum FrameStage {
     /// Inline cooled-camera status poll on the capture thread (`camera.status()`).
     /// Fires once per `STATUS_POLL_INTERVAL`, not per frame.
     StatusPoll,
+    /// Storing a frame to disk (raw, stacked, or PNG).
+    Storage,
+    /// Plate solving the frame (Pro edition).
+    PlateSolving,
 }
 
 impl FrameStage {
@@ -237,6 +241,8 @@ impl FrameStage {
             Self::Render => "frame.render_ms",
             Self::EncodeLz4 => "frame.encode_lz4_ms",
             Self::StatusPoll => "frame.status_poll_ms",
+            Self::Storage => "frame.storage_ms",
+            Self::PlateSolving => "frame.plate_solving_ms",
         }
     }
 }
@@ -298,6 +304,8 @@ fn pipeline_histogram(
     static RENDER: OnceLock<Histogram<f64>> = OnceLock::new();
     static ENCODE_LZ4: OnceLock<Histogram<f64>> = OnceLock::new();
     static STATUS_POLL: OnceLock<Histogram<f64>> = OnceLock::new();
+    static STORAGE: OnceLock<Histogram<f64>> = OnceLock::new();
+    static PLATE_SOLVING: OnceLock<Histogram<f64>> = OnceLock::new();
 
     let cell = match stage {
         FrameStage::Capture => &CAPTURE,
@@ -306,6 +314,8 @@ fn pipeline_histogram(
         FrameStage::Render => &RENDER,
         FrameStage::EncodeLz4 => &ENCODE_LZ4,
         FrameStage::StatusPoll => &STATUS_POLL,
+        FrameStage::Storage => &STORAGE,
+        FrameStage::PlateSolving => &PLATE_SOLVING,
     };
 
     if let Some(histogram) = cell.get() {

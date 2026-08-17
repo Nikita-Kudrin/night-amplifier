@@ -254,20 +254,76 @@ pub async fn process_frame_with_planetary_stacking(
     }
 }
 
-/// Process a frame for preview display using the unified render pipeline
+/// Process a frame for preview display using the unified render pipeline.
+/// Now returns a RenderReadyFrame instead of applying the non-linear stretch,
+/// allowing the stretch to be fused into the downsampling pass.
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
-) -> crate::error::Result<()> {
-    use crate::render::RenderPipeline;
+) -> crate::error::Result<(crate::render::RenderPipelineConfig, Option<crate::server::state::StretchResult>)> {
+    use crate::render::autostretch::prepare_auto_stretch_frame;
+    use crate::background::subtract_background_with_config;
+    
 
     let _span = tracing::info_span!("process_preview_frame").entered();
 
-    let pipeline_config = get_render_pipeline_config(settings, false);
-    let pipeline = RenderPipeline::new(pipeline_config);
-    let _ = pipeline.process(frame)?;
+    let mut pipeline_config = get_render_pipeline_config(settings, false);
 
-    Ok(())
+    // Stage 1: Background subtraction (modifies linear data)
+    if pipeline_config.background_subtraction {
+        let _span2 = tracing::info_span!("background_subtraction").entered();
+        if let Err(e) = subtract_background_with_config(frame, pipeline_config.background_config.clone()) {
+            warn!(error = %e, "Background subtraction failed");
+        }
+    }
+
+    // Stage 2: Prepare auto-stretch (computes stats, subtracts black point, but does not stretch)
+    let stretch_result = if pipeline_config.auto_stretch {
+        let _span2 = tracing::info_span!("prepare_auto_stretch").entered();
+        match prepare_auto_stretch_frame(frame, pipeline_config.stretch_config) {
+            Ok(res) => {
+                // When saturation boost is off and contrast is enabled, fuse the
+                // contrast S-curve into the scale LUT — the same optimization that
+                // auto_stretch_frame used in the old RenderPipeline::process path.
+                // This eliminates a separate per-pixel contrast pass in the encode
+                // kernels. When saturation boost is on, contrast must run as a
+                // separate pass because saturation sits between stretch and contrast.
+                let can_fuse_contrast = pipeline_config.contrast
+                    && frame.channels() == 3
+                    && !pipeline_config.contrast_config.is_disabled()
+                    && !pipeline_config.saturation_boost;
+
+                let contrast_for_lut = if can_fuse_contrast {
+                    Some(&pipeline_config.contrast_config)
+                } else {
+                    None
+                };
+
+                let scale_lut = crate::render::stretch::cached_scale_lut(
+                    pipeline_config.stretch_config.tone_mapping,
+                    res.stretch_factor,
+                    contrast_for_lut,
+                );
+
+                if can_fuse_contrast {
+                    pipeline_config.contrast = false;
+                }
+
+                Some(crate::server::state::StretchResult {
+                    black_point: res.black_point,
+                    scale_lut,
+                })
+            }
+            Err(e) => {
+                warn!(error = %e, "Auto-stretch preparation failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok((pipeline_config, stretch_result))
 }
 
 /// Helper to get background configuration from capture settings

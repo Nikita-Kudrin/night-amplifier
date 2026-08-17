@@ -11,7 +11,7 @@ pub use format::PixelFormat;
 pub(crate) use ops::sample_to_u8;
 
 /// A frame of image data stored as normalized f32 values in [0.0, 1.0]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Frame {
     /// Pixel data as normalized f32 values
     data: Vec<f32>,
@@ -21,6 +21,17 @@ pub struct Frame {
     height: usize,
     /// Number of channels (typically 1 for mono, 3 for RGB)
     channels: usize,
+}
+
+impl std::fmt::Debug for Frame {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("channels", &self.channels)
+            .field("data_len", &self.data.len())
+            .finish()
+    }
 }
 
 impl Frame {

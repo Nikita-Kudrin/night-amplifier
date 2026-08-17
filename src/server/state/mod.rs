@@ -26,7 +26,7 @@ pub use session::{
     CaptureSession, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD, REJECTION_RATE_WINDOW,
 };
 pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
-pub use types::{CameraPhase, CaptureState};
+pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
 
 /// The main application state shared across all handlers
 pub struct AppState {
@@ -41,7 +41,7 @@ pub struct AppState {
     /// Latest rendered frame (LZ4 compressed for streaming)
     pub latest_frame: RwLock<Option<bytes::Bytes>>,
     /// Latest raw frame (uncompressed, for dynamic JPEG encoding)
-    pub latest_raw_frame: RwLock<Option<Arc<crate::frame::Frame>>>,
+    pub latest_raw_frame: RwLock<Option<Arc<RenderReadyFrame>>>,
     /// Frame counter (for change detection)
     pub frame_counter: AtomicU64,
     /// Cancellation flag for capture loop
@@ -285,7 +285,7 @@ impl AppState {
     }
 
     /// Set the latest raw frame for dynamic encoding
-    pub async fn set_latest_raw_frame(&self, frame: Arc<crate::frame::Frame>) {
+    pub async fn set_latest_raw_frame(&self, frame: Arc<RenderReadyFrame>) {
         *self.latest_raw_frame.write().await = Some(frame);
     }
 
@@ -294,8 +294,13 @@ impl AppState {
         self.latest_frame.read().await.clone()
     }
 
-    /// Get the latest raw frame if available
-    pub async fn get_latest_raw_frame(&self) -> Option<Arc<crate::frame::Frame>> {
+    /// Retrieve the most recently rendered raw frame, if any.
+    ///
+    /// This is not the stacked FITS (which is linear 32-bit), but the
+    /// snapshot of the live preview pipeline immediately before compression.
+    /// Used by newly-connected WebSocket clients to encode an initial payload
+    /// for their specific tier without waiting for the next camera exposure.
+    pub async fn get_latest_raw_frame(&self) -> Option<Arc<RenderReadyFrame>> {
         self.latest_raw_frame.read().await.clone()
     }
 

@@ -96,6 +96,7 @@ impl DiskWriter {
         frame_number = request.frame_number
     ))]
     fn process_request(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+        let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Storage);
         match request.frame_type {
             FrameType::Raw(_) => {
                 if self.session_type == WritingSessionType::VideoContainer {

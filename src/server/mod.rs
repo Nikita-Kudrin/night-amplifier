@@ -28,12 +28,12 @@ mod capture;
 mod dto;
 mod embedded_assets;
 mod embedded_manual;
-mod encoding;
+pub mod encoding;
 pub mod error;
 pub mod events;
 pub mod services;
 mod settings_persistence;
-mod state;
+pub mod state;
 mod util;
 mod ws;
 

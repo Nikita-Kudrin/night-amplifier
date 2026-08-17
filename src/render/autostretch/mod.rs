@@ -77,6 +77,45 @@ pub fn auto_stretch_frame(
     Ok(result)
 }
 
+/// Compute autostretch parameters and subtract black point, but do NOT stretch the frame.
+/// Used for deferred rendering in the Mega-Kernel architecture.
+#[tracing::instrument(skip(frame))]
+pub fn prepare_auto_stretch_frame(
+    frame: &mut Frame,
+    config: AutoStretchConfig,
+) -> Result<AutoStretchResult> {
+    let channels = frame.channels();
+    if channels != 1 && channels != 3 {
+        return Err(StackError::InvalidConfiguration(format!(
+            "prepare_auto_stretch_frame requires 1 or 3 channels, got {}",
+            channels
+        )));
+    }
+
+    let stats = {
+        let _span = tracing::info_span!("compute_image_stats").entered();
+        compute_image_stats(frame)?
+    };
+    let mut result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
+
+    if channels == 3 && config.per_channel_black_point {
+        let bp_config = BlackPointConfig::new(config.black_point_sigma);
+        let black_points = {
+            let _span = tracing::info_span!("calculate_black_points").entered();
+            calculate_black_points(frame, &stats, bp_config)?
+        };
+        subtract_black_point(frame, &black_points)?;
+        // Set black point to 0 in the result since we already subtracted it per-channel
+        result.black_point = 0.0;
+    } else {
+        subtract_black_point_uniform(frame, result.black_point)?;
+        // Set black point to 0 in the result since we already subtracted it uniformly
+        result.black_point = 0.0;
+    }
+
+    Ok(result)
+}
+
 /// Automatically stretch a frame with default configuration
 pub fn auto_stretch_default(frame: &mut Frame) -> Result<AutoStretchResult> {
     auto_stretch_frame(frame, AutoStretchConfig::default(), None)

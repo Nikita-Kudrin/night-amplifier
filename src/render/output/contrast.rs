@@ -92,3 +92,11 @@ pub fn apply_contrast_frame(frame: &mut Frame, config: &ContrastConfig) -> Resul
 
     Ok(())
 }
+
+/// Apply S-curve contrast to a flat RGB slice (e.g. a row) in-place
+pub fn apply_contrast_slice(row: &mut [f32], config: &ContrastConfig) {
+    if config.is_disabled() {
+        return;
+    }
+    apply_luminance_preserving_simd(row, |l| apply_s_curve(l, config));
+}

@@ -35,3 +35,19 @@ pub enum CameraPhase {
     /// Handle open, cooler ramping off before release.
     WarmingUp,
 }
+
+#[derive(Clone)]
+pub struct StretchResult {
+    pub black_point: f32,
+    pub scale_lut: std::sync::Arc<Vec<f32>>,
+}
+
+/// A frame ready to be rendered and encoded.
+/// Replaces the old fully-stretched `Arc<Frame>` in the pipeline,
+/// allowing the stretch to be fused into the downsampling loop.
+#[derive(Clone)]
+pub struct RenderReadyFrame {
+    pub linear_frame: std::sync::Arc<crate::frame::Frame>,
+    pub pipeline_config: crate::render::RenderPipelineConfig,
+    pub stretch_result: Option<StretchResult>,
+}
