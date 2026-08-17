@@ -192,7 +192,7 @@ fn build_scale_lut(
     lut
 }
 
-fn cached_scale_lut(
+pub fn cached_scale_lut(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
@@ -235,9 +235,11 @@ pub fn apply_fused_stretch_frame(
 
     let row_len = frame.width() * 3;
     let data = frame.data_mut();
-    data.par_chunks_mut(row_len).for_each(|row| {
-        crate::render::simd::apply_luminance_scale_lut_simd(row, black_point, &scale_lut);
-    });
+    data.par_chunks_mut(row_len)
+        .with_min_len(32)
+        .for_each(|row| {
+            crate::render::simd::apply_luminance_scale_lut_simd(row, black_point, &scale_lut);
+        });
 
     Ok(())
 }

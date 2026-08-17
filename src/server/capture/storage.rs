@@ -208,6 +208,70 @@ mod tests {
         }
         assert!(!should_stop_on_errors(&state).await);
     }
+
+    /// Regression guard: the stacked-PNG export path must apply the full tone-curve
+    /// stretch, not just background/black-point subtraction. `process_preview_frame`
+    /// defers the stretch for the live-view fused encoders; if `prepare_stacked_png_frame`
+    /// were ever routed back through it without also applying the returned
+    /// `StretchResult`, this would fail — the pixel would stay near its dim linear input
+    /// instead of landing near the auto-stretch target background.
+    #[test]
+    fn prepare_stacked_png_frame_applies_the_stretch() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+        settings.background_subtraction = false;
+
+        // A perfectly uniform frame makes the black-point solver degenerate (median
+        // equals every pixel, sigma is ~0), so black-point subtraction alone nearly
+        // cancels it out regardless of whether the tone curve ever runs — that would
+        // pass even against the buggy code by accident. Inject small per-pixel noise,
+        // matching `render::autostretch::tests::test_auto_stretch_frame_end_to_end`,
+        // so the solver has real statistics and the tone curve has actual work to do.
+        let background = 0.02;
+        let mut data = vec![0.0f32; 32 * 32 * 3];
+        let mut seed: u32 = 54321;
+        for i in 0..(32 * 32) {
+            for c in 0..3 {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.005;
+                data[i * 3 + c] = background + noise;
+            }
+        }
+        let mut frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
+
+        prepare_stacked_png_frame(&mut frame, &settings).unwrap();
+
+        // A real auto-stretch targets a background around ~0.05-0.15 (see
+        // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
+        // its original value once the tone curve is actually applied. With the bug
+        // (routing through `process_preview_frame` and discarding its `StretchResult`),
+        // the frame only gets black-point subtraction and stays near-black.
+        let stretched = frame.get_pixel(16, 16, 0);
+        assert!(
+            stretched > 0.08,
+            "stacked PNG frame was not stretched: pixel stayed at {stretched} (background was ~{background})"
+        );
+    }
+}
+
+/// Fully render a stacked frame for PNG export (background, stretch, saturation, contrast).
+///
+/// Deliberately does NOT use `process_preview_frame`: that function defers the stretch so it
+/// can be fused into the live-view encode loop, which only pays off on the per-frame hot path.
+/// This runs once per stacking session, so applying the full pipeline eagerly is both simpler
+/// and correct — do not "simplify" this back to `process_preview_frame` without also applying
+/// its returned `StretchResult` before the frame reaches `write_png`, which has no tone-curve
+/// logic of its own.
+fn prepare_stacked_png_frame(
+    frame: &mut Frame,
+    settings: &CaptureSettings,
+) -> crate::error::Result<()> {
+    use super::pipeline::get_render_pipeline_config;
+    use crate::render::RenderPipeline;
+
+    let pipeline_config = get_render_pipeline_config(settings, false);
+    RenderPipeline::new(pipeline_config).process(frame)?;
+    Ok(())
 }
 
 /// Save stacked result if stacking was enabled and we have frames
@@ -216,7 +280,6 @@ pub async fn save_stacked_result(
     last_processed_frame: Option<Frame>,
     camera_info: &ConnectedCameraInfo,
 ) {
-    use super::pipeline::process_preview_frame;
     use crate::fits::FitsMetadata;
     use chrono::Utc;
 
@@ -269,7 +332,7 @@ pub async fn save_stacked_result(
         }
 
         let mut stretched_frame = stacked_frame;
-        if let Err(e) = process_preview_frame(&mut stretched_frame, &settings) {
+        if let Err(e) = prepare_stacked_png_frame(&mut stretched_frame, &settings) {
             warn!(error = %e, "Failed to process frame for PNG output");
             return;
         }

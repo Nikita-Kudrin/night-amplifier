@@ -271,14 +271,23 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
         let b_sub = (b - bp).max(zero);
 
         let lum = wr * r_sub + wg * g_sub + wb * b_sub;
-        let lum_arr = lum.to_array();
 
-        // 4 scalar LUT lookups
-        let mut scale_arr = [0.0f32; 4];
-        for j in 0..4 {
-            scale_arr[j] = scale_lut_lookup(scale_lut, lum_arr[j]);
-        }
-        let scale = f32x4::new(scale_arr);
+        let lut_max = f32x4::splat((scale_lut.len() - 1) as f32);
+        let pos = (lum * lut_max).min(lut_max);
+        
+        let pos_arr = pos.to_array();
+        let i0_0 = (pos_arr[0] as usize).min(scale_lut.len() - 2);
+        let i0_1 = (pos_arr[1] as usize).min(scale_lut.len() - 2);
+        let i0_2 = (pos_arr[2] as usize).min(scale_lut.len() - 2);
+        let i0_3 = (pos_arr[3] as usize).min(scale_lut.len() - 2);
+        
+        let i0_vec = f32x4::new([i0_0 as f32, i0_1 as f32, i0_2 as f32, i0_3 as f32]);
+        let frac = pos - i0_vec;
+        
+        let lo = f32x4::new([scale_lut[i0_0], scale_lut[i0_1], scale_lut[i0_2], scale_lut[i0_3]]);
+        let hi = f32x4::new([scale_lut[i0_0 + 1], scale_lut[i0_1 + 1], scale_lut[i0_2 + 1], scale_lut[i0_3 + 1]]);
+        
+        let scale = lo + (hi - lo) * frac;
 
         let r_out = (r_sub * scale).min(one);
         let g_out = (g_sub * scale).min(one);
@@ -306,7 +315,7 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
 }
 
 #[inline]
-fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
+pub fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &[f32]) {
     if scale_lut.len() < 2 {
         return;
     }

@@ -1,3 +1,16 @@
+
+fn to_ready_frame(frame: &night_amplifier::frame::Frame) -> night_amplifier::server::state::RenderReadyFrame {
+    let mut config = night_amplifier::render::RenderPipelineConfig::default();
+    config.contrast = false;
+    config.auto_stretch = false;
+    config.saturation_boost = false;
+    night_amplifier::server::state::RenderReadyFrame {
+        linear_frame: std::sync::Arc::new(frame.clone()),
+        pipeline_config: config,
+        stretch_result: None,
+    }
+}
+
 use std::hint::black_box;
 use std::io::Cursor;
 use std::fs;
@@ -8,6 +21,7 @@ use image::{ColorType, ImageEncoder, codecs::{jpeg::JpegEncoder, png::{PngEncode
 use image::imageops::FilterType as ResizeFilterType;
 use night_amplifier::frame::Frame;
 use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked, encode_rgb8_jpeg_dynamic};
+use night_amplifier::server::encoding::frame_to_rgb8_downsampled;
 
 fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     let mut frame = Frame::zeros(width, height, channels).unwrap();
@@ -47,22 +61,38 @@ fn bench_encoding(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(2));
 
     group.bench_function("encode_imx464_rgb", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&frame_imx464_rgb)).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb))).unwrap())
     });
 
     group.bench_function("encode_imx464_mono", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&frame_imx464_mono)).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono))).unwrap())
     });
     
     group.bench_function("encode_4k", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&frame_4k)).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k))).unwrap())
     });
 
     group.bench_function("encode_8k", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&frame_8k)).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_8k))).unwrap())
     });
 
     group.finish();
+
+    // --- frame_to_rgb8_downsampled ---
+    let mut group_conv = c.benchmark_group("frame_to_rgb8");
+    group_conv.sample_size(10);
+    group_conv.warm_up_time(Duration::from_millis(500));
+    group_conv.measurement_time(Duration::from_secs(2));
+
+    group_conv.bench_function("imx464_to_native", |b| {
+        b.iter(|| frame_to_rgb8_downsampled(black_box(&to_ready_frame(&frame_imx464_rgb)), 3840, 2160).unwrap())
+    });
+
+    group_conv.bench_function("8k_to_4k", |b| {
+        b.iter(|| frame_to_rgb8_downsampled(black_box(&to_ready_frame(&frame_8k)), 3840, 2160).unwrap())
+    });
+
+    group_conv.finish();
 
     // --- Chunked LZ4 (SA09) ---
     let mut group_chunked = c.benchmark_group("encode_chunked_lz4");
@@ -72,22 +102,22 @@ fn bench_encoding(c: &mut Criterion) {
 
     // 1 chunk = stacking mode (sequential, no parallelism)
     group_chunked.bench_function("imx464_rgb_1chunk", |b| {
-        b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_rgb), 1).unwrap())
+        b.iter(|| encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1).unwrap())
     });
 
     // 4 chunks = Raspberry Pi 5 (4 cores)
     group_chunked.bench_function("imx464_rgb_4chunks", |b| {
-        b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_rgb), 4).unwrap())
+        b.iter(|| encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4).unwrap())
     });
 
     // 8 chunks = max parallelism
     group_chunked.bench_function("imx464_rgb_8chunks", |b| {
-        b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_rgb), 8).unwrap())
+        b.iter(|| encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8).unwrap())
     });
 
     // mono grey-replication path with 4 chunks
     group_chunked.bench_function("imx464_mono_4chunks", |b| {
-        b.iter(|| encode_rgb8_lz4_chunked(black_box(&frame_imx464_mono), 4).unwrap())
+        b.iter(|| encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4).unwrap())
     });
 
     group_chunked.finish();
@@ -115,22 +145,22 @@ fn bench_encoding(c: &mut Criterion) {
     group_jpeg.measurement_time(Duration::from_secs(2));
 
     group_jpeg.bench_function("imx464_rgb_to_1080p", |b| {
-        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), Some(1920), Some(1080)).unwrap())
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), Some(1920), Some(1080)).unwrap())
     });
 
     group_jpeg.bench_function("imx464_rgb_to_720p", |b| {
-        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), Some(1280), Some(720)).unwrap())
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), Some(1280), Some(720)).unwrap())
     });
 
     group_jpeg.bench_function("imx464_rgb_full_res", |b| {
-        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&frame_imx464_rgb), None, None).unwrap())
+        b.iter(|| encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), None, None).unwrap())
     });
 
     // Mono sensor large enough to need downsampling — the path that previously
     // ran a full-resolution debayer to produce grey output.
     group_jpeg.bench_function("mono_asi1600mm_to_1080p", |b| {
         b.iter(|| {
-            encode_rgb8_jpeg_dynamic(black_box(&frame_mono_large), Some(1920), Some(1080)).unwrap()
+            encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_mono_large)), Some(1920), Some(1080)).unwrap()
         })
     });
 
