@@ -54,7 +54,11 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     mount(EyepieceView, {
       global: {
         provide: {
-          settings: ref({ eyepiece: { binoview: true, circular_view: true } })
+          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
         }
       }
     })
@@ -69,7 +73,11 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     mount(EyepieceView, {
       global: {
         provide: {
-          settings: ref({ eyepiece: { binoview: true, circular_view: true } })
+          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
         }
       }
     })
@@ -98,7 +106,11 @@ describe('EyepieceView.vue Layout', () => {
     const wrapper = mount(EyepieceView, {
       global: {
         provide: {
-          settings: ref({ eyepiece: { binoview: false, circular_view: true } })
+          settings: ref({ eyepiece: { binoview: false, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
         }
       }
     })
@@ -113,7 +125,11 @@ describe('EyepieceView.vue Layout', () => {
     const wrapper = mount(EyepieceView, {
       global: {
         provide: {
-          settings: ref({ eyepiece: { binoview: false, circular_view: false } })
+          settings: ref({ eyepiece: { binoview: false, circular_view: false } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
         }
       }
     })
@@ -121,5 +137,55 @@ describe('EyepieceView.vue Layout', () => {
     const singleCanvas = wrapper.find('.single-view canvas')
     expect(singleCanvas.exists()).toBe(true)
     expect(singleCanvas.classes()).not.toContain('circular')
+  })
+
+  it('renders GuideArrow when pushDirection and currentTarget are present', async () => {
+    // We need to mock ResizeObserver
+    global.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+
+    const EyepieceView = (await import('../EyepieceView.vue')).default
+    const wrapper = mount(EyepieceView, {
+      global: {
+        provide: {
+          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE' }),
+            currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
+          }
+        }
+      }
+    })
+
+    // 2 in binoview, 1 in single-view (which is hidden by v-show on the parent)
+    const arrows = wrapper.findAllComponents({ name: 'GuideArrow' })
+    expect(arrows.length).toBe(3)
+  })
+
+  it('does not render GuideArrow when pushDirection is null', async () => {
+    global.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+
+    const EyepieceView = (await import('../EyepieceView.vue')).default
+    const wrapper = mount(EyepieceView, {
+      global: {
+        provide: {
+          settings: ref({ eyepiece: { binoview: false, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
+          }
+        }
+      }
+    })
+
+    const arrows = wrapper.findAllComponents({ name: 'GuideArrow' })
+    expect(arrows.length).toBe(0)
   })
 })
