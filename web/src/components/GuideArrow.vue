@@ -1,5 +1,5 @@
 <script setup>
-import {computed} from 'vue'
+import {computed, getCurrentInstance} from 'vue'
 
 const props = defineProps({
   angleDeg: {
@@ -38,7 +38,14 @@ const props = defineProps({
     type: Number,
     default: 0,
   },
+  isCircular: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
+const gradientId = `chevronGradient-${uid}`
 
 const MAX_DISTANCE = 30
 const MIN_SCALE = 0.3
@@ -135,6 +142,12 @@ const containerStyle = computed(() => {
   if (Math.abs(dirX) < 0.001 && Math.abs(dirY) < 0.001) {
     offsetX = 0
     offsetY = 0
+  } else if (props.isCircular) {
+    const radius = Math.min(props.imageWidth, props.imageHeight) / 2
+    const margin = radius * EDGE_MARGIN_PERCENT
+    const maxOffset = Math.max(0, radius - svgHalfH - margin)
+    offsetX = dirX * maxOffset
+    offsetY = dirY * maxOffset
   } else {
     const scaleX = Math.abs(dirX) > 0.001 ? maxOffsetX / Math.abs(dirX) : Infinity
     const scaleY = Math.abs(dirY) > 0.001 ? maxOffsetY / Math.abs(dirY) : Infinity
@@ -249,7 +262,7 @@ function formatScreenSizes(screens) {
             viewBox="0 0 100 160" :width="responsiveBaseSize * arrowScale"
             :height="responsiveBaseSize * 1.6 * arrowScale">
           <defs>
-            <linearGradient id="chevronGradient" x1="0%" y1="100%" x2="0%" y2="0%">
+            <linearGradient :id="gradientId" x1="0%" y1="100%" x2="0%" y2="0%">
               <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.32"/>
               <stop offset="100%" stop-color="var(--primary)" stop-opacity="0.8"/>
             </linearGradient>
@@ -261,7 +274,7 @@ function formatScreenSizes(screens) {
                 :key="index"
                 :d="`M${-25 * chevron.scale} ${-chevron.yOffset} L0 ${-chevron.yOffset - 20 * chevron.scale} L${25 * chevron.scale} ${-chevron.yOffset}`"
                 fill="none"
-                stroke="url(#chevronGradient)"
+                :stroke="`url(#${gradientId})`"
                 :stroke-width="chevron.strokeWidth"
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -368,5 +381,11 @@ function formatScreenSizes(screens) {
 .hint {
   font-size: 0.9rem;
   color: var(--text-secondary);
+}
+
+@media (max-width: 768px) {
+  .distance-info {
+    transform: translate(-50%, -50%) scale(0.5);
+  }
 }
 </style>

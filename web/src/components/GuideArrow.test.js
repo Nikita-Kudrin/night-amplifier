@@ -277,7 +277,7 @@ describe('GuideArrow', () => {
         it('renders chevrons with gradient stroke', () => {
             const paths = mountChevronArrow().findAll('.arrow-wrapper svg g path')
             paths.forEach((path) => {
-                expect(path.attributes('stroke')).toBe('url(#chevronGradient)')
+                expect(path.attributes('stroke')).toMatch(/^url\(#chevronGradient-[\w\d]+\)$/)
             })
         })
 
@@ -653,6 +653,54 @@ describe('GuideArrow', () => {
                 const pos = getPosition(wrapper)
                 expect(pos.left).toBe(100)
                 expect(pos.top).toBe(75)
+            })
+        })
+
+        describe('circular bounds positioning', () => {
+            const circularProps = {
+                distanceDeg: 20,
+                directionHint: 'Off',
+                imageLeft: 0,
+                imageTop: 0,
+                imageWidth: 600,
+                imageHeight: 600,
+                fovDeg: 2,
+                isCircular: true,
+            }
+
+            it('keeps arrow radially within the circle for north', () => {
+                const wrapper = mountArrow({...circularProps, angleDeg: 0})
+                const pos = getPosition(wrapper)
+                const {halfH} = getSvgRotatedBbox(wrapper, 0)
+                // Center is 300, 300. Radius is 300.
+                // Arrow points north, so it should be at y < 300, exactly at x = 300
+                expect(pos.left).toBe(300)
+                expect(pos.top).toBeLessThan(300)
+                // Tip should be inside circle: pos.top - halfH >= margin
+                const radius = 300
+                const margin = radius * 0.1
+                expect(pos.top - halfH).toBeCloseTo(margin, 0)
+            })
+
+            it('keeps arrow radially within the circle for diagonal NE', () => {
+                const wrapper = mountArrow({...circularProps, angleDeg: 45})
+                const pos = getPosition(wrapper)
+                const radius = 300
+                
+                // Calculate distance from center to arrow center
+                const dx = pos.left - 300
+                const dy = pos.top - 300
+                const dist = Math.hypot(dx, dy)
+                
+                // Tip distance is dist + halfH (since it points radially)
+                // wait, the bounding logic uses maxOffset = radius - halfH - margin
+                // actually in GuideArrow: maxOffset = radius - svgHalfH - margin
+                const svg = wrapper.find('.arrow-wrapper svg')
+                const svgH = parseFloat(svg.attributes('height'))
+                const svgHalfH = svgH / 2
+                const margin = radius * 0.1
+
+                expect(dist).toBeCloseTo(radius - svgHalfH - margin, 0)
             })
         })
 
