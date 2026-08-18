@@ -18,6 +18,7 @@ const capabilities = ref({
     deep_sky: {advanced_rejection: false, rbf_background: false},
     planetary: {advanced_stacking: false},
     push_to: {astap_solver: false},
+    debug_logging: false,
 })
 // Latest live camera status keyed by camera name (cooled cameras)
 const cameraStatus = ref({})
