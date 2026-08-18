@@ -43,6 +43,7 @@ pub async fn get_capabilities() -> impl IntoResponse {
         comet: CometCapabilities {
             pro_stacking: has_comet,
         },
+        debug_logging: tracing::enabled!(tracing::Level::DEBUG),
     };
 
     (StatusCode::OK, ApiResponse::ok(response))

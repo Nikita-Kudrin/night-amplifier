@@ -3,8 +3,11 @@ import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
 import {useImageStream} from '../composables/useWebSocket.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
+import {getAppState} from '../composables/useAppState.js'
 
 const settings = inject('settings')
+const appState = getAppState()
+const capabilities = appState.capabilities
 
 const routePath = window.location.pathname
 const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
@@ -27,6 +30,33 @@ const isBinoview = computed(() => settings.value?.eyepiece?.binoview ?? true)
 const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
+
+// Active renderer backend (assuming both eyes use same backend)
+const renderBackend = computed(() => {
+  if (isJpeg.value) return 'jpeg'
+  if (isBinoview.value) {
+    if (webglLeft.isInitialized()) return webglLeft.backend.value
+    if (canvas2dLeft.isInitialized()) return canvas2dLeft.backend.value
+  } else {
+    if (webglSingle.isInitialized()) return webglSingle.backend.value
+    if (canvas2dSingle.isInitialized()) return canvas2dSingle.backend.value
+  }
+  return 'none'
+})
+
+// Map backend names to user-friendly labels
+const backendLabel = computed(() => {
+  const labels = {
+    jpeg: 'Dynamic JPEG (SIMD)',
+    'webgl2-16bit': 'WebGL2 16-bit',
+    'webgl2-8bit': 'WebGL2 8-bit',
+    webgl1: 'WebGL1',
+    canvas2d: 'Canvas 2D',
+    none: 'No renderer',
+    unknown: '...',
+  }
+  return labels[renderBackend.value] || renderBackend.value
+})
 
 function initRenderer() {
   if (canvasLeftRef.value) {
@@ -121,6 +151,10 @@ onUnmounted(() => {
     <div v-show="hasFrame && !isBinoview" class="single-view">
       <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
     </div>
+
+    <div v-if="capabilities?.debug_logging && hasFrame" class="debug-overlay">
+      {{ backendLabel }}
+    </div>
   </div>
 </template>
 
@@ -179,5 +213,18 @@ onUnmounted(() => {
   width: 100cqmin;
   height: 100cqmin;
   object-fit: cover;
+}
+
+.debug-overlay {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-family: monospace;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  pointer-events: none;
 }
 </style>

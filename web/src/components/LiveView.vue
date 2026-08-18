@@ -9,9 +9,12 @@ import {CAPTURE_STATES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
+import {getAppState} from '../composables/useAppState.js'
 
 const eventStream = inject('eventStream')
 const settings = inject('settings')
+const appState = getAppState()
+const capabilities = appState.capabilities
 
 const {connected, frameData, isJpeg, dimensions, fps, clearFrameData, sendResolution} = useImageStream({
   width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
@@ -65,6 +68,17 @@ const {
   handleMouseUp: handleRoiMouseUp,
 } = useCometRoi(settings, dimensions, canvasRef, containerRef)
 
+// Active renderer backend
+const renderBackend = computed(() => {
+  if (isJpeg.value) return 'jpeg'
+  if (webglRenderer.isInitialized()) {
+    return webglRenderer.backend.value
+  }
+  if (canvas2dRenderer.isInitialized()) {
+    return canvas2dRenderer.backend.value
+  }
+  return 'none'
+})
 
 const isCapturing = computed(() => eventStream.captureState.value === CAPTURE_STATES.CAPTURING)
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
@@ -215,6 +229,20 @@ onUnmounted(() => {
   }
 })
 
+// Map backend names to user-friendly labels
+const backendLabel = computed(() => {
+  const labels = {
+    jpeg: 'Dynamic JPEG (SIMD)',
+    'webgl2-16bit': 'WebGL2 16-bit',
+    'webgl2-8bit': 'WebGL2 8-bit',
+    webgl1: 'WebGL1',
+    canvas2d: 'Canvas 2D',
+    none: 'No renderer',
+    unknown: '...',
+  }
+  return labels[renderBackend.value] || renderBackend.value
+})
+
 </script>
 
 <template>
@@ -284,6 +312,8 @@ onUnmounted(() => {
     <LiveViewControls
         :scale="scale"
         :fps="fps"
+        :backend-label="backendLabel"
+        :debug-logging="capabilities?.debug_logging"
         :is-fullscreen="isFullscreen"
         :has-frame="hasFrame"
         :is-comet-mode="isCometMode"
