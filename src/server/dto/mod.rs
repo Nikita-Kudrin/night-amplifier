@@ -43,6 +43,7 @@ pub struct CapabilitiesResponse {
     pub planetary: PlanetaryCapabilities,
     pub push_to: PushToCapabilities,
     pub comet: CometCapabilities,
+    pub debug_logging: bool,
 }
 
 #[derive(Debug, Serialize)]
