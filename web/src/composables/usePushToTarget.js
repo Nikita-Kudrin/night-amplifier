@@ -27,8 +27,18 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             const status = await getPushToStatus()
             // Backend returns current_target (snake_case)
             currentTarget.value = status.current_target
-            currentPosition.value = status.last_position // Status response uses last_position
-            pushDirection.value = status.direction
+            currentPosition.value = status.last_position
+            if (status.direction) {
+                pushDirection.value = {
+                    angleDeg: status.direction.angle_deg,
+                    distanceDeg: status.direction.distance_deg,
+                    directionHint: status.direction.direction_hint,
+                    isClose: status.direction.is_close,
+                    fovDeg: status.direction.fov_deg || 0,
+                }
+            } else {
+                pushDirection.value = null
+            }
             isSolving.value = status.is_solving
         } catch {
             // Ignore - push-to may not be initialized

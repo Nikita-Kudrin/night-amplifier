@@ -4,7 +4,9 @@ import {useImageStream} from '../composables/useWebSocket.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {getAppState} from '../composables/useAppState.js'
+import GuideArrow from './GuideArrow.vue'
 
+const eventStream = inject('eventStream')
 const settings = inject('settings')
 const appState = getAppState()
 const capabilities = appState.capabilities
@@ -25,6 +27,18 @@ const canvas2dRight = useCanvas2DRenderer()
 
 const webglSingle = useWebGLRenderer()
 const canvas2dSingle = useCanvas2DRenderer()
+
+const leftEyeRef = ref(null)
+const rightEyeRef = ref(null)
+const singleEyeRef = ref(null)
+
+const leftEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
+const rightEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
+const singleViewBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
+
+const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
+const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
+const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
 const isBinoview = computed(() => settings.value?.eyepiece?.binoview ?? true)
 const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
@@ -123,12 +137,63 @@ watch(isBinoview, () => {
   }, 10)
 })
 
+let resizeObserver = null
+
+function updateBounds() {
+  if (isBinoview.value) {
+    if (leftEyeRef.value && canvasLeftRef.value) {
+      const containerRect = leftEyeRef.value.getBoundingClientRect()
+      const canvasRect = canvasLeftRef.value.getBoundingClientRect()
+      leftEyeBounds.value = {
+        left: canvasRect.left - containerRect.left,
+        top: canvasRect.top - containerRect.top,
+        width: canvasRect.width,
+        height: canvasRect.height,
+      }
+    }
+    if (rightEyeRef.value && canvasRightRef.value) {
+      const containerRect = rightEyeRef.value.getBoundingClientRect()
+      const canvasRect = canvasRightRef.value.getBoundingClientRect()
+      rightEyeBounds.value = {
+        left: canvasRect.left - containerRect.left,
+        top: canvasRect.top - containerRect.top,
+        width: canvasRect.width,
+        height: canvasRect.height,
+      }
+    }
+  } else {
+    if (singleEyeRef.value && canvasSingleRef.value) {
+      const containerRect = singleEyeRef.value.getBoundingClientRect()
+      const canvasRect = canvasSingleRef.value.getBoundingClientRect()
+      singleViewBounds.value = {
+        left: canvasRect.left - containerRect.left,
+        top: canvasRect.top - containerRect.top,
+        width: canvasRect.width,
+        height: canvasRect.height,
+      }
+    }
+  }
+}
+
+watch(hasFrame, (newVal) => {
+  if (newVal) setTimeout(updateBounds, 10)
+})
+
 onMounted(() => {
   initRenderer()
+  updateBounds()
+  resizeObserver = new ResizeObserver(updateBounds)
+  if (leftEyeRef.value) resizeObserver.observe(leftEyeRef.value)
+  if (rightEyeRef.value) resizeObserver.observe(rightEyeRef.value)
+  if (singleEyeRef.value) resizeObserver.observe(singleEyeRef.value)
 })
 
 onUnmounted(() => {
   cleanupRenderer()
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
 })
 </script>
 
@@ -140,16 +205,55 @@ onUnmounted(() => {
     </div>
 
     <div v-show="hasFrame && isBinoview" class="binoview-container">
-      <div class="eye left-eye">
+      <div ref="leftEyeRef" class="eye left-eye">
         <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+        <GuideArrow
+          v-if="showGuideArrow"
+          :angle-deg="pushDirection.angleDeg"
+          :distance-deg="pushDirection.distanceDeg"
+          :is-close="pushDirection.isClose"
+          :direction-hint="pushDirection.directionHint"
+          :image-left="leftEyeBounds.left"
+          :image-top="leftEyeBounds.top"
+          :image-width="leftEyeBounds.width"
+          :image-height="leftEyeBounds.height"
+          :fov-deg="pushDirection.fovDeg || 0"
+          :is-circular="isCircularView"
+        />
       </div>
-      <div class="eye right-eye">
+      <div ref="rightEyeRef" class="eye right-eye">
         <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+        <GuideArrow
+          v-if="showGuideArrow"
+          :angle-deg="pushDirection.angleDeg"
+          :distance-deg="pushDirection.distanceDeg"
+          :is-close="pushDirection.isClose"
+          :direction-hint="pushDirection.directionHint"
+          :image-left="rightEyeBounds.left"
+          :image-top="rightEyeBounds.top"
+          :image-width="rightEyeBounds.width"
+          :image-height="rightEyeBounds.height"
+          :fov-deg="pushDirection.fovDeg || 0"
+          :is-circular="isCircularView"
+        />
       </div>
     </div>
 
-    <div v-show="hasFrame && !isBinoview" class="single-view">
+    <div v-show="hasFrame && !isBinoview" ref="singleEyeRef" class="single-view">
       <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+      <GuideArrow
+        v-if="showGuideArrow"
+        :angle-deg="pushDirection.angleDeg"
+        :distance-deg="pushDirection.distanceDeg"
+        :is-close="pushDirection.isClose"
+        :direction-hint="pushDirection.directionHint"
+        :image-left="singleViewBounds.left"
+        :image-top="singleViewBounds.top"
+        :image-width="singleViewBounds.width"
+        :image-height="singleViewBounds.height"
+        :fov-deg="pushDirection.fovDeg || 0"
+        :is-circular="isCircularView"
+      />
     </div>
 
     <div v-if="capabilities?.debug_logging && hasFrame" class="debug-overlay">
@@ -181,6 +285,7 @@ onUnmounted(() => {
 }
 
 .eye {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
@@ -194,6 +299,7 @@ onUnmounted(() => {
 }
 
 .single-view {
+  position: relative;
   width: 100%;
   height: 100%;
   display: flex;

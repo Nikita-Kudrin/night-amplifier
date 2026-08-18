@@ -1,6 +1,7 @@
 import {ref, onUnmounted, shallowRef, computed} from 'vue'
 import {WS_RECONNECT} from '../constants'
 import {decodeFrame} from '../utils/frameDecoder.js'
+import {getPushToStatus} from './api.js'
 
 /**
  * WebSocket connection manager composable
@@ -345,6 +346,26 @@ export function useEventStream() {
     }
 
     const {connected, error, connect, disconnect} = useWebSocket('/ws/events', {
+        onOpen: async () => {
+            try {
+                // Fetch the initial state upon connection
+                const status = await getPushToStatus()
+                currentTarget.value = status.current_target || null
+                if (status.direction) {
+                    pushDirection.value = {
+                        angleDeg: status.direction.angle_deg,
+                        distanceDeg: status.direction.distance_deg,
+                        directionHint: status.direction.direction_hint,
+                        isClose: status.direction.is_close,
+                        fovDeg: status.direction.fov_deg || 0,
+                    }
+                } else {
+                    pushDirection.value = null
+                }
+            } catch {
+                // Ignore
+            }
+        },
         onMessage: (event) => {
             try {
                 const data = JSON.parse(event.data)
