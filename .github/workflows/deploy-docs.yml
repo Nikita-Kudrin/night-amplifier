@@ -19,6 +19,9 @@ concurrency:
   group: "pages"
   cancel-in-progress: true
 
+env:
+  INSTALL_TIMEOUT: '15'
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -29,6 +32,7 @@ jobs:
           fetch-depth: 0 # Not needed if lastUpdated is not configured
 
       - name: Setup Node.js
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         uses: actions/setup-node@v6
         with:
           node-version: 20
@@ -36,6 +40,7 @@ jobs:
           cache-dependency-path: manual/package-lock.json
 
       - name: Install dependencies
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         run: npm ci
         working-directory: manual
 
@@ -44,6 +49,7 @@ jobs:
         working-directory: manual
 
       - name: Setup Pages
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         uses: actions/configure-pages@v6
 
       - name: Upload artifact

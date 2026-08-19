@@ -1,6 +1,7 @@
 name: Release
 
 env:
+  INSTALL_TIMEOUT: '15'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 on:
@@ -80,6 +81,7 @@ jobs:
 
       # ── Frontend build ───────────────────────────────────────────
       - name: Setup Node.js
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -94,22 +96,30 @@ jobs:
 
       # ── Rust toolchain ───────────────────────────────────────────
       - name: Install cross (ARM64 builds)
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         if: matrix.use_cross
         uses: taiki-e/install-action@cross
 
       - name: Install Rust target
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         if: "!matrix.use_cross"
         run: rustup target add ${{ matrix.target }}
 
       - name: Install system deps (Linux)
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         if: "!matrix.use_cross && runner.os == 'Linux'"
-        run: sudo apt-get update && sudo apt-get install -y nasm libcfitsio-dev
+        run: |
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20"
+          sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20" nasm libcfitsio-dev
 
       - name: Install system deps (macOS)
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         if: runner.os == 'macOS'
         run: brew install nasm libusb
 
       - name: Install system deps (Windows)
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         if: runner.os == 'Windows'
         run: |
           choco install pkgconfiglite nasm
