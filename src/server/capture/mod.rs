@@ -18,7 +18,7 @@
 
 pub mod channel;
 mod context;
-mod pipeline;
+pub mod pipeline;
 mod render_task;
 mod solving;
 mod stacking_task;
