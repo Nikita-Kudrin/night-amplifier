@@ -24,7 +24,7 @@
 
 mod api;
 mod camera_session;
-mod capture;
+pub mod capture;
 mod dto;
 mod embedded_assets;
 mod embedded_manual;

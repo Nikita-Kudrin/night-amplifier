@@ -15,6 +15,7 @@ import CoolerControl from './CoolerControl.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 import {
   SATURATION_BOOST_LIMITS,
+  AUTO_STRETCH_INTENSITY_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
   WEIGHTING_PRESET_OPTIONS,
@@ -115,6 +116,19 @@ const HELP = HELP_TEXTS
     <div class="settings-section">
       <h3 class="section-title">Processing</h3>
 
+      <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
+        <BaseSlider
+            v-model="localSettings.eyepiece.intensity"
+            label="Black level"
+            :min="AUTO_STRETCH_INTENSITY_LIMITS.min"
+            :max="AUTO_STRETCH_INTENSITY_LIMITS.max"
+            :step="AUTO_STRETCH_INTENSITY_LIMITS.step"
+            :format-value="formatPercent"
+            :help="HELP.eyepiece_intensity"
+            @change="applySetting('eyepiece', localSettings.eyepiece)"
+        />
+      </div>
+
       <div class="control-group">
         <BaseToggle
             v-model="localSettings.background_subtraction"
@@ -166,6 +180,7 @@ const HELP = HELP_TEXTS
           </template>
         </BaseToggle>
       </div>
+
 
       <BaseSlider
           v-if="localSettings.saturation_boost"

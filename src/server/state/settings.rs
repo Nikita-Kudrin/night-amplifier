@@ -229,6 +229,13 @@ pub struct EyepieceSettings {
     /// Enable Circular view
     #[serde(default = "default_circular_view")]
     pub circular_view: bool,
+    /// Dark background enhancement intensity (0.0 to 1.0)
+    #[serde(default = "default_intensity")]
+    pub intensity: f32,
+}
+
+fn default_intensity() -> f32 {
+    0.3
 }
 
 fn default_circular_view() -> bool {
@@ -245,6 +252,7 @@ impl Default for EyepieceSettings {
             screen_resolution_x: 2880,
             screen_resolution_y: 1440,
             circular_view: true,
+            intensity: 0.3,
         }
     }
 }

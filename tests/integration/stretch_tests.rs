@@ -125,3 +125,75 @@ fn test_pipeline_edge_cases() {
 
     println!("\n=== Edge Case Tests Complete ===\n");
 }
+
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn test_eyepiece_intensity_metrics() {
+    println!("\n=== Eyepiece Intensity Metrics Test ===\n");
+
+    let images = load_all_fixture_images();
+    if images.is_empty() {
+        println!("No test images found. Skipping test.\n");
+        return;
+    }
+    
+    // Find a deep sky image for realistic testing
+    let img = images.iter().find(|i| i.path.to_string_lossy().contains("deep_sky")).unwrap_or(&images[0]);
+    println!("Testing metrics on: {:?}", img.path.file_name().unwrap_or_default());
+
+    let mut settings = night_amplifier::server::state::CaptureSettings::default();
+    settings.auto_stretch = true;
+
+    // Process with base intensity
+    settings.eyepiece.intensity = 0.0;
+    let mut frame_base = img.frame.clone();
+    if frame_base.channels() == 1 {
+        frame_base = night_amplifier::debayer_auto(&frame_base).unwrap().0;
+    }
+    let (_config_base, stretch_res_base) = night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame_base, &settings).unwrap();
+    let res_base = stretch_res_base.unwrap();
+    // Simulate stretch using the pre-computed fused LUT
+    {
+        use rayon::prelude::*;
+        let row_len = frame_base.width() * 3;
+        frame_base.data_mut().par_chunks_mut(row_len).with_min_len(32).for_each(|row| {
+            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_base.black_point, &res_base.scale_lut);
+        });
+    }
+    
+    let stats_base = night_amplifier::compute_image_stats(&frame_base).unwrap();
+    let median_base = stats_base.mean_median();
+
+    // Process with max intensity
+    settings.eyepiece.intensity = 1.0;
+    let mut frame_max = img.frame.clone();
+    if frame_max.channels() == 1 {
+        frame_max = night_amplifier::debayer_auto(&frame_max).unwrap().0;
+    }
+    let (_config_max, stretch_res_max) = night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame_max, &settings).unwrap();
+    let res_max = stretch_res_max.unwrap();
+    // Simulate stretch using the pre-computed fused LUT
+    {
+        use rayon::prelude::*;
+        let row_len = frame_max.width() * 3;
+        frame_max.data_mut().par_chunks_mut(row_len).with_min_len(32).for_each(|row| {
+            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_max.black_point, &res_max.scale_lut);
+        });
+    }
+
+    let stats_max = night_amplifier::compute_image_stats(&frame_max).unwrap();
+    let median_max = stats_max.mean_median();
+
+    println!("Base config - Median: {:.6}", median_base);
+    println!("Max config  - Median: {:.6}", median_max);
+
+    // Validate that background became darker
+    assert!(
+        median_max < median_base,
+        "Expected darker background at max intensity ({} < {})",
+        median_max, median_base
+    );
+    
+    println!("=== Eyepiece Intensity Metrics Test Complete ===\n");
+}
