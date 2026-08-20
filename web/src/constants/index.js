@@ -58,6 +58,14 @@ export const SATURATION_BOOST_LIMITS = {
     default: 0.5,
 }
 
+// Auto Stretch intensity limits
+export const AUTO_STRETCH_INTENSITY_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 0.3,
+}
+
 // Simulated camera preload limits
 export const SIMULATED_PRELOAD_LIMITS = {
     min: 1,
@@ -182,6 +190,7 @@ export const DEFAULT_SETTINGS = {
         screen_resolution_x: 2880,
         screen_resolution_y: 1440,
         circular_view: true,
+        intensity: 0.3,
     },
     dew_heater_enabled: true,
     dew_heater_power: 10,
@@ -234,6 +243,8 @@ export const HELP_TEXTS = {
         'Configure physical screen dimensions and resolution to calculate accurate split for Binoview.',
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
+    eyepiece_intensity:
+        'Darkens the background sky to pitch-black for OLED screens and pulls up the contrast of objects.',
     rejection_method:
         'Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\n• Min-Max: Discards the highest and lowest pixel values. Simple and effective for sparse satellite trails.\nChanges apply immediately to subsequent frames.',
     rejection_sigma:
