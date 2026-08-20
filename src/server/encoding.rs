@@ -385,7 +385,7 @@ fn to_ready_frame_with_stretch(
     crate::server::state::RenderReadyFrame {
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
-        stretch_result: Some(crate::server::state::StretchResult { black_point, scale_lut }),
+        stretch_result: Some(crate::server::state::StretchResult { black_point, scale_lut, color_intensity: 1.0 }),
     }
 }
 
@@ -1058,7 +1058,7 @@ pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame
                 }
 
                 if has_stretch {
-                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut);
+                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut, config.stretch_config.color_intensity);
                 }
                 if has_saturate {
                     if let Some(plugin) = crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN) {
@@ -1179,7 +1179,7 @@ pub fn box_downsample_to_rgb8_fused(ready_frame: &crate::server::state::RenderRe
                 }
 
                 if has_stretch {
-                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut);
+                    crate::render::simd::apply_luminance_scale_lut_simd(&mut f32_row, black_point, &scale_lut, config.stretch_config.color_intensity);
                 }
                 if has_saturate {
                     if let Some(plugin) = crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN) {

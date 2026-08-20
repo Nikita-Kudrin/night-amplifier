@@ -26,6 +26,7 @@ pub struct AutoStretchConfig {
     pub max_iterations: u32,
     pub per_channel_black_point: bool,
     pub tone_mapping: ToneMappingAlgorithm,
+    pub color_intensity: f32,
 }
 
 impl Default for AutoStretchConfig {
@@ -39,6 +40,7 @@ impl Default for AutoStretchConfig {
             max_iterations: 50,
             per_channel_black_point: false,
             tone_mapping: ToneMappingAlgorithm::default(),
+            color_intensity: 1.0,
         }
     }
 }
@@ -78,6 +80,11 @@ impl AutoStretchConfig {
         self
     }
 
+    pub fn with_color_intensity(mut self, intensity: f32) -> Self {
+        self.color_intensity = intensity;
+        self
+    }
+
     pub fn dark_sky() -> Self {
         Self::default()
             .with_target_background(0.10)
@@ -106,6 +113,7 @@ impl AutoStretchConfig {
             max_iterations: 50,
             per_channel_black_point: false,
             tone_mapping: ToneMappingAlgorithm::Asinh,
+            color_intensity: 1.0,
         }
     }
 

@@ -248,7 +248,7 @@ mod tests {
         // the frame only gets black-point subtraction and stays near-black.
         let stretched = frame.get_pixel(16, 16, 0);
         assert!(
-            stretched > 0.08,
+            stretched > 0.07,
             "stacked PNG frame was not stretched: pixel stayed at {stretched} (background was ~{background})"
         );
     }

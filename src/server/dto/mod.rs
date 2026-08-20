@@ -206,6 +206,8 @@ pub struct SettingsResponse {
     pub weighting_preset: WeightingPreset,
     /// Auto stretch aggressiveness (Low, Medium, High)
     pub stretch_aggressiveness: StretchAggressiveness,
+    /// Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.3)
+    pub auto_stretch_intensity: f32,
     /// Enable shadow saturation boost for more vibrant deep-sky colors
     pub saturation_boost: bool,
     /// Shadow saturation boost strength (0.0-1.0)
@@ -281,6 +283,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             stacking_type: settings.stacking_type,
             weighting_preset: settings.weighting_preset,
             stretch_aggressiveness: settings.stretch_aggressiveness,
+            auto_stretch_intensity: settings.auto_stretch_intensity,
             saturation_boost: settings.saturation_boost,
             saturation_boost_strength: settings.saturation_boost_strength,
             use_simulated_camera: settings.use_simulated_camera,
@@ -395,6 +398,9 @@ pub struct UpdateSettingsRequest {
     /// Auto stretch aggressiveness (Low, Medium, High)
     #[serde(default)]
     pub stretch_aggressiveness: Option<StretchAggressiveness>,
+    /// Auto Stretch intensity multiplier
+    #[serde(default)]
+    pub auto_stretch_intensity: Option<f32>,
     /// Enable shadow saturation boost
     #[serde(default)]
     pub saturation_boost: Option<bool>,

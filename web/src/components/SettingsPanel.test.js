@@ -21,6 +21,7 @@ describe('SettingsPanel', () => {
             offset: 10,
             bin: 1,
             auto_stretch: true,
+            auto_stretch_intensity: 0.3,
             stacking: true,
             background_subtraction: true,
             save_raw_frames: false,
@@ -56,6 +57,23 @@ describe('SettingsPanel', () => {
             },
         })
     }
+
+    describe('Slider Constants', () => {
+        it('uses correct constants for Black level and Auto Stretch sliders', () => {
+            const wrapper = mountSettingsPanel()
+            const sliders = wrapper.findAllComponents({ name: 'BaseSlider' })
+            
+            const autoStretchSlider = sliders.find(s => s.props('label') === 'Auto Stretching intensity')
+            expect(autoStretchSlider.exists()).toBe(true)
+            expect(autoStretchSlider.props('min')).toBe(0.0)
+            expect(autoStretchSlider.props('max')).toBe(1.0)
+            
+            const blackLevelSlider = sliders.find(s => s.props('label') === 'Black level')
+            expect(blackLevelSlider.exists()).toBe(true)
+            expect(blackLevelSlider.props('min')).toBe(0.0)
+            expect(blackLevelSlider.props('max')).toBe(1.0)
+        })
+    })
 
     describe('Advanced Settings - Binning', () => {
         it('displays binning options', () => {
@@ -108,6 +126,12 @@ describe('SettingsPanel', () => {
             await flushPromises()
 
             expect(updateSettings).toHaveBeenCalledWith({background_subtraction: false})
+        })
+
+        it('has an Auto Stretching intensity slider', () => {
+            const wrapper = mountSettingsPanel()
+            // Using deep search to find the label text
+            expect(wrapper.html()).toContain('Auto Stretching intensity')
         })
     })
 

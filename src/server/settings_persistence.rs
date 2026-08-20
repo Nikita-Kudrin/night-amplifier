@@ -40,6 +40,9 @@ pub struct PersistedSettings {
     /// Auto stretch aggressiveness (Low, Medium, High)
     #[serde(default)]
     pub stretch_aggressiveness: StretchAggressiveness,
+    /// Auto stretch color intensity
+    #[serde(default = "default_auto_stretch_intensity")]
+    pub auto_stretch_intensity: f32,
     /// Enable shadow saturation boost (defaults to false if not present)
     #[serde(default)]
     pub saturation_boost: bool,
@@ -144,6 +147,10 @@ fn default_saturation_strength() -> f32 {
     0.5
 }
 
+fn default_auto_stretch_intensity() -> f32 {
+    0.3
+}
+
 fn default_planetary_auto_tracking() -> bool {
     true
 }
@@ -172,6 +179,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             stacking_type: settings.stacking_type,
             weighting_preset: settings.weighting_preset,
             stretch_aggressiveness: settings.stretch_aggressiveness,
+            auto_stretch_intensity: settings.auto_stretch_intensity,
             saturation_boost: settings.saturation_boost,
             saturation_boost_strength: settings.saturation_boost_strength,
             use_simulated_camera: settings.use_simulated_camera,
@@ -219,6 +227,7 @@ impl From<PersistedSettings> for CaptureSettings {
             stacking_type: persisted.stacking_type,
             weighting_preset: persisted.weighting_preset,
             stretch_aggressiveness: persisted.stretch_aggressiveness,
+            auto_stretch_intensity: persisted.auto_stretch_intensity,
             saturation_boost: persisted.saturation_boost,
             saturation_boost_strength: persisted.saturation_boost_strength,
             use_simulated_camera: persisted.use_simulated_camera,

@@ -32,6 +32,7 @@ mod tests {
             stacking_type: StackingType::Planetary,
             weighting_preset: WeightingPreset::Galaxies,
             stretch_aggressiveness: StretchAggressiveness::High,
+            auto_stretch_intensity: 0.3,
             saturation_boost: true,
             saturation_boost_strength: 0.7,
             use_simulated_camera: true,
@@ -138,6 +139,7 @@ mod tests {
             restored.stretch_aggressiveness,
             settings.stretch_aggressiveness
         );
+        assert!((restored.auto_stretch_intensity - settings.auto_stretch_intensity).abs() < f32::EPSILON);
         assert_eq!(restored.saturation_boost, settings.saturation_boost);
         assert!(
             (restored.saturation_boost_strength - settings.saturation_boost_strength).abs()
@@ -242,6 +244,7 @@ mod tests {
             stacking_type: StackingType::DeepSky,
             weighting_preset: WeightingPreset::Nebulae,
             stretch_aggressiveness: StretchAggressiveness::High,
+            auto_stretch_intensity: 0.3,
             saturation_boost: true,
             saturation_boost_strength: 0.6,
             use_simulated_camera: true,
