@@ -71,6 +71,7 @@ watch(
           simulated_camera: newSettings.simulated_camera ?? DEFAULT_SETTINGS.simulated_camera,
           simulated_preload_images:
               newSettings.simulated_preload_images ?? DEFAULT_SETTINGS.simulated_preload_images,
+          show_focus_image: newSettings.show_focus_image ?? DEFAULT_SETTINGS.show_focus_image,
           eyepiece: newSettings.eyepiece
               ? {...newSettings.eyepiece}
               : {...DEFAULT_SETTINGS.eyepiece},
@@ -460,6 +461,7 @@ const HELP = HELP_TEXTS
         <BaseToggle
             v-model="simulatorEnabled"
             label="Simulated Camera"
+            data-test="simulator-toggle"
             :help="HELP.simulated_camera"
             @update:model-value="applySetting('use_simulated_camera', $event)"
         />
@@ -475,6 +477,15 @@ const HELP = HELP_TEXTS
             @change="
             debouncedApply('simulated_preload_images', localSettings.simulated_preload_images)
           "
+        />
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.show_focus_image"
+            label="Show focus image"
+            :help="HELP.show_focus_image"
+            @update:model-value="applySetting('show_focus_image', $event)"
         />
       </div>
     </div>
