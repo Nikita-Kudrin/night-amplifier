@@ -40,6 +40,7 @@ pub enum CameraPhase {
 pub struct StretchResult {
     pub black_point: f32,
     pub scale_lut: std::sync::Arc<Vec<f32>>,
+    pub color_intensity: f32,
 }
 
 /// A frame ready to be rendered and encoded.

@@ -39,6 +39,8 @@ pub struct CaptureSettings {
     pub weighting_preset: WeightingPreset,
     /// Auto stretch aggressiveness (Low, Medium, High)
     pub stretch_aggressiveness: StretchAggressiveness,
+    /// Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.3)
+    pub auto_stretch_intensity: f32,
     /// Enable shadow saturation boost
     pub saturation_boost: bool,
     /// Shadow saturation boost strength (0.0-1.0)
@@ -275,6 +277,7 @@ impl Default for CaptureSettings {
             stacking_type: StackingType::default(),
             weighting_preset: WeightingPreset::default(),
             stretch_aggressiveness: StretchAggressiveness::default(),
+            auto_stretch_intensity: 0.3,
             saturation_boost: false,
             saturation_boost_strength: 0.5,
             use_simulated_camera: false,

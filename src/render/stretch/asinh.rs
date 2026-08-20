@@ -73,6 +73,7 @@ pub fn asinh_stretch_color_preserving(
     g: f32,
     b: f32,
     stretch_factor: f32,
+    color_intensity: f32,
 ) -> (f32, f32, f32) {
     if stretch_factor <= 0.0 {
         return (r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0));
@@ -88,9 +89,13 @@ pub fn asinh_stretch_color_preserving(
     let luminance_stretched = asinh(stretch_factor * luminance) * asinh_norm;
     let scale = luminance_stretched / luminance;
 
-    let r_out = (r * scale).clamp(0.0, 1.0);
-    let g_out = (g * scale).clamp(0.0, 1.0);
-    let b_out = (b * scale).clamp(0.0, 1.0);
+    let lum_stretched = luminance * scale;
+    let base_add = lum_stretched * (1.0 - color_intensity);
+    let channel_mul = scale * color_intensity;
+
+    let r_out = (r * channel_mul + base_add).clamp(0.0, 1.0);
+    let g_out = (g * channel_mul + base_add).clamp(0.0, 1.0);
+    let b_out = (b * channel_mul + base_add).clamp(0.0, 1.0);
 
     (r_out, g_out, b_out)
 }
@@ -117,7 +122,7 @@ pub fn asinh_stretch_color_preserving(
 /// # Errors
 ///
 /// Returns `StackError::InvalidConfiguration` if the frame is not 1 or 3 channels.
-pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32) -> Result<()> {
+pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32, color_intensity: f32) -> Result<()> {
     let channels = frame.channels();
     if channels != 1 && channels != 3 {
         return Err(StackError::InvalidConfiguration(format!(
@@ -146,7 +151,7 @@ pub fn asinh_stretch_frame(frame: &mut Frame, stretch_factor: f32) -> Result<()>
     } else {
         let row_len = width * 3;
         data.par_chunks_mut(row_len).for_each(|row| {
-            apply_luminance_preserving_simd(row, |l| asinh(stretch_factor * l) * asinh_norm);
+            apply_luminance_preserving_simd(row, color_intensity, |l| asinh(stretch_factor * l) * asinh_norm);
         });
     }
 
@@ -229,7 +234,7 @@ mod tests {
         let orig_rb = r / b;
         let orig_gb = g / b;
 
-        let (r_out, g_out, b_out) = asinh_stretch_color_preserving(r, g, b, 10.0);
+        let (r_out, g_out, b_out) = asinh_stretch_color_preserving(r, g, b, 10.0, 1.0);
 
         let new_rg = r_out / g_out;
         let new_rb = r_out / b_out;
@@ -245,8 +250,8 @@ mod tests {
         let dark = (0.05, 0.03, 0.04);
         let bright = (0.8, 0.7, 0.6);
 
-        let (d_r, d_g, d_b) = asinh_stretch_color_preserving(dark.0, dark.1, dark.2, 10.0);
-        let (b_r, b_g, b_b) = asinh_stretch_color_preserving(bright.0, bright.1, bright.2, 10.0);
+        let (d_r, d_g, d_b) = asinh_stretch_color_preserving(dark.0, dark.1, dark.2, 10.0, 1.0);
+        let (b_r, b_g, b_b) = asinh_stretch_color_preserving(bright.0, bright.1, bright.2, 10.0, 1.0);
 
         let dark_lum_in = 0.2126 * dark.0 + 0.7152 * dark.1 + 0.0722 * dark.2;
         let dark_lum_out = 0.2126 * d_r + 0.7152 * d_g + 0.0722 * d_b;
@@ -261,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_asinh_stretch_color_preserving_black_pixel() {
-        let (r, g, b) = asinh_stretch_color_preserving(0.0, 0.0, 0.0, 10.0);
+        let (r, g, b) = asinh_stretch_color_preserving(0.0, 0.0, 0.0, 10.0, 1.0);
         assert_eq!(r, 0.0);
         assert_eq!(g, 0.0);
         assert_eq!(b, 0.0);
@@ -273,11 +278,46 @@ mod tests {
         let g = 0.3;
         let b = 0.7;
 
-        let (r_out, g_out, b_out) = asinh_stretch_color_preserving(r, g, b, 0.0);
+        let (r_out, g_out, b_out) = asinh_stretch_color_preserving(r, g, b, 0.0, 1.0);
 
         assert!((r_out - r).abs() < 1e-6);
         assert!((g_out - g).abs() < 1e-6);
         assert!((b_out - b).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_asinh_stretch_color_intensity() {
+        let r = 0.5;
+        let g = 0.3;
+        let b = 0.7;
+        let stretch_factor = 10.0;
+
+        let (r_out_1, g_out_1, b_out_1) = asinh_stretch_color_preserving(r, g, b, stretch_factor, 1.0);
+        let (r_out_high, g_out_high, b_out_high) = asinh_stretch_color_preserving(r, g, b, stretch_factor, 2.0);
+        let (r_out_low, g_out_low, b_out_low) = asinh_stretch_color_preserving(r, g, b, stretch_factor, 0.5);
+        let (r_out_zero, g_out_zero, b_out_zero) = asinh_stretch_color_preserving(r, g, b, stretch_factor, 0.0);
+
+        // When intensity is 0, the output should be monochromatic (luminance only)
+        // Check that the three channels are very close to each other.
+        assert!((r_out_zero - g_out_zero).abs() < 1e-4);
+        assert!((r_out_zero - b_out_zero).abs() < 1e-4);
+
+        // Calculate differences between channel and luminance for intensity=1
+        let l_out = 0.2126 * r_out_1 + 0.7152 * g_out_1 + 0.0722 * b_out_1;
+        let dr_1 = r_out_1 - l_out;
+        let dg_1 = g_out_1 - l_out;
+        let db_1 = b_out_1 - l_out;
+
+        // Calculate for intensity=2
+        let l_out_high = 0.2126 * r_out_high + 0.7152 * g_out_high + 0.0722 * b_out_high;
+        let dr_high = r_out_high - l_out_high;
+        let dg_high = g_out_high - l_out_high;
+        let db_high = b_out_high - l_out_high;
+
+        // Higher intensity should spread the channels further from luminance
+        assert!(dr_high.abs() > dr_1.abs());
+        assert!(dg_high.abs() > dg_1.abs());
+        assert!(db_high.abs() > db_1.abs());
     }
 
     #[test]
@@ -290,7 +330,7 @@ mod tests {
         }
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        asinh_stretch_frame(&mut frame, 5.0).unwrap();
+        asinh_stretch_frame(&mut frame, 5.0, 1.0).unwrap();
 
         let r_out = frame.get_pixel(16, 16, 0);
         let g_out = frame.get_pixel(16, 16, 1);
@@ -308,7 +348,7 @@ mod tests {
     #[test]
     fn test_asinh_stretch_frame_wrong_channels() {
         let mut frame = Frame::filled(10, 10, 2, 0.5).unwrap();
-        let result = asinh_stretch_frame(&mut frame, 5.0);
+        let result = asinh_stretch_frame(&mut frame, 5.0, 1.0);
         assert!(matches!(result, Err(StackError::InvalidConfiguration(_))));
     }
 

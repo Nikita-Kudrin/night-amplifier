@@ -59,7 +59,15 @@ export const SATURATION_BOOST_LIMITS = {
 }
 
 // Auto Stretch intensity limits
-export const AUTO_STRETCH_INTENSITY_LIMITS = {
+export const AUTO_STRETCH_INTENSITY = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 0.3,
+}
+
+// Black level limits
+export const BLACK_LEVEL_LIMITS = {
     min: 0.0,
     max: 1.0,
     step: 0.05,
@@ -173,6 +181,7 @@ export const DEFAULT_SETTINGS = {
     rejection_method: 'None',
     rejection_sigma: 2.5,
     stretch_aggressiveness: 'medium',
+    auto_stretch_intensity: 0.3,
     saturation_boost: false,
     saturation_boost_strength: 0.5,
     simulated_camera: false,
@@ -245,6 +254,8 @@ export const HELP_TEXTS = {
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     eyepiece_intensity:
         'Darkens the background sky to pitch-black for OLED screens and pulls up the contrast of objects.',
+    auto_stretch_intensity:
+        'Intensifies the colors of the image while perfectly preserving the luminance/black level.',
     rejection_method:
         'Outlier rejection algorithm to remove satellites, planes, or hot pixels from the stack:\n• None: Simple average. Fast and clean for noise-free data.\n• Sigma Clipping: Statistically rejects values too far from the mean. Great for satellite trails.\n• Winsorized: Clips extreme values to the rejection threshold rather than discarding. More stable for smaller stacks.\n• Min-Max: Discards the highest and lowest pixel values. Simple and effective for sparse satellite trails.\nChanges apply immediately to subsequent frames.',
     rejection_sigma:

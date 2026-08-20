@@ -158,7 +158,7 @@ fn test_eyepiece_intensity_metrics() {
         use rayon::prelude::*;
         let row_len = frame_base.width() * 3;
         frame_base.data_mut().par_chunks_mut(row_len).with_min_len(32).for_each(|row| {
-            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_base.black_point, &res_base.scale_lut);
+            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_base.black_point, &res_base.scale_lut, 1.0);
         });
     }
     
@@ -178,7 +178,7 @@ fn test_eyepiece_intensity_metrics() {
         use rayon::prelude::*;
         let row_len = frame_max.width() * 3;
         frame_max.data_mut().par_chunks_mut(row_len).with_min_len(32).for_each(|row| {
-            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_max.black_point, &res_max.scale_lut);
+            night_amplifier::render::simd::apply_luminance_scale_lut_simd(row, res_max.black_point, &res_max.scale_lut, 1.0);
         });
     }
 
