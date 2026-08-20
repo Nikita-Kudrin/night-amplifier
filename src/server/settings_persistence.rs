@@ -52,6 +52,9 @@ pub struct PersistedSettings {
     /// Number of images to preload for simulated camera (defaults to 5 if not present)
     #[serde(default = "default_preload_images")]
     pub simulated_preload_images: usize,
+    /// Show the focus image when waiting for frames
+    #[serde(default = "default_show_focus_image")]
+    pub show_focus_image: bool,
     /// Persisted simulated camera directories (only simulated cameras are persisted)
     #[serde(default)]
     pub simulated_directories: Vec<String>,
@@ -133,6 +136,10 @@ fn default_preload_images() -> usize {
     5
 }
 
+fn default_show_focus_image() -> bool {
+    true
+}
+
 fn default_saturation_strength() -> f32 {
     0.5
 }
@@ -169,6 +176,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             saturation_boost_strength: settings.saturation_boost_strength,
             use_simulated_camera: settings.use_simulated_camera,
             simulated_preload_images: settings.simulated_preload_images,
+            show_focus_image: settings.show_focus_image,
             simulated_directories,
             comet_roi: settings.comet_roi,
             planetary_roi: settings.planetary_roi,
@@ -215,6 +223,7 @@ impl From<PersistedSettings> for CaptureSettings {
             saturation_boost_strength: persisted.saturation_boost_strength,
             use_simulated_camera: persisted.use_simulated_camera,
             simulated_preload_images: persisted.simulated_preload_images,
+            show_focus_image: persisted.show_focus_image,
             comet_roi: persisted.comet_roi,
             planetary_roi: persisted.planetary_roi,
             planetary_auto_tracking: persisted.planetary_auto_tracking,

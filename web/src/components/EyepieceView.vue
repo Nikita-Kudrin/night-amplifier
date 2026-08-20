@@ -42,6 +42,7 @@ const showGuideArrow = computed(() => currentTarget.value !== null && pushDirect
 
 const isBinoview = computed(() => settings.value?.eyepiece?.binoview ?? true)
 const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
+const showFocusImage = computed(() => settings.value?.show_focus_image ?? false)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
@@ -201,7 +202,10 @@ onUnmounted(() => {
   <div class="eyepiece-view">
     <div v-show="!hasFrame" class="placeholder">
       <p v-if="!connected">Connecting to stream...</p>
-      <p v-else>Waiting for frames...</p>
+      <template v-else>
+        <img v-if="showFocusImage" src="../assets/focusing-star-black-white.png" class="focus-image" alt="Focusing Star" />
+        <p v-else>Waiting for frames...</p>
+      </template>
     </div>
 
     <div v-show="hasFrame && isBinoview" class="binoview-container">
@@ -276,6 +280,17 @@ onUnmounted(() => {
 .placeholder {
   color: #fff;
   font-family: sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.focus-image {
+  max-width: 80%;
+  max-height: 80vh;
+  object-fit: contain;
+  opacity: 0.8;
 }
 
 .binoview-container {

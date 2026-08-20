@@ -211,9 +211,8 @@ describe('SettingsPanel', () => {
                 },
             })
 
-            // Find simulator toggle (last toggle in the panel)
-            const toggles = wrapper.findAll('.toggle')
-            const simulatorToggle = toggles[toggles.length - 1]
+            // Find simulator toggle by data-test attribute, then find its inner input
+            const simulatorToggle = wrapper.find('[data-test="simulator-toggle"]').find('input')
 
             await simulatorToggle.setValue(true)
             await flushPromises()

@@ -169,6 +169,7 @@ export const DEFAULT_SETTINGS = {
     saturation_boost_strength: 0.5,
     simulated_camera: false,
     simulated_preload_images: 5,
+    show_focus_image: true,
     wanderer_mode: false,
     cooler_enabled: false,
     target_temp_c: null,
@@ -254,4 +255,6 @@ export const HELP_TEXTS = {
         'Activates the anti-dew heater at the front of the camera sensor to prevent condensation on the optical window.',
     dew_heater_power:
         'Controls the power level of the anti-dew heater. Typically 10-30% is sufficient for most conditions.',
+    show_focus_image:
+        'Displays a focusing star image instead of "Waiting for frames" on the eyepiece endpoints to help with screen setup and focus adjustments.',
 }
