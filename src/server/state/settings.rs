@@ -47,6 +47,8 @@ pub struct CaptureSettings {
     pub use_simulated_camera: bool,
     /// Number of images to preload for simulated camera
     pub simulated_preload_images: usize,
+    /// Show the focus image when waiting for frames
+    pub show_focus_image: bool,
     /// Whether the cooler should be active during capture (cooled cameras only)
     pub cooler_enabled: bool,
     /// Target sensor temperature in Celsius (None means "no target set")
@@ -269,6 +271,7 @@ impl Default for CaptureSettings {
             saturation_boost_strength: 0.5,
             use_simulated_camera: false,
             simulated_preload_images: 5,
+            show_focus_image: true,
             cooler_enabled: false,
             target_temp_c: None,
             cooler_fast_mode: false,
