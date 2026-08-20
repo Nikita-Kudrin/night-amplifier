@@ -25,7 +25,7 @@ pub fn mtf(x: f32, m: f32) -> f32 {
 
 /// Apply color-preserving MTF stretch to an RGB pixel
 #[inline]
-pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32) -> (f32, f32, f32) {
+pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32, color_intensity: f32) -> (f32, f32, f32) {
     let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     if luminance <= 1e-8 {
         return (0.0, 0.0, 0.0);
@@ -34,10 +34,14 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32) -> (f3
     let luminance_stretched = mtf(luminance, midtone);
     let scale = luminance_stretched / luminance;
 
+    let lum_stretched = luminance * scale;
+    let base_add = lum_stretched * (1.0 - color_intensity);
+    let channel_mul = scale * color_intensity;
+
     (
-        (r * scale).clamp(0.0, 1.0),
-        (g * scale).clamp(0.0, 1.0),
-        (b * scale).clamp(0.0, 1.0),
+        (r * channel_mul + base_add).clamp(0.0, 1.0),
+        (g * channel_mul + base_add).clamp(0.0, 1.0),
+        (b * channel_mul + base_add).clamp(0.0, 1.0),
     )
 }
 
@@ -47,7 +51,7 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32) -> (f3
 /// skips the incidental `[0, 1]` clamp the pass would have applied, which is safe because
 /// pixel data is normalised to `[0, 1]` by contract; the 1e-6 window keeps any residual
 /// curve error four orders of magnitude below one 8-bit LSB.
-pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
+pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32, color_intensity: f32) -> Result<()> {
     if (midtone - 0.5).abs() < 1e-6 {
         return Ok(());
     }
@@ -79,7 +83,7 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32) -> Result<()> {
     } else {
         let row_len = width * 3;
         data.par_chunks_mut(row_len).for_each(|row| {
-            apply_luminance_preserving_simd(row, |l| {
+            apply_luminance_preserving_simd(row, color_intensity, |l| {
                 let idx = (l * 65535.0) as usize;
                 lut[idx.min(65535)]
             });
@@ -127,6 +131,31 @@ mod tests {
     }
 
     #[test]
+    fn test_mtf_color_intensity() {
+        let r = 0.5;
+        let g = 0.3;
+        let b = 0.7;
+        let m = 0.2;
+
+        let (r_out_1, g_out_1, b_out_1) = mtf_stretch_color_preserving(r, g, b, m, 1.0);
+        let (r_out_high, g_out_high, b_out_high) = mtf_stretch_color_preserving(r, g, b, m, 2.0);
+        let (r_out_zero, g_out_zero, b_out_zero) = mtf_stretch_color_preserving(r, g, b, m, 0.0);
+
+        // Zero intensity means luminance only
+        assert!((r_out_zero - g_out_zero).abs() < 1e-4);
+        assert!((r_out_zero - b_out_zero).abs() < 1e-4);
+
+        // High intensity means channels are further from luminance
+        let l_out = 0.2126 * r_out_1 + 0.7152 * g_out_1 + 0.0722 * b_out_1;
+        let dr_1 = r_out_1 - l_out;
+
+        let l_out_high = 0.2126 * r_out_high + 0.7152 * g_out_high + 0.0722 * b_out_high;
+        let dr_high = r_out_high - l_out_high;
+
+        assert!(dr_high.abs() > dr_1.abs());
+    }
+
+    #[test]
     fn test_mtf_stretch_frame() {
         let mut data = vec![0.0f32; 32 * 32 * 3];
         for i in 0..(32 * 32) {
@@ -137,7 +166,7 @@ mod tests {
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
         let original_pixel = (0.1, 0.2, 0.3);
 
-        mtf_stretch_frame(&mut frame, 0.2).unwrap();
+        mtf_stretch_frame(&mut frame, 0.2, 1.0).unwrap();
 
         let r_out = frame.get_pixel(16, 16, 0);
         let g_out = frame.get_pixel(16, 16, 1);

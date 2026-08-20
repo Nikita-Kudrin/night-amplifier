@@ -119,6 +119,9 @@ pub async fn update_settings(
         if let Some(stretch_aggressiveness) = request.stretch_aggressiveness {
             settings.stretch_aggressiveness = stretch_aggressiveness;
         }
+        if let Some(auto_stretch_intensity) = request.auto_stretch_intensity {
+            settings.auto_stretch_intensity = auto_stretch_intensity.clamp(0.0, 1.0);
+        }
         if let Some(saturation_boost) = request.saturation_boost {
             if saturation_boost && crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_none() {
                 return (

@@ -57,6 +57,7 @@ pub fn auto_stretch_frame(
             0.0,
             config.tone_mapping,
             result.stretch_factor,
+            config.color_intensity,
             contrast_config,
         )?;
     } else if channels == 3 {
@@ -66,12 +67,13 @@ pub fn auto_stretch_frame(
             result.black_point,
             config.tone_mapping,
             result.stretch_factor,
+            config.color_intensity,
             contrast_config,
         )?;
     } else {
         subtract_black_point_uniform(frame, result.black_point)?;
         let _span = tracing::info_span!("apply_tone_mapping").entered();
-        apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor)?;
+        apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor, config.color_intensity)?;
     }
 
     Ok(result)

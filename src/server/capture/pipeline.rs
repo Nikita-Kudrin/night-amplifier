@@ -312,6 +312,7 @@ pub fn process_preview_frame(
                 Some(crate::server::state::StretchResult {
                     black_point: res.black_point,
                     scale_lut,
+                    color_intensity: pipeline_config.stretch_config.color_intensity,
                 })
             }
             Err(e) => {
@@ -349,7 +350,8 @@ pub fn get_render_pipeline_config(
         let stretch_config = AutoStretchConfig::from_profile(
             !use_aggressive_stretch,
             settings.stretch_aggressiveness,
-        );
+        )
+        .with_color_intensity(1.0 + settings.auto_stretch_intensity);
         let saturation_config = settings.saturation_boost_config();
 
         // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle

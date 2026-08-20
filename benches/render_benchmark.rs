@@ -80,7 +80,8 @@ fn bench_scale_lut(c: &mut Criterion) {
             night_amplifier::render::simd::apply_luminance_scale_lut_simd(
                 black_box(&mut test_data),
                 0.05,
-                black_box(&scale_lut)
+                black_box(&scale_lut),
+                1.0,
             );
         })
     });
@@ -91,7 +92,8 @@ fn bench_scale_lut(c: &mut Criterion) {
             night_amplifier::render::simd::apply_luminance_scale_lut_scalar(
                 black_box(&mut test_data),
                 0.05,
-                black_box(&scale_lut)
+                black_box(&scale_lut),
+                1.0,
             );
         })
     });
@@ -115,6 +117,7 @@ fn bench_fused_stretch(c: &mut Criterion) {
                 0.05,
                 night_amplifier::render::ToneMappingAlgorithm::Mtf,
                 0.15,
+                1.0,
                 None,
             ).unwrap();
         })

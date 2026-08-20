@@ -87,7 +87,7 @@ pub fn apply_contrast_frame(frame: &mut Frame, config: &ContrastConfig) -> Resul
 
     let row_len = width * 3;
     data.par_chunks_mut(row_len).for_each(|row| {
-        apply_luminance_preserving_simd(row, |l| apply_s_curve(l, config));
+        apply_luminance_preserving_simd(row, 1.0, |l| apply_s_curve(l, config));
     });
 
     Ok(())
@@ -98,5 +98,5 @@ pub fn apply_contrast_slice(row: &mut [f32], config: &ContrastConfig) {
     if config.is_disabled() {
         return;
     }
-    apply_luminance_preserving_simd(row, |l| apply_s_curve(l, config));
+    apply_luminance_preserving_simd(row, 1.0, |l| apply_s_curve(l, config));
 }

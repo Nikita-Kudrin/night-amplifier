@@ -15,7 +15,8 @@ import CoolerControl from './CoolerControl.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 import {
   SATURATION_BOOST_LIMITS,
-  AUTO_STRETCH_INTENSITY_LIMITS,
+  AUTO_STRETCH_INTENSITY,
+  BLACK_LEVEL_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
   WEIGHTING_PRESET_OPTIONS,
@@ -58,6 +59,8 @@ watch(
           background_extraction_algorithm:
               newSettings.background_extraction_algorithm ??
               DEFAULT_SETTINGS.background_extraction_algorithm,
+          auto_stretch_intensity:
+              newSettings.auto_stretch_intensity ?? DEFAULT_SETTINGS.auto_stretch_intensity,
           save_raw_frames: newSettings.save_raw_frames ?? DEFAULT_SETTINGS.save_raw_frames,
           save_stacked_image: newSettings.save_stacked_image ?? DEFAULT_SETTINGS.save_stacked_image,
           wanderer_mode: newSettings.wanderer_mode ?? DEFAULT_SETTINGS.wanderer_mode,
@@ -118,11 +121,24 @@ const HELP = HELP_TEXTS
 
       <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
         <BaseSlider
+            v-model="localSettings.auto_stretch_intensity"
+            label="Auto Stretching intensity"
+            :min="AUTO_STRETCH_INTENSITY.min"
+            :max="AUTO_STRETCH_INTENSITY.max"
+            :step="AUTO_STRETCH_INTENSITY.step"
+            :format-value="formatPercent"
+            :help="HELP.auto_stretch_intensity"
+            @change="applySetting('auto_stretch_intensity', localSettings.auto_stretch_intensity)"
+        />
+      </div>
+
+      <div class="control-group" style="margin-bottom: 1.5rem">
+        <BaseSlider
             v-model="localSettings.eyepiece.intensity"
             label="Black level"
-            :min="AUTO_STRETCH_INTENSITY_LIMITS.min"
-            :max="AUTO_STRETCH_INTENSITY_LIMITS.max"
-            :step="AUTO_STRETCH_INTENSITY_LIMITS.step"
+            :min="BLACK_LEVEL_LIMITS.min"
+            :max="BLACK_LEVEL_LIMITS.max"
+            :step="BLACK_LEVEL_LIMITS.step"
             :format-value="formatPercent"
             :help="HELP.eyepiece_intensity"
             @change="applySetting('eyepiece', localSettings.eyepiece)"
