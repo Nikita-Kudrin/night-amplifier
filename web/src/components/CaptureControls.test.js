@@ -210,7 +210,7 @@ describe('CaptureControls', () => {
         })
     })
 
-    describe('Auto Stretch Control', () => {
+    describe('Color mode Control', () => {
         it('syncs auto_stretch value', () => {
             const wrapper = mountCaptureControls({
                 settings: {auto_stretch: true},

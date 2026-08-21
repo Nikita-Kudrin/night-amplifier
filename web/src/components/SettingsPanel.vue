@@ -122,7 +122,7 @@ const HELP = HELP_TEXTS
       <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
         <BaseSlider
             v-model="localSettings.auto_stretch_intensity"
-            label="Auto Stretching intensity"
+            label="Color Intensity"
             :min="AUTO_STRETCH_INTENSITY.min"
             :max="AUTO_STRETCH_INTENSITY.max"
             :step="AUTO_STRETCH_INTENSITY.step"
