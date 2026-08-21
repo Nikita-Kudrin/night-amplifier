@@ -123,6 +123,7 @@ const HELP = HELP_TEXTS
         <BaseSlider
             v-model="localSettings.auto_stretch_intensity"
             label="Color Intensity"
+            large-gap
             :min="AUTO_STRETCH_INTENSITY.min"
             :max="AUTO_STRETCH_INTENSITY.max"
             :step="AUTO_STRETCH_INTENSITY.step"
@@ -136,6 +137,7 @@ const HELP = HELP_TEXTS
         <BaseSlider
             v-model="localSettings.eyepiece.intensity"
             label="Black level"
+            large-gap
             :min="BLACK_LEVEL_LIMITS.min"
             :max="BLACK_LEVEL_LIMITS.max"
             :step="BLACK_LEVEL_LIMITS.step"
@@ -202,6 +204,7 @@ const HELP = HELP_TEXTS
           v-if="localSettings.saturation_boost"
           v-model="localSettings.saturation_boost_strength"
           label="Saturation Strength"
+          large-gap
           :min="SATURATION_BOOST_LIMITS.min"
           :max="SATURATION_BOOST_LIMITS.max"
           :step="SATURATION_BOOST_LIMITS.step"
