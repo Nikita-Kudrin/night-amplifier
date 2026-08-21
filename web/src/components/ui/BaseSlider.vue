@@ -38,6 +38,10 @@ defineProps({
     type: Boolean,
     default: false
   },
+  largeGap: {
+    type: Boolean,
+    default: false
+  },
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
@@ -54,7 +58,7 @@ function handleChange(event) {
 </script>
 
 <template>
-  <div class="slider-control">
+  <div class="slider-control" :class="{'large-gap': largeGap}">
     <label v-if="label" class="control-label">
       <span class="label-text-wrapper">
         <slot name="label-left"></slot>
@@ -112,5 +116,9 @@ function handleChange(event) {
 .slider:disabled, .input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.slider-control.large-gap .control-label {
+  margin-bottom: 0.5rem;
 }
 </style>
