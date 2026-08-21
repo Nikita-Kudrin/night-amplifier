@@ -324,7 +324,7 @@ const HELP = HELP_TEXTS
     <div class="control-group">
       <div class="control-row">
         <label class="type-label-inline" :class="{ 'text-muted': showCometLock }">
-          Auto Stretch
+          Color mode
           <BaseInfoIcon :message="HELP.auto_stretch"/>
         </label>
         <div class="stretch-controls">
