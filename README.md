@@ -117,7 +117,7 @@ Alternatively, download the `.tar.gz` archive for your platform, extract, and ru
 ```bash
 tar xzf night-amplifier-*.tar.gz
 cd night-amplifier-*/
-./night-amplifier          # Default port 8080
+./night-amplifier          # Default port 9955 (or 8844 for distribution builds)
 ./night-amplifier 3000     # Custom port
 ```
 
@@ -395,7 +395,7 @@ cargo build --release --features svbony
 The integrated web server provides remote camera control and live image streaming.
 
 ```bash
-# Run the server (default port 8080)
+# Run the server (default port 9955)
 cargo run --release
 
 # Run on a custom port
@@ -528,7 +528,7 @@ A Vue 3 web interface is included for camera control from any browser (desktop o
 cd web
 npm install
 
-# Development server (proxies API to localhost:8080)
+# Development server (proxies API to localhost:9955)
 npm run dev
 
 # Production build (outputs to web/dist/)

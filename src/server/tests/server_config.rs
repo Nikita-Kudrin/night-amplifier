@@ -30,7 +30,7 @@ fn test_server_creation() {
 fn test_server_with_defaults() {
     let server = Server::with_defaults();
 
-    assert_eq!(server.config.bind_addr.port(), 8080);
+    assert_eq!(server.config.bind_addr.port(), 9955);
     assert!(server.config.enable_cors);
 }
 
