@@ -82,7 +82,7 @@ cargo run --release -- --span-timings                               # log per-st
 cargo build --profile profiling                                     # release codegen with symbols, for `perf`
 
 # Frontend (from web/)
-cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm install && npm run dev      # dev server on :5173, proxies to :8080
+cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm install && npm run dev      # dev server on :8844, proxies to :9955
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run build                    # production build to web/dist/
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run lint:fix
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run test:run
@@ -130,7 +130,7 @@ Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiec
 ### Web Frontend (web/)
 
 Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, components in `src/components/`. Vite proxies
-`/api` and `/ws` to `localhost:8080` in dev.
+`/api` and `/ws` to `localhost:9955` in dev.
 
 ## Camera Notes
 

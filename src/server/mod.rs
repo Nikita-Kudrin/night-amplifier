@@ -80,7 +80,7 @@ pub struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            bind_addr: SocketAddr::from(([0, 0, 0, 0], 9955)),
             static_dir: None,
             enable_cors: true,
             max_ws_message_size: 16 * 1024 * 1024, // 16MB
