@@ -100,12 +100,15 @@ onUnmounted(() => {
 
 <template>
   <div ref="iconRef" class="info-icon-container">
-    <button
+    <span
         class="info-icon"
         :class="type"
-        type="button"
+        role="button"
+        tabindex="0"
         title="Click for help"
         @click="toggleTooltip"
+        @keydown.enter.prevent="toggleTooltip"
+        @keydown.space.prevent="toggleTooltip"
     >
       <svg
           v-if="type === 'info'"
@@ -123,7 +126,7 @@ onUnmounted(() => {
         <line x1="12" y1="9" x2="12" y2="13"/>
         <line x1="12" y1="17" x2="12.01" y2="17"/>
       </svg>
-    </button>
+    </span>
 
     <div
         v-if="showTooltip"
