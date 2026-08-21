@@ -58,7 +58,7 @@ export const SATURATION_BOOST_LIMITS = {
     default: 0.5,
 }
 
-// Auto Stretch intensity limits
+// Color Intensity limits
 export const AUTO_STRETCH_INTENSITY = {
     min: 0.0,
     max: 1.0,
@@ -84,9 +84,9 @@ export const SIMULATED_PRELOAD_LIMITS = {
 
 // Stretch aggressiveness options
 export const STRETCH_AGGRESSIVENESS_OPTIONS = [
-    {value: 'high', label: 'High (Nebulae)'},
-    {value: 'medium', label: 'Medium'},
-    {value: 'low', label: 'Low (Star Fields)'},
+    {value: 'high', label: 'Nebulae'},
+    {value: 'medium', label: 'Deep Sky'},
+    {value: 'low', label: 'Star Fields'},
 ]
 
 // Frame weighting preset options for quality-based stacking
@@ -217,7 +217,7 @@ export const DEFAULT_SETTINGS = {
 export const HELP_TEXTS = {
     bin: 'Combines adjacent pixels to increase sensitivity and Signal-to-Noise Ratio (SNR) at the cost of resolution. 2x2 binning is 4x more sensitive. Changing binning will automatically reset the current stack.',
     auto_stretch:
-        'Automatically applies transformation to make faint details visible to the human eye.',
+        'Automatically transforms the image to make faint details and colors visible - stretching',
     stretch_aggressiveness:
         'Controls how strongly the dark areas are boosted. High is best for extremely faint nebulae, Low preserves star colors and contrast.',
     background_subtraction:

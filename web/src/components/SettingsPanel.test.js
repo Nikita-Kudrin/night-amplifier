@@ -63,7 +63,7 @@ describe('SettingsPanel', () => {
             const wrapper = mountSettingsPanel()
             const sliders = wrapper.findAllComponents({ name: 'BaseSlider' })
             
-            const autoStretchSlider = sliders.find(s => s.props('label') === 'Auto Stretching intensity')
+            const autoStretchSlider = sliders.find(s => s.props('label') === 'Color Intensity')
             expect(autoStretchSlider.exists()).toBe(true)
             expect(autoStretchSlider.props('min')).toBe(0.0)
             expect(autoStretchSlider.props('max')).toBe(1.0)
@@ -128,10 +128,10 @@ describe('SettingsPanel', () => {
             expect(updateSettings).toHaveBeenCalledWith({background_subtraction: false})
         })
 
-        it('has an Auto Stretching intensity slider', () => {
+        it('has an Color Intensity slider', () => {
             const wrapper = mountSettingsPanel()
             // Using deep search to find the label text
-            expect(wrapper.html()).toContain('Auto Stretching intensity')
+            expect(wrapper.html()).toContain('Color Intensity')
         })
     })
 
