@@ -76,6 +76,7 @@ watch(
           simulated_preload_images:
               newSettings.simulated_preload_images ?? DEFAULT_SETTINGS.simulated_preload_images,
           show_focus_image: newSettings.show_focus_image ?? DEFAULT_SETTINGS.show_focus_image,
+          force_focus_image_now: newSettings.force_focus_image_now ?? DEFAULT_SETTINGS.force_focus_image_now,
           eyepiece: newSettings.eyepiece
               ? {...newSettings.eyepiece}
               : {...DEFAULT_SETTINGS.eyepiece},
@@ -515,12 +516,23 @@ const HELP = HELP_TEXTS
       </div>
 
       <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.show_focus_image"
-            label="Show focus image"
-            :help="HELP.show_focus_image"
-            @update:model-value="applySetting('show_focus_image', $event)"
-        />
+        <div class="control-row">
+          <BaseToggle
+              v-model="localSettings.show_focus_image"
+              label="Show focus image"
+              size="small"
+              :help="HELP.show_focus_image"
+              @update:model-value="applySetting('show_focus_image', $event)"
+          />
+          <BaseToggle
+              v-if="localSettings.show_focus_image"
+              v-model="localSettings.force_focus_image_now"
+              label="Now"
+              size="small"
+              :help="HELP.force_focus_image_now"
+              @update:model-value="applySetting('force_focus_image_now', $event)"
+          />
+        </div>
       </div>
     </div>
   </BasePanel>
