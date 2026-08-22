@@ -43,8 +43,10 @@ const showGuideArrow = computed(() => currentTarget.value !== null && pushDirect
 const isBinoview = computed(() => settings.value?.eyepiece?.binoview ?? true)
 const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
 const showFocusImage = computed(() => settings.value?.show_focus_image ?? false)
+const forceFocusImageNow = computed(() => settings.value?.force_focus_image_now ?? false)
 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
+const effectiveHasFrame = computed(() => hasFrame.value && !forceFocusImageNow.value)
 
 // Active renderer backend (assuming both eyes use same backend)
 const renderBackend = computed(() => {
@@ -200,15 +202,15 @@ onUnmounted(() => {
 
 <template>
   <div class="eyepiece-view">
-    <div v-show="!hasFrame" class="placeholder">
+    <div v-show="!effectiveHasFrame" class="placeholder">
       <p v-if="!connected">Connecting to stream...</p>
       <template v-else>
-        <img v-if="showFocusImage" src="../assets/focusing-star-black-white.png" class="focus-image" alt="Focusing Star" />
+        <img v-if="showFocusImage || forceFocusImageNow" src="../assets/focusing-star-black-white.png" class="focus-image" alt="Focusing Star" />
         <p v-else>Waiting for frames...</p>
       </template>
     </div>
 
-    <div v-show="hasFrame && isBinoview" class="binoview-container">
+    <div v-show="effectiveHasFrame && isBinoview" class="binoview-container">
       <div ref="leftEyeRef" class="eye left-eye">
         <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
         <GuideArrow
@@ -243,7 +245,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-show="hasFrame && !isBinoview" ref="singleEyeRef" class="single-view">
+    <div v-show="effectiveHasFrame && !isBinoview" ref="singleEyeRef" class="single-view">
       <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
       <GuideArrow
         v-if="showGuideArrow"
@@ -260,7 +262,7 @@ onUnmounted(() => {
       />
     </div>
 
-    <div v-if="capabilities?.debug_logging && hasFrame" class="debug-overlay">
+    <div v-if="capabilities?.debug_logging && effectiveHasFrame" class="debug-overlay">
       {{ backendLabel }}
     </div>
   </div>

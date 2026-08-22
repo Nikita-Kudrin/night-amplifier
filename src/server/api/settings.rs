@@ -143,6 +143,9 @@ pub async fn update_settings(
         if let Some(show_focus_image) = request.show_focus_image {
             settings.show_focus_image = show_focus_image;
         }
+        if let Some(force_focus_image_now) = request.force_focus_image_now {
+            settings.force_focus_image_now = force_focus_image_now;
+        }
         if let Some(comet_roi) = request.comet_roi {
             settings.comet_roi = Some(comet_roi);
         }

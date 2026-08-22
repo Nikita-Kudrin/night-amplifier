@@ -218,6 +218,8 @@ pub struct SettingsResponse {
     pub simulated_preload_images: usize,
     /// Show the focus image when waiting for frames
     pub show_focus_image: bool,
+    /// Force showing the focus image even when the stream is active
+    pub force_focus_image_now: bool,
     /// Region of interest for comet nucleus tracking (used in Comet stacking mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comet_roi: Option<AlignmentRoi>,
@@ -289,6 +291,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             use_simulated_camera: settings.use_simulated_camera,
             simulated_preload_images: settings.simulated_preload_images,
             show_focus_image: settings.show_focus_image,
+            force_focus_image_now: settings.force_focus_image_now,
             comet_roi: settings.comet_roi.clone(),
             planetary_roi: settings.planetary_roi.clone(),
             planetary_auto_tracking: settings.planetary_auto_tracking,
@@ -416,6 +419,9 @@ pub struct UpdateSettingsRequest {
     /// Show the focus image when waiting for frames
     #[serde(default)]
     pub show_focus_image: Option<bool>,
+    /// Force showing the focus image even when the stream is active
+    #[serde(default)]
+    pub force_focus_image_now: Option<bool>,
     /// Region of interest for comet nucleus tracking (used in Comet stacking mode)
     #[serde(default)]
     pub comet_roi: Option<AlignmentRoi>,
