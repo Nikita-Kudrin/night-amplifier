@@ -187,6 +187,7 @@ export const DEFAULT_SETTINGS = {
     simulated_camera: false,
     simulated_preload_images: 5,
     show_focus_image: true,
+    force_focus_image_now: false,
     wanderer_mode: false,
     cooler_enabled: false,
     target_temp_c: null,
@@ -276,7 +277,9 @@ export const HELP_TEXTS = {
     dew_heater_enabled:
         'Activates the anti-dew heater at the front of the camera sensor to prevent condensation on the optical window.',
     dew_heater_power:
-        'Controls the power level of the anti-dew heater. Typically 10-30% is sufficient for most conditions.',
+        'Controls the power level of the anti-dew heater.',
     show_focus_image:
-        'Displays a focusing star image instead of "Waiting for frames" on the eyepiece endpoints to help with screen setup and focus adjustments.',
+        'Displays a focusing image instead of "Waiting for frames" on the eyepiece endpoints to help with screen setup and focus adjustments.',
+    force_focus_image_now:
+        'Forces the focusing image to be displayed even when the camera stream is active, allowing you to check eyepiece focus at any time.',
 }

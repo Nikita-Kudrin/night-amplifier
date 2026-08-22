@@ -58,6 +58,9 @@ pub struct PersistedSettings {
     /// Show the focus image when waiting for frames
     #[serde(default = "default_show_focus_image")]
     pub show_focus_image: bool,
+    /// Force showing the focus image even when the stream is active
+    #[serde(default)]
+    pub force_focus_image_now: bool,
     /// Persisted simulated camera directories (only simulated cameras are persisted)
     #[serde(default)]
     pub simulated_directories: Vec<String>,
@@ -185,6 +188,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             use_simulated_camera: settings.use_simulated_camera,
             simulated_preload_images: settings.simulated_preload_images,
             show_focus_image: settings.show_focus_image,
+            force_focus_image_now: settings.force_focus_image_now,
             simulated_directories,
             comet_roi: settings.comet_roi,
             planetary_roi: settings.planetary_roi,
@@ -233,6 +237,7 @@ impl From<PersistedSettings> for CaptureSettings {
             use_simulated_camera: persisted.use_simulated_camera,
             simulated_preload_images: persisted.simulated_preload_images,
             show_focus_image: persisted.show_focus_image,
+            force_focus_image_now: persisted.force_focus_image_now,
             comet_roi: persisted.comet_roi,
             planetary_roi: persisted.planetary_roi,
             planetary_auto_tracking: persisted.planetary_auto_tracking,
