@@ -2,6 +2,7 @@
 #[derive(Debug, Clone, Copy)]
 pub struct AutoStretchResult {
     pub stretch_factor: f32,
+    pub midtones: [f32; 3],
     pub black_point: f32,
     pub original_median: f32,
     pub adjusted_median: f32,

@@ -25,6 +25,11 @@ pub struct RenderPipelineConfig {
     pub contrast: bool,
     /// Configuration for contrast adjustment
     pub contrast_config: ContrastConfig,
+
+    /// Whether to apply SCNR (Subtractive Chromatic Noise Reduction)
+    pub scnr: bool,
+    /// Amount of SCNR to apply (0.0 to 1.0)
+    pub scnr_amount: f32,
 }
 
 impl Default for RenderPipelineConfig {
@@ -38,6 +43,8 @@ impl Default for RenderPipelineConfig {
             saturation_config: SaturationBoostConfig::default(),
             contrast: true,
             contrast_config: ContrastConfig::default(),
+            scnr: false,
+            scnr_amount: 1.0,
         }
     }
 }
@@ -100,6 +107,19 @@ impl RenderPipelineConfig {
         self
     }
 
+    /// Enable or disable SCNR
+    pub fn with_scnr(mut self, enabled: bool) -> Self {
+        self.scnr = enabled;
+        self
+    }
+
+    /// Set the SCNR amount
+    pub fn with_scnr_amount(mut self, amount: f32) -> Self {
+        self.scnr_amount = amount;
+        self.scnr = true;
+        self
+    }
+
     /// Preset for deep sky imaging (nebulae, galaxies)
     pub fn deep_sky() -> Self {
         Self {
@@ -116,6 +136,8 @@ impl RenderPipelineConfig {
             },
             contrast: true,
             contrast_config: ContrastConfig::default(),
+            scnr: true,
+            scnr_amount: 1.0,
         }
     }
 
@@ -130,6 +152,8 @@ impl RenderPipelineConfig {
             saturation_config: SaturationBoostConfig::default(),
             contrast: true,
             contrast_config: ContrastConfig::subtle(),
+            scnr: false,
+            scnr_amount: 1.0,
         }
     }
 
@@ -144,6 +168,8 @@ impl RenderPipelineConfig {
             saturation_config: SaturationBoostConfig::default(),
             contrast: true,
             contrast_config: ContrastConfig::default(),
+            scnr: false,
+            scnr_amount: 1.0,
         }
     }
 }
