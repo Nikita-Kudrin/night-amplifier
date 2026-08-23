@@ -14,15 +14,22 @@ pub use config::RenderPipelineConfig;
 
 use super::autostretch::{auto_stretch_frame, AutoStretchResult};
 use super::output::apply_contrast_frame;
+use super::scnr::apply_scnr;
 use super::stretch::apply_shadow_saturation_boost;
+use super::white_balance::{compute_white_balance_grid, neutralize_background};
+use crate::statistics::compute_image_stats;
 
 /// Result from processing a frame through the pipeline
 #[derive(Debug, Clone)]
 pub struct PipelineResult {
     /// Auto-stretch result (if auto-stretch was applied)
     pub stretch_result: Option<AutoStretchResult>,
+    /// Whether background neutralization was applied
+    pub background_neutralized: bool,
     /// Whether background subtraction was applied
     pub background_subtracted: bool,
+    /// Whether SCNR was applied
+    pub scnr_applied: bool,
     /// Whether saturation boost was applied
     pub saturation_boosted: bool,
     /// Whether contrast was applied
@@ -60,7 +67,9 @@ impl RenderPipeline {
         width = frame.width(),
         height = frame.height(),
         channels = frame.channels(),
+        background_neutralized = field::Empty,
         background_subtracted = field::Empty,
+        scnr_applied = field::Empty,
         auto_stretched = field::Empty,
         saturation_boosted = field::Empty,
         contrast_applied = field::Empty,
@@ -76,10 +85,28 @@ impl RenderPipeline {
 
         let mut result = PipelineResult {
             stretch_result: None,
+            background_neutralized: false,
             background_subtracted: false,
+            scnr_applied: false,
             saturation_boosted: false,
             contrast_applied: false,
         };
+
+        // Stage 0: Background Neutralization (Pre-subtraction)
+        if self.config.background_subtraction && channels == 3 {
+            let _span = tracing::info_span!("background_neutralization").entered();
+            match compute_white_balance_grid(frame, 16, 25.0) {
+                Ok(multipliers) => {
+                    if let Err(e) = neutralize_background(frame, &multipliers) {
+                        warn!(error = %e, "Background neutralization failed");
+                    } else {
+                        result.background_neutralized = true;
+                        debug!("Background neutralization applied");
+                    }
+                }
+                Err(e) => warn!(error = %e, "Failed to compute grid white balance"),
+            }
+        }
 
         // Stage 1: Background subtraction
         if self.config.background_subtraction {
@@ -91,6 +118,17 @@ impl RenderPipeline {
             } else {
                 result.background_subtracted = true;
                 debug!(algorithm = %self.config.background_config.algorithm, "Background subtraction applied");
+            }
+        }
+
+        // Stage 1.5: SCNR
+        if self.config.scnr && channels == 3 {
+            let _span = tracing::info_span!("scnr").entered();
+            if let Err(e) = apply_scnr(frame, self.config.scnr_amount) {
+                warn!(error = %e, "SCNR failed");
+            } else {
+                result.scnr_applied = true;
+                debug!("SCNR applied");
             }
         }
 
@@ -154,7 +192,9 @@ impl RenderPipeline {
         }
 
         let span = Span::current();
+        span.record("background_neutralized", result.background_neutralized);
         span.record("background_subtracted", result.background_subtracted);
+        span.record("scnr_applied", result.scnr_applied);
         span.record("auto_stretched", result.stretch_result.is_some());
         span.record("saturation_boosted", result.saturation_boosted);
         span.record("contrast_applied", result.contrast_applied);

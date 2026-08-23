@@ -174,6 +174,10 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
 /// Default list of fixture datasets to download.
 pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
     (
+        "250mm-dob-imx533-dumbbell-fits",
+        "https://drive.usercontent.google.com/download?id=1Xl_Ip539vfWyvP-VWvDxZe4y90hzaAWD&export=download",
+    ),
+    (
         "250mm-dob-imx464-orion-png",
         "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download",
     ),
@@ -287,6 +291,7 @@ pub fn ensure_fixtures_sync() {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(ensure_fixtures(Some(&[
+            "250mm-dob-imx533-dumbbell-fits",
             "250mm-dob-imx464-orion-png",
             "130mm-imx464-dumbell-nebulae-png",
             "130mm-imx464-ring-nebulae-png",

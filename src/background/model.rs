@@ -137,6 +137,48 @@ impl BackgroundModel {
         aggressiveness = self.aggressiveness
     ))]
     pub fn subtract_from(&self, frame: &mut Frame) {
+        // Calculate dynamic pedestal
+        let pedestal = {
+            let _span = tracing::info_span!("compute_pedestal").entered();
+            let w = frame.width();
+            let h = frame.height();
+            let c = frame.channels();
+            
+            let crop_w = (w / 4).max(10).min(w);
+            let crop_h = (h / 4).max(10).min(h);
+            let x_start = (w - crop_w) / 2;
+            let y_start = (h - crop_h) / 2;
+            
+            let sample_c = if c > 1 { 1 } else { 0 };
+            let num_pixels = crop_w * crop_h;
+            let max_samples = 4096;
+            let step = (num_pixels / max_samples).max(1);
+            
+            let mut sample = Vec::with_capacity(max_samples.min(num_pixels));
+            let data = frame.data();
+            let mut count = 0;
+            
+            for y in y_start..(y_start + crop_h) {
+                let row_offset = y * w * c;
+                for x in x_start..(x_start + crop_w) {
+                    if count % step == 0 {
+                        sample.push(data[row_offset + x * c + sample_c]);
+                    }
+                    count += 1;
+                }
+            }
+            
+            let median = crate::statistics::fast_median(&mut sample);
+            let mut deviations = Vec::with_capacity(sample.len());
+            for &v in &sample {
+                deviations.push((v - median).abs());
+            }
+            let mad = crate::statistics::fast_median(&mut deviations);
+            let sigma = mad * 1.4826;
+            
+            (3.0 * sigma).max(0.001)
+        };
+
         // Determine actual aggressiveness (auto-detect if -1.0)
         let aggressiveness = if self.aggressiveness < 0.0 {
             let _span = tracing::info_span!("compute_auto_aggressiveness").entered();
@@ -149,9 +191,17 @@ impl BackgroundModel {
         // and subtract only the difference from that reference, scaled by aggressiveness
         let offsets: Vec<f32> = if self.gradient_only {
             let _span = tracing::info_span!("compute_reference_levels").entered();
-            (0..self.channels)
+            let mut raw_offsets: Vec<f32> = (0..self.channels)
                 .map(|c| self.compute_reference_level(c))
-                .collect()
+                .collect();
+            
+            // If RGB, align all channels to the same minimum reference level
+            // This preserves the color neutrality achieved by white balance.
+            if self.channels == 3 {
+                let min_offset = raw_offsets[0].min(raw_offsets[1]).min(raw_offsets[2]);
+                raw_offsets = vec![min_offset; 3];
+            }
+            raw_offsets
         } else {
             vec![0.0; self.channels]
         };
@@ -159,10 +209,10 @@ impl BackgroundModel {
         // Dispatch to the optimal subtraction path
         if let (Some(nodes_x), Some(nodes_y)) = (&self.nodes_x, &self.nodes_y) {
             let _span = tracing::info_span!("delta_stepping_subtraction").entered();
-            self.subtract_delta_stepping(frame, &offsets, aggressiveness, nodes_x, nodes_y);
+            self.subtract_delta_stepping(frame, &offsets, aggressiveness, pedestal, nodes_x, nodes_y);
         } else {
             let _span = tracing::info_span!("weight_based_subtraction").entered();
-            self.subtract_weight_based(frame, &offsets, aggressiveness);
+            self.subtract_weight_based(frame, &offsets, aggressiveness, pedestal);
         }
     }
 
@@ -175,6 +225,7 @@ impl BackgroundModel {
         frame: &mut Frame,
         offsets: &[f32],
         aggressiveness: f32,
+        pedestal: f32,
         nodes_x: &[usize],
         nodes_y: &[usize],
     ) {
@@ -233,7 +284,7 @@ impl BackgroundModel {
                             // since data is borrowed mutably once and partitioned by y.
                             unsafe {
                                 let ptr = (data as *const [f32] as *mut f32).add(pixel_idx);
-                                *ptr = (*ptr - subtraction).max(0.0);
+                                *ptr = (*ptr - subtraction + pedestal).max(0.0);
                             }
                             current_bg += delta_x;
                         }
@@ -249,6 +300,7 @@ impl BackgroundModel {
         frame: &mut Frame,
         offsets: &[f32],
         aggressiveness: f32,
+        pedestal: f32,
     ) {
         let width = frame.width();
         let channels = frame.channels();
@@ -302,7 +354,7 @@ impl BackgroundModel {
 
                             let gradient = bg - offsets[c];
                             let subtraction = gradient * aggressiveness;
-                            row[idx] = (row[idx] - subtraction).max(0.0);
+                            row[idx] = (row[idx] - subtraction + pedestal).max(0.0);
                         }
                     }
                 });

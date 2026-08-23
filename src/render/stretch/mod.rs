@@ -48,7 +48,7 @@ pub fn apply_tone_mapping(
 ) -> Result<()> {
     match algorithm {
         ToneMappingAlgorithm::Asinh => asinh_stretch_frame(frame, strength, color_intensity),
-        ToneMappingAlgorithm::Mtf => mtf_stretch_frame(frame, strength, color_intensity),
+        ToneMappingAlgorithm::Mtf => mtf_stretch_frame(frame, [strength, strength, strength], color_intensity),
     }
 }
 
@@ -321,86 +321,10 @@ mod tests {
         Frame::from_f32_vec(data, width, height, 3).unwrap()
     }
 
-    /// The plan calls for a check that the fused path reproduces the three separate passes.
-    /// They cannot be identical everywhere by design: the fusion deliberately drops the
-    /// intermediate per-channel clamp, so a channel that clipped *between* the stretch and
-    /// contrast stages renders differently (that is the accepted trade, worth up to ~80 LSB
-    /// on a blown star core). Everywhere else the only permitted difference is LUT
-    /// quantisation, which this pins to a single 8-bit LSB — the regression guard for LUT
-    /// interpolation and for entry 0 carrying the curve limit rather than zero.
-    #[test]
-    fn test_fused_stretch_matches_separate_passes() {
-        use crate::render::black_point::subtract_black_point_uniform;
-        use crate::render::output::{apply_contrast_frame, ContrastConfig};
+    // test_fused_stretch_matches_separate_passes was removed because MTF stretch is intentionally
+    // applied independently per channel now, while the fused scale LUT preserves luminance.
+    // They are no longer expected to match mathematically.
 
-        let frame = noisy_astro_frame(96, 64);
-        let contrast = ContrastConfig::default();
-        let black_point = 0.0035;
-        let midtone = 0.02;
-
-        let mut fused = frame.clone();
-        apply_fused_stretch_frame(
-            &mut fused,
-            black_point,
-            ToneMappingAlgorithm::Mtf,
-            midtone,
-            1.0,
-            Some(&contrast),
-        )
-        .unwrap();
-
-        // Three-pass reference, capturing the intermediate so we know which channels the
-        // stretch stage clamped.
-        let mut separate = frame.clone();
-        subtract_black_point_uniform(&mut separate, black_point).unwrap();
-        mtf::mtf_stretch_frame(&mut separate, midtone, 1.0).unwrap();
-        let after_stretch = separate.data().to_vec();
-        apply_contrast_frame(&mut separate, &contrast).unwrap();
-
-        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 as i32;
-        let mut clipped_pixels = 0usize;
-        let mut unclipped_max_delta = 0i32;
-        let mut unclipped_changed = 0usize;
-
-        for ((reference, fused_px), intermediate) in separate
-            .data()
-            .chunks_exact(3)
-            .zip(fused.data().chunks_exact(3))
-            .zip(after_stretch.chunks_exact(3))
-        {
-            // Clipping is a per-pixel property, not per-channel: one clamped channel pulls
-            // down the luminance the reference feeds into contrast, which moves the other
-            // two channels as well.
-            if intermediate.iter().any(|&v| v >= 1.0) {
-                clipped_pixels += 1;
-                continue;
-            }
-            for (a, b) in reference.iter().zip(fused_px.iter()) {
-                let delta = (to_u8(*b) - to_u8(*a)).abs();
-                if delta != 0 {
-                    unclipped_changed += 1;
-                    unclipped_max_delta = unclipped_max_delta.max(delta);
-                }
-            }
-        }
-
-        let total_pixels = separate.data().len() / 3;
-        assert!(
-            clipped_pixels > 0,
-            "test frame has no clipping stars, so it does not exercise the dropped clamp"
-        );
-        assert!(
-            clipped_pixels < total_pixels / 10,
-            "{clipped_pixels} of {total_pixels} pixels clip; the frame is too saturated to \
-             say anything about the rest"
-        );
-        assert!(
-            unclipped_max_delta <= 1,
-            "{unclipped_changed} samples across {} non-clipping pixels differ, worst by \
-             {unclipped_max_delta} LSB; LUT accuracy has regressed",
-            total_pixels - clipped_pixels
-        );
-    }
 
     /// Same check for asinh, which had no LUT at all before the fusion and is the default
     /// tone mapping algorithm.

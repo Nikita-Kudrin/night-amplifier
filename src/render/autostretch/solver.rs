@@ -82,6 +82,7 @@ pub fn solve_stretch_factor_newton(
     if adjusted_median <= 1e-6 {
         return AutoStretchResult {
             stretch_factor: 1.0,
+            midtones: [1.0; 3],
             black_point: 0.0,
             original_median: 0.0,
             adjusted_median,
@@ -93,6 +94,7 @@ pub fn solve_stretch_factor_newton(
     if adjusted_median >= target_output {
         return AutoStretchResult {
             stretch_factor: config.min_stretch,
+            midtones: [config.min_stretch; 3],
             black_point: 0.0,
             original_median: adjusted_median,
             adjusted_median,
@@ -159,6 +161,7 @@ pub fn solve_stretch_factor_newton(
 
     AutoStretchResult {
         stretch_factor: stretch,
+        midtones: [stretch; 3],
         black_point: 0.0,
         original_median: m,
         adjusted_median: m,

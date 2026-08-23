@@ -35,21 +35,46 @@ pub fn compute_auto_stretch_with_algorithm(
     };
 
     let black_point = (mode - adaptive_sigma * mean_sigma).max(0.0);
-    let adjusted_median = mode - black_point;
-
-    let effective_median = if adjusted_median < 0.001 {
-        mode
-    } else {
-        adjusted_median
-    };
-
-    let effective_median = effective_median.max(1e-6);
+    let effective_median = (mode - black_point).max(1e-4);
 
     let target_background = if signal_fraction > 0.4 {
         (config.target_background * 1.3).min(0.20)
     } else {
         config.target_background
     };
+
+    let mut midtones = [0.5, 0.5, 0.5];
+    let mut w = 0.0;
+    let mut eff_r = effective_median;
+    let mut eff_g = effective_median;
+    let mut eff_b = effective_median;
+
+    if stats.channels.len() == 3 {
+        let m_r = stats.channels[0].median;
+        let m_g = stats.channels[1].median;
+        let m_b = stats.channels[2].median;
+
+        let m_avg = (m_r + m_g + m_b) / 3.0;
+        // Only unlink if the background is bright enough to represent a real color cast
+        // (e.g., > 0.005). If it's near zero (e.g. after background subtraction),
+        // calculating divergence on residual noise will force unlinked stretching
+        // and destroy the color balance (often turning the image green).
+        if m_avg > 0.005 {
+            let max_m = m_r.max(m_g).max(m_b);
+            let min_m = m_r.min(m_g).min(m_b);
+            let delta_rel = (max_m - min_m) / m_avg;
+            
+            w = ((delta_rel - 0.05) / (0.15 - 0.05)).clamp(0.0, 1.0);
+            
+            let adj_r = m_r - black_point;
+            let adj_g = m_g - black_point;
+            let adj_b = m_b - black_point;
+            
+            eff_r = adj_r.max(1e-4);
+            eff_g = adj_g.max(1e-4);
+            eff_b = adj_b.max(1e-4);
+        }
+    }
 
     let stretch_factor = match algorithm {
         ToneMappingAlgorithm::Asinh => {
@@ -59,20 +84,27 @@ pub fn compute_auto_stretch_with_algorithm(
             };
             let result =
                 solve_stretch_factor_newton(effective_median, target_background, &adaptive_config);
+            midtones = [result.stretch_factor; 3];
             result.stretch_factor
         }
         ToneMappingAlgorithm::Mtf => {
-            estimate_tone_mapping_strength(algorithm, effective_median, target_background)
+            let m_linked = estimate_tone_mapping_strength(algorithm, effective_median, target_background);
+            let m_r_un = estimate_tone_mapping_strength(algorithm, eff_r, target_background);
+            let m_g_un = estimate_tone_mapping_strength(algorithm, eff_g, target_background);
+            let m_b_un = estimate_tone_mapping_strength(algorithm, eff_b, target_background);
+            
+            midtones[0] = m_linked * (1.0 - w) + m_r_un * w;
+            midtones[1] = m_linked * (1.0 - w) + m_g_un * w;
+            midtones[2] = m_linked * (1.0 - w) + m_b_un * w;
+            
+            m_linked
         }
     };
 
     AutoStretchResult {
         stretch_factor,
-        black_point: if adjusted_median < 0.001 {
-            0.0
-        } else {
-            black_point
-        },
+        midtones,
+        black_point,
         original_median: mode,
         adjusted_median: effective_median,
         iterations: 0,

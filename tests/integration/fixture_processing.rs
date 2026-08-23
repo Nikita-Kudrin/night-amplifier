@@ -308,56 +308,67 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
     };
     println!("        Stack computed");
 
-    // Background subtraction
+    // Use RenderPipeline to properly apply background neutralization, subtraction, and stretch
     println!(
-        "  [{}/{}] Subtracting background...",
+        "  [{}/{}] Running render pipeline...",
         4 + step_offset,
         total_steps
     );
-    if let Err(e) = subtract_background(&mut stacked) {
-        println!("        Warning: Background subtraction failed: {}", e);
-    } else {
-        println!("        Background subtracted");
-    }
-
-    // Statistics
-    println!(
-        "  [{}/{}] Computing statistics and auto-stretch...",
-        5 + step_offset,
-        total_steps
-    );
-    let stats = compute_image_stats(&stacked);
-    if let Ok(s) = &stats {
-        println!("        Mean median: {:.6}", s.mean_median());
-    }
-
-    let stretch_result = auto_stretch_default(&mut stacked);
-    match &stretch_result {
+    let render_config = night_amplifier::render::pipeline::RenderPipelineConfig::deep_sky();
+    let render_pipeline = night_amplifier::render::pipeline::RenderPipeline::new(render_config);
+    match render_pipeline.process(&mut stacked) {
         Ok(r) => {
-            println!(
-                "        Stretch factor: {:.2}, Black point: {:.6}, Converged: {}",
-                r.stretch_factor, r.black_point, r.converged
-            );
+            if r.background_neutralized {
+                println!("        Background neutralized (grid-based)");
+            }
+            if r.background_subtracted {
+                println!("        Background subtracted");
+            }
+            if r.scnr_applied {
+                println!("        SCNR applied");
+            }
+            if let Some(stretch) = r.stretch_result {
+                println!(
+                    "        Stretch factor: {:.2}, Black point: {:.6}, Converged: {}",
+                    stretch.stretch_factor, stretch.black_point, stretch.converged
+                );
 
-            // VALIDATION: Check stretch factor bounds
-            if r.stretch_factor < MIN_STRETCH_FACTOR {
-                println!(
-                    "        VALIDATION WARNING: Stretch factor ({:.2}) below minimum ({:.2})",
-                    r.stretch_factor, MIN_STRETCH_FACTOR
-                );
+                // VALIDATION: Check stretch factor bounds
+                if stretch.stretch_factor < MIN_STRETCH_FACTOR {
+                    println!(
+                        "        VALIDATION WARNING: Stretch factor ({:.2}) below minimum ({:.2})",
+                        stretch.stretch_factor, MIN_STRETCH_FACTOR
+                    );
+                }
+                if stretch.stretch_factor > MAX_STRETCH_FACTOR {
+                    println!(
+                        "        VALIDATION WARNING: Stretch factor ({:.2}) exceeds maximum ({:.2})",
+                        stretch.stretch_factor, MAX_STRETCH_FACTOR
+                    );
+                }
+                if !stretch.converged {
+                    println!("        VALIDATION WARNING: Auto-stretch did not converge");
+                }
             }
-            if r.stretch_factor > MAX_STRETCH_FACTOR {
+            
+            // VALIDATION: Assert that background is neutral
+            if stacked.channels() == 3 {
+                let stats = compute_image_stats(&stacked).expect("Failed to compute stats");
                 println!(
-                    "        VALIDATION WARNING: Stretch factor ({:.2}) exceeds maximum ({:.2})",
-                    r.stretch_factor, MAX_STRETCH_FACTOR
+                    "        Channel Medians: R={:.2}, G={:.2}, B={:.2}",
+                    stats.channels[0].median * 255.0, stats.channels[1].median * 255.0, stats.channels[2].median * 255.0
                 );
-            }
-            if !r.converged {
-                println!("        VALIDATION WARNING: Auto-stretch did not converge");
+                let diff_rg = (stats.channels[0].median - stats.channels[1].median).abs() * 255.0;
+                let diff_gb = (stats.channels[1].median - stats.channels[2].median).abs() * 255.0;
+                let diff_rb = (stats.channels[0].median - stats.channels[2].median).abs() * 255.0;
+                
+                assert!(diff_rg < 3.0, "VALIDATION FAILED: Red and Green medians differ significantly: R={:.2}, G={:.2}", stats.channels[0].median * 255.0, stats.channels[1].median * 255.0);
+                assert!(diff_gb < 3.0, "VALIDATION FAILED: Green and Blue medians differ significantly: G={:.2}, B={:.2}", stats.channels[1].median * 255.0, stats.channels[2].median * 255.0);
+                assert!(diff_rb < 3.0, "VALIDATION FAILED: Red and Blue medians differ significantly: R={:.2}, B={:.2}", stats.channels[0].median * 255.0, stats.channels[2].median * 255.0);
             }
         }
         Err(e) => {
-            println!("        VALIDATION FAILED: Auto-stretch failed: {}", e);
+            println!("        VALIDATION FAILED: Render pipeline failed: {}", e);
         }
     }
 

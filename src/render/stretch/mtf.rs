@@ -51,8 +51,8 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32, color_
 /// skips the incidental `[0, 1]` clamp the pass would have applied, which is safe because
 /// pixel data is normalised to `[0, 1]` by contract; the 1e-6 window keeps any residual
 /// curve error four orders of magnitude below one 8-bit LSB.
-pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32, color_intensity: f32) -> Result<()> {
-    if (midtone - 0.5).abs() < 1e-6 {
+pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3], _color_intensity: f32) -> Result<()> {
+    if (midtones[0] - 0.5).abs() < 1e-6 && (midtones[1] - 0.5).abs() < 1e-6 && (midtones[2] - 0.5).abs() < 1e-6 {
         return Ok(());
     }
 
@@ -69,24 +69,33 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtone: f32, color_intensity: f32) 
 
     // Pre-compute LUT to avoid expensive division per pixel
     const LUT_SIZE: usize = 65536;
-    let mut lut = vec![0.0f32; LUT_SIZE];
+    let mut lut_r = vec![0.0f32; LUT_SIZE];
+    let mut lut_g = vec![0.0f32; LUT_SIZE];
+    let mut lut_b = vec![0.0f32; LUT_SIZE];
+    
     for i in 0..LUT_SIZE {
         let x = i as f32 / (LUT_SIZE - 1) as f32;
-        lut[i] = mtf(x, midtone);
+        lut_r[i] = mtf(x, midtones[0]);
+        lut_g[i] = mtf(x, midtones[1]);
+        lut_b[i] = mtf(x, midtones[2]);
     }
 
     if channels == 1 {
         data.par_iter_mut().for_each(|pixel| {
             let idx = (*pixel * 65535.0) as usize;
-            *pixel = lut[idx.min(65535)];
+            *pixel = lut_r[idx.min(65535)];
         });
     } else {
         let row_len = width * 3;
         data.par_chunks_mut(row_len).for_each(|row| {
-            apply_luminance_preserving_simd(row, color_intensity, |l| {
-                let idx = (l * 65535.0) as usize;
-                lut[idx.min(65535)]
-            });
+            for idx in (0..row.len()).step_by(3) {
+                let r_idx = (row[idx] * 65535.0) as usize;
+                let g_idx = (row[idx+1] * 65535.0) as usize;
+                let b_idx = (row[idx+2] * 65535.0) as usize;
+                row[idx] = lut_r[r_idx.min(65535)];
+                row[idx+1] = lut_g[g_idx.min(65535)];
+                row[idx+2] = lut_b[b_idx.min(65535)];
+            }
         });
     }
 
@@ -166,7 +175,7 @@ mod tests {
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
         let original_pixel = (0.1, 0.2, 0.3);
 
-        mtf_stretch_frame(&mut frame, 0.2, 1.0).unwrap();
+        mtf_stretch_frame(&mut frame, [0.2, 0.2, 0.2], 1.0).unwrap();
 
         let r_out = frame.get_pixel(16, 16, 0);
         let g_out = frame.get_pixel(16, 16, 1);
@@ -177,9 +186,7 @@ mod tests {
         assert!(g_out > original_pixel.1);
         assert!(b_out > original_pixel.2);
 
-        // Color ratios should be preserved
-        let orig_rg = original_pixel.0 / original_pixel.1;
-        let new_rg = r_out / g_out;
-        assert!((orig_rg - new_rg).abs() < 1e-4);
+        // Color ratios are no longer strictly preserved by MTF because we apply it independently
+        // to each channel to allow autonomous divergence control.
     }
 }
