@@ -3,10 +3,15 @@ source: tests/integration/stacking_tests.rs
 expression: stretch_result
 ---
 AutoStretchResult {
-    stretch_factor: 93.056435,
-    black_point: 0.0,
-    original_median: 0.005860806,
-    adjusted_median: 0.005860806,
+    stretch_factor: 4336.6367,
+    midtones: [
+        4336.6367,
+        4336.6367,
+        4336.6367,
+    ],
+    black_point: 0.006599743,
+    original_median: 0.006837607,
+    adjusted_median: 0.00023786398,
     iterations: 0,
     converged: true,
 }

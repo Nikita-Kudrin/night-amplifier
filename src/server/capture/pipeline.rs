@@ -269,11 +269,32 @@ pub fn process_preview_frame(
 
     let mut pipeline_config = get_render_pipeline_config(settings, false);
 
+    // Stage 0: Background Neutralization (Pre-subtraction)
+    if pipeline_config.background_subtraction && frame.channels() == 3 {
+        let _span0 = tracing::info_span!("background_neutralization").entered();
+        match crate::render::compute_white_balance_grid(frame, 16, 25.0) {
+            Ok(multipliers) => {
+                if let Err(e) = crate::render::neutralize_background(frame, &multipliers) {
+                    warn!(error = %e, "Background neutralization failed");
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to compute grid white balance"),
+        }
+    }
+
     // Stage 1: Background subtraction (modifies linear data)
     if pipeline_config.background_subtraction {
-        let _span2 = tracing::info_span!("background_subtraction").entered();
+        let _span1 = tracing::info_span!("background_subtraction").entered();
         if let Err(e) = subtract_background_with_config(frame, pipeline_config.background_config.clone()) {
             warn!(error = %e, "Background subtraction failed");
+        }
+    }
+
+    // Stage 1.5: SCNR
+    if pipeline_config.scnr && frame.channels() == 3 {
+        let _span1_5 = tracing::info_span!("scnr").entered();
+        if let Err(e) = crate::render::scnr::apply_scnr(frame, pipeline_config.scnr_amount) {
+            warn!(error = %e, "SCNR failed");
         }
     }
 
@@ -344,6 +365,11 @@ pub fn get_render_pipeline_config(
     let mut config = RenderPipelineConfig::new()
         .with_background_config(get_background_config(settings))
         .with_background_subtraction(settings.background_subtraction);
+
+    if settings.stacking_type == crate::stacking::StackingType::DeepSky || 
+       settings.stacking_type == crate::stacking::StackingType::Comet {
+        config = config.with_scnr(true).with_scnr_amount(1.0);
+    }
 
     if !for_fits {
         let use_aggressive_stretch = settings.stacking_type.uses_aggressive_stretch();

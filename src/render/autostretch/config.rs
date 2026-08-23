@@ -35,7 +35,7 @@ impl Default for AutoStretchConfig {
             target_background: 0.10,
             black_point_sigma: 2.8,
             min_stretch: 0.1,
-            max_stretch: 100.0,
+            max_stretch: 10000.0,
             tolerance: 0.001,
             max_iterations: 50,
             per_channel_black_point: false,
@@ -108,7 +108,7 @@ impl AutoStretchConfig {
             target_background: 0.08,
             black_point_sigma: 3.0,
             min_stretch: 0.1,
-            max_stretch: 100.0,
+            max_stretch: 10000.0,
             tolerance: 0.001,
             max_iterations: 50,
             per_channel_black_point: false,
@@ -134,7 +134,7 @@ impl AutoStretchConfig {
                     black_point_sigma: 1.5,
                     tone_mapping: ToneMappingAlgorithm::Asinh,
                     min_stretch: 1.0,
-                    max_stretch: 20.0,
+                    max_stretch: 10000.0,
                     ..Default::default()
                 },
                 StretchAggressiveness::Medium => Self {
@@ -168,7 +168,7 @@ mod tests {
         assert!((config.target_background - 0.10).abs() < 1e-6);
         assert!((config.black_point_sigma - 2.8).abs() < 1e-6);
         assert!((config.min_stretch - 0.1).abs() < 1e-6);
-        assert!((config.max_stretch - 100.0).abs() < 1e-6);
+        assert!((config.max_stretch - 10000.0).abs() < 1e-6);
         assert!((config.tolerance - 0.001).abs() < 1e-6);
         assert_eq!(config.max_iterations, 50);
         assert!(!config.per_channel_black_point);

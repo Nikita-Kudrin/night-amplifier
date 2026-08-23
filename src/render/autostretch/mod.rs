@@ -20,7 +20,7 @@ pub use stats::{estimate_signal_fraction, AutoStretchResult};
 use super::black_point::{
     calculate_black_points, subtract_black_point, subtract_black_point_uniform, BlackPointConfig,
 };
-use super::stretch::apply_tone_mapping;
+use super::stretch::{apply_tone_mapping, ToneMappingAlgorithm};
 
 /// Automatically stretch a frame to target background level
 #[tracing::instrument(skip(frame, contrast_config))]
@@ -51,29 +51,52 @@ pub fn auto_stretch_frame(
         };
         subtract_black_point(frame, &black_points)?;
 
-        let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
-        crate::render::stretch::apply_fused_stretch_frame(
-            frame,
-            0.0,
-            config.tone_mapping,
-            result.stretch_factor,
-            config.color_intensity,
-            contrast_config,
-        )?;
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            let _span = tracing::info_span!("mtf_stretch_frame").entered();
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+            if let Some(c_cfg) = contrast_config {
+                let _span = tracing::info_span!("apply_contrast_frame").entered();
+                crate::render::output::apply_contrast_frame(frame, c_cfg)?;
+            }
+        } else {
+            let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+            crate::render::stretch::apply_fused_stretch_frame(
+                frame,
+                0.0,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+                contrast_config,
+            )?;
+        }
     } else if channels == 3 {
-        let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
-        crate::render::stretch::apply_fused_stretch_frame(
-            frame,
-            result.black_point,
-            config.tone_mapping,
-            result.stretch_factor,
-            config.color_intensity,
-            contrast_config,
-        )?;
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            subtract_black_point_uniform(frame, result.black_point)?;
+            let _span = tracing::info_span!("mtf_stretch_frame").entered();
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+            if let Some(c_cfg) = contrast_config {
+                let _span = tracing::info_span!("apply_contrast_frame").entered();
+                crate::render::output::apply_contrast_frame(frame, c_cfg)?;
+            }
+        } else {
+            let _span = tracing::info_span!("apply_fused_stretch_frame").entered();
+            crate::render::stretch::apply_fused_stretch_frame(
+                frame,
+                result.black_point,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+                contrast_config,
+            )?;
+        }
     } else {
         subtract_black_point_uniform(frame, result.black_point)?;
         let _span = tracing::info_span!("apply_tone_mapping").entered();
-        apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor, config.color_intensity)?;
+        if config.tone_mapping == ToneMappingAlgorithm::Mtf {
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+        } else {
+            apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor, config.color_intensity)?;
+        }
     }
 
     Ok(result)
