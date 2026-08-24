@@ -3,6 +3,7 @@ import {ref, inject, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock} from './ui'
+import {useScrollProtect} from '../composables/useScrollProtect.js'
 import {
   EXPOSURE_PRESETS,
   GAIN_LIMITS,
@@ -38,6 +39,8 @@ const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
 const wandererMode = ref(DEFAULT_SETTINGS.wanderer_mode)
+
+const {blockIfScrolling} = useScrollProtect()
 
 const stackingMode = computed(() => {
   if (wandererMode.value) return 'wanderer'
@@ -299,14 +302,24 @@ const HELP = HELP_TEXTS
         </label>
         <div class="slider-group">
           <input
-              v-model.number="gain"
+              :value="gain"
               type="range"
               :min="GAIN_LIMITS.min"
               :max="GAIN_LIMITS.max"
               step="1"
               class="slider"
               :disabled="showCometLock"
-              @change="applyGain"
+              @input="(e) => {
+                if (!blockIfScrolling(e, gain)) {
+                  gain = Number(e.target.value)
+                }
+              }"
+              @change="(e) => {
+                if (!blockIfScrolling(e, gain)) {
+                  gain = Number(e.target.value)
+                  applyGain()
+                }
+              }"
           />
           <input
               v-model.number="gain"

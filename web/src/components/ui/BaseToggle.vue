@@ -1,7 +1,7 @@
 <script setup>
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-defineProps({
+const props = defineProps({
   modelValue: {
     type: Boolean,
     default: false
@@ -26,6 +26,15 @@ defineProps({
 })
 
 const emit = defineEmits(['update:modelValue'])
+
+import { useScrollProtect } from '../../composables/useScrollProtect.js'
+
+const { blockIfScrolling } = useScrollProtect()
+
+function handleChange(event) {
+  if (blockIfScrolling(event, props.modelValue)) return
+  emit('update:modelValue', event.target.checked)
+}
 </script>
 
 <template>
@@ -35,7 +44,7 @@ const emit = defineEmits(['update:modelValue'])
         :checked="modelValue"
         :disabled="disabled"
         class="toggle"
-        @change="emit('update:modelValue', $event.target.checked)"
+        @change="handleChange"
     />
     <span v-if="label" class="toggle-text">
       {{ label }}

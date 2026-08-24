@@ -303,6 +303,19 @@ input[type="number"]::-webkit-inner-spin-button {
     }
 }
 
+/* Touch handling for mobile scrolling */
+.btn,
+.btn-icon,
+.input,
+.select,
+.slider,
+.toggle,
+.collapse-toggle,
+input[type="number"],
+input[type="checkbox"] {
+    touch-action: pan-y;
+}
+
 /* Safe area insets for notched devices */
 @supports (padding: max(0px)) {
     body {

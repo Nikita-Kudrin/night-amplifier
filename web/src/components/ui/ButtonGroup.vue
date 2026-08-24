@@ -15,6 +15,15 @@ defineProps({
 })
 
 const emit = defineEmits(['update:modelValue'])
+
+import { useScrollProtect } from '../../composables/useScrollProtect.js'
+
+const { blockIfScrolling } = useScrollProtect()
+
+function handleClick(event, value) {
+  if (blockIfScrolling(event)) return
+  emit('update:modelValue', value)
+}
 </script>
 
 <template>
@@ -25,7 +34,7 @@ const emit = defineEmits(['update:modelValue'])
         class="btn btn-option"
         :class="{ active: modelValue === option.value }"
         :disabled="disabled"
-        @click="emit('update:modelValue', option.value)"
+        @click="handleClick($event, option.value)"
     >
       {{ option.label }}
     </button>
