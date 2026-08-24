@@ -1,7 +1,7 @@
 <script setup>
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-defineProps({
+const props = defineProps({
   modelValue: {
     type: Number,
     required: true,
@@ -46,12 +46,18 @@ defineProps({
 
 const emit = defineEmits(['update:modelValue', 'change'])
 
+import { useScrollProtect } from '../../composables/useScrollProtect.js'
+
+const { blockIfScrolling } = useScrollProtect()
+
 function handleInput(event) {
+  if (blockIfScrolling(event, props.modelValue)) return
   const value = Number(event.target.value)
   emit('update:modelValue', value)
 }
 
 function handleChange(event) {
+  if (blockIfScrolling(event, props.modelValue)) return
   const value = Number(event.target.value)
   emit('change', value)
 }
