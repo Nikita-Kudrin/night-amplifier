@@ -140,39 +140,177 @@ watch(isBinoview, () => {
   }, 10)
 })
 
+let initialDist = 0
+let initialScale = 1
+let initialCx = 0
+let initialCy = 0
+let initialPanX = 0
+let initialPanY = 0
+
+const isZoomAllowed = computed(() => routePath === '/eyepiece')
+const zoomScale = ref(1)
+const panX = ref(0)
+const panY = ref(0)
+const isPinching = ref(false)
+
+const zoomStyle = computed(() => {
+  if (zoomScale.value === 1) return {}
+  return {
+    transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoomScale.value})`,
+    transformOrigin: '0 0',
+  }
+})
+
+function clampPan(x, y, scale) {
+  if (scale <= 1) return { x: 0, y: 0 }
+  const W = window.innerWidth
+  const H = window.innerHeight
+  const minX = W * (1 - scale)
+  const minY = H * (1 - scale)
+  return {
+    x: Math.min(0, Math.max(minX, x)),
+    y: Math.min(0, Math.max(minY, y))
+  }
+}
+
+function resetZoom() {
+  zoomScale.value = 1
+  panX.value = 0
+  panY.value = 0
+}
+
+function handleWheel(e) {
+  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
+  
+  const zoomSensitivity = 0.001
+  const delta = -e.deltaY * zoomSensitivity
+  
+  const oldScale = zoomScale.value
+  let newScale = oldScale + delta
+  newScale = Math.min(2, Math.max(1, newScale))
+  
+  if (newScale === oldScale) return
+
+  const cx = e.clientX
+  const cy = e.clientY
+  
+  let newX = cx - (cx - panX.value) * (newScale / oldScale)
+  let newY = cy - (cy - panY.value) * (newScale / oldScale)
+  
+  const clamped = clampPan(newX, newY, newScale)
+  panX.value = clamped.x
+  panY.value = clamped.y
+  zoomScale.value = newScale
+}
+
+function getDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX
+  const dy = touches[0].clientY - touches[1].clientY
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+function getCenter(touches) {
+  if (touches.length === 1) {
+    return { x: touches[0].clientX, y: touches[0].clientY }
+  }
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2
+  }
+}
+
+function handleTouchStart(e) {
+  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
+  
+  if (e.touches.length === 2) {
+    isPinching.value = true
+    initialDist = getDist(e.touches)
+    initialScale = zoomScale.value
+    const center = getCenter(e.touches)
+    initialCx = center.x
+    initialCy = center.y
+    initialPanX = panX.value
+    initialPanY = panY.value
+  } else if (e.touches.length === 1 && zoomScale.value > 1) {
+    const center = getCenter(e.touches)
+    initialCx = center.x
+    initialCy = center.y
+    initialPanX = panX.value
+    initialPanY = panY.value
+  }
+}
+
+function handleTouchMove(e) {
+  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
+  
+  if (e.touches.length === 2 && isPinching.value) {
+    const currentDist = getDist(e.touches)
+    const scaleRatio = currentDist / initialDist
+    let newScale = initialScale * scaleRatio
+    newScale = Math.min(2, Math.max(1, newScale))
+    
+    const currentCenter = getCenter(e.touches)
+    let newX = currentCenter.x - (initialCx - initialPanX) * (newScale / initialScale)
+    let newY = currentCenter.y - (initialCy - initialPanY) * (newScale / initialScale)
+    
+    const clamped = clampPan(newX, newY, newScale)
+    panX.value = clamped.x
+    panY.value = clamped.y
+    zoomScale.value = newScale
+  } else if (e.touches.length === 1 && zoomScale.value > 1 && !isPinching.value) {
+    const currentCenter = getCenter(e.touches)
+    const dx = currentCenter.x - initialCx
+    const dy = currentCenter.y - initialCy
+    
+    let newX = initialPanX + dx
+    let newY = initialPanY + dy
+    
+    const clamped = clampPan(newX, newY, zoomScale.value)
+    panX.value = clamped.x
+    panY.value = clamped.y
+  }
+}
+
+function handleTouchEnd(e) {
+  if (e.touches.length < 2) {
+    isPinching.value = false
+  }
+  if (e.touches.length === 1 && zoomScale.value > 1) {
+    const center = getCenter(e.touches)
+    initialCx = center.x
+    initialCy = center.y
+    initialPanX = panX.value
+    initialPanY = panY.value
+  }
+}
+
 let resizeObserver = null
 
 function updateBounds() {
   if (isBinoview.value) {
     if (leftEyeRef.value && canvasLeftRef.value) {
-      const containerRect = leftEyeRef.value.getBoundingClientRect()
-      const canvasRect = canvasLeftRef.value.getBoundingClientRect()
       leftEyeBounds.value = {
-        left: canvasRect.left - containerRect.left,
-        top: canvasRect.top - containerRect.top,
-        width: canvasRect.width,
-        height: canvasRect.height,
+        left: canvasLeftRef.value.offsetLeft,
+        top: canvasLeftRef.value.offsetTop,
+        width: canvasLeftRef.value.offsetWidth,
+        height: canvasLeftRef.value.offsetHeight,
       }
     }
     if (rightEyeRef.value && canvasRightRef.value) {
-      const containerRect = rightEyeRef.value.getBoundingClientRect()
-      const canvasRect = canvasRightRef.value.getBoundingClientRect()
       rightEyeBounds.value = {
-        left: canvasRect.left - containerRect.left,
-        top: canvasRect.top - containerRect.top,
-        width: canvasRect.width,
-        height: canvasRect.height,
+        left: canvasRightRef.value.offsetLeft,
+        top: canvasRightRef.value.offsetTop,
+        width: canvasRightRef.value.offsetWidth,
+        height: canvasRightRef.value.offsetHeight,
       }
     }
   } else {
     if (singleEyeRef.value && canvasSingleRef.value) {
-      const containerRect = singleEyeRef.value.getBoundingClientRect()
-      const canvasRect = canvasSingleRef.value.getBoundingClientRect()
       singleViewBounds.value = {
-        left: canvasRect.left - containerRect.left,
-        top: canvasRect.top - containerRect.top,
-        width: canvasRect.width,
-        height: canvasRect.height,
+        left: canvasSingleRef.value.offsetLeft,
+        top: canvasSingleRef.value.offsetTop,
+        width: canvasSingleRef.value.offsetWidth,
+        height: canvasSingleRef.value.offsetHeight,
       }
     }
   }
@@ -201,7 +339,15 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="eyepiece-view">
+  <div 
+    class="eyepiece-view" 
+    :class="{ 'zoom-active': isZoomAllowed && zoomScale > 1 }"
+    @wheel="handleWheel" 
+    @touchstart="handleTouchStart" 
+    @touchmove="handleTouchMove" 
+    @touchend="handleTouchEnd" 
+    @touchcancel="handleTouchEnd"
+  >
     <div v-show="!effectiveHasFrame" class="placeholder">
       <p v-if="!connected">Connecting to stream...</p>
       <template v-else>
@@ -210,61 +356,70 @@ onUnmounted(() => {
       </template>
     </div>
 
-    <div v-show="effectiveHasFrame && isBinoview" class="binoview-container">
-      <div ref="leftEyeRef" class="eye left-eye">
-        <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-        <GuideArrow
-          v-if="showGuideArrow"
-          :angle-deg="pushDirection.angleDeg"
-          :distance-deg="pushDirection.distanceDeg"
-          :is-close="pushDirection.isClose"
-          :direction-hint="pushDirection.directionHint"
-          :image-left="leftEyeBounds.left"
-          :image-top="leftEyeBounds.top"
-          :image-width="leftEyeBounds.width"
-          :image-height="leftEyeBounds.height"
-          :fov-deg="pushDirection.fovDeg || 0"
-          :is-circular="isCircularView"
-        />
+    <div v-show="effectiveHasFrame" class="zoom-wrapper" :style="zoomStyle">
+      <div v-show="isBinoview" class="binoview-container">
+        <div ref="leftEyeRef" class="eye left-eye">
+          <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+          <GuideArrow
+            v-if="showGuideArrow"
+            :angle-deg="pushDirection.angleDeg"
+            :distance-deg="pushDirection.distanceDeg"
+            :is-close="pushDirection.isClose"
+            :direction-hint="pushDirection.directionHint"
+            :image-left="leftEyeBounds.left"
+            :image-top="leftEyeBounds.top"
+            :image-width="leftEyeBounds.width"
+            :image-height="leftEyeBounds.height"
+            :fov-deg="pushDirection.fovDeg || 0"
+            :is-circular="isCircularView"
+          />
+        </div>
+        <div ref="rightEyeRef" class="eye right-eye">
+          <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+          <GuideArrow
+            v-if="showGuideArrow"
+            :angle-deg="pushDirection.angleDeg"
+            :distance-deg="pushDirection.distanceDeg"
+            :is-close="pushDirection.isClose"
+            :direction-hint="pushDirection.directionHint"
+            :image-left="rightEyeBounds.left"
+            :image-top="rightEyeBounds.top"
+            :image-width="rightEyeBounds.width"
+            :image-height="rightEyeBounds.height"
+            :fov-deg="pushDirection.fovDeg || 0"
+            :is-circular="isCircularView"
+          />
+        </div>
       </div>
-      <div ref="rightEyeRef" class="eye right-eye">
-        <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-        <GuideArrow
-          v-if="showGuideArrow"
-          :angle-deg="pushDirection.angleDeg"
-          :distance-deg="pushDirection.distanceDeg"
-          :is-close="pushDirection.isClose"
-          :direction-hint="pushDirection.directionHint"
-          :image-left="rightEyeBounds.left"
-          :image-top="rightEyeBounds.top"
-          :image-width="rightEyeBounds.width"
-          :image-height="rightEyeBounds.height"
-          :fov-deg="pushDirection.fovDeg || 0"
-          :is-circular="isCircularView"
-        />
-      </div>
-    </div>
 
-    <div v-show="effectiveHasFrame && !isBinoview" ref="singleEyeRef" class="single-view">
-      <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-      <GuideArrow
-        v-if="showGuideArrow"
-        :angle-deg="pushDirection.angleDeg"
-        :distance-deg="pushDirection.distanceDeg"
-        :is-close="pushDirection.isClose"
-        :direction-hint="pushDirection.directionHint"
-        :image-left="singleViewBounds.left"
-        :image-top="singleViewBounds.top"
-        :image-width="singleViewBounds.width"
-        :image-height="singleViewBounds.height"
-        :fov-deg="pushDirection.fovDeg || 0"
-        :is-circular="isCircularView"
-      />
+      <div v-show="!isBinoview" ref="singleEyeRef" class="single-view">
+        <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+        <GuideArrow
+          v-if="showGuideArrow"
+          :angle-deg="pushDirection.angleDeg"
+          :distance-deg="pushDirection.distanceDeg"
+          :is-close="pushDirection.isClose"
+          :direction-hint="pushDirection.directionHint"
+          :image-left="singleViewBounds.left"
+          :image-top="singleViewBounds.top"
+          :image-width="singleViewBounds.width"
+          :image-height="singleViewBounds.height"
+          :fov-deg="pushDirection.fovDeg || 0"
+          :is-circular="isCircularView"
+        />
+      </div>
     </div>
 
     <div v-if="capabilities?.debug_logging && effectiveHasFrame" class="debug-overlay">
       {{ backendLabel }}
     </div>
+
+    <button v-if="isZoomAllowed && zoomScale > 1" class="fit-all-btn" @click="resetZoom">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7M21 21v-6h-6M3 3v6h6M21 21l-7-7M3 3l7 7" />
+      </svg>
+      Fit all
+    </button>
   </div>
 </template>
 
@@ -277,6 +432,43 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+.eyepiece-view.zoom-active {
+  touch-action: none;
+}
+
+.zoom-wrapper {
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.fit-all-btn {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 10;
+  background: rgba(30, 30, 30, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.fit-all-btn:hover {
+  background: rgba(50, 50, 50, 0.9);
+}
+
+.fit-all-btn:active {
+  background: rgba(70, 70, 70, 0.9);
 }
 
 .placeholder {
