@@ -89,7 +89,7 @@ fn convert_png_data(
 fn strip_alpha_8(buf: &[u8]) -> Vec<u8> {
     let pixel_count = buf.len() / 4;
     let mut rgb = Vec::with_capacity(pixel_count * 3);
-    for chunk in buf.chunks_exact(4) {
+    for chunk in buf.as_chunks::<4>().0 {
         rgb.extend_from_slice(&chunk[..3]);
     }
     rgb
@@ -99,7 +99,7 @@ fn strip_alpha_8(buf: &[u8]) -> Vec<u8> {
 fn strip_alpha_16(buf: &[u8]) -> Vec<u8> {
     let pixel_count = buf.len() / 8; // 4 channels × 2 bytes
     let mut rgb = Vec::with_capacity(pixel_count * 6); // 3 channels × 2 bytes
-    for chunk in buf.chunks_exact(8) {
+    for chunk in buf.as_chunks::<8>().0 {
         rgb.extend_from_slice(&chunk[..6]); // R(2) + G(2) + B(2), skip A(2)
     }
     rgb
@@ -109,7 +109,7 @@ fn strip_alpha_16(buf: &[u8]) -> Vec<u8> {
 fn strip_alpha_grayscale_8(buf: &[u8]) -> Vec<u8> {
     let pixel_count = buf.len() / 2;
     let mut gray = Vec::with_capacity(pixel_count);
-    for chunk in buf.chunks_exact(2) {
+    for chunk in buf.as_chunks::<2>().0 {
         gray.push(chunk[0]);
     }
     gray
@@ -119,7 +119,7 @@ fn strip_alpha_grayscale_8(buf: &[u8]) -> Vec<u8> {
 fn strip_alpha_grayscale_16(buf: &[u8]) -> Vec<u8> {
     let pixel_count = buf.len() / 4; // 2 channels × 2 bytes
     let mut gray = Vec::with_capacity(pixel_count * 2);
-    for chunk in buf.chunks_exact(4) {
+    for chunk in buf.as_chunks::<4>().0 {
         gray.extend_from_slice(&chunk[..2]); // Gray(2), skip A(2)
     }
     gray

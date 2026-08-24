@@ -151,9 +151,15 @@ mod tests {
             height: 10,
             format: crate::camera::ImageFormat::Raw16,
         });
-        
+
         for i in 0..5 {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, FitsMetadata::new(), crate::camera::SensorType::Mono, None);
+            let _ = handle.queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                i,
+                FitsMetadata::new(),
+                crate::camera::SensorType::Mono,
+                None,
+            );
         }
 
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -184,7 +190,13 @@ mod tests {
             format: crate::camera::ImageFormat::Raw16,
         });
         for i in 0..(QUEUE_WARNING_THRESHOLD + 2) {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i as u64, FitsMetadata::new(), crate::camera::SensorType::Mono, None);
+            let _ = handle.queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                i as u64,
+                FitsMetadata::new(),
+                crate::camera::SensorType::Mono,
+                None,
+            );
         }
 
         assert!(handle.has_queue_warning());
@@ -217,7 +229,13 @@ mod tests {
         metadata.camera = Some("Test Camera".to_string());
 
         for i in 0..5 {
-            let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone(), crate::camera::SensorType::Mono, None);
+            let _ = handle.queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                i,
+                metadata.clone(),
+                crate::camera::SensorType::Mono,
+                None,
+            );
         }
 
         // Give it some time to process

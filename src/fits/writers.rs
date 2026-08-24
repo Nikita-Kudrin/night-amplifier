@@ -158,9 +158,9 @@ pub(crate) fn write_fits_u16_primary(
     }
 
     header.extend_from_slice(b"END");
-    header.extend(std::iter::repeat(b' ').take(80 - 3));
+    header.extend(std::iter::repeat_n(b' ', 80 - 3));
 
-    let header_blocks = (header.len() + 2879) / 2880;
+    let header_blocks = header.len().div_ceil(2880);
     header.resize(header_blocks * 2880, b' ');
 
     let mut data_bytes = Vec::with_capacity(data.len() * 2);
@@ -169,7 +169,7 @@ pub(crate) fn write_fits_u16_primary(
         data_bytes.extend_from_slice(&signed.to_be_bytes());
     }
 
-    let data_blocks = (data_bytes.len() + 2879) / 2880;
+    let data_blocks = data_bytes.len().div_ceil(2880);
     data_bytes.resize(data_blocks * 2880, 0);
 
     let mut file = std::fs::File::create(path).map_err(|e| StackError::ArithmeticError {
@@ -196,17 +196,26 @@ pub(crate) fn write_fits_raw(
     metadata: Option<&crate::fits::FitsMetadata>,
 ) -> crate::error::Result<()> {
     use crate::camera::ImageFormat;
-    
+
     // Build FITS header
     let mut header = Vec::new();
 
     write_fits_keyword(&mut header, "SIMPLE", "T", "file conforms to FITS standard");
-    
+
     let is_16bit = frame.format == ImageFormat::Raw16;
     let bitpix = if is_16bit { "16" } else { "8" };
-    write_fits_keyword(&mut header, "BITPIX", bitpix, "number of bits per data pixel");
+    write_fits_keyword(
+        &mut header,
+        "BITPIX",
+        bitpix,
+        "number of bits per data pixel",
+    );
 
-    let channels = if frame.format == ImageFormat::Rgb24 { 3 } else { 1 };
+    let channels = if frame.format == ImageFormat::Rgb24 {
+        3
+    } else {
+        1
+    };
     let naxis = if channels == 1 { 2 } else { 3 };
     write_fits_keyword(
         &mut header,
@@ -251,14 +260,14 @@ pub(crate) fn write_fits_raw(
     }
 
     header.extend_from_slice(b"END");
-    header.extend(std::iter::repeat(b' ').take(80 - 3));
+    header.extend(std::iter::repeat_n(b' ', 80 - 3));
 
-    let header_blocks = (header.len() + 2879) / 2880;
+    let header_blocks = header.len().div_ceil(2880);
     header.resize(header_blocks * 2880, b' ');
 
     let data = frame.data_slice();
     let mut data_bytes = Vec::with_capacity(data.len());
-    
+
     if is_16bit {
         let u16_len = data.len() / 2;
         for i in 0..u16_len {
@@ -270,12 +279,13 @@ pub(crate) fn write_fits_raw(
         data_bytes.extend_from_slice(data);
     }
 
-    let data_blocks = (data_bytes.len() + 2879) / 2880;
+    let data_blocks = data_bytes.len().div_ceil(2880);
     data_bytes.resize(data_blocks * 2880, 0);
 
-    let mut file = std::fs::File::create(path).map_err(|e| crate::error::StackError::ArithmeticError {
-        message: format!("Failed to create FITS file: {}", e),
-    })?;
+    let mut file =
+        std::fs::File::create(path).map_err(|e| crate::error::StackError::ArithmeticError {
+            message: format!("Failed to create FITS file: {}", e),
+        })?;
 
     use std::io::Write;
     file.write_all(&header)

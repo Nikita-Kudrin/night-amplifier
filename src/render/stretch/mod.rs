@@ -48,7 +48,9 @@ pub fn apply_tone_mapping(
 ) -> Result<()> {
     match algorithm {
         ToneMappingAlgorithm::Asinh => asinh_stretch_frame(frame, strength, color_intensity),
-        ToneMappingAlgorithm::Mtf => mtf_stretch_frame(frame, [strength, strength, strength], color_intensity),
+        ToneMappingAlgorithm::Mtf => {
+            mtf_stretch_frame(frame, [strength, strength, strength], color_intensity)
+        }
     }
 }
 
@@ -240,7 +242,12 @@ pub fn apply_fused_stretch_frame(
     data.par_chunks_mut(row_len)
         .with_min_len(32)
         .for_each(|row| {
-            crate::render::simd::apply_luminance_scale_lut_simd(row, black_point, &scale_lut, color_intensity);
+            crate::render::simd::apply_luminance_scale_lut_simd(
+                row,
+                black_point,
+                &scale_lut,
+                color_intensity,
+            );
         });
 
     Ok(())
@@ -325,7 +332,6 @@ mod tests {
     // applied independently per channel now, while the fused scale LUT preserves luminance.
     // They are no longer expected to match mathematically.
 
-
     /// Same check for asinh, which had no LUT at all before the fusion and is the default
     /// tone mapping algorithm.
     #[test]
@@ -334,8 +340,15 @@ mod tests {
         let strength = 12.0;
 
         let mut fused = frame.clone();
-        apply_fused_stretch_frame(&mut fused, 0.0, ToneMappingAlgorithm::Asinh, strength, 1.0, None)
-            .unwrap();
+        apply_fused_stretch_frame(
+            &mut fused,
+            0.0,
+            ToneMappingAlgorithm::Asinh,
+            strength,
+            1.0,
+            None,
+        )
+        .unwrap();
 
         let mut separate = frame.clone();
         asinh::asinh_stretch_frame(&mut separate, strength, 1.0).unwrap();
@@ -362,7 +375,8 @@ mod tests {
         let faint = 0.5 / (SCALE_LUT_SIZE - 1) as f32;
         let mut frame = Frame::filled(8, 8, 3, faint).unwrap();
 
-        apply_fused_stretch_frame(&mut frame, 0.0, ToneMappingAlgorithm::Mtf, 0.01, 1.0, None).unwrap();
+        apply_fused_stretch_frame(&mut frame, 0.0, ToneMappingAlgorithm::Mtf, 0.01, 1.0, None)
+            .unwrap();
 
         let out = frame.get_pixel(4, 4, 0);
         assert!(
@@ -389,8 +403,15 @@ mod tests {
 
         // Warm this thread's cache so the first call below is not counted as a build.
         let mut warm = Frame::filled(4, 4, 3, 0.2).unwrap();
-        apply_fused_stretch_frame(&mut warm, 0.001, ToneMappingAlgorithm::Mtf, 0.123, 1.0, None)
-            .unwrap();
+        apply_fused_stretch_frame(
+            &mut warm,
+            0.001,
+            ToneMappingAlgorithm::Mtf,
+            0.123,
+            1.0,
+            None,
+        )
+        .unwrap();
 
         let before = builds();
         for black_point in [0.002, 0.05, 0.4] {
@@ -413,8 +434,15 @@ mod tests {
 
         // A different curve parameter must still rebuild.
         let mut frame = Frame::filled(4, 4, 3, 0.5).unwrap();
-        apply_fused_stretch_frame(&mut frame, 0.002, ToneMappingAlgorithm::Mtf, 0.321, 1.0, None)
-            .unwrap();
+        apply_fused_stretch_frame(
+            &mut frame,
+            0.002,
+            ToneMappingAlgorithm::Mtf,
+            0.321,
+            1.0,
+            None,
+        )
+        .unwrap();
         assert_eq!(builds(), before + 1);
     }
 

@@ -1,6 +1,6 @@
+use crate::camera::RawFrame;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
-use crate::camera::RawFrame;
 use std::path::PathBuf;
 use std::sync::Arc;
 

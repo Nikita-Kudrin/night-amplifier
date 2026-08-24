@@ -73,7 +73,7 @@ pub fn subtract_rgb_clamp_simd(data: &mut [f32], offsets: &[f32; 3]) {
 
 #[inline]
 fn subtract_rgb_clamp_scalar(data: &mut [f32], offsets: &[f32; 3]) {
-    for chunk in data.chunks_exact_mut(3) {
+    for chunk in data.as_chunks_mut::<3>().0 {
         chunk[0] = (chunk[0] - offsets[0]).clamp(0.0, 1.0);
         chunk[1] = (chunk[1] - offsets[1]).clamp(0.0, 1.0);
         chunk[2] = (chunk[2] - offsets[2]).clamp(0.0, 1.0);
@@ -159,7 +159,7 @@ pub fn multiply_rgb_clamp_simd(data: &mut [f32], multipliers: &[f32; 3]) {
 
 #[inline]
 fn multiply_rgb_clamp_scalar(data: &mut [f32], multipliers: &[f32; 3]) {
-    for chunk in data.chunks_exact_mut(3) {
+    for chunk in data.as_chunks_mut::<3>().0 {
         chunk[0] = (chunk[0] * multipliers[0]).clamp(0.0, 1.0);
         chunk[1] = (chunk[1] * multipliers[1]).clamp(0.0, 1.0);
         chunk[2] = (chunk[2] * multipliers[2]).clamp(0.0, 1.0);
@@ -232,7 +232,12 @@ fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
 /// This operates on whatever slice it is given, so callers are expected to drive it over
 /// `par_chunks_mut` of whole rows — see `apply_fused_stretch_frame`.
 #[inline]
-pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_lut: &[f32], color_intensity: f32) {
+pub fn apply_luminance_scale_lut_simd(
+    data: &mut [f32],
+    black_point: f32,
+    scale_lut: &[f32],
+    color_intensity: f32,
+) {
     let len = data.len();
     if len < 12 || scale_lut.len() < 2 {
         apply_luminance_scale_lut_scalar(data, black_point, scale_lut, color_intensity);
@@ -276,19 +281,29 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
 
         let lut_max = f32x4::splat((scale_lut.len() - 1) as f32);
         let pos = (lum * lut_max).min(lut_max);
-        
+
         let pos_arr = pos.to_array();
         let i0_0 = (pos_arr[0] as usize).min(scale_lut.len() - 2);
         let i0_1 = (pos_arr[1] as usize).min(scale_lut.len() - 2);
         let i0_2 = (pos_arr[2] as usize).min(scale_lut.len() - 2);
         let i0_3 = (pos_arr[3] as usize).min(scale_lut.len() - 2);
-        
+
         let i0_vec = f32x4::new([i0_0 as f32, i0_1 as f32, i0_2 as f32, i0_3 as f32]);
         let frac = pos - i0_vec;
-        
-        let lo = f32x4::new([scale_lut[i0_0], scale_lut[i0_1], scale_lut[i0_2], scale_lut[i0_3]]);
-        let hi = f32x4::new([scale_lut[i0_0 + 1], scale_lut[i0_1 + 1], scale_lut[i0_2 + 1], scale_lut[i0_3 + 1]]);
-        
+
+        let lo = f32x4::new([
+            scale_lut[i0_0],
+            scale_lut[i0_1],
+            scale_lut[i0_2],
+            scale_lut[i0_3],
+        ]);
+        let hi = f32x4::new([
+            scale_lut[i0_0 + 1],
+            scale_lut[i0_1 + 1],
+            scale_lut[i0_2 + 1],
+            scale_lut[i0_3 + 1],
+        ]);
+
         let scale = lo + (hi - lo) * frac;
 
         let lum_stretched = lum * scale;
@@ -317,16 +332,26 @@ pub fn apply_luminance_scale_lut_simd(data: &mut [f32], black_point: f32, scale_
         data[base + 11] = b_arr[3];
     }
 
-    apply_luminance_scale_lut_scalar(&mut data[chunks * 12..], black_point, scale_lut, color_intensity);
+    apply_luminance_scale_lut_scalar(
+        &mut data[chunks * 12..],
+        black_point,
+        scale_lut,
+        color_intensity,
+    );
 }
 
 #[inline]
-pub fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scale_lut: &[f32], color_intensity: f32) {
+pub fn apply_luminance_scale_lut_scalar(
+    data: &mut [f32],
+    black_point: f32,
+    scale_lut: &[f32],
+    color_intensity: f32,
+) {
     if scale_lut.len() < 2 {
         return;
     }
 
-    for pixel in data.chunks_exact_mut(3) {
+    for pixel in data.as_chunks_mut::<3>().0 {
         let r = (pixel[0] - black_point).max(0.0);
         let g = (pixel[1] - black_point).max(0.0);
         let b = (pixel[2] - black_point).max(0.0);
@@ -360,7 +385,11 @@ pub fn apply_luminance_scale_lut_scalar(data: &mut [f32], black_point: f32, scal
 /// R' = (R * scale).clamp(0, 1)
 /// ```
 #[inline]
-pub fn apply_luminance_preserving_simd(data: &mut [f32], color_intensity: f32, transform_fn: impl Fn(f32) -> f32) {
+pub fn apply_luminance_preserving_simd(
+    data: &mut [f32],
+    color_intensity: f32,
+    transform_fn: impl Fn(f32) -> f32,
+) {
     let len = data.len();
     if len < 12 {
         apply_luminance_preserving_scalar(data, color_intensity, &transform_fn);
@@ -446,8 +475,12 @@ pub fn apply_luminance_preserving_simd(data: &mut [f32], color_intensity: f32, t
 }
 
 #[inline]
-fn apply_luminance_preserving_scalar(data: &mut [f32], color_intensity: f32, transform_fn: &impl Fn(f32) -> f32) {
-    for pixel in data.chunks_exact_mut(3) {
+fn apply_luminance_preserving_scalar(
+    data: &mut [f32],
+    color_intensity: f32,
+    transform_fn: &impl Fn(f32) -> f32,
+) {
+    for pixel in data.as_chunks_mut::<3>().0 {
         let r = pixel[0];
         let g = pixel[1];
         let b = pixel[2];
@@ -560,35 +593,35 @@ mod tests {
         assert!((orig_rg - new_rg).abs() < 1e-4);
         assert!((orig_rb - new_rb).abs() < 1e-4);
     }
-    
+
     #[test]
     fn test_luminance_preserving_color_intensity_simd() {
         let r = 0.5f32;
         let g = 0.3;
         let b = 0.7;
-        
+
         let mut data_1 = vec![r, g, b, r, g, b, r, g, b, r, g, b];
         let mut data_2 = data_1.clone();
         let mut data_0 = data_1.clone();
-        
+
         // Intensity = 1.0 (normal)
         apply_luminance_preserving_simd(&mut data_1, 1.0, |l| l * 2.0);
-        
+
         // Intensity = 2.0 (boosted)
         apply_luminance_preserving_simd(&mut data_2, 2.0, |l| l * 2.0);
-        
+
         // Intensity = 0.0 (monochrome)
         apply_luminance_preserving_simd(&mut data_0, 0.0, |l| l * 2.0);
-        
+
         let l_out_1 = 0.2126 * data_1[0] + 0.7152 * data_1[1] + 0.0722 * data_1[2];
         let dr_1 = data_1[0] - l_out_1;
-        
+
         let l_out_2 = 0.2126 * data_2[0] + 0.7152 * data_2[1] + 0.0722 * data_2[2];
         let dr_2 = data_2[0] - l_out_2;
-        
+
         // Boosted intensity should have channels further from luminance
         assert!(dr_2.abs() > dr_1.abs());
-        
+
         // Zero intensity should make channels equal (grayscale)
         assert!((data_0[0] - data_0[1]).abs() < 1e-4);
         assert!((data_0[0] - data_0[2]).abs() < 1e-4);

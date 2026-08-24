@@ -9,9 +9,10 @@ use crate::stacking::incremental_pixel::IncrementalPixel;
 use std::sync::OnceLock;
 
 /// Rejection method for stacking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum RejectionMethod {
     /// No rejection - simple average of all frames
+    #[default]
     None,
     /// Sigma clipping: reject values > N sigma from mean (Pro only)
     SigmaClip,
@@ -19,12 +20,6 @@ pub enum RejectionMethod {
     WinsorizedSigmaClip,
     /// Min-max rejection: discard min and max, average the rest (Pro only)
     MinMax,
-}
-
-impl Default for RejectionMethod {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Plugin trait for advanced outlier rejection methods

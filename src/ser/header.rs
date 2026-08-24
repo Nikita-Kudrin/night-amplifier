@@ -246,9 +246,12 @@ mod tests {
         bytes[0..14].copy_from_slice(b"LUCAM-RECORDER");
         let invalid_color_id = 9999u32;
         bytes[18..22].copy_from_slice(&invalid_color_id.to_le_bytes());
-        
+
         let result = SerHeader::from_bytes(&bytes);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown SER color ID"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown SER color ID"));
     }
 }

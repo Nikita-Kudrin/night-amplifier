@@ -218,7 +218,10 @@ impl TouptekHandle {
     pub fn serial_number(&self) -> Result<String, String> {
         let sdk = TouptekSdk::try_load().ok_or("ToupTek SDK not loaded")?;
         let mut sn = [0i8; 32];
-        let hr = unsafe { sdk.api.Toupcam_get_SerialNumber(self.handle, sn.as_mut_ptr()) };
+        let hr = unsafe {
+            sdk.api
+                .Toupcam_get_SerialNumber(self.handle, sn.as_mut_ptr())
+        };
         check_hresult(hr, "Toupcam_get_SerialNumber")?;
         let s = unsafe { CStr::from_ptr(sn.as_ptr()) }
             .to_string_lossy()
@@ -260,22 +263,19 @@ impl TouptekHandle {
         self.fatal_error_flag.store(false, Ordering::SeqCst);
 
         unsafe extern "C" fn event_callback(event: u32, ctx: *mut c_void) {
-            if event == TOUPCAM_EVENT_ERROR || event == TOUPCAM_EVENT_DISCONNECTED {
-                if !ctx.is_null() {
-                    let flag = &*(ctx as *const AtomicBool);
-                    flag.store(true, Ordering::SeqCst);
-                }
+            if (event == TOUPCAM_EVENT_ERROR || event == TOUPCAM_EVENT_DISCONNECTED)
+                && !ctx.is_null()
+            {
+                let flag = &*(ctx as *const AtomicBool);
+                flag.store(true, Ordering::SeqCst);
             }
         }
 
         let ctx_ptr = Arc::as_ptr(&self.fatal_error_flag) as *mut c_void;
 
         let hr = unsafe {
-            sdk.api.Toupcam_StartPullModeWithCallback(
-                self.handle,
-                Some(event_callback),
-                ctx_ptr,
-            )
+            sdk.api
+                .Toupcam_StartPullModeWithCallback(self.handle, Some(event_callback), ctx_ptr)
         };
         check_hresult(hr, "Toupcam_StartPullModeWithCallback")?;
         self.pull_mode_active.store(true, Ordering::SeqCst);

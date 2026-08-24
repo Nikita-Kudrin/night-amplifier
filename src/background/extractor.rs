@@ -124,11 +124,13 @@ impl BackgroundExtractor {
         }
 
         let box_size = compute_box_size(width);
-        let (grid_template, nodes_x, nodes_y) = initialize_grid(width, height, grid_cols, grid_rows);
+        let (grid_template, nodes_x, nodes_y) =
+            initialize_grid(width, height, grid_cols, grid_rows);
 
         // Extract node values per channel (parallelized)
         let per_channel_grids: Vec<Vec<GridNode>> = {
-            let _span = tracing::info_span!("bilinear_node_extraction", box_size = box_size).entered();
+            let _span =
+                tracing::info_span!("bilinear_node_extraction", box_size = box_size).entered();
             (0..channels)
                 .into_par_iter()
                 .map(|channel| {
@@ -188,7 +190,8 @@ impl BackgroundExtractor {
 
         for y in y_start..y_end {
             let row_offset = y * width * channels_count;
-            buffer.extend((x_start..x_end).map(|x| data[row_offset + x * channels_count + channel]));
+            buffer
+                .extend((x_start..x_end).map(|x| data[row_offset + x * channels_count + channel]));
         }
 
         if buffer.is_empty() {
@@ -220,7 +223,7 @@ impl BackgroundExtractor {
         let cmp = |a: &f32, b: &f32| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
         values.select_nth_unstable_by(mid, cmp);
         let median_val = values[mid];
-        if values.len() % 2 == 0 {
+        if values.len().is_multiple_of(2) {
             // The element at mid-1 is the max of the lower partition
             let max_lower = values[..mid]
                 .iter()
@@ -234,7 +237,11 @@ impl BackgroundExtractor {
     }
 
     /// Compute Median Absolute Deviation
-    pub(crate) fn median_absolute_deviation(values: &[f32], median: f32, deviations: &mut Vec<f32>) -> f32 {
+    pub(crate) fn median_absolute_deviation(
+        values: &[f32],
+        median: f32,
+        deviations: &mut Vec<f32>,
+    ) -> f32 {
         if values.is_empty() {
             return 0.0;
         }
@@ -264,7 +271,11 @@ impl BackgroundExtractor {
 fn compute_box_size(image_width: usize) -> usize {
     let raw = (image_width as f32 * BOX_SIZE_PERCENTAGE) as usize;
     let clamped = raw.max(MIN_BOX_SIZE);
-    if clamped % 2 == 0 { clamped + 1 } else { clamped }
+    if clamped.is_multiple_of(2) {
+        clamped + 1
+    } else {
+        clamped
+    }
 }
 
 /// Initialize a boundary-hugging grid.
@@ -279,22 +290,34 @@ fn initialize_grid(
 ) -> (Vec<GridNode>, Vec<usize>, Vec<usize>) {
     let nodes_x: Vec<usize> = (0..grid_cols)
         .map(|i| {
-            if grid_cols == 1 { width / 2 }
-            else { i * (width - 1) / (grid_cols - 1) }
+            if grid_cols == 1 {
+                width / 2
+            } else {
+                i * (width - 1) / (grid_cols - 1)
+            }
         })
         .collect();
 
     let nodes_y: Vec<usize> = (0..grid_rows)
         .map(|j| {
-            if grid_rows == 1 { height / 2 }
-            else { j * (height - 1) / (grid_rows - 1) }
+            if grid_rows == 1 {
+                height / 2
+            } else {
+                j * (height - 1) / (grid_rows - 1)
+            }
         })
         .collect();
 
     let mut nodes = Vec::with_capacity(grid_cols * grid_rows);
     for (row, &y) in nodes_y.iter().enumerate() {
         for (col, &x) in nodes_x.iter().enumerate() {
-            nodes.push(GridNode { x, y, col, row, value: None });
+            nodes.push(GridNode {
+                x,
+                y,
+                col,
+                row,
+                value: None,
+            });
         }
     }
 
@@ -413,11 +436,7 @@ fn prune_nebulosity(nodes: &mut [GridNode], grid_cols: usize, grid_rows: usize) 
                 }
                 let nr = node.row as i32 + dr;
                 let nc = node.col as i32 + dc;
-                if nr >= 0
-                    && nr < grid_rows as i32
-                    && nc >= 0
-                    && nc < grid_cols as i32
-                {
+                if nr >= 0 && nr < grid_rows as i32 && nc >= 0 && nc < grid_cols as i32 {
                     let idx = nr as usize * grid_cols + nc as usize;
                     if let Some(nv) = snapshot[idx] {
                         neighbor_values.push(nv);
@@ -577,7 +596,11 @@ fn build_bilinear_model(
         };
 
         let grid = vec![vec![fallback_value; total_nodes]; channels];
-        return BilinearModel { grid, nodes_x, nodes_y };
+        return BilinearModel {
+            grid,
+            nodes_x,
+            nodes_y,
+        };
     }
 
     // Inpaint per channel, then flatten to completed f32 grids
@@ -590,5 +613,9 @@ fn build_bilinear_model(
         })
         .collect();
 
-    BilinearModel { grid, nodes_x, nodes_y }
+    BilinearModel {
+        grid,
+        nodes_x,
+        nodes_y,
+    }
 }

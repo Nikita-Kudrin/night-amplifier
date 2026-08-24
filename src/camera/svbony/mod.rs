@@ -11,11 +11,17 @@ pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
-use shim::{enumerate_devices, get_camera_property, get_camera_property_ex, parse_fourcc_bayer, SvbonyHandle};
+use shim::{
+    enumerate_devices, get_camera_property, get_camera_property_ex, parse_fourcc_bayer,
+    SvbonyHandle,
+};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
+use super::types::{
+    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
+    SensorType,
+};
 
 use ffi_types::*;
 
@@ -207,11 +213,12 @@ impl Camera for SvbonyCamera {
         }
         let temp_raw = (temp_c * 10.0) as c_long;
         catch_ffi_panic("SVBony::set_temp", || {
-            self.handle.set_control_value(SVB_TARGET_TEMPERATURE, temp_raw, false)
+            self.handle
+                .set_control_value(SVB_TARGET_TEMPERATURE, temp_raw, false)
         })
         .map_err(CameraError::from)?
         .map_err(CameraError::CoolingFailed)?;
-        
+
         self.cooler_on = true;
         let _ = catch_ffi_panic("SVBony::enable_cooler", || {
             self.handle.set_control_value(SVB_COOLER_ENABLE, 1, false)
@@ -228,8 +235,11 @@ impl Camera for SvbonyCamera {
             self.handle.set_control_value(SVB_COOLER_ENABLE, val, false)
         })
         .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError { code: -1, message: e })?;
-        
+        .map_err(|e| CameraError::SdkError {
+            code: -1,
+            message: e,
+        })?;
+
         self.cooler_on = enabled;
         Ok(())
     }
@@ -267,23 +277,31 @@ impl Camera for SvbonyCamera {
         let (w, h) = if config.should_reapply(self.last_applied_config.as_ref()) {
             // Update exposure
             catch_ffi_panic("SVBony::set_exposure", || {
-                self.handle.set_control_value(SVB_EXPOSURE, config.exposure_us as c_long, false)
+                self.handle
+                    .set_control_value(SVB_EXPOSURE, config.exposure_us as c_long, false)
             })
             .map_err(CameraError::from)?
             .map_err(CameraError::ExposureFailed)?;
 
             // Update gain
             catch_ffi_panic("SVBony::set_gain", || {
-                self.handle.set_control_value(SVB_GAIN, config.gain as c_long, false)
+                self.handle
+                    .set_control_value(SVB_GAIN, config.gain as c_long, false)
             })
             .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError { code: -1, message: e })?;
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: e,
+            })?;
 
             catch_ffi_panic("SVBony::set_image_type", || {
                 self.handle.set_output_image_type(svb_image_type)
             })
             .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError { code: -1, message: e })?;
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: e,
+            })?;
 
             // Set ROI and Binning
             let bin = config.bin as c_int;
@@ -291,25 +309,36 @@ impl Camera for SvbonyCamera {
             let (x, y, w, h) = if let Some((rx, ry, rw, rh)) = config.roi {
                 (rx as c_int, ry as c_int, rw as c_int, rh as c_int)
             } else {
-                (0, 0, (self.info.max_width / bin as u32) as c_int, (self.info.max_height / bin as u32) as c_int)
+                (
+                    0,
+                    0,
+                    (self.info.max_width / bin as u32) as c_int,
+                    (self.info.max_height / bin as u32) as c_int,
+                )
             };
 
             catch_ffi_panic("SVBony::set_roi", || {
                 self.handle.set_roi_format(x, y, w, h, bin)
             })
             .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError { code: -1, message: format!("Failed to set ROI: {}", e) })?;
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: format!("Failed to set ROI: {}", e),
+            })?;
 
             // Re-read actual ROI from SDK, as it might adjust to multiples
             let mut resolved = (x, y, w, h);
-            if let Ok(Ok((rx, ry, rw, rh, _rbin))) = catch_ffi_panic("SVBony::get_roi", || self.handle.get_roi_format()) {
+            if let Ok(Ok((rx, ry, rw, rh, _rbin))) =
+                catch_ffi_panic("SVBony::get_roi", || self.handle.get_roi_format())
+            {
                 resolved = (rx, ry, rw, rh);
             }
 
             self.last_applied_config = Some(config.clone());
             self.last_resolved_roi = Some(resolved);
             if self.stream_running {
-                let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                let _ =
+                    catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
                 self.stream_running = false;
             }
             (resolved.2, resolved.3)
@@ -327,7 +356,8 @@ impl Camera for SvbonyCamera {
 
         if !is_continuous {
             if self.stream_running {
-                let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                let _ =
+                    catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
                 self.stream_running = false;
             }
             catch_ffi_panic("SVBony::start_capture", || {
@@ -353,14 +383,18 @@ impl Camera for SvbonyCamera {
         let result = loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
                 if is_continuous {
-                    let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                    let _ = catch_ffi_panic("SVBony::stop_capture", || {
+                        self.handle.stop_video_capture()
+                    });
                     self.stream_running = false;
                 }
                 break Err(CameraError::Cancelled);
             }
             if start.elapsed() > total_timeout {
                 if is_continuous {
-                    let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                    let _ = catch_ffi_panic("SVBony::stop_capture", || {
+                        self.handle.stop_video_capture()
+                    });
                     self.stream_running = false;
                 }
                 break Err(CameraError::ExposureTimeout(total_timeout));
@@ -368,7 +402,7 @@ impl Camera for SvbonyCamera {
 
             match catch_ffi_panic("SVBony::get_video_data", || {
                 // Short wait to allow cancellation
-                self.handle.get_video_data(&mut *buffer, 500.min(timeout_ms))
+                self.handle.get_video_data(&mut buffer, 500.min(timeout_ms))
             }) {
                 Ok(Ok(())) => break Ok(()),
                 Ok(Err(e)) => {
@@ -377,14 +411,18 @@ impl Camera for SvbonyCamera {
                         continue;
                     }
                     if is_continuous {
-                        let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                        let _ = catch_ffi_panic("SVBony::stop_capture", || {
+                            self.handle.stop_video_capture()
+                        });
                         self.stream_running = false;
                     }
                     break Err(CameraError::ExposureFailed(e));
                 }
                 Err(e) => {
                     if is_continuous {
-                        let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
+                        let _ = catch_ffi_panic("SVBony::stop_capture", || {
+                            self.handle.stop_video_capture()
+                        });
                         self.stream_running = false;
                     }
                     break Err(CameraError::ExposureFailed(e.to_string()));
@@ -393,9 +431,7 @@ impl Camera for SvbonyCamera {
         };
 
         if !is_continuous {
-            let _ = catch_ffi_panic("SVBony::stop_capture", || {
-                self.handle.stop_video_capture()
-            });
+            let _ = catch_ffi_panic("SVBony::stop_capture", || self.handle.stop_video_capture());
         }
 
         result?;
@@ -477,8 +513,8 @@ fn build_camera_info(dev: &SVB_CAMERA_INFO, index: i32) -> Option<CameraInfo> {
         }
         match fmt {
             SVB_IMG_RAW8 | SVB_IMG_Y8 => supported_formats.push(ImageFormat::Raw8),
-            SVB_IMG_RAW10 | SVB_IMG_RAW12 | SVB_IMG_RAW14 | SVB_IMG_RAW16 |
-            SVB_IMG_Y10 | SVB_IMG_Y12 | SVB_IMG_Y14 | SVB_IMG_Y16 => {
+            SVB_IMG_RAW10 | SVB_IMG_RAW12 | SVB_IMG_RAW14 | SVB_IMG_RAW16 | SVB_IMG_Y10
+            | SVB_IMG_Y12 | SVB_IMG_Y14 | SVB_IMG_Y16 => {
                 if !supported_formats.contains(&ImageFormat::Raw16) {
                     supported_formats.push(ImageFormat::Raw16);
                 }
@@ -488,13 +524,15 @@ fn build_camera_info(dev: &SVB_CAMERA_INFO, index: i32) -> Option<CameraInfo> {
         }
     }
 
-    let has_cooler = prop_ex.map(|ex| ex.bSupportControlTemp != 0).unwrap_or(false);
+    let has_cooler = prop_ex
+        .map(|ex| ex.bSupportControlTemp != 0)
+        .unwrap_or(false);
 
     // Let's get control capabilities by opening a temporary handle if needed,
     // but the API allows `SVBGetControlCaps` on opened cameras only.
-    // We'll use safe defaults for gain and exposure, then the UI updates them 
+    // We'll use safe defaults for gain and exposure, then the UI updates them
     // when the camera is opened. SVBony typically has gain 0-500 or 0-1000.
-    
+
     Some(CameraInfo {
         name,
         id: index,

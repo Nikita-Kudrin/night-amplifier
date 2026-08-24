@@ -35,7 +35,7 @@ impl BackgroundStats {
 
 fn compute_median(sorted_sample: &[f32]) -> f32 {
     let len = sorted_sample.len();
-    if len % 2 == 0 {
+    if len.is_multiple_of(2) {
         (sorted_sample[len / 2 - 1] + sorted_sample[len / 2]) / 2.0
     } else {
         sorted_sample[len / 2]

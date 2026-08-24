@@ -7,7 +7,7 @@ use tracing::{debug, error, info, instrument, warn};
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
 use super::utils::write_png;
-use crate::fits::{write_fits, write_fits_u16, write_fits_from_raw};
+use crate::fits::{write_fits, write_fits_from_raw, write_fits_u16};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -120,8 +120,18 @@ impl DiskWriter {
             let path = session_dir.join("capture.ser");
 
             let (frame_width, frame_height, frame_channels) = match &request.frame_type {
-                FrameType::Raw(r) => (r.width, r.height, if r.format == crate::camera::ImageFormat::Rgb24 { 3 } else { 1 }),
-                FrameType::Stacked(s) | FrameType::StackedPng(s) => (s.width() as u32, s.height() as u32, s.channels()),
+                FrameType::Raw(r) => (
+                    r.width,
+                    r.height,
+                    if r.format == crate::camera::ImageFormat::Rgb24 {
+                        3
+                    } else {
+                        1
+                    },
+                ),
+                FrameType::Stacked(s) | FrameType::StackedPng(s) => {
+                    (s.width() as u32, s.height() as u32, s.channels())
+                }
             };
 
             let color_id = match frame_channels {
@@ -143,17 +153,18 @@ impl DiskWriter {
 
             // Determine bit depth from metadata or default to 16 for f32 frames
             let bit_depth = match &request.frame_type {
-                FrameType::Raw(r) => if r.format == crate::camera::ImageFormat::Raw16 { 16 } else { 8 },
+                FrameType::Raw(r) => {
+                    if r.format == crate::camera::ImageFormat::Raw16 {
+                        16
+                    } else {
+                        8
+                    }
+                }
                 _ => 16,
             };
 
-            let header = SerHeader::new(
-                frame_width,
-                frame_height,
-                color_id,
-                bit_depth,
-            )
-            .with_instrument(&request.metadata.camera.clone().unwrap_or_default());
+            let header = SerHeader::new(frame_width, frame_height, color_id, bit_depth)
+                .with_instrument(&request.metadata.camera.clone().unwrap_or_default());
 
             info!(path = ?path, ?color_id, bit_depth, "Creating new SER file for planetary session");
             self.ser_writer = Some(SerWriter::create(path, header).map_err(|e| {
@@ -189,7 +200,7 @@ impl DiskWriter {
                 frame_number = request.frame_number,
                 "Writing frame to SER container"
             );
-            
+
             match &request.frame_type {
                 FrameType::Raw(r) => {
                     writer
@@ -220,7 +231,11 @@ impl DiskWriter {
 
         let raw_frame = match &request.frame_type {
             FrameType::Raw(f) => f,
-            _ => return Err(DiskWriterError::WriteFailed("Invalid frame type for raw write".to_string())),
+            _ => {
+                return Err(DiskWriterError::WriteFailed(
+                    "Invalid frame type for raw write".to_string(),
+                ))
+            }
         };
 
         write_fits_from_raw(raw_frame, &path, Some(&request.metadata))
@@ -247,7 +262,11 @@ impl DiskWriter {
 
         let stacked_frame = match &request.frame_type {
             FrameType::Stacked(f) => f,
-            _ => return Err(DiskWriterError::WriteFailed("Invalid frame type for stacked write".to_string())),
+            _ => {
+                return Err(DiskWriterError::WriteFailed(
+                    "Invalid frame type for stacked write".to_string(),
+                ))
+            }
         };
 
         write_fits(stacked_frame, &path, Some(&request.metadata))
@@ -274,11 +293,14 @@ impl DiskWriter {
 
         let stacked_frame = match &request.frame_type {
             FrameType::StackedPng(f) => f,
-            _ => return Err(DiskWriterError::WriteFailed("Invalid frame type for PNG write".to_string())),
+            _ => {
+                return Err(DiskWriterError::WriteFailed(
+                    "Invalid frame type for PNG write".to_string(),
+                ))
+            }
         };
 
-        write_png(stacked_frame, &path)
-            .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+        write_png(stacked_frame, &path).map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stretched PNG file written successfully");
         Ok(())

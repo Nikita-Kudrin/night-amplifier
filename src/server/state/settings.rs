@@ -180,7 +180,7 @@ impl CameraCaptureProfile {
 }
 
 /// Telescope and camera parameters for FOV calculation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct TelescopeSettings {
     /// Telescope focal length in mm
     #[serde(default)]
@@ -200,19 +200,6 @@ pub struct TelescopeSettings {
     /// Barlow/reducer coefficient (effective_fl = focal_length * coeff; default 1.0)
     #[serde(default)]
     pub barlow_coeff: Option<f32>,
-}
-
-impl Default for TelescopeSettings {
-    fn default() -> Self {
-        Self {
-            focal_length_mm: None,
-            pixel_size_x_um: None,
-            pixel_size_y_um: None,
-            sensor_width_px: None,
-            sensor_height_px: None,
-            barlow_coeff: None,
-        }
-    }
 }
 
 /// Settings specifically for the eyepiece view feature

@@ -73,8 +73,8 @@ pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};
 pub use types::{
-    CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets, ImageFormat,
-    SensorMode, SensorType, RawFrame, BufferPool, PooledBuffer,
+    BufferPool, CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets,
+    ImageFormat, PooledBuffer, RawFrame, SensorMode, SensorType,
 };
 
 // Provider-specific re-exports

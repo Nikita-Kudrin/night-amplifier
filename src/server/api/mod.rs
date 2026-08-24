@@ -3,26 +3,26 @@
 //! This module organizes API handlers into resource-based submodules
 //! and provides a unified router assembly.
 
+pub mod about;
 pub mod cameras;
 pub mod capabilities;
 pub mod capture;
+pub mod indi;
 pub mod install;
 pub mod push_to;
 pub mod settings;
 pub mod simulator;
-pub mod about;
-pub mod indi;
 
 // Re-export all handlers to maintain backward compatibility for existing router definitions
+pub use about::*;
 pub use cameras::*;
 pub use capabilities::*;
 pub use capture::*;
+pub use indi::*;
 pub use install::*;
 pub use push_to::*;
 pub use settings::*;
 pub use simulator::*;
-pub use about::*;
-pub use indi::*;
 
 use crate::server::state::AppState;
 use axum::body::Body;
@@ -34,8 +34,14 @@ use std::sync::Arc;
 pub fn create_router() -> Router<Arc<AppState>> {
     Router::new()
         // About & License
-        .route("/about/license", get(about::get_license).post(about::update_license))
-        .route("/about/software-licenses", get(about::get_software_licenses))
+        .route(
+            "/about/license",
+            get(about::get_license).post(about::update_license),
+        )
+        .route(
+            "/about/software-licenses",
+            get(about::get_software_licenses),
+        )
         // Capabilities
         .route("/capabilities", get(capabilities::get_capabilities))
         // Capture

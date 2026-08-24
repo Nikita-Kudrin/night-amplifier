@@ -40,7 +40,9 @@ pub enum ServerEvent {
     CameraDisconnected { name: String },
 
     /// Camera discovered asynchronously (e.g. INDI)
-    CameraDiscovered { camera: crate::server::dto::CameraListEntry },
+    CameraDiscovered {
+        camera: crate::server::dto::CameraListEntry,
+    },
 
     /// Cooled camera status sample (sensor temperature, cooler power, cooler state)
     CameraStatusUpdated {
@@ -61,7 +63,10 @@ pub enum ServerEvent {
     /// reconnects — likely a persistent hardware/USB fault rather than an
     /// isolated hiccup. Sent in addition to (not instead of) the ordinary
     /// `Error` event that accompanies every individual timeout.
-    CameraPersistentlyUnresponsive { name: String, consecutive_timeouts: u32 },
+    CameraPersistentlyUnresponsive {
+        name: String,
+        consecutive_timeouts: u32,
+    },
 
     /// Error occurred
     Error { message: String },
@@ -342,11 +347,7 @@ impl ServerEvent {
         ServerEvent::PlateSolvingStarted { target_name }
     }
 
-    pub fn plate_solving_progress(
-        stage: impl Into<String>,
-        attempt: usize,
-        total: usize,
-    ) -> Self {
+    pub fn plate_solving_progress(stage: impl Into<String>, attempt: usize, total: usize) -> Self {
         ServerEvent::PlateSolvingProgress {
             stage: stage.into(),
             attempt,
@@ -520,8 +521,14 @@ mod tests {
 
     #[test]
     fn test_camera_status_updated_serialization() {
-        let event =
-            ServerEvent::camera_status_updated("Test Cam", -8.5, Some(42.0), true, true, Some(-10.0));
+        let event = ServerEvent::camera_status_updated(
+            "Test Cam",
+            -8.5,
+            Some(42.0),
+            true,
+            true,
+            Some(-10.0),
+        );
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_status_updated");

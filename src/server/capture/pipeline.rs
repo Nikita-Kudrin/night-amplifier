@@ -260,10 +260,12 @@ pub async fn process_frame_with_planetary_stacking(
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
-) -> crate::error::Result<(crate::render::RenderPipelineConfig, Option<crate::server::state::StretchResult>)> {
-    use crate::render::autostretch::prepare_auto_stretch_frame;
+) -> crate::error::Result<(
+    crate::render::RenderPipelineConfig,
+    Option<crate::server::state::StretchResult>,
+)> {
     use crate::background::subtract_background_with_config;
-    
+    use crate::render::autostretch::prepare_auto_stretch_frame;
 
     let _span = tracing::info_span!("process_preview_frame").entered();
 
@@ -285,7 +287,9 @@ pub fn process_preview_frame(
     // Stage 1: Background subtraction (modifies linear data)
     if pipeline_config.background_subtraction {
         let _span1 = tracing::info_span!("background_subtraction").entered();
-        if let Err(e) = subtract_background_with_config(frame, pipeline_config.background_config.clone()) {
+        if let Err(e) =
+            subtract_background_with_config(frame, pipeline_config.background_config.clone())
+        {
             warn!(error = %e, "Background subtraction failed");
         }
     }
@@ -366,8 +370,9 @@ pub fn get_render_pipeline_config(
         .with_background_config(get_background_config(settings))
         .with_background_subtraction(settings.background_subtraction);
 
-    if settings.stacking_type == crate::stacking::StackingType::DeepSky || 
-       settings.stacking_type == crate::stacking::StackingType::Comet {
+    if settings.stacking_type == crate::stacking::StackingType::DeepSky
+        || settings.stacking_type == crate::stacking::StackingType::Comet
+    {
         config = config.with_scnr(true).with_scnr_amount(1.0);
     }
 
@@ -392,18 +397,17 @@ pub fn get_render_pipeline_config(
         let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * 0.4;
         if intensity > 0.0 && config.auto_stretch {
             // Interpolate target_background down to 0.01 for pitch-black sky
-            config.stretch_config.target_background = 
+            config.stretch_config.target_background =
                 config.stretch_config.target_background * (1.0 - intensity) + 0.01 * intensity;
-            
+
             // Interpolate black_point_sigma down to 1.0 to clip noise
-            config.stretch_config.black_point_sigma = 
+            config.stretch_config.black_point_sigma =
                 config.stretch_config.black_point_sigma * (1.0 - intensity) + 1.0 * intensity;
 
             // Enhance contrast to make objects pop
             config.contrast = true;
-            config.contrast_config.strength = 
+            config.contrast_config.strength =
                 config.contrast_config.strength * (1.0 - intensity) + 1.0 * intensity;
-
         }
     }
 
@@ -446,34 +450,40 @@ mod tests {
     fn test_eyepiece_intensity_interpolation() {
         let mut settings = CaptureSettings::default();
         settings.auto_stretch = true;
-        
+
         // Base config
         settings.eyepiece.intensity = 0.0;
         let base_config = get_render_pipeline_config(&settings, false);
-        
+
         // Max intensity config (slider at 1.0, internal intensity 0.4)
         settings.eyepiece.intensity = 1.0;
         let max_config = get_render_pipeline_config(&settings, false);
-        
+
         let expected_bg = base_config.stretch_config.target_background * 0.6 + 0.01 * 0.4;
         let expected_sigma = base_config.stretch_config.black_point_sigma * 0.6 + 1.0 * 0.4;
         let expected_contrast = base_config.contrast_config.strength * 0.6 + 1.0 * 0.4;
-        
+
         // Target background and black point sigma should decrease
-        assert!(max_config.stretch_config.target_background < base_config.stretch_config.target_background);
+        assert!(
+            max_config.stretch_config.target_background
+                < base_config.stretch_config.target_background
+        );
         assert!((max_config.stretch_config.target_background - expected_bg).abs() < 1e-5);
-        
-        assert!(max_config.stretch_config.black_point_sigma < base_config.stretch_config.black_point_sigma);
+
+        assert!(
+            max_config.stretch_config.black_point_sigma
+                < base_config.stretch_config.black_point_sigma
+        );
         assert!((max_config.stretch_config.black_point_sigma - expected_sigma).abs() < 1e-5);
-        
+
         // Contrast should increase
         assert!(max_config.contrast);
         assert!((max_config.contrast_config.strength - expected_contrast).abs() < 1e-5);
-        
+
         // Half intensity config (slider at 0.5, internal intensity 0.2)
         settings.eyepiece.intensity = 0.5;
         let half_config = get_render_pipeline_config(&settings, false);
-        
+
         let expected_half_bg = base_config.stretch_config.target_background * 0.8 + 0.01 * 0.2;
         assert!((half_config.stretch_config.target_background - expected_half_bg).abs() < 1e-5);
     }

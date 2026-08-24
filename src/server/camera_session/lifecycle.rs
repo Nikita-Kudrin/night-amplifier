@@ -107,9 +107,8 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
     // temperature and let the monitor ramp it toward the user's target at
     // `RAMP_RATE_C_PER_MIN`. In fast mode we push the final target directly,
     // restoring the old "snap to setpoint" behavior.
-    let (initial_phase, cooler_applied) =
-        if info.has_cooler && cooler_enabled && target_temp_c.is_some() {
-            let final_target = target_temp_c.expect("checked is_some above");
+    let (initial_phase, cooler_applied) = if info.has_cooler && cooler_enabled {
+        if let Some(final_target) = target_temp_c {
             let initial_setpoint = if cooler_fast_mode {
                 final_target
             } else {
@@ -130,7 +129,10 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
             }
         } else {
             (CameraPhase::Idle, false)
-        };
+        }
+    } else {
+        (CameraPhase::Idle, false)
+    };
 
     // Apply initial dew heater state if supported.
     if info.has_dew_heater {
@@ -395,15 +397,18 @@ pub async fn return_from_capture(
             let fast = settings.cooler_fast_mode;
             drop(settings);
 
-            let next_phase = if cooler_enabled && target.is_some() {
-                match state.get_camera_status(camera_name).await {
-                    Some(status)
-                        if (status.temperature_c - target.unwrap()).abs()
-                            <= super::PRECOOL_TOLERANCE_C =>
-                    {
-                        CameraPhase::Idle
+            let next_phase = if let Some(t) = target {
+                if cooler_enabled {
+                    match state.get_camera_status(camera_name).await {
+                        Some(status)
+                            if (status.temperature_c - t).abs() <= super::PRECOOL_TOLERANCE_C =>
+                        {
+                            CameraPhase::Idle
+                        }
+                        _ => CameraPhase::Precooling,
                     }
-                    _ => CameraPhase::Precooling,
+                } else {
+                    CameraPhase::Idle
                 }
             } else {
                 CameraPhase::Idle

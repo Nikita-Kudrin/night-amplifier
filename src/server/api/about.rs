@@ -53,10 +53,7 @@ pub async fn update_license(
                     details: Some(details),
                 }),
             ),
-            Err(e) => (
-                StatusCode::BAD_REQUEST,
-                ApiResponse::<()>::err(&e),
-            ),
+            Err(e) => (StatusCode::BAD_REQUEST, ApiResponse::<()>::err(&e)),
         }
     } else {
         (
@@ -68,14 +65,15 @@ pub async fn update_license(
 
 /// GET /api/about/software-licenses
 pub async fn get_software_licenses() -> impl IntoResponse {
-    let core_license = std::fs::read_to_string("LICENSE").unwrap_or_else(|_| "License details not found on disk.".to_string());
-    
-    let third_party_licenses = match std::fs::read_to_string("licenses.txt") {
-        Ok(text) => Some(text),
-        Err(_) => None,
-    };
+    let core_license = std::fs::read_to_string("LICENSE")
+        .unwrap_or_else(|_| "License details not found on disk.".to_string());
 
-    let version = crate::app::APP_VERSION.get().map(|s| s.clone()).unwrap_or_else(|| "Unknown".to_string());
+    let third_party_licenses = std::fs::read_to_string("licenses.txt").ok();
+
+    let version = crate::app::APP_VERSION
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "Unknown".to_string());
 
     (
         StatusCode::OK,

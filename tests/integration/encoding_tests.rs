@@ -1,5 +1,6 @@
-
-fn to_ready_frame(frame: &night_amplifier::frame::Frame) -> night_amplifier::server::state::RenderReadyFrame {
+fn to_ready_frame(
+    frame: &night_amplifier::frame::Frame,
+) -> night_amplifier::server::state::RenderReadyFrame {
     let mut config = night_amplifier::render::RenderPipelineConfig::default();
     config.contrast = false;
     config.auto_stretch = false;
@@ -185,12 +186,12 @@ fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
 /// Encodes once for size, then times `ENCODE_TIMING_ITERATIONS` runs.
 /// Returns (avg_ms, encoded_wire_bytes).
 fn time_encode(frame: &Frame, chunks: usize) -> (f64, usize) {
-    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).expect("encode failed");
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks).expect("encode failed");
     let size = encoded.len();
 
     let start = Instant::now();
     for _ in 0..ENCODE_TIMING_ITERATIONS {
-        let _ = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).expect("encode failed");
+        let _ = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks).expect("encode failed");
     }
     let avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64;
     (avg_ms, size)
@@ -258,7 +259,8 @@ fn baseline_live_view_stream_encoding() {
 
         // Encode of the *linear* (unstretched) frame — isolates how much the
         // stretch costs in LZ4 compressibility.
-        let linear_encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), live_chunks).expect("linear encode");
+        let linear_encoded =
+            encode_rgb8_lz4_chunked(&to_ready_frame(&frame), live_chunks).expect("linear encode");
 
         // Preview render with default capture settings (live-view path)
         let mut preview = frame.clone();
@@ -697,7 +699,9 @@ fn probe_fused_render_clamp_difference() {
 
         for ((pa, pb), mid) in reference
             .data()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .zip(fused.data().chunks_exact(3))
             .zip(after_stretch.chunks_exact(3))
         {

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame, BufferPool};
+use super::types::{BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 use crate::ffi_safety::catch_ffi_panic;
 use crate::Frame;
 
@@ -223,9 +223,8 @@ impl Camera for PlayerOneCamera {
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
         config.validate(&self.info)?;
         if config.should_reapply(self.last_applied_config.as_ref()) {
-            let _span =
-                tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
-                    .entered();
+            let _span = tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
+                .entered();
             if self.stream_running {
                 let _ = catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure());
                 self.stream_running = false;

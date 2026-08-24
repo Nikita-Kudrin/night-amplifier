@@ -22,7 +22,10 @@ impl FitsDecoder {
     }
 
     /// Parses a raw FITS buffer (in memory) and returns a RawFrame.
-    pub fn parse_fits_buffer(buffer: &[u8], pool: &mut crate::camera::BufferPool) -> Result<RawFrame> {
+    pub fn parse_fits_buffer(
+        buffer: &[u8],
+        pool: &mut crate::camera::BufferPool,
+    ) -> Result<RawFrame> {
         let mut header_map = HashMap::new();
         let mut data_start = 0;
 
@@ -32,12 +35,12 @@ impl FitsDecoder {
 
         while offset + 2880 <= buffer.len() {
             let block = &buffer[offset..offset + 2880];
-            
+
             for i in 0..36 {
                 let record_start = i * 80;
                 let record = &block[record_start..record_start + 80];
                 let record_str = String::from_utf8_lossy(record);
-                
+
                 if record_str.starts_with("END ") {
                     end_found = true;
                     break;
@@ -46,13 +49,13 @@ impl FitsDecoder {
                 if let Some(eq_idx) = record_str.find('=') {
                     let key = record_str[0..eq_idx].trim().to_string();
                     let val_part = &record_str[eq_idx + 1..];
-                    
+
                     let value = if let Some(slash_idx) = val_part.find('/') {
                         val_part[0..slash_idx].trim()
                     } else {
                         val_part.trim()
                     };
-                    
+
                     // Strip quotes for strings
                     let value = value.trim_matches('\'').trim().to_string();
                     header_map.insert(key, value);
@@ -67,20 +70,39 @@ impl FitsDecoder {
         }
 
         if !end_found {
-            return Err(IndiError::DeviceNotFound("FITS END keyword not found".to_string()));
+            return Err(IndiError::DeviceNotFound(
+                "FITS END keyword not found".to_string(),
+            ));
         }
 
-        let width: u32 = header_map.get("NAXIS1").and_then(|s| s.parse().ok()).unwrap_or(0);
-        let height: u32 = header_map.get("NAXIS2").and_then(|s| s.parse().ok()).unwrap_or(0);
-        let bitpix: i32 = header_map.get("BITPIX").and_then(|s| s.parse().ok()).unwrap_or(8);
-        let _bzero: f64 = header_map.get("BZERO").and_then(|s| s.parse().ok()).unwrap_or(0.0);
-        let _bscale: f64 = header_map.get("BSCALE").and_then(|s| s.parse().ok()).unwrap_or(1.0);
-        
+        let width: u32 = header_map
+            .get("NAXIS1")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let height: u32 = header_map
+            .get("NAXIS2")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let bitpix: i32 = header_map
+            .get("BITPIX")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8);
+        let _bzero: f64 = header_map
+            .get("BZERO")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        let _bscale: f64 = header_map
+            .get("BSCALE")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0);
+
         let bayer_pat = header_map.get("BAYERPAT").or(header_map.get("CCD_CFA"));
-        let is_color = bayer_pat.is_some() || header_map.get("COLOR").map_or(false, |s| s == "T");
+        let is_color = bayer_pat.is_some() || header_map.get("COLOR").is_some_and(|s| s == "T");
 
         if width == 0 || height == 0 {
-            return Err(IndiError::DeviceNotFound("Invalid FITS dimensions".to_string()));
+            return Err(IndiError::DeviceNotFound(
+                "Invalid FITS dimensions".to_string(),
+            ));
         }
 
         let pixel_count = (width * height) as usize;
@@ -88,7 +110,12 @@ impl FitsDecoder {
         let format = match bitpix {
             8 => ImageFormat::Raw8,
             16 => ImageFormat::Raw16,
-            _ => return Err(IndiError::DeviceNotFound(format!("Unsupported BITPIX: {}", bitpix))),
+            _ => {
+                return Err(IndiError::DeviceNotFound(format!(
+                    "Unsupported BITPIX: {}",
+                    bitpix
+                )))
+            }
         };
 
         let bytes_needed = pixel_count * (bitpix as usize / 8);
@@ -96,13 +123,17 @@ impl FitsDecoder {
         match bitpix {
             8 => {
                 if raw_data.len() < pixel_count {
-                    return Err(IndiError::DeviceNotFound("Truncated 8-bit FITS data".to_string()));
+                    return Err(IndiError::DeviceNotFound(
+                        "Truncated 8-bit FITS data".to_string(),
+                    ));
                 }
                 data.copy_from_slice(&raw_data[..pixel_count]);
             }
             16 => {
                 if raw_data.len() < pixel_count * 2 {
-                    return Err(IndiError::DeviceNotFound("Truncated 16-bit FITS data".to_string()));
+                    return Err(IndiError::DeviceNotFound(
+                        "Truncated 16-bit FITS data".to_string(),
+                    ));
                 }
                 // FITS is big-endian, RawFrame expects little-endian
                 for i in 0..pixel_count {
@@ -123,4 +154,3 @@ impl FitsDecoder {
         })
     }
 }
-

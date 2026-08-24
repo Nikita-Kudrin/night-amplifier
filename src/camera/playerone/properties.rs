@@ -45,11 +45,11 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
 
     CameraInfo {
         name,
-        id: props.cameraID as i32,
+        id: props.cameraID,
         max_width: props.maxWidth as u32,
         max_height: props.maxHeight as u32,
-        pixel_size_x_um: props.pixelSize as f64,
-        pixel_size_y_um: props.pixelSize as f64,
+        pixel_size_x_um: props.pixelSize,
+        pixel_size_y_um: props.pixelSize,
         sensor_type,
         bayer_pattern,
         has_cooler: props.isHasCooler == POABool::POA_TRUE,

@@ -15,7 +15,10 @@ use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
+use super::types::{
+    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
+    SensorType,
+};
 
 use ffi_types::*;
 
@@ -209,9 +212,7 @@ impl Camera for TouptekCamera {
     }
 
     fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
-        Err(CameraError::ParameterNotSupported(
-            "dew_heater".to_string(),
-        ))
+        Err(CameraError::ParameterNotSupported("dew_heater".to_string()))
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
@@ -258,14 +259,12 @@ impl Camera for TouptekCamera {
                     })?;
             } else {
                 // Full frame at index 0 (highest resolution)
-                catch_ffi_panic("ToupTek::set_esize", || {
-                    self.handle.set_resolution_index(0)
-                })
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::SdkError {
-                    code: -1,
-                    message: format!("Failed to set resolution: {}", e),
-                })?;
+                catch_ffi_panic("ToupTek::set_esize", || self.handle.set_resolution_index(0))
+                    .map_err(CameraError::from)?
+                    .map_err(|e| CameraError::SdkError {
+                        code: -1,
+                        message: format!("Failed to set resolution: {}", e),
+                    })?;
             }
 
             self.last_applied_config = Some(config.clone());
@@ -343,13 +342,15 @@ impl Camera for TouptekCamera {
                     let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
                     self.stream_running = false;
                 }
-                return Err(CameraError::ExposureFailed("Camera reported a hardware error or disconnect during capture".to_string()));
+                return Err(CameraError::ExposureFailed(
+                    "Camera reported a hardware error or disconnect during capture".to_string(),
+                ));
             }
 
             // Try to pull with a short wait — allows cancel checks
             let chunk_wait = 500u32.min(wait_ms);
             match catch_ffi_panic("ToupTek::wait_image", || {
-                self.handle.wait_image_raw(chunk_wait, &mut *buffer)
+                self.handle.wait_image_raw(chunk_wait, &mut buffer)
             }) {
                 Ok(Ok(info)) => break info,
                 Ok(Err(_)) => continue, // Not ready yet
@@ -507,14 +508,12 @@ fn build_camera_info_from_handle(
     dev: &ToupcamDeviceV2,
     id: i32,
 ) -> CameraResult<CameraInfo> {
-    let mut info =
-        build_camera_info_from_device(dev, id).ok_or(CameraError::OpenFailed(
-            "ToupTek device model pointer is null".to_string(),
-        ))?;
+    let mut info = build_camera_info_from_device(dev, id).ok_or(CameraError::OpenFailed(
+        "ToupTek device model pointer is null".to_string(),
+    ))?;
 
     // Refine gain range from the SDK
-    if let Ok(Ok((min, max, _def))) =
-        catch_ffi_panic("ToupTek::gain_range", || handle.gain_range())
+    if let Ok(Ok((min, max, _def))) = catch_ffi_panic("ToupTek::gain_range", || handle.gain_range())
     {
         info.min_gain = min as i32;
         info.max_gain = max as i32;
@@ -529,17 +528,13 @@ fn build_camera_info_from_handle(
     }
 
     // Refine pixel size from the SDK
-    if let Ok(Ok((px, py))) =
-        catch_ffi_panic("ToupTek::pixel_size", || handle.pixel_size(0))
-    {
+    if let Ok(Ok((px, py))) = catch_ffi_panic("ToupTek::pixel_size", || handle.pixel_size(0)) {
         info.pixel_size_x_um = px as f64;
         info.pixel_size_y_um = py as f64;
     }
 
     // Detect bayer pattern from raw format
-    if let Ok(Ok((fourcc, _bpp))) =
-        catch_ffi_panic("ToupTek::raw_format", || handle.raw_format())
-    {
+    if let Ok(Ok((fourcc, _bpp))) = catch_ffi_panic("ToupTek::raw_format", || handle.raw_format()) {
         info.bayer_pattern = parse_fourcc_bayer(fourcc);
         if info.bayer_pattern.is_some() {
             info.sensor_type = SensorType::Color;

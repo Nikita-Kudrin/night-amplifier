@@ -61,7 +61,7 @@ pub trait Camera: Send {
     /// # Errors
     /// Returns `CameraError::ParameterNotSupported` if camera has no cooler
     fn set_cooler(&mut self, enabled: bool) -> CameraResult<()>;
-    
+
     /// Enable or disable anti-dew heater
     ///
     /// # Arguments

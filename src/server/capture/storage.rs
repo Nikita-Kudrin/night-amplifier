@@ -5,9 +5,9 @@ use tokio::sync::RwLockReadGuard;
 use tracing::{debug, info, warn};
 
 use super::channel::CapturedFrame;
+use crate::camera::RawFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
-use crate::camera::RawFrame;
 use crate::server::events::ServerEvent;
 use crate::server::state::{
     AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD,
@@ -130,10 +130,13 @@ pub async fn save_frame_to_disk(
         }
     }
 
-    if let Err(e) = state
-        .disk_writer
-        .queue_raw_frame(raw_frame, frame_number, metadata, camera_info.info.sensor_type, camera_info.info.bayer_pattern)
-    {
+    if let Err(e) = state.disk_writer.queue_raw_frame(
+        raw_frame,
+        frame_number,
+        metadata,
+        camera_info.info.sensor_type,
+        camera_info.info.bayer_pattern,
+    ) {
         warn!(error = %e, frame_number = frame_number, "Failed to queue frame for saving");
     }
 
@@ -327,7 +330,10 @@ pub async fn save_stacked_result(
             }
         }
 
-        if let Err(e) = state.disk_writer.queue_stacked_frame(Arc::new(fits_frame), metadata) {
+        if let Err(e) = state
+            .disk_writer
+            .queue_stacked_frame(Arc::new(fits_frame), metadata)
+        {
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
