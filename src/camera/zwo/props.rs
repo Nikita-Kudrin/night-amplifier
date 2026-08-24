@@ -36,8 +36,8 @@ pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i
         id,
         max_width: info.max_width as u32,
         max_height: info.max_height as u32,
-        pixel_size_x_um: info.pixel_size as f64,
-        pixel_size_y_um: info.pixel_size as f64,
+        pixel_size_x_um: info.pixel_size,
+        pixel_size_y_um: info.pixel_size,
         sensor_type: if info.is_color_cam {
             SensorType::Color
         } else {

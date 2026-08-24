@@ -53,7 +53,11 @@ pub fn auto_stretch_frame(
 
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
             let _span = tracing::info_span!("mtf_stretch_frame").entered();
-            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+            crate::render::stretch::mtf_stretch_frame(
+                frame,
+                result.midtones,
+                config.color_intensity,
+            )?;
             if let Some(c_cfg) = contrast_config {
                 let _span = tracing::info_span!("apply_contrast_frame").entered();
                 crate::render::output::apply_contrast_frame(frame, c_cfg)?;
@@ -73,7 +77,11 @@ pub fn auto_stretch_frame(
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
             subtract_black_point_uniform(frame, result.black_point)?;
             let _span = tracing::info_span!("mtf_stretch_frame").entered();
-            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+            crate::render::stretch::mtf_stretch_frame(
+                frame,
+                result.midtones,
+                config.color_intensity,
+            )?;
             if let Some(c_cfg) = contrast_config {
                 let _span = tracing::info_span!("apply_contrast_frame").entered();
                 crate::render::output::apply_contrast_frame(frame, c_cfg)?;
@@ -93,9 +101,18 @@ pub fn auto_stretch_frame(
         subtract_black_point_uniform(frame, result.black_point)?;
         let _span = tracing::info_span!("apply_tone_mapping").entered();
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
-            crate::render::stretch::mtf_stretch_frame(frame, result.midtones, config.color_intensity)?;
+            crate::render::stretch::mtf_stretch_frame(
+                frame,
+                result.midtones,
+                config.color_intensity,
+            )?;
         } else {
-            apply_tone_mapping(frame, config.tone_mapping, result.stretch_factor, config.color_intensity)?;
+            apply_tone_mapping(
+                frame,
+                config.tone_mapping,
+                result.stretch_factor,
+                config.color_intensity,
+            )?;
         }
     }
 
@@ -121,7 +138,8 @@ pub fn prepare_auto_stretch_frame(
         let _span = tracing::info_span!("compute_image_stats").entered();
         compute_image_stats(frame)?
     };
-    let mut result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
+    let mut result =
+        compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
 
     if channels == 3 && config.per_channel_black_point {
         let bp_config = BlackPointConfig::new(config.black_point_sigma);

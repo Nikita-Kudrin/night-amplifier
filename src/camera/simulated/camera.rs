@@ -11,7 +11,8 @@ use tracing::{debug, info};
 use crate::camera::error::{CameraError, CameraResult};
 use crate::camera::traits::Camera;
 use crate::camera::types::{
-    CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool,
+    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
+    SensorType,
 };
 use crate::Frame;
 
@@ -380,10 +381,20 @@ impl Camera for SimulatedCamera {
         }
 
         let is_color = frame.channels() == 3;
-        let required_len = frame.width() * frame.height() * if config.format == ImageFormat::Rgb24 { 3 } else { if config.format == ImageFormat::Raw16 { 2 } else { 1 } };
+        let required_len = frame.width()
+            * frame.height()
+            * if config.format == ImageFormat::Rgb24 {
+                3
+            } else {
+                if config.format == ImageFormat::Raw16 {
+                    2
+                } else {
+                    1
+                }
+            };
         let mut buffer = self.buffer_pool.get(required_len);
         let mut buf_idx = 0;
-        
+
         let step = frame.channels();
         match config.format {
             ImageFormat::Raw16 => {

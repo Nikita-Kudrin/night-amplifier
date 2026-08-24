@@ -27,7 +27,9 @@ struct Args {
 impl Args {
     fn parse() -> Self {
         let mut args = std::env::args().skip(1);
-        let mut port = if std::path::Path::new("Cargo.toml").exists() || std::path::Path::new("web/index.html").exists() {
+        let mut port = if std::path::Path::new("Cargo.toml").exists()
+            || std::path::Path::new("web/index.html").exists()
+        {
             9955u16
         } else {
             8844u16
@@ -111,7 +113,9 @@ impl Args {
         println!("Usage: night_amplifier [OPTIONS] [PORT]");
         println!();
         println!("Arguments:");
-        println!("  [PORT]              Server port (default: 9955, or 8844 in distribution binary)");
+        println!(
+            "  [PORT]              Server port (default: 9955, or 8844 in distribution binary)"
+        );
         println!();
         println!("Options:");
         println!("  -h, --help          Show this help message");

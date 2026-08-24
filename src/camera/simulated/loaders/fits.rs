@@ -79,7 +79,7 @@ fn extract_fits_info(info: &HduInfo) -> CameraResult<(usize, usize, usize, Image
                     )))
                 }
             };
-            Ok((w, h, c, image_type.clone()))
+            Ok((w, h, c, *image_type))
         }
         _ => Err(CameraError::ImageReadFailed(
             "FITS file does not contain image data".to_string(),
@@ -294,7 +294,10 @@ mod tests {
     fn test_load_nonexistent_fits() {
         let result = load_fits(Path::new("this_file_does_not_exist_xyz.fits"));
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CameraError::ImageReadFailed(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CameraError::ImageReadFailed(_)
+        ));
     }
 
     #[test]
@@ -307,7 +310,7 @@ mod tests {
             // Write a tiny incomplete header
             file.write_all(b"SIMPLE  =                    T").unwrap();
         }
-        
+
         let result = load_fits(&path);
         assert!(result.is_err());
         let _ = std::fs::remove_file(path);

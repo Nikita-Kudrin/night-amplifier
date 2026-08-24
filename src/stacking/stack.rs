@@ -46,13 +46,12 @@ impl MasterStack {
             RejectionMethod::SigmaClip
                 | RejectionMethod::WinsorizedSigmaClip
                 | RejectionMethod::MinMax
-        ) {
-            if crate::license::pro_plugin(&REJECTION_PLUGIN).is_none() {
-                return Err(StackError::InvalidConfiguration(
+        ) && crate::license::pro_plugin(&REJECTION_PLUGIN).is_none()
+        {
+            return Err(StackError::InvalidConfiguration(
                     "Advanced outlier rejection (Sigma Clipping, MinMax) is only available in Night Amplifier Pro.\n\
                      Please consider upgrading to unlock this feature.".into(),
                 ));
-            }
         }
 
         let pixel_count = width * height * channels;
@@ -246,11 +245,10 @@ impl MasterStack {
             RejectionMethod::SigmaClip
                 | RejectionMethod::WinsorizedSigmaClip
                 | RejectionMethod::MinMax
-        ) {
-            if crate::license::pro_plugin(&REJECTION_PLUGIN).is_none() {
-                warn!("Ignoring request for advanced rejection method - Night Amplifier Pro required.");
-                config.rejection = RejectionMethod::None;
-            }
+        ) && crate::license::pro_plugin(&REJECTION_PLUGIN).is_none()
+        {
+            warn!("Ignoring request for advanced rejection method - Night Amplifier Pro required.");
+            config.rejection = RejectionMethod::None;
         }
         self.config = config;
     }

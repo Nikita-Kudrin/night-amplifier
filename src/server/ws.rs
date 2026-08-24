@@ -49,11 +49,7 @@ async fn handle_eyepiece_quality(mut socket: WebSocket, state: Arc<AppState>) {
 
     // Send initial frame if available
     if let Some(frame_data) = state.get_latest_frame().await {
-        if socket
-            .send(Message::Binary(frame_data))
-            .await
-            .is_err()
-        {
+        if socket.send(Message::Binary(frame_data)).await.is_err() {
             return;
         }
     }
@@ -65,10 +61,8 @@ async fn handle_eyepiece_quality(mut socket: WebSocket, state: Arc<AppState>) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         // Handle ping/pong or commands
-                        if text == "ping" {
-                            if socket.send(Message::Text("pong".into())).await.is_err() {
-                                break;
-                            }
+                        if text == "ping" && socket.send(Message::Text("pong".into())).await.is_err() {
+                            break;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -261,10 +255,8 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if text == "ping" {
-                            if socket.send(Message::Text("pong".into())).await.is_err() {
-                                break;
-                            }
+                        if text == "ping" && socket.send(Message::Text("pong".into())).await.is_err() {
+                            break;
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {

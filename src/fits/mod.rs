@@ -17,7 +17,7 @@ mod writers;
 
 pub use metadata::FitsMetadata;
 
-use writers::{write_fits_u16_primary, write_mono_fits, write_rgb_fits, write_fits_raw};
+use writers::{write_fits_raw, write_fits_u16_primary, write_mono_fits, write_rgb_fits};
 
 /// Write a Frame to a FITS file
 #[instrument(skip(frame, metadata), fields(

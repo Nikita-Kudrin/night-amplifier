@@ -51,11 +51,7 @@ pub fn apply_scnr(frame: &mut Frame, amount: f32) -> Result<()> {
                 let l_new = (r * 0.2126) + (g_new * 0.7152) + (b * 0.0722);
 
                 // 4. Restore luminance with a division-by-zero safeguard
-                let ratio = if l_new > 1e-8 {
-                    l_old / l_new
-                } else {
-                    1.0
-                };
+                let ratio = if l_new > 1e-8 { l_old / l_new } else { 1.0 };
 
                 row[idx] = (r * ratio).clamp(0.0, 1.0);
                 row[idx + 1] = (g_new * ratio).clamp(0.0, 1.0);
@@ -74,12 +70,12 @@ mod tests {
     #[test]
     fn test_scnr_basic() {
         let mut frame = Frame::filled(2, 2, 3, 0.0).unwrap();
-        
+
         let mut data = vec![0.0f32; 2 * 2 * 3];
         data[0] = 0.1; // R
         data[1] = 0.5; // G (spike)
         data[2] = 0.1; // B
-        
+
         frame.data_mut().copy_from_slice(&data);
 
         let l_old = (0.1 * 0.2126) + (0.5 * 0.7152) + (0.1 * 0.0722);
@@ -91,13 +87,13 @@ mod tests {
         let b = frame.get_pixel(0, 0, 2);
 
         let l_new = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
-        
+
         // Luminance should be preserved exactly
         assert!((l_old - l_new).abs() < 1e-4);
-        
+
         // Green should have been reduced (but ratio'd back up due to luminance preservation)
         // Since g_limit = 0.1, it starts low, but luminance preservation scales all channels up.
-        assert!(g < 0.5); 
+        assert!(g < 0.5);
         assert!(r > 0.1);
         assert!(b > 0.1);
     }

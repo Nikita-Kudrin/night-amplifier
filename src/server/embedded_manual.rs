@@ -30,13 +30,15 @@ pub async fn serve_manual(uri: Uri) -> Response {
                 Some(content) => (content, html_path),
                 None => {
                     // Try directory index
-                    let index_path = format!("{}/index.html", path).trim_start_matches('/').to_string();
+                    let index_path = format!("{}/index.html", path)
+                        .trim_start_matches('/')
+                        .to_string();
                     match ManualAssets::get(&index_path) {
                         Some(content) => (content, index_path),
                         None => match ManualAssets::get("404.html") {
                             Some(content) => (content, "404.html".to_string()),
                             None => return StatusCode::NOT_FOUND.into_response(),
-                        }
+                        },
                     }
                 }
             }

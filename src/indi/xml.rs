@@ -2,17 +2,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum PropertyState {
+    #[default]
     Idle,
     Ok,
     Busy,
     Alert,
-}
-
-impl Default for PropertyState {
-    fn default() -> Self {
-        PropertyState::Idle
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

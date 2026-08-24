@@ -82,11 +82,7 @@ pub fn compute_alignment(
     }
 
     // Negate to match centroid convention (dx = rx - fx)
-    (
-        -(best_dx as i32 as f32),
-        -(best_dy as i32 as f32),
-        best_corr,
-    )
+    (-(best_dx as f32), -(best_dy as f32), best_corr)
 }
 
 /// Computes the weighted centroid of luminance data.

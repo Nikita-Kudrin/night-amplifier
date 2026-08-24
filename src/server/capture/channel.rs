@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use crate::frame::Frame;
 use crate::camera::RawFrame;
+use crate::frame::Frame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
 
 /// Maximum memory budget for in-flight frame queues (2 GB).

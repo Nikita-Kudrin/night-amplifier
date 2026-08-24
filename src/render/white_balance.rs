@@ -81,11 +81,7 @@ pub fn compute_green_reference_multipliers(stats: &ImageStats) -> Result<[f32; 3
     let k_g = 1.0;
     let k_b = g_median / b_median.max(1e-8);
 
-    Ok([
-        k_r.clamp(0.2, 5.0),
-        k_g,
-        k_b.clamp(0.2, 5.0),
-    ])
+    Ok([k_r.clamp(0.2, 5.0), k_g, k_b.clamp(0.2, 5.0)])
 }
 
 /// Neutralize the sky background color in-place
@@ -116,7 +112,10 @@ pub fn neutralize_background_auto(frame: &mut Frame) -> Result<[f32; 3]> {
 }
 
 /// Convenience function: neutralize background by matching Red and Blue to Green
-pub fn neutralize_background_green_reference(frame: &mut Frame, stats: &ImageStats) -> Result<[f32; 3]> {
+pub fn neutralize_background_green_reference(
+    frame: &mut Frame,
+    stats: &ImageStats,
+) -> Result<[f32; 3]> {
     let multipliers = compute_green_reference_multipliers(stats)?;
     neutralize_background(frame, &multipliers)?;
     Ok(multipliers)
@@ -177,7 +176,7 @@ pub fn compute_white_balance_grid(
             };
 
             let (r_med, g_med, b_med) = block_medians(frame, x_start, y_start, x_end, y_end);
-            
+
             // Filter out empty blocks (caused by registration artifacts at borders)
             if r_med > 0.0 || g_med > 0.0 || b_med > 0.0 {
                 r_samples.push(r_med);

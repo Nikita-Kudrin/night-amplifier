@@ -8,9 +8,9 @@ use super::config::{
     DiskWriterMessage, FrameType, WriteRequest, WritingSessionType, QUEUE_WARNING_THRESHOLD,
 };
 use super::error::DiskWriterError;
+use crate::camera::RawFrame;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
-use crate::camera::RawFrame;
 use crate::telemetry::metrics as telemetry_metrics;
 
 /// Handle to the disk writer for sending write requests

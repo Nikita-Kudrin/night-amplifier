@@ -332,16 +332,15 @@ impl PlanetaryStackingContext {
 
         // Try multi-point alignment via Pro plugin, falling back to single-point correlation.
         let warped_frame: Option<Frame> = if settings.planetary_multi_point_alignment {
-            crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN)
-                .and_then(|plugin| {
-                    match plugin.warp_frame(frame, reference, &roi, search_radius) {
-                        Ok(warped) => Some(warped),
-                        Err(e) => {
-                            debug!(error = %e, "Multi-point planetary alignment failed, falling back");
-                            None
-                        }
+            crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN).and_then(|plugin| {
+                match plugin.warp_frame(frame, reference, &roi, search_radius) {
+                    Ok(warped) => Some(warped),
+                    Err(e) => {
+                        debug!(error = %e, "Multi-point planetary alignment failed, falling back");
+                        None
                     }
-                })
+                }
+            })
         } else {
             None
         };

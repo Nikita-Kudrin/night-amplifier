@@ -123,7 +123,9 @@ pub async fn update_settings(
             settings.auto_stretch_intensity = auto_stretch_intensity.clamp(0.0, 1.0);
         }
         if let Some(saturation_boost) = request.saturation_boost {
-            if saturation_boost && crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_none() {
+            if saturation_boost
+                && crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_none()
+            {
                 return (
                     StatusCode::FORBIDDEN,
                     ApiResponse::err("Shadow Saturation Boost is a Pro feature"),
@@ -156,7 +158,9 @@ pub async fn update_settings(
             settings.planetary_auto_tracking = auto_tracking;
         }
         if let Some(multi_point) = request.planetary_multi_point_alignment {
-            if multi_point && crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN).is_none() {
+            if multi_point
+                && crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN).is_none()
+            {
                 return (
                     StatusCode::FORBIDDEN,
                     ApiResponse::err("Multi-Point Planetary Alignment is a Pro feature"),

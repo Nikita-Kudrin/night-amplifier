@@ -61,7 +61,7 @@ pub async fn connect_camera(
         Ok(cam_info) => {
             // Check if this was already connected (service returns existing info)
             let cameras = state.cameras.read().await;
-            let was_already_connected = cameras.len() > 0
+            let was_already_connected = !cameras.is_empty()
                 && cameras.get(&camera_id).map(|c| &c.info.name) == Some(&cam_info.info.name);
             drop(cameras);
 

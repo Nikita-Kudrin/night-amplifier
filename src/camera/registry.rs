@@ -196,7 +196,7 @@ impl CameraRegistry {
     /// Searches all available providers for a camera whose name contains
     /// the given substring.
     pub fn open_by_name(&self, name: &str) -> CameraResult<Box<dyn Camera>> {
-        for (_, provider) in &self.providers {
+        for provider in self.providers.values() {
             if !provider.is_available() {
                 continue;
             }
@@ -214,7 +214,7 @@ impl CameraRegistry {
 
     /// Open the first available camera from any provider
     pub fn open_first(&self) -> CameraResult<Box<dyn Camera>> {
-        for (_, provider) in &self.providers {
+        for provider in self.providers.values() {
             if !provider.is_available() {
                 continue;
             }

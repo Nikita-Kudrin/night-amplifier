@@ -36,12 +36,7 @@ impl JpegTier {
 
     /// All tiers in ascending bounding-box order.
     pub const fn all() -> [JpegTier; Self::COUNT] {
-        [
-            Self::Hd1080,
-            Self::Qhd1440,
-            Self::Uhd2160,
-            Self::Original,
-        ]
+        [Self::Hd1080, Self::Qhd1440, Self::Uhd2160, Self::Original]
     }
 
     /// Maximum output dimensions for the tier. `Original` is unbounded so the
@@ -212,7 +207,10 @@ mod tests {
     #[test]
     fn test_tier_from_resolution_below_1080p() {
         // A 720p phone viewport clamps up to the 1080p floor.
-        assert_eq!(JpegTier::for_request(Some(1280), Some(720)), JpegTier::Hd1080);
+        assert_eq!(
+            JpegTier::for_request(Some(1280), Some(720)),
+            JpegTier::Hd1080
+        );
     }
 
     #[test]
@@ -242,7 +240,10 @@ mod tests {
     #[test]
     fn test_tier_from_resolution_over_4k() {
         // Requests above 4K clamp down, so no client selects `Original`.
-        assert_eq!(JpegTier::for_request(Some(5000), Some(3000)), JpegTier::Uhd2160);
+        assert_eq!(
+            JpegTier::for_request(Some(5000), Some(3000)),
+            JpegTier::Uhd2160
+        );
     }
 
     #[test]
@@ -255,14 +256,26 @@ mod tests {
     /// the cheapest tier — rotating the phone must not change its bandwidth.
     #[test]
     fn test_tier_for_1080p_phone_is_orientation_independent() {
-        assert_eq!(JpegTier::for_request(Some(1080), Some(2220)), JpegTier::Hd1080);
-        assert_eq!(JpegTier::for_request(Some(2340), Some(1080)), JpegTier::Hd1080);
+        assert_eq!(
+            JpegTier::for_request(Some(1080), Some(2220)),
+            JpegTier::Hd1080
+        );
+        assert_eq!(
+            JpegTier::for_request(Some(2340), Some(1080)),
+            JpegTier::Hd1080
+        );
     }
 
     #[test]
     fn test_tier_for_4k_tablet_is_orientation_independent() {
-        assert_eq!(JpegTier::for_request(Some(3840), Some(2160)), JpegTier::Uhd2160);
-        assert_eq!(JpegTier::for_request(Some(2160), Some(3840)), JpegTier::Uhd2160);
+        assert_eq!(
+            JpegTier::for_request(Some(3840), Some(2160)),
+            JpegTier::Uhd2160
+        );
+        assert_eq!(
+            JpegTier::for_request(Some(2160), Some(3840)),
+            JpegTier::Uhd2160
+        );
     }
 
     #[test]
@@ -285,10 +298,7 @@ mod tests {
         let stored = cache.insert(JpegTier::Hd1080, 7, vec![1, 2, 3]);
 
         assert_eq!(stored.as_ref(), &[1, 2, 3]);
-        assert_eq!(
-            cache.get(JpegTier::Hd1080, 7).unwrap().as_ref(),
-            &[1, 2, 3]
-        );
+        assert_eq!(cache.get(JpegTier::Hd1080, 7).unwrap().as_ref(), &[1, 2, 3]);
     }
 
     #[test]

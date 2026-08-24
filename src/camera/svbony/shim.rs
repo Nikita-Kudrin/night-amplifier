@@ -20,7 +20,7 @@ unsafe impl Sync for SvbonyHandle {}
 impl SvbonyHandle {
     pub fn open(camera_id: c_int) -> Result<Self, String> {
         let sdk = SvbonySdk::try_load().ok_or("SVBONY SDK not loaded")?;
-        
+
         let hr = unsafe { sdk.api.SVBOpenCamera(camera_id) };
         check_error(hr, "SVBOpenCamera")?;
 
@@ -44,10 +44,18 @@ impl SvbonyHandle {
         unsafe { sdk.api.SVBCloseCamera(self.camera_id) };
     }
 
-    pub fn set_control_value(&self, control_type: c_int, value: c_long, auto: bool) -> Result<(), String> {
+    pub fn set_control_value(
+        &self,
+        control_type: c_int,
+        value: c_long,
+        auto: bool,
+    ) -> Result<(), String> {
         let sdk = SvbonySdk::try_load().ok_or("SVBONY SDK not loaded")?;
         let auto_val = if auto { SVB_TRUE } else { SVB_FALSE };
-        let hr = unsafe { sdk.api.SVBSetControlValue(self.camera_id, control_type, value, auto_val) };
+        let hr = unsafe {
+            sdk.api
+                .SVBSetControlValue(self.camera_id, control_type, value, auto_val)
+        };
         check_error(hr, &format!("SVBSetControlValue({})", control_type))
     }
 
@@ -55,7 +63,10 @@ impl SvbonyHandle {
         let sdk = SvbonySdk::try_load().ok_or("SVBONY SDK not loaded")?;
         let mut value: c_long = 0;
         let mut auto: c_int = 0;
-        let hr = unsafe { sdk.api.SVBGetControlValue(self.camera_id, control_type, &mut value, &mut auto) };
+        let hr = unsafe {
+            sdk.api
+                .SVBGetControlValue(self.camera_id, control_type, &mut value, &mut auto)
+        };
         check_error(hr, &format!("SVBGetControlValue({})", control_type))?;
         Ok((value, auto == SVB_TRUE))
     }
@@ -66,7 +77,14 @@ impl SvbonyHandle {
         check_error(hr, "SVBSetOutputImageType")
     }
 
-    pub fn set_roi_format(&self, x: c_int, y: c_int, w: c_int, h: c_int, bin: c_int) -> Result<(), String> {
+    pub fn set_roi_format(
+        &self,
+        x: c_int,
+        y: c_int,
+        w: c_int,
+        h: c_int,
+        bin: c_int,
+    ) -> Result<(), String> {
         let sdk = SvbonySdk::try_load().ok_or("SVBONY SDK not loaded")?;
         let hr = unsafe { sdk.api.SVBSetROIFormat(self.camera_id, x, y, w, h, bin) };
         check_error(hr, "SVBSetROIFormat")
@@ -79,7 +97,10 @@ impl SvbonyHandle {
         let mut w = 0;
         let mut h = 0;
         let mut bin = 0;
-        let hr = unsafe { sdk.api.SVBGetROIFormat(self.camera_id, &mut x, &mut y, &mut w, &mut h, &mut bin) };
+        let hr = unsafe {
+            sdk.api
+                .SVBGetROIFormat(self.camera_id, &mut x, &mut y, &mut w, &mut h, &mut bin)
+        };
         check_error(hr, "SVBGetROIFormat")?;
         Ok((x, y, w, h, bin))
     }
@@ -101,7 +122,14 @@ impl SvbonyHandle {
 
     pub fn get_video_data(&self, buffer: &mut [u8], wait_ms: c_int) -> Result<(), String> {
         let sdk = SvbonySdk::try_load().ok_or("SVBONY SDK not loaded")?;
-        let hr = unsafe { sdk.api.SVBGetVideoData(self.camera_id, buffer.as_mut_ptr(), buffer.len() as c_long, wait_ms) };
+        let hr = unsafe {
+            sdk.api.SVBGetVideoData(
+                self.camera_id,
+                buffer.as_mut_ptr(),
+                buffer.len() as c_long,
+                wait_ms,
+            )
+        };
         check_error(hr, "SVBGetVideoData")
     }
 }

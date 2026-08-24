@@ -63,13 +63,13 @@ pub fn compute_auto_stretch_with_algorithm(
             let max_m = m_r.max(m_g).max(m_b);
             let min_m = m_r.min(m_g).min(m_b);
             let delta_rel = (max_m - min_m) / m_avg;
-            
+
             w = ((delta_rel - 0.05) / (0.15 - 0.05)).clamp(0.0, 1.0);
-            
+
             let adj_r = m_r - black_point;
             let adj_g = m_g - black_point;
             let adj_b = m_b - black_point;
-            
+
             eff_r = adj_r.max(1e-4);
             eff_g = adj_g.max(1e-4);
             eff_b = adj_b.max(1e-4);
@@ -88,15 +88,16 @@ pub fn compute_auto_stretch_with_algorithm(
             result.stretch_factor
         }
         ToneMappingAlgorithm::Mtf => {
-            let m_linked = estimate_tone_mapping_strength(algorithm, effective_median, target_background);
+            let m_linked =
+                estimate_tone_mapping_strength(algorithm, effective_median, target_background);
             let m_r_un = estimate_tone_mapping_strength(algorithm, eff_r, target_background);
             let m_g_un = estimate_tone_mapping_strength(algorithm, eff_g, target_background);
             let m_b_un = estimate_tone_mapping_strength(algorithm, eff_b, target_background);
-            
+
             midtones[0] = m_linked * (1.0 - w) + m_r_un * w;
             midtones[1] = m_linked * (1.0 - w) + m_g_un * w;
             midtones[2] = m_linked * (1.0 - w) + m_b_un * w;
-            
+
             m_linked
         }
     };
@@ -149,7 +150,12 @@ mod tests {
 
     #[test]
     fn test_compute_auto_stretch_different_targets() {
-        let data = vec![0.08f32; 64 * 64 * 3];
+        let mut data = vec![0.0f32; 64 * 64 * 3];
+        for i in 0..data.len() {
+            let rand = (i % 100) as f32 / 100.0;
+            data[i] = 0.05 + rand * 0.1; // 0.05 to 0.15
+        }
+
         let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
         let stats = compute_image_stats(&frame).unwrap();
 
