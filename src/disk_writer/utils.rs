@@ -7,7 +7,7 @@ pub(crate) fn write_png(frame: &Frame, path: &Path) -> Result<(), std::io::Error
     use std::io::BufWriter;
 
     let file = File::create(path)?;
-    let ref mut w = BufWriter::new(file);
+    let w = &mut BufWriter::new(file);
 
     let mut encoder = png::Encoder::new(w, frame.width() as u32, frame.height() as u32);
 
@@ -22,7 +22,7 @@ pub(crate) fn write_png(frame: &Frame, path: &Path) -> Result<(), std::io::Error
 
     let mut writer = encoder
         .write_header()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(|e| std::io::Error::other(e))?;
 
     // Convert f32 [0.0, 1.0] to u8 [0, 255]
     let rgb8: Vec<u8> = frame
@@ -33,7 +33,7 @@ pub(crate) fn write_png(frame: &Frame, path: &Path) -> Result<(), std::io::Error
 
     writer
         .write_image_data(&rgb8)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(|e| std::io::Error::other(e))?;
 
     Ok(())
 }

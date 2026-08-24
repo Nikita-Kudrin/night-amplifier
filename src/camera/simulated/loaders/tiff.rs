@@ -63,7 +63,7 @@ fn convert_tiff_data(
         (ColorType::RGBA(8), DecodingResult::U8(data)) => {
             let expected_len = (data.len() / 4) * 3;
             let mut rgb = Vec::with_capacity(expected_len);
-            for chunk in data.chunks_exact(4) {
+            for chunk in data.as_chunks::<4>().0 {
                 rgb.extend_from_slice(&chunk[0..3]);
             }
             Ok((rgb, PixelFormat::Rgb8, 3))
@@ -71,7 +71,7 @@ fn convert_tiff_data(
         (ColorType::RGBA(16), DecodingResult::U16(data)) => {
             let expected_len = (data.len() / 4) * 3 * 2;
             let mut rgb = Vec::with_capacity(expected_len);
-            for chunk in data.chunks_exact(4) {
+            for chunk in data.as_chunks::<4>().0 {
                 for &v in &chunk[0..3] {
                     rgb.extend_from_slice(&v.to_le_bytes());
                 }
@@ -100,7 +100,7 @@ fn convert_tiff_data(
         (ColorType::RGBA(32), DecodingResult::F32(data)) => {
             let pixel_count = data.len() / 4;
             let mut bytes = Vec::with_capacity(pixel_count * 3 * 2);
-            for chunk in data.chunks_exact(4) {
+            for chunk in data.as_chunks::<4>().0 {
                 for &v in &chunk[0..3] {
                     let scaled = (v.clamp(0.0, 1.0) * 65535.0) as u16;
                     bytes.extend_from_slice(&scaled.to_le_bytes());

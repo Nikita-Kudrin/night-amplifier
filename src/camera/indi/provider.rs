@@ -3,7 +3,9 @@
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::camera::{Camera, CameraEntry, CameraInfo, CameraProvider, CameraResult, ImageFormat, SensorType};
+use crate::camera::{
+    Camera, CameraEntry, CameraInfo, CameraProvider, CameraResult, ImageFormat, SensorType,
+};
 use crate::indi::client::IndiClient;
 use crate::indi::xml::PropertyState;
 
@@ -19,7 +21,13 @@ impl IndiProvider {
 
     pub fn slugify_device_name(name: &str) -> String {
         name.chars()
-            .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>()
             .split('-')
             .filter(|s| !s.is_empty())
@@ -29,7 +37,10 @@ impl IndiProvider {
 
     pub async fn list_cameras_async(&self) -> CameraResult<Vec<CameraInfo>> {
         let mut client = IndiClient::new();
-        if let Err(e) = client.connect(&self.host, self.port, Duration::from_secs(3)).await {
+        if let Err(e) = client
+            .connect(&self.host, self.port, Duration::from_secs(3))
+            .await
+        {
             debug!("INDI provider failed to connect: {}", e);
             return Ok(vec![]);
         }
@@ -54,7 +65,7 @@ impl IndiProvider {
             let mut pixel_size_x_um = 0.0;
             let mut pixel_size_y_um = 0.0;
             let mut bit_depth = 16;
-            
+
             if let Some(num) = device.get_number("CCD_INFO", "CCD_MAX_X") {
                 max_width = num.value as u32;
             }
@@ -78,7 +89,7 @@ impl IndiProvider {
             }
 
             let has_cooler = device.properties.contains_key("CCD_TEMPERATURE");
-            
+
             let mut min_gain = 0.0;
             let mut max_gain = 100.0;
             if let Some(num) = device.get_number("CCD_GAIN", "GAIN") {
@@ -96,7 +107,7 @@ impl IndiProvider {
             // Attempt to determine color or mono
             let bayer_pattern = None;
             let sensor_type = SensorType::Mono;
-            // INDI doesn't always expose Bayer pattern clearly until a frame is taken, 
+            // INDI doesn't always expose Bayer pattern clearly until a frame is taken,
             // but we might check CfaPattern text or format
             // if device.properties.contains_key("CCD_CFA") || device.properties.contains_key("BAYERPAT") {
             //    sensor_type = SensorType::Color;
@@ -119,8 +130,12 @@ impl IndiProvider {
                 max_exposure_us: max_exposure_us as u64,
                 supported_formats: vec![ImageFormat::Raw16, ImageFormat::Raw8],
                 bit_depth,
-                min_temp_c: device.get_number("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE").map(|n| n.min),
-                max_temp_c: device.get_number("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE").map(|n| n.max),
+                min_temp_c: device
+                    .get_number("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE")
+                    .map(|n| n.min),
+                max_temp_c: device
+                    .get_number("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE")
+                    .map(|n| n.max),
                 has_shutter: false,
                 is_usb3: false,
                 unity_gain: 0,

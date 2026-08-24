@@ -41,13 +41,13 @@ impl Frame {
                 data.extend(raw.iter().map(|&v| v as f32 * inv_max));
             }
             PixelFormat::Rgb16 | PixelFormat::Bayer16 => {
-                for chunk in raw.chunks_exact(2) {
+                for chunk in raw.as_chunks::<2>().0 {
                     let value = u16::from_le_bytes([chunk[0], chunk[1]]);
                     data.push(value as f32 * inv_max);
                 }
             }
             PixelFormat::Rgb16Be | PixelFormat::Bayer16Be => {
-                for chunk in raw.chunks_exact(2) {
+                for chunk in raw.as_chunks::<2>().0 {
                     let value = u16::from_be_bytes([chunk[0], chunk[1]]);
                     data.push(value as f32 * inv_max);
                 }

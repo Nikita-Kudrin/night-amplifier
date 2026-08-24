@@ -93,7 +93,10 @@ mod tests {
         for i in 0..REJECTION_RATE_THRESHOLD {
             tripped = session.record_rejection(base + Duration::from_millis(i as u64 * 10));
         }
-        assert!(tripped, "threshold rejections within the window should trip");
+        assert!(
+            tripped,
+            "threshold rejections within the window should trip"
+        );
     }
 
     #[test]
@@ -107,7 +110,10 @@ mod tests {
         for i in 0..(REJECTION_RATE_THRESHOLD * 3) {
             tripped = session.record_rejection(base + Duration::from_secs(i as u64 * 2));
         }
-        assert!(!tripped, "rejections spread beyond the window should not trip");
+        assert!(
+            !tripped,
+            "rejections spread beyond the window should not trip"
+        );
     }
 
     #[test]
@@ -134,7 +140,8 @@ mod tests {
         }
         assert!(!session.rejection_rate_exceeded());
 
-        let tripped = session.record_rejection(base + Duration::from_millis(REJECTION_RATE_THRESHOLD as u64));
+        let tripped =
+            session.record_rejection(base + Duration::from_millis(REJECTION_RATE_THRESHOLD as u64));
         assert!(tripped);
         assert!(session.rejection_rate_exceeded());
     }

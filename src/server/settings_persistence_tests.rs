@@ -140,7 +140,10 @@ mod tests {
             restored.stretch_aggressiveness,
             settings.stretch_aggressiveness
         );
-        assert!((restored.auto_stretch_intensity - settings.auto_stretch_intensity).abs() < f32::EPSILON);
+        assert!(
+            (restored.auto_stretch_intensity - settings.auto_stretch_intensity).abs()
+                < f32::EPSILON
+        );
         assert_eq!(restored.saturation_boost, settings.saturation_boost);
         assert!(
             (restored.saturation_boost_strength - settings.saturation_boost_strength).abs()
@@ -301,7 +304,10 @@ mod tests {
         );
         assert_eq!(loaded.use_simulated_camera, settings.use_simulated_camera);
         assert_eq!(loaded.eyepiece.binoview, settings.eyepiece.binoview);
-        assert_eq!(loaded.eyepiece.circular_view, settings.eyepiece.circular_view);
+        assert_eq!(
+            loaded.eyepiece.circular_view,
+            settings.eyepiece.circular_view
+        );
         assert_eq!(loaded.eyepiece.intensity, settings.eyepiece.intensity);
         assert_eq!(
             loaded.planetary_auto_tracking,
@@ -401,7 +407,11 @@ mod tests {
         json["push_to_fov"] = serde_json::json!(0.2032);
         json["some_future_unknown_key"] = serde_json::json!("whatever");
         json["exposure_us"] = serde_json::json!(1_234_567u64);
-        std::fs::write(temp_file.path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+        std::fs::write(
+            temp_file.path(),
+            serde_json::to_string_pretty(&json).unwrap(),
+        )
+        .unwrap();
 
         let loaded = persistence
             .load()

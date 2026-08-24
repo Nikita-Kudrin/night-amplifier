@@ -230,25 +230,24 @@ fn test_stacking_with_various_offsets() {
 
 #[test]
 fn test_auto_tracking() {
-    // With auto_tracking = true, the stacker should be able to align a frame 
+    // With auto_tracking = true, the stacker should be able to align a frame
     // where the planet has drifted significantly (outside the central ROI).
     let mut config = PlanetaryConfig::default();
     config.auto_tracking = true;
     config.search_radius = 20; // limit search radius
     config.alignment_roi = Some(AlignmentRoi::new(0, 0, 32, 32)); // arbitrary base ROI size
-    
+
     let mut stacker = PlanetaryStacker::new(config);
-    
+
     // Reference frame has planet at center (32, 32) of a 64x64 frame
     let reference = create_planetary_frame(64, 64, 0.0, 0.0, 0.0);
     stacker.add_frame(&reference).unwrap();
-    
+
     // Shifted frame has planet shifted by (15, 15)
     let shifted = create_planetary_frame(64, 64, 15.0, 15.0, 0.0);
     stacker.add_frame(&shifted).unwrap();
-    
+
     let stats = stacker.statistics();
     // The stacker should successfully find the large offset
     assert!(stats.max_offset > 14.0);
 }
-

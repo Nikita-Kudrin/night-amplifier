@@ -224,11 +224,17 @@ impl AppState {
                     session.rejected_count += 1;
                 }
             }
-            (session.frame_count, session.stacked_count, session.rejected_count)
+            (
+                session.frame_count,
+                session.stacked_count,
+                session.rejected_count,
+            )
         };
-        let _ = self
-            .events
-            .send(ServerEvent::frame_captured(frame_number, stacked_count, rejected_count));
+        let _ = self.events.send(ServerEvent::frame_captured(
+            frame_number,
+            stacked_count,
+            rejected_count,
+        ));
     }
 
     /// Record a rejected frame (a camera-capture failure — see
@@ -249,7 +255,11 @@ impl AppState {
             // whether the camera itself is responding, not about stacking.
             session.record_rejection(std::time::Instant::now());
 
-            (session.frame_count, session.stacked_count, session.rejected_count)
+            (
+                session.frame_count,
+                session.stacked_count,
+                session.rejected_count,
+            )
         };
         let _ = self.events.send(ServerEvent::frame_rejected(
             frame_number,

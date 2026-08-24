@@ -4,17 +4,13 @@ use serde::{Deserialize, Serialize};
 /// Algorithm used for background extraction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BackgroundExtractionAlgorithm {
     /// Grid-based median with bilinear interpolation (fast, stable)
+    #[default]
     GridBilinear,
     /// Radial Basis Function with Thin-Plate Splines (high quality, nebula-safe)
     Rbf,
-}
-
-impl Default for BackgroundExtractionAlgorithm {
-    fn default() -> Self {
-        Self::GridBilinear
-    }
 }
 
 impl std::fmt::Display for BackgroundExtractionAlgorithm {

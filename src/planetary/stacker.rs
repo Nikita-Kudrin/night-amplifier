@@ -16,7 +16,13 @@ use std::sync::OnceLock;
 /// PlanetaryStacker trait for the Pro plugin
 pub trait PlanetaryStackerPlugin: Send + Sync {
     /// Aligns and warps the frame against the reference using multi-point surface alignment
-    fn warp_frame(&self, frame: &Frame, reference: &Frame, roi: &AlignmentRoi, search_radius: usize) -> Result<Frame>;
+    fn warp_frame(
+        &self,
+        frame: &Frame,
+        reference: &Frame,
+        roi: &AlignmentRoi,
+        search_radius: usize,
+    ) -> Result<Frame>;
     /// Clears any cached alignment points when the reference frame changes
     fn clear_cache(&self);
 }
@@ -157,7 +163,7 @@ impl PlanetaryStacker {
 
     fn compute_frame_alignment(&self, frame: &Frame) -> (f32, f32) {
         let reference = self.reference.as_ref().unwrap();
-        
+
         let roi = if self.config.auto_tracking {
             let lum = super::quality::frame_to_luminance(frame);
             let (cx, cy) = super::alignment::compute_centroid(&lum, self.width, self.height);

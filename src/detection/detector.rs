@@ -53,7 +53,8 @@ impl StarDetector {
         };
 
         let mut stars: Vec<Star> = {
-            let _span = tracing::info_span!("compute_centroids", candidates = candidates.len()).entered();
+            let _span =
+                tracing::info_span!("compute_centroids", candidates = candidates.len()).entered();
             candidates
                 .into_iter()
                 .filter_map(|(x, y)| self.compute_centroid(&luminance, width, height, x, y, &stats))
@@ -516,7 +517,7 @@ mod tests {
         let width = 50;
         let height = 50;
         let mut data = vec![0.05f32; width * height];
-        
+
         // Generate a star centered exactly at 25.3, 25.0
         add_gaussian_star(&mut data, width, 25.3, 25.0, 0.8, 2.0);
 
@@ -530,8 +531,16 @@ mod tests {
         let star = &stars[0];
 
         // Ensure the centroid is detected at the sub-pixel coordinate correctly
-        assert!((star.x - 25.3).abs() < 0.1, "Centroid x should be ~25.3, got x={}", star.x);
-        assert!((star.y - 25.0).abs() < 0.1, "Centroid y should be ~25.0, got y={}", star.y);
+        assert!(
+            (star.x - 25.3).abs() < 0.1,
+            "Centroid x should be ~25.3, got x={}",
+            star.x
+        );
+        assert!(
+            (star.y - 25.0).abs() < 0.1,
+            "Centroid y should be ~25.0, got y={}",
+            star.y
+        );
     }
 
     #[test]
@@ -742,7 +751,11 @@ mod tests {
 
         let frame = Frame::from_f32_vec(data, width, height, 1).unwrap();
         let stars = StarDetector::with_defaults().detect(&frame).unwrap();
-        assert_eq!(stars.len(), 2, "both the dim star and the lone pixel should register");
+        assert_eq!(
+            stars.len(),
+            2,
+            "both the dim star and the lone pixel should register"
+        );
 
         let dim = stars
             .iter()

@@ -8,9 +8,8 @@ use std::path::Path;
 use night_amplifier::camera::CaptureConfig;
 use night_amplifier::camera::{Camera, SimulatedCamera};
 use night_amplifier::{
-    auto_stretch_default, compute_image_stats, debayer_auto, detect_cfa_pattern,
-    subtract_background, CfaPattern, DebayerAlgorithm, DebayerConfig, DetectionConfig, Frame,
-    PipelineConfig, StackingPipeline, StarDetector,
+    compute_image_stats, debayer_auto, detect_cfa_pattern, CfaPattern, DebayerAlgorithm,
+    DebayerConfig, DetectionConfig, Frame, PipelineConfig, StackingPipeline, StarDetector,
 };
 use serial_test::serial;
 
@@ -135,8 +134,7 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
     let detected_pattern: Option<CfaPattern> = if needs_debayer {
         images
             .iter()
-            .filter(|img| img.is_bayer && img.frame.channels() == 1)
-            .next()
+            .find(|img| img.is_bayer && img.frame.channels() == 1)
             .and_then(|img| detect_cfa_pattern(&img.frame).ok())
             .map(|detection| {
                 println!("\n  Auto-detected CFA pattern: {:?}", detection.pattern);
@@ -255,7 +253,7 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
             }
         };
 
-        let frame = raw_frame.to_frame(&camera.info()).unwrap();
+        let frame = raw_frame.to_frame(camera.info()).unwrap();
 
         // Process through the pipeline
         let _result = pipeline.process_frame(&frame);
@@ -350,18 +348,20 @@ fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
                     println!("        VALIDATION WARNING: Auto-stretch did not converge");
                 }
             }
-            
+
             // VALIDATION: Assert that background is neutral
             if stacked.channels() == 3 {
                 let stats = compute_image_stats(&stacked).expect("Failed to compute stats");
                 println!(
                     "        Channel Medians: R={:.2}, G={:.2}, B={:.2}",
-                    stats.channels[0].median * 255.0, stats.channels[1].median * 255.0, stats.channels[2].median * 255.0
+                    stats.channels[0].median * 255.0,
+                    stats.channels[1].median * 255.0,
+                    stats.channels[2].median * 255.0
                 );
                 let diff_rg = (stats.channels[0].median - stats.channels[1].median).abs() * 255.0;
                 let diff_gb = (stats.channels[1].median - stats.channels[2].median).abs() * 255.0;
                 let diff_rb = (stats.channels[0].median - stats.channels[2].median).abs() * 255.0;
-                
+
                 assert!(diff_rg < 3.0, "VALIDATION FAILED: Red and Green medians differ significantly: R={:.2}, G={:.2}", stats.channels[0].median * 255.0, stats.channels[1].median * 255.0);
                 assert!(diff_gb < 3.0, "VALIDATION FAILED: Green and Blue medians differ significantly: G={:.2}, B={:.2}", stats.channels[1].median * 255.0, stats.channels[2].median * 255.0);
                 assert!(diff_rb < 3.0, "VALIDATION FAILED: Red and Blue medians differ significantly: R={:.2}, B={:.2}", stats.channels[0].median * 255.0, stats.channels[2].median * 255.0);

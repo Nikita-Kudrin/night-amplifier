@@ -55,13 +55,13 @@ impl Camera {
             .SupportedBins
             .iter()
             .take_while(|&&b| b != 0)
-            .map(|&b| b as i32)
+            .map(|&b| b)
             .collect();
         let supported_video_format = info
             .SupportedVideoFormat
             .iter()
             .take_while(|&&f| f != ASI_IMG_TYPE_ASI_IMG_END)
-            .map(|&f| f)
+            .copied()
             .collect();
 
         let info_asi = CameraInfoASI {
@@ -179,17 +179,17 @@ impl Camera {
 
     pub fn get_gain_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_GAIN)
-            .map(|(v, _)| v as i64)
+            .map(|(v, _)| v)
     }
 
     pub fn get_offset_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_OFFSET)
-            .map(|(v, _)| v as i64)
+            .map(|(v, _)| v)
     }
 
     pub fn get_exposure(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE)
-            .map(|(v, _)| v as i64)
+            .map(|(v, _)| v)
     }
 
     pub fn get_cooler(&self) -> Result<bool, String> {

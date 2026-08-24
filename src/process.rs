@@ -53,7 +53,7 @@ impl ExternalProcess {
 
     /// Wait for the process to complete
     pub async fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        std::pin::Pin::from(self.child.wait()).await
+        self.child.wait().await
     }
 
     /// Get the process ID of the leader

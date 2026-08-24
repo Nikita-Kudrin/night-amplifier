@@ -9,7 +9,10 @@ use tracing::{debug, error, info, warn};
 use crate::indi::connection::IndiConnection;
 use crate::indi::device::IndiDevice;
 use crate::indi::error::{IndiError, Result};
-use crate::indi::xml::{BlobEnable, EnableBlob, GetProperties, IndiMessage, NewNumber, NewNumberVector, NewSwitch, NewSwitchVector, SwitchState};
+use crate::indi::xml::{
+    BlobEnable, EnableBlob, GetProperties, IndiMessage, NewNumber, NewNumberVector, NewSwitch,
+    NewSwitchVector, SwitchState,
+};
 
 #[derive(Debug, Clone)]
 pub struct IndiClient {
@@ -17,6 +20,12 @@ pub struct IndiClient {
     connection: Option<IndiConnection>,
     updates_tx: broadcast::Sender<IndiMessage>,
     connected: Arc<RwLock<bool>>,
+}
+
+impl Default for IndiClient {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IndiClient {
@@ -101,7 +110,12 @@ impl IndiClient {
         }
     }
 
-    pub async fn enable_blob(&self, device: &str, property: Option<&str>, rule: BlobEnable) -> Result<()> {
+    pub async fn enable_blob(
+        &self,
+        device: &str,
+        property: Option<&str>,
+        rule: BlobEnable,
+    ) -> Result<()> {
         let req = EnableBlob {
             device: device.to_string(),
             name: property.map(|s| s.to_string()),
@@ -110,26 +124,42 @@ impl IndiClient {
         self.send_message(&req).await
     }
 
-    pub async fn set_number(&self, device: &str, property: &str, elements: Vec<(&str, f64)>) -> Result<()> {
+    pub async fn set_number(
+        &self,
+        device: &str,
+        property: &str,
+        elements: Vec<(&str, f64)>,
+    ) -> Result<()> {
         let req = NewNumberVector {
             device: device.to_string(),
             name: property.to_string(),
-            elements: elements.into_iter().map(|(n, v)| NewNumber {
-                name: n.to_string(),
-                value: v,
-            }).collect(),
+            elements: elements
+                .into_iter()
+                .map(|(n, v)| NewNumber {
+                    name: n.to_string(),
+                    value: v,
+                })
+                .collect(),
         };
         self.send_message(&req).await
     }
 
-    pub async fn set_switch(&self, device: &str, property: &str, elements: Vec<(&str, SwitchState)>) -> Result<()> {
+    pub async fn set_switch(
+        &self,
+        device: &str,
+        property: &str,
+        elements: Vec<(&str, SwitchState)>,
+    ) -> Result<()> {
         let req = NewSwitchVector {
             device: device.to_string(),
             name: property.to_string(),
-            elements: elements.into_iter().map(|(n, v)| NewSwitch {
-                name: n.to_string(),
-                value: v,
-            }).collect(),
+            elements: elements
+                .into_iter()
+                .map(|(n, v)| NewSwitch {
+                    name: n.to_string(),
+                    value: v,
+                })
+                .collect(),
         };
         self.send_message(&req).await
     }
@@ -141,11 +171,13 @@ impl IndiClient {
         timeout: Duration,
     ) -> Result<crate::indi::xml::SetBlob> {
         let mut rx = self.updates_tx.subscribe();
-        
+
         let wait_future = async {
             loop {
                 match rx.recv().await {
-                    Ok(IndiMessage::SetBlobVector(v)) if v.device == device && v.name == property => {
+                    Ok(IndiMessage::SetBlobVector(v))
+                        if v.device == device && v.name == property =>
+                    {
                         if let Some(blob) = v.elements.into_iter().next() {
                             return Ok(blob);
                         }
@@ -166,24 +198,34 @@ impl IndiClient {
             .map_err(|_| IndiError::Timeout(format!("BLOB from {}.{}", device, property)))?
     }
 
-    async fn update_device_state(devices: &Arc<RwLock<HashMap<String, IndiDevice>>>, msg: &IndiMessage) {
+    async fn update_device_state(
+        devices: &Arc<RwLock<HashMap<String, IndiDevice>>>,
+        msg: &IndiMessage,
+    ) {
         let mut devs = devices.write().await;
-        
+
         match msg {
             IndiMessage::DefNumberVector(v) => {
-                let dev = devs.entry(v.device.clone()).or_insert_with(|| IndiDevice::new(v.device.clone()));
+                let dev = devs
+                    .entry(v.device.clone())
+                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
                 let mut elements = HashMap::new();
                 for el in &v.elements {
                     elements.insert(el.name.clone(), el.clone());
                 }
-                dev.properties.insert(v.name.clone(), crate::indi::device::IndiProperty::Number {
-                    state: v.state.clone(),
-                    elements,
-                });
+                dev.properties.insert(
+                    v.name.clone(),
+                    crate::indi::device::IndiProperty::Number {
+                        state: v.state.clone(),
+                        elements,
+                    },
+                );
             }
             IndiMessage::SetNumberVector(v) => {
                 if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Number { state, elements }) = dev.properties.get_mut(&v.name) {
+                    if let Some(crate::indi::device::IndiProperty::Number { state, elements }) =
+                        dev.properties.get_mut(&v.name)
+                    {
                         *state = v.state.clone();
                         for el in &v.elements {
                             if let Some(def) = elements.get_mut(&el.name) {
@@ -194,20 +236,28 @@ impl IndiClient {
                 }
             }
             IndiMessage::DefSwitchVector(v) => {
-                let dev = devs.entry(v.device.clone()).or_insert_with(|| IndiDevice::new(v.device.clone()));
+                let dev = devs
+                    .entry(v.device.clone())
+                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
                 let mut elements = HashMap::new();
                 for el in &v.elements {
                     elements.insert(el.name.clone(), el.clone());
                 }
-                dev.properties.insert(v.name.clone(), crate::indi::device::IndiProperty::Switch {
-                    state: v.state.clone(),
-                    rule: v.rule.clone(),
-                    elements,
-                });
+                dev.properties.insert(
+                    v.name.clone(),
+                    crate::indi::device::IndiProperty::Switch {
+                        state: v.state.clone(),
+                        rule: v.rule.clone(),
+                        elements,
+                    },
+                );
             }
             IndiMessage::SetSwitchVector(v) => {
                 if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Switch { state, elements, .. }) = dev.properties.get_mut(&v.name) {
+                    if let Some(crate::indi::device::IndiProperty::Switch {
+                        state, elements, ..
+                    }) = dev.properties.get_mut(&v.name)
+                    {
                         *state = v.state.clone();
                         for el in &v.elements {
                             if let Some(def) = elements.get_mut(&el.name) {
@@ -218,19 +268,26 @@ impl IndiClient {
                 }
             }
             IndiMessage::DefTextVector(v) => {
-                let dev = devs.entry(v.device.clone()).or_insert_with(|| IndiDevice::new(v.device.clone()));
+                let dev = devs
+                    .entry(v.device.clone())
+                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
                 let mut elements = HashMap::new();
                 for el in &v.elements {
                     elements.insert(el.name.clone(), el.clone());
                 }
-                dev.properties.insert(v.name.clone(), crate::indi::device::IndiProperty::Text {
-                    state: v.state.clone(),
-                    elements,
-                });
+                dev.properties.insert(
+                    v.name.clone(),
+                    crate::indi::device::IndiProperty::Text {
+                        state: v.state.clone(),
+                        elements,
+                    },
+                );
             }
             IndiMessage::SetTextVector(v) => {
                 if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Text { state, elements }) = dev.properties.get_mut(&v.name) {
+                    if let Some(crate::indi::device::IndiProperty::Text { state, elements }) =
+                        dev.properties.get_mut(&v.name)
+                    {
                         *state = v.state.clone();
                         for el in &v.elements {
                             if let Some(def) = elements.get_mut(&el.name) {
@@ -241,19 +298,26 @@ impl IndiClient {
                 }
             }
             IndiMessage::DefLightVector(v) => {
-                let dev = devs.entry(v.device.clone()).or_insert_with(|| IndiDevice::new(v.device.clone()));
+                let dev = devs
+                    .entry(v.device.clone())
+                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
                 let mut elements = HashMap::new();
                 for el in &v.elements {
                     elements.insert(el.name.clone(), el.clone());
                 }
-                dev.properties.insert(v.name.clone(), crate::indi::device::IndiProperty::Light {
-                    state: v.state.clone(),
-                    elements,
-                });
+                dev.properties.insert(
+                    v.name.clone(),
+                    crate::indi::device::IndiProperty::Light {
+                        state: v.state.clone(),
+                        elements,
+                    },
+                );
             }
             IndiMessage::SetLightVector(v) => {
                 if let Some(dev) = devs.get_mut(&v.device) {
-                    if let Some(crate::indi::device::IndiProperty::Light { state, elements }) = dev.properties.get_mut(&v.name) {
+                    if let Some(crate::indi::device::IndiProperty::Light { state, elements }) =
+                        dev.properties.get_mut(&v.name)
+                    {
                         *state = v.state.clone();
                         for el in &v.elements {
                             if let Some(def) = elements.get_mut(&el.name) {
@@ -264,15 +328,20 @@ impl IndiClient {
                 }
             }
             IndiMessage::DefBlobVector(v) => {
-                let dev = devs.entry(v.device.clone()).or_insert_with(|| IndiDevice::new(v.device.clone()));
+                let dev = devs
+                    .entry(v.device.clone())
+                    .or_insert_with(|| IndiDevice::new(v.device.clone()));
                 let mut elements = HashMap::new();
                 for el in &v.elements {
                     elements.insert(el.name.clone(), el.clone());
                 }
-                dev.properties.insert(v.name.clone(), crate::indi::device::IndiProperty::Blob {
-                    state: v.state.clone(),
-                    elements,
-                });
+                dev.properties.insert(
+                    v.name.clone(),
+                    crate::indi::device::IndiProperty::Blob {
+                        state: v.state.clone(),
+                        elements,
+                    },
+                );
             }
             IndiMessage::DelProperty(v) => {
                 if let Some(dev) = devs.get_mut(&v.device) {
@@ -288,4 +357,3 @@ impl IndiClient {
         }
     }
 }
-

@@ -574,19 +574,19 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
 async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    
+
     // Inject mock camera
     let (cam, _) = MockCamera::new(true, 5.0);
     let fail_flag = Arc::clone(&cam.fail_next_status);
     let name = cam.info().name.clone();
-    
+
     let connected_info = ConnectedCameraInfo {
         id: "mock_0".to_string(),
         provider: "Mock".to_string(),
         index: 0,
         info: cam.info().clone(),
     };
-    
+
     {
         let mut cameras = state.cameras.write().await;
         cameras.insert("mock_0".to_string(), connected_info);
@@ -596,14 +596,18 @@ async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
     state.set_camera_phase(&name, CameraPhase::Idle).await;
 
     let mut rx = state.subscribe_events();
-    
+
     // Spawn monitor thread
-    let tx = monitor::spawn(Arc::clone(&state), name.clone(), tokio::runtime::Handle::current());
+    let tx = monitor::spawn(
+        Arc::clone(&state),
+        name.clone(),
+        tokio::runtime::Handle::current(),
+    );
     *state.camera_monitor_tx.lock().unwrap() = Some(tx);
-    
+
     // Trigger error on next poll
     fail_flag.store(true, Ordering::SeqCst);
-    
+
     // Check if system raises a camera disconnect/error event within a reasonable time
     let saw_disconnect = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -622,8 +626,11 @@ async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
     .await
     .unwrap_or(false);
 
-    assert!(saw_disconnect, "Monitor should broadcast CameraError or CameraDisconnected on stall");
-    
+    assert!(
+        saw_disconnect,
+        "Monitor should broadcast CameraError or CameraDisconnected on stall"
+    );
+
     lifecycle::finalize_disconnect(&state, &name).await;
 }
 
@@ -633,7 +640,11 @@ async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
 
 /// Shape a `CameraInfo` for the unit tests. Only the fields checked by
 /// `apply_camera_profile_on_connect` matter here.
-fn test_camera_info(has_cooler: bool, supports_sensor_modes: bool, has_dew_heater: bool) -> CameraInfo {
+fn test_camera_info(
+    has_cooler: bool,
+    supports_sensor_modes: bool,
+    has_dew_heater: bool,
+) -> CameraInfo {
     use crate::camera::SensorMode;
     CameraInfo {
         name: "test".to_string(),

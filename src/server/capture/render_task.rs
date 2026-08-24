@@ -95,11 +95,17 @@ pub fn run_render_task(
 
         // Deduplicate f32 -> u8 conversion for native resolution streams.
         // If the frame fits in 4K, LZ4's 4K limit and JPEG's native resolution are identical.
-        let fits_in_4k = raw_frame.linear_frame.width() <= 3840 && raw_frame.linear_frame.height() <= 2160;
+        let fits_in_4k =
+            raw_frame.linear_frame.width() <= 3840 && raw_frame.linear_frame.height() <= 2160;
         let lz4_active = state.lz4_clients.load(std::sync::atomic::Ordering::SeqCst) > 0;
         let mut original_jpeg_active = false;
         for tier in JpegTier::all() {
-            if state.jpeg_tier_client_count(tier) > 0 && !tier.would_downsample(raw_frame.linear_frame.width(), raw_frame.linear_frame.height()) {
+            if state.jpeg_tier_client_count(tier) > 0
+                && !tier.would_downsample(
+                    raw_frame.linear_frame.width(),
+                    raw_frame.linear_frame.height(),
+                )
+            {
                 original_jpeg_active = true;
                 break;
             }
@@ -108,7 +114,9 @@ pub fn run_render_task(
         let mut shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>> = None;
         if fits_in_4k && (lz4_active || original_jpeg_active) {
             let _span = tracing::info_span!("frame_to_rgb8_shared").entered();
-            if let Ok(data) = crate::server::encoding::frame_to_rgb8_downsampled(&raw_frame, 3840, 2160) {
+            if let Ok(data) =
+                crate::server::encoding::frame_to_rgb8_downsampled(&raw_frame, 3840, 2160)
+            {
                 shared_native_rgb8 = Some(Arc::new(data));
             }
         }
@@ -120,7 +128,12 @@ pub fn run_render_task(
                 let _timer =
                     telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
                 if let Some(ref shared) = shared_native_rgb8 {
-                    crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(&shared.0, shared.1, shared.2, chunk_count)
+                    crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
+                        &shared.0,
+                        shared.1,
+                        shared.2,
+                        chunk_count,
+                    )
                 } else {
                     crate::server::encoding::encode_rgb8_lz4_chunked(&raw_frame, chunk_count)
                 }
@@ -147,7 +160,12 @@ pub fn run_render_task(
 /// native-resolution payload, so the first such encode is shared with the rest.
 /// For sensors below 4K that collapses `Uhd2160` and `Original` into a single
 /// encode.
-fn encode_jpeg_tiers(state: &AppState, frame: &crate::server::state::RenderReadyFrame, counter: u64, shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>>) {
+fn encode_jpeg_tiers(
+    state: &AppState,
+    frame: &crate::server::state::RenderReadyFrame,
+    counter: u64,
+    shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>>,
+) {
     let _span = tracing::info_span!("encode_jpeg_tiers").entered();
     let mut native: Option<bytes::Bytes> = None;
 
@@ -156,7 +174,8 @@ fn encode_jpeg_tiers(state: &AppState, frame: &crate::server::state::RenderReady
             continue;
         }
 
-        let downsamples = tier.would_downsample(frame.linear_frame.width(), frame.linear_frame.height());
+        let downsamples =
+            tier.would_downsample(frame.linear_frame.width(), frame.linear_frame.height());
         if !downsamples {
             if let Some(shared) = &native {
                 state.set_tier_jpeg(tier, counter, shared.clone());
@@ -166,8 +185,7 @@ fn encode_jpeg_tiers(state: &AppState, frame: &crate::server::state::RenderReady
 
         let (max_w, max_h) = tier.bounding_box();
         let started = std::time::Instant::now();
-        let encoded = if !downsamples && shared_native_rgb8.is_some() {
-            let data = shared_native_rgb8.as_ref().unwrap();
+        let encoded = if let (false, Some(data)) = (downsamples, shared_native_rgb8.as_ref()) {
             crate::server::encoding::encode_rgb8_jpeg_bounded_from_u8(&data.0, data.1, data.2)
         } else {
             crate::server::encoding::encode_rgb8_jpeg_bounded(frame, max_w, max_h)
@@ -350,7 +368,8 @@ mod tests {
             .get_latest_raw_frame()
             .await
             .expect("render task published a frame")
-            .linear_frame.data()
+            .linear_frame
+            .data()
             .as_ptr() as usize;
         (addr_in, addr_out)
     }
@@ -458,9 +477,11 @@ mod tests {
         let (width, height) = IMX464;
         let frame = Arc::new(crate::frame::Frame::filled(width, height, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None))
-            .await
-            .unwrap();
+        tokio::task::spawn_blocking(move || {
+            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+        })
+        .await
+        .unwrap();
 
         let uhd = state.get_tier_jpeg(JpegTier::Uhd2160, 1).unwrap();
         let original = state.get_tier_jpeg(JpegTier::Original, 1).unwrap();
@@ -485,14 +506,20 @@ mod tests {
         let (width, height) = (IMX464.0 / 2, IMX464.1 / 2);
         let frame = Arc::new(crate::frame::Frame::filled(width, height, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None))
-            .await
-            .unwrap();
+        tokio::task::spawn_blocking(move || {
+            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+        })
+        .await
+        .unwrap();
 
         let hd = state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
         for tier in [JpegTier::Qhd1440, JpegTier::Uhd2160] {
             let other = state.get_tier_jpeg(tier, 1).unwrap();
-            assert_eq!(hd.as_ptr(), other.as_ptr(), "{tier:?} re-encoded needlessly");
+            assert_eq!(
+                hd.as_ptr(),
+                other.as_ptr(),
+                "{tier:?} re-encoded needlessly"
+            );
         }
         assert_eq!(
             u32::from_le_bytes(hd[4..8].try_into().unwrap()),
@@ -513,9 +540,11 @@ mod tests {
         // native-resolution payload.
         let frame = Arc::new(crate::frame::Frame::filled(2000, 1200, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None))
-            .await
-            .unwrap();
+        tokio::task::spawn_blocking(move || {
+            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+        })
+        .await
+        .unwrap();
 
         let hd = state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
         let original = state.get_tier_jpeg(JpegTier::Original, 1).unwrap();

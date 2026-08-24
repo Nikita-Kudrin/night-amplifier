@@ -67,7 +67,7 @@ pub fn compute_median_fwhm(stars: &[Star]) -> Option<f32> {
     }
     fwhms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = fwhms.len() / 2;
-    if fwhms.len() % 2 == 0 {
+    if fwhms.len().is_multiple_of(2) {
         Some((fwhms[mid - 1] + fwhms[mid]) / 2.0)
     } else {
         Some(fwhms[mid])
@@ -84,7 +84,7 @@ pub fn compute_median_snr(stars: &[Star]) -> Option<f32> {
     let mut snrs: Vec<f32> = stars.iter().map(|s| s.snr).collect();
     snrs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = snrs.len() / 2;
-    if snrs.len() % 2 == 0 {
+    if snrs.len().is_multiple_of(2) {
         Some((snrs[mid - 1] + snrs[mid]) / 2.0)
     } else {
         Some(snrs[mid])

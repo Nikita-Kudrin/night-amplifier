@@ -15,9 +15,9 @@ use tracing::{debug, warn};
 use super::super::error::{CameraError, CameraResult};
 use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
 use super::sensor_mode;
+use crate::camera::types::RawFrame;
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
-use crate::camera::types::RawFrame;
 
 pub fn apply_config(
     camera: &mut POACamera,
@@ -150,7 +150,11 @@ fn apply_sensor_mode(camera: &mut POACamera, config: &CaptureConfig, info: &Came
                     );
                 }
                 None => {
-                    warn!(index, ?desired, "Could not read back sensor mode to verify apply");
+                    warn!(
+                        index,
+                        ?desired,
+                        "Could not read back sensor mode to verify apply"
+                    );
                 }
             }
         }
@@ -283,9 +287,11 @@ pub fn run_capture(
     // Start exposure if not already running in continuous mode
     if is_continuous {
         if !*stream_running {
-            catch_ffi_panic("PlayerOne::start_exposure(false)", || camera.start_exposure(false))
-                .map_err(CameraError::from)?
-                .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+            catch_ffi_panic("PlayerOne::start_exposure(false)", || {
+                camera.start_exposure(false)
+            })
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
             *stream_running = true;
         }
     } else {
@@ -293,22 +299,28 @@ pub fn run_capture(
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
             *stream_running = false;
         }
-        catch_ffi_panic("PlayerOne::start_exposure(true)", || camera.start_exposure(true))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+        catch_ffi_panic("PlayerOne::start_exposure(true)", || {
+            camera.start_exposure(true)
+        })
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
     }
 
     // Wait for image to be ready
     loop {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-            if is_continuous { *stream_running = false; }
+            if is_continuous {
+                *stream_running = false;
+            }
             return Err(CameraError::Cancelled);
         }
 
         if start.elapsed() > total_timeout {
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-            if is_continuous { *stream_running = false; }
+            if is_continuous {
+                *stream_running = false;
+            }
             return Err(CameraError::ExposureTimeout(total_timeout));
         }
 
@@ -322,7 +334,9 @@ pub fn run_capture(
             }
             Err(e) => {
                 let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-                if is_continuous { *stream_running = false; }
+                if is_continuous {
+                    *stream_running = false;
+                }
                 return Err(CameraError::ExposureFailed(format!("{:?}", e)));
             }
         }
@@ -330,7 +344,7 @@ pub fn run_capture(
 
     // Get image data
     catch_ffi_panic("PlayerOne::get_image_data", || {
-        camera.get_image_data(&mut *buffer, Some(500))
+        camera.get_image_data(&mut buffer, Some(500))
     })
     .map_err(CameraError::from)?
     .map_err(|e| CameraError::ImageReadFailed(format!("{:?}", e)))?;

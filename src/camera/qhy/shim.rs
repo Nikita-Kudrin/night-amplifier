@@ -95,7 +95,8 @@ impl QhyHandle {
         // IsQHYCCDControlAvailable(CAM_COLOR) returns the Bayer pattern ID for color
         // cameras (1=BAYER_GB, 2=BAYER_GR, 3=BAYER_BG, 4=BAYER_RG) or QHYCCD_ERROR for mono.
         let cam_color_result = unsafe {
-            sdk.api.IsQHYCCDControlAvailable(self.handle, ControlId::CamColor as u32)
+            sdk.api
+                .IsQHYCCDControlAvailable(self.handle, ControlId::CamColor as u32)
         };
 
         let bayer = parse_bayer_id(cam_color_result);
@@ -150,8 +151,13 @@ impl QhyHandle {
         let mut max = 0.0;
         let mut step = 0.0;
         let res = unsafe {
-            sdk.api
-                .GetQHYCCDParamMinMaxStep(self.handle, ctrl as u32, &mut min, &mut max, &mut step)
+            sdk.api.GetQHYCCDParamMinMaxStep(
+                self.handle,
+                ctrl as u32,
+                &mut min,
+                &mut max,
+                &mut step,
+            )
         };
         if res == QHYCCD_SUCCESS {
             Ok((min, max, step))
@@ -189,7 +195,7 @@ impl QhyHandle {
             Err(format!("SetQHYCCDBitsMode failed: {}", res))
         }
     }
-    
+
     pub fn set_stream_mode(&self, mode: u8) -> Result<(), String> {
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
         let res = unsafe { sdk.api.SetQHYCCDStreamMode(self.handle, mode) };

@@ -25,7 +25,13 @@ pub fn mtf(x: f32, m: f32) -> f32 {
 
 /// Apply color-preserving MTF stretch to an RGB pixel
 #[inline]
-pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32, color_intensity: f32) -> (f32, f32, f32) {
+pub fn mtf_stretch_color_preserving(
+    r: f32,
+    g: f32,
+    b: f32,
+    midtone: f32,
+    color_intensity: f32,
+) -> (f32, f32, f32) {
     let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
     if luminance <= 1e-8 {
         return (0.0, 0.0, 0.0);
@@ -51,8 +57,15 @@ pub fn mtf_stretch_color_preserving(r: f32, g: f32, b: f32, midtone: f32, color_
 /// skips the incidental `[0, 1]` clamp the pass would have applied, which is safe because
 /// pixel data is normalised to `[0, 1]` by contract; the 1e-6 window keeps any residual
 /// curve error four orders of magnitude below one 8-bit LSB.
-pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3], _color_intensity: f32) -> Result<()> {
-    if (midtones[0] - 0.5).abs() < 1e-6 && (midtones[1] - 0.5).abs() < 1e-6 && (midtones[2] - 0.5).abs() < 1e-6 {
+pub fn mtf_stretch_frame(
+    frame: &mut Frame,
+    midtones: [f32; 3],
+    _color_intensity: f32,
+) -> Result<()> {
+    if (midtones[0] - 0.5).abs() < 1e-6
+        && (midtones[1] - 0.5).abs() < 1e-6
+        && (midtones[2] - 0.5).abs() < 1e-6
+    {
         return Ok(());
     }
 
@@ -72,7 +85,7 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3], _color_intensity
     let mut lut_r = vec![0.0f32; LUT_SIZE];
     let mut lut_g = vec![0.0f32; LUT_SIZE];
     let mut lut_b = vec![0.0f32; LUT_SIZE];
-    
+
     for i in 0..LUT_SIZE {
         let x = i as f32 / (LUT_SIZE - 1) as f32;
         lut_r[i] = mtf(x, midtones[0]);
@@ -90,11 +103,11 @@ pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3], _color_intensity
         data.par_chunks_mut(row_len).for_each(|row| {
             for idx in (0..row.len()).step_by(3) {
                 let r_idx = (row[idx] * 65535.0) as usize;
-                let g_idx = (row[idx+1] * 65535.0) as usize;
-                let b_idx = (row[idx+2] * 65535.0) as usize;
+                let g_idx = (row[idx + 1] * 65535.0) as usize;
+                let b_idx = (row[idx + 2] * 65535.0) as usize;
                 row[idx] = lut_r[r_idx.min(65535)];
-                row[idx+1] = lut_g[g_idx.min(65535)];
-                row[idx+2] = lut_b[b_idx.min(65535)];
+                row[idx + 1] = lut_g[g_idx.min(65535)];
+                row[idx + 2] = lut_b[b_idx.min(65535)];
             }
         });
     }

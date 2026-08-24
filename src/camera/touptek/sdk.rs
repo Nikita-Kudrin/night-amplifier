@@ -63,7 +63,8 @@ pub struct TouptekSdkApi {
 
     // Resolution & ROI
     Toupcam_put_Size: unsafe extern "C" fn(h: HToupcam, nWidth: c_int, nHeight: c_int) -> c_int,
-    Toupcam_get_Size: unsafe extern "C" fn(h: HToupcam, pWidth: *mut c_int, pHeight: *mut c_int) -> c_int,
+    Toupcam_get_Size:
+        unsafe extern "C" fn(h: HToupcam, pWidth: *mut c_int, pHeight: *mut c_int) -> c_int,
     Toupcam_put_eSize: unsafe extern "C" fn(h: HToupcam, nResolutionIndex: c_uint) -> c_int,
     Toupcam_put_Roi: unsafe extern "C" fn(
         h: HToupcam,
@@ -75,7 +76,8 @@ pub struct TouptekSdkApi {
 
     // Options (RAW mode, binning, bit depth, etc.)
     Toupcam_put_Option: unsafe extern "C" fn(h: HToupcam, iOption: c_uint, iValue: c_int) -> c_int,
-    Toupcam_get_Option: unsafe extern "C" fn(h: HToupcam, iOption: c_uint, piValue: *mut c_int) -> c_int,
+    Toupcam_get_Option:
+        unsafe extern "C" fn(h: HToupcam, iOption: c_uint, piValue: *mut c_int) -> c_int,
 
     // Temperature & cooling (0.1°C units)
     Toupcam_get_Temperature: unsafe extern "C" fn(h: HToupcam, pTemperature: *mut c_short) -> c_int,

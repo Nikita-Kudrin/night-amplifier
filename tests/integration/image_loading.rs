@@ -127,7 +127,7 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
                 [h, w, c] if *c == 3 => (*w, *h, 3),
                 _ => return Err(format!("Unsupported FITS shape {:?} in {:?}", shape, path)),
             };
-            (w, h, c, image_type.clone())
+            (w, h, c, *image_type)
         }
         _ => return Err(format!("FITS file {:?} does not contain image data", path)),
     };
@@ -166,7 +166,7 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
             let max_val = data.iter().map(|&v| v.abs()).max().unwrap_or(1) as f64;
             let bytes: Vec<u8> = data
                 .iter()
-                .map(|&v| ((v as f64 / max_val * 32767.0 + 32768.0) as u16).min(65535))
+                .map(|&v| ((v as f64 / max_val * 32767.0 + 32768.0) as u16))
                 .flat_map(|v| v.to_le_bytes())
                 .collect();
             (bytes, PixelFormat::Rgb16)
@@ -303,7 +303,7 @@ fn save_frame_to_path(frame: &Frame, output_path: &Path) -> Result<PathBuf, Stri
     };
 
     // Create TIFF file
-    let file = fs::File::create(&output_path)
+    let file = fs::File::create(output_path)
         .map_err(|e| format!("Failed to create output file {:?}: {}", output_path, e))?;
 
     let mut encoder =

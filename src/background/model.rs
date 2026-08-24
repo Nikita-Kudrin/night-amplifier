@@ -143,21 +143,21 @@ impl BackgroundModel {
             let w = frame.width();
             let h = frame.height();
             let c = frame.channels();
-            
+
             let crop_w = (w / 4).max(10).min(w);
             let crop_h = (h / 4).max(10).min(h);
             let x_start = (w - crop_w) / 2;
             let y_start = (h - crop_h) / 2;
-            
+
             let sample_c = if c > 1 { 1 } else { 0 };
             let num_pixels = crop_w * crop_h;
             let max_samples = 4096;
             let step = (num_pixels / max_samples).max(1);
-            
+
             let mut sample = Vec::with_capacity(max_samples.min(num_pixels));
             let data = frame.data();
             let mut count = 0;
-            
+
             for y in y_start..(y_start + crop_h) {
                 let row_offset = y * w * c;
                 for x in x_start..(x_start + crop_w) {
@@ -167,7 +167,7 @@ impl BackgroundModel {
                     count += 1;
                 }
             }
-            
+
             let median = crate::statistics::fast_median(&mut sample);
             let mut deviations = Vec::with_capacity(sample.len());
             for &v in &sample {
@@ -175,7 +175,7 @@ impl BackgroundModel {
             }
             let mad = crate::statistics::fast_median(&mut deviations);
             let sigma = mad * 1.4826;
-            
+
             (3.0 * sigma).max(0.001)
         };
 
@@ -194,7 +194,7 @@ impl BackgroundModel {
             let mut raw_offsets: Vec<f32> = (0..self.channels)
                 .map(|c| self.compute_reference_level(c))
                 .collect();
-            
+
             // If RGB, align all channels to the same minimum reference level
             // This preserves the color neutrality achieved by white balance.
             if self.channels == 3 {
@@ -209,7 +209,14 @@ impl BackgroundModel {
         // Dispatch to the optimal subtraction path
         if let (Some(nodes_x), Some(nodes_y)) = (&self.nodes_x, &self.nodes_y) {
             let _span = tracing::info_span!("delta_stepping_subtraction").entered();
-            self.subtract_delta_stepping(frame, &offsets, aggressiveness, pedestal, nodes_x, nodes_y);
+            self.subtract_delta_stepping(
+                frame,
+                &offsets,
+                aggressiveness,
+                pedestal,
+                nodes_x,
+                nodes_y,
+            );
         } else {
             let _span = tracing::info_span!("weight_based_subtraction").entered();
             self.subtract_weight_based(frame, &offsets, aggressiveness, pedestal);
@@ -318,7 +325,8 @@ impl BackgroundModel {
 
             let mut gy_weights = Vec::with_capacity(self.image_height);
             for y in 0..self.image_height {
-                let gy = (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
+                let gy =
+                    (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
                 let gy0 = (gy.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
                 let gy1 = (gy0 + 1).min(self.grid_height - 1);
                 let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
@@ -403,16 +411,15 @@ impl BackgroundModel {
         // CV > 0.15: Highly non-uniform (likely nebulae) -> aggressiveness = 0.15
         // Linear interpolation in between
         // This is more conservative than before to better preserve extended objects
-        let aggressiveness = if cv < 0.03 {
+
+        if cv < 0.03 {
             0.7
         } else if cv > 0.15 {
             0.15
         } else {
             // Linear interpolation: 0.7 at cv=0.03, 0.15 at cv=0.15
             0.7 - (cv - 0.03) / (0.15 - 0.03) * 0.55
-        };
-
-        aggressiveness
+        }
     }
 
     /// Generate the background as a new Frame (useful for visualization)

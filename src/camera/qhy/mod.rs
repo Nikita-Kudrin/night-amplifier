@@ -10,12 +10,15 @@ pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
-use shim::{scan_cameras, QhyHandle};
 use ffi_types::ControlId;
+use shim::{scan_cameras, QhyHandle};
 
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, SensorType, RawFrame, BufferPool};
+use super::types::{
+    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
+    SensorType,
+};
 
 /// QHY camera provider
 pub struct QhyProvider;
@@ -74,10 +77,11 @@ impl CameraProvider for QhyProvider {
                         },
                         ..Default::default()
                     };
-                    if let Ok(Ok((_, max, _))) = catch_ffi_panic("QHY::gain_range", || cam.param_range(ControlId::Gain)) {
+                    if let Ok(Ok((_, max, _))) =
+                        catch_ffi_panic("QHY::gain_range", || cam.param_range(ControlId::Gain))
+                    {
                         info.max_gain = max as i32;
                     }
-                    
 
                     info.has_cooler = cam.is_control_available(ControlId::Cooler);
                     info.supported_bins = cam.supported_bins();
@@ -152,7 +156,9 @@ impl QhyCamera {
             },
             ..Default::default()
         };
-        if let Ok(Ok((_, max, _))) = catch_ffi_panic("QHY::gain_range", || camera.param_range(ControlId::Gain)) {
+        if let Ok(Ok((_, max, _))) =
+            catch_ffi_panic("QHY::gain_range", || camera.param_range(ControlId::Gain))
+        {
             info.max_gain = max as i32;
         }
 
@@ -171,7 +177,7 @@ impl QhyCamera {
         } else {
             vec![ImageFormat::Raw8]
         };
-        
+
         let slf = Self {
             camera,
             info,
@@ -183,9 +189,12 @@ impl QhyCamera {
 
         // Initialize defaults
         let _ = slf.camera.set_stream_mode(0); // Single frame mode
-        let _ = slf.camera.set_param(ControlId::TransferBit, if chip.bpp > 8 { 16.0 } else { 8.0 });
+        let _ = slf.camera.set_param(
+            ControlId::TransferBit,
+            if chip.bpp > 8 { 16.0 } else { 8.0 },
+        );
         let _ = slf.camera.set_resolution(0, 0, chip.img_w, chip.img_h);
-        
+
         Ok(slf)
     }
 
@@ -199,7 +208,10 @@ impl QhyCamera {
                 return Self::open(i);
             }
         }
-        Err(CameraError::OpenFailed(format!("Camera '{}' not found", name)))
+        Err(CameraError::OpenFailed(format!(
+            "Camera '{}' not found",
+            name
+        )))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -216,7 +228,8 @@ impl QhyCamera {
         bits: u32,
     ) -> CameraResult<()> {
         catch_ffi_panic("QHY::set_exposure", || {
-            self.camera.set_param(ControlId::Exposure, exposure_us as f64)
+            self.camera
+                .set_param(ControlId::Exposure, exposure_us as f64)
         })
         .map_err(CameraError::from)?
         .map_err(|e| CameraError::SdkError {
@@ -275,7 +288,7 @@ impl Camera for QhyCamera {
     }
 
     fn gain_presets(&self) -> CameraResult<GainPresets> {
-        // Note: These HCG/unity values are placeholder defaults. 
+        // Note: These HCG/unity values are placeholder defaults.
         // QHY models vary widely in their actual thresholds and do not share a single scale.
         Ok(GainPresets {
             highest_dr: 0,
@@ -298,11 +311,10 @@ impl Camera for QhyCamera {
             .map_err(CameraError::from)?
             .unwrap_or(0.0);
 
-        let current_gain = catch_ffi_panic("QHY::get_gain", || {
-            self.camera.get_param(ControlId::Gain)
-        })
-        .map_err(CameraError::from)?
-        .unwrap_or(0.0) as i32;
+        let current_gain =
+            catch_ffi_panic("QHY::get_gain", || self.camera.get_param(ControlId::Gain))
+                .map_err(CameraError::from)?
+                .unwrap_or(0.0) as i32;
 
         let current_offset = catch_ffi_panic("QHY::get_offset", || {
             self.camera.get_param(ControlId::Offset)
@@ -334,9 +346,11 @@ impl Camera for QhyCamera {
         if !self.info.has_cooler {
             return Err(CameraError::ParameterNotSupported("cooler".to_string()));
         }
-        catch_ffi_panic("QHY::set_temp", || self.camera.set_target_temperature(temp_c))
-            .map_err(CameraError::from)?
-            .map_err(CameraError::CoolingFailed)
+        catch_ffi_panic("QHY::set_temp", || {
+            self.camera.set_target_temperature(temp_c)
+        })
+        .map_err(CameraError::from)?
+        .map_err(CameraError::CoolingFailed)
     }
 
     fn set_cooler(&mut self, enabled: bool) -> CameraResult<()> {
@@ -383,7 +397,17 @@ impl Camera for QhyCamera {
                 let _ = catch_ffi_panic("QHY::init", || self.camera.init());
                 self.stream_running = false;
             }
-            self.apply_capture_config(config.exposure_us, config.gain, config.offset, x, y, w, h, bin, bits)?;
+            self.apply_capture_config(
+                config.exposure_us,
+                config.gain,
+                config.offset,
+                x,
+                y,
+                w,
+                h,
+                bin,
+                bits,
+            )?;
             self.last_applied_config = Some(config.clone());
         }
 
@@ -442,17 +466,19 @@ impl Camera for QhyCamera {
             }
 
             let ready = if is_continuous {
-                catch_ffi_panic("QHY::get_live", || self.camera.get_live_frame(&mut *buffer))
+                catch_ffi_panic("QHY::get_live", || self.camera.get_live_frame(&mut buffer))
             } else {
-                catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(&mut *buffer))
+                catch_ffi_panic("QHY::get_single", || {
+                    self.camera.get_single_frame(&mut buffer)
+                })
             };
 
             match ready {
                 Ok(Ok((bw, bh))) => {
                     return Ok(RawFrame {
                         data: buffer,
-                        width: bw as u32,
-                        height: bh as u32,
+                        width: bw,
+                        height: bh,
                         format: config.format,
                     });
                 }

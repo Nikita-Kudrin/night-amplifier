@@ -8,7 +8,7 @@ use tracing::instrument;
 pub trait SaturationPlugin: Send + Sync {
     /// Apply saturation boost to an RGB frame
     fn apply_boost(&self, frame: &mut Frame, config: &SaturationBoostConfig) -> Result<()>;
-    
+
     /// Apply saturation boost to a flat row of interleaved RGB f32 samples.
     ///
     /// Called per-row inside the fused encode kernels (`expand_to_rgb8_fused`,

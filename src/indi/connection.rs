@@ -104,7 +104,7 @@ impl IndiConnection {
             let mut byte_reader = quick_xml::Reader::from_reader(*buf);
             byte_reader.config_mut().trim_text(true);
             let mut event_buf = Vec::new();
-            
+
             loop {
                 let pos_before = byte_reader.buffer_position();
                 match byte_reader.read_event_into(&mut event_buf) {
@@ -149,11 +149,14 @@ impl IndiConnection {
                             let _ = message_tx.send(Ok(msg)).await;
                         }
                         Err(e) => {
-                            warn!("Failed to parse INDI message: {} (XML: {:.100})", e, xml_str);
+                            warn!(
+                                "Failed to parse INDI message: {} (XML: {:.100})",
+                                e, xml_str
+                            );
                         }
                     }
                 }
-                
+
                 // Consume parsed part
                 buffer.drain(0..current_pos as usize);
                 // Reset state
@@ -168,4 +171,3 @@ impl IndiConnection {
         }
     }
 }
-

@@ -137,7 +137,7 @@ pub fn validate_dimensions(
         .checked_mul(height)
         .and_then(|wh| wh.checked_mul(channels))
         .and_then(|whc| whc.checked_mul(bytes_per_sample))
-        .ok_or_else(|| FfiError::BufferOverflow {
+        .ok_or(FfiError::BufferOverflow {
             expected: 0,
             actual: usize::MAX,
         })

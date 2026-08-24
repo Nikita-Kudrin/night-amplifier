@@ -61,7 +61,7 @@ impl CameraService {
                 });
             }
         }
-        
+
         // Get INDI settings
         let settings = state.settings.read().await;
         let indi_host = settings.indi_server_host.clone();
@@ -72,21 +72,21 @@ impl CameraService {
         if !indi_host.is_empty() {
             let event_sender = state.events.clone();
             let state_arc = state.clone();
-            
+
             tokio::spawn(async move {
                 let provider = crate::camera::IndiProvider::new(indi_host, indi_port);
                 if let Ok(cameras) = provider.list_cameras_async().await {
                     for cam in cameras {
                         let provider_name = "indi";
                         let id = format!("{}_{}", provider_name, cam.id);
-                        
+
                         // Check if already connected
                         let connected = state_arc.cameras.read().await;
                         if connected.contains_key(&id) {
                             continue;
                         }
                         drop(connected);
-                        
+
                         let entry = crate::server::dto::CameraListEntry {
                             id: id.clone(),
                             name: cam.name.clone(),
@@ -95,7 +95,8 @@ impl CameraService {
                             index: Some(cam.id as usize),
                             info: crate::server::dto::CameraInfoResponse::from_info(&cam, &id),
                         };
-                        let _ = event_sender.send(crate::server::events::ServerEvent::camera_discovered(entry));
+                        let _ = event_sender
+                            .send(crate::server::events::ServerEvent::camera_discovered(entry));
                     }
                 }
             });

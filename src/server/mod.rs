@@ -166,8 +166,7 @@ impl Server {
             .route("/stream", get(ws::stream_handler))
             .route("/events", get(ws::events_handler));
 
-        let manual_routes = Router::new()
-            .fallback(get(embedded_manual::serve_manual));
+        let manual_routes = Router::new().fallback(get(embedded_manual::serve_manual));
 
         let app = Router::new()
             .nest("/api", api_routes)

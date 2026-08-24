@@ -176,7 +176,7 @@ impl WeightingPreset {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct FrameQuality {
     /// Full Width at Half Maximum of stars in pixels.
     /// Lower values indicate sharper stars (better seeing).
@@ -187,15 +187,6 @@ pub struct FrameQuality {
     /// Higher values indicate cleaner signal.
     /// Typically the median SNR of detected stars.
     pub snr: Option<f32>,
-}
-
-impl Default for FrameQuality {
-    fn default() -> Self {
-        Self {
-            fwhm: None,
-            snr: None,
-        }
-    }
 }
 
 impl FrameQuality {

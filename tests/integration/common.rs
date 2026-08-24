@@ -165,7 +165,7 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
     }
 
     // Create the directory
-    fs::create_dir_all(&output_dir)
+    std::fs::create_dir_all(&output_dir)
         .map_err(|e| format!("Failed to create output directory {:?}: {}", output_dir, e))?;
 
     Ok(output_dir)
@@ -175,23 +175,23 @@ pub fn prepare_test_output_dir(test_name: &str) -> Result<PathBuf, String> {
 pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
     (
         "250mm-dob-imx533-dumbbell-fits",
-        "https://drive.usercontent.google.com/download?id=1Xl_Ip539vfWyvP-VWvDxZe4y90hzaAWD&export=download",
+        "https://drive.usercontent.google.com/download?id=1Xl_Ip539vfWyvP-VWvDxZe4y90hzaAWD&export=download&confirm=t",
     ),
     (
         "250mm-dob-imx464-orion-png",
-        "https://drive.google.com/uc?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download",
+        "https://drive.usercontent.google.com/download?id=1vKjx5lCFoqhJOcgRLPd4Btcf6Y4j96ap&export=download&confirm=t",
     ),
     (
         "35mm-imx464-orion-tiff",
-        "https://drive.google.com/uc?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download",
+        "https://drive.usercontent.google.com/download?id=1Qgs51ATx7k5ECdTRwV8ThXE2Lgb2qRqP&export=download&confirm=t",
     ),
     (
         "130mm-imx464-dumbell-nebulae-png",
-        "https://drive.google.com/uc?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download",
+        "https://drive.usercontent.google.com/download?id=1GYc544x6EZpYmA0S3DUo3XqDo3NiyI7W&export=download&confirm=t",
     ),
     (
         "130mm-imx464-ring-nebulae-png",
-        "https://drive.google.com/uc?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download",
+        "https://drive.usercontent.google.com/download?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download&confirm=t",
     ),
 ];
 
@@ -200,11 +200,8 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
 /// Each fixture is only downloaded once — if the target directory already exists,
 /// it is skipped. After downloading, the zip is extracted and removed.
 pub async fn ensure_fixtures(names: Option<&[&str]>) {
-    use night_amplifier::push_to::download::download_file;
     use std::fs;
     use std::io;
-    use std::path::Path;
-    use tokio::sync::mpsc;
 
     let fixtures: Vec<(&str, &str)> = if let Some(names) = names {
         DEFAULT_FIXTURES
@@ -213,18 +210,15 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             .copied()
             .collect()
     } else {
-        DEFAULT_FIXTURES.iter().copied().collect()
+        DEFAULT_FIXTURES.to_vec()
     };
 
     let fixtures_dir = Path::new(FIXTURES_DIR);
     if !fixtures_dir.exists() {
-        fs::create_dir_all(fixtures_dir).expect("Failed to create fixtures dir");
+        tokio::fs::create_dir_all(fixtures_dir)
+            .await
+            .expect("Failed to create fixtures dir");
     }
-
-    let (tx, mut rx) = mpsc::channel(100);
-
-    // Drain channel
-    tokio::spawn(async move { while let Some(_) = rx.recv().await {} });
 
     for (name, url) in fixtures {
         let dir_path = fixtures_dir.join(name);
@@ -239,23 +233,67 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             continue;
         }
 
-        println!("Downloading fixture {} from {}", name, url);
-        if let Err(e) = download_file(url, &zip_path, name, None, tx.clone()).await {
-            if !dir_path.exists() {
-                panic!("Failed to download fixture {}: {}", name, e);
-            }
-            continue;
-        }
+        const MAX_RETRIES: usize = 3;
+        let mut last_error = String::new();
 
-        println!("Extracting fixture {}", name);
-        if let Ok(file) = fs::File::open(&zip_path) {
+        for attempt in 1..=MAX_RETRIES {
+            if attempt > 1 {
+                println!(
+                    "Retrying fixture {} (attempt {}/{}), waiting 2s...",
+                    name, attempt, MAX_RETRIES
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let _ = fs::remove_file(&zip_path);
+            }
+
+            println!("Downloading fixture {} from {}", name, url);
+            if let Err(e) = download_file(url, &zip_path, name).await {
+                if dir_path.exists() {
+                    break;
+                }
+                last_error = format!("Download failed: {}", e);
+                continue;
+            }
+
+            println!("Extracting fixture {}", name);
+            let file = match fs::File::open(&zip_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    last_error = format!("Failed to open downloaded file: {}", e);
+                    continue;
+                }
+            };
+
             let mut archive = match zip::ZipArchive::new(file) {
                 Ok(a) => a,
-                Err(_) => {
+                Err(e) => {
                     if dir_path.exists() {
-                        continue;
+                        break;
                     }
-                    panic!("Failed to open zip archive for {}", name);
+                    // Log first bytes to help diagnose what Google Drive returned
+                    let diagnostic = fs::read(&zip_path)
+                        .ok()
+                        .map(|bytes| {
+                            let preview_len = bytes.len().min(200);
+                            if bytes.starts_with(b"<") || bytes.starts_with(b"<!") {
+                                format!(
+                                    "file starts with HTML ({} bytes): {}",
+                                    bytes.len(),
+                                    String::from_utf8_lossy(&bytes[..preview_len])
+                                )
+                            } else {
+                                format!(
+                                    "file size: {} bytes, first 16 bytes: {:02x?}",
+                                    bytes.len(),
+                                    &bytes[..bytes.len().min(16)]
+                                )
+                            }
+                        })
+                        .unwrap_or_else(|| "could not read file".to_string());
+                    last_error =
+                        format!("Invalid zip archive: {} ({})", e, diagnostic);
+                    eprintln!("Attempt {}: {}", attempt, last_error);
+                    continue;
                 }
             };
 
@@ -267,10 +305,10 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
                 };
 
                 if file.name().ends_with('/') {
-                    let _ = fs::create_dir_all(&outpath);
+                    let _ = std::fs::create_dir_all(&outpath);
                 } else {
                     if let Some(p) = outpath.parent() {
-                        let _ = fs::create_dir_all(&p);
+                        let _ = std::fs::create_dir_all(p);
                     }
                     if let Ok(mut outfile) = fs::File::create(&outpath) {
                         let _ = io::copy(&mut file, &mut outfile);
@@ -279,10 +317,22 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             }
 
             // Remove the zip after extraction (ignore if already removed by another test)
-            let _ = fs::remove_file(zip_path);
+            let _ = fs::remove_file(&zip_path);
+            last_error.clear();
+            break;
+        }
+
+        if !last_error.is_empty() && !dir_path.exists() {
+            panic!(
+                "Failed to download/extract fixture {} after {} attempts: {}",
+                name, MAX_RETRIES, last_error
+            );
         }
 
         println!("Fixture {} ready", name);
+
+        // Brief cooldown between fixtures to avoid Google Drive rate limiting
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 }
 
@@ -296,4 +346,136 @@ pub fn ensure_fixtures_sync() {
             "130mm-imx464-dumbell-nebulae-png",
             "130mm-imx464-ring-nebulae-png",
         ])));
+}
+
+use regex::Regex;
+use reqwest::Client;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
+use tracing::{error, info};
+
+type PushToResult<T> = Result<T, String>;
+
+pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToResult<()> {
+    if let Some(p) = dest.parent() {
+        tokio::fs::create_dir_all(p)
+            .await
+            .map_err(|e| format!("Failed to create directories: {}", e))?;
+    }
+
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .cookie_store(true)
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let response = client.get(url).send().await.map_err(|e| {
+        error!(error = %e, url = %url, "Download request failed");
+        format!("Download request failed: {}", e)
+    })?;
+
+    let status = response.status();
+    let is_html = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/html"));
+
+    // Google Drive can return the virus scan warning as either a non-success
+    // status or as a 200 with Content-Type: text/html (for large files via
+    // drive.usercontent.google.com).
+    if !status.is_success() || is_html {
+        let body = response.text().await.unwrap_or_default();
+        if body.contains("Google Drive") || body.contains("virus scan") || body.contains("confirm=") {
+            info!("Hit Google Drive virus scan warning page");
+            if let Some(confirm_url) = extract_google_drive_confirm_url(&body, url) {
+                let response = client.get(&confirm_url).send().await.map_err(|e| {
+                    error!(error = %e, "Confirmation download request failed");
+                    format!("Confirmation download request failed: {}", e)
+                })?;
+
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Confirmation download failed: HTTP {}",
+                        response.status()
+                    ));
+                }
+                return download_with_progress(response, dest, component).await;
+            }
+            return Err(
+                "Google Drive virus scan page: could not extract download link".to_string(),
+            );
+        }
+
+        if !status.is_success() {
+            return Err(format!("Download failed: HTTP {}", status));
+        }
+        return Err("Download returned HTML instead of binary content".to_string());
+    }
+
+    download_with_progress(response, dest, component).await
+}
+
+async fn download_with_progress(
+    mut response: reqwest::Response,
+    dest: &Path,
+    _component: &str,
+) -> PushToResult<()> {
+    let _total_size = response.content_length();
+    let mut file = File::create(dest).await.map_err(|e| {
+        error!(error = %e, path = %dest.display(), "Failed to create file");
+        format!("Failed to create file {}: {}", dest.display(), e)
+    })?;
+
+    let mut _downloaded: u64 = 0;
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        error!(error = %e, "Download stream error");
+        format!("Download stream error: {}", e)
+    })? {
+        file.write_all(&chunk).await.map_err(|e| {
+            error!(error = %e, "Failed to write chunk to file");
+            format!("Failed to write to file: {}", e)
+        })?;
+        _downloaded += chunk.len() as u64;
+    }
+
+    Ok(())
+}
+
+fn extract_google_drive_confirm_url(html: &str, original_url: &str) -> Option<String> {
+    if let Some(id) = extract_google_drive_id(original_url) {
+        let re = Regex::new(r#"confirm=([a-zA-Z0-9-_]+)"#).ok()?;
+        if let Some(caps) = re.captures(html) {
+            let confirm_token = caps.get(1)?.as_str();
+            return Some(format!(
+                "https://drive.usercontent.google.com/download?id={}&export=download&confirm={}",
+                id, confirm_token
+            ));
+        }
+    }
+
+    let re = Regex::new(r#"href="(/uc\?export=download[^"]+)""#).ok()?;
+    if let Some(caps) = re.captures(html) {
+        let path = caps.get(1)?.as_str();
+        return Some(format!("https://drive.google.com{}", path).replace("&amp;", "&"));
+    }
+
+    None
+}
+
+fn extract_google_drive_id(url: &str) -> Option<String> {
+    if let Some(id_param) = url.split("id=").nth(1) {
+        let id = id_param.split('&').next().unwrap_or(id_param);
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+
+    let re = Regex::new(r"/file/d/([a-zA-Z0-9-_]+)").ok()?;
+    if let Some(caps) = re.captures(url) {
+        return Some(caps.get(1)?.as_str().to_string());
+    }
+
+    None
 }

@@ -199,7 +199,10 @@ mod tests {
         let flat_frame = Frame::from_f32_vec(flat_data, 2, 2, 1).unwrap();
         // Mean is 0.0, so it should return an error due to FLAT_MIN_THRESHOLD
         let result = MasterFlat::new(flat_frame);
-        assert!(matches!(result, Err(crate::error::StackError::InvalidFlatField { .. })));
+        assert!(matches!(
+            result,
+            Err(crate::error::StackError::InvalidFlatField { .. })
+        ));
     }
 
     #[test]

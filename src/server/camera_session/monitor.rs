@@ -336,11 +336,13 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
             let name = ctx.camera_name.clone();
             ctx.rt.block_on(async move {
                 state.send_error("Camera disconnected (USB stall)".to_string());
-                
-                let _ = state.events.send(crate::server::events::ServerEvent::camera_disconnected(
-                    name.clone(),
-                ));
-                
+
+                let _ = state
+                    .events
+                    .send(crate::server::events::ServerEvent::camera_disconnected(
+                        name.clone(),
+                    ));
+
                 lifecycle::finalize_disconnect(&state, &name).await;
             });
             return false; // Stop monitor thread
@@ -500,7 +502,9 @@ fn read_status(ctx: &MonitorCtx) -> Result<CameraStatus, crate::camera::CameraEr
         .active_camera
         .lock()
         .expect("active_camera mutex poisoned");
-    let camera = guard.as_mut().ok_or(crate::camera::CameraError::Disconnected)?;
+    let camera = guard
+        .as_mut()
+        .ok_or(crate::camera::CameraError::Disconnected)?;
     let result = camera.status();
     let elapsed = start.elapsed();
     if elapsed > Duration::from_millis(500) {

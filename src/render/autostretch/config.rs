@@ -3,16 +3,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum StretchAggressiveness {
     Low,
+    #[default]
     Medium,
     High,
-}
-
-impl Default for StretchAggressiveness {
-    fn default() -> Self {
-        Self::Medium
-    }
 }
 
 /// Configuration for the automatic stretch factor solver

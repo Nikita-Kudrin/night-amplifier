@@ -295,7 +295,7 @@ fn test_stack_dimension_mismatch() {
 fn test_stack_compute_empty() {
     let config = StackingConfig::default().with_rejection(RejectionMethod::None);
     let stack = MasterStack::new(4, 4, 1, config).unwrap();
-    
+
     let result = stack.compute();
     assert!(result.is_err());
 }

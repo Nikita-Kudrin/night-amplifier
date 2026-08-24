@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
-use std::os::raw::c_char;
 use dlopen2::wrapper::{Container, WrapperApi};
+use std::os::raw::c_char;
 use std::sync::OnceLock;
 use tracing::{info, warn};
 
@@ -26,13 +26,8 @@ pub struct QhySdkApi {
         max: *mut f64,
         step: *mut f64,
     ) -> u32,
-    SetQHYCCDResolution: unsafe extern "C" fn(
-        handle: QhyccdHandle,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-    ) -> u32,
+    SetQHYCCDResolution:
+        unsafe extern "C" fn(handle: QhyccdHandle, x: u32, y: u32, w: u32, h: u32) -> u32,
     SetQHYCCDBinMode: unsafe extern "C" fn(handle: QhyccdHandle, wbin: u32, hbin: u32) -> u32,
     SetQHYCCDBitsMode: unsafe extern "C" fn(handle: QhyccdHandle, bits: u32) -> u32,
     ExpQHYCCDSingleFrame: unsafe extern "C" fn(handle: QhyccdHandle) -> u32,
@@ -91,16 +86,23 @@ impl QhySdk {
                     // Initialize the QHY resource (required by QHY SDK)
                     let res = unsafe { api.InitQHYCCDResource() };
                     if res != QHYCCD_SUCCESS {
-                        warn!("QHY SDK loaded but InitQHYCCDResource failed with code {}", res);
+                        warn!(
+                            "QHY SDK loaded but InitQHYCCDResource failed with code {}",
+                            res
+                        );
                         // Still returning it, but it might not work. Often it's fine.
                     }
                     Some(QhySdk { api })
                 }
                 Err(e) => {
-                    info!("QHY SDK ({}) not found or failed to load: {}. QHY cameras disabled.", lib_name, e);
+                    info!(
+                        "QHY SDK ({}) not found or failed to load: {}. QHY cameras disabled.",
+                        lib_name, e
+                    );
                     None
                 }
             }
-        }).as_ref()
+        })
+        .as_ref()
     }
 }

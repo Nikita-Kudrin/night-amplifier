@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use night_amplifier::disk_writer::WritingSessionType;
 use night_amplifier::camera::{BufferPool, ImageFormat, RawFrame, SensorType};
+use night_amplifier::disk_writer::WritingSessionType;
 use night_amplifier::{DiskWriter, DiskWriterConfig, FitsMetadata};
 use std::hint::black_box;
 use std::time::Duration;
@@ -37,7 +37,13 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..num_frames {
-                let _ = handle.queue_raw_frame(black_box(std::sync::Arc::clone(&frame)), i, metadata.clone(), SensorType::Mono, None);
+                let _ = handle.queue_raw_frame(
+                    black_box(std::sync::Arc::clone(&frame)),
+                    i,
+                    metadata.clone(),
+                    SensorType::Mono,
+                    None,
+                );
             }
 
             // Wait for queue to drain
@@ -92,7 +98,13 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
             let writer_task = std::thread::spawn(move || writer.run());
 
             for i in 0..10u64 {
-                let _ = handle.queue_raw_frame(std::sync::Arc::clone(&frame), i, metadata.clone(), SensorType::Mono, None);
+                let _ = handle.queue_raw_frame(
+                    std::sync::Arc::clone(&frame),
+                    i,
+                    metadata.clone(),
+                    SensorType::Mono,
+                    None,
+                );
             }
 
             // CPU work on the main thread while disk I/O is happening

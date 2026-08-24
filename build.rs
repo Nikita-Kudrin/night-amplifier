@@ -14,7 +14,10 @@ fn main() {
     // Ensure the manual/.vitepress/dist directory exists for the same reason.
     if !std::path::Path::new("manual/.vitepress/dist").exists() {
         if let Err(e) = fs::create_dir_all("manual/.vitepress/dist") {
-            println!("cargo:warning=Failed to create manual/.vitepress/dist directory: {}", e);
+            println!(
+                "cargo:warning=Failed to create manual/.vitepress/dist directory: {}",
+                e
+            );
         } else {
             let _ = fs::write("manual/.vitepress/dist/.keep", "");
         }

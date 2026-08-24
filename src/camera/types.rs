@@ -75,8 +75,8 @@ impl ImageFormat {
     }
 }
 
-use std::sync::{Arc, Mutex};
 use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex};
 
 /// A pool of reusable byte buffers for zero-allocation camera capture
 #[derive(Debug, Clone)]
@@ -105,10 +105,10 @@ impl BufferPool {
         } else {
             Vec::with_capacity(size)
         };
-        
+
         buf.clear();
         buf.resize(size, 0);
-        
+
         PooledBuffer {
             data: Some(buf),
             pool: self.pool.clone(),
@@ -125,9 +125,7 @@ pub struct PooledBuffer {
 impl std::fmt::Debug for PooledBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let len = self.data.as_ref().map_or(0, |v| v.len());
-        f.debug_struct("PooledBuffer")
-            .field("len", &len)
-            .finish()
+        f.debug_struct("PooledBuffer").field("len", &len).finish()
     }
 }
 
@@ -145,7 +143,8 @@ impl Drop for PooledBuffer {
     fn drop(&mut self) {
         if let Some(buf) = self.data.take() {
             if let Ok(mut pool) = self.pool.lock() {
-                if pool.len() < 5 { // Max 5 buffers in the pool
+                if pool.len() < 5 {
+                    // Max 5 buffers in the pool
                     pool.push(buf);
                 }
             }
@@ -213,24 +212,52 @@ impl RawFrame {
     pub fn to_frame(&self, info: &CameraInfo) -> CameraResult<crate::Frame> {
         use crate::PixelFormat;
 
-        let channels = if info.sensor_type == SensorType::Color && self.format == ImageFormat::Rgb24 { 3 } else { 1 };
+        let channels = if info.sensor_type == SensorType::Color && self.format == ImageFormat::Rgb24
+        {
+            3
+        } else {
+            1
+        };
         let pixel_format = match self.format {
-            ImageFormat::Raw8 => if channels == 1 && info.sensor_type == SensorType::Color { PixelFormat::Bayer8 } else { PixelFormat::Rgb8 },
-            ImageFormat::Raw16 => if channels == 1 && info.sensor_type == SensorType::Color { PixelFormat::Bayer16 } else { PixelFormat::Rgb16 },
+            ImageFormat::Raw8 => {
+                if channels == 1 && info.sensor_type == SensorType::Color {
+                    PixelFormat::Bayer8
+                } else {
+                    PixelFormat::Rgb8
+                }
+            }
+            ImageFormat::Raw16 => {
+                if channels == 1 && info.sensor_type == SensorType::Color {
+                    PixelFormat::Bayer16
+                } else {
+                    PixelFormat::Rgb16
+                }
+            }
             ImageFormat::Rgb24 => PixelFormat::Rgb8,
         };
 
         if info.sensor_type == SensorType::Color && channels == 1 {
             let pattern = info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            crate::Frame::from_bayer(self.data_slice(), self.width as usize, self.height as usize, pixel_format, pattern)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+            crate::Frame::from_bayer(
+                self.data_slice(),
+                self.width as usize,
+                self.height as usize,
+                pixel_format,
+                pattern,
+            )
+            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         } else {
-            crate::Frame::from_raw(self.data_slice(), self.width as usize, self.height as usize, channels, pixel_format)
-                .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+            crate::Frame::from_raw(
+                self.data_slice(),
+                self.width as usize,
+                self.height as usize,
+                channels,
+                pixel_format,
+            )
+            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         }
     }
 }
-
 
 /// Camera information
 #[derive(Debug, Clone)]
