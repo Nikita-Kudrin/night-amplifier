@@ -37,20 +37,22 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
     let height = frame.height();
     let input = frame.data();
 
-    let mut output = vec![0.0f32; width * height * 3];
+    let mut output = Frame::zeros(width, height, 3)?;
+    let (r_plane, g_plane, b_plane) = output.planes_mut();
 
-    output
-        .par_chunks_mut(width * 3)
+    r_plane
+        .par_chunks_mut(width)
+        .zip(g_plane.par_chunks_mut(width))
+        .zip(b_plane.par_chunks_mut(width))
         .enumerate()
-        .for_each(|(y, row)| {
+        .for_each(|(y, ((r_row, g_row), b_row))| {
             // Process border pixels with scalar fallback
             if y < 2 || y >= height - 2 {
                 for x in 0..width {
                     let (r, g, b) = bilinear_at(input, width, height, x, y, pattern);
-                    let out_idx = x * 3;
-                    row[out_idx] = r;
-                    row[out_idx + 1] = g;
-                    row[out_idx + 2] = b;
+                    r_row[x] = r;
+                    g_row[x] = g;
+                    b_row[x] = b;
                 }
                 return;
             }
@@ -58,10 +60,9 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
             // Process left border (x < 2)
             for x in 0..2 {
                 let (r, g, b) = bilinear_at(input, width, height, x, y, pattern);
-                let out_idx = x * 3;
-                row[out_idx] = r;
-                row[out_idx + 1] = g;
-                row[out_idx + 2] = b;
+                r_row[x] = r;
+                g_row[x] = g;
+                b_row[x] = b;
             }
 
             // Process interior pixels with SIMD (4 at a time)
@@ -72,31 +73,29 @@ pub fn debayer_vng(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
             // SIMD batch processing
             let mut x = interior_start;
             while x < simd_end {
-                process_4_pixels_simd(input, width, height, x, y, pattern, row);
+                process_4_pixels_simd(input, width, height, x, y, pattern, r_row, g_row, b_row);
                 x += 4;
             }
 
             // Handle remaining interior pixels (0-3 pixels)
             while x < interior_end {
                 let (r, g, b) = vng_at(input, width, height, x, y, pattern);
-                let out_idx = x * 3;
-                row[out_idx] = r;
-                row[out_idx + 1] = g;
-                row[out_idx + 2] = b;
+                r_row[x] = r;
+                g_row[x] = g;
+                b_row[x] = b;
                 x += 1;
             }
 
             // Process right border (x >= width - 2)
             for x in interior_end..width {
                 let (r, g, b) = bilinear_at(input, width, height, x, y, pattern);
-                let out_idx = x * 3;
-                row[out_idx] = r;
-                row[out_idx + 1] = g;
-                row[out_idx + 2] = b;
+                r_row[x] = r;
+                g_row[x] = g;
+                b_row[x] = b;
             }
         });
 
-    Frame::from_f32_vec(output, width, height, 3)
+    Ok(output)
 }
 
 /// Process 4 consecutive pixels using SIMD gradient computation
@@ -108,10 +107,12 @@ fn process_4_pixels_simd(
     x_start: usize,
     y: usize,
     pattern: CfaPattern,
-    row: &mut [f32],
+    r_row: &mut [f32],
+    g_row: &mut [f32],
+    b_row: &mut [f32],
 ) {
     // Compute gradients for all 4 pixels using SIMD
-    let gradients = compute_gradients_simd_4(data, width, height, x_start, y);
+    let gradients = compute_gradients_simd_4(data, width, x_start, y);
 
     // Process each pixel with its SIMD-computed gradients
     for i in 0..4 {
@@ -128,10 +129,9 @@ fn process_4_pixels_simd(
         ];
 
         let (r, g, b) = vng_at_with_gradients(data, width, height, x, y, pattern, &pixel_gradients);
-        let out_idx = x * 3;
-        row[out_idx] = r;
-        row[out_idx + 1] = g;
-        row[out_idx + 2] = b;
+        r_row[x] = r;
+        g_row[x] = g;
+        b_row[x] = b;
     }
 }
 
@@ -150,7 +150,6 @@ fn load_4_horizontal(data: &[f32], width: usize, base_x: usize, y: usize) -> f32
 fn compute_gradients_simd_4(
     data: &[f32],
     width: usize,
-    height: usize,
     x_start: usize,
     y: usize,
 ) -> [[f32; 4]; 8] {

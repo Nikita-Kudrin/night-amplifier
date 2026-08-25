@@ -68,6 +68,21 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
         },
     );
 
+    // The 8-bit streaming path, which had no coverage. Note it is not a like-for-like
+    // control against the f32 path above: 8-bit output is a quarter of the write
+    // volume, so the gap between them is mostly bytes written, not layout.
+    let frame = generate_bayer_frame(2712, 1538);
+    group.bench_with_input(
+        BenchmarkId::from_parameter("2712x1538_to_rgb8"),
+        &frame,
+        |b, frame| {
+            b.iter(|| {
+                night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(black_box(frame), CfaPattern::Rggb)
+                    .expect("Debayer failed")
+            })
+        },
+    );
+
     group.finish();
 }
 

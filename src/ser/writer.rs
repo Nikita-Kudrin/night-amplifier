@@ -145,61 +145,60 @@ fn encode_frame(frame: &Frame, header: &SerHeader) -> Vec<u8> {
     }
 }
 
-fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
+/// Borrows a frame's three colour planes, replicating the single plane for mono.
+///
+/// SER payloads are interleaved (RGB/BGR) or single-channel, while `Frame` is
+/// planar — so every arm below gathers across planes rather than walking the buffer
+/// linearly. Replicating mono into all three slots also makes the Rec. 709
+/// luminance sum collapse to the sample itself (the weights total 1.0), which lets
+/// mono and colour sources share one code path.
+fn planes_of(frame: &Frame) -> (&[f32], &[f32], &[f32]) {
+    let area = frame.width() * frame.height();
     let data = frame.data();
-    let src_channels = frame.channels();
+    if frame.channels() >= 3 {
+        (&data[..area], &data[area..2 * area], &data[2 * area..3 * area])
+    } else {
+        (&data[..area], &data[..area], &data[..area])
+    }
+}
+
+#[inline]
+fn luminance(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
+    let (rp, gp, bp) = planes_of(frame);
     let dst_channels = header.color_id.channels();
     let pixels = header.width as usize * header.height as usize;
 
     let mut bytes = Vec::with_capacity(pixels * dst_channels);
+    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
 
     match header.color_id {
         SerColorId::Mono => {
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    let r = data[i * 3];
-                    let g = data[i * 3 + 1];
-                    let b = data[i * 3 + 2];
-                    let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                    bytes.push((lum.clamp(0.0, 1.0) * 255.0) as u8);
-                }
-            } else {
-                for i in 0..pixels {
-                    bytes.push((data[i].clamp(0.0, 1.0) * 255.0) as u8);
-                }
+            for i in 0..pixels {
+                bytes.push(to_u8(luminance(rp[i], gp[i], bp[i])));
             }
         }
         SerColorId::Rgb => {
-            for &v in data {
-                bytes.push((v.clamp(0.0, 1.0) * 255.0) as u8);
+            for i in 0..pixels {
+                bytes.push(to_u8(rp[i]));
+                bytes.push(to_u8(gp[i]));
+                bytes.push(to_u8(bp[i]));
             }
         }
         SerColorId::Bgr => {
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    bytes.push((data[i * 3 + 2].clamp(0.0, 1.0) * 255.0) as u8);
-                    bytes.push((data[i * 3 + 1].clamp(0.0, 1.0) * 255.0) as u8);
-                    bytes.push((data[i * 3].clamp(0.0, 1.0) * 255.0) as u8);
-                }
-            } else {
-                for i in 0..pixels {
-                    let v = (data[i].clamp(0.0, 1.0) * 255.0) as u8;
-                    bytes.push(v);
-                    bytes.push(v);
-                    bytes.push(v);
-                }
+            for i in 0..pixels {
+                bytes.push(to_u8(bp[i]));
+                bytes.push(to_u8(gp[i]));
+                bytes.push(to_u8(rp[i]));
             }
         }
         _ => {
-            // For Bayer or unknown, try to output as grayscale
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    bytes.push((data[i * 3 + 1].clamp(0.0, 1.0) * 255.0) as u8);
-                }
-            } else {
-                for i in 0..pixels {
-                    bytes.push((data[i].clamp(0.0, 1.0) * 255.0) as u8);
-                }
+            // Bayer or unknown: emit the green channel as greyscale.
+            for i in 0..pixels {
+                bytes.push(to_u8(gp[i]));
             }
         }
     }
@@ -208,70 +207,40 @@ fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
 }
 
 fn encode_16bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
-    let data = frame.data();
-    let src_channels = frame.channels();
+    let (rp, gp, bp) = planes_of(frame);
     let dst_channels = header.color_id.channels();
     let pixels = header.width as usize * header.height as usize;
 
     let mut bytes = Vec::with_capacity(pixels * dst_channels * 2);
+    let to_u16 = |v: f32| (v.clamp(0.0, 1.0) * 65535.0) as u16;
 
     match header.color_id {
         SerColorId::Mono => {
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    let r = data[i * 3];
-                    let g = data[i * 3 + 1];
-                    let b = data[i * 3 + 2];
-                    let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                    let value = (lum.clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&value.to_le_bytes());
-                }
-            } else {
-                for i in 0..pixels {
-                    let value = (data[i].clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&value.to_le_bytes());
-                }
+            for i in 0..pixels {
+                bytes.extend_from_slice(&to_u16(luminance(rp[i], gp[i], bp[i])).to_le_bytes());
             }
         }
         SerColorId::Rgb => {
-            for &v in data {
-                let value = (v.clamp(0.0, 1.0) * 65535.0) as u16;
-                bytes.extend_from_slice(&value.to_le_bytes());
+            for i in 0..pixels {
+                bytes.extend_from_slice(&to_u16(rp[i]).to_le_bytes());
+                bytes.extend_from_slice(&to_u16(gp[i]).to_le_bytes());
+                bytes.extend_from_slice(&to_u16(bp[i]).to_le_bytes());
             }
         }
         SerColorId::Bgr => {
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    let b = (data[i * 3 + 2].clamp(0.0, 1.0) * 65535.0) as u16;
-                    let g = (data[i * 3 + 1].clamp(0.0, 1.0) * 65535.0) as u16;
-                    let r = (data[i * 3].clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&b.to_le_bytes());
-                    bytes.extend_from_slice(&g.to_le_bytes());
-                    bytes.extend_from_slice(&r.to_le_bytes());
-                }
-            } else {
-                for i in 0..pixels {
-                    let v = (data[i].clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                }
+            for i in 0..pixels {
+                bytes.extend_from_slice(&to_u16(bp[i]).to_le_bytes());
+                bytes.extend_from_slice(&to_u16(gp[i]).to_le_bytes());
+                bytes.extend_from_slice(&to_u16(rp[i]).to_le_bytes());
             }
         }
         _ => {
-            if src_channels >= 3 {
-                for i in 0..pixels {
-                    let value = (data[i * 3 + 1].clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&value.to_le_bytes());
-                }
-            } else {
-                for i in 0..pixels {
-                    let value = (data[i].clamp(0.0, 1.0) * 65535.0) as u16;
-                    bytes.extend_from_slice(&value.to_le_bytes());
-                }
+            for i in 0..pixels {
+                bytes.extend_from_slice(&to_u16(gp[i]).to_le_bytes());
             }
         }
     }
 
     bytes
 }
+

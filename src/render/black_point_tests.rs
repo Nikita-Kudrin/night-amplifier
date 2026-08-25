@@ -42,10 +42,11 @@ fn test_calculate_black_point_clamps_to_zero() {
 #[test]
 fn test_calculate_black_points_per_channel() {
     let mut data = vec![0.0f32; 64 * 64 * 3];
-    for i in 0..(64 * 64) {
-        data[i * 3] = 0.1;
-        data[i * 3 + 1] = 0.2;
-        data[i * 3 + 2] = 0.3;
+    let plane = 64 * 64;
+    for i in 0..plane {
+        data[i] = 0.1;
+        data[plane + i] = 0.2;
+        data[plane * 2 + i] = 0.3;
     }
     let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
     let stats = compute_image_stats(&frame).unwrap();
@@ -59,10 +60,11 @@ fn test_calculate_black_points_per_channel() {
 #[test]
 fn test_calculate_luminance_black_point() {
     let mut data = vec![0.0f32; 64 * 64 * 3];
-    for i in 0..(64 * 64) {
-        data[i * 3] = 0.1;
-        data[i * 3 + 1] = 0.2;
-        data[i * 3 + 2] = 0.3;
+    let plane = 64 * 64;
+    for i in 0..plane {
+        data[i] = 0.1;
+        data[plane + i] = 0.2;
+        data[plane * 2 + i] = 0.3;
     }
     let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
     let stats = compute_image_stats(&frame).unwrap();
@@ -76,10 +78,11 @@ fn test_calculate_luminance_black_point() {
 #[test]
 fn test_subtract_black_point_basic() {
     let mut data = vec![0.0f32; 32 * 32 * 3];
-    for i in 0..(32 * 32) {
-        data[i * 3] = 0.3;
-        data[i * 3 + 1] = 0.3;
-        data[i * 3 + 2] = 0.3;
+    let plane = 32 * 32;
+    for i in 0..plane {
+        data[i] = 0.3;
+        data[plane + i] = 0.3;
+        data[plane * 2 + i] = 0.3;
     }
     let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
@@ -98,10 +101,11 @@ fn test_subtract_black_point_basic() {
 #[test]
 fn test_subtract_black_point_clamps_negative() {
     let mut data = vec![0.0f32; 32 * 32 * 3];
-    for i in 0..(32 * 32) {
-        data[i * 3] = 0.1;
-        data[i * 3 + 1] = 0.2;
-        data[i * 3 + 2] = 0.3;
+    let plane = 32 * 32;
+    for i in 0..plane {
+        data[i] = 0.1;
+        data[plane + i] = 0.2;
+        data[plane * 2 + i] = 0.3;
     }
     let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
@@ -133,16 +137,18 @@ fn test_subtract_black_point_uniform() {
 fn test_subtract_black_point_auto() {
     let mut data = vec![0.0f32; 64 * 64 * 3];
     let mut seed: u32 = 12345;
-    for i in 0..(64 * 64) {
+    let plane = 64 * 64;
+    for i in 0..plane {
         for c in 0..3 {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.02;
-            data[i * 3 + c] = 0.2 + noise;
+            data[c * plane + i] = 0.2 + noise;
         }
     }
-    data[32 * 64 * 3 + 32 * 3] = 0.9;
-    data[32 * 64 * 3 + 32 * 3 + 1] = 0.9;
-    data[32 * 64 * 3 + 32 * 3 + 2] = 0.9;
+    let idx = 32 * 64 + 32;
+    data[idx] = 0.9;
+    data[plane + idx] = 0.9;
+    data[plane * 2 + idx] = 0.9;
 
     let mut frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
 
@@ -173,11 +179,12 @@ fn test_subtract_black_point_wrong_channels() {
 fn test_sigma_factor_affects_black_point() {
     let mut data = vec![0.0f32; 64 * 64 * 3];
     let mut seed: u32 = 54321;
-    for i in 0..(64 * 64) {
+    let plane = 64 * 64;
+    for i in 0..plane {
         for c in 0..3 {
             seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
             let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.1;
-            data[i * 3 + c] = 0.3 + noise;
+            data[c * plane + i] = 0.3 + noise;
         }
     }
     let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();

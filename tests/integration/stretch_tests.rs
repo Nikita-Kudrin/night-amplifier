@@ -123,6 +123,24 @@ fn test_pipeline_edge_cases() {
 
     assert_eq!(rgb8.len(), width * height * 3);
 
+    // The synthetic background is B > R > G by construction. Rendering must preserve
+    // that ordering; a planar-read-as-interleaved render flattens it, because each
+    // output pixel becomes three adjacent samples of the same channel.
+    let bg = (10usize, 10usize);
+    let src = (
+        frame.get_pixel(bg.0, bg.1, 0),
+        frame.get_pixel(bg.0, bg.1, 1),
+        frame.get_pixel(bg.0, bg.1, 2),
+    );
+    assert!(src.2 > src.0 && src.0 > src.1, "fixture invariant: expected B > R > G, got {src:?}");
+
+    let idx = (bg.1 * width + bg.0) * 3;
+    let out = (rgb8[idx], rgb8[idx + 1], rgb8[idx + 2]);
+    assert!(
+        out.2 >= out.0 && out.0 >= out.1,
+        "render_to_rgb8 lost the channel ordering: frame {src:?} -> rgb8 {out:?}"
+    );
+
     println!("\n=== Edge Case Tests Complete ===\n");
 }
 

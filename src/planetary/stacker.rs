@@ -8,7 +8,7 @@ use crate::frame::Frame;
 
 use super::alignment::compute_alignment;
 use super::config::{
-    AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats, QualityMetric,
+    AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats,
 };
 use super::quality::compute_quality;
 use std::sync::OnceLock;
@@ -345,6 +345,14 @@ impl PlanetaryStacker {
             .collect()
     }
 
+    /// Resamples `frame` by a whole-frame sub-pixel `offset`.
+    ///
+    /// Written plane by plane and in parallel. The previous version called a
+    /// `bilinear_sample` that returned `Option<Vec<f32>>`, i.e. one heap allocation per
+    /// output pixel — 4.17 million of them per aligned frame at IMX464 resolution, on a
+    /// single thread. `BilinearTap` resolves the source position once per pixel and the
+    /// three planes then read through it, so the O(1) work per pixel is shared rather
+    /// than repeated per channel.
     fn apply_offset(&self, frame: &Frame, offset: (f32, f32)) -> Result<Frame> {
         if offset.0.abs() < 0.001 && offset.1.abs() < 0.001 {
             return Ok(frame.clone());
@@ -353,28 +361,67 @@ impl PlanetaryStacker {
         let width = frame.width();
         let height = frame.height();
         let channels = frame.channels();
-        let src_data = frame.data();
-
-        let mut result = vec![0.0f32; width * height * channels];
         let (dx, dy) = offset;
 
-        for y in 0..height {
-            for x in 0..width {
-                let src_x = x as f32 - dx;
-                let src_y = y as f32 - dy;
+        let mut out = Frame::zeros(width, height, channels)?;
+        let chunk_rows = crate::parallel::balanced_chunk_len(width * height).div_ceil(width).max(1);
 
-                if let Some(value) =
-                    bilinear_sample(src_data, width, height, channels, src_x, src_y)
-                {
-                    let dst_idx = (y * width + x) * channels;
-                    for c in 0..channels {
-                        result[dst_idx + c] = value[c];
+        if channels == 3 {
+            let (src_r, src_g, src_b) = frame.planes();
+            let (dst_r, dst_g, dst_b) = out.planes_mut();
+            dst_r
+                .par_chunks_mut(width * chunk_rows)
+                .zip(dst_g.par_chunks_mut(width * chunk_rows))
+                .zip(dst_b.par_chunks_mut(width * chunk_rows))
+                .enumerate()
+                .for_each(|(block, ((r_block, g_block), b_block))| {
+                    let y_start = block * chunk_rows;
+                    for (row, ((r_row, g_row), b_row)) in r_block
+                        .chunks_mut(width)
+                        .zip(g_block.chunks_mut(width))
+                        .zip(b_block.chunks_mut(width))
+                        .enumerate()
+                    {
+                        let y = y_start + row;
+                        for x in 0..width {
+                            let Some(tap) = BilinearTap::at(
+                                x as f32 - dx,
+                                y as f32 - dy,
+                                width,
+                                height,
+                            ) else {
+                                continue;
+                            };
+                            r_row[x] = tap.sample(src_r);
+                            g_row[x] = tap.sample(src_g);
+                            b_row[x] = tap.sample(src_b);
+                        }
                     }
-                }
-            }
+                });
+            return Ok(out);
         }
 
-        Frame::from_f32_vec(result, width, height, channels)
+        for c in 0..channels {
+            let src = frame.channel_data(c);
+            out.channel_data_mut(c)
+                .par_chunks_mut(width * chunk_rows)
+                .enumerate()
+                .for_each(|(block, rows)| {
+                    let y_start = block * chunk_rows;
+                    for (row, out_row) in rows.chunks_mut(width).enumerate() {
+                        let y = y_start + row;
+                        for x in 0..width {
+                            if let Some(tap) =
+                                BilinearTap::at(x as f32 - dx, y as f32 - dy, width, height)
+                            {
+                                out_row[x] = tap.sample(src);
+                            }
+                        }
+                    }
+                });
+        }
+
+        Ok(out)
     }
 
     /// Clears all frames and resets the stacker
@@ -415,42 +462,61 @@ impl PlanetaryStacker {
 }
 
 /// Samples a pixel with bilinear interpolation, returning None if out of bounds.
-fn bilinear_sample(
-    src_data: &[f32],
-    width: usize,
-    height: usize,
-    channels: usize,
-    src_x: f32,
-    src_y: f32,
-) -> Option<Vec<f32>> {
-    if src_x < 0.0 || src_x >= (width - 1) as f32 || src_y < 0.0 || src_y >= (height - 1) as f32 {
-        return None;
+/// The four plane-relative offsets and weights one output pixel interpolates from.
+///
+/// Plane-relative on purpose: the same tap serves every channel, so a colour frame
+/// resolves the source position once per pixel rather than once per pixel per channel.
+/// That is also why this is `pub`: Pro's planetary stacker resamples through the same
+/// four taps (with an IDW displacement instead of a whole-frame offset), and a second
+/// copy over there is one more place for the two to disagree about layout.
+pub struct BilinearTap {
+    base00: usize,
+    base10: usize,
+    base01: usize,
+    base11: usize,
+    w00: f32,
+    w10: f32,
+    w01: f32,
+    w11: f32,
+}
+
+impl BilinearTap {
+    /// `None` when the source position falls outside the frame, in which case the
+    /// caller leaves that output pixel at its initial value.
+    #[inline]
+    pub fn at(src_x: f32, src_y: f32, width: usize, height: usize) -> Option<Self> {
+        if src_x < 0.0 || src_x >= (width - 1) as f32 || src_y < 0.0 || src_y >= (height - 1) as f32
+        {
+            return None;
+        }
+
+        let x0 = src_x.floor() as usize;
+        let y0 = src_y.floor() as usize;
+        let fx = src_x - x0 as f32;
+        let fy = src_y - y0 as f32;
+
+        let base00 = y0 * width + x0;
+        Some(Self {
+            base00,
+            base10: base00 + 1,
+            base01: base00 + width,
+            base11: base00 + width + 1,
+            w00: (1.0 - fx) * (1.0 - fy),
+            w10: fx * (1.0 - fy),
+            w01: (1.0 - fx) * fy,
+            w11: fx * fy,
+        })
     }
 
-    let x0 = src_x.floor() as usize;
-    let y0 = src_y.floor() as usize;
-    let x1 = x0 + 1;
-    let y1 = y0 + 1;
-
-    let fx = src_x - x0 as f32;
-    let fy = src_y - y0 as f32;
-
-    let w00 = (1.0 - fx) * (1.0 - fy);
-    let w10 = fx * (1.0 - fy);
-    let w01 = (1.0 - fx) * fy;
-    let w11 = fx * fy;
-
-    let mut result = Vec::with_capacity(channels);
-    for c in 0..channels {
-        let v00 = src_data[(y0 * width + x0) * channels + c];
-        let v10 = src_data[(y0 * width + x1) * channels + c];
-        let v01 = src_data[(y1 * width + x0) * channels + c];
-        let v11 = src_data[(y1 * width + x1) * channels + c];
-
-        result.push(w00 * v00 + w10 * v10 + w01 * v01 + w11 * v11);
+    /// Interpolates one plane. The plane must be `width * height` long and come from
+    /// the frame the tap was built against.
+    #[inline]
+    pub fn sample(&self, plane: &[f32]) -> f32 {
+        self.w00 * plane[self.base00]
+            + self.w10 * plane[self.base10]
+            + self.w01 * plane[self.base01]
+            + self.w11 * plane[self.base11]
     }
-
-    Some(result)
 }
 
 /// Convenience function to stack a slice of frames

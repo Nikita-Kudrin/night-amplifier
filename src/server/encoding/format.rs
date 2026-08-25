@@ -136,6 +136,7 @@ pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame
     let channels = frame.channels();
     let src_data = frame.data();
 
+
     let config = &ready_frame.pipeline_config;
     let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
     let has_saturate = config.saturation_boost;
@@ -160,20 +161,22 @@ pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame
                 let mut f32_row = cell.borrow_mut();
                 f32_row.resize(row_len, 0.0);
 
-                let row_start = y * width * channels;
-
+                let plane_size = width * height;
+                // Hoisted: the migration moved `y * width` into the per-pixel
+                // expression, and a mono frame — where planar and interleaved are the
+                // same thing — measured 6-10 % slower for it.
+                let row = y * width;
                 for x in 0..width {
                     let out_idx = x * 3;
                     if channels == 1 {
-                        let val = src_data[row_start + x];
+                        let val = src_data[row + x];
                         f32_row[out_idx] = val;
                         f32_row[out_idx + 1] = val;
                         f32_row[out_idx + 2] = val;
                     } else {
-                        let in_idx = row_start + x * channels;
-                        f32_row[out_idx] = src_data[in_idx];
-                        f32_row[out_idx + 1] = src_data[in_idx + 1];
-                        f32_row[out_idx + 2] = src_data[in_idx + 2];
+                        f32_row[out_idx] = src_data[row + x];
+                        f32_row[out_idx + 1] = src_data[plane_size + row + x];
+                        f32_row[out_idx + 2] = src_data[plane_size * 2 + row + x];
                     }
                 }
 
@@ -238,7 +241,7 @@ pub fn box_downsample_to_rgb8_fused(
     let height = frame.height();
     let channels = frame.channels();
     let src_data = frame.data();
-    let src_stride = width * channels;
+    let plane_size = width * height;
 
     let config = &ready_frame.pipeline_config;
     let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
@@ -285,15 +288,15 @@ pub fn box_downsample_to_rgb8_fused(
                     let mut acc = [0.0f32; 3];
 
                     for src_y in src_y0..src_y1 {
-                        let row_start = src_y * src_stride;
+                        let src_row = src_y * width;
                         for src_x in src_x0..src_x1 {
-                            let src_idx = row_start + src_x * channels;
                             if channels == 1 {
-                                acc[0] += src_data[src_idx];
+                                acc[0] += src_data[src_row + src_x];
                             } else {
-                                acc[0] += src_data[src_idx];
-                                acc[1] += src_data[src_idx + 1];
-                                acc[2] += src_data[src_idx + 2];
+                                let idx = src_row + src_x;
+                                acc[0] += src_data[idx];
+                                acc[1] += src_data[plane_size + idx];
+                                acc[2] += src_data[plane_size * 2 + idx];
                             }
                         }
                     }

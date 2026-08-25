@@ -5,16 +5,14 @@ use rayon::prelude::*;
 
 /// Compute statistics for a single channel with SIMD optimization
 pub(crate) fn compute_channel_stats(frame: &Frame, channel: usize, step: usize) -> ChannelStats {
-    let width = frame.width();
-    let height = frame.height();
-    let channels = frame.channels();
     let data = frame.data();
-    let total_pixels = width * height;
+    let total_pixels = frame.pixel_count();
 
-    // For step=1 (full sampling), use optimized contiguous access
-    if step == 1 && channels == 1 {
-        // Monochrome with full sampling: data is contiguous
-        let mut samples = data.to_vec();
+    // For step=1 (full sampling), use optimized contiguous access.
+    // Planar layout makes every channel contiguous, not just mono, so this shortcut
+    // now covers colour frames too instead of falling through to the strided gather.
+    if step == 1 {
+        let mut samples = frame.channel_data(channel).to_vec();
         let (min_val, max_val) = min_max_simd(&samples);
         let median = fast_median(&mut samples);
         compute_mad_in_place_simd(&mut samples, median);
@@ -22,12 +20,13 @@ pub(crate) fn compute_channel_stats(frame: &Frame, channel: usize, step: usize) 
         return ChannelStats::new(median, mad, min_val, max_val);
     }
 
-    // Collect samples in parallel. The gather is strided, so every read is a cache miss
-    // regardless; splitting it across cores hides that latency.
+    // Collect samples in parallel. Within a plane the stride is `step` samples (it was
+    // `step * channels` when frames were interleaved), so this is a sampling gather
+    // rather than a full traversal; splitting it across cores hides the miss latency.
     let mut samples: Vec<f32> = (0..total_pixels)
         .into_par_iter()
         .step_by(step)
-        .map(|pixel_idx| data[pixel_idx * channels + channel])
+        .map(|pixel_idx| data[channel * total_pixels + pixel_idx])
         .collect();
 
     if samples.is_empty() {

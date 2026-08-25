@@ -65,23 +65,10 @@ pub(crate) fn write_rgb_fits(
         message: format!("Failed to create FITS image HDU: {}", e),
     })?;
 
-    let pixels_per_channel = width * height;
-    let mut planar_data = vec![0.0f32; pixels_per_channel * channels];
     let data = frame.data();
 
-    for y in 0..height {
-        for x in 0..width {
-            let pixel_idx = y * width + x;
-            for c in 0..channels {
-                let src_idx = pixel_idx * channels + c;
-                let dst_idx = c * pixels_per_channel + pixel_idx;
-                planar_data[dst_idx] = data[src_idx];
-            }
-        }
-    }
-
     catch_ffi_panic("cfitsio::write_image", || {
-        hdu.write_image(fptr, &planar_data)
+        hdu.write_image(fptr, data)
     })
     .map_err(StackError::from)?
     .map_err(|e| StackError::ArithmeticError {

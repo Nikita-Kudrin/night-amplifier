@@ -4,9 +4,6 @@ use crate::server::encoding::format::*;
 use crate::server::encoding::jpeg::calculate_dynamic_jpeg_quality;
 use crate::server::encoding::jpeg::*;
 use crate::server::encoding::lz4::*;
-use crate::server::state::CaptureSettings;
-use crate::server::StretchResult;
-use std::sync::Arc;
 
 fn to_ready_frame(frame: &Frame) -> crate::server::state::RenderReadyFrame {
     let mut config = crate::render::RenderPipelineConfig::default();
@@ -43,8 +40,6 @@ fn to_ready_frame_with_stretch(
         }),
     }
 }
-
-use super::*;
 
 #[test]
 fn test_rgb8_lz4_encode_header_format() {
@@ -399,10 +394,11 @@ fn test_jpeg_encode_reused_compressor_does_not_leak_quality() {
 /// a channel mix-up cannot survive. Values stay inside [0, 1].
 fn gradient_frame(width: usize, height: usize, channels: usize) -> Frame {
     let mut data = vec![0.0f32; width * height * channels];
+    let area = width * height;
     for y in 0..height {
         for x in 0..width {
             for c in 0..channels {
-                let idx = (y * width + x) * channels + c;
+                let idx = c * area + y * width + x;
                 let v = (x * 7 + y * 13 + c * 71) % 251;
                 data[idx] = v as f32 / 250.0;
             }
@@ -608,8 +604,9 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
     // R=G=B per pixel, so luminance equals the shared channel value regardless of
     // the 0.2126/0.7152/0.0722 weighting, keeping the expected values simple.
     let data = vec![
-        0.2, 0.2, 0.2, 0.05, 0.05, 0.05, //
-        0.9, 0.9, 0.9, 0.0, 0.0, 0.0,
+        0.2, 0.05, 0.9, 0.0, //
+        0.2, 0.05, 0.9, 0.0, //
+        0.2, 0.05, 0.9, 0.0,
     ];
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
     let scale_lut = std::sync::Arc::new(vec![2.0f32; 8192]); // flat 2x scale
@@ -647,8 +644,9 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
 
     // 2x2 box: two dim (0.0) pixels, two bright (0.8) pixels. R=G=B per pixel.
     let data = vec![
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, //
-        0.8, 0.8, 0.8, 0.8, 0.8, 0.8,
+        0.0, 0.0, 0.8, 0.8, // R
+        0.0, 0.0, 0.8, 0.8, // G
+        0.0, 0.0, 0.8, 0.8, // B
     ];
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
     let ready = to_ready_frame_with_stretch(&frame, 0.0, scale_lut);

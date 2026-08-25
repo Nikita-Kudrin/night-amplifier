@@ -11,7 +11,7 @@ use fitsio::FitsFile;
 
 use crate::camera::error::{CameraError, CameraResult};
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{Frame, PixelFormat};
+use crate::Frame;
 use rayon::prelude::*;
 
 pub fn load_fits(path: &Path) -> CameraResult<Frame> {
@@ -47,39 +47,20 @@ pub fn load_fits(path: &Path) -> CameraResult<Frame> {
         CameraError::ImageReadFailed(format!("Failed to re-open HDU {}: {}", hdu_idx, e))
     })?;
 
-    let (width, height, channels, image_type) = extract_fits_info(&hdu.info)?;
+    let (shape, image_type) = extract_fits_info(&hdu.info)?;
 
-    let fits_data = read_fits_data(&hdu, &mut fitsfile, image_type, width, height, channels)?;
-
-    match fits_data {
-        FitsData::Bytes(raw_bytes, format) => {
-            Frame::from_raw(&raw_bytes, width, height, channels, format)
-                .map_err(|e| CameraError::ImageReadFailed(format!("Failed to create frame: {}", e)))
-        }
-        FitsData::Frame(frame) => Ok(frame),
-    }
+    read_fits_data(&hdu, &mut fitsfile, image_type, shape)
 }
 
-enum FitsData {
-    Bytes(Vec<u8>, PixelFormat),
-    Frame(Frame),
-}
-
-fn extract_fits_info(info: &HduInfo) -> CameraResult<(usize, usize, usize, ImageType)> {
+fn extract_fits_info(
+    info: &HduInfo,
+) -> CameraResult<(crate::fits::FitsShape, ImageType)> {
     match info {
         HduInfo::ImageInfo { shape, image_type } => {
-            let (w, h, c) = match shape.as_slice() {
-                [h, w] => (*w, *h, 1),
-                [c, h, w] if *c == 3 => (*w, *h, 3),
-                [h, w, c] if *c == 3 => (*w, *h, 3),
-                _ => {
-                    return Err(CameraError::ImageReadFailed(format!(
-                        "Unsupported FITS shape: {:?}",
-                        shape
-                    )))
-                }
-            };
-            Ok((w, h, c, *image_type))
+            let parsed = crate::fits::interpret_shape(shape).ok_or_else(|| {
+                CameraError::ImageReadFailed(format!("Unsupported FITS shape: {:?}", shape))
+            })?;
+            Ok((parsed, *image_type))
         }
         _ => Err(CameraError::ImageReadFailed(
             "FITS file does not contain image data".to_string(),
@@ -87,114 +68,77 @@ fn extract_fits_info(info: &HduInfo) -> CameraResult<(usize, usize, usize, Image
     }
 }
 
+/// Reads the HDU payload and normalises it into a planar [`Frame`].
+///
+/// FITS colour is plane-major and so is `Frame`, so a [`FitsColourLayout::Planar`]
+/// source needs no reordering at all. Only the interleaved form (NAXIS1 = 3) is
+/// scattered across planes.
+///
+/// The integer arms used to route through `FitsData::Bytes` -> `Frame::from_raw`, which
+/// de-interleaves — so a planar source had to be interleaved first, and the two
+/// conversions then cancelled. Correct, but two full-buffer passes and two extra
+/// allocations per loaded frame to arrive where the data already was.
 fn read_fits_data(
     hdu: &fitsio::hdu::FitsHdu,
     fitsfile: &mut FitsFile,
     image_type: ImageType,
-    width: usize,
-    height: usize,
-    channels: usize,
-) -> CameraResult<FitsData> {
+    shape: crate::fits::FitsShape,
+) -> CameraResult<Frame> {
+    macro_rules! read {
+        ($label:literal, $ty:ty) => {{
+            let data: Vec<$ty> = catch_ffi_panic($label, || hdu.read_image(fitsfile))
+                .map_err(CameraError::from)?
+                .map_err(|e| CameraError::ImageReadFailed(format!("Failed to read data: {}", e)))?;
+            data
+        }};
+    }
+
     match image_type {
         ImageType::UnsignedByte => {
-            let data: Vec<u8> =
-                catch_ffi_panic("cfitsio::read_image_u8", || hdu.read_image(fitsfile))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| {
-                        CameraError::ImageReadFailed(format!("Failed to read data: {}", e))
-                    })?;
-
-            let data = if channels > 1 {
-                interleave_planar(&data, width, height, channels)
-            } else {
-                data
-            };
-
-            Ok(FitsData::Bytes(data, PixelFormat::Rgb8))
+            let data = read!("cfitsio::read_image_u8", u8);
+            planar_frame(&data, shape, |v| v as f32 * (1.0 / 255.0))
         }
         ImageType::Short => {
-            let data: Vec<i16> =
-                catch_ffi_panic("cfitsio::read_image_i16", || hdu.read_image(fitsfile))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| {
-                        CameraError::ImageReadFailed(format!("Failed to read data: {}", e))
-                    })?;
-
-            let data = if channels > 1 {
-                interleave_planar(&data, width, height, channels)
-            } else {
-                data
-            };
-
-            let mut bytes = Vec::with_capacity(data.len() * 2);
-            for &v in &data {
-                let u = (v as i32 + 32768) as u16;
-                bytes.extend_from_slice(&u.to_le_bytes());
-            }
-            Ok(FitsData::Bytes(bytes, PixelFormat::Rgb16))
+            let data = read!("cfitsio::read_image_i16", i16);
+            planar_frame(&data, shape, |v| {
+                (v as i32 + 32768) as f32 * (1.0 / 65535.0)
+            })
         }
         ImageType::UnsignedShort => {
-            let data: Vec<u16> =
-                catch_ffi_panic("cfitsio::read_image_u16", || hdu.read_image(fitsfile))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| {
-                        CameraError::ImageReadFailed(format!("Failed to read data: {}", e))
-                    })?;
-
-            let data = if channels > 1 {
-                interleave_planar(&data, width, height, channels)
-            } else {
-                data
-            };
-
-            let mut bytes = Vec::with_capacity(data.len() * 2);
-            for &v in &data {
-                bytes.extend_from_slice(&v.to_le_bytes());
-            }
-            Ok(FitsData::Bytes(bytes, PixelFormat::Rgb16))
+            let data = read!("cfitsio::read_image_u16", u16);
+            planar_frame(&data, shape, |v| v as f32 * (1.0 / 65535.0))
+        }
+        ImageType::Long => {
+            let data = read!("cfitsio::read_image_i32", i32);
+            // Scaled against the data's own magnitude: FITS integers on this axis carry
+            // no declared full-well. Kept bit-for-bit equivalent to the previous
+            // `(v / max * 32767 + 32768) / 65535`, which mapped signed input onto the
+            // upper half of the u16 range. `unsigned_abs` rather than `abs` because
+            // `i32::MIN.abs()` overflows, and `.max(1)` because all-zero data used to
+            // divide by zero.
+            let max_val = data.iter().map(|&v| v.unsigned_abs()).max().unwrap_or(1).max(1) as f32;
+            let inv = 1.0 / max_val;
+            planar_frame(&data, shape, move |v| {
+                (v as f32 * inv * 32767.0 + 32768.0) * (1.0 / 65535.0)
+            })
         }
         ImageType::Float => {
-            let mut data: Vec<f32> =
-                catch_ffi_panic("cfitsio::read_image_f32", || hdu.read_image(fitsfile))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| {
-                        CameraError::ImageReadFailed(format!("Failed to read data: {}", e))
-                    })?;
-
-            normalize_f32_in_place(&mut data);
-
-            let data = if channels > 1 {
-                interleave_planar(&data, width, height, channels)
-            } else {
-                data
-            };
-
-            // Zero-copy conversion directly into Frame
-            let frame = Frame::from_f32_vec(data, width, height, channels).map_err(|e| {
-                CameraError::ImageReadFailed(format!("Failed to create frame: {}", e))
-            })?;
-            Ok(FitsData::Frame(frame))
+            let data = read!("cfitsio::read_image_f32", f32);
+            let (min, max) = data
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let inv_range = 1.0 / (max - min).max(1e-10);
+            planar_frame(&data, shape, move |v| (v - min) * inv_range)
         }
         ImageType::Double => {
-            let f64_data: Vec<f64> =
-                catch_ffi_panic("cfitsio::read_image_f64", || hdu.read_image(fitsfile))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| {
-                        CameraError::ImageReadFailed(format!("Failed to read data: {}", e))
-                    })?;
-
-            let data = normalize_f64_to_f32(&f64_data);
-
-            let data = if channels > 1 {
-                interleave_planar(&data, width, height, channels)
-            } else {
-                data
-            };
-
-            let frame = Frame::from_f32_vec(data, width, height, channels).map_err(|e| {
-                CameraError::ImageReadFailed(format!("Failed to create frame: {}", e))
-            })?;
-            Ok(FitsData::Frame(frame))
+            let data = read!("cfitsio::read_image_f64", f64);
+            // Span accumulated in f64, as before: narrowing first would lose the range
+            // on high-dynamic-range doubles.
+            let (min, max) = data
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let inv_range = 1.0 / (max - min).max(1e-10);
+            planar_frame(&data, shape, move |v| ((v - min) * inv_range) as f32)
         }
         _ => Err(CameraError::ImageReadFailed(format!(
             "Unsupported FITS image type: {:?}",
@@ -203,91 +147,119 @@ fn read_fits_data(
     }
 }
 
-/// Normalizes f32 data to [0.0, 1.0] in place using a single min/max pass.
-fn normalize_f32_in_place(data: &mut [f32]) {
-    // 1-pass min/max
-    let mut min = f32::MAX;
-    let mut max = f32::MIN;
-    for &v in data.iter() {
-        if v < min {
-            min = v;
-        }
-        if v > max {
-            max = v;
-        }
+/// Scatters `samples` into a planar [`Frame`], normalising with `to_norm`.
+///
+/// One pass, one allocation, whichever layout the source uses.
+fn planar_frame<T: Copy + Send + Sync>(
+    samples: &[T],
+    shape: crate::fits::FitsShape,
+    to_norm: impl Fn(T) -> f32 + Send + Sync,
+) -> CameraResult<Frame> {
+    use crate::fits::FitsColourLayout;
+
+    let crate::fits::FitsShape {
+        width,
+        height,
+        channels,
+        layout,
+    } = shape;
+    let area = width * height;
+    let expected = area * channels;
+
+    if samples.len() < expected {
+        return Err(CameraError::ImageReadFailed(format!(
+            "FITS payload holds {} samples, expected {} for {}x{}x{}",
+            samples.len(),
+            expected,
+            width,
+            height,
+            channels
+        )));
     }
 
-    let range = (max - min).max(1e-10);
-    let inv_range = 1.0 / range;
-    for v in data.iter_mut() {
-        *v = (*v - min) * inv_range;
-    }
-}
-
-/// Converts f64 data to normalized f32 [0.0, 1.0] in a single pass.
-fn normalize_f64_to_f32(data: &[f64]) -> Vec<f32> {
-    let (min, max) = data.iter().fold((f64::MAX, f64::MIN), |(cmin, cmax), &v| {
-        (cmin.min(v), cmax.max(v))
-    });
-
-    let range = (max - min).max(1e-10);
-    let inv_range = 1.0 / range;
-
-    let mut f32_data = Vec::with_capacity(data.len());
-    for &v in data {
-        f32_data.push(((v - min) * inv_range) as f32);
-    }
-    f32_data
-}
-
-/// Converts planar data [R..., G..., B...] to interleaved [RGB, RGB, ...] in parallel.
-fn interleave_planar<T>(data: &[T], width: usize, height: usize, channels: usize) -> Vec<T>
-where
-    T: Copy + Send + Sync + Default,
-{
-    let mut interleaved = vec![T::default(); data.len()];
-    let plane_size = width * height;
-
-    interleaved
-        .par_chunks_mut(width * channels)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..width {
-                let pixel_offset = x * channels;
-                let plane_offset = y * width + x;
-                for c in 0..channels {
-                    row[pixel_offset + c] = data[c * plane_size + plane_offset];
+    let mut data = vec![0.0f32; expected];
+    match layout {
+        // NAXIS1 = 3: channels are the fastest-varying axis, so this is the one layout
+        // that has to be scattered.
+        FitsColourLayout::Interleaved => {
+            data.par_chunks_mut(area).enumerate().for_each(|(c, plane)| {
+                for (i, slot) in plane.iter_mut().enumerate() {
+                    *slot = to_norm(samples[i * channels + c]);
                 }
-            }
-        });
+            });
+        }
+        // Already plane-major, which is exactly what `Frame` wants.
+        FitsColourLayout::Mono | FitsColourLayout::Planar => {
+            data.par_chunks_mut(area)
+                .zip(samples[..expected].par_chunks(area))
+                .for_each(|(plane, src)| {
+                    for (slot, &v) in plane.iter_mut().zip(src) {
+                        *slot = to_norm(v);
+                    }
+                });
+        }
+    }
 
-    interleaved
+    Frame::from_f32_vec(data, width, height, channels)
+        .map_err(|e| CameraError::ImageReadFailed(format!("Failed to create frame: {}", e)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::fits::{FitsColourLayout, FitsShape};
+
+    fn shape(layout: FitsColourLayout) -> FitsShape {
+        FitsShape {
+            width: 2,
+            height: 2,
+            channels: 3,
+            layout,
+        }
+    }
+
+    /// A NAXIS3 = 3 payload is already plane-major, so it must pass through untouched.
     #[test]
-    fn test_interleave_planar() {
-        // 2x2 RGB image in planar format: [R1, R2, R3, R4, G1, G2, G3, G4, B1, B2, B3, B4]
-        let planar = vec![
-            1.0, 2.0, 3.0, 4.0, // Red
-            5.0, 6.0, 7.0, 8.0, // Green
-            9.0, 10.0, 11.0, 12.0, // Blue
+    fn planar_payload_passes_through() {
+        let planar: Vec<u16> = vec![
+            1, 2, 3, 4, // Red
+            5, 6, 7, 8, // Green
+            9, 10, 11, 12, // Blue
         ];
 
-        let interleaved = interleave_planar(&planar, 2, 2, 3);
+        let frame = planar_frame(&planar, shape(FitsColourLayout::Planar), |v| v as f32).unwrap();
 
-        // Expected interleaved: [R1, G1, B1, R2, G2, B2, R3, G3, B3, R4, G4, B4]
-        let expected = vec![
-            1.0, 5.0, 9.0, // Pixel (0,0)
-            2.0, 6.0, 10.0, // Pixel (1,0)
-            3.0, 7.0, 11.0, // Pixel (0,1)
-            4.0, 8.0, 12.0, // Pixel (1,1)
+        assert_eq!(frame.get_pixel(0, 0, 0), 1.0);
+        assert_eq!(frame.get_pixel(1, 0, 0), 2.0);
+        assert_eq!(frame.get_pixel(0, 0, 1), 5.0);
+        assert_eq!(frame.get_pixel(1, 1, 2), 12.0);
+    }
+
+    /// A NAXIS1 = 3 payload is interleaved and must be scattered across the planes.
+    #[test]
+    fn interleaved_payload_is_scattered_into_planes() {
+        let interleaved: Vec<u16> = vec![
+            1, 5, 9, // Pixel (0,0)
+            2, 6, 10, // Pixel (1,0)
+            3, 7, 11, // Pixel (0,1)
+            4, 8, 12, // Pixel (1,1)
         ];
 
-        assert_eq!(interleaved, expected);
+        let frame =
+            planar_frame(&interleaved, shape(FitsColourLayout::Interleaved), |v| v as f32).unwrap();
+
+        assert_eq!(frame.get_pixel(0, 0, 0), 1.0);
+        assert_eq!(frame.get_pixel(1, 0, 0), 2.0);
+        assert_eq!(frame.get_pixel(0, 0, 1), 5.0);
+        assert_eq!(frame.get_pixel(1, 1, 2), 12.0);
+    }
+
+    /// A truncated payload must be reported, not silently read past.
+    #[test]
+    fn short_payload_is_rejected() {
+        let too_short: Vec<u16> = vec![1, 2, 3];
+        assert!(planar_frame(&too_short, shape(FitsColourLayout::Planar), |v| v as f32).is_err());
     }
 
     #[test]

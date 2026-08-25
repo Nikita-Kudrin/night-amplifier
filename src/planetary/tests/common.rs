@@ -2,7 +2,10 @@ use crate::frame::Frame;
 
 /// Creates a test frame with a simple Gaussian dot
 pub fn create_test_frame(width: usize, height: usize, offset_x: f32, offset_y: f32) -> Frame {
-    let mut data = vec![0.1f32; width * height * 3];
+    // `set_pixel` rather than hand-computed offsets: this fixture feeds
+    // `frame_to_luminance`, and an interleaved fixture read by a planar consumer
+    // (or the reverse) hides the bug instead of catching it.
+    let mut frame = Frame::filled(width, height, 3, 0.1).unwrap();
 
     let cx = width as f32 / 2.0 + offset_x;
     let cy = height as f32 / 2.0 + offset_y;
@@ -14,14 +17,14 @@ pub fn create_test_frame(width: usize, height: usize, offset_x: f32, offset_y: f
             let dist_sq = dx * dx + dy * dy;
             let intensity = (-dist_sq / 100.0).exp();
 
-            let idx = (y * width + x) * 3;
-            data[idx] += intensity;
-            data[idx + 1] += intensity;
-            data[idx + 2] += intensity;
+            for c in 0..3 {
+                let current = frame.get_pixel(x, y, c);
+                frame.set_pixel(x, y, c, current + intensity);
+            }
         }
     }
 
-    Frame::from_f32_vec(data, width, height, 3).unwrap()
+    frame
 }
 
 /// Creates a simulated planetary disk with surface features
@@ -32,7 +35,7 @@ pub fn create_planetary_frame(
     offset_y: f32,
     blur_factor: f32,
 ) -> Frame {
-    let mut data = vec![0.05f32; width * height * 3];
+    let mut frame = Frame::filled(width, height, 3, 0.05).unwrap();
 
     let cx = width as f32 / 2.0 + offset_x;
     let cy = height as f32 / 2.0 + offset_y;
@@ -53,13 +56,12 @@ pub fn create_planetary_frame(
                 let base_intensity = 0.6 * limb_darkening + feature1 + feature2;
                 let intensity = base_intensity * sharpness;
 
-                let idx = (y * width + x) * 3;
-                data[idx] = (intensity * 1.1).clamp(0.0, 1.0);
-                data[idx + 1] = intensity.clamp(0.0, 1.0);
-                data[idx + 2] = (intensity * 0.9).clamp(0.0, 1.0);
+                frame.set_pixel(x, y, 0, (intensity * 1.1).clamp(0.0, 1.0));
+                frame.set_pixel(x, y, 1, intensity.clamp(0.0, 1.0));
+                frame.set_pixel(x, y, 2, (intensity * 0.9).clamp(0.0, 1.0));
             }
         }
     }
 
-    Frame::from_f32_vec(data, width, height, 3).unwrap()
+    frame
 }

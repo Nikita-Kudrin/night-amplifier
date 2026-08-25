@@ -79,6 +79,45 @@ fn test_encode_8k_downsamples_to_4k() {
     assert!((val as i32 - 128).abs() <= 1);
 }
 
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn test_lz4_payload_preserves_channel_order() {
+    println!("\n=== Encoding Test: LZ4 payload channel order ===\n");
+    let (width, height) = (64usize, 32usize);
+
+    // Distinct constant channels: any layout mix-up shows up immediately.
+    let mut frame = Frame::zeros(width, height, 3).unwrap();
+    for y in 0..height {
+        for x in 0..width {
+            frame.set_pixel(x, y, 0, 0.0);
+            frame.set_pixel(x, y, 1, 0.5);
+            frame.set_pixel(x, y, 2, 1.0);
+        }
+    }
+
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let decompressed = decompress_size_prepended(&encoded[16..]).unwrap();
+    assert_eq!(decompressed.len(), width * height * 3);
+
+    for i in 0..(width * height) {
+        let px = (
+            decompressed[i * 3],
+            decompressed[i * 3 + 1],
+            decompressed[i * 3 + 2],
+        );
+        assert_eq!(
+            px,
+            (0u8, 128u8, 255u8),
+            "LZ4 payload pixel {i} is {px:?}; the SA08 payload must be interleaved RGB8"
+        );
+    }
+
+    let spread = crate::integration::common::mean_chroma_spread_rgb8(&decompressed, width, height);
+    crate::integration::common::assert_has_chroma(spread, "LZ4 payload");
+    println!("  Channel order preserved, chroma spread {:.2}", spread);
+}
+
 // ============================================================================
 // Live-view streaming baseline on real fixtures
 // ============================================================================
@@ -695,16 +734,27 @@ fn probe_fused_render_clamp_difference() {
         let mut clean_max_delta = 0i32;
         let mut clean_min_lum = f32::MAX;
 
-        let total_px = (reference.data().len() / 3) as u64;
+        // `Frame` is planar, so a pixel's three samples are `area` apart, not adjacent.
+        // Grouping `data()` in threes — which this loop used to do — walks three
+        // horizontally-neighbouring samples of one channel instead. The per-element
+        // deltas below survived that (both buffers share the layout), but the
+        // clipped/clean partition and the luminance did not, so the `clean_max_delta`
+        // guard was being applied to the wrong population.
+        let area = reference.pixel_count();
+        let total_px = area as u64;
+        let (ref_r, ref_g, ref_b) = reference.planes();
+        let (fus_r, fus_g, fus_b) = fused.planes();
+        let mid_planes = [
+            &after_stretch[..area],
+            &after_stretch[area..2 * area],
+            &after_stretch[2 * area..3 * area],
+        ];
 
-        for ((pa, pb), mid) in reference
-            .data()
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .zip(fused.data().chunks_exact(3))
-            .zip(after_stretch.chunks_exact(3))
-        {
+        for p in 0..area {
+            let pa = [ref_r[p], ref_g[p], ref_b[p]];
+            let pb = [fus_r[p], fus_g[p], fus_b[p]];
+            let mid = [mid_planes[0][p], mid_planes[1][p], mid_planes[2][p]];
+
             // Clipping is a per-pixel property: one clamped channel drags down the
             // luminance the reference feeds into contrast, moving all three channels.
             let clipped = mid.iter().any(|&v| v >= 1.0);

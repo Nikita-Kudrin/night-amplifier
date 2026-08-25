@@ -24,12 +24,9 @@ pub(crate) fn write_png(frame: &Frame, path: &Path) -> Result<(), std::io::Error
         .write_header()
         .map_err(|e| std::io::Error::other(e))?;
 
-    // Convert f32 [0.0, 1.0] to u8 [0, 255]
-    let rgb8: Vec<u8> = frame
-        .data()
-        .iter()
-        .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
-        .collect();
+    // `to_rgb8_fast` owns the planar -> interleaved gather and the canonical
+    // rounding. Duplicating the conversion here is what let the two drift apart.
+    let rgb8 = frame.to_rgb8_fast();
 
     writer
         .write_image_data(&rgb8)

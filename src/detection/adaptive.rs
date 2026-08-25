@@ -61,7 +61,7 @@ struct ImageAnalysis {
 }
 
 fn analyze_image(frame: &Frame) -> ImageAnalysis {
-    let luminance = compute_luminance(frame);
+    let luminance = crate::detection::luminance::mean_luminance(frame);
 
     let sample_size = 50_000.min(luminance.len());
     let step = luminance.len() / sample_size;
@@ -100,20 +100,4 @@ fn choose_config(analysis: &ImageAnalysis) -> DetectionConfig {
     DetectionConfig::default().with_sigma(4.0).with_min_snr(3.0)
 }
 
-fn compute_luminance(frame: &Frame) -> Vec<f32> {
-    let data = frame.data();
-    let channels = frame.channels();
 
-    if channels == 1 {
-        return data.to_vec();
-    }
-
-    let pixel_count = frame.pixel_count();
-    let inv_channels = 1.0 / channels as f32;
-    (0..pixel_count)
-        .map(|i| {
-            let base = i * channels;
-            data[base..base + channels].iter().sum::<f32>() * inv_channels
-        })
-        .collect()
-}

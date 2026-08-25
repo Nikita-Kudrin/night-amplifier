@@ -3,7 +3,12 @@
 //! A high-performance astronomy image stacking engine optimized for
 //! Electronically Assisted Astronomy (EAA) on embedded platforms like Raspberry Pi 5.
 
-#![allow(dead_code, unused_variables, unused_imports, unused_assignments)]
+// `dead_code` and `unused_imports` stay allowed: the vendored camera SDK bindings
+// account for over 200 of them and clearing those is separate work. `unused_variables`
+// and `unused_assignments` are deliberately *not* allowed — suppressing them is what
+// let the planar migration ship three half-converted call sites whose only symptom
+// was a local computed and never read.
+#![allow(dead_code, unused_imports)]
 
 pub mod background;
 pub mod calibration;
@@ -18,6 +23,7 @@ pub mod frame;
 #[cfg(feature = "indi")]
 pub mod indi;
 pub mod logging;
+pub mod parallel;
 pub mod planetary;
 pub mod process;
 pub mod push_to;

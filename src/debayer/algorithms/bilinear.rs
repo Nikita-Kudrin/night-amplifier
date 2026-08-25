@@ -43,64 +43,50 @@ fn chunk_min_len() -> usize {
 
 /// Perform bilinear debayering on a single-channel Bayer frame
 pub fn debayer_bilinear(frame: &Frame, pattern: CfaPattern) -> Result<Frame> {
-    let output = debayer_impl::<F32Output>(frame, pattern);
-    Frame::from_f32_vec(output, frame.width(), frame.height(), 3)
+    let width = frame.width();
+    let height = frame.height();
+    let input = frame.data();
+    let area = width * height;
+
+    let mut output = vec![0.0f32; area * 3];
+    let (r_plane, rest) = output.split_at_mut(area);
+    let (g_plane, b_plane) = rest.split_at_mut(area);
+
+    r_plane
+        .par_chunks_mut(width * ROWS_PER_TASK)
+        .zip(g_plane.par_chunks_mut(width * ROWS_PER_TASK))
+        .zip(b_plane.par_chunks_mut(width * ROWS_PER_TASK))
+        .with_min_len(chunk_min_len())
+        .enumerate()
+        .for_each(|(task, ((r_rows, g_rows), b_rows))| {
+            let y_start = task * ROWS_PER_TASK;
+            // Zip rather than three `next()` calls behind an `if let`: the tuple form
+            // kept polling exhausted iterators for the whole ROWS_PER_TASK range on a
+            // short trailing chunk, and could not express that the three advance
+            // together.
+            let rows = r_rows
+                .chunks_mut(width)
+                .zip(g_rows.chunks_mut(width))
+                .zip(b_rows.chunks_mut(width));
+
+            for (offset, ((r, g), b)) in rows.enumerate() {
+                let mut writer = F32RowWriter::new(r, g, b);
+                debayer_row(input, width, height, pattern, y_start + offset, &mut writer);
+            }
+        });
+
+    Frame::from_f32_vec(output, width, height, 3)
 }
 
 /// Perform bilinear debayering directly to a 8-bit RGB vector
 /// Bypasses intermediate f32 Frame allocations for encoding/streaming
 pub fn debayer_bilinear_to_rgb8(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
-    Ok(debayer_impl::<Rgb8Output>(frame, pattern))
-}
-
-/// Destination format of a debayer pass.
-///
-/// The f32 and 8-bit variants differ only in how a pixel is stored, so they share one traversal
-/// rather than two copies of the interior/border split.
-trait DebayerOutput: Send {
-    type Elem: Copy + Default + Send;
-
-    fn store(dst: &mut [Self::Elem], idx: usize, rgb: (f32, f32, f32));
-}
-
-struct F32Output;
-
-impl DebayerOutput for F32Output {
-    type Elem = f32;
-
-    #[inline(always)]
-    fn store(dst: &mut [f32], idx: usize, (r, g, b): (f32, f32, f32)) {
-        dst[idx] = r;
-        dst[idx + 1] = g;
-        dst[idx + 2] = b;
-    }
-}
-
-struct Rgb8Output;
-
-impl DebayerOutput for Rgb8Output {
-    type Elem = u8;
-
-    #[inline(always)]
-    fn store(dst: &mut [u8], idx: usize, (r, g, b): (f32, f32, f32)) {
-        dst[idx] = to_u8(r);
-        dst[idx + 1] = to_u8(g);
-        dst[idx + 2] = to_u8(b);
-    }
-}
-
-#[inline(always)]
-fn to_u8(value: f32) -> u8 {
-    (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
-}
-
-fn debayer_impl<O: DebayerOutput>(frame: &Frame, pattern: CfaPattern) -> Vec<O::Elem> {
     let width = frame.width();
     let height = frame.height();
     let input = frame.data();
+    let area = width * height;
 
-    let mut output = vec![O::Elem::default(); width * height * 3];
-
+    let mut output = vec![0u8; area * 3];
     output
         .par_chunks_mut(width * 3 * ROWS_PER_TASK)
         .with_min_len(chunk_min_len())
@@ -108,11 +94,63 @@ fn debayer_impl<O: DebayerOutput>(frame: &Frame, pattern: CfaPattern) -> Vec<O::
         .for_each(|(task, rows)| {
             let y_start = task * ROWS_PER_TASK;
             for (offset, out_row) in rows.chunks_mut(width * 3).enumerate() {
-                debayer_row::<O>(input, width, height, pattern, y_start + offset, out_row);
+                let mut writer = Rgb8RowWriter { dst: out_row };
+                debayer_row(input, width, height, pattern, y_start + offset, &mut writer);
             }
         });
 
-    output
+    Ok(output)
+}
+
+trait RowWriter {
+    fn write_pixel(&mut self, x: usize, rgb: (f32, f32, f32));
+}
+
+struct F32RowWriter<'a> {
+    r: &'a mut [f32],
+    g: &'a mut [f32],
+    b: &'a mut [f32],
+}
+
+impl<'a> F32RowWriter<'a> {
+    /// Asserting the three rows are the same length once per row lets the compiler
+    /// collapse the three per-pixel bounds checks in `write_pixel` into one. The
+    /// interleaved writer gets this for free because its three stores share a slice;
+    /// the planar one has to say so explicitly.
+    #[inline(always)]
+    fn new(r: &'a mut [f32], g: &'a mut [f32], b: &'a mut [f32]) -> Self {
+        assert_eq!(r.len(), g.len());
+        assert_eq!(r.len(), b.len());
+        Self { r, g, b }
+    }
+}
+
+impl<'a> RowWriter for F32RowWriter<'a> {
+    #[inline(always)]
+    fn write_pixel(&mut self, x: usize, (r, g, b): (f32, f32, f32)) {
+        self.r[x] = r;
+        self.g[x] = g;
+        self.b[x] = b;
+    }
+}
+
+struct Rgb8RowWriter<'a> {
+    dst: &'a mut [u8],
+}
+
+impl<'a> RowWriter for Rgb8RowWriter<'a> {
+    #[inline(always)]
+    fn write_pixel(&mut self, x: usize, (r, g, b): (f32, f32, f32)) {
+        let idx = x * 3;
+        self.dst[idx] = to_u8(r);
+        self.dst[idx + 1] = to_u8(g);
+        self.dst[idx + 2] = to_u8(b);
+    }
+}
+
+#[inline(always)]
+fn to_u8(value: f32) -> u8 {
+    (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
 }
 
 /// Per-row CFA constants.
@@ -139,20 +177,19 @@ impl RowLayout {
     }
 }
 
-fn debayer_row<O: DebayerOutput>(
+fn debayer_row<W: RowWriter>(
     input: &[f32],
     width: usize,
     height: usize,
     pattern: CfaPattern,
     y: usize,
-    out_row: &mut [O::Elem],
+    writer: &mut W,
 ) {
     // No row above or below, so every neighbour fetch has to clamp.
     if y == 0 || y + 1 == height {
         for x in 0..width {
-            O::store(
-                out_row,
-                x * 3,
+            writer.write_pixel(
+                x,
                 bilinear_at(input, width, height, x, y, pattern),
             );
         }
@@ -167,11 +204,10 @@ fn debayer_row<O: DebayerOutput>(
     let last_x = width.saturating_sub(1);
 
     // The first and last columns still clamp horizontally.
-    O::store(out_row, 0, bilinear_at(input, width, height, 0, y, pattern));
+    writer.write_pixel(0, bilinear_at(input, width, height, 0, y, pattern));
     if last_x > 0 {
-        O::store(
-            out_row,
-            last_x * 3,
+        writer.write_pixel(
+            last_x,
             bilinear_at(input, width, height, last_x, y, pattern),
         );
     }
@@ -180,9 +216,8 @@ fn debayer_row<O: DebayerOutput>(
     // therefore its role — is known from `layout` without testing anything per pixel.
     let mut x = 1;
     while x + 1 < last_x {
-        O::store(
-            out_row,
-            x * 3,
+        writer.write_pixel(
+            x,
             interior_pixel(
                 prev,
                 curr,
@@ -192,9 +227,8 @@ fn debayer_row<O: DebayerOutput>(
                 layout.red_horizontal,
             ),
         );
-        O::store(
-            out_row,
-            (x + 1) * 3,
+        writer.write_pixel(
+            x + 1,
             interior_pixel(
                 prev,
                 curr,
@@ -207,9 +241,8 @@ fn debayer_row<O: DebayerOutput>(
         x += 2;
     }
     if x < last_x {
-        O::store(
-            out_row,
-            x * 3,
+        writer.write_pixel(
+            x,
             interior_pixel(
                 prev,
                 curr,
@@ -392,13 +425,11 @@ mod tests {
         for pattern in CfaPattern::all() {
             let frame = constant_plane_frame(pattern, TEST_WIDTH, TEST_HEIGHT);
             let rgb = debayer_bilinear(&frame, pattern).unwrap();
-            let data = rgb.data();
 
             for y in 1..TEST_HEIGHT - 1 {
                 for x in 1..TEST_WIDTH - 1 {
-                    let idx = (y * TEST_WIDTH + x) * 3;
                     assert_eq!(
-                        (data[idx], data[idx + 1], data[idx + 2]),
+                        (rgb.get_pixel(x, y, 0), rgb.get_pixel(x, y, 1), rgb.get_pixel(x, y, 2)),
                         (R_LEVEL, G_LEVEL, B_LEVEL),
                         "{pattern:?} at ({x}, {y}), CFA role {}",
                         pattern.color_at(x, y)
@@ -445,7 +476,16 @@ mod tests {
             let fast = debayer_bilinear(&frame, pattern).unwrap();
             let reference = scalar_reference(&frame, pattern);
 
-            assert_eq!(fast.data(), &reference[..], "f32 path, {pattern:?}");
+            for y in 0..TEST_HEIGHT {
+                for x in 0..TEST_WIDTH {
+                    let idx = (y * TEST_WIDTH + x) * 3;
+                    assert_eq!(
+                        (fast.get_pixel(x, y, 0), fast.get_pixel(x, y, 1), fast.get_pixel(x, y, 2)),
+                        (reference[idx], reference[idx + 1], reference[idx + 2]),
+                        "f32 path, {pattern:?} at ({x}, {y})"
+                    );
+                }
+            }
 
             let fast_rgb8 = debayer_bilinear_to_rgb8(&frame, pattern).unwrap();
             let reference_rgb8: Vec<u8> = reference.iter().map(|&v| to_u8(v)).collect();

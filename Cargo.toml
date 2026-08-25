@@ -147,3 +147,7 @@ harness = false
 name = "render_benchmark"
 harness = false
 
+[[bench]]
+name = "planetary_benchmark"
+harness = false
+

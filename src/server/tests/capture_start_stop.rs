@@ -115,7 +115,7 @@ async fn test_capture_start_while_stopping() {
     state.set_capture_state(CaptureState::Stopping).await;
     let app = create_test_router(state);
 
-    let (status, json) = post_json(&app, "/api/capture/start", json!({})).await;
+    let (status, _json) = post_json(&app, "/api/capture/start", json!({})).await;
 
     // Should allow starting when in Stopping state
     assert_eq!(status, StatusCode::OK);

@@ -29,36 +29,39 @@ pub fn apply_scnr(frame: &mut Frame, amount: f32) -> Result<()> {
     }
 
     let amount = amount.clamp(0.0, 1.0);
-    let row_len = frame.width() * 3;
-    let data = frame.data_mut();
+    let width = frame.width();
+    let (r_plane, g_plane, b_plane) = frame.planes_mut();
 
-    data.par_chunks_mut(row_len).for_each(|row| {
-        for idx in (0..row.len()).step_by(3) {
-            let r = row[idx];
-            let g = row[idx + 1];
-            let b = row[idx + 2];
+    r_plane.par_chunks_mut(width)
+        .zip_eq(g_plane.par_chunks_mut(width))
+        .zip_eq(b_plane.par_chunks_mut(width))
+        .for_each(|((r_row, g_row), b_row)| {
+            for idx in 0..r_row.len() {
+                let r = r_row[idx];
+                let g = g_row[idx];
+                let b = b_row[idx];
 
-            let g_limit = r.max(b);
+                let g_limit = r.max(b);
 
-            if g > g_limit {
-                // 1. Calculate original luminance (Rec. 709)
-                let l_old = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+                if g > g_limit {
+                    // 1. Calculate original luminance (Rec. 709)
+                    let l_old = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
 
-                // 2. Apply Maximum Neutral SCNR to Green
-                let g_new = g_limit * amount + g * (1.0 - amount);
+                    // 2. Apply Maximum Neutral SCNR to Green
+                    let g_new = g_limit * amount + g * (1.0 - amount);
 
-                // 3. Calculate new luminance
-                let l_new = (r * 0.2126) + (g_new * 0.7152) + (b * 0.0722);
+                    // 3. Calculate new luminance
+                    let l_new = (r * 0.2126) + (g_new * 0.7152) + (b * 0.0722);
 
-                // 4. Restore luminance with a division-by-zero safeguard
-                let ratio = if l_new > 1e-8 { l_old / l_new } else { 1.0 };
+                    // 4. Restore luminance with a division-by-zero safeguard
+                    let ratio = if l_new > 1e-8 { l_old / l_new } else { 1.0 };
 
-                row[idx] = (r * ratio).clamp(0.0, 1.0);
-                row[idx + 1] = (g_new * ratio).clamp(0.0, 1.0);
-                row[idx + 2] = (b * ratio).clamp(0.0, 1.0);
+                    r_row[idx] = (r * ratio).clamp(0.0, 1.0);
+                    g_row[idx] = (g_new * ratio).clamp(0.0, 1.0);
+                    b_row[idx] = (b * ratio).clamp(0.0, 1.0);
+                }
             }
-        }
-    });
+        });
 
     Ok(())
 }
@@ -73,8 +76,8 @@ mod tests {
 
         let mut data = vec![0.0f32; 2 * 2 * 3];
         data[0] = 0.1; // R
-        data[1] = 0.5; // G (spike)
-        data[2] = 0.1; // B
+        data[2 * 2] = 0.5; // G (spike)
+        data[2 * 2 * 2] = 0.1; // B
 
         frame.data_mut().copy_from_slice(&data);
 

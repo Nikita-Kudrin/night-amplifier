@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::RwLockReadGuard;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use super::channel::CapturedFrame;
 use crate::camera::RawFrame;
@@ -10,7 +10,7 @@ use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
 use crate::server::events::ServerEvent;
 use crate::server::state::{
-    AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD,
+    AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo,
 };
 use crate::stacking::StackingType;
 
@@ -174,6 +174,7 @@ pub async fn should_stop_on_errors(state: &AppState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::state::REJECTION_RATE_THRESHOLD;
     use std::time::{Duration, Instant};
 
     #[tokio::test]
@@ -233,11 +234,12 @@ mod tests {
         let background = 0.02;
         let mut data = vec![0.0f32; 32 * 32 * 3];
         let mut seed: u32 = 54321;
+        let plane = 32 * 32;
         for i in 0..(32 * 32) {
             for c in 0..3 {
                 seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
                 let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.005;
-                data[i * 3 + c] = background + noise;
+                data[c * plane + i] = background + noise;
             }
         }
         let mut frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();

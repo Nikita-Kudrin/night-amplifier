@@ -253,16 +253,16 @@ mod tests {
     #[test]
     fn test_multichannel() {
         // Create a frame with different backgrounds per channel
-        let mut data = vec![0.0f32; 64 * 64 * 3];
+        // `set_pixel` rather than hand-computed offsets: the fixture must not encode
+        // an assumption about the memory layout it is testing through.
+        let mut frame = Frame::zeros(64, 64, 3).unwrap();
         for y in 0..64 {
             for x in 0..64 {
-                let idx = (y * 64 + x) * 3;
-                data[idx] = 0.1; // R
-                data[idx + 1] = 0.3; // G
-                data[idx + 2] = 0.5; // B
+                frame.set_pixel(x, y, 0, 0.1);
+                frame.set_pixel(x, y, 1, 0.3);
+                frame.set_pixel(x, y, 2, 0.5);
             }
         }
-        let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
 
         let extractor = BackgroundExtractor::with_defaults();
         let model = extractor.estimate(&frame).unwrap();
@@ -403,6 +403,113 @@ mod tests {
             "Non-uniform result suggests double-processing: min={}, max={}",
             min_val,
             max_val
+        );
+    }
+
+    /// The dynamic pedestal must be derived from the centre crop of a single plane.
+    ///
+    /// The interleaved indexing that survived the planar migration stayed silent for
+    /// three-channel frames — `y * w * 3` lands inside the green plane by arithmetic
+    /// accident — so it never scrambled channels. What it did do was sample the wrong
+    /// *rows*: roughly the middle 75 % of the frame height at a 3-pixel horizontal
+    /// stride that wraps across row ends, instead of the centre 25 % x 25 % crop. This
+    /// fixture separates the two by making green flat inside the crop and noisy outside
+    /// it, and reads the pedestal back through its only observable effect.
+    #[test]
+    fn pedestal_is_sampled_from_the_centre_crop_of_one_plane() {
+        let (w, h) = (256usize, 256usize);
+        let crop_w = (w / 4).max(10);
+        let crop_h = (h / 4).max(10);
+        let x0 = (w - crop_w) / 2;
+        let y0 = (h - crop_h) / 2;
+
+        let mut frame = Frame::zeros(w, h, 3).unwrap();
+        let mut seed = 12345u32;
+        for y in 0..h {
+            for x in 0..w {
+                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                let noise = (seed >> 16) as f32 / 65536.0;
+                let in_crop = (x0..x0 + crop_w).contains(&x) && (y0..y0 + crop_h).contains(&y);
+                frame.set_pixel(x, y, 0, noise);
+                frame.set_pixel(x, y, 1, if in_crop { 0.25 } else { noise });
+                frame.set_pixel(x, y, 2, noise);
+            }
+        }
+
+        // A zero background at zero aggressiveness leaves the pedestal as the only thing
+        // `subtract_from` can change, which makes it directly observable.
+        let model = BackgroundModel::new(vec![vec![0.0f32; 16]; 3], 4, 4, w, h, 3, false, 0.1, 0.0);
+        let before = frame.get_pixel(x0, y0, 1);
+        let mut subtracted = frame.clone();
+        model.subtract_from(&mut subtracted);
+        let pedestal = subtracted.get_pixel(x0, y0, 1) - before;
+
+        assert!(
+            (pedestal - 0.001).abs() < 1e-6,
+            "pedestal {pedestal} — a flat crop has zero MAD, so this must clamp to the \
+             0.001 floor; the interleaved version reported ~0.975"
+        );
+    }
+
+    /// `subtract_from` and `get_background` are two implementations of the same bilinear
+    /// interpolation and must agree everywhere.
+    ///
+    /// Exercised on a **portrait** grid, which is the case that used to diverge:
+    /// `subtract_weight_based` clamped the grid *row* index against `grid_width - 1`.
+    /// That is invisible while the grid is square (the extractor's 12x12 and 16x16
+    /// defaults) or wider than it is tall (RBF's `eval_height = 256 * h / w` on a
+    /// landscape frame), and wrong as soon as there are more grid rows than columns —
+    /// every row past `grid_width - 1` collapsed onto that one.
+    #[test]
+    fn weight_based_subtraction_agrees_with_get_background_on_a_portrait_grid() {
+        let (w, h) = (16usize, 32usize);
+        let (grid_cols, grid_rows) = (4usize, 8usize);
+
+        // Varies along the grid's y axis, so a mis-clamped row index changes the answer.
+        let grid: Vec<Vec<f32>> = (0..3)
+            .map(|c| {
+                (0..grid_rows * grid_cols)
+                    .map(|i| 0.02 + (i / grid_cols) as f32 * 0.01 + c as f32 * 0.002)
+                    .collect()
+            })
+            .collect();
+
+        // No node coordinates, so this takes the weight-based path (as RBF does).
+        let model = BackgroundModel::new(
+            grid, grid_cols, grid_rows, w, h, 3, false, 0.1, 1.0,
+        );
+
+        // A constant frame has zero MAD, so the pedestal is its 0.001 floor and the
+        // output is a pure readout of the interpolated background.
+        let mut frame = Frame::filled(w, h, 3, 1.0).unwrap();
+        model.subtract_from(&mut frame);
+
+        for y in 0..h {
+            for x in 0..w {
+                for c in 0..3 {
+                    let want = 1.0 - model.get_background(x, y, c) + 0.001;
+                    let got = frame.get_pixel(x, y, c);
+                    assert!(
+                        (got - want).abs() < 1e-5,
+                        "({x}, {y}, {c}): subtract_from gave {got}, get_background implies {want}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A frame the model was not built for must be refused rather than half-corrected:
+    /// the weight-based path recovers the channel index from the model's stored height.
+    #[test]
+    fn subtract_from_leaves_a_mismatched_frame_untouched() {
+        let model = BackgroundModel::new(vec![vec![0.5f32; 16]; 3], 4, 4, 64, 64, 3, false, 0.1, 1.0);
+
+        let mut frame = Frame::filled(32, 32, 3, 0.4).unwrap();
+        model.subtract_from(&mut frame);
+
+        assert!(
+            frame.data().iter().all(|&v| (v - 0.4).abs() < 1e-6),
+            "a mismatched frame must be left alone"
         );
     }
 }

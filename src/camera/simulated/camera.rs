@@ -286,6 +286,23 @@ impl SimulatedCamera {
     }
 }
 
+/// Feeds `(index, mono_sample)` for every pixel, as a mono sensor would report it.
+///
+/// Rec. 601 luminance for a colour source, the single plane otherwise. `Frame` is
+/// planar, so the planes are sliced once here instead of gathered per pixel.
+fn for_each_mono_sample(frame: &Frame, mut f: impl FnMut(usize, f32)) {
+    if frame.channels() == 3 {
+        let (r, g, b) = frame.planes();
+        for i in 0..r.len() {
+            f(i, r[i] * 0.299 + g[i] * 0.587 + b[i] * 0.114);
+        }
+        return;
+    }
+    for (i, &v) in frame.channel_data(0).iter().enumerate() {
+        f(i, v);
+    }
+}
+
 impl Camera for SimulatedCamera {
     fn info(&self) -> &CameraInfo {
         &self.info
@@ -380,63 +397,38 @@ impl Camera for SimulatedCamera {
             return Err(CameraError::Cancelled);
         }
 
-        let is_color = frame.channels() == 3;
-        let required_len = frame.width()
-            * frame.height()
-            * if config.format == ImageFormat::Rgb24 {
-                3
-            } else {
-                if config.format == ImageFormat::Raw16 {
-                    2
-                } else {
-                    1
-                }
+        let area = frame.width() * frame.height();
+        let required_len = area
+            * match config.format {
+                ImageFormat::Rgb24 => 3,
+                ImageFormat::Raw16 => 2,
+                ImageFormat::Raw8 => 1,
             };
         let mut buffer = self.buffer_pool.get(required_len);
-        let mut buf_idx = 0;
 
-        let step = frame.channels();
+        // `Frame` is planar; every format below is interleaved or single-channel, so a
+        // pixel's channels sit `area` apart rather than adjacent. The previous version
+        // read them as adjacent (`frame.data().chunks(channels)`), which built the
+        // Raw8/Raw16 luminance out of three horizontally-neighbouring samples of one
+        // plane and copied the planar buffer verbatim into a buffer tagged `Rgb24`.
+        // Neither is visible with a 1-channel source, which is what every bundled
+        // fixture is.
         match config.format {
-            ImageFormat::Raw16 => {
-                for chunk in frame.data().chunks(step) {
-                    let p = if step == 3 {
-                        chunk[0] * 0.299 + chunk[1] * 0.587 + chunk[2] * 0.114
-                    } else {
-                        chunk[0]
-                    };
-                    let val = (p * 65535.0).clamp(0.0, 65535.0) as u16;
-                    let bytes = val.to_le_bytes();
-                    buffer[buf_idx] = bytes[0];
-                    buffer[buf_idx + 1] = bytes[1];
-                    buf_idx += 2;
-                }
-            }
-            ImageFormat::Raw8 => {
-                for chunk in frame.data().chunks(step) {
-                    let p = if step == 3 {
-                        chunk[0] * 0.299 + chunk[1] * 0.587 + chunk[2] * 0.114
-                    } else {
-                        chunk[0]
-                    };
-                    let val = (p * 255.0).clamp(0.0, 255.0) as u8;
-                    buffer[buf_idx] = val;
-                    buf_idx += 1;
-                }
-            }
+            ImageFormat::Raw16 => for_each_mono_sample(&frame, |i, v| {
+                let val = (v * 65535.0).clamp(0.0, 65535.0) as u16;
+                buffer[i * 2..i * 2 + 2].copy_from_slice(&val.to_le_bytes());
+            }),
+            ImageFormat::Raw8 => for_each_mono_sample(&frame, |i, v| {
+                buffer[i] = (v * 255.0).clamp(0.0, 255.0) as u8;
+            }),
             ImageFormat::Rgb24 => {
-                if step == 3 {
-                    for &p in frame.data() {
-                        let val = (p * 255.0).clamp(0.0, 255.0) as u8;
-                        buffer[buf_idx] = val;
-                        buf_idx += 1;
-                    }
+                if frame.channels() == 3 {
+                    // `write_rgb8_into` owns the planar -> interleaved gather; a second
+                    // copy of it here is how the PNG and SER writers drifted before.
+                    frame.write_rgb8_into(&mut buffer[..area * 3]);
                 } else {
-                    for &p in frame.data() {
-                        let val = (p * 255.0).clamp(0.0, 255.0) as u8;
-                        buffer[buf_idx] = val;
-                        buffer[buf_idx + 1] = val;
-                        buffer[buf_idx + 2] = val;
-                        buf_idx += 3;
+                    for (px, &v) in buffer.chunks_exact_mut(3).zip(frame.channel_data(0)) {
+                        px.fill((v * 255.0).clamp(0.0, 255.0) as u8);
                     }
                 }
             }
@@ -518,6 +510,72 @@ mod tests {
         0xff, 0xff, 0x3f, 0x00, 0x05, 0xfe, 0x02, 0xfe, 0xdc, 0x44, 0x74, 0x8e, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
+
+    /// Writes an 8-bit RGB PNG whose three channels are constant and mutually distinct.
+    fn write_tricolour_png(path: &std::path::Path, width: u32, height: u32, rgb: [u8; 3]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        let pixels: Vec<u8> = (0..(width * height)).flat_map(|_| rgb).collect();
+        writer.write_image_data(&pixels).unwrap();
+    }
+
+    /// A colour source must reach `RawFrame` interleaved, and the mono formats must
+    /// carry the luminance of each pixel's own channels.
+    ///
+    /// `Frame` is planar, so `frame.data().chunks(channels)` — what this path used
+    /// before — hands back three horizontally-neighbouring samples of *one* plane
+    /// instead of one pixel's RGB. With a constant-colour source that turns the Raw16
+    /// luminance into a copy of R for the first third of the buffer, then G, then B,
+    /// and makes the Rgb24 buffer plane-major while it is tagged interleaved. Every
+    /// bundled fixture is 1-channel, where the two layouts coincide, so nothing else
+    /// covers this.
+    #[test]
+    fn colour_source_capture_is_interleaved_and_luma_is_per_pixel() {
+        let (w, h) = (8u32, 4u32);
+        let rgb = [20u8, 140, 250];
+        let dir = tempdir().unwrap();
+        write_tricolour_png(&dir.path().join("frame_000.png"), w, h, rgb);
+
+        let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
+        // Zero exposure so the simulated wait is skipped.
+        let base = CaptureConfig::default()
+            .with_exposure_us(0)
+            .with_simulated_preload_images(1);
+
+        let captured = camera
+            .capture(&base.clone().with_format(ImageFormat::Rgb24))
+            .unwrap();
+        assert_eq!(captured.data.len(), (w * h) as usize * 3);
+        for (i, px) in captured.data.chunks_exact(3).enumerate() {
+            assert_eq!(
+                (px[0], px[1], px[2]),
+                (rgb[0], rgb[1], rgb[2]),
+                "Rgb24 pixel {i} is {px:?}, expected {rgb:?} — planar buffer emitted as interleaved?"
+            );
+        }
+
+        let captured = camera
+            .capture(&base.clone().with_format(ImageFormat::Raw16))
+            .unwrap();
+        assert_eq!(captured.data.len(), (w * h) as usize * 2);
+        // Derived from the source colour rather than hardcoded, so the expectation is
+        // legible: a per-pixel Rec. 601 combine, not a copy of one channel.
+        let expect = {
+            let f = |v: u8| v as f32 / 255.0;
+            let luma = f(rgb[0]) * 0.299 + f(rgb[1]) * 0.587 + f(rgb[2]) * 0.114;
+            (luma * 65535.0) as u16
+        };
+        for (i, s) in captured.data.chunks_exact(2).enumerate() {
+            let got = u16::from_le_bytes([s[0], s[1]]);
+            assert!(
+                got.abs_diff(expect) <= 1,
+                "Raw16 sample {i} is {got}, expected ~{expect}"
+            );
+        }
+    }
 
     /// Populate a directory with `count` decodable frames.
     fn write_frames(dir: &std::path::Path, count: usize) {

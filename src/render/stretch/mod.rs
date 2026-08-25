@@ -236,17 +236,18 @@ pub fn apply_fused_stretch_frame(
     }
 
     let scale_lut = cached_scale_lut(algorithm, strength, contrast);
+    let bp = black_point;
+    let ci = color_intensity;
+    let width = frame.width();
+    let (r, g, b) = frame.planes_mut();
 
-    let row_len = frame.width() * 3;
-    let data = frame.data_mut();
-    data.par_chunks_mut(row_len)
+    r.par_chunks_mut(width)
+        .zip_eq(g.par_chunks_mut(width))
+        .zip_eq(b.par_chunks_mut(width))
         .with_min_len(32)
-        .for_each(|row| {
-            crate::render::simd::apply_luminance_scale_lut_simd(
-                row,
-                black_point,
-                &scale_lut,
-                color_intensity,
+        .for_each(|((r_row, g_row), b_row)| {
+            crate::render::simd::apply_luminance_scale_lut_simd_planar(
+                r_row, g_row, b_row, bp, &scale_lut, ci
             );
         });
 

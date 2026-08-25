@@ -23,6 +23,9 @@ pub use error::DiskWriterError;
 pub use handle::DiskWriterHandle;
 pub use worker::DiskWriter;
 
+#[cfg(test)]
+pub(crate) use utils::write_png;
+
 use crate::telemetry::metrics as telemetry_metrics;
 
 impl DiskWriter {

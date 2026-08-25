@@ -118,6 +118,37 @@ fn test_debayer_pipeline() {
                 assert_eq!(rgb_frame.width(), img.width);
                 assert_eq!(rgb_frame.height(), img.height);
 
+                // Chroma spread is *not* a valid assertion here: this is raw linear
+                // data whose sky background is genuinely near-neutral before
+                // neutralisation and stretch. Reported for information only; the
+                // stretched-output tests are where the threshold applies.
+                println!(
+                    "  Chroma spread (raw linear): {:.2}",
+                    crate::integration::common::mean_chroma_spread_frame(&rgb_frame)
+                );
+
+                // Scene-independent layout check instead: bilinear interpolation must
+                // reproduce a CFA site's own colour exactly, because that sample needs
+                // no interpolation. Any layout scramble breaks this on the first pixel,
+                // whatever the scene contains.
+                let mut checked = 0;
+                for (x, y) in [(101usize, 101usize), (102, 101), (101, 102), (102, 102)] {
+                    if x + 1 >= img.width || y + 1 >= img.height {
+                        continue;
+                    }
+                    let cfa_channel = detection.pattern.color_at(x, y);
+                    let source = img.frame.get_pixel(x, y, 0);
+                    let debayered = rgb_frame.get_pixel(x, y, cfa_channel);
+                    assert!(
+                        (debayered - source).abs() < 1e-6,
+                        "CFA site ({x}, {y}) carries channel {cfa_channel}: source {source} \
+                         but debayered {debayered}. The sampled channel must survive \
+                         untouched — a mismatch means the planes are mis-indexed."
+                    );
+                    checked += 1;
+                }
+                assert!(checked > 0, "no CFA sites were checked");
+
                 // Test VNG algorithm as well (more expensive)
                 let vng_config =
                     DebayerConfig::new(detection.pattern).with_algorithm(DebayerAlgorithm::Vng);

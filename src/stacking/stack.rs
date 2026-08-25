@@ -120,10 +120,6 @@ impl MasterStack {
             .quality_limits
             .calculate_weight(&quality, &self.config.weighting);
 
-        let sigma_low = self.config.sigma_low;
-        let sigma_high = self.config.sigma_high;
-        let min_frames = self.config.min_frames_for_rejection as u16;
-
         let needs_rejection = matches!(
             self.config.rejection,
             RejectionMethod::SigmaClip | RejectionMethod::WinsorizedSigmaClip
