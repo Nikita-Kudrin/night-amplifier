@@ -4,7 +4,7 @@ import {useError} from '../composables/useError.js'
 import {useCatalogSearch, getCatalogClass} from '../composables/useCatalogSearch.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
 import {useCoordinateInput, formatRA, formatDec} from '../composables/useCoordinates.js'
-import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon} from './ui'
+import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 import EquipmentSection from './EquipmentSection.vue'
 import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
@@ -167,8 +167,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="panel">
-    <div class="panel-header">
+  <BasePanel class="push-to-panel" :bordered="false">
+    <template #header>
       <button class="collapse-toggle" title="Toggle Push-To panel" @click="collapsed = !collapsed">
         <svg
             :class="{ collapsed }"
@@ -202,7 +202,7 @@ onUnmounted(() => {
           message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can increase the success rate of Push-To."
           class="header-warning-icon"
       />
-    </div>
+    </template>
 
     <BaseAlert v-if="showFovWarning && fovWarning" type="warning" @dismiss="showFovWarning = false">
       {{ fovWarning.message }}
@@ -255,7 +255,9 @@ onUnmounted(() => {
             :disabled="isSolving"
             @focus="revealResults"
         />
-        <div v-if="searching || isSolving" class="search-spinner"></div>
+        <div v-if="searching || isSolving" class="search-spinner-wrapper">
+          <BaseSpinner size="sm" />
+        </div>
         <button
             v-if="isSolving"
             class="btn-cancel-solve"
@@ -354,7 +356,7 @@ onUnmounted(() => {
           @installed="showDatabaseManager = false"
       />
     </div>
-  </div>
+  </BasePanel>
 </template>
 
 <style scoped>
@@ -477,23 +479,13 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
-.search-spinner {
+.search-spinner-wrapper {
   position: absolute;
   right: 0.5rem;
   top: 50%;
   transform: translateY(-50%);
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: translateY(-50%) rotate(360deg);
-  }
+  display: flex;
+  align-items: center;
 }
 
 .search-results {

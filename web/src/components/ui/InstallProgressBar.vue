@@ -1,4 +1,5 @@
 <script setup>
+import BaseSpinner from './BaseSpinner.vue'
 defineProps({
   progressText: {
     type: String,
@@ -24,7 +25,7 @@ defineProps({
     <slot name="before"/>
 
     <div class="progress-icon">
-      <div class="spinner"></div>
+      <BaseSpinner size="lg" />
     </div>
 
     <p v-if="progressText" class="progress-text">{{ progressText }}</p>
@@ -56,21 +57,6 @@ defineProps({
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.spinner {
-  width: 48px;
-  height: 48px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .progress-text {

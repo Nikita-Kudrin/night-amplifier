@@ -14,6 +14,7 @@ import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
+import { BaseSpinner } from './components/ui'
 
 // Routing
 const isEyepieceRoute = ref(window.location.pathname === '/eyepiece' || window.location.pathname === '/eyepiece_quality')
@@ -182,7 +183,7 @@ onMounted(() => {
           <circle cx="12" cy="12" r="10"/>
           <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
         </svg>
-        <span v-else class="btn-spinner"></span>
+        <BaseSpinner v-else size="xs" />
       </button>
       <button
           class="btn btn-icon btn-header-icon"
@@ -201,7 +202,7 @@ onMounted(() => {
 
     <!-- Loading state -->
     <div v-if="loading" class="loading">
-      <div class="spinner"></div>
+      <BaseSpinner size="md" />
       <p>Connecting to server...</p>
     </div>
 
@@ -218,7 +219,7 @@ onMounted(() => {
       <h2 class="error-title">Cannot Connect to Server</h2>
       <p class="error-message">{{ error }}</p>
       <p class="retry-status">
-        <span class="retry-spinner"></span>
+        <BaseSpinner size="sm" />
         Retrying automatically...
       </p>
     </div>
@@ -298,16 +299,6 @@ onMounted(() => {
   margin: 0;
 }
 
-.btn-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  display: block;
-}
-
 .loading,
 .error-screen {
   flex: 1;
@@ -352,30 +343,6 @@ onMounted(() => {
   color: var(--text-muted, #6b7280);
   font-size: 0.875rem;
   margin-top: 0.5rem;
-}
-
-.retry-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .main {
