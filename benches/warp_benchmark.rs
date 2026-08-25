@@ -10,22 +10,21 @@ use std::time::Duration;
 
 /// Generate a synthetic frame for benchmarking
 fn generate_frame(width: usize, height: usize) -> Frame {
-    let mut data = vec![0.0f32; width * height * 3];
+    let mut frame = Frame::zeros(width, height, 3).expect("Failed to create frame");
 
     // Create a gradient pattern to simulate real image data
     for y in 0..height {
         for x in 0..width {
-            let idx = (y * width + x) * 3;
             let fx = x as f32 / width as f32;
             let fy = y as f32 / height as f32;
             // Simulate typical astronomical image: low background with some variation
-            data[idx] = 0.05 + 0.1 * fx; // R
-            data[idx + 1] = 0.05 + 0.1 * fy; // G
-            data[idx + 2] = 0.1; // B
+            frame.set_pixel(x, y, 0, 0.05 + 0.1 * fx);
+            frame.set_pixel(x, y, 1, 0.05 + 0.1 * fy);
+            frame.set_pixel(x, y, 2, 0.1);
         }
     }
 
-    Frame::from_f32_vec(data, width, height, 3).expect("Failed to create frame")
+    frame
 }
 
 fn warp_identity_benchmark(c: &mut Criterion) {

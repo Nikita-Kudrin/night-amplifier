@@ -96,9 +96,6 @@ impl FitsDecoder {
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.0);
 
-        let bayer_pat = header_map.get("BAYERPAT").or(header_map.get("CCD_CFA"));
-        let is_color = bayer_pat.is_some() || header_map.get("COLOR").is_some_and(|s| s == "T");
-
         if width == 0 || height == 0 {
             return Err(IndiError::DeviceNotFound(
                 "Invalid FITS dimensions".to_string(),

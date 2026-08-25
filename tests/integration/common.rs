@@ -48,6 +48,112 @@ pub const STACKED_OUTPUT_DIR: &str = "stacked";
 pub const DEBAYER_OUTPUT_DIR: &str = "debayer";
 
 // ============================================================================
+// Planar Layout Detectors
+// ============================================================================
+//
+// `Frame` stores pixels planar (`channel * width * height + y * width + x`) while
+// every 8-bit output format is interleaved. Reading a planar buffer as interleaved
+// makes each output pixel three *adjacent samples of one channel*, so chroma
+// collapses toward zero. That is cheap to assert on and needs no golden image,
+// which makes it the detector for the whole class of layout bugs.
+//
+// Measured on the bundled fixtures: a correct *stretched* colour render scores ~32, a
+// planar-read-as-interleaved one ~0.5.
+//
+// Calibration matters. This threshold only applies **after** background
+// neutralisation and stretch. Raw linear data is legitimately near-neutral — a freshly
+// debayered sub from the bundled FITS fixture scores 0.72 with nothing wrong with it —
+// so asserting this on a linear frame produces a false failure. For raw data, assert a
+// scene-independent structural property instead (see the CFA-site check in
+// `debayer_tests`).
+
+/// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures
+/// must exceed. Do not apply to raw linear frames; see the note above.
+pub const MIN_CHROMA_SPREAD: f64 = 5.0;
+
+/// Mean per-pixel `|R-G| + |G-B|` over an interleaved RGB8 buffer, in 0-255 units.
+///
+/// Samples on a grid rather than every pixel: this runs inside tests on
+/// 2712x1538 frames and the statistic converges long before a full traversal.
+pub fn mean_chroma_spread_rgb8(rgb8: &[u8], width: usize, height: usize) -> f64 {
+    assert_eq!(
+        rgb8.len(),
+        width * height * 3,
+        "mean_chroma_spread_rgb8 expects an interleaved RGB8 buffer"
+    );
+
+    let step_x = (width / 40).max(1);
+    let step_y = (height / 40).max(1);
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+
+    let mut y = 0;
+    while y < height {
+        let mut x = 0;
+        while x < width {
+            let idx = (y * width + x) * 3;
+            let r = rgb8[idx] as f64;
+            let g = rgb8[idx + 1] as f64;
+            let b = rgb8[idx + 2] as f64;
+            sum += (r - g).abs() + (g - b).abs();
+            count += 1;
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    if count == 0 {
+        return 0.0;
+    }
+    sum / count as f64
+}
+
+/// Mean per-pixel `|R-G| + |G-B|` over a `Frame`, scaled to 0-255 units.
+///
+/// Goes through `get_pixel` so the detector is layout-agnostic by construction and
+/// cannot inherit the bug it is hunting.
+pub fn mean_chroma_spread_frame(frame: &night_amplifier::Frame) -> f64 {
+    if frame.channels() < 3 {
+        return 0.0;
+    }
+
+    let (width, height) = (frame.width(), frame.height());
+    let step_x = (width / 40).max(1);
+    let step_y = (height / 40).max(1);
+    let mut sum = 0.0f64;
+    let mut count = 0usize;
+
+    let mut y = 0;
+    while y < height {
+        let mut x = 0;
+        while x < width {
+            let r = frame.get_pixel(x, y, 0) as f64 * 255.0;
+            let g = frame.get_pixel(x, y, 1) as f64 * 255.0;
+            let b = frame.get_pixel(x, y, 2) as f64 * 255.0;
+            sum += (r - g).abs() + (g - b).abs();
+            count += 1;
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    if count == 0 {
+        return 0.0;
+    }
+    sum / count as f64
+}
+
+/// Asserts a render kept its colour. `context` names the path under test.
+pub fn assert_has_chroma(spread: f64, context: &str) {
+    assert!(
+        spread > MIN_CHROMA_SPREAD,
+        "{context}: chroma spread {spread:.2} <= {MIN_CHROMA_SPREAD:.2}. \
+         Channels have collapsed toward grey, which is the signature of reading \
+         the planar Frame buffer as interleaved RGB."
+    );
+}
+
+// ============================================================================
 // Common Types
 // ============================================================================
 

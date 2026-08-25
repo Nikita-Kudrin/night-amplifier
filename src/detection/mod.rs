@@ -33,6 +33,7 @@
 //! This typically achieves ~0.1 pixel accuracy for well-exposed stars.
 
 mod adaptive;
+mod luminance;
 mod background;
 mod config;
 mod detector;

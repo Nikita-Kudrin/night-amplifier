@@ -1,6 +1,5 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use crate::render::simd::apply_luminance_preserving_simd;
 use rayon::prelude::*;
 
 /// Midtones Transfer Function (MTF)
@@ -77,7 +76,6 @@ pub fn mtf_stretch_frame(
         )));
     }
 
-    let width = frame.width();
     let data = frame.data_mut();
 
     // Pre-compute LUT to avoid expensive division per pixel
@@ -99,17 +97,16 @@ pub fn mtf_stretch_frame(
             *pixel = lut_r[idx.min(65535)];
         });
     } else {
-        let row_len = width * 3;
-        data.par_chunks_mut(row_len).for_each(|row| {
-            for idx in (0..row.len()).step_by(3) {
-                let r_idx = (row[idx] * 65535.0) as usize;
-                let g_idx = (row[idx + 1] * 65535.0) as usize;
-                let b_idx = (row[idx + 2] * 65535.0) as usize;
-                row[idx] = lut_r[r_idx.min(65535)];
-                row[idx + 1] = lut_g[g_idx.min(65535)];
-                row[idx + 2] = lut_b[b_idx.min(65535)];
-            }
-        });
+        let (r, g, b) = frame.planes_mut();
+        r.par_iter_mut().zip_eq(g.par_iter_mut()).zip_eq(b.par_iter_mut())
+            .for_each(|((p_r, p_g), p_b)| {
+                let r_idx = (*p_r * 65535.0) as usize;
+                let g_idx = (*p_g * 65535.0) as usize;
+                let b_idx = (*p_b * 65535.0) as usize;
+                *p_r = lut_r[r_idx.min(65535)];
+                *p_g = lut_g[g_idx.min(65535)];
+                *p_b = lut_b[b_idx.min(65535)];
+            });
     }
 
     Ok(())
@@ -180,10 +177,11 @@ mod tests {
     #[test]
     fn test_mtf_stretch_frame() {
         let mut data = vec![0.0f32; 32 * 32 * 3];
-        for i in 0..(32 * 32) {
-            data[i * 3] = 0.1;
-            data[i * 3 + 1] = 0.2;
-            data[i * 3 + 2] = 0.3;
+        let plane = 32 * 32;
+        for i in 0..plane {
+            data[i] = 0.1;
+            data[plane + i] = 0.2;
+            data[plane * 2 + i] = 0.3;
         }
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
         let original_pixel = (0.1, 0.2, 0.3);

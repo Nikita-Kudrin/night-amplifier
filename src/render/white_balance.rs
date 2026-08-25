@@ -8,7 +8,7 @@
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use crate::render::simd::multiply_rgb_clamp_simd;
+use crate::render::simd::multiply_scalar_clamp_simd;
 use crate::statistics::{compute_image_stats, fast_median, ImageStats};
 use rayon::prelude::*;
 
@@ -93,12 +93,19 @@ pub fn neutralize_background(frame: &mut Frame, multipliers: &[f32; 3]) -> Resul
         });
     }
 
-    let row_len = frame.width() * 3;
-    let data = frame.data_mut();
+    // Per plane, then chunked within the plane — see `subtract_black_point` for why
+    // the chunk length is not required to divide the plane size.
+    let chunk = crate::parallel::balanced_chunk_len(frame.pixel_count());
+    let muls = *multipliers;
+    let (r, g, b) = frame.planes_mut();
 
-    data.par_chunks_mut(row_len).for_each(|row| {
-        multiply_rgb_clamp_simd(row, multipliers);
-    });
+    [(r, muls[0]), (g, muls[1]), (b, muls[2])]
+        .into_par_iter()
+        .for_each(|(plane, mul)| {
+            plane
+                .par_chunks_mut(chunk)
+                .for_each(|block| multiply_scalar_clamp_simd(block, mul));
+        });
 
     Ok(())
 }

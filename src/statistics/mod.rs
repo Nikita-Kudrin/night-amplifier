@@ -169,10 +169,11 @@ mod tests {
     #[test]
     fn test_multichannel_independence() {
         let mut data = vec![0.0f32; 64 * 64 * 3];
-        for i in 0..(64 * 64) {
-            data[i * 3] = 0.2;
-            data[i * 3 + 1] = 0.4;
-            data[i * 3 + 2] = 0.6;
+        let plane = 64 * 64;
+        for i in 0..plane {
+            data[i] = 0.2;
+            data[plane + i] = 0.4;
+            data[plane * 2 + i] = 0.6;
         }
 
         let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
@@ -200,10 +201,11 @@ mod tests {
     #[test]
     fn test_mean_statistics() {
         let mut data = vec![0.0f32; 64 * 64 * 3];
-        for i in 0..(64 * 64) {
-            data[i * 3] = 0.3;
-            data[i * 3 + 1] = 0.3;
-            data[i * 3 + 2] = 0.3;
+        let plane = 64 * 64;
+        for i in 0..plane {
+            data[i] = 0.3;
+            data[plane + i] = 0.3;
+            data[plane * 2 + i] = 0.3;
         }
 
         let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();

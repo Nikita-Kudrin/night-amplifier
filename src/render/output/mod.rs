@@ -64,7 +64,9 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
         });
     }
 
-    let data = frame.data();
+    // `Frame` is planar; this output is interleaved RGB8. Read the three planes in
+    // lockstep rather than treating consecutive samples as one pixel.
+    let (r_plane, g_plane, b_plane) = frame.planes();
     let num_pixels = frame.width() * frame.height();
 
     let gamma_lut: Option<[f32; 256]> = if (config.gamma - 1.0).abs() > 1e-6 {
@@ -81,12 +83,17 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
     let apply_contrast = !config.contrast.is_disabled();
     let contrast = config.contrast;
 
-    let output: Vec<u8> = data
-        .par_chunks(3)
-        .flat_map(|pixel| {
-            let mut r = pixel[0];
-            let mut g = pixel[1];
-            let mut b = pixel[2];
+    let mut output = vec![0u8; num_pixels * 3];
+    output
+        .par_chunks_mut(3)
+        .zip(
+            r_plane
+                .par_iter()
+                .zip(g_plane.par_iter())
+                .zip(b_plane.par_iter()),
+        )
+        .for_each(|(out_px, ((&pr, &pg), &pb))| {
+            let (mut r, mut g, mut b) = (pr, pg, pb);
 
             if apply_contrast {
                 let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -108,13 +115,10 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
                 b = lut[b_idx];
             }
 
-            [
-                (r * 255.0).round().clamp(0.0, 255.0) as u8,
-                (g * 255.0).round().clamp(0.0, 255.0) as u8,
-                (b * 255.0).round().clamp(0.0, 255.0) as u8,
-            ]
-        })
-        .collect();
+            out_px[0] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
+            out_px[1] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+            out_px[2] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+        });
 
     if config.dither {
         return Ok(apply_ordered_dither(output, frame.width(), frame.height()));

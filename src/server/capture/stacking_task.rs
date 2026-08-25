@@ -93,7 +93,7 @@ pub fn run_stacking_task(
         }
 
         // Process frame through stacking pipeline
-        let mut registration_succeeded = true;
+        let registration_succeeded;
         let mut display_frame = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,

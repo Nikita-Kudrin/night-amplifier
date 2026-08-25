@@ -96,6 +96,23 @@ pub fn load_tiff(path: &Path) -> Result<LoadedImage, String> {
     })
 }
 
+/// Reorders plane-major 16-bit LE samples into interleaved order.
+///
+/// Every arm of `load_fits` funnels into `Frame::from_raw`, which expects
+/// interleaved input, so a planar FITS has to be converted first.
+fn interleave_u16_planes(bytes: &[u8], area: usize, channels: usize) -> Vec<u8> {
+    let mut out = vec![0u8; bytes.len()];
+    for i in 0..area {
+        for c in 0..channels {
+            let src = (c * area + i) * 2;
+            let dst = (i * channels + c) * 2;
+            out[dst] = bytes[src];
+            out[dst + 1] = bytes[src + 1];
+        }
+    }
+    out
+}
+
 // ============================================================================
 // FITS Loading
 // ============================================================================
@@ -117,20 +134,19 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
         .primary_hdu()
         .map_err(|e| format!("Failed to get primary HDU from {:?}: {}", path, e))?;
 
-    let (width, height, channels, image_type) = match &hdu.info {
+    // `[3, h, w]` (NAXIS3 = 3) and `[h, w, 3]` (NAXIS1 = 3) are different memory
+    // layouts, and `Frame::from_raw` de-interleaves — so a planar source has to be
+    // interleaved first or its channels come out scrambled. Reuse the production
+    // interpretation rather than keeping a second copy of this logic.
+    let (shape, image_type) = match &hdu.info {
         HduInfo::ImageInfo { shape, image_type } => {
-            let (w, h, c) = match shape.as_slice() {
-                // 2D image (grayscale): [height, width]
-                [h, w] => (*w, *h, 1),
-                // 3D image (color): [channels, height, width] or [height, width, channels]
-                [c, h, w] if *c == 3 => (*w, *h, 3),
-                [h, w, c] if *c == 3 => (*w, *h, 3),
-                _ => return Err(format!("Unsupported FITS shape {:?} in {:?}", shape, path)),
-            };
-            (w, h, c, *image_type)
+            let parsed = night_amplifier::fits::interpret_shape(shape)
+                .ok_or_else(|| format!("Unsupported FITS shape {:?} in {:?}", shape, path))?;
+            (parsed, *image_type)
         }
         _ => return Err(format!("FITS file {:?} does not contain image data", path)),
     };
+    let (width, height, channels) = (shape.width, shape.height, shape.channels);
 
     let (raw_bytes, format) = match image_type {
         ImageType::UnsignedByte => {
@@ -166,7 +182,7 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
             let max_val = data.iter().map(|&v| v.abs()).max().unwrap_or(1) as f64;
             let bytes: Vec<u8> = data
                 .iter()
-                .map(|&v| ((v as f64 / max_val * 32767.0 + 32768.0) as u16))
+                .map(|&v| (v as f64 / max_val * 32767.0 + 32768.0) as u16)
                 .flat_map(|v| v.to_le_bytes())
                 .collect();
             (bytes, PixelFormat::Rgb16)
@@ -211,6 +227,14 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
 
     // FITS grayscale data is likely Bayer from astronomy cameras
     let is_bayer = channels == 1;
+
+    let raw_bytes = if channels > 1
+        && shape.layout == night_amplifier::fits::FitsColourLayout::Planar
+    {
+        interleave_u16_planes(&raw_bytes, width * height, channels)
+    } else {
+        raw_bytes
+    };
 
     let frame = Frame::from_raw(&raw_bytes, width, height, channels, format)
         .map_err(|e| format!("Failed to create Frame from FITS {:?}: {}", path, e))?;
@@ -323,6 +347,22 @@ fn save_frame_to_path(frame: &Frame, output_path: &Path) -> Result<PathBuf, Stri
     } else {
         // RGB: use renderer
         let rgb8 = render_to_rgb8(frame).map_err(|e| format!("Failed to render frame: {}", e))?;
+
+        // Every integration test that writes a fixture passes through here, which
+        // makes this the cheapest place to catch a planar buffer being read as
+        // interleaved: that collapses the channels toward grey.
+        let spread = crate::integration::common::mean_chroma_spread_rgb8(
+            &rgb8,
+            frame.width(),
+            frame.height(),
+        );
+        let frame_spread = crate::integration::common::mean_chroma_spread_frame(frame);
+        if frame_spread > crate::integration::common::MIN_CHROMA_SPREAD {
+            crate::integration::common::assert_has_chroma(
+                spread,
+                &format!("render_to_rgb8 for {:?} (source frame spread {frame_spread:.2})", output_path),
+            );
+        }
 
         encoder
             .write_image::<RGB8>(frame.width() as u32, frame.height() as u32, &rgb8)

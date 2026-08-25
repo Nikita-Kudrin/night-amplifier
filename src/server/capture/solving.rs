@@ -85,7 +85,8 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
         return;
     }
 
-    // Get target name for logging
+    // Carried into the spawned task so a successful solve names the target it was
+    // solving for; the solve itself does not use it.
     let target_name = push_to_status
         .current_target
         .map(|t| t.name.unwrap_or(t.designation));
@@ -136,6 +137,7 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
                         ra = pos.ra_degrees,
                         dec = pos.dec_degrees,
                         stars = pos.stars_matched,
+                        target = target_name.as_deref().unwrap_or("-"),
                         "Plate solve succeeded"
                     );
 

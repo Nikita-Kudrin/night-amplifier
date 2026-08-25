@@ -1,6 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use crate::render::simd::apply_luminance_preserving_simd;
+use crate::render::simd::apply_luminance_preserving_simd_planar;
 use rayon::prelude::*;
 
 /// Inverse hyperbolic sine function
@@ -153,11 +153,9 @@ pub fn asinh_stretch_frame(
             *pixel = (asinh(stretch_factor * value) * asinh_norm).clamp(0.0, 1.0);
         });
     } else {
-        let row_len = width * 3;
-        data.par_chunks_mut(row_len).for_each(|row| {
-            apply_luminance_preserving_simd(row, color_intensity, |l| {
-                asinh(stretch_factor * l) * asinh_norm
-            });
+        let (r, g, b) = frame.planes_mut();
+        apply_luminance_preserving_simd_planar(r, g, b, width, color_intensity, |l| {
+            asinh(stretch_factor * l) * asinh_norm
         });
     }
 
@@ -325,7 +323,18 @@ mod tests {
         let dg_high = g_out_high - l_out_high;
         let db_high = b_out_high - l_out_high;
 
-        // Higher intensity should spread the channels further from luminance
+        // Calculate for intensity=0.5. This case was computed but never asserted on,
+        // so the monotonicity claim below only ever covered the 1.0 -> 2.0 half.
+        let l_out_low = 0.2126 * r_out_low + 0.7152 * g_out_low + 0.0722 * b_out_low;
+        let dr_low = r_out_low - l_out_low;
+        let dg_low = g_out_low - l_out_low;
+        let db_low = b_out_low - l_out_low;
+
+        // Channel spread from luminance must increase monotonically with intensity.
+        assert!(dr_low.abs() < dr_1.abs());
+        assert!(dg_low.abs() < dg_1.abs());
+        assert!(db_low.abs() < db_1.abs());
+
         assert!(dr_high.abs() > dr_1.abs());
         assert!(dg_high.abs() > dg_1.abs());
         assert!(db_high.abs() > db_1.abs());
@@ -334,10 +343,11 @@ mod tests {
     #[test]
     fn test_asinh_stretch_frame_basic() {
         let mut data = vec![0.0f32; 32 * 32 * 3];
-        for i in 0..(32 * 32) {
-            data[i * 3] = 0.3;
-            data[i * 3 + 1] = 0.15;
-            data[i * 3 + 2] = 0.2;
+        let plane = 32 * 32;
+        for i in 0..plane {
+            data[i] = 0.3;
+            data[plane + i] = 0.15;
+            data[plane * 2 + i] = 0.2;
         }
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 

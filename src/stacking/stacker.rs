@@ -193,7 +193,6 @@ mod tests {
 
     fn create_spot_frame(width: usize, height: usize, spot_x: usize, spot_y: usize) -> Frame {
         let mut frame = Frame::filled(width, height, 3, 0.1).unwrap();
-        let data = frame.data_mut();
 
         for dy in 0..height {
             for dx in 0..width {
@@ -201,10 +200,10 @@ mod tests {
                     (dx as f32 - spot_x as f32).powi(2) + (dy as f32 - spot_y as f32).powi(2);
                 let intensity = (-dist_sq / 50.0).exp();
 
-                let idx = (dy * width + dx) * 3;
-                data[idx] += intensity;
-                data[idx + 1] += intensity;
-                data[idx + 2] += intensity;
+                for c in 0..3 {
+                    let current = frame.get_pixel(dx, dy, c);
+                    frame.set_pixel(dx, dy, c, current + intensity);
+                }
             }
         }
 

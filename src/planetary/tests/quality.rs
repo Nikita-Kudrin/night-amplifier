@@ -63,38 +63,57 @@ fn test_quality_scores_ordering() {
     }
 }
 
+/// A single vertical step edge, built with `set_pixel` so the fixture cannot encode a
+/// layout assumption.
+///
+/// The bound is pinned rather than left at `> 0.0`: the previous fixture wrote
+/// `(y * 32 + x) * 3` into a planar frame, which reshuffles the edge into a different
+/// image entirely, and `> 0.0` accepted that just as happily as the intended one.
 #[test]
 fn test_laplacian_variance_calculation() {
-    let mut data = vec![0.0f32; 32 * 32 * 3];
+    let mut frame = Frame::zeros(32, 32, 3).unwrap();
     for y in 0..32 {
         for x in 0..32 {
-            let idx = (y * 32 + x) * 3;
             let value = if x < 16 { 0.2 } else { 0.8 };
-            data[idx] = value;
-            data[idx + 1] = value;
-            data[idx + 2] = value;
+            for c in 0..3 {
+                frame.set_pixel(x, y, c, value);
+            }
         }
     }
-    let frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
     let laplacian = compute_quality(&frame, QualityMetric::Laplacian);
-    assert!(laplacian > 0.0, "Laplacian should detect edge");
+
+    // One column of the 30 interior columns carries a +-0.6 Laplacian response either
+    // side of the step; everything else is flat. Mean is 0, so the variance is
+    // 2 * 0.6^2 * 30 / (30 * 30) = 0.024.
+    assert!(
+        (laplacian - 0.024).abs() < 1e-3,
+        "Laplacian variance {laplacian} does not match the step edge (expected ~0.024)"
+    );
 }
 
+/// A constant-slope diagonal ramp, again via `set_pixel`.
+///
+/// On a ramp of 1/64 per pixel in each axis the Sobel response is uniform, so the mean
+/// magnitude is exactly `sqrt(2) * 8 / 64`. Pinning it means a fixture that quietly
+/// stops being a ramp fails here instead of passing a `> 0.0` check.
 #[test]
 fn test_sobel_gradient_calculation() {
-    let mut data = vec![0.0f32; 32 * 32 * 3];
+    let mut frame = Frame::zeros(32, 32, 3).unwrap();
     for y in 0..32 {
         for x in 0..32 {
-            let idx = (y * 32 + x) * 3;
             let value = (x + y) as f32 / 64.0;
-            data[idx] = value;
-            data[idx + 1] = value;
-            data[idx + 2] = value;
+            for c in 0..3 {
+                frame.set_pixel(x, y, c, value);
+            }
         }
     }
-    let frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
     let sobel = compute_quality(&frame, QualityMetric::Sobel);
-    assert!(sobel > 0.0, "Sobel should detect gradient");
+
+    let expected = (2.0f32).sqrt() * 8.0 / 64.0;
+    assert!(
+        (sobel - expected).abs() < 1e-3,
+        "Sobel magnitude {sobel} does not match the uniform ramp (expected ~{expected})"
+    );
 }
 
 #[test]

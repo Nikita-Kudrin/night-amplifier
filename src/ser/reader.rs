@@ -204,24 +204,27 @@ fn determine_rgb_format(header: &SerHeader) -> PixelFormat {
     }
 }
 
+/// Splits a freshly allocated planar buffer into its three planes.
+fn planes_mut(data: &mut [f32], area: usize) -> (&mut [f32], &mut [f32], &mut [f32]) {
+    let (r, rest) = data.split_at_mut(area);
+    let (g, b) = rest.split_at_mut(area);
+    (r, g, b)
+}
+
 fn create_mono_frame(buffer: &[u8], width: usize, height: usize, bit_depth: u32) -> Result<Frame> {
     let pixels = width * height;
     let mut data = vec![0.0f32; pixels * 3];
+    let (r, g, b) = planes_mut(&mut data, pixels);
 
-    if bit_depth <= 8 {
-        for i in 0..pixels {
-            let value = buffer[i] as f32 / 255.0;
-            data[i * 3] = value;
-            data[i * 3 + 1] = value;
-            data[i * 3 + 2] = value;
-        }
-    } else {
-        for i in 0..pixels {
-            let value = u16::from_le_bytes([buffer[i * 2], buffer[i * 2 + 1]]) as f32 / 65535.0;
-            data[i * 3] = value;
-            data[i * 3 + 1] = value;
-            data[i * 3 + 2] = value;
-        }
+    for i in 0..pixels {
+        let value = if bit_depth <= 8 {
+            buffer[i] as f32 / 255.0
+        } else {
+            u16::from_le_bytes([buffer[i * 2], buffer[i * 2 + 1]]) as f32 / 65535.0
+        };
+        r[i] = value;
+        g[i] = value;
+        b[i] = value;
     }
 
     Frame::from_f32_vec(data, width, height, 3)
@@ -230,22 +233,26 @@ fn create_mono_frame(buffer: &[u8], width: usize, height: usize, bit_depth: u32)
 fn create_bgr_frame(buffer: &[u8], width: usize, height: usize, bit_depth: u32) -> Result<Frame> {
     let pixels = width * height;
     let mut data = vec![0.0f32; pixels * 3];
+    let (r, g, b) = planes_mut(&mut data, pixels);
 
-    if bit_depth <= 8 {
-        for i in 0..pixels {
-            data[i * 3] = buffer[i * 3 + 2] as f32 / 255.0;
-            data[i * 3 + 1] = buffer[i * 3 + 1] as f32 / 255.0;
-            data[i * 3 + 2] = buffer[i * 3] as f32 / 255.0;
-        }
-    } else {
-        for i in 0..pixels {
-            let b = u16::from_le_bytes([buffer[i * 6], buffer[i * 6 + 1]]) as f32 / 65535.0;
-            let g = u16::from_le_bytes([buffer[i * 6 + 2], buffer[i * 6 + 3]]) as f32 / 65535.0;
-            let r = u16::from_le_bytes([buffer[i * 6 + 4], buffer[i * 6 + 5]]) as f32 / 65535.0;
-            data[i * 3] = r;
-            data[i * 3 + 1] = g;
-            data[i * 3 + 2] = b;
-        }
+    // On-disk order is B, G, R per pixel; `Frame` is planar, so unpack across planes.
+    for i in 0..pixels {
+        let (bv, gv, rv) = if bit_depth <= 8 {
+            (
+                buffer[i * 3] as f32 / 255.0,
+                buffer[i * 3 + 1] as f32 / 255.0,
+                buffer[i * 3 + 2] as f32 / 255.0,
+            )
+        } else {
+            (
+                u16::from_le_bytes([buffer[i * 6], buffer[i * 6 + 1]]) as f32 / 65535.0,
+                u16::from_le_bytes([buffer[i * 6 + 2], buffer[i * 6 + 3]]) as f32 / 65535.0,
+                u16::from_le_bytes([buffer[i * 6 + 4], buffer[i * 6 + 5]]) as f32 / 65535.0,
+            )
+        };
+        r[i] = rv;
+        g[i] = gv;
+        b[i] = bv;
     }
 
     Frame::from_f32_vec(data, width, height, 3)

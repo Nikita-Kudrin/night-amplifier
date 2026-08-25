@@ -1,7 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use crate::render::simd::apply_luminance_preserving_simd;
-use rayon::prelude::*;
+use crate::render::simd::{apply_luminance_preserving_simd, apply_luminance_preserving_simd_planar};
 
 /// Configuration for S-curve contrast adjustment
 #[derive(Debug, Clone, Copy)]
@@ -83,12 +82,8 @@ pub fn apply_contrast_frame(frame: &mut Frame, config: &ContrastConfig) -> Resul
     }
 
     let width = frame.width();
-    let data = frame.data_mut();
-
-    let row_len = width * 3;
-    data.par_chunks_mut(row_len).for_each(|row| {
-        apply_luminance_preserving_simd(row, 1.0, |l| apply_s_curve(l, config));
-    });
+    let (r, g, b) = frame.planes_mut();
+    apply_luminance_preserving_simd_planar(r, g, b, width, 1.0, |l| apply_s_curve(l, config));
 
     Ok(())
 }

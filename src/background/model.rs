@@ -137,6 +137,23 @@ impl BackgroundModel {
         aggressiveness = self.aggressiveness
     ))]
     pub fn subtract_from(&self, frame: &mut Frame) {
+        // `subtract_weight_based` recovers the channel index from `self.image_height`
+        // while writing `frame.data_mut()`, so a frame that does not match the model
+        // would silently write one plane's correction into another. `subtract_delta_stepping`
+        // reads the same geometry off the frame instead. Rather than leave the two paths
+        // disagreeing about which is authoritative, refuse the mismatch here.
+        if frame.width() != self.image_width
+            || frame.height() != self.image_height
+            || frame.channels() != self.channels
+        {
+            tracing::warn!(
+                frame = %format!("{}x{}x{}", frame.width(), frame.height(), frame.channels()),
+                model = %format!("{}x{}x{}", self.image_width, self.image_height, self.channels),
+                "Background model does not match the frame; skipping subtraction"
+            );
+            return;
+        }
+
         // Calculate dynamic pedestal
         let pedestal = {
             let _span = tracing::info_span!("compute_pedestal").entered();
@@ -155,14 +172,19 @@ impl BackgroundModel {
             let step = (num_pixels / max_samples).max(1);
 
             let mut sample = Vec::with_capacity(max_samples.min(num_pixels));
-            let data = frame.data();
+            // One plane, indexed `y * w + x`. The interleaved form (`y * w * c` plus
+            // `x * c + sample_c`) survived the planar migration and stayed silent because
+            // for `c == 3` the arithmetic happens to land inside the green plane — it just
+            // sampled the wrong rows, sweeping most of the frame height at a 3-pixel
+            // horizontal stride instead of the centre crop.
+            let plane = frame.channel_data(sample_c);
             let mut count = 0;
 
             for y in y_start..(y_start + crop_h) {
-                let row_offset = y * w * c;
+                let row_offset = y * w;
                 for x in x_start..(x_start + crop_w) {
                     if count % step == 0 {
-                        sample.push(data[row_offset + x * c + sample_c]);
+                        sample.push(plane[row_offset + x]);
                     }
                     count += 1;
                 }
@@ -237,6 +259,7 @@ impl BackgroundModel {
         nodes_y: &[usize],
     ) {
         let width = frame.width();
+        let height = frame.height();
         let channels = frame.channels();
         let grid_cols = self.grid_width;
         let grid_rows = self.grid_height;
@@ -282,8 +305,9 @@ impl BackgroundModel {
                         let delta_x = (v_right - v_left) * inv_dx;
 
                         let mut current_bg = v_left;
+                        let area = width * height;
                         for x in x_start..x_end_loop {
-                            let pixel_idx = y * width * channels + x * channels + c;
+                            let pixel_idx = c * area + y * width + x;
                             let gradient = current_bg - offset;
                             let subtraction = gradient * aggressiveness;
                             // SAFETY: parallel bands don't overlap, so no data race.
@@ -310,7 +334,6 @@ impl BackgroundModel {
         pedestal: f32,
     ) {
         let width = frame.width();
-        let channels = frame.channels();
 
         let (gx_weights, gy_weights) = {
             let _span = tracing::info_span!("prepare_interpolation_weights").entered();
@@ -327,7 +350,13 @@ impl BackgroundModel {
             for y in 0..self.image_height {
                 let gy =
                     (y as f32 + 0.5) * self.grid_height as f32 / self.image_height as f32 - 0.5;
-                let gy0 = (gy.floor() as isize).clamp(0, self.grid_width as isize - 1) as usize;
+                // `grid_height`, not `grid_width`: clamping the row index against the
+                // column count is harmless while the grid is square or wider than it is
+                // tall (the extractor's 12x12/16x16 defaults, and RBF on a landscape
+                // frame), but RBF derives `eval_height = 256 * h / w`, so a portrait
+                // frame gets more grid rows than columns and every row past
+                // `grid_width - 1` collapsed onto that one.
+                let gy0 = (gy.floor() as isize).clamp(0, self.grid_height as isize - 1) as usize;
                 let gy1 = (gy0 + 1).min(self.grid_height - 1);
                 let fy = (gy - gy0 as f32).clamp(0.0, 1.0);
                 gy_weights.push((gy0, gy1, fy));
@@ -335,35 +364,40 @@ impl BackgroundModel {
             (gx_weights, gy_weights)
         };
 
-        let data = frame.data_mut();
-
         {
             let _span = tracing::info_span!("apply_subtraction").entered();
-            data.par_chunks_mut(width * channels)
+            // One dispatch for the whole buffer instead of one per channel. Planes are
+            // contiguous and every plane has `height` rows, so a flat walk over
+            // `width`-sized chunks yields both the channel and the row from the chunk
+            // index — no zip, no per-channel barrier.
+            let height = self.image_height;
+            let grid_width = self.grid_width;
+            let grids = &self.grid_values;
+
+            frame
+                .data_mut()
+                .par_chunks_mut(width)
                 .enumerate()
-                .for_each(|(y, row)| {
+                .for_each(|(i, row)| {
+                    let c = i / height;
+                    let y = i % height;
+                    let grid = &grids[c];
+                    let offset = offsets[c];
+
                     let (gy0, gy1, fy) = gy_weights[y];
+                    // Row offsets into the grid are fixed for the whole row.
+                    let row0 = gy0 * grid_width;
+                    let row1 = gy1 * grid_width;
 
                     for x in 0..width {
                         let (gx0, gx1, fx) = gx_weights[x];
 
-                        for c in 0..channels {
-                            let idx = x * channels + c;
+                        let v0 = grid[row0 + gx0] * (1.0 - fx) + grid[row0 + gx1] * fx;
+                        let v1 = grid[row1 + gx0] * (1.0 - fx) + grid[row1 + gx1] * fx;
+                        let bg = v0 * (1.0 - fy) + v1 * fy;
 
-                            let grid = &self.grid_values[c];
-                            let v00 = grid[gy0 * self.grid_width + gx0];
-                            let v10 = grid[gy0 * self.grid_width + gx1];
-                            let v01 = grid[gy1 * self.grid_width + gx0];
-                            let v11 = grid[gy1 * self.grid_width + gx1];
-
-                            let v0 = v00 * (1.0 - fx) + v10 * fx;
-                            let v1 = v01 * (1.0 - fx) + v11 * fx;
-                            let bg = v0 * (1.0 - fy) + v1 * fy;
-
-                            let gradient = bg - offsets[c];
-                            let subtraction = gradient * aggressiveness;
-                            row[idx] = (row[idx] - subtraction + pedestal).max(0.0);
-                        }
+                        let subtraction = (bg - offset) * aggressiveness;
+                        row[x] = (row[x] - subtraction + pedestal).max(0.0);
                     }
                 });
         }
@@ -428,18 +462,16 @@ impl BackgroundModel {
         let width = self.image_width;
         let channels = self.channels;
 
-        let data = frame.data_mut();
-
-        data.par_chunks_mut(width * channels)
-            .enumerate()
-            .for_each(|(y, row)| {
-                for x in 0..width {
-                    for c in 0..channels {
-                        let idx = x * channels + c;
-                        row[idx] = self.get_background(x, y, c);
+        for c in 0..channels {
+            let plane = frame.channel_data_mut(c);
+            plane.par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    for x in 0..width {
+                        row[x] = self.get_background(x, y, c);
                     }
-                }
-            });
+                });
+        }
 
         Ok(frame)
     }

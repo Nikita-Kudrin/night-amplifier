@@ -4,6 +4,31 @@ use crate::debayer::{CfaPattern, DebayerConfig, Debayerer};
 use crate::error::{Result, StackError};
 use tracing::instrument;
 
+/// Writes `sample(i, c)` into plane-major `data`, one contiguous run per channel.
+///
+/// The three `PixelFormat` arms differ only in how a sample is decoded, so they share
+/// this traversal rather than repeating the channel ladder three times.
+#[inline]
+fn scatter_to_planes(
+    data: &mut [f32],
+    pixels: usize,
+    channels: usize,
+    sample: impl Fn(usize, usize) -> f32,
+) {
+    if channels == 1 {
+        for (i, slot) in data[..pixels].iter_mut().enumerate() {
+            *slot = sample(i, 0);
+        }
+        return;
+    }
+
+    for (c, plane) in data.chunks_exact_mut(pixels).enumerate() {
+        for (i, slot) in plane.iter_mut().enumerate() {
+            *slot = sample(i, c);
+        }
+    }
+}
+
 impl Frame {
     /// Creates a new Frame from raw 8-bit or 16-bit image data
     #[instrument(skip(raw), fields(format = ?format, resolution = %format!("{}x{}x{}", width, height, channels), buffer_size = raw.len()))]
@@ -32,25 +57,32 @@ impl Frame {
             });
         }
 
-        let mut data = Vec::with_capacity(pixel_count);
+        let mut data = vec![0.0f32; pixel_count];
         let max_value = format.max_value();
         let inv_max = 1.0 / max_value;
 
+        // Split into plane slices once, so each channel is a sequential store stream.
+        // Indexing `data[c * area + i]` per sample made this three bounds-checked
+        // scatter writes per pixel on every incoming camera frame.
         match format {
             PixelFormat::Rgb8 | PixelFormat::Bayer8 => {
-                data.extend(raw.iter().map(|&v| v as f32 * inv_max));
+                scatter_to_planes(&mut data, raw.len() / channels, channels, |i, c| {
+                    raw[i * channels + c] as f32 * inv_max
+                });
             }
             PixelFormat::Rgb16 | PixelFormat::Bayer16 => {
-                for chunk in raw.as_chunks::<2>().0 {
-                    let value = u16::from_le_bytes([chunk[0], chunk[1]]);
-                    data.push(value as f32 * inv_max);
-                }
+                let u16_raw = raw.as_chunks::<2>().0;
+                scatter_to_planes(&mut data, u16_raw.len() / channels, channels, |i, c| {
+                    let s = u16_raw[i * channels + c];
+                    u16::from_le_bytes([s[0], s[1]]) as f32 * inv_max
+                });
             }
             PixelFormat::Rgb16Be | PixelFormat::Bayer16Be => {
-                for chunk in raw.as_chunks::<2>().0 {
-                    let value = u16::from_be_bytes([chunk[0], chunk[1]]);
-                    data.push(value as f32 * inv_max);
-                }
+                let u16_raw = raw.as_chunks::<2>().0;
+                scatter_to_planes(&mut data, u16_raw.len() / channels, channels, |i, c| {
+                    let s = u16_raw[i * channels + c];
+                    u16::from_be_bytes([s[0], s[1]]) as f32 * inv_max
+                });
             }
         }
 

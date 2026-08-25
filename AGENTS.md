@@ -72,7 +72,7 @@ cargo build --release
 cargo test                                                          # fast unit tests
 # These are ignored by default and must be run explicitly:
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
-cargo bench --bench <name>                                          # benchmarks — keep each bench binary ≤ ~30 s on CI; use `sample_size(10)`, short warm-up (~500 ms), and 1–2 s `measurement_time` (see `benches/background_benchmark.rs`).
+cargo bench --bench <name>                                          # benchmarks — keep each bench binary ≤ ~30 s on CI; use `sample_size(10)`, short warm-up (~500 ms), and 1–2 s `measurement_time` (see `benches/background_benchmark.rs`). Feed inputs via `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()` inside `b.iter`: a 2712x1538x3 clone is ~14 ms, which was 77 % of the reported `fused_stretch_frame` figure and hid anything short of a 30 % kernel regression.
 cargo bench --bench <name> -- --noplot                              # ~4x faster wall clock: without gnuplot installed, criterion's plotters fallback dominates the run (debayer_benchmark: 95 s -> 22 s) while the measurements are identical. Prefer this unless you want the HTML report.
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
@@ -118,6 +118,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 | `push_to/`                    | Community-side Push-To trait definitions (impl is in Pro)                            |
 | `server/`                     | Axum REST + WebSocket server                                                         |
 | `app.rs`                      | Shared `app::run()` entry point for Community and Pro binaries                       |
+| `parallel.rs`                 | `balanced_chunk_len` — rayon work partitioning, shared with Pro                      |
 | `ffi_safety.rs`               | `catch_ffi_panic`, buffer/dimension validation                                       |
 | `logging.rs` / `telemetry.rs` | `tracing` + optional OpenTelemetry (OTLP)                                            |
 
@@ -252,6 +253,54 @@ Corrects for sensor imperfections:
 - **Master Flat Division**: Corrects for vignetting, dust motes, and uneven sensor illumination:
   `calibrated = (raw - dark) / flat`.
 - Applies math purely in 32-bit floating-point precision.
+
+### Frame memory layout (planar) — non-obvious and load-bearing
+
+`Frame` stores samples **plane-major**: `idx = channel * width * height + y * width + x`.
+An RGB frame is `RRR...GGG...BBB`, not `RGBRGB...`. This is what lets SIMD and spatial
+filters read a channel as a contiguous run rather than a stride-3 gather.
+
+**`Frame` is planar; every 8-bit output format is interleaved.** Crossing that boundary
+wrongly still compiles, and produces an image whose channels have collapsed toward grey
+(three adjacent samples of one channel become one output pixel). This has already
+happened once, simultaneously across `Frame::to_rgb8_fast`, `render::frame_to_rgb8`, the
+PNG preview writer, the SER writer *and* reader, and the Pro saturation and comet
+plugins — none of which the compiler or the test suite noticed.
+
+| Consumer | Layout |
+|---|---|
+| JPEG (SA10), LZ4 (SA08/SA09), PNG, TIFF RGB8, SER `Rgb`/`Bgr` | interleaved |
+| FITS (NAXIS3 = 3) | planar — passes straight through |
+
+Rules:
+
+- Use `planes()` / `planes_mut()` / `channel_data()` / `get_pixel()`. Treat a new
+  `frame.data()` next to `* 3` or `* channels` as a review flag.
+- `planes()` and `planes_mut()` **panic** unless `channels() == 3`.
+- Build fixtures with `set_pixel`, never hand-computed offsets — a fixture that encodes
+  the layout cannot catch a layout bug, and several tests passed only because the
+  fixture and the code under test were wrong in the same way.
+- `src/frame/layout_tests.rs` pushes distinct constant channels through every output
+  path — `to_rgb8{,_fast}`, `write_rgb8_into`, `render::frame_to_rgb8`, `render_to_rgb8`,
+  the fused encoder expansion, JPEG (SA10), chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`,
+  FITS f32/u16 both directions, and `downsample`. Add a row when you add a format.
+  `tests/integration/common.rs` provides `mean_chroma_spread_*` for asserting on real
+  fixture data — a correct colour render of the bundled fixtures scores ~32, a
+  planar-read-as-interleaved one ~0.5.
+- A constant-plane fixture must be swept over the whole interior, not spot-checked. An
+  interleaved write lands sample `c * area + p` exactly where the planar read expects it
+  whenever `p % 3 == 0`, so a single-pixel assertion passes against a fully scrambled
+  buffer. Both the pro planetary warp and the simulated camera reached that state.
+- Partition rayon work with `parallel::balanced_chunk_len`, and **do not require the
+  chunk length to divide anything**. Chunking a contiguous plane by `width` is fine —
+  measured, switching `apply_scnr` to plane-sized chunks moved it 1.17 → 1.56 ms and
+  adding `with_min_len(32)` to `warp_frame` moved it 6.82 → 7.87 ms, i.e. rayon's
+  adaptive splitting already handles row granularity. What is *not* fine is deriving a
+  channel index from a flat chunk index: that forces the chunk length to divide the
+  plane size, and the divisor search it used to take cost 0.115 ms per call on a
+  2712x1538 plane, 4.9 ms on a 1999x1999 one, and collapsed to a single chunk — no
+  parallelism at all — whenever the plane size had no convenient divisor. Dispatch per
+  plane instead; see `render::black_point::subtract_black_point`.
 
 ### Phase 2: Debayering (Demosaicing)
 

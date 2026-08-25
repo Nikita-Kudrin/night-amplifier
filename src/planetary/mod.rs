@@ -47,5 +47,6 @@ pub use config::{
 };
 pub use quality::{compute_quality, frame_to_luminance};
 pub use stacker::{
-    stack_planetary, PlanetaryStacker, PlanetaryStackerPlugin, ScoredFrame, PLANETARY_PLUGIN,
+    stack_planetary, BilinearTap, PlanetaryStacker, PlanetaryStackerPlugin, ScoredFrame,
+    PLANETARY_PLUGIN,
 };

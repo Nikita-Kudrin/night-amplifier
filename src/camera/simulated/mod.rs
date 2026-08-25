@@ -5,6 +5,9 @@
 //! Multiple simulated cameras can be added, each pointing to a different directory.
 
 mod camera;
+#[cfg(test)]
+pub(crate) mod loaders;
+#[cfg(not(test))]
 mod loaders;
 mod probe;
 mod registry;

@@ -167,7 +167,6 @@ pub fn auto_stretch_default(frame: &mut Frame) -> Result<AutoStretchResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::statistics::compute_image_stats;
 
     #[test]
     fn test_autostretch_config_defaults() {
@@ -178,18 +177,21 @@ mod tests {
     #[test]
     fn test_auto_stretch_frame_end_to_end() {
         let background = 0.03;
-        let mut data = vec![0.0f32; 64 * 64 * 3];
+        // `set_pixel`, not index arithmetic: a fixture that encodes the layout cannot
+        // detect a layout bug. The identical fixture in `server::capture::storage` was
+        // converted during the planar migration and this one was missed.
+        let mut frame = Frame::zeros(64, 64, 3).unwrap();
 
         let mut seed: u32 = 54321;
-        for i in 0..(64 * 64) {
-            for c in 0..3 {
-                seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.005;
-                data[i * 3 + c] = background + noise;
+        for y in 0..64 {
+            for x in 0..64 {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.005;
+                    frame.set_pixel(x, y, c, background + noise);
+                }
             }
         }
-
-        let mut frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
         let config = AutoStretchConfig::new().with_target_background(0.15);
         let result = auto_stretch_frame(&mut frame, config, None).unwrap();
 
@@ -202,16 +204,17 @@ mod tests {
     fn test_auto_stretch_frame_preserves_colors() {
         let mut data = vec![0.0f32; 32 * 32 * 3];
 
-        for i in 0..(32 * 32) {
-            data[i * 3] = 0.04;
-            data[i * 3 + 1] = 0.05;
-            data[i * 3 + 2] = 0.06;
+        let plane = 32 * 32;
+        for i in 0..plane {
+            data[i] = 0.04;
+            data[plane + i] = 0.05;
+            data[plane * 2 + i] = 0.06;
         }
 
-        let idx = (16 * 32 + 16) * 3;
+        let idx = 16 * 32 + 16;
         data[idx] = 0.8;
-        data[idx + 1] = 0.3;
-        data[idx + 2] = 0.2;
+        data[plane + idx] = 0.3;
+        data[plane * 2 + idx] = 0.2;
 
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
         auto_stretch_frame(&mut frame, AutoStretchConfig::default(), None).unwrap();

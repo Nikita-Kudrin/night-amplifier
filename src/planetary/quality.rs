@@ -20,22 +20,24 @@ pub fn compute_quality(frame: &Frame, metric: QualityMetric) -> f32 {
 
 /// Converts frame to luminance values
 pub fn frame_to_luminance(frame: &Frame) -> Vec<f32> {
-    let data = frame.data();
     let channels = frame.channels();
     let pixels = frame.width() * frame.height();
 
     if channels == 1 {
-        return data.to_vec();
+        return frame.data()[..pixels].to_vec();
     }
 
-    let mut lum = Vec::with_capacity(pixels);
-    for i in 0..pixels {
-        let r = data[i * channels];
-        let g = data[i * channels + 1];
-        let b = data[i * channels + 2];
-        lum.push(0.2126 * r + 0.7152 * g + 0.0722 * b);
+    if channels < 3 {
+        // Not a colour frame in any meaningful sense; use the first plane.
+        return frame.channel_data(0).to_vec();
     }
-    lum
+
+    // Rec. 709 luminance. Planar layout makes this three streaming reads and one
+    // write, instead of the strided gather the interleaved version needed.
+    let (r, g, b) = frame.planes();
+    (0..pixels)
+        .map(|i| 0.2126 * r[i] + 0.7152 * g[i] + 0.0722 * b[i])
+        .collect()
 }
 
 /// Computes Laplacian variance (sharpness metric)

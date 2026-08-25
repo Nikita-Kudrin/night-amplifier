@@ -38,7 +38,7 @@ impl StarDetector {
     pub fn detect(&self, frame: &Frame) -> Result<Vec<Star>> {
         let luminance = {
             let _span = tracing::info_span!("compute_luminance").entered();
-            compute_luminance(frame)
+            crate::detection::luminance::mean_luminance(frame)
         };
         let width = frame.width();
         let height = frame.height();
@@ -411,23 +411,7 @@ impl StarDetector {
     }
 }
 
-fn compute_luminance(frame: &Frame) -> Vec<f32> {
-    let channels = frame.channels();
-    let pixel_count = frame.pixel_count();
-    let data = frame.data();
 
-    if channels == 1 {
-        return data.to_vec();
-    }
-
-    let inv_channels = 1.0 / channels as f32;
-    (0..pixel_count)
-        .map(|i| {
-            let base = i * channels;
-            data[base..base + channels].iter().sum::<f32>() * inv_channels
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -561,7 +545,7 @@ mod tests {
                     if x >= 0 && y >= 0 && (x as usize) < width && (y as usize) < height {
                         let dist_sq = (dx * dx + dy * dy) as f32;
                         let intensity = peak * (-dist_sq / (2.0 * sigma * sigma)).exp();
-                        let idx = (y as usize * width + x as usize) * channels + c;
+                        let idx = c * (width * height) + (y as usize) * width + (x as usize);
                         data[idx] += intensity;
                     }
                 }

@@ -17,6 +17,67 @@ mod writers;
 
 pub use metadata::FitsMetadata;
 
+/// How a FITS image stores its colour samples.
+///
+/// The two 3-channel forms are genuinely different memory layouts, and the axis
+/// order is the only thing that distinguishes them — so a reader that collapses
+/// them into one path is wrong for one of the two. `write_rgb_fits` emits
+/// [`FitsColourLayout::Planar`] (NAXIS3 = 3), which is also the convention for
+/// astronomical colour FITS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitsColourLayout {
+    /// Single channel: mono or an undebayered CFA frame.
+    Mono,
+    /// NAXIS3 = 3 — channels are the slowest-varying axis, so planes are
+    /// contiguous. Matches `Frame`'s own layout, so no reordering is needed.
+    Planar,
+    /// NAXIS1 = 3 — channels are the fastest-varying axis, i.e. RGBRGB...
+    /// Needs de-interleaving into `Frame`'s planes.
+    Interleaved,
+}
+
+/// Geometry and colour layout of a FITS image HDU.
+#[derive(Debug, Clone, Copy)]
+pub struct FitsShape {
+    pub width: usize,
+    pub height: usize,
+    pub channels: usize,
+    pub layout: FitsColourLayout,
+}
+
+/// Interprets a `fitsio` HDU shape, which is in C order (`[NAXISn, ..., NAXIS1]`).
+///
+/// Returns `None` for shapes this codebase does not handle, so callers can raise
+/// their own domain error.
+pub fn interpret_shape(shape: &[usize]) -> Option<FitsShape> {
+    match shape {
+        // 2D: [height, width]
+        [h, w] => Some(FitsShape {
+            width: *w,
+            height: *h,
+            channels: 1,
+            layout: FitsColourLayout::Mono,
+        }),
+        // NAXIS3 = 3 -> [3, height, width]. Checked first because it is what this
+        // application writes; a cube whose height happens to be 3 is vanishingly
+        // rare next to that.
+        [c, h, w] if *c == 3 => Some(FitsShape {
+            width: *w,
+            height: *h,
+            channels: 3,
+            layout: FitsColourLayout::Planar,
+        }),
+        // NAXIS1 = 3 -> [height, width, 3]
+        [h, w, c] if *c == 3 => Some(FitsShape {
+            width: *w,
+            height: *h,
+            channels: 3,
+            layout: FitsColourLayout::Interleaved,
+        }),
+        _ => None,
+    }
+}
+
 use writers::{write_fits_raw, write_fits_u16_primary, write_mono_fits, write_rgb_fits};
 
 /// Write a Frame to a FITS file
@@ -85,25 +146,10 @@ pub fn write_fits_u16(
     let channels = frame.channels();
 
     let data = frame.data();
-    let u16_data: Vec<u16> = if channels == 1 {
-        data.iter()
-            .map(|&v| (v.clamp(0.0, 1.0) * 65535.0) as u16)
-            .collect()
-    } else {
-        let pixels_per_channel = width * height;
-        let mut planar = vec![0u16; pixels_per_channel * channels];
-        for y in 0..height {
-            for x in 0..width {
-                let pixel_idx = y * width + x;
-                for c in 0..channels {
-                    let src_idx = pixel_idx * channels + c;
-                    let dst_idx = c * pixels_per_channel + pixel_idx;
-                    planar[dst_idx] = (data[src_idx].clamp(0.0, 1.0) * 65535.0) as u16;
-                }
-            }
-        }
-        planar
-    };
+    let u16_data: Vec<u16> = data
+        .iter()
+        .map(|&v| (v.clamp(0.0, 1.0) * 65535.0) as u16)
+        .collect();
 
     write_fits_u16_primary(&u16_data, width, height, channels, path, metadata)
 }

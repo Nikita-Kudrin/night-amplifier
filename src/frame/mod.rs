@@ -2,9 +2,53 @@
 //!
 //! The Frame struct holds image data as a contiguous Vec<f32> for high-precision
 //! arithmetic operations required in image stacking.
+//!
+//! # Memory layout: planar, and load-bearing
+//!
+//! Samples are stored **plane-major**:
+//!
+//! ```text
+//! idx = channel * (width * height) + y * width + x
+//! ```
+//!
+//! so an RGB frame is `RRRR...GGGG...BBBB`, not `RGBRGBRGB...`. This exists so SIMD
+//! and spatial filters read one channel as a contiguous run instead of a stride-3
+//! gather.
+//!
+//! **`Frame` is planar; every 8-bit output format is interleaved.** That boundary is
+//! the single most dangerous thing about this type, because crossing it wrongly
+//! compiles cleanly and produces a plausible-looking image with the channels
+//! scrambled — three adjacent samples of one channel become one output pixel, so
+//! colour collapses toward grey. It has already happened once, across eight output
+//! paths at the same time. The interleaved side of the boundary is:
+//!
+//! | Consumer | Layout |
+//! |---|---|
+//! | JPEG (SA10), LZ4 (SA08/SA09), PNG, TIFF RGB8 | interleaved |
+//! | SER `Rgb` / `Bgr` payloads | interleaved |
+//! | FITS (NAXIS3 = 3) | **planar** — passes through unchanged |
+//!
+//! Practical rules:
+//!
+//! - Reach for [`Frame::planes`], [`Frame::planes_mut`], [`Frame::channel_data`] or
+//!   [`Frame::get_pixel`]. Treat any new `frame.data()` combined with `* 3` or
+//!   `* channels` as a review flag.
+//! - Build test fixtures with [`Frame::set_pixel`], never hand-computed offsets. A
+//!   fixture that encodes the layout cannot detect a layout bug, and several tests
+//!   passed for exactly that reason: fixture and consumer were wrong in the same way.
+//! - `src/frame/layout_tests.rs` pushes a frame with distinct constant channels
+//!   through every output path listed above — including JPEG (SA10) and the chunked
+//!   LZ4 (SA09) framing. Add a row when you add a format.
+//! - Sweep such a fixture over the whole interior, never one pixel: an interleaved
+//!   write lands sample `c * area + p` exactly where the planar read expects it
+//!   whenever `p % 3 == 0`, so a spot check passes against a scrambled buffer.
+//! - Callers holding a pooled buffer should use [`Frame::write_rgb8_into`] rather than
+//!   re-deriving the gather; that duplication is how the PNG and SER writers drifted.
 
 mod factory;
 mod format;
+#[cfg(test)]
+mod layout_tests;
 mod ops;
 
 pub use format::PixelFormat;
@@ -93,7 +137,7 @@ impl Frame {
     #[inline]
     pub fn get_pixel(&self, x: usize, y: usize, channel: usize) -> f32 {
         debug_assert!(x < self.width && y < self.height && channel < self.channels);
-        let idx = (y * self.width + x) * self.channels + channel;
+        let idx = channel * (self.width * self.height) + y * self.width + x;
         self.data[idx]
     }
 
@@ -101,8 +145,64 @@ impl Frame {
     #[inline]
     pub fn set_pixel(&mut self, x: usize, y: usize, channel: usize, value: f32) {
         debug_assert!(x < self.width && y < self.height && channel < self.channels);
-        let idx = (y * self.width + x) * self.channels + channel;
+        let idx = channel * (self.width * self.height) + y * self.width + x;
         self.data[idx] = value;
+    }
+
+    /// Returns a slice of the pixel data for a specific channel
+    #[inline]
+    pub fn channel_data(&self, channel: usize) -> &[f32] {
+        debug_assert!(channel < self.channels);
+        let area = self.width * self.height;
+        let start = channel * area;
+        &self.data[start..start + area]
+    }
+
+    /// Returns a mutable slice of the pixel data for a specific channel
+    #[inline]
+    pub fn channel_data_mut(&mut self, channel: usize) -> &mut [f32] {
+        debug_assert!(channel < self.channels);
+        let area = self.width * self.height;
+        let start = channel * area;
+        &mut self.data[start..start + area]
+    }
+
+    /// Returns three distinct mutable slices for the Red, Green, and Blue planes.
+    /// This is required to satisfy the borrow checker when parallelizing across planes.
+    ///
+    /// # Panics
+    /// Panics unless `channels() == 3`. A `debug_assert` would be worse than useless
+    /// here: in release it would fall through to `split_at_mut` and panic anyway,
+    /// with "mid > len" and no hint about the real cause. The check costs nothing next
+    /// to the full-plane work every caller does.
+    #[inline]
+    pub fn planes_mut(&mut self) -> (&mut [f32], &mut [f32], &mut [f32]) {
+        assert_eq!(
+            self.channels, 3,
+            "planes_mut() requires a 3-channel frame, got {}",
+            self.channels
+        );
+        let area = self.width * self.height;
+        let (r_plane, rest) = self.data.split_at_mut(area);
+        let (g_plane, b_plane) = rest.split_at_mut(area);
+        (r_plane, g_plane, b_plane)
+    }
+
+    /// Returns three distinct immutable slices for the Red, Green, and Blue planes.
+    ///
+    /// # Panics
+    /// Panics unless `channels() == 3`; see [`Frame::planes_mut`].
+    #[inline]
+    pub fn planes(&self) -> (&[f32], &[f32], &[f32]) {
+        assert_eq!(
+            self.channels, 3,
+            "planes() requires a 3-channel frame, got {}",
+            self.channels
+        );
+        let area = self.width * self.height;
+        let (r_plane, rest) = self.data.split_at(area);
+        let (g_plane, b_plane) = rest.split_at(area);
+        (r_plane, g_plane, b_plane)
     }
 
     /// Checks if this frame has the same dimensions as another
@@ -155,59 +255,31 @@ impl Frame {
         let inv_area = 1.0 / (factor * factor) as f32;
         let mut output = vec![0.0f32; dst_width * dst_height * channels];
         let src_data = self.data.as_slice();
+        
+        let src_area = src_width * src_height;
 
+        // One flat dispatch over output rows. The previous nesting put a
+        // `par_chunks_mut` inside a `par_chunks_mut`, and for the mono plate-solve case
+        // the outer iterator had exactly one item — pure overhead.
         output
-            .par_chunks_mut(dst_width * channels)
+            .par_chunks_mut(dst_width)
             .enumerate()
-            .for_each(|(dst_y, row)| {
+            .for_each(|(row_idx, row_out)| {
+                let c = row_idx / dst_height;
+                let dst_y = row_idx % dst_height;
+                let src_plane = &src_data[c * src_area..(c + 1) * src_area];
                 let src_y_start = dst_y * factor;
+
                 for dst_x in 0..dst_width {
                     let src_x_start = dst_x * factor;
-
-                    if channels == 1 {
-                        let mut sum = 0.0f32;
-                        for sy in 0..factor {
-                            let row_start = (src_y_start + sy) * src_width;
-                            for sx in 0..factor {
-                                sum += src_data[row_start + src_x_start + sx];
-                            }
-                        }
-                        row[dst_x] = sum * inv_area;
-                    } else if channels == 3 {
-                        let mut sum_r = 0.0f32;
-                        let mut sum_g = 0.0f32;
-                        let mut sum_b = 0.0f32;
-                        for sy in 0..factor {
-                            let row_start = (src_y_start + sy) * src_width * 3;
-                            for sx in 0..factor {
-                                let pixel_start = row_start + (src_x_start + sx) * 3;
-                                sum_r += src_data[pixel_start];
-                                sum_g += src_data[pixel_start + 1];
-                                sum_b += src_data[pixel_start + 2];
-                            }
-                        }
-                        let out_idx = dst_x * 3;
-                        row[out_idx] = sum_r * inv_area;
-                        row[out_idx + 1] = sum_g * inv_area;
-                        row[out_idx + 2] = sum_b * inv_area;
-                    } else {
-                        // Fallback for other channel counts. Accumulates straight
-                        // into the (zero-initialised) output row: a scratch `Vec`
-                        // here would be one allocation per output pixel.
-                        let out_idx = dst_x * channels;
-                        for sy in 0..factor {
-                            let row_start = (src_y_start + sy) * src_width * channels;
-                            for sx in 0..factor {
-                                let pixel_start = row_start + (src_x_start + sx) * channels;
-                                for c in 0..channels {
-                                    row[out_idx + c] += src_data[pixel_start + c];
-                                }
-                            }
-                        }
-                        for c in 0..channels {
-                            row[out_idx + c] *= inv_area;
+                    let mut sum = 0.0f32;
+                    for sy in 0..factor {
+                        let row_start = (src_y_start + sy) * src_width;
+                        for sx in 0..factor {
+                            sum += src_plane[row_start + src_x_start + sx];
                         }
                     }
+                    row_out[dst_x] = sum * inv_area;
                 }
             });
 
@@ -285,7 +357,7 @@ mod tests {
         for y in 0..height {
             for x in 0..width {
                 for c in 0..channels {
-                    let idx = (y * width + x) * channels + c;
+                    let idx = c * (width * height) + y * width + x;
                     data[idx] = (x as f32 * 3.0 + y as f32 * 7.0 + c as f32 * 100.0) / 1000.0;
                 }
             }

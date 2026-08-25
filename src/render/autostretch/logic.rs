@@ -120,24 +120,17 @@ mod tests {
 
     #[test]
     fn test_compute_auto_stretch_basic() {
-        let mut data = vec![0.0f32; 64 * 64 * 3];
         let background = 0.05;
+        let mut frame = Frame::filled(64, 64, 3, background).unwrap();
 
-        for i in (0..data.len()).step_by(3) {
-            data[i] = background;
-            data[i + 1] = background;
-            data[i + 2] = background;
+        // Add some "stars". Written with `set_pixel`: the interleaved version put all
+        // three samples in the red plane, so the stars were three adjacent red pixels
+        // and the test passed only because the flat background is layout-invariant.
+        for (sx, sy) in [(10usize, 10usize), (30, 30), (50, 50)] {
+            frame.set_pixel(sx, sy, 0, 0.9);
+            frame.set_pixel(sx, sy, 1, 0.85);
+            frame.set_pixel(sx, sy, 2, 0.8);
         }
-
-        // Add some "stars"
-        for star_pos in [(10, 10), (30, 30), (50, 50)] {
-            let idx = (star_pos.1 * 64 + star_pos.0) * 3;
-            data[idx] = 0.9;
-            data[idx + 1] = 0.85;
-            data[idx + 2] = 0.8;
-        }
-
-        let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
         let stats = compute_image_stats(&frame).unwrap();
 
         let config = AutoStretchConfig::new().with_black_point_sigma(0.5);

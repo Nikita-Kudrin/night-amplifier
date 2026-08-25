@@ -169,51 +169,6 @@ impl BackgroundExtractor {
         ))
     }
 
-    /// Compute the median of a block, rejecting bright stars.
-    /// Exposed as pub(crate) so the RBF module can reuse this for sample block medians.
-    pub(crate) fn compute_block_median(
-        &self,
-        frame: &Frame,
-        x_start: usize,
-        y_start: usize,
-        x_end: usize,
-        y_end: usize,
-        channel: usize,
-        buffer: &mut Vec<f32>,
-        mad_buffer: &mut Vec<f32>,
-    ) -> f32 {
-        buffer.clear();
-
-        let channels_count = frame.channels();
-        let width = frame.width();
-        let data = frame.data();
-
-        for y in y_start..y_end {
-            let row_offset = y * width * channels_count;
-            buffer
-                .extend((x_start..x_end).map(|x| data[row_offset + x * channels_count + channel]));
-        }
-
-        if buffer.is_empty() {
-            return 0.0;
-        }
-
-        // First pass: compute initial median and MAD
-        let initial_median = Self::median(buffer);
-        let mad = Self::median_absolute_deviation(buffer, initial_median, mad_buffer);
-
-        // Second pass: reject pixels above threshold (likely stars)
-        let threshold = initial_median + self.config.star_rejection_sigma * mad * 1.4826; // 1.4826 scales MAD to std dev
-
-        buffer.retain(|&v| v <= threshold);
-
-        if buffer.is_empty() {
-            initial_median
-        } else {
-            Self::median(buffer)
-        }
-    }
-
     /// Compute median of a slice using O(N) selection instead of O(N log N) sort
     pub(crate) fn median(values: &mut [f32]) -> f32 {
         if values.is_empty() {
@@ -340,16 +295,17 @@ fn extract_node_value(
     let x_end = (node.x + half + 1).min(width);
     let y_end = (node.y + half + 1).min(height);
 
-    let channels = frame.channels();
     let data = frame.data();
 
     let capacity = (x_end - x_start) * (y_end - y_start);
     let mut pixels = Vec::with_capacity(capacity);
 
+    let area = width * height;
+    let plane_offset = channel * area;
     for y in y_start..y_end {
-        let row_offset = y * width * channels;
+        let row_offset = plane_offset + y * width;
         for x in x_start..x_end {
-            pixels.push(data[row_offset + x * channels + channel]);
+            pixels.push(data[row_offset + x]);
         }
     }
 
