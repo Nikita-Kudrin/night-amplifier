@@ -1,6 +1,7 @@
 <script setup>
 import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
 import {getCatalogStatus, installCatalog} from '../composables/api.js'
+import {BaseSpinner} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
 
@@ -134,7 +135,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
 
     <!-- Loading -->
     <div v-if="loading && !status" class="section-content loading">
-      <div class="spinner-small"></div>
+      <BaseSpinner size="sm" />
       <span>Checking catalog status...</span>
     </div>
 
@@ -153,7 +154,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
     <!-- Installing -->
     <div v-else-if="installing" class="section-installing">
       <div class="install-progress-compact">
-        <div class="spinner-small"></div>
+        <BaseSpinner size="sm" />
         <span class="progress-label">{{ progressText }}</span>
       </div>
       <div v-if="progress.percent !== null" class="progress-bar">
@@ -301,21 +302,6 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
   margin-bottom: 0.5rem;
 }
 
-.spinner-small {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .progress-label {
   font-size: 0.8rem;
   color: var(--text-secondary);
@@ -411,17 +397,5 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
   font-size: 0.85rem;
   color: var(--text-primary);
   cursor: pointer;
-}
-
-.checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: var(--primary);
-}
-
-.checkbox-label input[type="checkbox"]:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>

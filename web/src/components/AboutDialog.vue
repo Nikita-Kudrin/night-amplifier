@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getLicenseStatus, updateLicense, getSoftwareLicenses } from '../composables/api.js'
-
+import { BaseModal, BaseSpinner } from './ui'
 defineEmits(['close'])
 
 const activeTab = ref('license') // 'license' | 'software'
@@ -88,22 +88,26 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="overlay-container" @click.self="$emit('close')">
-    <div class="overlay-panel about-panel">
-      <!-- Header -->
-      <div class="overlay-header">
-        <h2 class="overlay-title">
-          About NightAmplifier
-          <span v-if="version" class="version-badge">v{{ version }}</span>
-        </h2>
-        <button class="btn btn-icon close-btn" title="Close" @click="$emit('close')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
+  <BaseModal 
+    title="About NightAmplifier" 
+    max-width="600px" 
+    no-padding
+    @close="$emit('close')"
+  >
+    <template #header>
+      <h2 class="base-modal-title">
+        About NightAmplifier
+        <span v-if="version" class="version-badge">v{{ version }}</span>
+      </h2>
+      <button class="btn-close" title="Close" @click="$emit('close')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </template>
 
+    <template #default>
       <!-- Tabs -->
       <div class="tabs">
         <button 
@@ -125,7 +129,7 @@ onMounted(() => {
       <!-- Content: License -->
       <div v-if="activeTab === 'license'" class="tab-content">
         <div v-if="isLoadingLicense" class="loading-state">
-          <div class="spinner"></div>
+          <BaseSpinner size="md" />
           <p>Checking license status...</p>
         </div>
         
@@ -198,7 +202,7 @@ onMounted(() => {
               :disabled="!licenseToken.trim() || isUpdatingLicense"
               @click="handleUpdateLicense"
             >
-              <span v-if="isUpdatingLicense" class="btn-spinner"></span>
+              <BaseSpinner v-if="isUpdatingLicense" size="sm" light />
               <span v-else>Update License</span>
             </button>
           </div>
@@ -208,7 +212,7 @@ onMounted(() => {
       <!-- Content: Software Licenses -->
       <div v-if="activeTab === 'software'" class="tab-content software-tab">
         <div v-if="isLoadingSoftware" class="loading-state">
-          <div class="spinner"></div>
+          <BaseSpinner size="md" />
           <p>Loading license information...</p>
         </div>
         
@@ -224,56 +228,11 @@ onMounted(() => {
           </div>
         </div>
       </div>
-
-    </div>
-  </div>
+    </template>
+  </BaseModal>
 </template>
 
 <style scoped>
-/* Base overlay styles matching AstapInstallOverlay */
-.overlay-container {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
-}
-
-.overlay-panel {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  width: 100%;
-  max-width: 600px;
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
-}
-
-.overlay-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 12px 12px 0 0;
-}
-
-.overlay-title {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-}
-
 .version-badge {
   font-size: 0.85rem;
   font-weight: normal;
@@ -282,15 +241,6 @@ onMounted(() => {
   padding: 0.25rem 0.5rem;
   border-radius: 6px;
   margin-left: 0.75rem;
-}
-
-.close-btn {
-  color: var(--text-secondary);
-}
-
-.close-btn:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
 }
 
 /* Tabs */
@@ -333,30 +283,6 @@ onMounted(() => {
 
 .software-tab {
   padding: 0; /* Let inner container handle padding so pre block scrolls well */
-}
-
-/* Loading State */
-.loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 3rem;
-  color: var(--text-secondary);
-  gap: 1rem;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 /* License Info Styles */
@@ -469,16 +395,6 @@ onMounted(() => {
 .update-btn {
   align-self: flex-end;
   padding: 0.5rem 1.5rem;
-}
-
-.btn-spinner {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
 }
 
 /* Alerts */

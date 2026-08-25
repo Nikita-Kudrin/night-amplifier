@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getSoftwareLicenses, updateSettings } from '../composables/api.js'
+import { BaseModal, BaseSpinner } from './ui'
 
 const emit = defineEmits(['accepted'])
 
@@ -44,26 +45,29 @@ onMounted(() => {
 </script>
 
 <template>
-  <div id="eula-overlay" class="eula-overlay">
-    <div class="eula-panel">
-      <!-- Header -->
-      <div class="eula-header">
-        <div class="eula-logo">
-          <svg class="eula-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 2a14.5 14.5 0 000 20 14.5 14.5 0 000-20" />
-            <path d="M2 12h20" />
-          </svg>
-          <div>
-            <h1 class="eula-title">NightAmplifier</h1>
-            <p class="eula-subtitle">End User License Agreement</p>
-          </div>
+  <BaseModal 
+    max-width="680px" 
+    no-padding
+    persistent
+  >
+    <template #header>
+      <div class="eula-logo">
+        <svg class="eula-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 2a14.5 14.5 0 000 20 14.5 14.5 0 000-20" />
+          <path d="M2 12h20" />
+        </svg>
+        <div>
+          <h1 class="eula-title">NightAmplifier</h1>
+          <p class="eula-subtitle">End User License Agreement</p>
         </div>
       </div>
+    </template>
 
+    <template #default>
       <!-- Loading State -->
-      <div v-if="isLoading" class="eula-loading">
-        <div class="spinner"></div>
+      <div v-if="isLoading" class="loading-state eula-loading">
+        <BaseSpinner size="md" />
         <p>Loading license information...</p>
       </div>
 
@@ -111,62 +115,16 @@ onMounted(() => {
             :disabled="!agreed || isAccepting"
             @click="handleAccept"
           >
-            <span v-if="isAccepting" class="btn-spinner"></span>
+            <BaseSpinner v-if="isAccepting" size="sm" light />
             <span v-else>Accept & Continue</span>
           </button>
         </div>
       </div>
-    </div>
-  </div>
+    </template>
+  </BaseModal>
 </template>
 
 <style scoped>
-.eula-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.85);
-  backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  padding: 1rem;
-}
-
-.eula-panel {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  width: 100%;
-  max-width: 680px;
-  max-height: 90vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow:
-    0 0 0 1px rgba(204, 68, 68, 0.1),
-    0 20px 50px -10px rgba(0, 0, 0, 0.7);
-  animation: eula-slide-in 0.3s ease-out;
-}
-
-@keyframes eula-slide-in {
-  from {
-    opacity: 0;
-    transform: translateY(16px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* Header */
-.eula-header {
-  padding: 1.5rem 1.5rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 12px 12px 0 0;
-}
-
 .eula-logo {
   display: flex;
   align-items: center;
@@ -196,26 +154,7 @@ onMounted(() => {
 
 /* Loading */
 .eula-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   padding: 4rem 2rem;
-  color: var(--text-secondary);
-  gap: 1rem;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
 }
 
 /* Body */
@@ -343,27 +282,16 @@ onMounted(() => {
   border-radius: 8px;
 }
 
-.btn-spinner {
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+.eula-accept-btn {
+  align-self: flex-end;
+  padding: 0.625rem 2rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+  border-radius: 8px;
 }
 
 /* Mobile */
 @media (max-width: 768px) {
-  .eula-panel {
-    max-height: 95vh;
-    border-radius: 8px;
-  }
-
-  .eula-header {
-    border-radius: 8px 8px 0 0;
-  }
-
   .eula-text {
     max-height: 180px;
   }

@@ -1,4 +1,5 @@
 <script setup>
+import BaseSpinner from './BaseSpinner.vue'
 defineProps({
   stages: {
     type: Array,
@@ -18,7 +19,7 @@ defineProps({
         <span class="stage-icon">
           <template v-if="stage.completed">&#10003;</template>
           <template v-else-if="stage.showSpinner">
-            <div class="mini-spinner"></div>
+            <BaseSpinner size="sm" />
           </template>
           <template v-else>{{ index + 1 }}</template>
         </span>
@@ -104,20 +105,5 @@ defineProps({
 
 .stage-connector.completed {
   background: var(--success, #22c55e);
-}
-
-.mini-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 </style>
