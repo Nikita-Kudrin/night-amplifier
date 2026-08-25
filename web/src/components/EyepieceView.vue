@@ -13,7 +13,11 @@ const capabilities = appState.capabilities
 
 const routePath = window.location.pathname
 const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
-const {connected, frameData, dimensions, isJpeg} = useImageStream({ endpoint })
+const {connected, frameData, dimensions, isJpeg, sendResolution} = useImageStream({ 
+  endpoint,
+  width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
+  height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
+})
 
 const canvasLeftRef = ref(null)
 const canvasRightRef = ref(null)
@@ -285,6 +289,16 @@ function handleTouchEnd(e) {
 }
 
 let resizeObserver = null
+let windowResizeTimeout = null
+
+function handleWindowResize() {
+  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
+  windowResizeTimeout = setTimeout(() => {
+    const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
+    const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
+    sendResolution(newWidth, newHeight)
+  }, 200)
+}
 
 function updateBounds() {
   if (isBinoview.value) {
@@ -321,6 +335,7 @@ watch(hasFrame, (newVal) => {
 })
 
 onMounted(() => {
+  window.addEventListener('resize', handleWindowResize)
   initRenderer()
   updateBounds()
   resizeObserver = new ResizeObserver(updateBounds)
@@ -330,6 +345,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', handleWindowResize)
+  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()

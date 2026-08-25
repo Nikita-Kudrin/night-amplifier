@@ -8,6 +8,7 @@ vi.mock('../../composables/useWebSocket.js', () => ({
     connected: ref(true),
     frameData: ref(null),
     dimensions: ref({ width: 0, height: 0 }),
+    sendResolution: vi.fn(),
   }))
 }))
 
@@ -63,7 +64,11 @@ describe('EyepieceView.vue Endpoint Selection', () => {
       }
     })
 
-    expect(useImageStream).toHaveBeenCalledWith({ endpoint: '/ws/eyepiece' })
+    expect(useImageStream).toHaveBeenCalledWith({
+      endpoint: '/ws/eyepiece',
+      width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
+      height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
+    })
   })
 
   it('uses /ws/eyepiece_quality when path is /eyepiece_quality (raw 8bit + LZ4)', async () => {
@@ -82,7 +87,45 @@ describe('EyepieceView.vue Endpoint Selection', () => {
       }
     })
 
-    expect(useImageStream).toHaveBeenCalledWith({ endpoint: '/ws/eyepiece_quality' })
+    expect(useImageStream).toHaveBeenCalledWith({
+      endpoint: '/ws/eyepiece_quality',
+      width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
+      height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
+    })
+  })
+
+  it('sends resolution updates on window resize', async () => {
+    vi.useFakeTimers()
+    window.location = { ...originalLocation, pathname: '/eyepiece' }
+    window.innerWidth = 800
+    window.innerHeight = 600
+    window.devicePixelRatio = 2
+    
+    const EyepieceView = (await import('../EyepieceView.vue')).default
+    mount(EyepieceView, {
+      global: {
+        provide: {
+          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
+        }
+      }
+    })
+
+    const { sendResolution } = useImageStream.mock.results[0].value
+    
+    // Simulate resize
+    window.innerWidth = 1000
+    window.innerHeight = 800
+    window.dispatchEvent(new Event('resize'))
+    
+    // Fast forward debounce timer
+    vi.advanceTimersByTime(250)
+    
+    expect(sendResolution).toHaveBeenCalledWith(2000, 1600) // 1000 * 2, 800 * 2
+    vi.useRealTimers()
   })
 })
 
