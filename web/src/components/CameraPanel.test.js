@@ -420,7 +420,7 @@ describe('CameraPanel', () => {
             })
 
             expect(wrapper.find('.phase-pill').text()).toBe('Warming up')
-            expect(wrapper.find('.spinner').exists()).toBe(true)
+            expect(wrapper.find('.base-spinner').exists()).toBe(true)
             expect(wrapper.find('.btn-danger').text()).toContain('Warming up')
         })
 

@@ -2,8 +2,7 @@
 import {ref, inject, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock} from './ui'
-import {useScrollProtect} from '../composables/useScrollProtect.js'
+import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
 import {
   EXPOSURE_PRESETS,
   GAIN_LIMITS,
@@ -39,8 +38,6 @@ const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
 const wandererMode = ref(DEFAULT_SETTINGS.wanderer_mode)
-
-const {blockIfScrolling} = useScrollProtect()
 
 const stackingMode = computed(() => {
   if (wandererMode.value) return 'wanderer'
@@ -178,22 +175,26 @@ const HELP = HELP_TEXTS
 </script>
 
 <template>
-  <div class="panel panel-bordered">
-    <div class="panel-header" style="justify-content: flex-start; gap: 0.5rem; margin-bottom: 0.5rem;">
-      <div class="header-control-item">
-        <label class="type-label-inline">Capture mode</label>
-        <ButtonGroup
-            :model-value="stackingMode"
-            :options="[
-              {value: 'off', label: 'Live view'},
-              {value: 'wanderer', label: 'Wanderer'},
-              {value: 'stacking', label: 'Stacking'}
-            ]"
-            @update:model-value="applyStackingMode"
-        />
-        <BaseInfoIcon :message="HELP.stacking"/>
+  <BasePanel class="capture-controls">
+    <template #header>
+      <div class="capture-header-row">
+        <div class="header-control-item">
+          <label class="type-label-inline">Capture mode</label>
+          <ButtonGroup
+              :model-value="stackingMode"
+              :options="[
+                {value: 'off', label: 'Live view'},
+                {value: 'wanderer', label: 'Wanderer'},
+                {value: 'stacking', label: 'Stacking'}
+              ]"
+              @update:model-value="applyStackingMode"
+          />
+          <BaseInfoIcon :message="HELP.stacking"/>
+        </div>
       </div>
-    </div>
+    </template>
+
+    <template #default>
 
     <BaseAlert v-if="error" type="error" @dismiss="clearError">
       {{ error }}
@@ -296,38 +297,17 @@ const HELP = HELP_TEXTS
 
     <div class="control-group" :class="{ 'control-disabled': showCometLock }">
       <div class="control-row">
-        <label class="type-label-inline">
-          Gain
-          <BaseInfoIcon :message="HELP.gain"/>
-        </label>
-        <div class="slider-group">
-          <input
-              :value="gain"
-              type="range"
+        <div class="slider-control-wrapper">
+          <BaseSlider
+              :model-value="gain"
+              label="Gain"
               :min="GAIN_LIMITS.min"
               :max="GAIN_LIMITS.max"
-              step="1"
-              class="slider"
+              :step="1"
               :disabled="showCometLock"
-              @input="(e) => {
-                if (!blockIfScrolling(e, gain)) {
-                  gain = Number(e.target.value)
-                }
-              }"
-              @change="(e) => {
-                if (!blockIfScrolling(e, gain)) {
-                  gain = Number(e.target.value)
-                  applyGain()
-                }
-              }"
-          />
-          <input
-              v-model.number="gain"
-              type="number"
-              :min="GAIN_LIMITS.min"
-              :max="GAIN_LIMITS.max"
-              class="input input-sm"
-              :disabled="showCometLock"
+              :help="HELP.gain"
+              show-input
+              @update:model-value="gain = $event"
               @change="applyGain"
           />
         </div>
@@ -361,7 +341,8 @@ const HELP = HELP_TEXTS
         </div>
       </div>
     </div>
-  </div>
+    </template>
+  </BasePanel>
 </template>
 
 <style scoped>
@@ -433,8 +414,7 @@ const HELP = HELP_TEXTS
 }
 
 
-.control-row .input-group,
-.control-row .slider-group {
+.control-row .input-group {
   flex: 1;
 }
 
@@ -473,6 +453,14 @@ const HELP = HELP_TEXTS
   flex: 1;
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
+}
+
+.capture-header-row {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  width: 100%;
 }
 
 .header-control-item {

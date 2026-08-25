@@ -2,6 +2,7 @@
 import {ref, computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
+import {BaseSpinner} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
 
@@ -54,7 +55,7 @@ const installedDbIds = computed(() => {
 
     <!-- Loading -->
     <div v-if="loading && !status" class="section-content loading">
-      <div class="spinner-small"></div>
+      <BaseSpinner size="sm" />
       <span>Checking ASTAP status...</span>
     </div>
 
@@ -101,7 +102,7 @@ const installedDbIds = computed(() => {
     <!-- Installing -->
     <div v-else-if="installing" class="section-installing">
       <div class="install-progress-compact">
-        <div class="spinner-small"></div>
+        <BaseSpinner size="sm" />
         <span class="progress-label">{{ progressText }}</span>
       </div>
       <div v-if="installProgress.overallPercent !== null" class="progress-bar">
@@ -234,21 +235,6 @@ const installedDbIds = computed(() => {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
-}
-
-.spinner-small {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .progress-label {

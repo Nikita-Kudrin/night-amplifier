@@ -311,9 +311,21 @@ input[type="number"]::-webkit-inner-spin-button {
 .slider,
 .toggle,
 .collapse-toggle,
-input[type="number"],
-input[type="checkbox"] {
+input[type="number"] {
     touch-action: pan-y;
+}
+
+input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--primary);
+    touch-action: pan-y;
+}
+
+input[type="checkbox"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Safe area insets for notched devices */
@@ -543,6 +555,23 @@ input[type="checkbox"] {
 
 .animate-pulse-fast {
     animation: pulse 0.5s infinite;
+}
+
+/* Generic state layouts */
+.loading-state,
+.error-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    text-align: center;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.error-state {
+    color: var(--error);
 }
 
 /* Empty state - placeholder for empty lists */

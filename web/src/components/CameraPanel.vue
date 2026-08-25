@@ -8,7 +8,7 @@ import {
   removeSimulatedCamera,
 } from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseInfoIcon} from './ui'
+import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
 import {CAPTURE_STATES} from '../constants'
 
 const cameras = inject('cameras')
@@ -179,8 +179,8 @@ const HELP = {
 </script>
 
 <template>
-  <div class="panel">
-    <div class="panel-header">
+  <BasePanel class="camera-panel" :bordered="false">
+    <template #header>
       <button
           class="collapse-toggle"
           title="Toggle camera list"
@@ -215,7 +215,7 @@ const HELP = {
           <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
         </svg>
       </button>
-    </div>
+    </template>
 
     <BaseAlert v-if="error" type="error" @dismiss="clearError">
       {{ error }}
@@ -303,7 +303,7 @@ const HELP = {
                   :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
                   @click.stop="handleDisconnect(cam.id)"
               >
-                <span v-if="isWarmingUp(cam)" class="spinner" aria-hidden="true"></span>
+                <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
                 <span>{{
                     connecting === cam.id
                         ? '...'
@@ -382,12 +382,11 @@ const HELP = {
       </div>
     </div>
 
-    <!-- Collapsed summary -->
     <div v-if="camerasCollapsed && currentCamera" class="collapsed-summary">
       <span class="camera-name">{{ currentCamera.name }}</span>
       <span class="camera-details">{{ formatResolution(currentCamera) }}</span>
     </div>
-  </div>
+  </BasePanel>
 </template>
 
 <style scoped>
@@ -503,28 +502,14 @@ const HELP = {
   font-weight: 500;
 }
 
-.spinner {
-  display: inline-block;
-  width: 0.75rem;
-  height: 0.75rem;
-  margin-right: 0.35rem;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  vertical-align: middle;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .camera-actions {
   display: flex;
   gap: 0.25rem;
   align-items: center;
+}
+
+.warmup-spinner {
+  margin-right: 0.35rem;
 }
 
 .btn-icon {

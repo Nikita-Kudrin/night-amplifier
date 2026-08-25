@@ -2,6 +2,7 @@
 import {ref, computed} from 'vue'
 import AstapInstaller from './AstapInstaller.vue'
 import CatalogInstaller from './CatalogInstaller.vue'
+import { BaseModal } from './ui'
 
 const emit = defineEmits(['close', 'installed'])
 
@@ -35,20 +36,14 @@ function checkAllInstalled() {
 </script>
 
 <template>
-  <div class="overlay-backdrop" @click.self="!anyInstalling && emit('close')">
-    <div class="overlay-content">
-      <div class="overlay-header">
-        <h2>Push-To Navigation Setup</h2>
-        <button
-            v-if="!anyInstalling"
-            class="btn-close"
-            title="Close"
-            @click="emit('close')"
-        >
-          &times;
-        </button>
-      </div>
-
+  <BaseModal
+    title="Push-To Navigation Setup"
+    max-width="480px"
+    :persistent="anyInstalling"
+    :show-close-button="!anyInstalling"
+    @close="emit('close')"
+  >
+    <template #default>
       <div class="overlay-body">
         <p class="intro-text">
           Push-To navigation requires ASTAP plate solver and the target catalogs.
@@ -73,108 +68,13 @@ function checkAllInstalled() {
           </button>
         </div>
       </div>
-    </div>
-  </div>
+    </template>
+  </BaseModal>
 </template>
 
 <style scoped>
-.overlay-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: 1rem;
-}
-
-.overlay-content {
-  background: var(--surface);
-  border-radius: 12px;
-  max-width: 480px;
-  width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-}
-
-.overlay-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.overlay-header h2 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.btn-close {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 1.5rem;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-}
-
-.btn-close:hover {
-  background: var(--surface-elevated);
-  color: var(--text-primary);
-}
-
 .overlay-body {
-  padding: 1.25rem;
-}
-
-.loading-state,
-.error-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 200px;
-  text-align: center;
-  gap: 1rem;
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.spinner-small {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--border);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  padding: 1.25rem 0 0 0;
 }
 
 .error-icon {
