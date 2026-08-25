@@ -67,12 +67,16 @@ const renderBackend = computed(() => {
 
 // Map backend names to user-friendly labels
 const backendLabel = computed(() => {
+  const res = dimensions.value.width > 0 
+    ? ` (${dimensions.value.width}x${dimensions.value.height})`
+    : ''
+
   const labels = {
-    jpeg: 'Dynamic JPEG (SIMD)',
-    'webgl2-16bit': 'WebGL2 16-bit',
-    'webgl2-8bit': 'WebGL2 8-bit',
-    webgl1: 'WebGL1',
-    canvas2d: 'Canvas 2D',
+    jpeg: `Dynamic JPEG${res}`,
+    'webgl2-16bit': `WebGL2 16-bit${res}`,
+    'webgl2-8bit': `WebGL2 8-bit${res}`,
+    webgl1: `WebGL1${res}`,
+    canvas2d: `Canvas 2D${res}`,
     none: 'No renderer',
     unknown: '...',
   }
