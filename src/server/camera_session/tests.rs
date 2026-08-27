@@ -76,7 +76,7 @@ impl Camera for MockCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        if self.fail_next_status.swap(false, Ordering::SeqCst) {
+        if self.fail_next_status.load(Ordering::SeqCst) {
             return Err(CameraError::Disconnected);
         }
 
@@ -260,7 +260,7 @@ async fn no_precool_when_cooler_disabled() {
     assert_eq!(state.camera_phase(&name).await, CameraPhase::Idle);
 
     // Clean up.
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 #[tokio::test]
@@ -358,7 +358,7 @@ async fn take_and_return_handle_during_precool() {
     assert!(state.active_camera.lock().unwrap().is_some());
 
     // Clean up.
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 #[tokio::test]
@@ -382,7 +382,7 @@ async fn capture_during_warmup_cancels_warmup() {
 
     // Return and clean up.
     lifecycle::return_from_capture(&state, &name, Some(cam)).await;
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 #[tokio::test]
@@ -457,7 +457,7 @@ async fn live_target_temp_change_propagates_to_hardware() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 #[tokio::test]
@@ -507,7 +507,7 @@ async fn live_cooler_disable_propagates_to_hardware() {
         "cooler should be off on hardware"
     );
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 #[tokio::test]
@@ -631,7 +631,7 @@ async fn monitor_handles_usb_stall_and_recovers_or_disconnects() {
         "Monitor should broadcast CameraError or CameraDisconnected on stall"
     );
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 // ----------------------------------------------------------------------------
@@ -859,7 +859,7 @@ async fn cooldown_ramp_drives_setpoint_to_target() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 /// Warmup must keep the cooler ON while ramping the setpoint upward — the
@@ -978,7 +978,7 @@ async fn fast_mode_skips_cooldown_ramp() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
 
 /// Fast mode at warmup: cooler should be disabled immediately on StartWarmup
@@ -1089,5 +1089,5 @@ async fn target_change_mid_precool_restarts_ramp() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    lifecycle::finalize_disconnect(&state, &name).await;
+    lifecycle::finalize_disconnect(&state, &name, false).await;
 }
