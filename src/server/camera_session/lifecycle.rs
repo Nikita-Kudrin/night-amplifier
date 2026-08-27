@@ -355,17 +355,29 @@ pub async fn take_for_capture(
     // its polling loop. This avoids contention with capture's own calls.
     send_monitor_cmd(state, MonitorCmd::HandOffToCapture);
 
-    let camera = state
-        .active_camera
-        .lock()
-        .expect("active_camera mutex poisoned")
-        .take()
-        .ok_or_else(|| {
-            ApiError::Internal(format!(
-                "Camera '{}' has no active handle to take for capture",
-                camera_name
-            ))
-        })?;
+    // The monitor thread may have temporarily taken the camera out of the mutex
+    // to perform a bounded FFI call. We retry for up to 3 seconds (the monitor's
+    // FFI timeout) to wait for it to be returned.
+    let mut camera = None;
+    for _ in 0..60 {
+        if let Some(c) = state
+            .active_camera
+            .lock()
+            .expect("active_camera mutex poisoned")
+            .take()
+        {
+            camera = Some(c);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let camera = camera.ok_or_else(|| {
+        ApiError::Internal(format!(
+            "Camera '{}' has no active handle to take for capture (monitor thread did not return it)",
+            camera_name
+        ))
+    })?;
 
     state
         .set_camera_phase(camera_name, CameraPhase::Capturing)

@@ -24,7 +24,7 @@
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{
     lifecycle, PHASE_POLL_INTERVAL, PRECOOL_TOLERANCE_C, RAMP_RATE_C_PER_MIN,
@@ -284,15 +284,9 @@ fn start_warmup(ctx: &mut MonitorCtx, fast: bool) {
         // naturally. The WarmingUp tick branch still watches for the
         // warm-enough predicate before closing the handle.
         ctx.warmup_ramp = None;
-        let mut guard = ctx
-            .state
-            .active_camera
-            .lock()
-            .expect("active_camera mutex poisoned");
-        if let Some(cam) = guard.as_mut() {
-            if let Err(e) = cam.set_cooler(false) {
-                warn!(error = %e, "Failed to disable cooler at fast-warmup start");
-            }
+        let result = with_camera_bounded(ctx, Duration::from_secs(3), |cam| cam.set_cooler(false));
+        if let Err(e) = result {
+            warn!(error = %e, "Failed to disable cooler at fast-warmup start");
         }
         info!(camera_name = %ctx.camera_name, "Warmup started (fast — cooler disabled)");
         return;
@@ -342,14 +336,18 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 warn!(camera_name = %ctx.camera_name, "Camera persistently unresponsive during monitor poll (SDK dead)");
                 let state = Arc::clone(&ctx.state);
                 let name = ctx.camera_name.clone();
+                let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
+                let unexpected = phase != CameraPhase::WarmingUp;
+
                 ctx.rt.block_on(async move {
                     state.send_error("Camera disconnected (SDK dead)".to_string());
                     let _ = state
                         .events
-                        .send(crate::server::events::ServerEvent::camera_disconnected(
-                            name.clone(),
-                        ));
-                    lifecycle::finalize_disconnect(&state, &name, true).await;
+                        .send(crate::server::events::ServerEvent::CameraPersistentlyUnresponsive {
+                            name: name.clone(),
+                            consecutive_timeouts: 3,
+                        });
+                    lifecycle::finalize_disconnect(&state, &name, unexpected).await;
                 });
                 return false; // Stop monitor thread
             }
@@ -475,16 +473,9 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 // Disable the cooler here (moved from start_warmup). By this
                 // point the setpoint is at or past ambient so duty is already
                 // near 0 % — this just latches it off before we close.
-                if let Some(cam) = ctx
-                    .state
-                    .active_camera
-                    .lock()
-                    .expect("active_camera mutex poisoned")
-                    .as_mut()
-                {
-                    if let Err(e) = cam.set_cooler(false) {
-                        warn!(error = %e, "Failed to disable cooler at warmup finalize");
-                    }
+                let result = with_camera_bounded(ctx, Duration::from_secs(3), |cam| cam.set_cooler(false));
+                if let Err(e) = result {
+                    warn!(error = %e, "Failed to disable cooler at warmup finalize");
                 }
                 ctx.warmup_ramp = None;
 
@@ -510,15 +501,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
 
 fn read_status(ctx: &MonitorCtx) -> Result<CameraStatus, crate::camera::CameraError> {
     let start = Instant::now();
-    let mut guard = ctx
-        .state
-        .active_camera
-        .lock()
-        .expect("active_camera mutex poisoned");
-    let camera = guard
-        .as_mut()
-        .ok_or(crate::camera::CameraError::Disconnected)?;
-    let result = camera.status();
+    let result = with_camera_bounded(ctx, Duration::from_secs(3), |cam| cam.status());
     let elapsed = start.elapsed();
     if elapsed > Duration::from_millis(500) {
         warn!(
@@ -552,15 +535,11 @@ fn push_setpoint(ctx: &mut MonitorCtx, ramp: &RampState) -> bool {
 /// Push an arbitrary setpoint (°C) to the camera, bypassing any ramp. Used
 /// by the fast-mode path and by `push_setpoint` above.
 fn push_raw_setpoint(ctx: &mut MonitorCtx, temp_c: f64) -> bool {
-    let mut guard = ctx
-        .state
-        .active_camera
-        .lock()
-        .expect("active_camera mutex poisoned");
-    let Some(cam) = guard.as_mut() else {
-        return false;
-    };
-    if let Err(e) = cam.set_target_temperature(temp_c) {
+    let result = with_camera_bounded(ctx, Duration::from_secs(3), move |cam| {
+        cam.set_target_temperature(temp_c)
+    });
+
+    if let Err(e) = result {
         warn!(
             camera_name = %ctx.camera_name,
             setpoint = temp_c,
@@ -576,14 +555,18 @@ fn push_raw_setpoint(ctx: &mut MonitorCtx, temp_c: f64) -> bool {
             warn!(camera_name = %ctx.camera_name, "Camera persistently unresponsive during cooler setpoint (SDK dead)");
             let state = Arc::clone(&ctx.state);
             let name = ctx.camera_name.clone();
+            let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
+            let unexpected = phase != CameraPhase::WarmingUp;
+
             ctx.rt.block_on(async move {
                 state.send_error("Camera disconnected (SDK dead)".to_string());
                 let _ = state
                     .events
-                    .send(crate::server::events::ServerEvent::camera_disconnected(
-                        name.clone(),
-                    ));
-                lifecycle::finalize_disconnect(&state, &name, true).await;
+                    .send(crate::server::events::ServerEvent::CameraPersistentlyUnresponsive {
+                        name: name.clone(),
+                        consecutive_timeouts: 3,
+                    });
+                lifecycle::finalize_disconnect(&state, &name, unexpected).await;
             });
             return false;
         }
@@ -673,4 +656,67 @@ mod ramp_tests {
         ramp.current_setpoint_c = -0.4;
         assert_eq!(ramp.commanded_i64(), 0);
     }
+}
+
+/// Execute a camera FFI operation on a separate watchdog thread with a timeout.
+/// Prevents the monitor thread from deadlocking if the camera SDK hangs.
+fn with_camera_bounded<T, F>(
+    ctx: &MonitorCtx,
+    timeout: Duration,
+    f: F,
+) -> Result<T, crate::camera::CameraError>
+where
+    F: FnOnce(&mut Box<dyn crate::camera::Camera>) -> Result<T, crate::camera::CameraError> + Send + 'static,
+    T: Send + 'static,
+{
+    let camera_opt = {
+        let mut guard = ctx
+            .state
+            .active_camera
+            .lock()
+            .expect("active_camera mutex poisoned");
+        guard.take()
+    };
+    let mut camera = camera_opt.ok_or(crate::camera::CameraError::Disconnected)?;
+
+    let (tx, rx) = mpsc::channel();
+    let name_clone = ctx.camera_name.clone();
+
+    if let Err(e) = std::thread::Builder::new()
+        .name("monitor-ffi-watchdog".into())
+        .spawn(move || {
+            let result = f(&mut camera);
+            let _ = tx.send((camera, result));
+        })
+    {
+        error!(error = %e, camera_name = %name_clone, "Failed to spawn monitor FFI watchdog thread");
+        return Err(crate::camera::CameraError::Disconnected);
+    }
+
+    let (mut camera, result) = match rx.recv_timeout(timeout) {
+        Ok(res) => res,
+        Err(_) => {
+            error!(camera_name = %ctx.camera_name, "FFI call timed out. Abandoning handle.");
+            return Err(crate::camera::CameraError::Disconnected);
+        }
+    };
+
+    let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
+    if phase != CameraPhase::Disconnected {
+        let mut guard = ctx
+            .state
+            .active_camera
+            .lock()
+            .expect("active_camera mutex poisoned");
+        if guard.is_none() {
+            *guard = Some(camera);
+        } else {
+            warn!(camera_name = %ctx.camera_name, "Camera replaced during FFI poll. Dropping old handle.");
+            let _ = camera.close();
+        }
+    } else {
+        let _ = camera.close();
+    }
+
+    result
 }
