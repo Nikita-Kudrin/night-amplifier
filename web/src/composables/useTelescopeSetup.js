@@ -36,11 +36,11 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     const lastCameraName = ref(null)
 
     // ── Sync from persisted settings on load ──────────────────────────
-    let initialSyncDone = false
+    const initialSyncDone = ref(false)
 
     watch(settings, (s) => {
-        if (!s?.telescope || initialSyncDone) return
-        initialSyncDone = true
+        if (!s?.telescope || initialSyncDone.value) return
+        initialSyncDone.value = true
         const t = s.telescope
         if (t.focal_length_mm != null) focalLength.value = t.focal_length_mm
         if (t.pixel_size_x_um != null) pixelSizeX.value = t.pixel_size_x_um
@@ -128,7 +128,7 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
 
     // Watch all telescope params and debounce-save
     watch([focalLength, pixelSizeX, pixelSizeY, sensorWidthPx, sensorHeightPx, barlowCoeff], () => {
-        if (initialSyncDone) {
+        if (initialSyncDone.value) {
             scheduleSettingsSave()
         }
     })
@@ -176,69 +176,78 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     // ── Auto-apply on camera change ───────────────────────────────────
 
     if (connectedCameraInfo) {
-        watch(connectedCameraInfo, (newInfo, oldInfo) => {
-            if (!newInfo) return
+        watch(
+            [connectedCameraInfo, () => initialSyncDone.value],
+            ([newInfo, syncDone], [oldInfo]) => {
+                if (!syncDone) return
+                if (!newInfo) return
 
-            const cameraName = newInfo.name
-            if (!cameraName) return
+                const cameraName = newInfo.name
+                if (!cameraName) return
 
-            // Don't re-process if the same camera is re-selected
-            if (oldInfo?.name === cameraName) return
+                // Use the oldInfo from the array destructuring.
+                // It will be the first element in the old values array.
+                const oldCameraName = oldInfo?.[0]?.name
 
-            // Save current settings as a profile for the outgoing camera
-            if (oldInfo?.name) {
-                saveCurrentAsProfile(oldInfo.name)
-            }
+                // Don't re-process if the same camera is re-selected
+                if (oldCameraName === cameraName) return
 
-            // Step 1: Check if we have a stored profile for this camera
-            const existingProfile = cameraProfiles.value[cameraName]
-            if (existingProfile) {
-                restoreProfile(existingProfile)
-                lastCameraName.value = cameraName
-                scheduleSettingsSave()
-                return
-            }
+                // Save current settings as a profile for the outgoing camera
+                if (oldCameraName) {
+                    saveCurrentAsProfile(oldCameraName)
+                }
 
-            // Step 2: New camera -- inherit focal_length and barlow from last camera
-            const lastProfile = lastCameraName.value
-                ? cameraProfiles.value[lastCameraName.value]
-                : null
+                // Step 1: Check if we have a stored profile for this camera
+                const existingProfile = cameraProfiles.value[cameraName]
+                if (existingProfile) {
+                    restoreProfile(existingProfile)
+                    lastCameraName.value = cameraName
+                    scheduleSettingsSave()
+                    return
+                }
 
-            if (lastProfile) {
-                if (lastProfile.focal_length_mm != null) focalLength.value = lastProfile.focal_length_mm
-                if (lastProfile.barlow_coeff != null) barlowCoeff.value = lastProfile.barlow_coeff
-            }
+                // Step 2: New camera -- inherit focal_length and barlow from last camera
+                const lastProfile = lastCameraName.value
+                    ? cameraProfiles.value[lastCameraName.value]
+                    : null
 
-            // Step 3: Fill pixel size and sensor dims from driver
-            let pixelSizeFilled = false
-            if (newInfo.pixel_size_x_um && newInfo.pixel_size_x_um > 0) {
-                pixelSizeX.value = newInfo.pixel_size_x_um
-                pixelSizeY.value = newInfo.pixel_size_y_um || newInfo.pixel_size_x_um
-                pixelSizeFilled = true
-            }
-            if (newInfo.max_width && newInfo.max_width > 0) {
-                sensorWidthPx.value = newInfo.max_width
-                sensorHeightPx.value = newInfo.max_height
-            }
+                if (lastProfile) {
+                    if (lastProfile.focal_length_mm != null) focalLength.value = lastProfile.focal_length_mm
+                    if (lastProfile.barlow_coeff != null) barlowCoeff.value = lastProfile.barlow_coeff
+                }
 
-            // Step 4: If pixel size is 0 from driver, try CAMERA_DATABASE
-            if (!pixelSizeFilled) {
-                const dbMatch = matchCameraInDatabase(cameraName)
-                if (dbMatch) {
-                    pixelSizeX.value = dbMatch.pixel_size_x
-                    pixelSizeY.value = dbMatch.pixel_size_y
-                    // Also use DB resolution if driver didn't provide it
-                    if (!newInfo.max_width || newInfo.max_width === 0) {
-                        sensorWidthPx.value = dbMatch.width
-                        sensorHeightPx.value = dbMatch.height
+                // Step 3: Fill pixel size and sensor dims from driver
+                let pixelSizeFilled = false
+                if (newInfo.pixel_size_x_um && newInfo.pixel_size_x_um > 0) {
+                    pixelSizeX.value = newInfo.pixel_size_x_um
+                    pixelSizeY.value = newInfo.pixel_size_y_um || newInfo.pixel_size_x_um
+                    pixelSizeFilled = true
+                }
+                if (newInfo.max_width && newInfo.max_width > 0) {
+                    sensorWidthPx.value = newInfo.max_width
+                    sensorHeightPx.value = newInfo.max_height
+                }
+
+                // Step 4: If pixel size is 0 from driver, try CAMERA_DATABASE
+                if (!pixelSizeFilled) {
+                    const dbMatch = matchCameraInDatabase(cameraName)
+                    if (dbMatch) {
+                        pixelSizeX.value = dbMatch.pixel_size_x
+                        pixelSizeY.value = dbMatch.pixel_size_y
+                        // Also use DB resolution if driver didn't provide it
+                        if (!newInfo.max_width || newInfo.max_width === 0) {
+                            sensorWidthPx.value = dbMatch.width
+                            sensorHeightPx.value = dbMatch.height
+                        }
                     }
                 }
-            }
 
-            manualPixelSize.value = false
-            lastCameraName.value = cameraName
-            scheduleSettingsSave()
-        }, {immediate: false})
+                manualPixelSize.value = false
+                lastCameraName.value = cameraName
+                scheduleSettingsSave()
+            },
+            {immediate: true}
+        )
     }
 
     // ── Manual auto-fill from connected camera (button) ───────────────
