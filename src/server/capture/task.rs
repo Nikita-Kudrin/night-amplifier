@@ -87,7 +87,12 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
             error!(error = %e, "Failed to capture probe frame for pipeline setup");
             state.send_error(format!("Failed to capture initial frame: {}", e));
             state.clear_active_camera_token().await;
-            lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
+            if e.is_sdk_disconnected() {
+                let _ = camera.close();
+                lifecycle::return_from_capture(&state, &camera_name, None).await;
+            } else {
+                lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
+            }
             state.set_capture_state(CaptureState::Idle).await;
             return;
         }
@@ -304,7 +309,7 @@ pub(crate) fn run_capture_task(
                 }
 
                 // Hard disconnect errors invalidate the handle — don't return it.
-                if let crate::camera::CameraError::Disconnected = e {
+                if e.is_sdk_disconnected() {
                     error!(error = %e, "Camera disconnected during capture");
                     state.send_error(format!("Camera disconnected: {}", e));
                     camera_ok = false;

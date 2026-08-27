@@ -137,6 +137,8 @@ struct MonitorCtx {
     cooldown_ramp: Option<RampState>,
     /// Active warmup ramp, if any. Installed in `start_warmup`.
     warmup_ramp: Option<RampState>,
+    /// Consecutive SDK disconnected errors.
+    consecutive_sdk_errors: u32,
 }
 
 fn run(
@@ -158,6 +160,7 @@ fn run(
         warm_samples: 0,
         cooldown_ramp: None,
         warmup_ramp: None,
+        consecutive_sdk_errors: 0,
     };
 
     loop {
@@ -329,25 +332,31 @@ fn cancel_warmup(ctx: &mut MonitorCtx) {
 /// (handle closed during warmup).
 fn tick(ctx: &mut MonitorCtx) -> bool {
     let status = match read_status(ctx) {
-        Ok(s) => s,
-        Err(crate::camera::CameraError::Disconnected) => {
-            warn!(camera_name = %ctx.camera_name, "Camera disconnected during monitor poll (USB stall)");
-            let state = Arc::clone(&ctx.state);
-            let name = ctx.camera_name.clone();
-            ctx.rt.block_on(async move {
-                state.send_error("Camera disconnected (USB stall)".to_string());
-
-                let _ = state
-                    .events
-                    .send(crate::server::events::ServerEvent::camera_disconnected(
-                        name.clone(),
-                    ));
-
-                lifecycle::finalize_disconnect(&state, &name).await;
-            });
-            return false; // Stop monitor thread
+        Ok(s) => {
+            ctx.consecutive_sdk_errors = 0;
+            s
+        }
+        Err(e) if e.is_sdk_disconnected() => {
+            ctx.consecutive_sdk_errors += 1;
+            if ctx.consecutive_sdk_errors >= 3 {
+                warn!(camera_name = %ctx.camera_name, "Camera persistently unresponsive during monitor poll (SDK dead)");
+                let state = Arc::clone(&ctx.state);
+                let name = ctx.camera_name.clone();
+                ctx.rt.block_on(async move {
+                    state.send_error("Camera disconnected (SDK dead)".to_string());
+                    let _ = state
+                        .events
+                        .send(crate::server::events::ServerEvent::camera_disconnected(
+                            name.clone(),
+                        ));
+                    lifecycle::finalize_disconnect(&state, &name, true).await;
+                });
+                return false; // Stop monitor thread
+            }
+            return true; // Keep trying until threshold
         }
         Err(e) => {
+            ctx.consecutive_sdk_errors = 0;
             debug!(camera_name = %ctx.camera_name, error = %e, "Transient error reading camera status");
             return true; // transient error; keep running
         }
@@ -371,7 +380,9 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 let commanded = ramp.commanded_i64();
                 if ramp.last_commanded_i64 != Some(commanded) {
                     let snapshot = ramp.clone();
-                    push_setpoint(ctx, &snapshot);
+                    if !push_setpoint(ctx, &snapshot) {
+                        return false;
+                    }
                     if let Some(ramp) = ctx.cooldown_ramp.as_mut() {
                         ramp.last_commanded_i64 = Some(commanded);
                     }
@@ -424,7 +435,9 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 let commanded = ramp.commanded_i64();
                 if ramp.last_commanded_i64 != Some(commanded) {
                     let snapshot = ramp.clone();
-                    push_setpoint(ctx, &snapshot);
+                    if !push_setpoint(ctx, &snapshot) {
+                        return false;
+                    }
                     if let Some(ramp) = ctx.warmup_ramp.as_mut() {
                         ramp.last_commanded_i64 = Some(commanded);
                     }
@@ -480,7 +493,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 let state = Arc::clone(&ctx.state);
                 let name = ctx.camera_name.clone();
                 ctx.rt.block_on(async move {
-                    lifecycle::finalize_disconnect(&state, &name).await;
+                    lifecycle::finalize_disconnect(&state, &name, false).await;
                 });
                 return false;
             }
@@ -532,20 +545,20 @@ fn current_sensor_temp(ctx: &MonitorCtx) -> Option<f64> {
 /// Push the ramp's current integer setpoint to the camera. Best-effort: a
 /// failed SDK call is logged but does not abort the ramp — the next tick will
 /// retry.
-fn push_setpoint(ctx: &MonitorCtx, ramp: &RampState) {
-    push_raw_setpoint(ctx, ramp.current_setpoint_c);
+fn push_setpoint(ctx: &mut MonitorCtx, ramp: &RampState) -> bool {
+    push_raw_setpoint(ctx, ramp.current_setpoint_c)
 }
 
 /// Push an arbitrary setpoint (°C) to the camera, bypassing any ramp. Used
 /// by the fast-mode path and by `push_setpoint` above.
-fn push_raw_setpoint(ctx: &MonitorCtx, temp_c: f64) {
+fn push_raw_setpoint(ctx: &mut MonitorCtx, temp_c: f64) -> bool {
     let mut guard = ctx
         .state
         .active_camera
         .lock()
         .expect("active_camera mutex poisoned");
     let Some(cam) = guard.as_mut() else {
-        return;
+        return false;
     };
     if let Err(e) = cam.set_target_temperature(temp_c) {
         warn!(
@@ -554,7 +567,30 @@ fn push_raw_setpoint(ctx: &MonitorCtx, temp_c: f64) {
             error = %e,
             "Failed to push setpoint"
         );
+        if e.is_sdk_disconnected() {
+            ctx.consecutive_sdk_errors += 1;
+        } else {
+            ctx.consecutive_sdk_errors = 0;
+        }
+        if ctx.consecutive_sdk_errors >= 3 {
+            warn!(camera_name = %ctx.camera_name, "Camera persistently unresponsive during cooler setpoint (SDK dead)");
+            let state = Arc::clone(&ctx.state);
+            let name = ctx.camera_name.clone();
+            ctx.rt.block_on(async move {
+                state.send_error("Camera disconnected (SDK dead)".to_string());
+                let _ = state
+                    .events
+                    .send(crate::server::events::ServerEvent::camera_disconnected(
+                        name.clone(),
+                    ));
+                lifecycle::finalize_disconnect(&state, &name, true).await;
+            });
+            return false;
+        }
+    } else {
+        ctx.consecutive_sdk_errors = 0;
     }
+    true
 }
 
 #[cfg(test)]

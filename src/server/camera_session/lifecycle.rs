@@ -304,7 +304,7 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
         Ok(camera_name)
     } else {
         // No cooler active — close immediately.
-        finalize_disconnect(state, &camera_name).await;
+        finalize_disconnect(state, &camera_name, false).await;
         Ok(camera_name)
     }
 }
@@ -438,7 +438,7 @@ pub async fn return_from_capture(
                 camera_name,
                 "Capture ended without returning handle; cleaning up"
             );
-            finalize_disconnect(state, camera_name).await;
+            finalize_disconnect(state, camera_name, true).await;
         }
     }
 }
@@ -446,7 +446,7 @@ pub async fn return_from_capture(
 /// Close the handle, drop state, broadcast `CameraDisconnected`, and
 /// transition phase to `Disconnected`. Used by both immediate-disconnect
 /// (no warmup) and warmup-completion paths.
-pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str) {
+pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, unexpected: bool) {
     // Shut down the monitor thread first.
     send_monitor_cmd(state, MonitorCmd::Shutdown);
     {
@@ -501,6 +501,24 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str) {
         .send(ServerEvent::camera_disconnected(camera_name));
 
     info!(camera_name, "Camera disconnected");
+
+    if unexpected {
+        if let Some(id) = removed_id {
+            let state = Arc::clone(state);
+            let camera_id = id.clone();
+            tokio::spawn(async move {
+                // Wait before reconnecting to let the driver/USB settle
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                warn!(camera_id = %camera_id, "Attempting auto-reconnect after unexpected disconnect...");
+                if let Err(e) = connect(&state, &camera_id).await {
+                    error!(camera_id = %camera_id, error = %e, "Auto-reconnect failed");
+                    state.send_error(format!("Auto-reconnect failed: {}", e));
+                } else {
+                    info!(camera_id = %camera_id, "Auto-reconnect successful");
+                }
+            });
+        }
+    }
 }
 
 /// Push the current `cooler_enabled` / `target_temp_c` settings to the active
