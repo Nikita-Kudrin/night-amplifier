@@ -277,6 +277,10 @@ pub async fn update_settings(
         let _ = PushToService::set_telescope_settings(&state, telescope).await;
     }
 
+    if telescope_updated || request.bin.is_some() || request.sensor_mode_override.is_some() {
+        let _ = PushToService::cancel_solve(&state).await;
+    }
+
     // Persist settings to disk
     state.save_settings().await;
 
