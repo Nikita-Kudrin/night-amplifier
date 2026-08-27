@@ -97,6 +97,26 @@ describe('useEventStream', () => {
             expect(lastError.value).toBe(null)
         })
 
+        it('updates unresponsiveWarning on camera_persistently_unresponsive event', async () => {
+            const {unresponsiveWarning} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'camera_persistently_unresponsive', camera_name: 'TestCam'})
+
+            expect(unresponsiveWarning.value).toBe('Camera TestCam is persistently unresponsive. Please check the USB cable.')
+        })
+
+        it('clearUnresponsiveWarning clears unresponsiveWarning', async () => {
+            const {unresponsiveWarning, clearUnresponsiveWarning} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'camera_persistently_unresponsive', camera_name: 'TestCam'})
+            expect(unresponsiveWarning.value).toBeTruthy()
+
+            clearUnresponsiveWarning()
+            expect(unresponsiveWarning.value).toBe(null)
+        })
+
         it('handles malformed JSON gracefully', async () => {
             const {lastEvent} = useEventStream()
             const consoleSpy = suppressConsoleErrors()

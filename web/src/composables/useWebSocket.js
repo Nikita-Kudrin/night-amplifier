@@ -171,6 +171,7 @@ export function useEventStream() {
     const droppedCount = ref(0)
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
+    const unresponsiveWarning = ref(null)
 
     // Push-To state
     const pushDirection = ref(null)
@@ -227,6 +228,9 @@ export function useEventStream() {
         frame_rejected: handleFrameEvent,
         error(data) {
             lastError.value = data.message
+        },
+        camera_persistently_unresponsive(data) {
+            unresponsiveWarning.value = `Camera ${data.camera_name} is persistently unresponsive. Please check the USB cable.`
         },
         settings_updated() { /* components should refresh */
         },
@@ -401,6 +405,10 @@ export function useEventStream() {
         catalogInstallProgress.value = null
     }
 
+    function clearUnresponsiveWarning() {
+        unresponsiveWarning.value = null
+    }
+
     return {
         connected,
         error,
@@ -412,6 +420,7 @@ export function useEventStream() {
         droppedCount,
         lastError,
         diskWriterWarning,
+        unresponsiveWarning,
         pushDirection,
         currentTarget,
         plateSolving,
@@ -420,6 +429,7 @@ export function useEventStream() {
         catalogInstallProgress,
         clearError,
         clearDiskWriterWarning,
+        clearUnresponsiveWarning,
         clearPushDirection,
         clearPlateSolving,
         clearAstapInstallProgress,

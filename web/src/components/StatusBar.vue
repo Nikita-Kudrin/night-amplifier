@@ -153,6 +153,27 @@ const rejectedCount = computed(() => eventStream.rejectedCount.value)
       <button class="btn-close btn-dismiss">&times;</button>
     </div>
 
+    <!-- Unresponsive camera warning -->
+    <div
+        v-if="eventStream.unresponsiveWarning.value"
+        class="status-item error"
+        @click="eventStream.clearUnresponsiveWarning()"
+    >
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 8v4M12 16h.01"/>
+      </svg>
+      <span>{{ eventStream.unresponsiveWarning.value }}</span>
+      <button class="btn-close btn-dismiss">&times;</button>
+    </div>
+
     <!-- Error indicator -->
     <div
         v-if="eventStream.lastError.value"

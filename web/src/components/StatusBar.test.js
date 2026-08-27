@@ -15,6 +15,7 @@ describe('StatusBar', () => {
                 rejectedCount: ref(0),
                 droppedCount: ref(0),
                 lastError: ref(null),
+                unresponsiveWarning: ref(null),
                 clearError: vi.fn(),
                 diskWriterWarning: ref(null),
                 clearDiskWriterWarning: vi.fn(),
@@ -211,6 +212,41 @@ describe('StatusBar', () => {
             await wrapper.find('.error').trigger('click')
 
             expect(clearError).toHaveBeenCalled()
+        })
+    })
+
+    describe('Unresponsive Warning Display', () => {
+        it('does not show warning when unresponsiveWarning is null', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {unresponsiveWarning: ref(null)},
+            })
+
+            // .error class is used for unresponsiveWarning, but there shouldn't be any
+            expect(wrapper.find('.error').exists()).toBe(false)
+        })
+
+        it('shows warning message when unresponsiveWarning is set', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {unresponsiveWarning: ref('Camera is persistently unresponsive')},
+            })
+
+            const error = wrapper.find('.error')
+            expect(error.exists()).toBe(true)
+            expect(error.text()).toContain('Camera is persistently unresponsive')
+        })
+
+        it('calls clearUnresponsiveWarning when clicking on warning', async () => {
+            const clearUnresponsiveWarning = vi.fn()
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    unresponsiveWarning: ref('Some warning'),
+                    clearUnresponsiveWarning,
+                },
+            })
+
+            await wrapper.find('.error').trigger('click')
+
+            expect(clearUnresponsiveWarning).toHaveBeenCalled()
         })
     })
 
