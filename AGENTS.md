@@ -282,8 +282,12 @@ Rules:
   fixture and the code under test were wrong in the same way.
 - `src/frame/layout_tests.rs` pushes distinct constant channels through every output
   path — `to_rgb8{,_fast}`, `write_rgb8_into`, `render::frame_to_rgb8`, `render_to_rgb8`,
-  the fused encoder expansion, JPEG (SA10), chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`,
-  FITS f32/u16 both directions, and `downsample`. Add a row when you add a format.
+  the fused encoder expansion *and* `box_downsample_to_rgb8_fused` (a separate
+  traversal — the downsampled tiers are what most clients receive), JPEG (SA10),
+  chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono`, FITS f32/u16 both directions,
+  `downsample`, `warp_frame_into` and `debayer_bilinear_to_rgb8`. Add a row when you
+  add a format, and note that a uniform-grey fixture proves nothing here: it is
+  layout-invariant by construction.
   `tests/integration/common.rs` provides `mean_chroma_spread_*` for asserting on real
   fixture data — a correct colour render of the bundled fixtures scores ~32, a
   planar-read-as-interleaved one ~0.5.
