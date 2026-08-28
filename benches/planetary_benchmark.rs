@@ -17,13 +17,7 @@ use std::time::Duration;
 /// The shift is what makes this bench measure anything: `apply_offset` short-circuits to
 /// a plain clone when the computed offset is under 0.001 px, so a pair of identical
 /// frames would skip the resample entirely.
-fn planet_frame(
-    width: usize,
-    height: usize,
-    channels: usize,
-    shift_x: f32,
-    shift_y: f32,
-) -> Frame {
+fn planet_frame(width: usize, height: usize, channels: usize, shift_x: f32, shift_y: f32) -> Frame {
     let mut frame = Frame::zeros(width, height, channels).unwrap();
     let cx = width as f32 / 2.0 + shift_x;
     let cy = height as f32 / 2.0 + shift_y;

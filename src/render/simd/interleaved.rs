@@ -4,7 +4,7 @@
 //! the streaming encoder assembles per row in `server::encoding::format`. For the planar
 //! `Frame` equivalents see [`super::planar`].
 
-use super::{scale_lut_lookup, SIMD_MIN_LEN};
+use super::scale_lut_lookup;
 use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
@@ -295,11 +295,6 @@ fn apply_luminance_preserving_scalar(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use super::*;
-
-
-
 
     #[test]
     fn test_luminance_preserving_identity() {

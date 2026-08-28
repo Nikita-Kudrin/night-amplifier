@@ -52,9 +52,7 @@ pub fn load_fits(path: &Path) -> CameraResult<Frame> {
     read_fits_data(&hdu, &mut fitsfile, image_type, shape)
 }
 
-fn extract_fits_info(
-    info: &HduInfo,
-) -> CameraResult<(crate::fits::FitsShape, ImageType)> {
+fn extract_fits_info(info: &HduInfo) -> CameraResult<(crate::fits::FitsShape, ImageType)> {
     match info {
         HduInfo::ImageInfo { shape, image_type } => {
             let parsed = crate::fits::interpret_shape(shape).ok_or_else(|| {
@@ -116,7 +114,12 @@ fn read_fits_data(
             // upper half of the u16 range. `unsigned_abs` rather than `abs` because
             // `i32::MIN.abs()` overflows, and `.max(1)` because all-zero data used to
             // divide by zero.
-            let max_val = data.iter().map(|&v| v.unsigned_abs()).max().unwrap_or(1).max(1) as f32;
+            let max_val = data
+                .iter()
+                .map(|&v| v.unsigned_abs())
+                .max()
+                .unwrap_or(1)
+                .max(1) as f32;
             let inv = 1.0 / max_val;
             planar_frame(&data, shape, move |v| {
                 (v as f32 * inv * 32767.0 + 32768.0) * (1.0 / 65535.0)
@@ -182,11 +185,13 @@ fn planar_frame<T: Copy + Send + Sync>(
         // NAXIS1 = 3: channels are the fastest-varying axis, so this is the one layout
         // that has to be scattered.
         FitsColourLayout::Interleaved => {
-            data.par_chunks_mut(area).enumerate().for_each(|(c, plane)| {
-                for (i, slot) in plane.iter_mut().enumerate() {
-                    *slot = to_norm(samples[i * channels + c]);
-                }
-            });
+            data.par_chunks_mut(area)
+                .enumerate()
+                .for_each(|(c, plane)| {
+                    for (i, slot) in plane.iter_mut().enumerate() {
+                        *slot = to_norm(samples[i * channels + c]);
+                    }
+                });
         }
         // Already plane-major, which is exactly what `Frame` wants.
         FitsColourLayout::Mono | FitsColourLayout::Planar => {
@@ -246,8 +251,10 @@ mod tests {
             4, 8, 12, // Pixel (1,1)
         ];
 
-        let frame =
-            planar_frame(&interleaved, shape(FitsColourLayout::Interleaved), |v| v as f32).unwrap();
+        let frame = planar_frame(&interleaved, shape(FitsColourLayout::Interleaved), |v| {
+            v as f32
+        })
+        .unwrap();
 
         assert_eq!(frame.get_pixel(0, 0, 0), 1.0);
         assert_eq!(frame.get_pixel(1, 0, 0), 2.0);

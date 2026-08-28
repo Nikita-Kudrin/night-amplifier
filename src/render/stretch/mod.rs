@@ -247,7 +247,7 @@ pub fn apply_fused_stretch_frame(
         .with_min_len(32)
         .for_each(|((r_row, g_row), b_row)| {
             crate::render::simd::apply_luminance_scale_lut_simd_planar(
-                r_row, g_row, b_row, bp, &scale_lut, ci
+                r_row, g_row, b_row, bp, &scale_lut, ci,
             );
         });
 

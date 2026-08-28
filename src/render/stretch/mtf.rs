@@ -98,7 +98,9 @@ pub fn mtf_stretch_frame(
         });
     } else {
         let (r, g, b) = frame.planes_mut();
-        r.par_iter_mut().zip_eq(g.par_iter_mut()).zip_eq(b.par_iter_mut())
+        r.par_iter_mut()
+            .zip_eq(g.par_iter_mut())
+            .zip_eq(b.par_iter_mut())
             .for_each(|((p_r, p_g), p_b)| {
                 let r_idx = (*p_r * 65535.0) as usize;
                 let g_idx = (*p_g * 65535.0) as usize;

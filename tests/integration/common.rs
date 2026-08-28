@@ -396,8 +396,7 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
                             }
                         })
                         .unwrap_or_else(|| "could not read file".to_string());
-                    last_error =
-                        format!("Invalid zip archive: {} ({})", e, diagnostic);
+                    last_error = format!("Invalid zip archive: {} ({})", e, diagnostic);
                     eprintln!("Attempt {}: {}", attempt, last_error);
                     continue;
                 }
@@ -493,7 +492,8 @@ pub async fn download_file(url: &str, dest: &Path, component: &str) -> PushToRes
     // drive.usercontent.google.com).
     if !status.is_success() || is_html {
         let body = response.text().await.unwrap_or_default();
-        if body.contains("Google Drive") || body.contains("virus scan") || body.contains("confirm=") {
+        if body.contains("Google Drive") || body.contains("virus scan") || body.contains("confirm=")
+        {
             info!("Hit Google Drive virus scan warning page");
             if let Some(confirm_url) = extract_google_drive_confirm_url(&body, url) {
                 let response = client.get(&confirm_url).send().await.map_err(|e| {

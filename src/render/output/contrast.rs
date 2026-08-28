@@ -1,6 +1,8 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
-use crate::render::simd::{apply_luminance_preserving_simd, apply_luminance_preserving_simd_planar};
+use crate::render::simd::{
+    apply_luminance_preserving_simd, apply_luminance_preserving_simd_planar,
+};
 
 /// Configuration for S-curve contrast adjustment
 #[derive(Debug, Clone, Copy)]

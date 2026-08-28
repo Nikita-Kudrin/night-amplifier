@@ -33,10 +33,10 @@
 //! This typically achieves ~0.1 pixel accuracy for well-exposed stars.
 
 mod adaptive;
-mod luminance;
 mod background;
 mod config;
 mod detector;
+mod luminance;
 mod star;
 
 pub use adaptive::{detect_stars_adaptive, detect_stars_adaptive_thorough};

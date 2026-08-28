@@ -136,7 +136,6 @@ pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame
     let channels = frame.channels();
     let src_data = frame.data();
 
-
     let config = &ready_frame.pipeline_config;
     let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
     let has_saturate = config.saturation_boost;

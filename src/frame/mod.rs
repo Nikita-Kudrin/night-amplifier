@@ -255,7 +255,7 @@ impl Frame {
         let inv_area = 1.0 / (factor * factor) as f32;
         let mut output = vec![0.0f32; dst_width * dst_height * channels];
         let src_data = self.data.as_slice();
-        
+
         let src_area = src_width * src_height;
 
         // One flat dispatch over output rows. The previous nesting put a

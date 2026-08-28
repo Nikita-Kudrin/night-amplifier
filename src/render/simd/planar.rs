@@ -19,7 +19,14 @@ pub fn apply_luminance_scale_lut_simd_planar(
 ) {
     let len = r_plane.len();
     if len < 4 || scale_lut.len() < 2 {
-        apply_luminance_scale_lut_scalar_planar(r_plane, g_plane, b_plane, black_point, scale_lut, color_intensity);
+        apply_luminance_scale_lut_scalar_planar(
+            r_plane,
+            g_plane,
+            b_plane,
+            black_point,
+            scale_lut,
+            color_intensity,
+        );
         return;
     }
 
@@ -44,7 +51,11 @@ pub fn apply_luminance_scale_lut_simd_planar(
     let (g_body, g_tail) = g_plane.as_chunks_mut::<4>();
     let (b_body, b_tail) = b_plane.as_chunks_mut::<4>();
 
-    for ((rc, gc), bc) in r_body.iter_mut().zip(g_body.iter_mut()).zip(b_body.iter_mut()) {
+    for ((rc, gc), bc) in r_body
+        .iter_mut()
+        .zip(g_body.iter_mut())
+        .zip(b_body.iter_mut())
+    {
         let r = f32x4::new(*rc);
         let g = f32x4::new(*gc);
         let b = f32x4::new(*bc);
@@ -85,9 +96,18 @@ pub fn apply_luminance_scale_lut_simd_planar(
         let base_add = lum * scale * one_minus_ci;
         let channel_mul = scale * ci;
 
-        *rc = (r_sub * channel_mul + base_add).max(zero).min(one).to_array();
-        *gc = (g_sub * channel_mul + base_add).max(zero).min(one).to_array();
-        *bc = (b_sub * channel_mul + base_add).max(zero).min(one).to_array();
+        *rc = (r_sub * channel_mul + base_add)
+            .max(zero)
+            .min(one)
+            .to_array();
+        *gc = (g_sub * channel_mul + base_add)
+            .max(zero)
+            .min(one)
+            .to_array();
+        *bc = (b_sub * channel_mul + base_add)
+            .max(zero)
+            .min(one)
+            .to_array();
     }
 
     apply_luminance_scale_lut_scalar_planar(
@@ -148,17 +168,23 @@ pub fn apply_luminance_preserving_simd_planar(
 ) {
     let len = r_plane.len();
     if len < 4 {
-        apply_luminance_preserving_scalar_planar(r_plane, g_plane, b_plane, color_intensity, &transform_fn);
+        apply_luminance_preserving_scalar_planar(
+            r_plane,
+            g_plane,
+            b_plane,
+            color_intensity,
+            &transform_fn,
+        );
         return;
     }
 
     use rayon::prelude::*;
 
-    r_plane.par_chunks_mut(chunk_size)
+    r_plane
+        .par_chunks_mut(chunk_size)
         .zip(g_plane.par_chunks_mut(chunk_size))
         .zip(b_plane.par_chunks_mut(chunk_size))
         .for_each(|((r_chunk, g_chunk), b_chunk)| {
-
             let wr = f32x4::splat(0.2126);
             let wg = f32x4::splat(0.7152);
             let wb = f32x4::splat(0.0722);
@@ -172,8 +198,10 @@ pub fn apply_luminance_preserving_simd_planar(
             let (g_body, g_tail) = g_chunk.as_chunks_mut::<4>();
             let (b_body, b_tail) = b_chunk.as_chunks_mut::<4>();
 
-            for ((rc, gc), bc) in
-                r_body.iter_mut().zip(g_body.iter_mut()).zip(b_body.iter_mut())
+            for ((rc, gc), bc) in r_body
+                .iter_mut()
+                .zip(g_body.iter_mut())
+                .zip(b_body.iter_mut())
             {
                 let r = f32x4::new(*rc);
                 let g = f32x4::new(*gc);

@@ -44,7 +44,13 @@ fn tricolour_frame(width: usize, height: usize) -> Frame {
 }
 
 /// Asserts every pixel of an interleaved RGB8 buffer is `(r, g, b)`.
-fn assert_interleaved_rgb8(rgb8: &[u8], width: usize, height: usize, expect: (u8, u8, u8), ctx: &str) {
+fn assert_interleaved_rgb8(
+    rgb8: &[u8],
+    width: usize,
+    height: usize,
+    expect: (u8, u8, u8),
+    ctx: &str,
+) {
     assert_eq!(rgb8.len(), width * height * 3, "{ctx}: wrong buffer length");
     for i in 0..(width * height) {
         let got = (rgb8[i * 3], rgb8[i * 3 + 1], rgb8[i * 3 + 2]);
@@ -77,7 +83,13 @@ fn assert_frame_is_tricolour(frame: &Frame, ctx: &str) {
 #[test]
 fn to_rgb8_fast_is_interleaved() {
     let frame = tricolour_frame(W, H);
-    assert_interleaved_rgb8(&frame.to_rgb8_fast(), W, H, (R_U8, G_U8, B_U8), "to_rgb8_fast");
+    assert_interleaved_rgb8(
+        &frame.to_rgb8_fast(),
+        W,
+        H,
+        (R_U8, G_U8, B_U8),
+        "to_rgb8_fast",
+    );
 }
 
 #[test]
@@ -93,7 +105,11 @@ fn to_rgb8_is_interleaved() {
 fn to_rgb8_fast_keeps_mono_single_byte() {
     let frame = Frame::filled(W, H, 1, G_VAL).unwrap();
     let rgb8 = frame.to_rgb8_fast();
-    assert_eq!(rgb8.len(), W * H, "mono to_rgb8_fast should stay 1 byte per pixel");
+    assert_eq!(
+        rgb8.len(),
+        W * H,
+        "mono to_rgb8_fast should stay 1 byte per pixel"
+    );
     assert!(rgb8.iter().all(|&v| v == G_U8));
 }
 
@@ -101,7 +117,10 @@ fn to_rgb8_fast_keeps_mono_single_byte() {
 /// with a pooled buffer use it precisely to avoid keeping a second copy of the gather.
 #[test]
 fn write_rgb8_into_matches_to_rgb8_fast() {
-    for frame in [tricolour_frame(W, H), Frame::filled(W, H, 1, G_VAL).unwrap()] {
+    for frame in [
+        tricolour_frame(W, H),
+        Frame::filled(W, H, 1, G_VAL).unwrap(),
+    ] {
         let want = frame.to_rgb8_fast();
         let mut got = vec![0u8; want.len()];
         frame.write_rgb8_into(&mut got);
@@ -135,8 +154,15 @@ fn expand_to_rgb8_fused_is_interleaved() {
         pipeline_config: config,
         stretch_result: None,
     };
-    let (rgb8, w, h) = crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
-    assert_interleaved_rgb8(&rgb8, w as usize, h as usize, (R_U8, G_U8, B_U8), "expand_to_rgb8_fused");
+    let (rgb8, w, h) =
+        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+    assert_interleaved_rgb8(
+        &rgb8,
+        w as usize,
+        h as usize,
+        (R_U8, G_U8, B_U8),
+        "expand_to_rgb8_fused",
+    );
 }
 
 /// Builds the `RenderReadyFrame` the streaming encoders take, with every optional
@@ -173,10 +199,14 @@ fn jpeg_sa10_payload_is_interleaved() {
     assert_eq!((width, height), (64, 32));
 
     let jpeg = &payload[crate::server::encoding::SA10_HEADER_SIZE..];
-    let decoded: image::RgbImage = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
-        .expect("SA10 payload is not decodable JPEG")
-        .to_rgb8();
-    assert_eq!((decoded.width() as usize, decoded.height() as usize), (width, height));
+    let decoded: image::RgbImage =
+        image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
+            .expect("SA10 payload is not decodable JPEG")
+            .to_rgb8();
+    assert_eq!(
+        (decoded.width() as usize, decoded.height() as usize),
+        (width, height)
+    );
 
     for (x, y, px) in decoded.enumerate_pixels() {
         let [r, g, b] = px.0;
@@ -219,13 +249,20 @@ fn lz4_sa09_payload_is_interleaved() {
             u32::from_le_bytes(payload[desc + 4..desc + 8].try_into().unwrap()) as usize;
         desc += desc_size;
 
-        let stripe = lz4_flex::decompress(&payload[data..data + compressed_size], decompressed_size)
-            .expect("SA09 stripe did not decompress");
+        let stripe =
+            lz4_flex::decompress(&payload[data..data + compressed_size], decompressed_size)
+                .expect("SA09 stripe did not decompress");
         data += compressed_size;
         rgb8.extend_from_slice(&stripe);
     }
 
-    assert_interleaved_rgb8(&rgb8, width, height, (R_U8, G_U8, B_U8), "encode_rgb8_lz4_chunked");
+    assert_interleaved_rgb8(
+        &rgb8,
+        width,
+        height,
+        (R_U8, G_U8, B_U8),
+        "encode_rgb8_lz4_chunked",
+    );
 }
 
 #[test]
@@ -241,7 +278,13 @@ fn png_preview_is_interleaved() {
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
     assert_eq!(info.color_type, png::ColorType::Rgb);
-    assert_interleaved_rgb8(&buf[..info.buffer_size()], W, H, (R_U8, G_U8, B_U8), "write_png");
+    assert_interleaved_rgb8(
+        &buf[..info.buffer_size()],
+        W,
+        H,
+        (R_U8, G_U8, B_U8),
+        "write_png",
+    );
 }
 
 /// SER frame data starts after a fixed 178-byte header.
@@ -330,9 +373,21 @@ fn fits_f32_round_trip_preserves_channels() {
 
     let area = W * H;
     for i in 0..area {
-        assert!((data[i] - R_VAL).abs() < 1e-4, "FITS f32 R plane at {i}: {}", data[i]);
-        assert!((data[area + i] - G_VAL).abs() < 1e-4, "FITS f32 G plane at {i}: {}", data[area + i]);
-        assert!((data[2 * area + i] - B_VAL).abs() < 1e-4, "FITS f32 B plane at {i}: {}", data[2 * area + i]);
+        assert!(
+            (data[i] - R_VAL).abs() < 1e-4,
+            "FITS f32 R plane at {i}: {}",
+            data[i]
+        );
+        assert!(
+            (data[area + i] - G_VAL).abs() < 1e-4,
+            "FITS f32 G plane at {i}: {}",
+            data[area + i]
+        );
+        assert!(
+            (data[2 * area + i] - B_VAL).abs() < 1e-4,
+            "FITS f32 B plane at {i}: {}",
+            data[2 * area + i]
+        );
     }
 }
 

@@ -411,8 +411,6 @@ impl StarDetector {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

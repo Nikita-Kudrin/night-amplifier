@@ -67,13 +67,11 @@ pub(crate) fn write_rgb_fits(
 
     let data = frame.data();
 
-    catch_ffi_panic("cfitsio::write_image", || {
-        hdu.write_image(fptr, data)
-    })
-    .map_err(StackError::from)?
-    .map_err(|e| StackError::ArithmeticError {
-        message: format!("Failed to write FITS image data: {}", e),
-    })?;
+    catch_ffi_panic("cfitsio::write_image", || hdu.write_image(fptr, data))
+        .map_err(StackError::from)?
+        .map_err(|e| StackError::ArithmeticError {
+            message: format!("Failed to write FITS image data: {}", e),
+        })?;
 
     write_fits_headers(fptr, &hdu, metadata)?;
 

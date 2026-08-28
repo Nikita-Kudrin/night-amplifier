@@ -188,10 +188,7 @@ fn debayer_row<W: RowWriter>(
     // No row above or below, so every neighbour fetch has to clamp.
     if y == 0 || y + 1 == height {
         for x in 0..width {
-            writer.write_pixel(
-                x,
-                bilinear_at(input, width, height, x, y, pattern),
-            );
+            writer.write_pixel(x, bilinear_at(input, width, height, x, y, pattern));
         }
         return;
     }
@@ -429,7 +426,11 @@ mod tests {
             for y in 1..TEST_HEIGHT - 1 {
                 for x in 1..TEST_WIDTH - 1 {
                     assert_eq!(
-                        (rgb.get_pixel(x, y, 0), rgb.get_pixel(x, y, 1), rgb.get_pixel(x, y, 2)),
+                        (
+                            rgb.get_pixel(x, y, 0),
+                            rgb.get_pixel(x, y, 1),
+                            rgb.get_pixel(x, y, 2)
+                        ),
                         (R_LEVEL, G_LEVEL, B_LEVEL),
                         "{pattern:?} at ({x}, {y}), CFA role {}",
                         pattern.color_at(x, y)
@@ -480,7 +481,11 @@ mod tests {
                 for x in 0..TEST_WIDTH {
                     let idx = (y * TEST_WIDTH + x) * 3;
                     assert_eq!(
-                        (fast.get_pixel(x, y, 0), fast.get_pixel(x, y, 1), fast.get_pixel(x, y, 2)),
+                        (
+                            fast.get_pixel(x, y, 0),
+                            fast.get_pixel(x, y, 1),
+                            fast.get_pixel(x, y, 2)
+                        ),
                         (reference[idx], reference[idx + 1], reference[idx + 2]),
                         "f32 path, {pattern:?} at ({x}, {y})"
                     );

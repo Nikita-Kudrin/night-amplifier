@@ -464,7 +464,8 @@ impl BackgroundModel {
 
         for c in 0..channels {
             let plane = frame.channel_data_mut(c);
-            plane.par_chunks_mut(width)
+            plane
+                .par_chunks_mut(width)
                 .enumerate()
                 .for_each(|(y, row)| {
                     for x in 0..width {

@@ -40,7 +40,13 @@ mod tests {
     /// operations to get there.
     #[test]
     fn awkward_lengths_still_parallelise() {
-        for len in [2712 * 1538, 1021 * 1021, 1999 * 1999, 3008 * 3008, 1289 * 1291] {
+        for len in [
+            2712 * 1538,
+            1021 * 1021,
+            1999 * 1999,
+            3008 * 3008,
+            1289 * 1291,
+        ] {
             let chunk = balanced_chunk_len(len);
             assert!(chunk <= len, "len {len}: chunk {chunk} exceeds the run");
             assert!(

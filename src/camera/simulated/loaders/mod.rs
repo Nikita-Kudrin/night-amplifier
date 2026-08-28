@@ -1,9 +1,6 @@
 //! Image file loaders for various formats
 
-#[cfg(test)]
 pub(crate) mod fits;
-#[cfg(not(test))]
-mod fits;
 mod png;
 mod tiff;
 

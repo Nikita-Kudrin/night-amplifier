@@ -99,5 +99,3 @@ fn choose_config(analysis: &ImageAnalysis) -> DetectionConfig {
 
     DetectionConfig::default().with_sigma(4.0).with_min_snr(3.0)
 }
-
-
