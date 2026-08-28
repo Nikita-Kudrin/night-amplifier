@@ -236,8 +236,33 @@ pub fn apply_fused_stretch_frame(
     }
 
     let scale_lut = cached_scale_lut(algorithm, strength, contrast);
-    let bp = black_point;
-    let ci = color_intensity;
+    apply_scale_lut_frame(frame, black_point, &scale_lut, color_intensity)
+}
+
+/// Applies an already-built scale LUT to a planar frame, in place.
+///
+/// The tail of [`apply_fused_stretch_frame`], split out because callers that already
+/// hold a `StretchResult::scale_lut` — the streaming encoder's equivalent, and the
+/// integration tests that reproduce it — must not re-derive this loop. The one that
+/// did drove `render::simd::apply_luminance_scale_lut_simd`, the *interleaved* kernel,
+/// over `frame.data_mut().par_chunks_mut(width * 3)`, so every "pixel" it saw was three
+/// horizontally-adjacent samples of the red plane.
+///
+/// Rows rather than whole planes: `with_min_len(32)` lets rayon coalesce them, and
+/// per-plane dispatch would need three passes to keep the three channels of a pixel in
+/// the same task.
+pub fn apply_scale_lut_frame(
+    frame: &mut Frame,
+    black_point: f32,
+    scale_lut: &[f32],
+    color_intensity: f32,
+) -> Result<()> {
+    if frame.channels() != 3 {
+        return Err(crate::error::StackError::InvalidConfiguration(
+            "Fused stretch requires 3 channels".into(),
+        ));
+    }
+
     let width = frame.width();
     let (r, g, b) = frame.planes_mut();
 
@@ -247,7 +272,12 @@ pub fn apply_fused_stretch_frame(
         .with_min_len(32)
         .for_each(|((r_row, g_row), b_row)| {
             crate::render::simd::apply_luminance_scale_lut_simd_planar(
-                r_row, g_row, b_row, bp, &scale_lut, ci,
+                r_row,
+                g_row,
+                b_row,
+                black_point,
+                scale_lut,
+                color_intensity,
             );
         });
 

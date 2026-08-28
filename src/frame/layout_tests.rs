@@ -10,8 +10,9 @@
 //! Kept as one table of paths on purpose: the failure these catch is systemic, so
 //! adding a new output format should mean adding a row here. Rows currently cover
 //! `to_rgb8`/`to_rgb8_fast`/`write_rgb8_into`, `render::frame_to_rgb8`,
-//! `render_to_rgb8`, the fused encoder expansion, JPEG (SA10), chunked LZ4 (SA09),
-//! PNG, SER `Rgb`/`Bgr`, FITS f32/u16 (both directions) and `Frame::downsample`.
+//! `render_to_rgb8`, the fused encoder expansion *and* its downsampling sibling,
+//! JPEG (SA10), chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono`, FITS f32/u16 (both
+//! directions), `Frame::downsample`, `warp_frame_into` and the debayer-to-RGB8 path.
 
 use super::Frame;
 use crate::frame::PixelFormat;
@@ -162,6 +163,34 @@ fn expand_to_rgb8_fused_is_interleaved() {
         h as usize,
         (R_U8, G_U8, B_U8),
         "expand_to_rgb8_fused",
+    );
+}
+
+/// The *downsampling* half of the streaming encoder — the Hd1080 and Qhd1440 tiers,
+/// i.e. what most clients actually receive.
+///
+/// `expand_to_rgb8_fused_is_interleaved` above only reaches `expand_to_rgb8_fused`,
+/// because its fixture already fits the bounding box. `box_downsample_to_rgb8_fused`
+/// is a separate traversal with its own planar indexing (`plane_size + idx`), and the
+/// only integration test that touched it asserted on a uniform grey frame, which is
+/// layout-invariant by construction. A source larger than the box is what makes the
+/// downsampling branch run at all.
+#[test]
+fn box_downsample_to_rgb8_fused_is_interleaved() {
+    let ready = passthrough_ready(tricolour_frame(64, 32));
+    let (rgb8, w, h) = crate::server::encoding::frame_to_rgb8_downsampled(&ready, 32, 16).unwrap();
+
+    assert!(
+        (w as usize) < 64,
+        "fixture did not take the downsampling branch: got {w}x{h}"
+    );
+    // Every source pixel is the same colour, so box-averaging must reproduce it exactly.
+    assert_interleaved_rgb8(
+        &rgb8,
+        w as usize,
+        h as usize,
+        (R_U8, G_U8, B_U8),
+        "box_downsample_to_rgb8_fused",
     );
 }
 
@@ -320,6 +349,44 @@ fn write_ser_and_read_samples(color_id: crate::ser::SerColorId, name: &str) -> (
     (samples, round_tripped)
 }
 
+/// SER `Mono` from a colour source is a Rec. 709 combine across the three planes, so it
+/// reads all three and is exactly as exposed to the layout as `Rgb`/`Bgr` are — but it
+/// had no row here.
+#[test]
+fn ser_mono_payload_is_per_pixel_luminance() {
+    use crate::ser::{SerColorId, SerHeader, SerWriter};
+
+    let frame = tricolour_frame(W, H);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mono.ser");
+
+    let mut writer = SerWriter::create(
+        &path,
+        SerHeader::new(W as u32, H as u32, SerColorId::Mono, 16),
+    )
+    .unwrap();
+    writer.write_frame(&frame, None).unwrap();
+    writer.finalize().unwrap();
+
+    let bytes = std::fs::read(&path).unwrap();
+    let payload = &bytes[SER_HEADER_SIZE..SER_HEADER_SIZE + W * H * 2];
+    let samples: Vec<u16> = payload
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+
+    // Derived from the fixture rather than hardcoded, so the expectation stays legible:
+    // one pixel's own three channels, not three neighbouring samples of one plane.
+    let want = as_u16(0.2126 * R_VAL + 0.7152 * G_VAL + 0.0722 * B_VAL);
+    assert_eq!(samples.len(), W * H);
+    for (i, &got) in samples.iter().enumerate() {
+        assert!(
+            got.abs_diff(want) <= 1,
+            "SER Mono sample {i} is {got}, expected ~{want}"
+        );
+    }
+}
+
 fn as_u16(v: f32) -> u16 {
     (v.clamp(0.0, 1.0) * 65535.0) as u16
 }
@@ -410,6 +477,88 @@ fn fits_u16_round_trip_preserves_channels() {
         assert_eq!(data[i], expect(R_VAL), "FITS u16 R plane at {i}");
         assert_eq!(data[area + i], expect(G_VAL), "FITS u16 G plane at {i}");
         assert_eq!(data[2 * area + i], expect(B_VAL), "FITS u16 B plane at {i}");
+    }
+}
+
+/// `warp_frame_into` writes into a caller-owned buffer and is the variant the stacker
+/// actually runs per frame; `warp_frame` is the one that had a per-channel test. They
+/// are separate functions with separate plane dispatch, so both need a row.
+///
+/// An identity transform means every output pixel interpolates from its own source
+/// pixel, so a constant-plane fixture must come back untouched — including the borders,
+/// which take the `border_value` path only when the source coordinate leaves the frame.
+#[test]
+fn warp_frame_into_preserves_channel_identity() {
+    use crate::registration::AffineTransform;
+
+    let frame = tricolour_frame(32, 24);
+    let mut output = Frame::zeros(32, 24, 3).unwrap();
+    crate::stacking::warp_frame_into(&frame, &AffineTransform::identity(), &mut output, 0.0)
+        .unwrap();
+
+    // The warp treats a source coordinate as in-bounds only while `sx < width - 2`
+    // (bilinear needs `x0 + 1` to exist), so the last two columns and rows take the
+    // border-value path by design and are excluded here rather than asserted on.
+    let (w, h) = (output.width(), output.height());
+    for y in 1..h - 2 {
+        for x in 1..w - 2 {
+            let got = (
+                output.get_pixel(x, y, 0),
+                output.get_pixel(x, y, 1),
+                output.get_pixel(x, y, 2),
+            );
+            assert!(
+                (got.0 - R_VAL).abs() < 1e-4
+                    && (got.1 - G_VAL).abs() < 1e-4
+                    && (got.2 - B_VAL).abs() < 1e-4,
+                "warp_frame_into: pixel ({x}, {y}) is {got:?}, expected \
+                 ({R_VAL}, {G_VAL}, {B_VAL})"
+            );
+        }
+    }
+}
+
+/// The debayer-straight-to-8-bit path used by the streaming encoder for undebayered
+/// frames. Its f32 sibling writes three planes; this one writes interleaved bytes, so
+/// the two cannot share a row.
+///
+/// A constant-plane CFA source: every site carries its own channel's level, so bilinear
+/// interpolation must reproduce the three constants exactly across the interior.
+#[test]
+fn debayer_to_rgb8_is_interleaved() {
+    use crate::debayer::CfaPattern;
+
+    let (w, h) = (32usize, 16usize);
+    for pattern in CfaPattern::all() {
+        let mut cfa = Frame::zeros(w, h, 1).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                let level = match pattern.color_at(x, y) {
+                    0 => R_VAL,
+                    2 => B_VAL,
+                    _ => G_VAL,
+                };
+                cfa.set_pixel(x, y, 0, level);
+            }
+        }
+
+        let rgb8 = crate::debayer::debayer_bilinear_to_rgb8_fast(&cfa, pattern).unwrap();
+        assert_eq!(rgb8.len(), w * h * 3);
+
+        // Interior only: border pixels clamp their neighbour fetches, which biases the
+        // interpolation at the edge even on a constant source.
+        for y in 1..h - 1 {
+            for x in 1..w - 1 {
+                let i = (y * w + x) * 3;
+                let got = (rgb8[i], rgb8[i + 1], rgb8[i + 2]);
+                assert_eq!(
+                    got,
+                    (R_U8, G_U8, B_U8),
+                    "{pattern:?} at ({x}, {y}) is {got:?}, expected \
+                     ({R_U8}, {G_U8}, {B_U8})"
+                );
+            }
+        }
     }
 }
 

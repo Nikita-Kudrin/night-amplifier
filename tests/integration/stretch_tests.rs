@@ -169,76 +169,53 @@ fn test_eyepiece_intensity_metrics() {
         img.path.file_name().unwrap_or_default()
     );
 
-    let mut settings = night_amplifier::server::state::CaptureSettings::default();
-    settings.auto_stretch = true;
+    // Runs the preview pipeline at `intensity`, then applies the fused LUT it produced
+    // exactly as the streaming encoder does, and reports the mean median.
+    //
+    // `apply_scale_lut_frame` rather than a hand-rolled `par_chunks_mut(width * 3)` loop:
+    // `Frame` is planar and the loop this replaced drove the *interleaved* kernel over it,
+    // so both measurements below were taken from an image whose channels had been
+    // scrambled into each other. The comparison still passed, because both sides were
+    // scrambled identically — which is precisely why it had stopped being a regression
+    // guard for the eyepiece intensity path.
+    let mean_median_at = |intensity: f32| {
+        let mut settings = night_amplifier::server::state::CaptureSettings::default();
+        settings.auto_stretch = true;
+        settings.eyepiece.intensity = intensity;
 
-    // Process with base intensity
-    settings.eyepiece.intensity = 0.0;
-    let mut frame_base = img.frame.clone();
-    if frame_base.channels() == 1 {
-        frame_base = night_amplifier::debayer_auto(&frame_base).unwrap().0;
-    }
-    let (_config_base, stretch_res_base) =
-        night_amplifier::server::capture::pipeline::process_preview_frame(
-            &mut frame_base,
-            &settings,
+        let mut frame = img.frame.clone();
+        if frame.channels() == 1 {
+            frame = night_amplifier::debayer_auto(&frame).unwrap().0;
+        }
+
+        let (_config, stretch_res) =
+            night_amplifier::server::capture::pipeline::process_preview_frame(
+                &mut frame, &settings,
+            )
+            .unwrap();
+        let res = stretch_res.unwrap();
+
+        night_amplifier::render::stretch::apply_scale_lut_frame(
+            &mut frame,
+            res.black_point,
+            &res.scale_lut,
+            1.0,
         )
         .unwrap();
-    let res_base = stretch_res_base.unwrap();
-    // Simulate stretch using the pre-computed fused LUT
-    {
-        use rayon::prelude::*;
-        let row_len = frame_base.width() * 3;
-        frame_base
-            .data_mut()
-            .par_chunks_mut(row_len)
-            .with_min_len(32)
-            .for_each(|row| {
-                night_amplifier::render::simd::apply_luminance_scale_lut_simd(
-                    row,
-                    res_base.black_point,
-                    &res_base.scale_lut,
-                    1.0,
-                );
-            });
-    }
 
-    let stats_base = night_amplifier::compute_image_stats(&frame_base).unwrap();
-    let median_base = stats_base.mean_median();
+        let spread = crate::integration::common::mean_chroma_spread_frame(&frame);
+        crate::integration::common::assert_has_chroma(
+            spread,
+            &format!("stretched preview at intensity {intensity}"),
+        );
 
-    // Process with max intensity
-    settings.eyepiece.intensity = 1.0;
-    let mut frame_max = img.frame.clone();
-    if frame_max.channels() == 1 {
-        frame_max = night_amplifier::debayer_auto(&frame_max).unwrap().0;
-    }
-    let (_config_max, stretch_res_max) =
-        night_amplifier::server::capture::pipeline::process_preview_frame(
-            &mut frame_max,
-            &settings,
-        )
-        .unwrap();
-    let res_max = stretch_res_max.unwrap();
-    // Simulate stretch using the pre-computed fused LUT
-    {
-        use rayon::prelude::*;
-        let row_len = frame_max.width() * 3;
-        frame_max
-            .data_mut()
-            .par_chunks_mut(row_len)
-            .with_min_len(32)
-            .for_each(|row| {
-                night_amplifier::render::simd::apply_luminance_scale_lut_simd(
-                    row,
-                    res_max.black_point,
-                    &res_max.scale_lut,
-                    1.0,
-                );
-            });
-    }
+        night_amplifier::compute_image_stats(&frame)
+            .unwrap()
+            .mean_median()
+    };
 
-    let stats_max = night_amplifier::compute_image_stats(&frame_max).unwrap();
-    let median_max = stats_max.mean_median();
+    let median_base = mean_median_at(0.0);
+    let median_max = mean_median_at(1.0);
 
     println!("Base config - Median: {:.6}", median_base);
     println!("Max config  - Median: {:.6}", median_max);
