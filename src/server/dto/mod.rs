@@ -232,6 +232,8 @@ pub struct SettingsResponse {
     pub planetary_multi_point_alignment: bool,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
+    pub auto_reconnect: bool,
+    pub auto_resume_capture: bool,
     pub eyepiece: EyepieceSettings,
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -297,6 +299,8 @@ impl From<&CaptureSettings> for SettingsResponse {
             planetary_auto_tracking: settings.planetary_auto_tracking,
             planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             wanderer_mode: settings.wanderer_mode,
+            auto_reconnect: settings.auto_reconnect,
+            auto_resume_capture: settings.auto_resume_capture,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
@@ -437,6 +441,8 @@ pub struct UpdateSettingsRequest {
     /// Enable "Wanderer" mode
     #[serde(default)]
     pub wanderer_mode: Option<bool>,
+    pub auto_reconnect: Option<bool>,
+    pub auto_resume_capture: Option<bool>,
 
     #[serde(default)]
     pub eyepiece: Option<EyepieceSettings>,

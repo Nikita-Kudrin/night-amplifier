@@ -76,6 +76,14 @@ pub struct CaptureSettings {
     pub dew_heater_power: i32,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
+    /// Reopen the camera automatically after it drops out mid-session (a USB
+    /// stall or an unplug), instead of leaving the session dead until someone
+    /// clicks Connect.
+    pub auto_reconnect: bool,
+    /// After an automatic reconnect, resume the capture that was interrupted —
+    /// same mode, same settings, same stack. Without this the camera comes
+    /// back but the session does not.
+    pub auto_resume_capture: bool,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -284,6 +292,8 @@ impl Default for CaptureSettings {
             dew_heater_enabled: true,
             dew_heater_power: 10,
             wanderer_mode: false,
+            auto_reconnect: true,
+            auto_resume_capture: true,
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),

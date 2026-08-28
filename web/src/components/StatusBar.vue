@@ -174,9 +174,31 @@ const rejectedCount = computed(() => eventStream.rejectedCount.value)
       <button class="btn-close btn-dismiss">&times;</button>
     </div>
 
-    <!-- Error indicator -->
+    <!-- Capture resumed after a reconnect -->
     <div
-        v-if="eventStream.lastError.value"
+        v-if="eventStream.resumeNotice.value"
+        class="status-item resumed"
+        @click="eventStream.clearResumeNotice()"
+    >
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <path d="M20 12a8 8 0 11-2.34-5.66"/>
+        <path d="M20 4v4h-4"/>
+      </svg>
+      <span>{{ eventStream.resumeNotice.value }}</span>
+      <button class="btn-close btn-dismiss">&times;</button>
+    </div>
+
+    <!-- Error indicator. Suppressed while a camera warning is showing: the two
+         describe the same incident, and stacking them just doubles the noise. -->
+    <div
+        v-if="eventStream.lastError.value && !eventStream.unresponsiveWarning.value"
         class="status-item error"
         @click="eventStream.clearError()"
     >
@@ -301,6 +323,20 @@ const rejectedCount = computed(() => eventStream.rejectedCount.value)
 }
 
 .status-item.error span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-item.resumed {
+  color: var(--success);
+  background: var(--success-bg);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  max-width: 300px;
+}
+
+.status-item.resumed span {
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -148,11 +148,24 @@ impl TouptekSdk {
     }
 }
 
+/// `E_HANDLE` — the handle no longer refers to an open device.
+const E_HANDLE: u32 = 0x8007_0006;
+/// `E_GEN_FAILURE` — "a device attached to the system is not functioning",
+/// which is what Toupcam reports for a camera that has been unplugged.
+const E_GEN_FAILURE: u32 = 0x8007_001F;
+
 /// ToupTek uses Windows-style HRESULT: >= 0 is success, < 0 is failure.
+///
+/// The single funnel every ToupTek call passes through. HRESULTs that mean the
+/// device is gone are tagged for `CameraError::is_sdk_disconnected`.
 pub fn check_hresult(hr: i32, context: &str) -> Result<(), String> {
     if hr >= 0 {
-        Ok(())
-    } else {
-        Err(format!("{} failed: HRESULT 0x{:08X}", context, hr as u32))
+        return Ok(());
     }
+    let code = hr as u32;
+    let detail = format!("{} failed: HRESULT 0x{:08X}", context, code);
+    if matches!(code, E_HANDLE | E_GEN_FAILURE) {
+        return Err(crate::camera::device_lost::mark(detail));
+    }
+    Err(detail)
 }

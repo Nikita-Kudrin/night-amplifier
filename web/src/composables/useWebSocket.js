@@ -172,6 +172,7 @@ export function useEventStream() {
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
     const unresponsiveWarning = ref(null)
+    const resumeNotice = ref(null)
 
     // Push-To state
     const pushDirection = ref(null)
@@ -230,7 +231,23 @@ export function useEventStream() {
             lastError.value = data.message
         },
         camera_persistently_unresponsive(data) {
-            unresponsiveWarning.value = `Camera ${data.camera_name} is persistently unresponsive. Please check the USB cable.`
+            // The server sends `name`, not `camera_name` — see the shape pinned
+            // by src/server/tests/events.rs.
+            unresponsiveWarning.value = `${data.name} has stopped responding.`
+        },
+        camera_reconnecting(data) {
+            unresponsiveWarning.value =
+                `Reconnecting to ${data.name} — attempt ${data.attempt} of ${data.of}.`
+        },
+        camera_reconnect_failed(data) {
+            unresponsiveWarning.value =
+                `Could not bring ${data.name} back after ${data.attempts} attempts: ${data.reason}.`
+        },
+        capture_resumed(data) {
+            unresponsiveWarning.value = null
+            lastError.value = null
+            resumeNotice.value =
+                `${data.name} is back. Capture resumed with ${data.stacked_count} frames still stacked.`
         },
         settings_updated() { /* components should refresh */
         },
@@ -409,6 +426,10 @@ export function useEventStream() {
         unresponsiveWarning.value = null
     }
 
+    function clearResumeNotice() {
+        resumeNotice.value = null
+    }
+
     return {
         connected,
         error,
@@ -421,6 +442,7 @@ export function useEventStream() {
         lastError,
         diskWriterWarning,
         unresponsiveWarning,
+        resumeNotice,
         pushDirection,
         currentTarget,
         plateSolving,
@@ -430,6 +452,7 @@ export function useEventStream() {
         clearError,
         clearDiskWriterWarning,
         clearUnresponsiveWarning,
+        clearResumeNotice,
         clearPushDirection,
         clearPlateSolving,
         clearAstapInstallProgress,

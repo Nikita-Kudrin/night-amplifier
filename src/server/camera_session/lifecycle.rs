@@ -17,10 +17,98 @@ use crate::server::state::{
 };
 use crate::telemetry::metrics as telemetry_metrics;
 
+/// How long a caller waits for the monitor to hand the camera handle back
+/// before giving up. Slightly over the monitor's own `FFI_CALL_TIMEOUT`, so a
+/// call that is merely slow is waited out and only a genuine stall gives up.
+const HANDLE_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3_500);
+
+/// Why a camera session is ending. Decides whether the reconnect supervisor
+/// treats the loss as something to recover from.
+///
+/// This used to be a bare `unexpected: bool` at fourteen call sites, where
+/// `true` and `false` said nothing about which situation they meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisconnectCause {
+    /// The user asked, or the session ended normally. Do not reconnect —
+    /// reconnecting would fight the request that got us here.
+    Requested,
+    /// The camera stopped answering or reported its device gone. Recoverable
+    /// in principle: hand it to the reconnect supervisor.
+    DeviceFault,
+}
+
+impl DisconnectCause {
+    fn should_attempt_reconnect(self) -> bool {
+        matches!(self, DisconnectCause::DeviceFault)
+    }
+}
+
+/// Take the camera handle, waiting for the monitor to give it back if it
+/// currently has it checked out for a bounded call.
+///
+/// `active_camera == None` is ambiguous on its own: it means either "no camera
+/// connected" or "the monitor is mid-poll". Treating the second as the first is
+/// what made a capture start fail, and a cooler slider move vanish, whenever
+/// they landed inside a poll window.
+pub(crate) async fn take_active_camera(state: &Arc<AppState>) -> Option<Box<dyn Camera>> {
+    with_handle_slot(state, |slot| slot.take()).await
+}
+
+/// Run `f` against the live handle, waiting for the monitor to return it if
+/// necessary. `None` means no handle arrived within `HANDLE_WAIT_TIMEOUT`.
+pub(crate) async fn with_active_camera<T>(
+    state: &Arc<AppState>,
+    f: impl FnOnce(&mut Box<dyn Camera>) -> T,
+) -> Option<T> {
+    let mut f = Some(f);
+    with_handle_slot(state, |slot| {
+        let cam = slot.as_mut()?;
+        Some(f.take().expect("closure consumed once")(cam))
+    })
+    .await
+}
+
+/// Shared wait loop: register for the hand-back signal, try `f`, and sleep
+/// until either the monitor signals or the budget runs out. Registering before
+/// the check is what stops a hand-back that lands between them from being lost.
+async fn with_handle_slot<T>(
+    state: &Arc<AppState>,
+    mut f: impl FnMut(&mut Option<Box<dyn Camera>>) -> Option<T>,
+) -> Option<T> {
+    let deadline = tokio::time::Instant::now() + HANDLE_WAIT_TIMEOUT;
+    loop {
+        let notified = state.active_camera_returned.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+
+        {
+            let mut guard = state
+                .active_camera
+                .lock()
+                .expect("active_camera mutex poisoned");
+            if let Some(value) = f(&mut guard) {
+                return Some(value);
+            }
+        }
+
+        tokio::select! {
+            _ = &mut notified => {}
+            _ = tokio::time::sleep_until(deadline) => return None,
+        }
+    }
+}
+
 /// Open a camera, store the handle long-term, and (optionally) begin
 /// pre-cooling. Replaces the old `CameraService::connect_camera` behavior
 /// that dropped the handle immediately after probing `CameraInfo`.
 pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<ConnectedCameraInfo> {
+    // Serialize connects. The idempotency check below reads `cameras`, which
+    // `finalize_disconnect` clears before the reconnect supervisor starts, so
+    // without this an automatic reconnect and a user clicking Connect would
+    // both pass it, both open the device, and the second would displace — and
+    // therefore close — the first.
+    let _connect_guard = state.camera_connect_lock.lock().await;
+
     // Already connected? Return the existing info — matches the prior
     // idempotent connect behavior.
     {
@@ -72,11 +160,37 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
 
     let info = camera.info().clone();
     let camera_name = info.name.clone();
+
+    // Prove the handle works before reporting success.
+    //
+    // `open()` returning is not evidence: the field failure this guards against
+    // opened cleanly, seeded the cooler without complaint, and only started
+    // answering `POA_ERROR_NOT_OPENED` a minute later, once the previous
+    // abandoned handle's destructor had closed the device underneath it. A
+    // status read touches the same config path a capture will, so a handle that
+    // is already dead fails here instead of at the first frame.
+    if let Err(e) = camera.status() {
+        if e.is_sdk_disconnected() {
+            error!(
+                camera_id = %camera_id,
+                camera_name = %camera_name,
+                error = %e,
+                "Camera opened but is not responding; discarding the handle"
+            );
+            let _ = camera.close();
+            return Err(ApiError::CameraOpenFailed(format!(
+                "camera opened but did not respond: {}",
+                e
+            )));
+        }
+        debug!(camera_id = %camera_id, error = %e, "Probe read returned a non-fatal error");
+    }
+
     info!(
         camera_id = %camera_id,
         camera_name = %camera_name,
         provider = %provider_registry_name,
-        "Camera opened and held in AppState"
+        "Camera opened and verified"
     );
     debug!(
         camera_id = %camera_id,
@@ -158,10 +272,19 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
             *selected = Some(camera_id.to_string());
         }
     }
-    *state
-        .active_camera
-        .lock()
-        .expect("active_camera mutex poisoned") = Some(camera);
+    {
+        let mut guard = state
+            .active_camera
+            .lock()
+            .expect("active_camera mutex poisoned");
+        if let Some(mut displaced) = guard.replace(camera) {
+            // Should be unreachable now that connects are serialized, but
+            // dropping a handle silently is how a live device gets closed.
+            warn!(camera_name = %camera_name, "Closing a camera handle displaced by this connect");
+            let _ = displaced.close();
+        }
+    }
+    state.notify_active_camera_returned();
 
     state.set_camera_phase(&camera_name, initial_phase).await;
 
@@ -304,7 +427,7 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
         Ok(camera_name)
     } else {
         // No cooler active — close immediately.
-        finalize_disconnect(state, &camera_name, false).await;
+        finalize_disconnect(state, &camera_name, DisconnectCause::Requested).await;
         Ok(camera_name)
     }
 }
@@ -329,14 +452,7 @@ pub async fn take_for_capture(
             let target = settings.target_temp_c;
             let fast = settings.cooler_fast_mode;
             drop(settings);
-            if let Some(cam) = state
-                .active_camera
-                .lock()
-                .expect("active_camera mutex poisoned")
-                .as_mut()
-            {
-                let _ = cam.set_cooler(true);
-            }
+            let _ = with_active_camera(state, |cam| cam.set_cooler(true)).await;
             // Re-seed the cooldown ramp so that if capture exits quickly the
             // monitor picks up a gentle ramp rather than snapping to target.
             // Fast mode preserves the old "snap to target" behavior.
@@ -355,26 +471,9 @@ pub async fn take_for_capture(
     // its polling loop. This avoids contention with capture's own calls.
     send_monitor_cmd(state, MonitorCmd::HandOffToCapture);
 
-    // The monitor thread may have temporarily taken the camera out of the mutex
-    // to perform a bounded FFI call. We retry for up to 3 seconds (the monitor's
-    // FFI timeout) to wait for it to be returned.
-    let mut camera = None;
-    for _ in 0..60 {
-        if let Some(c) = state
-            .active_camera
-            .lock()
-            .expect("active_camera mutex poisoned")
-            .take()
-        {
-            camera = Some(c);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-
-    let camera = camera.ok_or_else(|| {
+    let camera = take_active_camera(state).await.ok_or_else(|| {
         ApiError::Internal(format!(
-            "Camera '{}' has no active handle to take for capture (monitor thread did not return it)",
+            "Camera '{}' did not become available for capture — the monitor is stuck in a camera call",
             camera_name
         ))
     })?;
@@ -399,6 +498,7 @@ pub async fn return_from_capture(
                 .active_camera
                 .lock()
                 .expect("active_camera mutex poisoned") = Some(cam);
+            state.notify_active_camera_returned();
 
             // Decide phase: if cooling is enabled and we're not yet near target,
             // precooling; otherwise idle. We use the last cached status as a
@@ -450,7 +550,7 @@ pub async fn return_from_capture(
                 camera_name,
                 "Capture ended without returning handle; cleaning up"
             );
-            finalize_disconnect(state, camera_name, true).await;
+            finalize_disconnect(state, camera_name, DisconnectCause::DeviceFault).await;
         }
     }
 }
@@ -458,7 +558,7 @@ pub async fn return_from_capture(
 /// Close the handle, drop state, broadcast `CameraDisconnected`, and
 /// transition phase to `Disconnected`. Used by both immediate-disconnect
 /// (no warmup) and warmup-completion paths.
-pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, unexpected: bool) {
+pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, cause: DisconnectCause) {
     // Shut down the monitor thread first.
     send_monitor_cmd(state, MonitorCmd::Shutdown);
     {
@@ -505,6 +605,7 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, unexp
         statuses.remove(camera_name);
     }
 
+    state.notify_active_camera_returned();
     state
         .set_camera_phase(camera_name, CameraPhase::Disconnected)
         .await;
@@ -514,23 +615,13 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, unexp
 
     info!(camera_name, "Camera disconnected");
 
-    if unexpected {
-        if let Some(id) = removed_id {
-            let state = Arc::clone(state);
-            let camera_id = id.clone();
-            tokio::spawn(async move {
-                // Wait before reconnecting to let the driver/USB settle
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                warn!(camera_id = %camera_id, "Attempting auto-reconnect after unexpected disconnect...");
-                if let Err(e) = connect(&state, &camera_id).await {
-                    error!(camera_id = %camera_id, error = %e, "Auto-reconnect failed");
-                    state.send_error(format!("Auto-reconnect failed: {}", e));
-                } else {
-                    info!(camera_id = %camera_id, "Auto-reconnect successful");
-                }
-            });
-        }
+    if !cause.should_attempt_reconnect() {
+        return;
     }
+    let Some(camera_id) = removed_id else {
+        return;
+    };
+    super::reconnect::spawn(state, &camera_id, camera_name);
 }
 
 /// Push the current `cooler_enabled` / `target_temp_c` settings to the active
@@ -580,20 +671,18 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>) {
     // Only the cooler enable/disable switch is pushed to hardware here; the
     // target temperature is handed to the monitor so the setpoint ramps at
     // RAMP_RATE_C_PER_MIN instead of snapping to the final value.
-    let applied = {
-        let mut guard = state
-            .active_camera
-            .lock()
-            .expect("active_camera mutex poisoned");
-        match guard.as_mut() {
-            Some(cam) => match cam.set_cooler(enabled) {
-                Ok(()) => true,
-                Err(e) => {
-                    warn!(error = %e, "Failed to apply live cooler switch");
-                    false
-                }
-            },
-            None => return,
+    let applied = match with_active_camera(state, |cam| cam.set_cooler(enabled)).await {
+        Some(Ok(())) => true,
+        Some(Err(e)) => {
+            warn!(error = %e, "Failed to apply live cooler switch");
+            false
+        }
+        None => {
+            warn!(
+                camera_name = %camera_name,
+                "Cooler change not applied — no camera handle became available"
+            );
+            false
         }
     };
     if !applied {
@@ -657,21 +746,18 @@ pub async fn apply_dew_heater_settings(state: &Arc<AppState>) {
         (settings.dew_heater_enabled, settings.dew_heater_power)
     };
 
-    let mut guard = state
-        .active_camera
-        .lock()
-        .expect("active_camera mutex poisoned");
-    if let Some(cam) = guard.as_mut() {
-        if let Err(e) = cam.set_dew_heater(enabled, power) {
-            warn!(error = %e, "Failed to apply live dew heater settings");
-        } else {
-            info!(
-                camera_name = %camera_name,
-                enabled,
-                power,
-                "Live dew heater settings applied"
-            );
-        }
+    match with_active_camera(state, |cam| cam.set_dew_heater(enabled, power)).await {
+        Some(Ok(())) => info!(
+            camera_name = %camera_name,
+            enabled,
+            power,
+            "Live dew heater settings applied"
+        ),
+        Some(Err(e)) => warn!(error = %e, "Failed to apply live dew heater settings"),
+        None => warn!(
+            camera_name = %camera_name,
+            "Dew heater change not applied — no camera handle became available"
+        ),
     }
 }
 
@@ -688,7 +774,7 @@ fn send_monitor_cmd(state: &Arc<AppState>, cmd: MonitorCmd) {
 }
 
 /// Parse camera ID into provider name and index (e.g. "playerone_0" → ("playerone", 0)).
-pub(crate) fn parse_camera_id(camera_id: &str) -> ApiResult<(&str, usize)> {
+pub(super) fn parse_camera_id(camera_id: &str) -> ApiResult<(&str, usize)> {
     let parts: Vec<&str> = camera_id.splitn(2, '_').collect();
     if parts.len() != 2 {
         return Err(ApiError::InvalidCameraIdFormat);

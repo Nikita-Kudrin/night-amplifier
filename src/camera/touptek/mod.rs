@@ -13,6 +13,7 @@ use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
 use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
 
+use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
@@ -158,23 +159,31 @@ impl Camera for TouptekCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        // If getting exposure fails, the camera is disconnected
+        // Exposure is the liveness probe: every ToupTek model reports it, so a
+        // failure here is the device, not the parameter.
         let current_exposure_us =
             catch_ffi_panic("ToupTek::get_expo", || self.handle.get_exposure_us())
                 .map_err(CameraError::from)?
                 .map_err(|_e| CameraError::Disconnected)? as u64;
 
+        // Every read goes through `tolerate_unsupported`: a parameter this
+        // model does not expose falls back, but a lost device propagates so the
+        // fault detector can see it. See `camera::device_lost`.
         let temperature_c = if self.info.has_cooler {
-            catch_ffi_panic("ToupTek::get_temp", || self.handle.get_temperature_c())
-                .map_err(CameraError::from)?
-                .unwrap_or(0.0)
+            tolerate_unsupported(
+                catch_ffi_panic("ToupTek::get_temp", || self.handle.get_temperature_c())
+                    .map_err(CameraError::from)?,
+                0.0,
+            )?
         } else {
             0.0
         };
 
-        let current_gain = catch_ffi_panic("ToupTek::get_gain", || self.handle.get_gain())
-            .map_err(CameraError::from)?
-            .unwrap_or(100) as i32;
+        let current_gain = tolerate_unsupported(
+            catch_ffi_panic("ToupTek::get_gain", || self.handle.get_gain())
+                .map_err(CameraError::from)?,
+            100,
+        )? as i32;
 
         Ok(CameraStatus {
             temperature_c,

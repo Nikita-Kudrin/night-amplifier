@@ -31,5 +31,5 @@ pub mod watchdog;
 #[cfg(test)]
 pub mod watchdog_tests;
 
-pub use context::{PlanetaryStackingContext, StackingContext};
+pub use context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 pub use task::run_capture_loop;

@@ -13,6 +13,7 @@ use crate::{CfaPattern, Frame, PixelFormat};
 use ffi_types::ControlId;
 use shim::{scan_cameras, QhyHandle};
 
+use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
@@ -303,30 +304,42 @@ impl Camera for QhyCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        let temp = catch_ffi_panic("QHY::current_temp", || self.camera.current_temperature())
-            .map_err(CameraError::from)?
-            .unwrap_or(0.0);
+        // Every read goes through `tolerate_unsupported`: a parameter this
+        // model does not expose falls back, but a lost device propagates so the
+        // fault detector can see it. See `camera::device_lost`.
+        let temp = tolerate_unsupported(
+            catch_ffi_panic("QHY::current_temp", || self.camera.current_temperature())
+                .map_err(CameraError::from)?,
+            0.0,
+        )?;
 
-        let pwm = catch_ffi_panic("QHY::cooler_power", || self.camera.cooler_power())
-            .map_err(CameraError::from)?
-            .unwrap_or(0.0);
+        let pwm = tolerate_unsupported(
+            catch_ffi_panic("QHY::cooler_power", || self.camera.cooler_power())
+                .map_err(CameraError::from)?,
+            0.0,
+        )?;
 
-        let current_gain =
+        let current_gain = tolerate_unsupported(
             catch_ffi_panic("QHY::get_gain", || self.camera.get_param(ControlId::Gain))
-                .map_err(CameraError::from)?
-                .unwrap_or(0.0) as i32;
+                .map_err(CameraError::from)?,
+            0.0,
+        )? as i32;
 
-        let current_offset = catch_ffi_panic("QHY::get_offset", || {
-            self.camera.get_param(ControlId::Offset)
-        })
-        .map_err(CameraError::from)?
-        .unwrap_or(0.0) as i32;
+        let current_offset = tolerate_unsupported(
+            catch_ffi_panic("QHY::get_offset", || {
+                self.camera.get_param(ControlId::Offset)
+            })
+            .map_err(CameraError::from)?,
+            0.0,
+        )? as i32;
 
-        let current_exposure_us = catch_ffi_panic("QHY::get_exposure", || {
-            self.camera.get_param(ControlId::Exposure)
-        })
-        .map_err(CameraError::from)?
-        .unwrap_or(0.0) as u64;
+        let current_exposure_us = tolerate_unsupported(
+            catch_ffi_panic("QHY::get_exposure", || {
+                self.camera.get_param(ControlId::Exposure)
+            })
+            .map_err(CameraError::from)?,
+            0.0,
+        )? as u64;
 
         let cooler_on = pwm > 0.0;
 

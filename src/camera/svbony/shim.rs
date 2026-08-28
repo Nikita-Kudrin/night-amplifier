@@ -6,11 +6,18 @@ use tracing::{debug, warn};
 
 use super::ffi_types::*;
 use super::sdk::{check_error, SvbonySdk};
+use crate::camera::DeviceLease;
 use crate::CfaPattern;
+
+/// Provider key for [`DeviceLease`] slots. `SVBCloseCamera` takes a device
+/// index, so a stale close would land on whoever holds that index now.
+pub(super) const PROVIDER: &str = "SVBony";
 
 pub struct SvbonyHandle {
     camera_id: c_int,
     video_mode_active: AtomicBool,
+    /// Proof this handle still owns `camera_id`. Gates every `SVBCloseCamera`.
+    lease: DeviceLease,
 }
 
 // SAFETY: SDK is thread-safe per camera handle.
@@ -27,10 +34,16 @@ impl SvbonyHandle {
         Ok(Self {
             camera_id,
             video_mode_active: AtomicBool::new(false),
+            lease: DeviceLease::acquire(PROVIDER, camera_id),
         })
     }
 
     pub fn close(&self) {
+        // Refused for a handle a later open has superseded, and for a second
+        // close on the same handle (`Drop` follows an explicit `close()`).
+        if !self.lease.begin_close() {
+            return;
+        }
         let sdk = match SvbonySdk::try_load() {
             Some(s) => s,
             None => return,

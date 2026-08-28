@@ -189,6 +189,8 @@ export const DEFAULT_SETTINGS = {
     show_focus_image: true,
     force_focus_image_now: false,
     wanderer_mode: false,
+    auto_reconnect: true,
+    auto_resume_capture: true,
     cooler_enabled: false,
     target_temp_c: null,
     cooler_fast_mode: false,
@@ -247,6 +249,10 @@ export const HELP_TEXTS = {
     gain: 'Electronic amplification of the signal. Higher gain increases sensitivity but also introduces more read noise.',
     wanderer_mode:
         'Automatically resets the stack when you move to a new target. Once stationary, stacking restarts and the live stack is displayed.',
+    auto_reconnect:
+        'Reopens the camera by itself after it drops out mid-session — a USB stall or a knocked cable. Retries a few times with a growing gap, then stops and tells you.',
+    auto_resume_capture:
+        'After the camera comes back, picks the capture up where it stopped: same mode, same settings, and the frames already stacked are kept.',
     eyepiece_binoview:
         'Splits the screen into two independent copies of the image based on physical screen dimensions and resolution.',
     eyepiece_screen_settings:

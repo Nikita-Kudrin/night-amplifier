@@ -8,6 +8,7 @@ use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
 use super::super::state::{AppState, CaptureState, StackingType};
+use crate::disk_writer::WritingSessionType;
 
 /// Returns the profile key (`"{provider}/{model}"`) for the currently
 /// connected camera, if any. `None` when no camera is attached — callers
@@ -169,6 +170,12 @@ pub async fn update_settings(
             settings.planetary_multi_point_alignment = multi_point;
         }
 
+        if let Some(auto_reconnect) = request.auto_reconnect {
+            settings.auto_reconnect = auto_reconnect;
+        }
+        if let Some(auto_resume_capture) = request.auto_resume_capture {
+            settings.auto_resume_capture = auto_resume_capture;
+        }
         if let Some(wanderer_mode) = request.wanderer_mode {
             settings.wanderer_mode = wanderer_mode;
         }
@@ -240,6 +247,24 @@ pub async fn update_settings(
         let disk_enabled =
             is_stacking_mode && (settings.save_raw_frames || settings.save_stacked_image);
         state.disk_writer.set_enabled(disk_enabled);
+
+        // Turning saving on partway through a capture leaves the writer enabled
+        // with no session directory — `initialize_capture_session` only runs at
+        // capture start. Every frame after that was then lost to "No active
+        // session"; observed in the field for frames 514 and 515.
+        if disk_enabled {
+            let session_type = match settings.stacking_type {
+                StackingType::Planetary => WritingSessionType::VideoContainer,
+                _ => WritingSessionType::IndividualFrames,
+            };
+            if let Err(e) = state.disk_writer.ensure_session(session_type) {
+                tracing::warn!(error = %e, "Could not open a capture directory for saving");
+                state.send_error(format!(
+                    "Saving is on but no folder could be created: {}",
+                    e
+                ));
+            }
+        }
 
         // If exposure-impacting settings changed while capturing, cancel current exposure
         // so changes take effect immediately.

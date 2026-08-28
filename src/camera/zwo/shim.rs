@@ -5,6 +5,55 @@ use tracing::warn;
 
 use super::ffi_types::*;
 use super::sdk::ZwoSdk;
+use crate::camera::device_lost;
+use crate::camera::DeviceLease;
+
+/// Provider key for [`DeviceLease`] slots. `ASICloseCamera` takes a device
+/// index, so a stale close would land on whoever holds that index now.
+pub(super) const PROVIDER: &str = "ZWO";
+
+/// Symbolic name for an `ASI_ERROR_CODE`, so a log line says
+/// `ASI_ERROR_CAMERA_REMOVED` rather than `5`.
+fn asi_symbol(err: ASI_ERROR_CODE) -> &'static str {
+    match err {
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_INDEX => "ASI_ERROR_INVALID_INDEX",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_ID => "ASI_ERROR_INVALID_ID",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_CONTROL_TYPE => "ASI_ERROR_INVALID_CONTROL_TYPE",
+        ASI_ERROR_CODE_ASI_ERROR_CAMERA_CLOSED => "ASI_ERROR_CAMERA_CLOSED",
+        ASI_ERROR_CODE_ASI_ERROR_CAMERA_REMOVED => "ASI_ERROR_CAMERA_REMOVED",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_PATH => "ASI_ERROR_INVALID_PATH",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_FILEFORMAT => "ASI_ERROR_INVALID_FILEFORMAT",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_SIZE => "ASI_ERROR_INVALID_SIZE",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_IMGTYPE => "ASI_ERROR_INVALID_IMGTYPE",
+        ASI_ERROR_CODE_ASI_ERROR_OUTOF_BOUNDARY => "ASI_ERROR_OUTOF_BOUNDARY",
+        ASI_ERROR_CODE_ASI_ERROR_TIMEOUT => "ASI_ERROR_TIMEOUT",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_SEQUENCE => "ASI_ERROR_INVALID_SEQUENCE",
+        ASI_ERROR_CODE_ASI_ERROR_BUFFER_TOO_SMALL => "ASI_ERROR_BUFFER_TOO_SMALL",
+        ASI_ERROR_CODE_ASI_ERROR_VIDEO_MODE_ACTIVE => "ASI_ERROR_VIDEO_MODE_ACTIVE",
+        ASI_ERROR_CODE_ASI_ERROR_EXPOSURE_IN_PROGRESS => "ASI_ERROR_EXPOSURE_IN_PROGRESS",
+        ASI_ERROR_CODE_ASI_ERROR_GENERAL_ERROR => "ASI_ERROR_GENERAL_ERROR",
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_MODE => "ASI_ERROR_INVALID_MODE",
+        ASI_ERROR_CODE_ASI_ERROR_GPS_NOT_SUPPORTED => "ASI_ERROR_GPS_NOT_SUPPORTED",
+        ASI_ERROR_CODE_ASI_ERROR_GPS_VER_ERR => "ASI_ERROR_GPS_VER_ERR",
+        _ => "ASI_ERROR_UNKNOWN",
+    }
+}
+
+/// Render a ZWO failure symbolically, tagging the codes that mean the device
+/// is gone. Before this the message was a bare integer, which is why device
+/// loss on ZWO was never classified at all.
+fn asi_err(op: &str, err: ASI_ERROR_CODE) -> String {
+    let detail = format!("{} failed: {} ({})", op, asi_symbol(err), err);
+    if matches!(
+        err,
+        ASI_ERROR_CODE_ASI_ERROR_INVALID_ID
+            | ASI_ERROR_CODE_ASI_ERROR_CAMERA_CLOSED
+            | ASI_ERROR_CODE_ASI_ERROR_CAMERA_REMOVED
+    ) {
+        return device_lost::mark(detail);
+    }
+    detail
+}
 
 #[derive(Debug)]
 pub struct CameraInfoASI {
@@ -28,6 +77,8 @@ pub struct CameraInfoASI {
 
 pub struct Camera {
     camera_id: c_int,
+    /// Proof this handle still owns `camera_id`. Gates every `ASICloseCamera`.
+    lease: DeviceLease,
 }
 
 impl Camera {
@@ -35,17 +86,17 @@ impl Camera {
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let err = unsafe { sdk.api.ASIOpenCamera(camera_id) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(format!("ASIOpenCamera failed: {}", err));
+            return Err(asi_err("ASIOpenCamera", err));
         }
         let err = unsafe { sdk.api.ASIInitCamera(camera_id) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(format!("ASIInitCamera failed: {}", err));
+            return Err(asi_err("ASIInitCamera", err));
         }
 
         let mut info: ASI_CAMERA_INFO = unsafe { std::mem::zeroed() };
         let err = unsafe { sdk.api.ASIGetCameraProperty(&mut info, camera_id) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(format!("ASIGetCameraProperty failed: {}", err));
+            return Err(asi_err("ASIGetCameraProperty", err));
         }
 
         let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
@@ -83,16 +134,27 @@ impl Camera {
             is_trigger_cam: info.IsTriggerCam == ASI_BOOL_ASI_TRUE,
         };
 
-        Ok((Self { camera_id }, info_asi))
+        Ok((
+            Self {
+                camera_id,
+                lease: DeviceLease::acquire(PROVIDER, camera_id),
+            },
+            info_asi,
+        ))
     }
 
     pub fn close(&self) -> Result<(), String> {
+        // Refused for a handle a later open has superseded, and for a second
+        // close on the same handle (`Drop` follows an explicit `close()`).
+        if !self.lease.begin_close() {
+            return Ok(());
+        }
         let sdk = ZwoSdk::try_load().ok_or("ZWO SDK not loaded")?;
         let err = unsafe { sdk.api.ASICloseCamera(self.camera_id) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASICloseCamera failed: {}", err))
+            Err(asi_err("ASICloseCamera", err))
         }
     }
 
@@ -110,7 +172,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASISetControlValue failed: {}", err))
+            Err(asi_err("ASISetControlValue", err))
         }
     }
 
@@ -128,7 +190,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok((value, auto))
         } else {
-            Err(format!("ASIGetControlValue failed: {}", err))
+            Err(asi_err("ASIGetControlValue", err))
         }
     }
 
@@ -228,7 +290,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASISetROIFormat failed: {}", err))
+            Err(asi_err("ASISetROIFormat", err))
         }
     }
 
@@ -250,7 +312,7 @@ impl Camera {
 
         let err = unsafe { sdk.api.ASISetStartPos(self.camera_id, x, y) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(format!("ASISetStartPos failed: {}", err));
+            return Err(asi_err("ASISetStartPos", err));
         }
 
         let err = unsafe {
@@ -260,7 +322,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASISetROIFormat failed: {}", err))
+            Err(asi_err("ASISetROIFormat", err))
         }
     }
 
@@ -270,7 +332,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIStartExposure failed: {}", err))
+            Err(asi_err("ASIStartExposure", err))
         }
     }
 
@@ -280,7 +342,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIStopExposure failed: {}", err))
+            Err(asi_err("ASIStopExposure", err))
         }
     }
 
@@ -289,7 +351,7 @@ impl Camera {
         let mut status = ASI_EXPOSURE_STATUS_ASI_EXP_IDLE;
         let err = unsafe { sdk.api.ASIGetExpStatus(self.camera_id, &mut status) };
         if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(format!("ASIGetExpStatus failed: {}", err));
+            return Err(asi_err("ASIGetExpStatus", err));
         }
         if status == ASI_EXPOSURE_STATUS_ASI_EXP_SUCCESS {
             Ok(true)
@@ -312,7 +374,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIGetDataAfterExp failed: {}", err))
+            Err(asi_err("ASIGetDataAfterExp", err))
         }
     }
 
@@ -322,7 +384,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIStartVideoCapture failed: {}", err))
+            Err(asi_err("ASIStartVideoCapture", err))
         }
     }
 
@@ -332,7 +394,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIStopVideoCapture failed: {}", err))
+            Err(asi_err("ASIStopVideoCapture", err))
         }
     }
 
@@ -349,7 +411,7 @@ impl Camera {
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
             Ok(())
         } else {
-            Err(format!("ASIGetVideoData failed: {}", err))
+            Err(asi_err("ASIGetVideoData", err))
         }
     }
 }

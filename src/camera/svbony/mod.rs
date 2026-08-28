@@ -16,6 +16,7 @@ use shim::{
     SvbonyHandle,
 };
 
+use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
@@ -156,41 +157,56 @@ impl Camera for SvbonyCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        let current_exposure_us = catch_ffi_panic("SVBony::get_exp", || {
-            self.handle.get_control_value(SVB_EXPOSURE)
-        })
-        .ok()
-        .and_then(|res| res.ok())
-        .map(|(v, _)| v as u64)
-        .unwrap_or(0);
+        // Every read goes through `tolerate_unsupported`: a parameter this
+        // model does not expose falls back, but a lost device propagates so the
+        // fault detector can see it. See `camera::device_lost`.
+        //
+        // These used to discard the FFI-boundary result with `.ok()` as well,
+        // which hid a panic caught at the boundary just as thoroughly as it hid
+        // a dead handle.
+        let current_exposure_us = tolerate_unsupported(
+            catch_ffi_panic("SVBony::get_exp", || {
+                self.handle.get_control_value(SVB_EXPOSURE)
+            })
+            .map_err(CameraError::from)?,
+            (0, false),
+        )?
+        .0 as u64;
 
         let temperature_c = if self.info.has_cooler {
-            catch_ffi_panic("SVBony::get_temp", || {
-                self.handle.get_control_value(SVB_CURRENT_TEMPERATURE)
-            })
-            .ok()
-            .and_then(|res| res.ok())
-            .map(|(v, _)| v as f64 / 10.0)
-            .unwrap_or(0.0)
+            tolerate_unsupported(
+                catch_ffi_panic("SVBony::get_temp", || {
+                    self.handle.get_control_value(SVB_CURRENT_TEMPERATURE)
+                })
+                .map_err(CameraError::from)?,
+                (0, false),
+            )?
+            .0 as f64
+                / 10.0
         } else {
             0.0
         };
 
-        let current_gain = catch_ffi_panic("SVBony::get_gain", || {
-            self.handle.get_control_value(SVB_GAIN)
-        })
-        .ok()
-        .and_then(|res| res.ok())
-        .map(|(v, _)| v as i32)
-        .unwrap_or(0);
+        let current_gain = tolerate_unsupported(
+            catch_ffi_panic("SVBony::get_gain", || {
+                self.handle.get_control_value(SVB_GAIN)
+            })
+            .map_err(CameraError::from)?,
+            (0, false),
+        )?
+        .0 as i32;
 
         let cooler_power = if self.info.has_cooler {
-            catch_ffi_panic("SVBony::get_cooler_power", || {
-                self.handle.get_control_value(SVB_COOLER_POWER)
-            })
-            .ok()
-            .and_then(|res| res.ok())
-            .map(|(v, _)| v as f64)
+            Some(
+                tolerate_unsupported(
+                    catch_ffi_panic("SVBony::get_cooler_power", || {
+                        self.handle.get_control_value(SVB_COOLER_POWER)
+                    })
+                    .map_err(CameraError::from)?,
+                    (0, false),
+                )?
+                .0 as f64,
+            )
         } else {
             None
         };

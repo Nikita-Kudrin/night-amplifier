@@ -17,6 +17,8 @@ mod tests {
     #[test]
     fn test_persisted_settings_roundtrip() {
         let settings = CaptureSettings {
+            auto_reconnect: true,
+            auto_resume_capture: true,
             exposure_us: 2_000_000,
             gain: 150,
             offset: 20,
@@ -233,6 +235,8 @@ mod tests {
         let persistence = SettingsPersistence::new(temp_file.path());
 
         let settings = CaptureSettings {
+            auto_reconnect: true,
+            auto_resume_capture: true,
             exposure_us: 3_000_000,
             gain: 200,
             offset: 15,

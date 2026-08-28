@@ -23,6 +23,7 @@
 //! ```
 
 mod api;
+mod camera_health;
 mod camera_session;
 pub mod capture;
 mod dto;

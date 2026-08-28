@@ -8,6 +8,7 @@ use shim::{Camera as POACamera, CameraDescription};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
@@ -128,50 +129,62 @@ impl Camera for PlayerOneCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        let temperature = catch_ffi_panic("PlayerOne::temperature", || self.camera.temperature())
-            .map_err(CameraError::from)?
-            .map(|t| t as f64)
-            .unwrap_or(0.0);
+        // Every read here goes through `tolerate_unsupported`: a parameter this
+        // model does not expose falls back, but a lost device propagates so the
+        // fault detector can see it. See `camera::device_lost`.
+        let temperature = tolerate_unsupported(
+            catch_ffi_panic("PlayerOne::temperature", || self.camera.temperature())
+                .map_err(CameraError::from)?,
+            0.0,
+        )? as f64;
 
-        let current_gain = catch_ffi_panic("PlayerOne::gain", || self.camera.gain())
-            .map_err(CameraError::from)?
-            .map(|(v, _)| v as i32)
-            .unwrap_or(0);
+        let current_gain = tolerate_unsupported(
+            catch_ffi_panic("PlayerOne::gain", || self.camera.gain()).map_err(CameraError::from)?,
+            (0, false),
+        )?
+        .0 as i32;
 
-        let current_offset = catch_ffi_panic("PlayerOne::offset", || self.camera.offset())
-            .map_err(CameraError::from)?
-            .map(|v| v as i32)
-            .unwrap_or(0);
+        let current_offset = tolerate_unsupported(
+            catch_ffi_panic("PlayerOne::offset", || self.camera.offset())
+                .map_err(CameraError::from)?,
+            0,
+        )? as i32;
 
-        let current_exposure_us = catch_ffi_panic("PlayerOne::exposure", || self.camera.exposure())
-            .map_err(CameraError::from)?
-            .map(|(v, _)| v as u64)
-            .unwrap_or(0);
+        let current_exposure_us = tolerate_unsupported(
+            catch_ffi_panic("PlayerOne::exposure", || self.camera.exposure())
+                .map_err(CameraError::from)?,
+            (0, false),
+        )?
+        .0 as u64;
 
         let cooler_power = if self.info.has_cooler {
-            catch_ffi_panic("PlayerOne::cooler_power", || self.camera.cooler_power())
-                .map_err(CameraError::from)?
-                .ok()
-                .map(|p| p as f64)
+            Some(tolerate_unsupported(
+                catch_ffi_panic("PlayerOne::cooler_power", || self.camera.cooler_power())
+                    .map_err(CameraError::from)?,
+                0,
+            )? as f64)
         } else {
             None
         };
 
         let cooler_on = if self.info.has_cooler {
-            catch_ffi_panic("PlayerOne::cooler", || self.camera.cooler())
-                .map_err(CameraError::from)?
-                .unwrap_or(false)
+            tolerate_unsupported(
+                catch_ffi_panic("PlayerOne::cooler", || self.camera.cooler())
+                    .map_err(CameraError::from)?,
+                false,
+            )?
         } else {
             false
         };
 
         let dew_heater_on = if self.info.has_dew_heater {
-            catch_ffi_panic("PlayerOne::dew_heater_power", || {
-                self.camera.dew_heater_power()
-            })
-            .map_err(CameraError::from)?
-            .map(|p| p > 0)
-            .unwrap_or(false)
+            tolerate_unsupported(
+                catch_ffi_panic("PlayerOne::dew_heater_power", || {
+                    self.camera.dew_heater_power()
+                })
+                .map_err(CameraError::from)?,
+                0,
+            )? > 0
         } else {
             false
         };

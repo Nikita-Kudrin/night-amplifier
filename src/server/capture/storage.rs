@@ -71,7 +71,14 @@ pub async fn get_camera_info(state: &AppState, camera_id: &str) -> Option<Connec
 }
 
 /// Initialize capture session (disk writer, etc.)
-pub async fn initialize_capture_session(state: &AppState) -> Result<(), String> {
+///
+/// `resume_dir` rejoins an existing raw-frame directory instead of creating a
+/// timestamped one, so a session interrupted by a device fault stays in a
+/// single folder across the reconnect.
+pub async fn initialize_capture_session(
+    state: &AppState,
+    resume_dir: Option<std::path::PathBuf>,
+) -> Result<(), String> {
     let settings: RwLockReadGuard<'_, CaptureSettings> = state.settings.read().await;
     let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
     let save_raw = settings.save_raw_frames;
@@ -87,10 +94,16 @@ pub async fn initialize_capture_session(state: &AppState) -> Result<(), String> 
             _ => WritingSessionType::IndividualFrames,
         };
 
-        state
-            .disk_writer
-            .start_session(session_type)
-            .map_err(|e| format!("Failed to create capture directory: {}", e))?;
+        match resume_dir {
+            Some(dir) => state
+                .disk_writer
+                .resume_session(dir, session_type)
+                .map_err(|e| format!("Failed to reopen capture directory: {}", e))?,
+            None => state
+                .disk_writer
+                .start_session(session_type)
+                .map_err(|e| format!("Failed to create capture directory: {}", e))?,
+        };
     }
     Ok(())
 }

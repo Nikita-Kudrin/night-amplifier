@@ -3,6 +3,7 @@
 use std::time::Duration;
 use thiserror::Error;
 
+use crate::camera::device_lost;
 use crate::ffi_safety::FfiError;
 
 /// Camera-specific error types
@@ -35,6 +36,13 @@ pub enum CameraError {
     /// Camera was disconnected during operation
     #[error("Camera disconnected")]
     Disconnected,
+
+    /// The SDK answered, but its error code says this handle's device is gone
+    /// — unplugged, USB reset, or closed underneath us. Distinct from
+    /// `Disconnected`, which is the server's own verdict rather than the
+    /// vendor's.
+    #[error("Camera device lost: {0}")]
+    DeviceLost(String),
 
     /// Exposure failed
     #[error("Exposure failed: {0}")]
@@ -98,23 +106,28 @@ pub enum CameraError {
 }
 
 impl CameraError {
-    /// Whether this error signals that the camera's SDK handle is no longer
-    /// valid — typically because the device was physically disconnected or
-    /// the USB bus reset. Callers should treat this the same as
-    /// `CameraError::Disconnected` (abandon the handle, finalize cleanup).
+    /// Whether this error means the camera's SDK handle no longer refers to a
+    /// live device — unplugged, USB bus reset, or closed underneath us.
+    /// Callers must abandon the handle rather than retry on it.
+    ///
+    /// Two sources, and deliberately no third: the typed variants that say so
+    /// outright, and the [`device_lost`] marker each shim attaches after
+    /// classifying its own vendor code. Nothing here matches vendor
+    /// vocabulary — that approach only ever worked for PlayerOne, because it
+    /// is the one provider that renders its error enum symbolically.
     pub fn is_sdk_disconnected(&self) -> bool {
         match self {
-            CameraError::Disconnected => true,
+            CameraError::Disconnected | CameraError::NotOpen | CameraError::DeviceLost(_) => true,
             CameraError::SdkError { message, .. }
             | CameraError::ExposureFailed(message)
             | CameraError::CoolingFailed(message)
             | CameraError::ImageReadFailed(message)
-            | CameraError::ParameterNotSupported(message) => {
-                let m = message.to_uppercase();
-                m.contains("NOT_OPENED")
-                    || m.contains("INVALID_ID")
-                    || m.contains("ERROR_CLOSED")
-            }
+            | CameraError::TemperatureReadFailed(message)
+            | CameraError::ParameterNotSupported(message)
+            | CameraError::InvalidParameter { message, .. }
+            | CameraError::OpenFailed(message)
+            | CameraError::CloseFailed(message)
+            | CameraError::FfiBoundaryError(message) => device_lost::is_marked(message),
             _ => false,
         }
     }
@@ -137,43 +150,78 @@ pub type CameraResult<T> = std::result::Result<T, CameraError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::camera::device_lost::mark;
 
     #[test]
-    fn test_is_sdk_disconnected() {
+    fn typed_variants_are_disconnects_without_a_message() {
         assert!(CameraError::Disconnected.is_sdk_disconnected());
+        assert!(CameraError::NotOpen.is_sdk_disconnected());
+    }
 
-        let errors_to_test = vec![
-            CameraError::ExposureFailed("poa_error_NOT_OPENED".to_string()),
-            CameraError::CoolingFailed("ASI_ERROR_INVALID_ID".to_string()),
-            CameraError::ImageReadFailed("ERROR_CLOSED returned by SDK".to_string()),
-            CameraError::ParameterNotSupported("some NOT_OPENED err".to_string()),
+    /// One case per provider, using the exact text that provider's shim now
+    /// produces. ZWO, SVBony and ToupTek used to render a bare number, which
+    /// is why none of them were ever classified.
+    #[test]
+    fn every_provider_marks_its_own_device_loss_codes() {
+        let cases = vec![
+            CameraError::ExposureFailed(mark("POAImageReady failed: POA_ERROR_NOT_OPENED")),
+            CameraError::CoolingFailed(mark("POASetConfig failed: POA_ERROR_DEVICE_NOT_FOUND")),
             CameraError::SdkError {
-                code: 1,
-                message: "Camera NOT_OPENED".to_string(),
+                code: -1,
+                message: format!(
+                    "Failed to set exposure: {}",
+                    mark("POASetConfig failed: POA_ERROR_NOT_OPENED")
+                ),
             },
+            CameraError::ImageReadFailed(mark(
+                "ASIGetDataAfterExp failed: ASI_ERROR_CAMERA_REMOVED (5)",
+            )),
+            CameraError::CoolingFailed(mark(
+                "ASISetControlValue failed: ASI_ERROR_CAMERA_CLOSED (4)",
+            )),
+            CameraError::ExposureFailed(mark(
+                "SVBGetVideoData failed: SVB_ERROR_CAMERA_REMOVED (5)",
+            )),
+            CameraError::SdkError {
+                code: 0,
+                message: mark("Toupcam_put_Option(0x04) failed: HRESULT 0x8007001F"),
+            },
+            CameraError::ParameterNotSupported(format!(
+                "dew_heater: {}",
+                mark("POASetConfig failed: POA_ERROR_NOT_OPENED")
+            )),
         ];
-
-        for e in errors_to_test {
-            assert!(e.is_sdk_disconnected(), "Expected {} to be a disconnect error", e);
+        for e in cases {
+            assert!(e.is_sdk_disconnected(), "{} should be a disconnect", e);
         }
+    }
 
-        let non_disconnect_errors = vec![
+    /// The regression this replaced: an unsupported parameter, a value out of
+    /// range and an ordinary timeout are not device loss. The old matcher
+    /// keyed on `ParameterNotSupported` as a variant, so any camera without a
+    /// dew heater looked disconnected.
+    #[test]
+    fn ordinary_failures_are_not_disconnects() {
+        let cases = vec![
             CameraError::ExposureFailed("timeout".to_string()),
-            CameraError::CoolingFailed("value out of range".to_string()),
-            CameraError::ImageReadFailed("buffer too small".to_string()),
-            CameraError::ParameterNotSupported("foo".to_string()),
+            CameraError::CoolingFailed("POASetConfig failed: POA_ERROR_OUT_OF_LIMIT".to_string()),
+            CameraError::ImageReadFailed(
+                "ASIGetVideoData failed: ASI_ERROR_TIMEOUT (11)".to_string(),
+            ),
+            CameraError::ParameterNotSupported("dew_heater".to_string()),
             CameraError::SdkError {
                 code: 2,
                 message: "some generic error".to_string(),
             },
             CameraError::ProviderNotFound("foo".to_string()),
             CameraError::NoCamerasFound,
-            CameraError::OpenFailed("foo".to_string()),
+            CameraError::OpenFailed("SDK not loaded".to_string()),
             CameraError::FfiBoundaryError("panic".to_string()),
+            CameraError::ExposureTimeout(Duration::from_secs(1)),
+            CameraError::Cancelled,
         ];
-
-        for e in non_disconnect_errors {
-            assert!(!e.is_sdk_disconnected(), "Expected {} to NOT be a disconnect error", e);
+        for e in cases {
+            assert!(!e.is_sdk_disconnected(), "{} should NOT be a disconnect", e);
         }
     }
 }

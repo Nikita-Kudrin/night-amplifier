@@ -196,6 +196,54 @@ Behavior that's not obvious from the code:
   `LowReadoutNoise`, Planetary → `Normal`). Override with `CaptureSettings.sensor_mode_override`. Name matching lives in
   `src/camera/playerone/sensor_mode.rs` using raw `playerone-sdk-sys` bindings inside `catch_ffi_panic`.
 - **Monitor thread**: runs on a dedicated `std::thread` (not tokio) so USB stalls can't poison the runtime.
+  It borrows the handle out of `AppState.active_camera` for the duration of each bounded call, via one
+  reusable FFI worker thread (`monitor::FfiWorker`) rather than a thread per poll.
+
+### Handle ownership — non-obvious and load-bearing
+
+**A vendor close takes a device *index*, not a handle.** `POACloseCamera(0)` / `ASICloseCamera(0)` /
+`SVBCloseCamera(0)` close whatever occupies index 0 *at that moment*. Handles get abandoned as a matter
+of routine — `capture_frame_bounded` and `poll_camera_status_bounded` hand a stuck call to a detached
+thread and stop waiting — and that thread's `Drop` runs whenever the SDK finally returns, which can be
+minutes later.
+
+On 2026-08-22 that closed a camera 80 s *after* a successful reconnect: the reconnect opened index 0
+cleanly, seeded the cooler without complaint, and then every call started returning
+`POA_ERROR_NOT_OPENED` once the abandoned handle unwound. Three restarts of the application, and an
+hour of integration lost each time.
+
+- Every shim-level handle holds a `camera::DeviceLease`, and **every vendor close goes through
+  `lease.begin_close()`** — which authorizes exactly one close, and only for the lease that still owns
+  the slot. Add a lease to any new provider; a `Drop` that calls the SDK directly is a review flag.
+- Do not "fix" an abandoned handle by closing it eagerly. There is no way to cancel a stuck synchronous
+  FFI call; the lease is what makes abandoning safe.
+- `connect()` **probes the handle before reporting success.** `open()` returning proves nothing — the
+  field failure opened cleanly. Keep the probe.
+
+### Device-loss classification
+
+`CameraError::is_sdk_disconnected()` knows no vendor vocabulary. Each shim classifies its **own numeric
+or enum code** and tags the message with `camera::device_lost::mark`. Matching vendor substrings after
+the fact only ever worked for PlayerOne, which is the one provider that renders its error enum
+symbolically; ZWO, SVBony, QHY and ToupTek all printed a bare integer, so device loss on those was
+never detected at all.
+
+`status()` reads go through `device_lost::tolerate_unsupported`, not `.unwrap_or(default)`. An
+unsupported parameter still falls back; a lost device propagates. Every provider used to swallow both,
+so `status()` returned `Ok` with a temperature of 0.0 on a dead camera and the monitor polled it
+indefinitely.
+
+### Fault detection and recovery
+
+One detector, in `server::camera_health`: one `PERSISTENT_FAULT_THRESHOLD`, one streak in
+`AppState.consecutive_watchdog_timeouts`, fed by the capture watchdog, the status-poll watchdog and the
+monitor alike. A counter per call site means each site has to reach the threshold on its own, so a
+fault alternating between them escalates from neither. The streak ages out (`FAULT_STREAK_TTL`) rather
+than resetting on any success, so an intermittent fault cannot hide behind the occasional good poll.
+
+`camera_session::reconnect` owns the recovery policy — bounded attempts, exponential backoff,
+re-enumeration before each try, and a liveness probe before declaring success. `finalize_disconnect`
+takes a `DisconnectCause`, not a bool: a warmup teardown must not be reconnected.
 
 ## Storage Formats
 

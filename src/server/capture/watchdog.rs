@@ -1,6 +1,6 @@
 use crate::camera::Camera;
+use crate::server::camera_health::{self, FaultKind};
 use crate::server::capture::channel::CapturedFrame;
-use crate::server::events::ServerEvent;
 use crate::server::state::AppState;
 use crate::telemetry::metrics as telemetry_metrics;
 use std::sync::mpsc;
@@ -17,12 +17,6 @@ pub(crate) const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// to block frame delivery indefinitely — no vendor SDK call other than the
 /// image-data read exposes a timeout of its own.
 pub(crate) const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// Consecutive watchdog timeouts against the same camera before escalating
-/// from an ordinary disconnect to a distinct "persistently unresponsive"
-/// signal (`ServerEvent::CameraPersistentlyUnresponsive`) — see
-/// `AppState.consecutive_watchdog_timeouts`.
-pub(crate) const PERSISTENT_FAULT_THRESHOLD: u32 = 3;
 
 /// Added on top of a capture attempt's own `config.timeout + exposure` budget
 /// to get `capture_frame_bounded`'s watchdog timeout — gives the backend's own
@@ -70,49 +64,6 @@ pub(crate) fn capture_watchdog_margin(exposure_us: u64, config_timeout: Duration
     Duration::from_secs_f64(min + (max - min) * fraction)
 }
 
-/// Clear a camera's consecutive-watchdog-timeout streak. Called whenever any
-/// bounded SDK call — status or capture — returns within its budget, since
-/// that proves the camera is currently responding regardless of which
-/// specific watchdog was in play.
-pub(crate) fn clear_watchdog_timeout_streak(state: &Arc<AppState>, camera_name: &str) {
-    state
-        .consecutive_watchdog_timeouts
-        .lock()
-        .expect("consecutive_watchdog_timeouts mutex poisoned")
-        .remove(camera_name);
-}
-
-/// Record a watchdog timeout for a camera — a status-poll timeout and a
-/// capture timeout are equally strong evidence of the same underlying
-/// hardware/USB fault, so both feed this one counter. Once
-/// `PERSISTENT_FAULT_THRESHOLD` consecutive timeouts have accumulated,
-/// escalates with a distinct event on top of whatever per-incident error the
-/// caller already sends.
-pub(crate) fn record_watchdog_timeout(state: &Arc<AppState>, camera_name: &str) {
-    let consecutive_timeouts = {
-        let mut counts = state
-            .consecutive_watchdog_timeouts
-            .lock()
-            .expect("consecutive_watchdog_timeouts mutex poisoned");
-        let count = counts.entry(camera_name.to_string()).or_insert(0);
-        *count += 1;
-        *count
-    };
-    if consecutive_timeouts >= PERSISTENT_FAULT_THRESHOLD {
-        error!(
-            camera_name = %camera_name,
-            consecutive_timeouts,
-            "Camera appears persistently unresponsive across repeated reconnects"
-        );
-        let _ = state
-            .events
-            .send(ServerEvent::camera_persistently_unresponsive(
-                camera_name.to_string(),
-                consecutive_timeouts,
-            ));
-    }
-}
-
 pub(crate) enum StatusPollOutcome {
     /// The call returned in time. The camera handle is returned so the
     /// capture loop can keep using it.
@@ -139,15 +90,23 @@ pub(crate) enum StatusPollOutcome {
 /// The call runs on that detached helper thread while this function waits up
 /// to `STATUS_POLL_TIMEOUT` on a channel. If it returns in time, the handle
 /// comes back and capture continues normally. If not, the handle is abandoned
-/// for good: every backend's underlying type implements `Drop`, so the SDK
-/// resource is still released whenever that thread eventually unwinds — there
-/// is no way to forcibly cancel a stuck synchronous FFI call in Rust, so
-/// "abandon and disconnect" is the safe alternative to "wait forever." The
-/// caller must treat `TimedOut` the same as a real disconnect.
+/// for good — there is no way to forcibly cancel a stuck synchronous FFI call
+/// in Rust, so "abandon and disconnect" is the safe alternative to "wait
+/// forever." The caller must treat `TimedOut` the same as a real disconnect.
+///
+/// Abandoning is only safe because of `camera::DeviceLease`. This comment used
+/// to argue the opposite — that it was safe *because* every backend implements
+/// `Drop`, so the SDK resource is released whenever the stuck thread unwinds.
+/// That has it backwards. Vendor SDKs close by device *index*, so a `Drop` that
+/// runs minutes later closes whichever handle owns that index by then. On
+/// 2026-08-22 that killed a camera 80 s after a successful reconnect and cost
+/// the rest of the session. The lease makes a superseded handle's close a
+/// no-op; without it, this function is a liability.
 ///
 /// Also tracks consecutive timeouts per camera (`AppState.consecutive_watchdog_timeouts`)
 /// to distinguish an isolated USB hiccup from a persistent hardware fault — see
-/// `PERSISTENT_FAULT_THRESHOLD` and `ServerEvent::CameraPersistentlyUnresponsive`.
+/// `camera_health::PERSISTENT_FAULT_THRESHOLD` and
+/// `ServerEvent::CameraPersistentlyUnresponsive`.
 pub(crate) fn poll_camera_status_bounded(
     camera: Box<dyn crate::camera::Camera>,
     state: &Arc<AppState>,
@@ -185,7 +144,7 @@ pub(crate) fn poll_camera_status_bounded(
             // A response arrived within budget — whatever it says, the camera
             // is currently communicating, so any prior timeout streak no
             // longer indicates an active fault.
-            clear_watchdog_timeout_streak(state, &camera_name);
+            camera_health::clear_fault_streak(state, &camera_name);
 
             if elapsed > Duration::from_millis(500) {
                 warn!(
@@ -208,10 +167,10 @@ pub(crate) fn poll_camera_status_bounded(
                 timeout = ?STATUS_POLL_TIMEOUT,
                 "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            record_watchdog_timeout(state, &camera_name);
-            state.send_error(format!(
-                "Camera '{}' stopped responding (status read timed out) — disconnecting",
-                camera_name
+            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            state.send_error(camera_health::incident_message(
+                &camera_name,
+                FaultKind::Timeout,
             ));
             StatusPollOutcome::TimedOut
         }
@@ -300,7 +259,16 @@ pub(crate) fn capture_frame_bounded(
             // A response arrived within budget — regardless of whether
             // `result` itself is Ok or Err, the camera is currently
             // communicating, so any prior timeout streak no longer applies.
-            clear_watchdog_timeout_streak(state, &camera_name);
+            // A device-lost error is an answer, not a silence: the camera is
+            // talking, but says its handle is dead. That is evidence of the
+            // same fault the timeout branch counts, so it must not clear the
+            // streak — it extends it.
+            match &result {
+                Err(e) if e.is_sdk_disconnected() => {
+                    camera_health::record_fault(state, &camera_name, FaultKind::DeviceLost);
+                }
+                _ => camera_health::clear_fault_streak(state, &camera_name),
+            }
             CaptureOutcome::Completed(camera, result)
         }
         Err(_) => {
@@ -309,10 +277,10 @@ pub(crate) fn capture_frame_bounded(
                 timeout = ?watchdog_timeout,
                 "camera.capture() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            record_watchdog_timeout(state, &camera_name);
-            state.send_error(format!(
-                "Camera '{}' stopped responding (capture timed out) — disconnecting",
-                camera_name
+            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            state.send_error(camera_health::incident_message(
+                &camera_name,
+                FaultKind::Timeout,
             ));
             CaptureOutcome::TimedOut
         }
@@ -322,6 +290,8 @@ pub(crate) fn capture_frame_bounded(
 #[cfg(test)]
 mod watchdog_tests {
     use super::*;
+    use crate::server::camera_health::PERSISTENT_FAULT_THRESHOLD;
+    use crate::server::events::ServerEvent;
     use crate::server::state::AppState;
     use std::sync::atomic::AtomicBool;
 
