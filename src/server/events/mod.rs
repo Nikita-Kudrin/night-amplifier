@@ -68,6 +68,28 @@ pub enum ServerEvent {
         consecutive_timeouts: u32,
     },
 
+    /// An automatic reconnect is under way after the camera dropped out.
+    /// `attempt` counts from 1; `next_attempt_in_s` is the wait before this
+    /// attempt runs.
+    CameraReconnecting {
+        name: String,
+        attempt: u32,
+        of: u32,
+        next_attempt_in_s: u64,
+    },
+
+    /// Automatic reconnect gave up. The camera stays disconnected until
+    /// somebody intervenes.
+    CameraReconnectFailed {
+        name: String,
+        attempts: u32,
+        reason: String,
+    },
+
+    /// A reconnect succeeded and the interrupted capture resumed, keeping the
+    /// stack it had already accumulated.
+    CaptureResumed { name: String, stacked_count: u64 },
+
     /// Error occurred
     Error { message: String },
 
@@ -320,6 +342,39 @@ impl ServerEvent {
         ServerEvent::CameraPersistentlyUnresponsive {
             name: name.into(),
             consecutive_timeouts,
+        }
+    }
+
+    pub fn camera_reconnecting(
+        name: impl Into<String>,
+        attempt: u32,
+        of: u32,
+        next_attempt_in_s: u64,
+    ) -> Self {
+        ServerEvent::CameraReconnecting {
+            name: name.into(),
+            attempt,
+            of,
+            next_attempt_in_s,
+        }
+    }
+
+    pub fn camera_reconnect_failed(
+        name: impl Into<String>,
+        attempts: u32,
+        reason: impl Into<String>,
+    ) -> Self {
+        ServerEvent::CameraReconnectFailed {
+            name: name.into(),
+            attempts,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn capture_resumed(name: impl Into<String>, stacked_count: u64) -> Self {
+        ServerEvent::CaptureResumed {
+            name: name.into(),
+            stacked_count,
         }
     }
 

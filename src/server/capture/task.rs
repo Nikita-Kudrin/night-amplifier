@@ -5,7 +5,7 @@ use crate::frame::Frame;
 use crate::server::capture::channel::max_queue_capacity;
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CaptureState, StackingType};
+use crate::server::state::{AppState, CaptureState, SessionResumePlan, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 use std::sync::mpsc;
@@ -16,13 +16,22 @@ use tracing::{debug, error, info, warn};
 use super::render_task::run_render_task;
 use super::stacking_task::run_stacking_task;
 use super::storage;
-pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
+/// Run one capture session to completion.
+///
+/// `resume` is set when a reconnect is picking up a session a device fault
+/// interrupted: it rejoins that session's raw-frame directory and carries its
+/// stacking accumulators forward instead of starting a new observation.
+pub async fn run_capture_loop(
+    state: Arc<AppState>,
+    camera_id: String,
+    resume: Option<SessionResumePlan>,
+) {
     use crate::server::camera_session::lifecycle;
 
     // Transition to capturing state
     state.set_capture_state(CaptureState::Capturing).await;
 
-    debug!(camera_id = %camera_id, "Capture pipeline starting");
+    debug!(camera_id = %camera_id, resumed = resume.is_some(), "Capture pipeline starting");
 
     // Capture the tokio runtime handle — this will be passed to all spawned
     // OS threads so they can call handle.block_on() and handle.spawn().
@@ -40,11 +49,24 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     };
 
     // Initialize capture session
-    if let Err(e) = storage::initialize_capture_session(&state).await {
+    let resume_dir = resume.as_ref().and_then(|p| p.disk_session_dir.clone());
+    if let Err(e) = storage::initialize_capture_session(&state, resume_dir).await {
         error!(error = %e, "Failed to initialize capture session");
         state.send_error(e);
         state.set_capture_state(CaptureState::Idle).await;
         return;
+    }
+
+    // Snapshot what a resume would need, now that the disk session exists and
+    // the settings for this run are fixed. Recorded for every capture, because
+    // a dropout can happen in any of them.
+    {
+        let settings = state.settings.read().await.clone();
+        *state.session_resume_plan.write().await = Some(SessionResumePlan {
+            camera_id: camera_id.clone(),
+            settings,
+            disk_session_dir: state.disk_writer.session_dir(),
+        });
     }
 
     // Take the handle from AppState (held by camera_session since connect).
@@ -81,17 +103,52 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
     apply_sensor_mode_support_override(&mut capture_config, &camera_info.info, &camera_name);
-    let probe_raw = match camera.capture(&capture_config) {
-        Ok(f) => f,
+    // Bounded like every other capture. Unbounded, this call is where a dead
+    // handle hides: the field log shows seventy seconds between "Starting
+    // capture session" and the SDK finally admitting the device was gone, with
+    // nothing on screen for the whole of it.
+    let probe_timeout = Duration::from_micros(capture_config.exposure_us)
+        + capture_watchdog_margin(capture_config.exposure_us, capture_config.timeout);
+    let probe_state = Arc::clone(&state);
+    let probe_config = capture_config.clone();
+    let (camera, probe_result) = match tokio::task::spawn_blocking(move || {
+        capture_frame_bounded(camera, probe_config, 1, probe_timeout, &probe_state)
+    })
+    .await
+    {
+        Ok(CaptureOutcome::Completed(cam, result)) => (Some(cam), Some(result)),
+        Ok(CaptureOutcome::TimedOut) => (None, None),
         Err(e) => {
-            error!(error = %e, "Failed to capture probe frame for pipeline setup");
-            state.send_error(format!("Failed to capture initial frame: {}", e));
+            error!(error = %e, "Probe capture task failed to run");
+            (None, None)
+        }
+    };
+
+    let (camera, probe_raw) = match (camera, probe_result) {
+        (Some(cam), Some(Ok(frame))) => (cam, frame),
+        (camera, probe_result) => {
+            let reason = match &probe_result {
+                Some(Err(e)) => e.to_string(),
+                _ => "camera did not return the first frame in time".to_string(),
+            };
+            error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
+            state.send_error(format!("Failed to capture initial frame: {}", reason));
             state.clear_active_camera_token().await;
-            if e.is_sdk_disconnected() {
-                let _ = camera.close();
-                lifecycle::return_from_capture(&state, &camera_name, None).await;
-            } else {
-                lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
+
+            // A lost device invalidates the handle; a timeout already abandoned
+            // it. Either way the session ends as a fault, so the reconnect
+            // supervisor gets a chance at it.
+            let handle_is_usable =
+                matches!(&probe_result, Some(Err(e)) if !e.is_sdk_disconnected());
+            match (camera, handle_is_usable) {
+                (Some(cam), true) => {
+                    lifecycle::return_from_capture(&state, &camera_name, Some(cam)).await
+                }
+                (Some(mut cam), false) => {
+                    let _ = cam.close();
+                    lifecycle::return_from_capture(&state, &camera_name, None).await;
+                }
+                (None, _) => lifecycle::return_from_capture(&state, &camera_name, None).await,
             }
             state.set_capture_state(CaptureState::Idle).await;
             return;
@@ -158,10 +215,28 @@ pub async fn run_capture_loop(state: Arc<AppState>, camera_id: String) {
         .spawn(move || run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture))
         .expect("Failed to spawn capture thread");
 
+    // On a resume, hand the parked accumulators to the new stacking task; on a
+    // fresh start `CaptureService` has already cleared them.
+    let carryover = if resume.is_some() {
+        state
+            .stacking_carryover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    } else {
+        None
+    };
+
     let stacking_handle = std::thread::Builder::new()
         .name("stacking-task".into())
         .spawn(move || {
-            run_stacking_task(state_stacking, stacking_rx, render_tx, rt_stacking);
+            run_stacking_task(
+                state_stacking,
+                stacking_rx,
+                render_tx,
+                rt_stacking,
+                carryover,
+            );
         })
         .expect("Failed to spawn stacking thread");
 

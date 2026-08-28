@@ -162,10 +162,45 @@ impl SvbonySdk {
     }
 }
 
+/// Symbolic name for an SVBony error code, so a log line names the fault
+/// rather than numbering it.
+fn svb_symbol(code: c_int) -> &'static str {
+    match code {
+        SVB_ERROR_INVALID_INDEX => "SVB_ERROR_INVALID_INDEX",
+        SVB_ERROR_INVALID_ID => "SVB_ERROR_INVALID_ID",
+        SVB_ERROR_INVALID_CONTROL_TYPE => "SVB_ERROR_INVALID_CONTROL_TYPE",
+        SVB_ERROR_CAMERA_CLOSED => "SVB_ERROR_CAMERA_CLOSED",
+        SVB_ERROR_CAMERA_REMOVED => "SVB_ERROR_CAMERA_REMOVED",
+        SVB_ERROR_INVALID_PATH => "SVB_ERROR_INVALID_PATH",
+        SVB_ERROR_INVALID_FILEFORMAT => "SVB_ERROR_INVALID_FILEFORMAT",
+        SVB_ERROR_INVALID_SIZE => "SVB_ERROR_INVALID_SIZE",
+        SVB_ERROR_INVALID_IMGTYPE => "SVB_ERROR_INVALID_IMGTYPE",
+        SVB_ERROR_OUTOF_BOUNDARY => "SVB_ERROR_OUTOF_BOUNDARY",
+        SVB_ERROR_TIMEOUT => "SVB_ERROR_TIMEOUT",
+        SVB_ERROR_INVALID_SEQUENCE => "SVB_ERROR_INVALID_SEQUENCE",
+        SVB_ERROR_BUFFER_TOO_SMALL => "SVB_ERROR_BUFFER_TOO_SMALL",
+        SVB_ERROR_VIDEO_MODE_ACTIVE => "SVB_ERROR_VIDEO_MODE_ACTIVE",
+        SVB_ERROR_EXPOSURE_IN_PROGRESS => "SVB_ERROR_EXPOSURE_IN_PROGRESS",
+        SVB_ERROR_GENERAL_ERROR => "SVB_ERROR_GENERAL_ERROR",
+        SVB_ERROR_INVALID_MODE => "SVB_ERROR_INVALID_MODE",
+        SVB_ERROR_INVALID_DIRECTION => "SVB_ERROR_INVALID_DIRECTION",
+        SVB_ERROR_UNKNOW_SENSOR_TYPE => "SVB_ERROR_UNKNOW_SENSOR_TYPE",
+        _ => "SVB_ERROR_UNKNOWN",
+    }
+}
+
+/// The single funnel every SVBony call passes through. Codes that mean the
+/// device is gone are tagged for `CameraError::is_sdk_disconnected`.
 pub fn check_error(code: c_int, context: &str) -> Result<(), String> {
     if code == SVB_SUCCESS {
-        Ok(())
-    } else {
-        Err(format!("SVBony SDK error {} in {}", code, context))
+        return Ok(());
     }
+    let detail = format!("{} failed: {} ({})", context, svb_symbol(code), code);
+    if matches!(
+        code,
+        SVB_ERROR_INVALID_ID | SVB_ERROR_CAMERA_CLOSED | SVB_ERROR_CAMERA_REMOVED
+    ) {
+        return Err(crate::camera::device_lost::mark(detail));
+    }
+    Err(detail)
 }

@@ -8,7 +8,7 @@ use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, StackedFrame};
-use super::context::{PlanetaryStackingContext, StackingContext};
+use super::context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 use super::{pipeline, solving, storage};
 
 /// Stacking pipeline running on a dedicated OS thread.
@@ -16,17 +16,27 @@ use super::{pipeline, solving, storage};
 /// Receives captured frames, runs star detection, registration, and
 /// accumulation. Sends the resulting display frame to the render channel.
 /// Owns all stacking contexts exclusively — no shared mutable state.
+///
+/// `carryover` seeds those contexts from a capture that ended unexpectedly, so
+/// a session resumed after a reconnect keeps the integration it had already
+/// built rather than starting from one frame.
 pub fn run_stacking_task(
     state: Arc<AppState>,
     stacking_rx: mpsc::Receiver<CapturedFrame>,
     render_tx: mpsc::SyncSender<StackedFrame>,
     rt: tokio::runtime::Handle,
+    carryover: Option<StackingCarryover>,
 ) {
-    debug!("Stacking task started");
+    debug!(resumed = carryover.is_some(), "Stacking task started");
 
-    let mut stacking_ctx: Option<StackingContext> = None;
-    let mut comet_ctx: Option<Box<dyn CometContext>> = None;
-    let mut planetary_ctx: Option<PlanetaryStackingContext> = None;
+    let carryover = carryover.unwrap_or(StackingCarryover {
+        stacking: None,
+        comet: None,
+        planetary: None,
+    });
+    let mut stacking_ctx: Option<StackingContext> = carryover.stacking;
+    let mut comet_ctx: Option<Box<dyn CometContext>> = carryover.comet;
+    let mut planetary_ctx: Option<PlanetaryStackingContext> = carryover.planetary;
     let mut stacking_failed = false;
     let mut was_stacking_enabled = false;
     let mut last_stacking_type = StackingType::DeepSky;
@@ -212,6 +222,18 @@ pub fn run_stacking_task(
 
     // Save stacked result before exiting
     save_stacked_result(&state, &stacking_ctx, &comet_ctx, &planetary_ctx, &rt);
+
+    // Park the accumulators in case this capture is about to be resumed after a
+    // reconnect. A fresh start or a clean stop clears them; see
+    // `CaptureService::start_capture` and `stop_capture`.
+    *state
+        .stacking_carryover
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(StackingCarryover {
+        stacking: stacking_ctx,
+        comet: comet_ctx,
+        planetary: planetary_ctx,
+    });
 
     debug!("Stacking task ended");
 }

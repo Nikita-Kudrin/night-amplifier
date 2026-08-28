@@ -113,6 +113,12 @@ pub struct PersistedSettings {
     /// Anti-dew heater power level (0-100)
     #[serde(default = "default_dew_heater_power")]
     pub dew_heater_power: i32,
+    /// Reopen the camera automatically after an unexpected dropout.
+    #[serde(default = "default_true")]
+    pub auto_reconnect: bool,
+    /// Resume the interrupted capture after an automatic reconnect.
+    #[serde(default = "default_true")]
+    pub auto_resume_capture: bool,
     /// Whether the user has accepted the End User License Agreement
     #[serde(default)]
     pub eula_accepted: bool,
@@ -120,6 +126,10 @@ pub struct PersistedSettings {
     pub indi_server_host: String,
     #[serde(default = "default_indi_server_port")]
     pub indi_server_port: u16,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_indi_server_host() -> String {
@@ -206,6 +216,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             sensor_mode_override: settings.sensor_mode_override,
             dew_heater_enabled: settings.dew_heater_enabled,
             dew_heater_power: settings.dew_heater_power,
+            auto_reconnect: settings.auto_reconnect,
+            auto_resume_capture: settings.auto_resume_capture,
             eula_accepted: settings.eula_accepted,
             indi_server_host: settings.indi_server_host.clone(),
             indi_server_port: settings.indi_server_port,
@@ -254,6 +266,8 @@ impl From<PersistedSettings> for CaptureSettings {
             sensor_mode_override: persisted.sensor_mode_override,
             dew_heater_enabled: persisted.dew_heater_enabled,
             dew_heater_power: persisted.dew_heater_power,
+            auto_reconnect: persisted.auto_reconnect,
+            auto_resume_capture: persisted.auto_resume_capture,
             eula_accepted: persisted.eula_accepted,
             indi_server_host: persisted.indi_server_host,
             indi_server_port: persisted.indi_server_port,

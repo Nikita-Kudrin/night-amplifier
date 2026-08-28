@@ -80,6 +80,40 @@ impl DiskWriterHandle {
         Ok(session_path)
     }
 
+    /// Reopen an existing session directory instead of creating a new one.
+    ///
+    /// Used when a capture resumes after an automatic reconnect: the frames on
+    /// either side of the dropout belong to one observation, and a fresh
+    /// `start_session` would scatter them across timestamped folders.
+    pub fn resume_session(
+        &self,
+        session_path: PathBuf,
+        session_type: WritingSessionType,
+    ) -> std::io::Result<PathBuf> {
+        std::fs::create_dir_all(&session_path)?;
+        *self.session_dir.write().unwrap_or_else(|e| e.into_inner()) = Some(session_path.clone());
+        let _ = self.sender.try_send(DiskWriterMessage::StartSession {
+            path: session_path.clone(),
+            session_type,
+        });
+        info!(session_dir = ?session_path, ?session_type, "Resumed capture session");
+        Ok(session_path)
+    }
+
+    /// Start a session only if saving is on and none is open.
+    ///
+    /// `POST /api/settings` can turn saving on partway through a capture, long
+    /// after `initialize_capture_session` ran. Without this the writer accepted
+    /// frames it had nowhere to put and logged "No active session" for every
+    /// one of them.
+    pub fn ensure_session(&self, session_type: WritingSessionType) -> std::io::Result<()> {
+        if !self.is_enabled() || self.session_dir().is_some() {
+            return Ok(());
+        }
+        self.start_session(session_type)?;
+        Ok(())
+    }
+
     /// End the current capture session
     pub fn end_session(&self) -> Option<PathBuf> {
         let path = self

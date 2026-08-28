@@ -64,6 +64,9 @@ watch(
           save_raw_frames: newSettings.save_raw_frames ?? DEFAULT_SETTINGS.save_raw_frames,
           save_stacked_image: newSettings.save_stacked_image ?? DEFAULT_SETTINGS.save_stacked_image,
           wanderer_mode: newSettings.wanderer_mode ?? DEFAULT_SETTINGS.wanderer_mode,
+          auto_reconnect: newSettings.auto_reconnect ?? DEFAULT_SETTINGS.auto_reconnect,
+          auto_resume_capture:
+              newSettings.auto_resume_capture ?? DEFAULT_SETTINGS.auto_resume_capture,
           weighting_preset: newSettings.weighting_preset ?? DEFAULT_SETTINGS.weighting_preset,
           rejection_method: newSettings.rejection_method ?? DEFAULT_SETTINGS.rejection_method,
           rejection_sigma: newSettings.rejection_sigma ?? DEFAULT_SETTINGS.rejection_sigma,
@@ -241,6 +244,29 @@ const HELP = HELP_TEXTS
             label="Save Stacked Image"
             :help="HELP.save_stacked_image"
             @update:model-value="applySetting('save_stacked_image', $event)"
+        />
+      </div>
+    </div>
+
+    <!-- Camera dropout recovery -->
+    <div class="settings-section">
+      <h3 class="section-title">If the camera drops out</h3>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.auto_reconnect"
+            label="Reconnect automatically"
+            :help="HELP.auto_reconnect"
+            @update:model-value="applySetting('auto_reconnect', $event)"
+        />
+      </div>
+
+      <div v-if="localSettings.auto_reconnect" class="control-group">
+        <BaseToggle
+            v-model="localSettings.auto_resume_capture"
+            label="Resume the capture"
+            :help="HELP.auto_resume_capture"
+            @update:model-value="applySetting('auto_resume_capture', $event)"
         />
       </div>
     </div>

@@ -4,6 +4,13 @@ use tracing::warn;
 
 use super::ffi_types::*;
 use super::sdk::QhySdk;
+use crate::camera::DeviceLease;
+
+/// Provider key for [`DeviceLease`] slots. QHY closes by opaque pointer, so
+/// reopening cannot alias a live handle; the lease is here for the
+/// double-close guard — `close()` is followed by `Drop`, and `CloseQHYCCD`
+/// twice on one pointer is a use-after-free.
+pub(super) const PROVIDER: &str = "QHY";
 
 pub struct ChipInfo {
     pub chip_w: f64,
@@ -18,6 +25,8 @@ pub struct ChipInfo {
 
 pub struct QhyHandle {
     handle: QhyccdHandle,
+    /// Gates `CloseQHYCCD` to exactly one call per handle.
+    lease: DeviceLease,
 }
 
 // SAFETY: QHY SDK handles are bound to a single device. All access to
@@ -42,7 +51,10 @@ impl QhyHandle {
             return Err(format!("InitQHYCCD failed with code {}", res));
         }
 
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            lease: DeviceLease::acquire_unique(PROVIDER),
+        })
     }
 
     pub fn init(&self) -> Result<(), String> {
@@ -56,6 +68,9 @@ impl QhyHandle {
     }
 
     pub fn close(&self) -> Result<(), String> {
+        if !self.lease.begin_close() {
+            return Ok(());
+        }
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
         let res = unsafe { sdk.api.CloseQHYCCD(self.handle) };
         if res == QHYCCD_SUCCESS {

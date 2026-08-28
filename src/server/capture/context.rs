@@ -13,11 +13,27 @@ use crate::planetary::AlignmentRoi;
 use crate::registration::AdaptiveRegistration;
 use crate::server::state::CaptureSettings;
 use crate::stacking::{
-    FrameQuality, RejectionMethod, Stacker, StackingConfig, WeightingConfig, WeightingPreset,
-    REJECTION_PLUGIN,
+    CometContext, FrameQuality, RejectionMethod, Stacker, StackingConfig, WeightingConfig,
+    WeightingPreset, REJECTION_PLUGIN,
 };
 
-/// Holds state for the live stacking pipeline
+/// The stacking state a capture leaves behind when it ends unexpectedly.
+///
+/// A dropout in the middle of a two-hour session must not cost the two hours.
+/// The stacking task normally owns these contexts for the life of one capture
+/// and drops them on exit; when a reconnect is going to resume the session,
+/// they are parked in `AppState.stacking_carryover` instead and handed to the
+/// next stacking task.
+///
+/// Only valid for a resume at the same frame geometry — the stacking task's
+/// existing dimension-mismatch check discards them otherwise, exactly as it
+/// does for a binning change mid-session.
+pub struct StackingCarryover {
+    pub stacking: Option<StackingContext>,
+    pub comet: Option<Box<dyn CometContext>>,
+    pub planetary: Option<PlanetaryStackingContext>,
+}
+
 pub struct StackingContext {
     pub stacker: Stacker,
     pub detector: StarDetector,

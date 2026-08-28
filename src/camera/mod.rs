@@ -37,6 +37,8 @@
 //! # Ok::<(), night_amplifier::camera::CameraError>(())
 //! ```
 
+mod device_lease;
+mod device_lost;
 mod error;
 mod registry;
 mod simulated;
@@ -69,6 +71,8 @@ mod touptek;
 mod touptek_stub;
 
 // Re-export everything
+pub use device_lease::DeviceLease;
+pub use device_lost::{is_marked as is_device_lost_message, mark as mark_device_lost};
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};

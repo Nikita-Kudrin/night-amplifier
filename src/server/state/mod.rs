@@ -5,7 +5,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use tracing::warn;
 
 use super::events::ServerEvent;
@@ -23,7 +24,8 @@ mod types;
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use jpeg_tiers::{JpegTier, JpegTierCache, JpegTierClientGuard};
 pub use session::{
-    CaptureSession, ConnectedCameraInfo, REJECTION_RATE_THRESHOLD, REJECTION_RATE_WINDOW,
+    CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
+    REJECTION_RATE_WINDOW,
 };
 pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
 pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
@@ -67,16 +69,42 @@ pub struct AppState {
     /// Long-lived camera handle. `Some` while connected and not capturing.
     /// Taken out during a capture session and returned on exit.
     pub active_camera: StdMutex<Option<Box<dyn Camera>>>,
+    /// Woken every time a handle is put back into `active_camera` — or fails
+    /// to be, after a stall. The monitor checks the handle out for the
+    /// duration of each bounded call, so `active_camera == None` means "busy",
+    /// not "no camera"; readers wait on this instead of polling. See
+    /// `camera_session::lifecycle::with_active_camera`.
+    pub active_camera_returned: Arc<Notify>,
+    /// Serializes `camera_session::lifecycle::connect`. Its idempotency check
+    /// reads `cameras`, which `finalize_disconnect` clears first, so two
+    /// concurrent connects for one id would both pass it, both open the
+    /// device, and the second would displace — and so close — the first.
+    pub camera_connect_lock: Mutex<()>,
+    /// What an interrupted capture needs in order to pick up where it left
+    /// off. Recorded when a capture starts, consumed by the reconnect
+    /// supervisor, cleared on a clean stop.
+    pub session_resume_plan: RwLock<Option<SessionResumePlan>>,
+    /// True while the reconnect supervisor is running, so a second dropout
+    /// cannot start a second supervisor racing the first.
+    pub reconnect_in_flight: Arc<AtomicBool>,
+    /// Stacking state parked by a capture that ended unexpectedly, so a
+    /// resumed capture continues the same integration instead of restarting
+    /// it. Cleared whenever a capture starts fresh or stops cleanly — holding
+    /// full-resolution accumulators between sessions would be pure waste.
+    pub stacking_carryover: StdMutex<Option<crate::server::capture::StackingCarryover>>,
     /// Current lifecycle phase per connected camera (keyed by camera name).
     pub camera_phase: RwLock<HashMap<String, CameraPhase>>,
     /// Sender used by `lifecycle` to issue commands to the running monitor
     /// thread. `None` when no monitor is running.
     pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
-    /// Consecutive watchdog-timeout status-poll failures, keyed by camera
-    /// name. Incremented on a watchdog timeout, reset to 0 by any poll that
-    /// returns within its timeout — distinguishes an isolated USB hiccup from
-    /// a persistent hardware fault. See `capture::PERSISTENT_FAULT_THRESHOLD`.
-    pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, u32>>,
+    /// Consecutive camera faults keyed by camera name, with the instant the
+    /// streak was last extended. Every fault detector — the capture watchdog,
+    /// the status-poll watchdog and the monitor's cooler poll — feeds this one
+    /// counter, so evidence from any of them counts toward the same
+    /// escalation. Cleared by a call that succeeds, and aged out after
+    /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
+    /// behind the occasional success. See `camera_health`.
+    pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, (u32, Instant)>>,
     /// Number of active JPEG clients per resolution tier. The render task only
     /// encodes tiers somebody is watching.
     pub jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
@@ -169,6 +197,11 @@ impl AppState {
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
             camera_monitor_tx: StdMutex::new(None),
+            active_camera_returned: Arc::new(Notify::new()),
+            camera_connect_lock: Mutex::new(()),
+            session_resume_plan: RwLock::new(None),
+            reconnect_in_flight: Arc::new(AtomicBool::new(false)),
+            stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
             jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
@@ -346,6 +379,38 @@ impl AppState {
         let receiver = self.events.subscribe();
         telemetry_metrics::record_event_subscribers(self.events.receiver_count() as u64);
         receiver
+    }
+
+    /// Discard any stacking accumulators parked for a resume.
+    pub fn clear_stacking_carryover(&self) {
+        *self
+            .stacking_carryover
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Announce that `active_camera` is readable again. Safe to call when
+    /// nobody is waiting; `notify_waiters` stores no permit, and every waiter
+    /// re-checks the handle after registering.
+    pub fn notify_active_camera_returned(&self) {
+        self.active_camera_returned.notify_waiters();
+    }
+
+    /// Extend a camera's fault streak and return its new length. A streak
+    /// older than `ttl` has expired and restarts at 1.
+    pub fn bump_fault_streak(&self, camera_name: &str, ttl: Duration) -> u32 {
+        let now = Instant::now();
+        let mut counts = self
+            .consecutive_watchdog_timeouts
+            .lock()
+            .expect("consecutive_watchdog_timeouts mutex poisoned");
+        let entry = counts.entry(camera_name.to_string()).or_insert((0, now));
+        if now.duration_since(entry.1) > ttl {
+            entry.0 = 0;
+        }
+        entry.0 += 1;
+        entry.1 = now;
+        entry.0
     }
 
     /// Send an error event

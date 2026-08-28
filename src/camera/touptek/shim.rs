@@ -6,12 +6,21 @@ use tracing::warn;
 
 use super::ffi_types::*;
 use super::sdk::{check_hresult, TouptekSdk};
+use crate::camera::DeviceLease;
 use crate::CfaPattern;
+
+/// Provider key for [`DeviceLease`] slots. ToupTek closes by opaque pointer,
+/// so reopening cannot alias a live handle; the lease is here for the
+/// double-close guard — `close()` is followed by `Drop`, and `Toupcam_Close`
+/// twice on one pointer is a use-after-free.
+pub(super) const PROVIDER: &str = "ToupTek";
 
 pub struct TouptekHandle {
     handle: HToupcam,
     pull_mode_active: AtomicBool,
     fatal_error_flag: Arc<AtomicBool>,
+    /// Gates `Toupcam_Close` to exactly one call per handle.
+    lease: DeviceLease,
 }
 
 // SAFETY: ToupTek SDK handles are bound to a single device. All access to
@@ -34,6 +43,7 @@ impl TouptekHandle {
             handle,
             pull_mode_active: AtomicBool::new(false),
             fatal_error_flag: Arc::new(AtomicBool::new(false)),
+            lease: DeviceLease::acquire_unique(PROVIDER),
         })
     }
 
@@ -42,6 +52,9 @@ impl TouptekHandle {
     }
 
     pub fn close(&self) {
+        if !self.lease.begin_close() {
+            return;
+        }
         let sdk = match TouptekSdk::try_load() {
             Some(s) => s,
             None => return,

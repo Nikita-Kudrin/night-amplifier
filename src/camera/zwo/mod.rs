@@ -14,6 +14,7 @@ use crate::ffi_safety::catch_ffi_panic;
 use crate::{CfaPattern, Frame, PixelFormat};
 use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
 
+use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
@@ -342,37 +343,51 @@ impl Camera for ZwoCamera {
     }
 
     fn status(&self) -> CameraResult<CameraStatus> {
-        let temperature = catch_ffi_panic("ZWO::get_temperature", || self.camera.get_temperature())
-            .map_err(CameraError::from)?
-            .unwrap_or(0.0) as f64;
+        // Every read goes through `tolerate_unsupported`: a parameter this
+        // model does not expose falls back, but a lost device propagates so the
+        // fault detector can see it. See `camera::device_lost`.
+        let temperature = tolerate_unsupported(
+            catch_ffi_panic("ZWO::get_temperature", || self.camera.get_temperature())
+                .map_err(CameraError::from)?,
+            0.0,
+        )? as f64;
 
-        let current_gain = catch_ffi_panic("ZWO::get_gain_raw", || self.camera.get_gain_raw())
-            .map_err(CameraError::from)?
-            .unwrap_or(0) as i32;
+        let current_gain = tolerate_unsupported(
+            catch_ffi_panic("ZWO::get_gain_raw", || self.camera.get_gain_raw())
+                .map_err(CameraError::from)?,
+            0,
+        )? as i32;
 
-        let current_offset = catch_ffi_panic("ZWO::get_offset_raw", || self.camera.get_offset_raw())
-            .map_err(CameraError::from)?
-            .unwrap_or(0) as i32;
+        let current_offset = tolerate_unsupported(
+            catch_ffi_panic("ZWO::get_offset_raw", || self.camera.get_offset_raw())
+                .map_err(CameraError::from)?,
+            0,
+        )? as i32;
 
-        let current_exposure_us =
+        let current_exposure_us = tolerate_unsupported(
             catch_ffi_panic("ZWO::get_exposure", || self.camera.get_exposure())
-                .map_err(CameraError::from)?
-                .unwrap_or(0) as u64;
+                .map_err(CameraError::from)?,
+            0,
+        )? as u64;
 
         let cooler_on = if self.info.has_cooler {
-            catch_ffi_panic("ZWO::get_cooler", || self.camera.get_cooler())
-                .map_err(CameraError::from)?
-                .unwrap_or(false)
+            tolerate_unsupported(
+                catch_ffi_panic("ZWO::get_cooler", || self.camera.get_cooler())
+                    .map_err(CameraError::from)?,
+                false,
+            )?
         } else {
             false
         };
 
         let dew_heater_on = if self.info.has_dew_heater {
-            catch_ffi_panic("ZWO::get_anti_dew_heater", || {
-                self.camera.get_anti_dew_heater()
-            })
-            .map_err(CameraError::from)?
-            .unwrap_or(false)
+            tolerate_unsupported(
+                catch_ffi_panic("ZWO::get_anti_dew_heater", || {
+                    self.camera.get_anti_dew_heater()
+                })
+                .map_err(CameraError::from)?,
+                false,
+            )?
         } else {
             false
         };

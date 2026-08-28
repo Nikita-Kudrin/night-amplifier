@@ -1,6 +1,30 @@
 use super::ffi_types::*;
 use super::sdk::PlayerOneSdk;
+use crate::camera::device_lost;
+use crate::camera::DeviceLease;
 use std::os::raw::c_long;
+
+/// Provider key for [`DeviceLease`] slots. Vendor closes here take a device
+/// index, so a stale close would land on whoever holds that index now.
+pub(super) const PROVIDER: &str = "PlayerOne";
+
+/// Render a PlayerOne failure, tagging the codes that mean the device is gone.
+///
+/// `POA_ERROR_OPERATION_FAILED` is included on the vendor's own description of
+/// it — "operation failed, maybe the camera is disconnected suddenly".
+fn poa_err(op: &str, err: POAErrors) -> String {
+    let detail = format!("{} failed: {:?}", op, err);
+    if matches!(
+        err,
+        POAErrors::POA_ERROR_NOT_OPENED
+            | POAErrors::POA_ERROR_DEVICE_NOT_FOUND
+            | POAErrors::POA_ERROR_INVALID_ID
+            | POAErrors::POA_ERROR_OPERATION_FAILED
+    ) {
+        return device_lost::mark(detail);
+    }
+    detail
+}
 
 pub struct CameraDescription {
     properties: POACameraProperties,
@@ -15,23 +39,26 @@ impl CameraDescription {
         let sdk = PlayerOneSdk::try_load().ok_or("SDK not loaded")?;
         let err = unsafe { sdk.api.POAOpenCamera(self.properties.cameraID) };
         if err != POAErrors::POA_OK {
-            return Err(format!("POAOpenCamera failed: {:?}", err));
+            return Err(poa_err("POAOpenCamera", err));
         }
         let err = unsafe { sdk.api.POAInitCamera(self.properties.cameraID) };
         if err != POAErrors::POA_OK {
             unsafe {
                 sdk.api.POACloseCamera(self.properties.cameraID);
             }
-            return Err(format!("POAInitCamera failed: {:?}", err));
+            return Err(poa_err("POAInitCamera", err));
         }
         Ok(Camera {
             id: self.properties.cameraID,
+            lease: DeviceLease::acquire(PROVIDER, self.properties.cameraID),
         })
     }
 }
 
 pub struct Camera {
     id: i32,
+    /// Proof this handle still owns device `id`. Gates every `POACloseCamera`.
+    lease: DeviceLease,
 }
 
 impl Camera {
@@ -65,7 +92,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok((val, is_auto == POABool::POA_TRUE))
         } else {
-            Err(format!("POAGetConfig failed: {:?}", err))
+            Err(poa_err("POAGetConfig", err))
         }
     }
 
@@ -85,7 +112,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POASetConfig failed: {:?}", err))
+            Err(poa_err("POASetConfig", err))
         }
     }
 
@@ -198,7 +225,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POASetImageBin failed: {:?}", err))
+            Err(poa_err("POASetImageBin", err))
         }
     }
 
@@ -208,7 +235,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POASetImageFormat failed: {:?}", err))
+            Err(poa_err("POASetImageFormat", err))
         }
     }
 
@@ -219,7 +246,7 @@ impl Camera {
                 .POASetImageStartPos(self.id, roi.start_x as i32, roi.start_y as i32)
         };
         if err != POAErrors::POA_OK {
-            return Err(format!("POASetImageStartPos failed: {:?}", err));
+            return Err(poa_err("POASetImageStartPos", err));
         }
 
         let err = unsafe {
@@ -229,7 +256,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POASetImageSize failed: {:?}", err))
+            Err(poa_err("POASetImageSize", err))
         }
     }
 
@@ -244,7 +271,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POAStartExposure failed: {:?}", err))
+            Err(poa_err("POAStartExposure", err))
         }
     }
 
@@ -254,7 +281,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POAStopExposure failed: {:?}", err))
+            Err(poa_err("POAStopExposure", err))
         }
     }
 
@@ -265,7 +292,7 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(ready == POABool::POA_TRUE)
         } else {
-            Err(format!("POAImageReady failed: {:?}", err))
+            Err(poa_err("POAImageReady", err))
         }
     }
 
@@ -279,13 +306,19 @@ impl Camera {
         if err == POAErrors::POA_OK {
             Ok(())
         } else {
-            Err(format!("POAGetImageData failed: {:?}", err))
+            Err(poa_err("POAGetImageData", err))
         }
     }
 }
 
 impl Drop for Camera {
     fn drop(&mut self) {
+        // A handle abandoned inside a stuck SDK call can drop long after a
+        // reconnect reopened this index; the lease is what keeps that close
+        // from landing on the new handle's device.
+        if !self.lease.begin_close() {
+            return;
+        }
         if let Some(sdk) = PlayerOneSdk::try_load() {
             unsafe {
                 sdk.api.POACloseCamera(self.id);

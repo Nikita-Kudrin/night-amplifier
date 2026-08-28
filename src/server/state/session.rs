@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+
+use super::settings::CaptureSettings;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -158,4 +161,22 @@ pub struct ConnectedCameraInfo {
     pub index: usize,
     /// Camera info
     pub info: CameraInfo,
+}
+
+/// Everything an interrupted capture needs to pick up where it left off.
+///
+/// Recorded when a capture session starts and consumed by the reconnect
+/// supervisor. Restoring from a snapshot rather than re-reading live state
+/// matters twice over: the settings file may have moved on by the time the
+/// reconnect lands, and the disk session directory has to be rejoined rather
+/// than recreated so one observation stays in one folder.
+#[derive(Debug, Clone)]
+pub struct SessionResumePlan {
+    /// The camera the capture was running against.
+    pub camera_id: String,
+    /// The settings in force when the capture started, including the mode
+    /// (live / wanderer / stacking / planetary) the user was in.
+    pub settings: CaptureSettings,
+    /// The raw-frame directory to rejoin, if the session was saving frames.
+    pub disk_session_dir: Option<PathBuf>,
 }

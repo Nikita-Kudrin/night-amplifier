@@ -57,4 +57,28 @@ async fn test_event_to_json_all_variants() {
     assert_eq!(json["type"], "camera_persistently_unresponsive");
     assert_eq!(json["name"], "Test Camera");
     assert_eq!(json["consecutive_timeouts"], 3);
+
+    // The web client reads these field names directly. A mismatch here renders
+    // as "Camera undefined has stopped responding" and no test catches it
+    // unless both sides are pinned to the same shape.
+    let event = ServerEvent::camera_reconnecting("Test Camera", 2, 5, 10);
+    let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+    assert_eq!(json["type"], "camera_reconnecting");
+    assert_eq!(json["name"], "Test Camera");
+    assert_eq!(json["attempt"], 2);
+    assert_eq!(json["of"], 5);
+    assert_eq!(json["next_attempt_in_s"], 10);
+
+    let event = ServerEvent::camera_reconnect_failed("Test Camera", 5, "still unreachable");
+    let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+    assert_eq!(json["type"], "camera_reconnect_failed");
+    assert_eq!(json["name"], "Test Camera");
+    assert_eq!(json["attempts"], 5);
+    assert_eq!(json["reason"], "still unreachable");
+
+    let event = ServerEvent::capture_resumed("Test Camera", 514);
+    let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+    assert_eq!(json["type"], "capture_resumed");
+    assert_eq!(json["name"], "Test Camera");
+    assert_eq!(json["stacked_count"], 514);
 }

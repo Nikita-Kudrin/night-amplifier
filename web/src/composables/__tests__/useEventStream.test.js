@@ -97,24 +97,69 @@ describe('useEventStream', () => {
             expect(lastError.value).toBe(null)
         })
 
+        // The payload shape here must match what the server actually sends —
+        // see the assertions in src/server/tests/events.rs. This test used to
+        // send `camera_name`, a field the server has never emitted, so it
+        // passed green while the UI rendered "Camera undefined".
         it('updates unresponsiveWarning on camera_persistently_unresponsive event', async () => {
             const {unresponsiveWarning} = useEventStream()
 
             await openWebSocket()
-            await sendEvent({type: 'camera_persistently_unresponsive', camera_name: 'TestCam'})
+            await sendEvent({
+                type: 'camera_persistently_unresponsive',
+                name: 'TestCam',
+                consecutive_timeouts: 3,
+            })
 
-            expect(unresponsiveWarning.value).toBe('Camera TestCam is persistently unresponsive. Please check the USB cable.')
+            expect(unresponsiveWarning.value).toBe('TestCam has stopped responding.')
         })
 
         it('clearUnresponsiveWarning clears unresponsiveWarning', async () => {
             const {unresponsiveWarning, clearUnresponsiveWarning} = useEventStream()
 
             await openWebSocket()
-            await sendEvent({type: 'camera_persistently_unresponsive', camera_name: 'TestCam'})
+            await sendEvent({
+                type: 'camera_persistently_unresponsive',
+                name: 'TestCam',
+                consecutive_timeouts: 3,
+            })
             expect(unresponsiveWarning.value).toBeTruthy()
 
             clearUnresponsiveWarning()
             expect(unresponsiveWarning.value).toBe(null)
+        })
+
+        it('reports reconnect progress and how it ended', async () => {
+            const {unresponsiveWarning} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({
+                type: 'camera_reconnecting',
+                name: 'TestCam',
+                attempt: 2,
+                of: 5,
+                next_attempt_in_s: 10,
+            })
+            expect(unresponsiveWarning.value).toBe('Reconnecting to TestCam — attempt 2 of 5.')
+
+            await sendEvent({
+                type: 'camera_reconnect_failed',
+                name: 'TestCam',
+                attempts: 5,
+                reason: 'still unreachable after 300 s',
+            })
+            expect(unresponsiveWarning.value).toContain('Could not bring TestCam back')
+        })
+
+        it('clears the fault warnings when the capture resumes', async () => {
+            const {unresponsiveWarning, resumeNotice} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'camera_persistently_unresponsive', name: 'TestCam'})
+            await sendEvent({type: 'capture_resumed', name: 'TestCam', stacked_count: 514})
+
+            expect(unresponsiveWarning.value).toBe(null)
+            expect(resumeNotice.value).toContain('514 frames still stacked')
         })
 
         it('handles malformed JSON gracefully', async () => {

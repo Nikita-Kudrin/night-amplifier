@@ -16,6 +16,9 @@ describe('StatusBar', () => {
                 droppedCount: ref(0),
                 lastError: ref(null),
                 unresponsiveWarning: ref(null),
+                clearUnresponsiveWarning: vi.fn(),
+                resumeNotice: ref(null),
+                clearResumeNotice: vi.fn(),
                 clearError: vi.fn(),
                 diskWriterWarning: ref(null),
                 clearDiskWriterWarning: vi.fn(),
@@ -221,8 +224,32 @@ describe('StatusBar', () => {
                 eventStream: {unresponsiveWarning: ref(null)},
             })
 
-            // .error class is used for unresponsiveWarning, but there shouldn't be any
             expect(wrapper.find('.error').exists()).toBe(false)
+        })
+
+        it('shows one row, not two, when an error accompanies the warning', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    unresponsiveWarning: ref('Ares-C PRO has stopped responding.'),
+                    lastError: ref("Camera 'Ares-C PRO' stopped responding — disconnecting"),
+                },
+            })
+
+            // Both describe the same incident; stacking them just doubles the noise.
+            expect(wrapper.findAll('.error')).toHaveLength(1)
+            expect(wrapper.find('.error').text()).toContain('has stopped responding')
+        })
+
+        it('shows the resume notice after a capture picks back up', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    resumeNotice: ref('Ares-C PRO is back. Capture resumed with 514 frames still stacked.'),
+                },
+            })
+
+            const resumed = wrapper.find('.resumed')
+            expect(resumed.exists()).toBe(true)
+            expect(resumed.text()).toContain('514 frames still stacked')
         })
 
         it('shows warning message when unresponsiveWarning is set', () => {
