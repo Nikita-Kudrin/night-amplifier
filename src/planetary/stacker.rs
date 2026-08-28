@@ -246,17 +246,26 @@ impl PlanetaryStacker {
         let mut sum = vec![0.0f64; pixel_count];
         let mut count = vec![0u32; pixel_count];
 
+        let chunk = crate::parallel::balanced_chunk_len(pixel_count);
         for &idx in indices {
             let scored = &self.frames[idx];
             let aligned = self.apply_offset(&scored.frame, scored.offset)?;
             let data = aligned.data();
 
-            for (i, &v) in data.iter().enumerate() {
-                if v > 0.0 {
-                    sum[i] += v as f64;
-                    count[i] += 1;
-                }
-            }
+            // `apply_offset` is parallel; this accumulation was not, so it was the
+            // serial stretch in the middle of an otherwise parallel stack — 12.5 M
+            // samples per frame at IMX464 resolution, on one core.
+            sum.par_chunks_mut(chunk)
+                .zip(count.par_chunks_mut(chunk))
+                .zip(data.par_chunks(chunk))
+                .for_each(|((sum_block, count_block), src)| {
+                    for ((s, c), &v) in sum_block.iter_mut().zip(count_block).zip(src) {
+                        if v > 0.0 {
+                            *s += v as f64;
+                            *c += 1;
+                        }
+                    }
+                });
         }
 
         let result: Vec<f32> = sum
@@ -279,24 +288,44 @@ impl PlanetaryStacker {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let result: Vec<f32> = (0..pixel_count)
-            .into_par_iter()
-            .map(|pixel_idx| {
-                let mut values: Vec<f32> = aligned_frames
-                    .iter()
-                    .map(|f| f.data()[pixel_idx])
-                    .filter(|&v| v > 0.0)
-                    .collect();
+        // The buffers are gathered once rather than re-resolved per pixel, and the
+        // scratch `Vec` is reused across every pixel in a rayon task. Collecting a fresh
+        // `Vec` per output sample cost one heap allocation per sample — 12.5 million per
+        // stack at IMX464 resolution — which is the same allocation-per-pixel pathology
+        // `apply_offset` was fixed for, sitting in the function that consumes its output.
+        //
+        // `select_nth_unstable_by` rather than a full sort: only one order statistic is
+        // wanted, so this is O(n) instead of O(n log n), and it does not panic on a NaN
+        // the way `partial_cmp(..).unwrap()` did.
+        let planes: Vec<&[f32]> = aligned_frames.iter().map(|f| f.data()).collect();
+        let chunk = crate::parallel::balanced_chunk_len(pixel_count);
 
-                if values.is_empty() {
-                    return 0.0;
+        let mut result = vec![0.0f32; pixel_count];
+        result
+            .par_chunks_mut(chunk)
+            .enumerate()
+            .for_each(|(block, out)| {
+                let start = block * chunk;
+                let mut values: Vec<f32> = Vec::with_capacity(planes.len());
+
+                for (offset, slot) in out.iter_mut().enumerate() {
+                    let pixel_idx = start + offset;
+                    values.clear();
+                    values.extend(planes.iter().map(|p| p[pixel_idx]).filter(|&v| v > 0.0));
+
+                    if values.is_empty() {
+                        *slot = 0.0;
+                        continue;
+                    }
+
+                    let rank = (((values.len() - 1) as f32 * percentile).round() as usize)
+                        .min(values.len() - 1);
+                    values.select_nth_unstable_by(rank, |a, b| {
+                        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    *slot = values[rank];
                 }
-
-                values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let idx = ((values.len() - 1) as f32 * percentile).round() as usize;
-                values[idx.min(values.len() - 1)]
-            })
-            .collect();
+            });
 
         Frame::from_f32_vec(result, self.width, self.height, self.channels)
     }
@@ -308,18 +337,27 @@ impl PlanetaryStacker {
 
         let weights = self.compute_normalized_weights(indices);
 
+        let chunk = crate::parallel::balanced_chunk_len(pixel_count);
         for (i, &idx) in indices.iter().enumerate() {
             let scored = &self.frames[idx];
             let weight = weights[i];
             let aligned = self.apply_offset(&scored.frame, scored.offset)?;
             let data = aligned.data();
 
-            for (j, &v) in data.iter().enumerate() {
-                if v > 0.0 {
-                    weighted_sum[j] += v as f64 * weight;
-                    weight_sum[j] += weight;
-                }
-            }
+            // Parallel for the same reason as `stack_mean`: a serial pass over 12.5 M
+            // samples per frame between two parallel stages.
+            weighted_sum
+                .par_chunks_mut(chunk)
+                .zip(weight_sum.par_chunks_mut(chunk))
+                .zip(data.par_chunks(chunk))
+                .for_each(|((sum_block, weight_block), src)| {
+                    for ((ws, w), &v) in sum_block.iter_mut().zip(weight_block).zip(src) {
+                        if v > 0.0 {
+                            *ws += v as f64 * weight;
+                            *w += weight;
+                        }
+                    }
+                });
         }
 
         let result: Vec<f32> = weighted_sum

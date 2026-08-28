@@ -75,13 +75,23 @@ impl Frame {
         }
 
         if self.channels == 3 {
+            // Chunked by pixel run, not by pixel: `par_chunks_mut(3)` zipped three deep
+            // makes one rayon item per pixel through a four-level `Zip`, so the split and
+            // index bookkeeping cost as much as the conversion. `balanced_chunk_len` gives
+            // a few runs per worker, and the inner loop is a plain scalar walk.
             let (r, g, b) = self.planes();
-            out.par_chunks_mut(3)
-                .zip(r.par_iter().zip(g.par_iter()).zip(b.par_iter()))
-                .for_each(|(px, ((&r, &g), &b))| {
-                    px[0] = convert(r);
-                    px[1] = convert(g);
-                    px[2] = convert(b);
+            let pixels_per_chunk = crate::parallel::balanced_chunk_len(r.len());
+
+            out.par_chunks_mut(pixels_per_chunk * 3)
+                .zip(r.par_chunks(pixels_per_chunk))
+                .zip(g.par_chunks(pixels_per_chunk))
+                .zip(b.par_chunks(pixels_per_chunk))
+                .for_each(|(((px_block, r_block), g_block), b_block)| {
+                    for (i, px) in px_block.chunks_exact_mut(3).enumerate() {
+                        px[0] = convert(r_block[i]);
+                        px[1] = convert(g_block[i]);
+                        px[2] = convert(b_block[i]);
+                    }
                 });
             return;
         }

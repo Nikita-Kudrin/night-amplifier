@@ -49,7 +49,11 @@ fn planet_frame(width: usize, height: usize, channels: usize, shift_x: f32, shif
 }
 
 /// Stacks per measured iteration. See the note on the mono case below.
-const REPS: usize = 2;
+///
+/// Three, not two: removing the per-output-sample `Vec` allocation from
+/// `stack_percentile` took the mono case from 5.5 ms to 4.3 ms, which dropped the x2
+/// figure back under the 10 ms floor.
+const REPS: usize = 3;
 
 fn bench_planetary_stack(c: &mut Criterion) {
     let mut group = c.benchmark_group("planetary_align");
