@@ -139,13 +139,7 @@ pub fn apply_luminance_scale_lut_scalar_planar(
         let b = (b_plane[i] - black_point).max(0.0);
 
         let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        // reuse scale_lut_lookup
-        let lut_max = (scale_lut.len() - 1) as f32;
-        let pos = (luminance * lut_max).min(lut_max);
-        let i0 = (pos as usize).min(scale_lut.len() - 2);
-        let frac = pos - i0 as f32;
-        let lo = scale_lut[i0];
-        let scale = lo + (scale_lut[i0 + 1] - lo) * frac;
+        let scale = scale_lut_lookup(scale_lut, luminance);
 
         let lum_stretched = luminance * scale;
         let base_add = lum_stretched * (1.0 - color_intensity);
