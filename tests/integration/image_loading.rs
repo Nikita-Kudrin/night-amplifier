@@ -96,154 +96,28 @@ pub fn load_tiff(path: &Path) -> Result<LoadedImage, String> {
     })
 }
 
-/// Reorders plane-major 16-bit LE samples into interleaved order.
-///
-/// Every arm of `load_fits` funnels into `Frame::from_raw`, which expects
-/// interleaved input, so a planar FITS has to be converted first.
-fn interleave_u16_planes(bytes: &[u8], area: usize, channels: usize) -> Vec<u8> {
-    let mut out = vec![0u8; bytes.len()];
-    for i in 0..area {
-        for c in 0..channels {
-            let src = (c * area + i) * 2;
-            let dst = (i * channels + c) * 2;
-            out[dst] = bytes[src];
-            out[dst + 1] = bytes[src + 1];
-        }
-    }
-    out
-}
-
 // ============================================================================
 // FITS Loading
 // ============================================================================
 
-/// Loads a FITS file and converts it to a Frame
+/// Loads a FITS file and converts it to a Frame.
+///
+/// Delegates to `night_amplifier::fits::read_frame`, the same reader the application
+/// uses. The 100-line copy this replaced had to re-interleave a planar FITS before
+/// handing it to `Frame::from_raw` — reinstating, in the harness, exactly the double
+/// conversion the production reader was written to remove. A fixture loader that does
+/// not agree with the application is not testing the application.
 pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
-    use fitsio::hdu::HduInfo;
-    use fitsio::images::ImageType;
-    use fitsio::FitsFile;
-
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| format!("Invalid path: {:?}", path))?;
-
-    let mut fitsfile = FitsFile::open(path_str)
-        .map_err(|e| format!("Failed to open FITS file {:?}: {}", path, e))?;
-
-    let hdu = fitsfile
-        .primary_hdu()
-        .map_err(|e| format!("Failed to get primary HDU from {:?}: {}", path, e))?;
-
-    // `[3, h, w]` (NAXIS3 = 3) and `[h, w, 3]` (NAXIS1 = 3) are different memory
-    // layouts, and `Frame::from_raw` de-interleaves — so a planar source has to be
-    // interleaved first or its channels come out scrambled. Reuse the production
-    // interpretation rather than keeping a second copy of this logic.
-    let (shape, image_type) = match &hdu.info {
-        HduInfo::ImageInfo { shape, image_type } => {
-            let parsed = night_amplifier::fits::interpret_shape(shape)
-                .ok_or_else(|| format!("Unsupported FITS shape {:?} in {:?}", shape, path))?;
-            (parsed, *image_type)
-        }
-        _ => return Err(format!("FITS file {:?} does not contain image data", path)),
-    };
-    let (width, height, channels) = (shape.width, shape.height, shape.channels);
-
-    let (raw_bytes, format) = match image_type {
-        ImageType::UnsignedByte => {
-            let data: Vec<u8> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read u8 FITS data from {:?}: {}", path, e))?;
-            (data, PixelFormat::Rgb8)
-        }
-        ImageType::Short => {
-            let data: Vec<i16> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read i16 FITS data from {:?}: {}", path, e))?;
-            // Convert to u16 by adding offset
-            let bytes: Vec<u8> = data
-                .iter()
-                .map(|&v| (v as i32 + 32768) as u16)
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
-            (bytes, PixelFormat::Rgb16)
-        }
-        ImageType::UnsignedShort => {
-            let data: Vec<u16> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read u16 FITS data from {:?}: {}", path, e))?;
-            let bytes: Vec<u8> = data.iter().flat_map(|&v| v.to_le_bytes()).collect();
-            (bytes, PixelFormat::Rgb16)
-        }
-        ImageType::Long => {
-            let data: Vec<i32> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read i32 FITS data from {:?}: {}", path, e))?;
-            // Scale to 16-bit
-            let max_val = data.iter().map(|&v| v.abs()).max().unwrap_or(1) as f64;
-            let bytes: Vec<u8> = data
-                .iter()
-                .map(|&v| (v as f64 / max_val * 32767.0 + 32768.0) as u16)
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
-            (bytes, PixelFormat::Rgb16)
-        }
-        ImageType::Float => {
-            let data: Vec<f32> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read f32 FITS data from {:?}: {}", path, e))?;
-            // Normalize and convert to 16-bit
-            let min = data.iter().cloned().fold(f32::MAX, f32::min);
-            let max = data.iter().cloned().fold(f32::MIN, f32::max);
-            let range = (max - min).max(1e-10);
-            let bytes: Vec<u8> = data
-                .iter()
-                .map(|&v| (((v - min) / range) * 65535.0) as u16)
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
-            (bytes, PixelFormat::Rgb16)
-        }
-        ImageType::Double => {
-            let data: Vec<f64> = hdu
-                .read_image(&mut fitsfile)
-                .map_err(|e| format!("Failed to read f64 FITS data from {:?}: {}", path, e))?;
-            // Normalize and convert to 16-bit
-            let min = data.iter().cloned().fold(f64::MAX, f64::min);
-            let max = data.iter().cloned().fold(f64::MIN, f64::max);
-            let range = (max - min).max(1e-10);
-            let bytes: Vec<u8> = data
-                .iter()
-                .map(|&v| (((v - min) / range) * 65535.0) as u16)
-                .flat_map(|v| v.to_le_bytes())
-                .collect();
-            (bytes, PixelFormat::Rgb16)
-        }
-        _ => {
-            return Err(format!(
-                "Unsupported FITS image type {:?} in {:?}",
-                image_type, path
-            ))
-        }
-    };
-
-    // FITS grayscale data is likely Bayer from astronomy cameras
-    let is_bayer = channels == 1;
-
-    let raw_bytes =
-        if channels > 1 && shape.layout == night_amplifier::fits::FitsColourLayout::Planar {
-            interleave_u16_planes(&raw_bytes, width * height, channels)
-        } else {
-            raw_bytes
-        };
-
-    let frame = Frame::from_raw(&raw_bytes, width, height, channels, format)
-        .map_err(|e| format!("Failed to create Frame from FITS {:?}: {}", path, e))?;
+    let frame = night_amplifier::fits::read_frame(path)
+        .map_err(|e| format!("Failed to load FITS {:?}: {}", path, e))?;
 
     Ok(LoadedImage {
+        width: frame.width(),
+        height: frame.height(),
+        // FITS greyscale from an astronomy camera is usually undebayered CFA data.
+        is_bayer: frame.channels() == 1,
         frame,
         path: path.to_path_buf(),
-        width,
-        height,
-        is_bayer,
     })
 }
 

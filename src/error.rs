@@ -59,6 +59,10 @@ pub enum StackError {
     #[error("FFI error: {0}")]
     FfiBoundaryError(String),
 
+    /// A FITS file could not be read
+    #[error("Failed to read FITS: {0}")]
+    FitsRead(String),
+
     /// Operation attempted on an empty stack
     #[error("Cannot compute on an empty stack")]
     EmptyStack,

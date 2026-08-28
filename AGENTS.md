@@ -146,6 +146,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 | Module                        | Purpose                                                                              |
 |-------------------------------|--------------------------------------------------------------------------------------|
 | `frame/`                      | `Frame` with normalized f32 pixels; format conversion                                |
+| `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
 | `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG                                       |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |

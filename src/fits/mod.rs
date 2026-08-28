@@ -13,9 +13,11 @@ use fitsio::FitsFile;
 
 mod header;
 mod metadata;
+mod reader;
 mod writers;
 
 pub use metadata::FitsMetadata;
+pub use reader::read_frame;
 
 /// How a FITS image stores its colour samples.
 ///

@@ -39,7 +39,7 @@
 
 mod error;
 mod registry;
-pub(crate) mod simulated;
+mod simulated;
 mod traits;
 mod types;
 
