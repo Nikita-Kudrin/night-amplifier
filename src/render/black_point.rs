@@ -76,25 +76,40 @@ pub fn calculate_black_point(
 }
 
 /// Finds the Mode (peak) of the image histogram for a specific channel
+///
+/// The scan is bounded to the bins that actually received a sample. Only ~10 000 samples
+/// go into a 65 536-bin histogram, so walking all of it spent six times more work
+/// deciding that empty bins were empty than it did filling them — three times per frame,
+/// once per channel. The answer is unchanged: an untouched bin holds 0, and `count >
+/// max_count` starting from 0 can never select one.
 pub fn estimate_channel_mode(frame: &Frame, channel_index: usize) -> f32 {
     let data = frame.channel_data(channel_index);
     let mut histogram = vec![0u32; 65536];
 
     let step = (data.len() / 10000).max(1);
 
+    let mut lowest_bin = usize::MAX;
+    let mut highest_bin = 0usize;
+
     for i in (0..data.len()).step_by(step) {
         let val = data[i];
-        let bin = (val * 65535.0) as usize;
-        histogram[bin.clamp(0, 65535)] += 1;
+        let bin = ((val * 65535.0) as usize).clamp(0, 65535);
+        histogram[bin] += 1;
+        lowest_bin = lowest_bin.min(bin);
+        highest_bin = highest_bin.max(bin);
     }
 
     let mut max_count = 0;
     let mut peak_bin = 0;
 
-    for (i, &count) in histogram.iter().enumerate().skip(10) {
-        if count > max_count {
-            max_count = count;
-            peak_bin = i;
+    // `skip(10)` in bin terms: the first ten bins are excluded as sensor floor.
+    let scan_start = lowest_bin.max(10);
+    if scan_start <= highest_bin {
+        for (offset, &count) in histogram[scan_start..=highest_bin].iter().enumerate() {
+            if count > max_count {
+                max_count = count;
+                peak_bin = scan_start + offset;
+            }
         }
     }
 

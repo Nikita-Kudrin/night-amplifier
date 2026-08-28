@@ -8,6 +8,17 @@ use tracing::instrument;
 ///
 /// The three `PixelFormat` arms differ only in how a sample is decoded, so they share
 /// this traversal rather than repeating the channel ladder three times.
+///
+/// # One pass over the source, not one per plane
+///
+/// The obvious shape — walk each output plane in turn, reading `raw[i * channels + c]` —
+/// reads the *whole* source buffer once per channel. For a 2712x1538 RGB frame that is
+/// three passes over 12.5 MB, each touching every cache line, where the interleaved
+/// predecessor did one. This is the camera ingest path, so it runs per frame.
+///
+/// Instead the source is walked once and each sample is scattered to its plane. The
+/// planes are split apart up front so the write is a sequential store stream per channel
+/// rather than a bounds-checked `data[c * area + i]` per sample.
 #[inline]
 fn scatter_to_planes(
     data: &mut [f32],
@@ -22,9 +33,29 @@ fn scatter_to_planes(
         return;
     }
 
-    for (c, plane) in data.chunks_exact_mut(pixels).enumerate() {
-        for (i, slot) in plane.iter_mut().enumerate() {
-            *slot = sample(i, c);
+    if channels == 3 {
+        let (r, rest) = data.split_at_mut(pixels);
+        let (g, b) = rest.split_at_mut(pixels);
+        for i in 0..pixels {
+            r[i] = sample(i, 0);
+            g[i] = sample(i, 1);
+            b[i] = sample(i, 2);
+        }
+        return;
+    }
+
+    // Uncommon channel counts: still one pass over the source, collecting the plane
+    // slices first so the inner write does not re-derive an offset per sample.
+    let mut planes: Vec<&mut [f32]> = Vec::with_capacity(channels);
+    let mut rest = &mut data[..pixels * channels];
+    for _ in 0..channels {
+        let (plane, tail) = rest.split_at_mut(pixels);
+        planes.push(plane);
+        rest = tail;
+    }
+    for i in 0..pixels {
+        for (c, plane) in planes.iter_mut().enumerate() {
+            plane[i] = sample(i, c);
         }
     }
 }
