@@ -1,6 +1,6 @@
 //! Image file loaders for various formats
 
-pub(crate) mod fits;
+mod fits;
 mod png;
 mod tiff;
 

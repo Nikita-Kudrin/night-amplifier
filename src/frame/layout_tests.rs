@@ -619,7 +619,7 @@ fn production_fits_loader_round_trips_u16() {
     let path = dir.path().join("roundtrip_u16.fits");
 
     crate::fits::write_fits_u16(&frame, &path, None).unwrap();
-    let back = crate::camera::simulated::loaders::fits::load_fits(&path).unwrap();
+    let back = crate::fits::read_frame(&path).unwrap();
 
     assert_eq!(back.channels(), 3, "loader lost the colour planes");
     assert_frame_is_tricolour(&back, "write_fits_u16 -> production load_fits");
@@ -632,7 +632,7 @@ fn production_fits_loader_round_trips_f32() {
     let path = dir.path().join("roundtrip_f32.fits");
 
     crate::fits::write_fits(&frame, &path, None).unwrap();
-    let back = crate::camera::simulated::loaders::fits::load_fits(&path).unwrap();
+    let back = crate::fits::read_frame(&path).unwrap();
 
     assert_eq!(back.channels(), 3, "loader lost the colour planes");
     assert_frame_is_tricolour(&back, "write_fits -> production load_fits");

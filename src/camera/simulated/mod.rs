@@ -5,7 +5,7 @@
 //! Multiple simulated cameras can be added, each pointing to a different directory.
 
 mod camera;
-pub(crate) mod loaders;
+mod loaders;
 mod probe;
 mod registry;
 
