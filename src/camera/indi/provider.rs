@@ -57,8 +57,6 @@ impl IndiProvider {
             }
 
             let name = device.name.clone();
-            let slug = Self::slugify_device_name(&name);
-            let _id = format!("indi_{}", slug);
 
             let mut max_width = 0;
             let mut max_height = 0;

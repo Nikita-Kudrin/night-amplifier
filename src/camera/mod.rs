@@ -39,10 +39,7 @@
 
 mod error;
 mod registry;
-#[cfg(test)]
 pub(crate) mod simulated;
-#[cfg(not(test))]
-mod simulated;
 mod traits;
 mod types;
 

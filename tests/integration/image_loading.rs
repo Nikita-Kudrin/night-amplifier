@@ -228,13 +228,12 @@ pub fn load_fits(path: &Path) -> Result<LoadedImage, String> {
     // FITS grayscale data is likely Bayer from astronomy cameras
     let is_bayer = channels == 1;
 
-    let raw_bytes = if channels > 1
-        && shape.layout == night_amplifier::fits::FitsColourLayout::Planar
-    {
-        interleave_u16_planes(&raw_bytes, width * height, channels)
-    } else {
-        raw_bytes
-    };
+    let raw_bytes =
+        if channels > 1 && shape.layout == night_amplifier::fits::FitsColourLayout::Planar {
+            interleave_u16_planes(&raw_bytes, width * height, channels)
+        } else {
+            raw_bytes
+        };
 
     let frame = Frame::from_raw(&raw_bytes, width, height, channels, format)
         .map_err(|e| format!("Failed to create Frame from FITS {:?}: {}", path, e))?;
@@ -360,7 +359,10 @@ fn save_frame_to_path(frame: &Frame, output_path: &Path) -> Result<PathBuf, Stri
         if frame_spread > crate::integration::common::MIN_CHROMA_SPREAD {
             crate::integration::common::assert_has_chroma(
                 spread,
-                &format!("render_to_rgb8 for {:?} (source frame spread {frame_spread:.2})", output_path),
+                &format!(
+                    "render_to_rgb8 for {:?} (source frame spread {frame_spread:.2})",
+                    output_path
+                ),
             );
         }
 

@@ -28,25 +28,38 @@ pub fn warp_frame(frame: &Frame, transform: &AffineTransform, border_value: f32)
     // returns `Result`, and the fallible construction used to propagate through
     // `Frame::from_f32_vec`.
     let mut output = Frame::filled(width, height, channels, border_value)?;
-    
+
     // Pre-compute inverse transform coefficients once per frame
     let inv_cache = InverseTransformCache::from_transform(transform);
 
     if channels == 3 {
         let (src_r, src_g, src_b) = frame.planes();
         let (r_plane, g_plane, b_plane) = output.planes_mut();
-        r_plane.par_chunks_mut(width)
+        r_plane
+            .par_chunks_mut(width)
             .zip(g_plane.par_chunks_mut(width))
             .zip(b_plane.par_chunks_mut(width))
             .enumerate()
             .for_each(|(dy, ((r_row, g_row), b_row))| {
-                warp_row_rgb_planar(frame, &inv_cache, dy, src_r, src_g, src_b, r_row, g_row, b_row, border_value);
+                warp_row_rgb_planar(
+                    frame,
+                    &inv_cache,
+                    dy,
+                    src_r,
+                    src_g,
+                    src_b,
+                    r_row,
+                    g_row,
+                    b_row,
+                    border_value,
+                );
             });
     } else {
         for c in 0..channels {
             let src_c = frame.channel_data(c);
             let c_plane = output.channel_data_mut(c);
-            c_plane.par_chunks_mut(width)
+            c_plane
+                .par_chunks_mut(width)
                 .enumerate()
                 .for_each(|(dy, c_row)| {
                     warp_row_1ch(frame, &inv_cache, dy, src_c, c_row, border_value);
@@ -82,18 +95,31 @@ pub fn warp_frame_into(
     if channels == 3 {
         let (src_r, src_g, src_b) = frame.planes();
         let (r_plane, g_plane, b_plane) = output.planes_mut();
-        r_plane.par_chunks_mut(width)
+        r_plane
+            .par_chunks_mut(width)
             .zip(g_plane.par_chunks_mut(width))
             .zip(b_plane.par_chunks_mut(width))
             .enumerate()
             .for_each(|(dy, ((r_row, g_row), b_row))| {
-                warp_row_rgb_planar(frame, &inv_cache, dy, src_r, src_g, src_b, r_row, g_row, b_row, border_value);
+                warp_row_rgb_planar(
+                    frame,
+                    &inv_cache,
+                    dy,
+                    src_r,
+                    src_g,
+                    src_b,
+                    r_row,
+                    g_row,
+                    b_row,
+                    border_value,
+                );
             });
     } else {
         for c in 0..channels {
             let src_c = frame.channel_data(c);
             let c_plane = output.channel_data_mut(c);
-            c_plane.par_chunks_mut(width)
+            c_plane
+                .par_chunks_mut(width)
                 .enumerate()
                 .for_each(|(dy, c_row)| {
                     warp_row_1ch(frame, &inv_cache, dy, src_c, c_row, border_value);
@@ -129,13 +155,21 @@ fn warp_row_rgb_planar(
     let (sx_step, sy_step) = inv_cache.x_step();
 
     warp_row_rgb(
-        src_r, src_g, src_b,
-        width, height,
-        r_row, g_row, b_row,
+        src_r,
+        src_g,
+        src_b,
+        width,
+        height,
+        r_row,
+        g_row,
+        b_row,
         border_value,
-        sx, sy,
-        sx_step, sy_step,
-        max_sx, max_sy,
+        sx,
+        sy,
+        sx_step,
+        sy_step,
+        max_sx,
+        max_sy,
     );
 }
 
@@ -200,7 +234,7 @@ mod tests {
                 let cur_r = frame.get_pixel(dx, dy, 0);
                 let cur_g = frame.get_pixel(dx, dy, 1);
                 let cur_b = frame.get_pixel(dx, dy, 2);
-                
+
                 frame.set_pixel(dx, dy, 0, cur_r + intensity);
                 frame.set_pixel(dx, dy, 1, cur_g + intensity);
                 frame.set_pixel(dx, dy, 2, cur_b + intensity);

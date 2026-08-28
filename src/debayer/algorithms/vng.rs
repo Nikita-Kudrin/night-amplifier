@@ -147,12 +147,7 @@ fn load_4_horizontal(data: &[f32], width: usize, base_x: usize, y: usize) -> f32
 /// Returns an array of 8 f32x4 vectors, one for each direction.
 /// Each f32x4 contains the gradient values for 4 consecutive x positions.
 #[inline]
-fn compute_gradients_simd_4(
-    data: &[f32],
-    width: usize,
-    x_start: usize,
-    y: usize,
-) -> [[f32; 4]; 8] {
+fn compute_gradients_simd_4(data: &[f32], width: usize, x_start: usize, y: usize) -> [[f32; 4]; 8] {
     let yi = y as isize;
     let xi = x_start as isize;
 

@@ -475,9 +475,7 @@ mod tests {
             .collect();
 
         // No node coordinates, so this takes the weight-based path (as RBF does).
-        let model = BackgroundModel::new(
-            grid, grid_cols, grid_rows, w, h, 3, false, 0.1, 1.0,
-        );
+        let model = BackgroundModel::new(grid, grid_cols, grid_rows, w, h, 3, false, 0.1, 1.0);
 
         // A constant frame has zero MAD, so the pedestal is its 0.001 floor and the
         // output is a pure readout of the interpolated background.
@@ -502,7 +500,8 @@ mod tests {
     /// the weight-based path recovers the channel index from the model's stored height.
     #[test]
     fn subtract_from_leaves_a_mismatched_frame_untouched() {
-        let model = BackgroundModel::new(vec![vec![0.5f32; 16]; 3], 4, 4, 64, 64, 3, false, 0.1, 1.0);
+        let model =
+            BackgroundModel::new(vec![vec![0.5f32; 16]; 3], 4, 4, 64, 64, 3, false, 0.1, 1.0);
 
         let mut frame = Frame::filled(32, 32, 3, 0.4).unwrap();
         model.subtract_from(&mut frame);

@@ -76,7 +76,6 @@ pub fn subtract_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
     }
 }
 
-
 /// SIMD-optimized scalar multiplication with clamping to [0, 1].
 ///
 /// Equivalent to: `data[i] = (data[i] * scalar).clamp(0.0, 1.0)`
@@ -142,7 +141,6 @@ mod tests {
 
     use super::*;
 
-
     /// Deterministic pseudo-random samples in [0, 1).
     fn noise(n: usize, seed_init: u32) -> Vec<f32> {
         let mut seed = seed_init;
@@ -181,10 +179,7 @@ mod tests {
     fn assert_close(a: &[f32], b: &[f32], ctx: &str) {
         assert_eq!(a.len(), b.len(), "{ctx}: length mismatch");
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-            assert!(
-                (x - y).abs() < 1e-6,
-                "{ctx}: index {i} differs: {x} vs {y}"
-            );
+            assert!((x - y).abs() < 1e-6, "{ctx}: index {i} differs: {x} vs {y}");
         }
     }
 
@@ -222,7 +217,9 @@ mod tests {
             let (mut r2, mut g2, mut b2) = to_planes(&base);
 
             apply_luminance_scale_lut_simd_planar(&mut r1, &mut g1, &mut b1, 0.02, &scale_lut, 1.5);
-            apply_luminance_scale_lut_scalar_planar(&mut r2, &mut g2, &mut b2, 0.02, &scale_lut, 1.5);
+            apply_luminance_scale_lut_scalar_planar(
+                &mut r2, &mut g2, &mut b2, 0.02, &scale_lut, 1.5,
+            );
 
             assert_close(&r1, &r2, &format!("scale_lut R, {pixels} px"));
             assert_close(&g1, &g2, &format!("scale_lut G, {pixels} px"));
@@ -265,7 +262,9 @@ mod tests {
             apply_luminance_preserving_simd(&mut interleaved, 1.0, |l| l * 1.7);
 
             let (mut r, mut g, mut b) = to_planes(&base);
-            apply_luminance_preserving_simd_planar(&mut r, &mut g, &mut b, pixels, 1.0, |l| l * 1.7);
+            apply_luminance_preserving_simd_planar(&mut r, &mut g, &mut b, pixels, 1.0, |l| {
+                l * 1.7
+            });
 
             assert_close(
                 &interleave(&r, &g, &b),
@@ -330,7 +329,11 @@ mod tests {
             let mut simd = base.clone();
             multiply_scalar_clamp_simd(&mut simd, 1.9);
             let expected: Vec<f32> = base.iter().map(|v| (v * 1.9).clamp(0.0, 1.0)).collect();
-            assert_close(&simd, &expected, &format!("multiply_scalar_clamp len {len}"));
+            assert_close(
+                &simd,
+                &expected,
+                &format!("multiply_scalar_clamp len {len}"),
+            );
         }
     }
 }

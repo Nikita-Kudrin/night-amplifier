@@ -132,7 +132,10 @@ fn test_pipeline_edge_cases() {
         frame.get_pixel(bg.0, bg.1, 1),
         frame.get_pixel(bg.0, bg.1, 2),
     );
-    assert!(src.2 > src.0 && src.0 > src.1, "fixture invariant: expected B > R > G, got {src:?}");
+    assert!(
+        src.2 > src.0 && src.0 > src.1,
+        "fixture invariant: expected B > R > G, got {src:?}"
+    );
 
     let idx = (bg.1 * width + bg.0) * 3;
     let out = (rgb8[idx], rgb8[idx + 1], rgb8[idx + 2]);

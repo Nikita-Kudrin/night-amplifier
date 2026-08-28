@@ -77,8 +77,11 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
         &frame,
         |b, frame| {
             b.iter(|| {
-                night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(black_box(frame), CfaPattern::Rggb)
-                    .expect("Debayer failed")
+                night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(
+                    black_box(frame),
+                    CfaPattern::Rggb,
+                )
+                .expect("Debayer failed")
             })
         },
     );

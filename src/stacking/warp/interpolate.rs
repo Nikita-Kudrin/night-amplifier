@@ -2,12 +2,7 @@ use wide::f32x4;
 
 /// Performs bilinear interpolation on a single channel.
 #[inline]
-pub fn bilinear_interpolate_direct_1ch(
-    data: &[f32],
-    width: usize,
-    sx: f32,
-    sy: f32,
-) -> f32 {
+pub fn bilinear_interpolate_direct_1ch(data: &[f32], width: usize, sx: f32, sy: f32) -> f32 {
     let x0 = sx.floor() as usize;
     let y0 = sy.floor() as usize;
 
@@ -30,12 +25,7 @@ pub fn bilinear_interpolate_direct_1ch(
     let base01 = row1_offset + x0;
     let base11 = base01 + 1;
 
-    let corners = f32x4::new([
-        data[base00],
-        data[base10],
-        data[base01],
-        data[base11],
-    ]);
+    let corners = f32x4::new([data[base00], data[base10], data[base01], data[base11]]);
     (corners * weights).reduce_add()
 }
 
@@ -91,28 +81,16 @@ pub fn warp_row_rgb(
             let base01 = base00 + row_stride;
             let base11 = base01 + 1;
 
-            let r_corners = f32x4::new([
-                src_r[base00],
-                src_r[base10],
-                src_r[base01],
-                src_r[base11],
-            ]);
+            let r_corners =
+                f32x4::new([src_r[base00], src_r[base10], src_r[base01], src_r[base11]]);
             r_row[dx] = (r_corners * weights).reduce_add();
 
-            let g_corners = f32x4::new([
-                src_g[base00],
-                src_g[base10],
-                src_g[base01],
-                src_g[base11],
-            ]);
+            let g_corners =
+                f32x4::new([src_g[base00], src_g[base10], src_g[base01], src_g[base11]]);
             g_row[dx] = (g_corners * weights).reduce_add();
 
-            let b_corners = f32x4::new([
-                src_b[base00],
-                src_b[base10],
-                src_b[base01],
-                src_b[base11],
-            ]);
+            let b_corners =
+                f32x4::new([src_b[base00], src_b[base10], src_b[base01], src_b[base11]]);
             b_row[dx] = (b_corners * weights).reduce_add();
 
             sx += sx_step;

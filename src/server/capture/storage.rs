@@ -9,9 +9,7 @@ use crate::camera::RawFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
 use crate::server::events::ServerEvent;
-use crate::server::state::{
-    AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo,
-};
+use crate::server::state::{AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo};
 use crate::stacking::StackingType;
 
 /// Dedicated storage task running on its own OS thread.

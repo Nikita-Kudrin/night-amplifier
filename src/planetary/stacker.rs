@@ -7,9 +7,7 @@ use crate::error::{Result, StackError};
 use crate::frame::Frame;
 
 use super::alignment::compute_alignment;
-use super::config::{
-    AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats,
-};
+use super::config::{AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats};
 use super::quality::compute_quality;
 use std::sync::OnceLock;
 
@@ -364,7 +362,9 @@ impl PlanetaryStacker {
         let (dx, dy) = offset;
 
         let mut out = Frame::zeros(width, height, channels)?;
-        let chunk_rows = crate::parallel::balanced_chunk_len(width * height).div_ceil(width).max(1);
+        let chunk_rows = crate::parallel::balanced_chunk_len(width * height)
+            .div_ceil(width)
+            .max(1);
 
         if channels == 3 {
             let (src_r, src_g, src_b) = frame.planes();
@@ -384,12 +384,9 @@ impl PlanetaryStacker {
                     {
                         let y = y_start + row;
                         for x in 0..width {
-                            let Some(tap) = BilinearTap::at(
-                                x as f32 - dx,
-                                y as f32 - dy,
-                                width,
-                                height,
-                            ) else {
+                            let Some(tap) =
+                                BilinearTap::at(x as f32 - dx, y as f32 - dy, width, height)
+                            else {
                                 continue;
                             };
                             r_row[x] = tap.sample(src_r);

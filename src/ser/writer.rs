@@ -156,7 +156,11 @@ fn planes_of(frame: &Frame) -> (&[f32], &[f32], &[f32]) {
     let area = frame.width() * frame.height();
     let data = frame.data();
     if frame.channels() >= 3 {
-        (&data[..area], &data[area..2 * area], &data[2 * area..3 * area])
+        (
+            &data[..area],
+            &data[area..2 * area],
+            &data[2 * area..3 * area],
+        )
     } else {
         (&data[..area], &data[..area], &data[..area])
     }
@@ -243,4 +247,3 @@ fn encode_16bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
 
     bytes
 }
-

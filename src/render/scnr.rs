@@ -32,7 +32,8 @@ pub fn apply_scnr(frame: &mut Frame, amount: f32) -> Result<()> {
     let width = frame.width();
     let (r_plane, g_plane, b_plane) = frame.planes_mut();
 
-    r_plane.par_chunks_mut(width)
+    r_plane
+        .par_chunks_mut(width)
         .zip_eq(g_plane.par_chunks_mut(width))
         .zip_eq(b_plane.par_chunks_mut(width))
         .for_each(|((r_row, g_row), b_row)| {
