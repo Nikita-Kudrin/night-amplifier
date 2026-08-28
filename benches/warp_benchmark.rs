@@ -2,11 +2,24 @@
 //!
 //! Run with: cargo bench --bench warp_benchmark
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use night_amplifier::{warp_frame, AffineTransform, Frame};
 use std::f32::consts::PI;
 use std::hint::black_box;
 use std::time::Duration;
+
+/// Warp invocations per measured iteration.
+///
+/// A 2048x2048 warp is ~9 ms, which sits right on the noise floor where thermal
+/// management moves the figure as much as a real regression does. Two passes clears
+/// ~10 ms with the frame size — and therefore the rayon task shape — left alone.
+/// **The reported `time:` is for `REPS` warps, not one.**
+///
+/// Sound because `warp_frame` is pure: it reads a `&Frame` and returns a fresh one.
+///
+/// The 1024x1024 cases were dropped rather than repeated harder; they exercised the
+/// same kernel as the 2048x2048 ones and the bench binary has a ~30 s budget.
+const REPS: usize = 2;
 
 /// Generate a synthetic frame for benchmarking
 fn generate_frame(width: usize, height: usize) -> Frame {
@@ -29,19 +42,25 @@ fn generate_frame(width: usize, height: usize) -> Frame {
 
 fn warp_identity_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_identity");
-    group.sample_size(20);
+    group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    for size in [1024, 2048].iter() {
+    for size in [2048].iter() {
         let frame = generate_frame(*size, *size);
         let transform = AffineTransform::identity();
 
+        group.throughput(Throughput::Elements((REPS * size * size) as u64));
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}", size, size)),
+            BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
             &(&frame, &transform),
             |b, (frame, transform)| {
                 b.iter(|| {
-                    warp_frame(black_box(frame), black_box(transform), 0.0).expect("Warp failed")
+                    for _ in 0..REPS {
+                        black_box(
+                            warp_frame(black_box(frame), black_box(transform), 0.0)
+                                .expect("Warp failed"),
+                        );
+                    }
                 })
             },
         );
@@ -52,20 +71,26 @@ fn warp_identity_benchmark(c: &mut Criterion) {
 
 fn warp_rotation_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_rotation");
-    group.sample_size(20);
+    group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
-    for size in [1024, 2048].iter() {
+    for size in [2048].iter() {
         let frame = generate_frame(*size, *size);
         // Small rotation typical for astronomical tracking
         let transform = AffineTransform::new(PI / 180.0 * 2.0, 1.0, 5.0, 3.0);
 
+        group.throughput(Throughput::Elements((REPS * size * size) as u64));
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}x{}", size, size)),
+            BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, REPS)),
             &(&frame, &transform),
             |b, (frame, transform)| {
                 b.iter(|| {
-                    warp_frame(black_box(frame), black_box(transform), 0.0).expect("Warp failed")
+                    for _ in 0..REPS {
+                        black_box(
+                            warp_frame(black_box(frame), black_box(transform), 0.0)
+                                .expect("Warp failed"),
+                        );
+                    }
                 })
             },
         );
