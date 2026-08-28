@@ -67,10 +67,12 @@ Tests might run a minute or two - you should wait for them to finish. Benches mi
 
 Two hard rules, both learned from figures that turned out to mean nothing:
 
-1. **Every case must report at least ~10 ms.** Below that, criterion's own overhead and
+1. **Every case must report at least ~100 ms.** Below that, criterion's own overhead and
    the machine's thermal management move the number by more than a real regression does,
-   so runs are not comparable. Nineteen of thirty-two cases used to sit under 10 ms; six
-   under 1 ms; four in the *nanosecond* range.
+   so runs are not comparable. The ≥10 ms floor this replaced removed the worst
+   offenders — nineteen of thirty-two cases used to sit under 10 ms, six under 1 ms, four
+   in the *nanosecond* range — but 10 ms turned out to still be inside the same noise
+   floor on this machine, not a thermally-driven problem the earlier fix had solved.
 2. **Every bench binary must stay ≤ ~30 s wall clock** so CI stays usable.
 
 Those pull against each other, so pick the cheapest technique that satisfies both:
@@ -83,10 +85,11 @@ Those pull against each other, so pick the cheapest technique that satisfies bot
 | Small size that only re-measures a bigger sibling's kernel | Delete it. The 1024x1024 debayer and warp cases went this way. |
 
 Then keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
-`measurement_time`. Reach for `group.sampling_mode(SamplingMode::Flat)` once cases are
-≥ 10 ms: criterion's default linear scheme runs 1+2+...+10 = 55 iterations per case,
-which is what put `encoding_benchmark` at 50 s. Flat brought it to 30 s and
-`catalog_search_benchmark` from 51 s to 13 s.
+`measurement_time`. Always set `group.sampling_mode(SamplingMode::Flat)`: criterion's
+default linear scheme runs 1+2+...+10 = 55 iterations per case, which is what put
+`encoding_benchmark` at 50 s. Flat brought it to 30 s and `catalog_search_benchmark` from
+51 s to 13 s. At a 100 ms floor every case pays that 55x multiplier if Flat is left off,
+so there is no case small enough for Linear to still be the right call.
 
 **Say so in the case name when a figure covers more than one call.** `_x5` means the
 reported `time:` is five invocations. A reader who divides by the wrong number is worse

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
 use night_amplifier::background::{
     BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundExtractor,
 };
@@ -26,7 +26,8 @@ fn bench_background_estimation_grid(c: &mut Criterion) {
     let frame = create_test_frame(2712, 1538, 3);
 
     let mut group = c.benchmark_group("background_estimation_grid");
-    group.sample_size(10); // Matches the previous setting
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
     let config_grid =
@@ -37,7 +38,7 @@ fn bench_background_estimation_grid(c: &mut Criterion) {
     // point where the reported figure is stable run to run. `estimate` takes `&Frame` and
     // returns a fresh model, so repeating it measures the same work each time.
     // **The reported `time:` is for `REPS` estimates, not one.**
-    const REPS: usize = 16;
+    const REPS: usize = 150;
 
     group.throughput(Throughput::Elements((REPS * 2712 * 1538) as u64));
     group.bench_function(format!("estimate_grid_x{}", REPS), |b| {

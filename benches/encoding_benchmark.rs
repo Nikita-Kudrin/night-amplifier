@@ -61,7 +61,12 @@ fn bench_encoding(c: &mut Criterion) {
 
     // Groups here run a 1 s measurement window rather than 2 s: this binary carries 16
     // cases, and at 2 s each the wall clock reached 50 s against a ~30 s budget. Every
-    // case clears 10 ms, so a 1 s window still collects ten samples of real work.
+    // case clears the ~100 ms floor, so a 1 s window still collects ten samples of real
+    // work. This is the tightest binary in the suite even so: `bench_encoding`'s 16
+    // cases at ~100-220 ms each land the binary at ~32 s. Every REPS below is already the
+    // minimum that clears the floor with margin, not padded further, and the mono LZ4
+    // case (`encode_imx464_mono`) runs unusually noisy (~140-220 ms swings) for reasons
+    // unrelated to this change.
     let mut group = c.benchmark_group("encode_rgb8_lz4");
     // Flat sampling: the 8K case is ~140 ms, and criterion's default linear scheme runs
     // 1+2+...+10 = 55 iterations per case, i.e. 8 s for that one alone. Flat runs a fixed
@@ -71,15 +76,19 @@ fn bench_encoding(c: &mut Criterion) {
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(1));
 
-    group.bench_function("encode_imx464_rgb", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb))).unwrap())
+    // ~21 ms per call. `encode_rgb8_lz4` takes the frame by reference and returns a
+    // fresh buffer, so repeating it measures the same work each time.
+    const RGB_REPS: usize = 5;
+    group.bench_function(format!("encode_imx464_rgb_x{}", RGB_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..RGB_REPS {
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb))).unwrap());
+            }
+        })
     });
 
-    // The only case in this group under 10 ms (~8 ms, and it swung 6.7-9.6 ms run to
-    // run). `encode_rgb8_lz4` takes the frame by reference and returns a fresh buffer,
-    // so two passes measure the same work twice. **The reported `time:` is for two
-    // encodes, not one.**
-    const MONO_REPS: usize = 2;
+    // ~6.25 ms per call.
+    const MONO_REPS: usize = 20;
     group.bench_function(format!("encode_imx464_mono_x{}", MONO_REPS), |b| {
         b.iter(|| {
             for _ in 0..MONO_REPS {
@@ -88,10 +97,17 @@ fn bench_encoding(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("encode_4k", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k))).unwrap())
+    // ~42 ms per call.
+    const FOUR_K_REPS: usize = 3;
+    group.bench_function(format!("encode_4k_x{}", FOUR_K_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..FOUR_K_REPS {
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k))).unwrap());
+            }
+        })
     });
 
+    // Already ~145 ms on its own — clears the floor without repeating.
     group.bench_function("encode_8k", |b| {
         b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_8k))).unwrap())
     });
@@ -105,13 +121,24 @@ fn bench_encoding(c: &mut Criterion) {
     group_conv.warm_up_time(Duration::from_millis(500));
     group_conv.measurement_time(Duration::from_secs(1));
 
-    group_conv.bench_function("imx464_to_native", |b| {
+    // ~19 ms per call.
+    const NATIVE_REPS: usize = 6;
+    group_conv.bench_function(format!("imx464_to_native_x{}", NATIVE_REPS), |b| {
         b.iter(|| {
-            frame_to_rgb8_downsampled(black_box(&to_ready_frame(&frame_imx464_rgb)), 3840, 2160)
-                .unwrap()
+            for _ in 0..NATIVE_REPS {
+                black_box(
+                    frame_to_rgb8_downsampled(
+                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        3840,
+                        2160,
+                    )
+                    .unwrap(),
+                );
+            }
         })
     });
 
+    // Already ~138 ms on its own — clears the floor without repeating.
     group_conv.bench_function("8k_to_4k", |b| {
         b.iter(|| {
             frame_to_rgb8_downsampled(black_box(&to_ready_frame(&frame_8k)), 3840, 2160).unwrap()
@@ -127,31 +154,47 @@ fn bench_encoding(c: &mut Criterion) {
     group_chunked.warm_up_time(Duration::from_millis(500));
     group_chunked.measurement_time(Duration::from_secs(1));
 
-    // 1 chunk = stacking mode (sequential, no parallelism)
-    group_chunked.bench_function("imx464_rgb_1chunk", |b| {
+    // ~20-21 ms per call. 1 chunk = stacking mode (sequential, no parallelism)
+    const CHUNK_REPS: usize = 6;
+    group_chunked.bench_function(format!("imx464_rgb_1chunk_x{}", CHUNK_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1).unwrap()
+            for _ in 0..CHUNK_REPS {
+                black_box(
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1)
+                        .unwrap(),
+                );
+            }
         })
     });
 
     // 4 chunks = Raspberry Pi 5 (4 cores)
-    group_chunked.bench_function("imx464_rgb_4chunks", |b| {
+    group_chunked.bench_function(format!("imx464_rgb_4chunks_x{}", CHUNK_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4).unwrap()
+            for _ in 0..CHUNK_REPS {
+                black_box(
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4)
+                        .unwrap(),
+                );
+            }
         })
     });
 
     // 8 chunks = max parallelism
-    group_chunked.bench_function("imx464_rgb_8chunks", |b| {
+    group_chunked.bench_function(format!("imx464_rgb_8chunks_x{}", CHUNK_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8).unwrap()
+            for _ in 0..CHUNK_REPS {
+                black_box(
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8)
+                        .unwrap(),
+                );
+            }
         })
     });
 
-    // mono grey-replication path with 4 chunks. ~6.4 ms on its own, so three passes per
-    // iteration; the encoder takes the frame by reference and returns a fresh buffer.
+    // mono grey-replication path with 4 chunks. ~5.2 ms on its own; the encoder takes the
+    // frame by reference and returns a fresh buffer.
     // **The reported `time:` is for `CHUNKED_MONO_REPS` encodes, not one.**
-    const CHUNKED_MONO_REPS: usize = 3;
+    const CHUNKED_MONO_REPS: usize = 22;
     group_chunked.bench_function(format!("imx464_mono_4chunks_x{}", CHUNKED_MONO_REPS), |b| {
         b.iter(|| {
             for _ in 0..CHUNKED_MONO_REPS {
@@ -175,10 +218,10 @@ fn bench_encoding(c: &mut Criterion) {
     group_lz4.measurement_time(Duration::from_secs(1));
 
     // The compression step alone, without the debayer or the f32 -> u8 conversion, is
-    // ~1.8 ms — this is the control the other LZ4 figures are read against, so it needs
+    // ~1.75 ms — this is the control the other LZ4 figures are read against, so it needs
     // to be at least as well resolved as they are.
     // **The reported `time:` is for `LZ4_REPS` compressions, not one.**
-    const LZ4_REPS: usize = 8;
+    const LZ4_REPS: usize = 64;
     group_lz4.bench_function(format!("lz4_imx464_x{}", LZ4_REPS), |b| {
         b.iter(|| {
             for _ in 0..LZ4_REPS {
@@ -196,45 +239,64 @@ fn bench_encoding(c: &mut Criterion) {
     group_jpeg.warm_up_time(Duration::from_millis(500));
     group_jpeg.measurement_time(Duration::from_secs(1));
 
-    group_jpeg.bench_function("imx464_rgb_to_1080p", |b| {
+    // ~29 ms per call for all four cases below.
+    const JPEG_REPS: usize = 4;
+
+    group_jpeg.bench_function(format!("imx464_rgb_to_1080p_x{}", JPEG_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_jpeg_dynamic(
-                black_box(&to_ready_frame(&frame_imx464_rgb)),
-                Some(1920),
-                Some(1080),
-            )
-            .unwrap()
+            for _ in 0..JPEG_REPS {
+                black_box(
+                    encode_rgb8_jpeg_dynamic(
+                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        Some(1920),
+                        Some(1080),
+                    )
+                    .unwrap(),
+                );
+            }
         })
     });
 
-    group_jpeg.bench_function("imx464_rgb_to_720p", |b| {
+    group_jpeg.bench_function(format!("imx464_rgb_to_720p_x{}", JPEG_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_jpeg_dynamic(
-                black_box(&to_ready_frame(&frame_imx464_rgb)),
-                Some(1280),
-                Some(720),
-            )
-            .unwrap()
+            for _ in 0..JPEG_REPS {
+                black_box(
+                    encode_rgb8_jpeg_dynamic(
+                        black_box(&to_ready_frame(&frame_imx464_rgb)),
+                        Some(1280),
+                        Some(720),
+                    )
+                    .unwrap(),
+                );
+            }
         })
     });
 
-    group_jpeg.bench_function("imx464_rgb_full_res", |b| {
+    group_jpeg.bench_function(format!("imx464_rgb_full_res_x{}", JPEG_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), None, None)
-                .unwrap()
+            for _ in 0..JPEG_REPS {
+                black_box(
+                    encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), None, None)
+                        .unwrap(),
+                );
+            }
         })
     });
 
     // Mono sensor large enough to need downsampling — the path that previously
     // ran a full-resolution debayer to produce grey output.
-    group_jpeg.bench_function("mono_asi1600mm_to_1080p", |b| {
+    group_jpeg.bench_function(format!("mono_asi1600mm_to_1080p_x{}", JPEG_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_jpeg_dynamic(
-                black_box(&to_ready_frame(&frame_mono_large)),
-                Some(1920),
-                Some(1080),
-            )
-            .unwrap()
+            for _ in 0..JPEG_REPS {
+                black_box(
+                    encode_rgb8_jpeg_dynamic(
+                        black_box(&to_ready_frame(&frame_mono_large)),
+                        Some(1920),
+                        Some(1080),
+                    )
+                    .unwrap(),
+                );
+            }
         })
     });
 
@@ -260,6 +322,22 @@ fn load_and_resize_fixture(path: &str, width: u32, height: u32) -> Vec<u8> {
     resized.to_rgb8().into_raw()
 }
 
+/// Repeats per measured iteration to clear the ~100 ms floor, sized from one real call's
+/// duration rather than a hardcoded figure.
+///
+/// This group runs the same six codecs over nine image/resolution combinations, and per-
+/// call cost varies by well over 100x across them (lz4_flex on a 1080p frame vs.
+/// `image_jpeg_95` on a 4K one) — a single constant could not clear the floor for the
+/// cheap cases without making the expensive ones blow the wall-clock budget. `elapsed` is
+/// a real call already made for the size printout above, not a throwaway warm-up.
+fn calibrated_reps(elapsed: Duration) -> usize {
+    let target = Duration::from_millis(120);
+    if elapsed.is_zero() {
+        return 1;
+    }
+    (target.as_secs_f64() / elapsed.as_secs_f64()).ceil() as usize
+}
+
 fn run_benchmarks(
     c: &mut Criterion,
     picture_name: &str,
@@ -270,7 +348,9 @@ fn run_benchmarks(
 ) {
     let group_name = format!("{}_{}", picture_name, res_name);
 
-    // Helper to get TurboJPEG size and save
+    // Helper to get TurboJPEG size and save. Returns the call's own duration alongside
+    // the size, so the one real compression already needed for the printout can also
+    // size `REPS` for the benchmark below instead of a second throwaway call.
     let save_tj = |quality: i32| {
         let mut compressor = turbojpeg::Compressor::new().unwrap();
         compressor.set_quality(quality).unwrap();
@@ -282,7 +362,9 @@ fn run_benchmarks(
             height,
             format: turbojpeg::PixelFormat::RGB,
         };
+        let start = std::time::Instant::now();
         let out = compressor.compress_to_vec(image_tj).unwrap();
+        let elapsed = start.elapsed();
         save_output(
             picture_name,
             res_name,
@@ -290,18 +372,24 @@ fn run_benchmarks(
             "jpg",
             &out,
         );
-        out.len()
+        (out.len(), elapsed)
     };
 
     println!("\n=== {} ({}x{}) ===", group_name, width, height);
-    println!("turbojpeg_100 size: {} bytes", save_tj(100));
-    println!("turbojpeg_95 size: {} bytes", save_tj(95));
-    println!("turbojpeg_90 size: {} bytes", save_tj(90));
+    let (tj100_len, tj100_elapsed) = save_tj(100);
+    println!("turbojpeg_100 size: {} bytes", tj100_len);
+    let (tj95_len, tj95_elapsed) = save_tj(95);
+    println!("turbojpeg_95 size: {} bytes", tj95_len);
+    let (tj90_len, tj90_elapsed) = save_tj(90);
+    println!("turbojpeg_90 size: {} bytes", tj90_len);
 
+    let start = std::time::Instant::now();
     let lz4_out = lz4_flex::compress_prepend_size(rgb8_data);
+    let lz4_elapsed = start.elapsed();
     save_output(picture_name, res_name, "lz4_flex", "lz4", &lz4_out);
     println!("lz4_flex size: {} bytes", lz4_out.len());
 
+    let start = std::time::Instant::now();
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
     let encoder = JpegEncoder::new_with_quality(&mut cursor, 95);
@@ -313,10 +401,12 @@ fn run_benchmarks(
             ColorType::Rgb8.into(),
         )
         .unwrap();
+    let jpeg95_elapsed = start.elapsed();
     save_output(picture_name, res_name, "image_jpeg_95", "jpg", &buf);
     println!("image_jpeg_95 size: {} bytes", buf.len());
 
     // PNG (Lossless, using default compression)
+    let start = std::time::Instant::now();
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
     let encoder = PngEncoder::new(&mut cursor);
@@ -328,95 +418,117 @@ fn run_benchmarks(
             ColorType::Rgb8.into(),
         )
         .unwrap();
+    let png_elapsed = start.elapsed();
     save_output(picture_name, res_name, "image_png_lossless", "png", &buf);
     println!("image_png_lossless size: {} bytes", buf.len());
 
     let mut group = c.benchmark_group(format!("encoding_comparison_{}", group_name));
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(1));
 
-    group.bench_function("turbojpeg_100", |b| {
+    let tj100_reps = calibrated_reps(tj100_elapsed);
+    group.bench_function(format!("turbojpeg_100_x{}", tj100_reps), |b| {
         b.iter(|| {
-            let mut compressor = turbojpeg::Compressor::new().unwrap();
-            let _ = compressor.set_quality(100);
-            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-            let image = turbojpeg::Image {
-                pixels: black_box(rgb8_data),
-                width,
-                pitch: 3 * width,
-                height,
-                format: turbojpeg::PixelFormat::RGB,
-            };
-            compressor.compress_to_vec(image).unwrap()
+            for _ in 0..tj100_reps {
+                let mut compressor = turbojpeg::Compressor::new().unwrap();
+                let _ = compressor.set_quality(100);
+                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+                let image = turbojpeg::Image {
+                    pixels: black_box(rgb8_data),
+                    width,
+                    pitch: 3 * width,
+                    height,
+                    format: turbojpeg::PixelFormat::RGB,
+                };
+                black_box(compressor.compress_to_vec(image).unwrap());
+            }
         })
     });
 
-    group.bench_function("turbojpeg_95", |b| {
+    let tj95_reps = calibrated_reps(tj95_elapsed);
+    group.bench_function(format!("turbojpeg_95_x{}", tj95_reps), |b| {
         b.iter(|| {
-            let mut compressor = turbojpeg::Compressor::new().unwrap();
-            let _ = compressor.set_quality(95);
-            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-            let image = turbojpeg::Image {
-                pixels: black_box(rgb8_data),
-                width,
-                pitch: 3 * width,
-                height,
-                format: turbojpeg::PixelFormat::RGB,
-            };
-            compressor.compress_to_vec(image).unwrap()
+            for _ in 0..tj95_reps {
+                let mut compressor = turbojpeg::Compressor::new().unwrap();
+                let _ = compressor.set_quality(95);
+                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+                let image = turbojpeg::Image {
+                    pixels: black_box(rgb8_data),
+                    width,
+                    pitch: 3 * width,
+                    height,
+                    format: turbojpeg::PixelFormat::RGB,
+                };
+                black_box(compressor.compress_to_vec(image).unwrap());
+            }
         })
     });
 
-    group.bench_function("turbojpeg_90", |b| {
+    let tj90_reps = calibrated_reps(tj90_elapsed);
+    group.bench_function(format!("turbojpeg_90_x{}", tj90_reps), |b| {
         b.iter(|| {
-            let mut compressor = turbojpeg::Compressor::new().unwrap();
-            let _ = compressor.set_quality(90);
-            let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
-            let image = turbojpeg::Image {
-                pixels: black_box(rgb8_data),
-                width,
-                pitch: 3 * width,
-                height,
-                format: turbojpeg::PixelFormat::RGB,
-            };
-            compressor.compress_to_vec(image).unwrap()
+            for _ in 0..tj90_reps {
+                let mut compressor = turbojpeg::Compressor::new().unwrap();
+                let _ = compressor.set_quality(90);
+                let _ = compressor.set_subsamp(turbojpeg::Subsamp::Sub2x2);
+                let image = turbojpeg::Image {
+                    pixels: black_box(rgb8_data),
+                    width,
+                    pitch: 3 * width,
+                    height,
+                    format: turbojpeg::PixelFormat::RGB,
+                };
+                black_box(compressor.compress_to_vec(image).unwrap());
+            }
         })
     });
 
-    group.bench_function("lz4_flex", |b| {
-        b.iter(|| lz4_flex::compress_prepend_size(black_box(rgb8_data)))
-    });
-
-    group.bench_function("image_jpeg_95", |b| {
+    let lz4_reps = calibrated_reps(lz4_elapsed);
+    group.bench_function(format!("lz4_flex_x{}", lz4_reps), |b| {
         b.iter(|| {
-            let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
-            let mut cursor = Cursor::new(&mut buffer);
-            let encoder = JpegEncoder::new_with_quality(&mut cursor, 95);
-            encoder
-                .write_image(
-                    black_box(rgb8_data),
-                    width as u32,
-                    height as u32,
-                    ColorType::Rgb8.into(),
-                )
-                .unwrap();
+            for _ in 0..lz4_reps {
+                black_box(lz4_flex::compress_prepend_size(black_box(rgb8_data)));
+            }
         })
     });
 
-    group.bench_function("image_png_lossless", |b| {
+    let jpeg95_reps = calibrated_reps(jpeg95_elapsed);
+    group.bench_function(format!("image_jpeg_95_x{}", jpeg95_reps), |b| {
         b.iter(|| {
-            let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
-            let mut cursor = Cursor::new(&mut buffer);
-            let encoder = PngEncoder::new(&mut cursor);
-            encoder
-                .write_image(
-                    black_box(rgb8_data),
-                    width as u32,
-                    height as u32,
-                    ColorType::Rgb8.into(),
-                )
-                .unwrap();
+            for _ in 0..jpeg95_reps {
+                let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
+                let mut cursor = Cursor::new(&mut buffer);
+                let encoder = JpegEncoder::new_with_quality(&mut cursor, 95);
+                encoder
+                    .write_image(
+                        black_box(rgb8_data),
+                        width as u32,
+                        height as u32,
+                        ColorType::Rgb8.into(),
+                    )
+                    .unwrap();
+            }
+        })
+    });
+
+    let png_reps = calibrated_reps(png_elapsed);
+    group.bench_function(format!("image_png_lossless_x{}", png_reps), |b| {
+        b.iter(|| {
+            for _ in 0..png_reps {
+                let mut buffer = Vec::with_capacity(1024 * 1024 * 4);
+                let mut cursor = Cursor::new(&mut buffer);
+                let encoder = PngEncoder::new(&mut cursor);
+                encoder
+                    .write_image(
+                        black_box(rgb8_data),
+                        width as u32,
+                        height as u32,
+                        ColorType::Rgb8.into(),
+                    )
+                    .unwrap();
+            }
         })
     });
 

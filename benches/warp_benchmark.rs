@@ -2,7 +2,9 @@
 //!
 //! Run with: cargo bench --bench warp_benchmark
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{
+    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+};
 use night_amplifier::{warp_frame, AffineTransform, Frame};
 use std::f32::consts::PI;
 use std::hint::black_box;
@@ -10,16 +12,15 @@ use std::time::Duration;
 
 /// Warp invocations per measured iteration.
 ///
-/// A 2048x2048 warp is ~9 ms, which sits right on the noise floor where thermal
-/// management moves the figure as much as a real regression does. Two passes clears
-/// ~10 ms with the frame size — and therefore the rayon task shape — left alone.
+/// A 2048x2048 warp is ~9 ms. Twelve passes clears the ~100 ms floor with the frame
+/// size — and therefore the rayon task shape — left alone.
 /// **The reported `time:` is for `REPS` warps, not one.**
 ///
 /// Sound because `warp_frame` is pure: it reads a `&Frame` and returns a fresh one.
 ///
 /// The 1024x1024 cases were dropped rather than repeated harder; they exercised the
 /// same kernel as the 2048x2048 ones and the bench binary has a ~30 s budget.
-const REPS: usize = 2;
+const REPS: usize = 12;
 
 /// Generate a synthetic frame for benchmarking
 fn generate_frame(width: usize, height: usize) -> Frame {
@@ -42,6 +43,7 @@ fn generate_frame(width: usize, height: usize) -> Frame {
 
 fn warp_identity_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_identity");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 
@@ -71,6 +73,7 @@ fn warp_identity_benchmark(c: &mut Criterion) {
 
 fn warp_rotation_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("warp_rotation");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
 

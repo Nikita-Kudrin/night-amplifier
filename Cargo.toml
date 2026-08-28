@@ -148,6 +148,14 @@ name = "render_benchmark"
 harness = false
 
 [[bench]]
+name = "scale_lut_benchmark"
+harness = false
+
+[[bench]]
 name = "planetary_benchmark"
+harness = false
+
+[[bench]]
+name = "frame_ingest_benchmark"
 harness = false
 

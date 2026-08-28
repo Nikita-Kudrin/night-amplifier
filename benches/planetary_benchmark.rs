@@ -13,7 +13,7 @@
 //! criterion asked for a 37.8 s target time. Both AGENTS.md files cap a bench binary at
 //! ~30 s.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use night_amplifier::frame::Frame;
 use night_amplifier::planetary::{PlanetaryConfig, PlanetaryStacker, QualityMetric};
 use std::hint::black_box;
@@ -50,13 +50,12 @@ fn planet_frame(width: usize, height: usize, channels: usize, shift_x: f32, shif
 
 /// Stacks per measured iteration. See the note on the mono case below.
 ///
-/// Three, not two: removing the per-output-sample `Vec` allocation from
-/// `stack_percentile` took the mono case from 5.5 ms to 4.3 ms, which dropped the x2
-/// figure back under the 10 ms floor.
-const REPS: usize = 3;
+/// Mono is ~4.3 ms per stack; 25 repeats clears the ~100 ms floor.
+const REPS: usize = 25;
 
 fn bench_planetary_stack(c: &mut Criterion) {
     let mut group = c.benchmark_group("planetary_align");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
