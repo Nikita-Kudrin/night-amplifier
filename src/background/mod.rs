@@ -496,6 +496,91 @@ mod tests {
         }
     }
 
+    /// The delta-stepping path interpolates between *node coordinates*, and nothing
+    /// pinned that geometry.
+    ///
+    /// `get_background` cannot serve as the reference the way it does for
+    /// `subtract_weight_based`: it maps pixels to grid *cell centres*, while
+    /// delta-stepping interpolates between boundary-hugging nodes, so the two disagree
+    /// by construction. The pin has to be analytic — at a node the background is that
+    /// node's value exactly, and halfway between two nodes it is their mean.
+    ///
+    /// This is what the band-parallel version's correctness rested on by inspection,
+    /// including its `*mut`-derived-from-`&` write.
+    #[test]
+    fn delta_stepping_reproduces_the_node_grid() {
+        let (w, h) = (65usize, 33usize);
+        let (grid_cols, grid_rows) = (3usize, 3usize);
+
+        // Boundary-hugging, exactly as `initialize_grid` builds them.
+        let nodes_x: Vec<usize> = (0..grid_cols)
+            .map(|i| i * (w - 1) / (grid_cols - 1))
+            .collect();
+        let nodes_y: Vec<usize> = (0..grid_rows)
+            .map(|j| j * (h - 1) / (grid_rows - 1))
+            .collect();
+
+        // Distinct per node and per channel, so a transposed or mis-strided read shows up.
+        let grid: Vec<Vec<f32>> = (0..3)
+            .map(|c| {
+                (0..grid_rows * grid_cols)
+                    .map(|i| 0.05 + i as f32 * 0.01 + c as f32 * 0.003)
+                    .collect()
+            })
+            .collect();
+
+        let model = BackgroundModel::with_node_coords(
+            grid.clone(),
+            grid_cols,
+            grid_rows,
+            w,
+            h,
+            3,
+            false,
+            0.1,
+            1.0,
+            nodes_x.clone(),
+            nodes_y.clone(),
+        );
+
+        // A constant frame makes the output a direct readout of the interpolation: MAD
+        // is zero, so the pedestal is its 0.001 floor.
+        let mut frame = Frame::filled(w, h, 3, 1.0).unwrap();
+        model.subtract_from(&mut frame);
+        let background_at = |x: usize, y: usize, c: usize| 1.0 + 0.001 - frame.get_pixel(x, y, c);
+
+        for c in 0..3 {
+            for (jy, &y) in nodes_y.iter().enumerate() {
+                for (ix, &x) in nodes_x.iter().enumerate() {
+                    let want = grid[c][jy * grid_cols + ix];
+                    let got = background_at(x, y, c);
+                    assert!(
+                        (got - want).abs() < 1e-5,
+                        "node ({ix}, {jy}) channel {c}: background {got}, node value {want}"
+                    );
+                }
+            }
+
+            // Midway along the top edge: the mean of the two nodes either side.
+            let mx = (nodes_x[0] + nodes_x[1]) / 2;
+            let want = (grid[c][0] + grid[c][1]) / 2.0;
+            let got = background_at(mx, 0, c);
+            assert!(
+                (got - want).abs() < 2e-3,
+                "midpoint ({mx}, 0) channel {c}: background {got}, expected ~{want}"
+            );
+
+            // And midway down the left edge.
+            let my = (nodes_y[0] + nodes_y[1]) / 2;
+            let want = (grid[c][0] + grid[c][grid_cols]) / 2.0;
+            let got = background_at(0, my, c);
+            assert!(
+                (got - want).abs() < 2e-3,
+                "midpoint (0, {my}) channel {c}: background {got}, expected ~{want}"
+            );
+        }
+    }
+
     /// A frame the model was not built for must be refused rather than half-corrected:
     /// the weight-based path recovers the channel index from the model's stored height.
     #[test]
