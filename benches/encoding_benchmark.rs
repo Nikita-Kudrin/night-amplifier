@@ -12,7 +12,7 @@ fn to_ready_frame(
     }
 }
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use image::imageops::FilterType as ResizeFilterType;
 use image::{
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
@@ -59,17 +59,33 @@ fn bench_encoding(c: &mut Criterion) {
     // 8K resolution (simulating a very large sensor that will trigger downsampling)
     let frame_8k = create_test_frame(7680, 4320, 3);
 
+    // Groups here run a 1 s measurement window rather than 2 s: this binary carries 16
+    // cases, and at 2 s each the wall clock reached 50 s against a ~30 s budget. Every
+    // case clears 10 ms, so a 1 s window still collects ten samples of real work.
     let mut group = c.benchmark_group("encode_rgb8_lz4");
+    // Flat sampling: the 8K case is ~140 ms, and criterion's default linear scheme runs
+    // 1+2+...+10 = 55 iterations per case, i.e. 8 s for that one alone. Flat runs a fixed
+    // count per sample and keeps the binary inside its ~30 s budget.
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(2));
+    group.measurement_time(Duration::from_secs(1));
 
     group.bench_function("encode_imx464_rgb", |b| {
         b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb))).unwrap())
     });
 
-    group.bench_function("encode_imx464_mono", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono))).unwrap())
+    // The only case in this group under 10 ms (~8 ms, and it swung 6.7-9.6 ms run to
+    // run). `encode_rgb8_lz4` takes the frame by reference and returns a fresh buffer,
+    // so two passes measure the same work twice. **The reported `time:` is for two
+    // encodes, not one.**
+    const MONO_REPS: usize = 2;
+    group.bench_function(format!("encode_imx464_mono_x{}", MONO_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..MONO_REPS {
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono))).unwrap());
+            }
+        })
     });
 
     group.bench_function("encode_4k", |b| {
@@ -84,9 +100,10 @@ fn bench_encoding(c: &mut Criterion) {
 
     // --- frame_to_rgb8_downsampled ---
     let mut group_conv = c.benchmark_group("frame_to_rgb8");
+    group_conv.sampling_mode(SamplingMode::Flat);
     group_conv.sample_size(10);
     group_conv.warm_up_time(Duration::from_millis(500));
-    group_conv.measurement_time(Duration::from_secs(2));
+    group_conv.measurement_time(Duration::from_secs(1));
 
     group_conv.bench_function("imx464_to_native", |b| {
         b.iter(|| {
@@ -105,9 +122,10 @@ fn bench_encoding(c: &mut Criterion) {
 
     // --- Chunked LZ4 (SA09) ---
     let mut group_chunked = c.benchmark_group("encode_chunked_lz4");
+    group_chunked.sampling_mode(SamplingMode::Flat);
     group_chunked.sample_size(10);
     group_chunked.warm_up_time(Duration::from_millis(500));
-    group_chunked.measurement_time(Duration::from_secs(2));
+    group_chunked.measurement_time(Duration::from_secs(1));
 
     // 1 chunk = stacking mode (sequential, no parallelism)
     group_chunked.bench_function("imx464_rgb_1chunk", |b| {
@@ -130,10 +148,18 @@ fn bench_encoding(c: &mut Criterion) {
         })
     });
 
-    // mono grey-replication path with 4 chunks
-    group_chunked.bench_function("imx464_mono_4chunks", |b| {
+    // mono grey-replication path with 4 chunks. ~6.4 ms on its own, so three passes per
+    // iteration; the encoder takes the frame by reference and returns a fresh buffer.
+    // **The reported `time:` is for `CHUNKED_MONO_REPS` encodes, not one.**
+    const CHUNKED_MONO_REPS: usize = 3;
+    group_chunked.bench_function(format!("imx464_mono_4chunks_x{}", CHUNKED_MONO_REPS), |b| {
         b.iter(|| {
-            encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4).unwrap()
+            for _ in 0..CHUNKED_MONO_REPS {
+                black_box(
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4)
+                        .unwrap(),
+                );
+            }
         })
     });
 
@@ -143,21 +169,32 @@ fn bench_encoding(c: &mut Criterion) {
     let rgb8_imx464 = frame_imx464_rgb.to_rgb8_fast();
 
     let mut group_lz4 = c.benchmark_group("lz4_only");
+    group_lz4.sampling_mode(SamplingMode::Flat);
     group_lz4.sample_size(10);
     group_lz4.warm_up_time(Duration::from_millis(500));
-    group_lz4.measurement_time(Duration::from_secs(2));
+    group_lz4.measurement_time(Duration::from_secs(1));
 
-    group_lz4.bench_function("lz4_imx464", |b| {
-        b.iter(|| lz4_flex::compress_prepend_size(black_box(&rgb8_imx464)))
+    // The compression step alone, without the debayer or the f32 -> u8 conversion, is
+    // ~1.8 ms — this is the control the other LZ4 figures are read against, so it needs
+    // to be at least as well resolved as they are.
+    // **The reported `time:` is for `LZ4_REPS` compressions, not one.**
+    const LZ4_REPS: usize = 8;
+    group_lz4.bench_function(format!("lz4_imx464_x{}", LZ4_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..LZ4_REPS {
+                black_box(lz4_flex::compress_prepend_size(black_box(&rgb8_imx464)));
+            }
+        })
     });
 
     group_lz4.finish();
 
     // --- Dynamic JPEG (SA10) ---
     let mut group_jpeg = c.benchmark_group("encode_jpeg_dynamic");
+    group_jpeg.sampling_mode(SamplingMode::Flat);
     group_jpeg.sample_size(10);
     group_jpeg.warm_up_time(Duration::from_millis(500));
-    group_jpeg.measurement_time(Duration::from_secs(2));
+    group_jpeg.measurement_time(Duration::from_secs(1));
 
     group_jpeg.bench_function("imx464_rgb_to_1080p", |b| {
         b.iter(|| {
@@ -297,7 +334,7 @@ fn run_benchmarks(
     let mut group = c.benchmark_group(format!("encoding_comparison_{}", group_name));
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
-    group.measurement_time(Duration::from_secs(2));
+    group.measurement_time(Duration::from_secs(1));
 
     group.bench_function("turbojpeg_100", |b| {
         b.iter(|| {

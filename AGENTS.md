@@ -63,6 +63,50 @@ If you can't fix the test, don't try to simplify if by removing the idea of the 
 Tests might run a minute or two - you should wait for them to finish. Benches migth run even longer.
 **Do not run benchmarks at the same time with other tests and tasks - this may affect the performance metrics.**
 
+## Benchmark sizing
+
+Two hard rules, both learned from figures that turned out to mean nothing:
+
+1. **Every case must report at least ~10 ms.** Below that, criterion's own overhead and
+   the machine's thermal management move the number by more than a real regression does,
+   so runs are not comparable. Nineteen of thirty-two cases used to sit under 10 ms; six
+   under 1 ms; four in the *nanosecond* range.
+2. **Every bench binary must stay ≤ ~30 s wall clock** so CI stays usable.
+
+Those pull against each other, so pick the cheapest technique that satisfies both:
+
+| Situation | Technique |
+|---|---|
+| Routine is pure (`&Frame` in, fresh value out) | Repeat it `REPS` times inside `b.iter`, declare `Throughput::Elements(REPS * n)`, and put `_xN` in the case name. See `debayer_benchmark`. |
+| Routine mutates its input in place | `iter_batched_ref` over a `Vec<_>` of `REPS` clones — repeating is *not* available, iteration two would see iteration one's output. See `render_benchmark`. |
+| The input size is itself the unrealistic part | Resize to what production actually produces. `rejection_benchmark` ran on a 1-megapixel buffer the pipeline never generates; one IMX464 plane is both faster to justify and 4x the work. |
+| Small size that only re-measures a bigger sibling's kernel | Delete it. The 1024x1024 debayer and warp cases went this way. |
+
+Then keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
+`measurement_time`. Reach for `group.sampling_mode(SamplingMode::Flat)` once cases are
+≥ 10 ms: criterion's default linear scheme runs 1+2+...+10 = 55 iterations per case,
+which is what put `encoding_benchmark` at 50 s. Flat brought it to 30 s and
+`catalog_search_benchmark` from 51 s to 13 s.
+
+**Say so in the case name when a figure covers more than one call.** `_x5` means the
+reported `time:` is five invocations. A reader who divides by the wrong number is worse
+off than one who had no benchmark.
+
+**Never let setup leak into the measured region, and never let it dominate wall clock.**
+`iter_batched` excludes setup from the *measurement* but still runs it every iteration:
+`planetary_benchmark` rebuilt a `PlanetaryStacker` — quality scoring plus a
+search-radius-50 cross-correlation — per iteration, and spent 78 s to report two numbers.
+`stack` takes `&self`; hoisting the stacker out of the loop made it 14 s.
+
+**Feed inputs via `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()`
+inside `b.iter`.** A 2712x1538x3 clone is ~14 ms, which was 77 % of the reported
+`fused_stretch_frame` figure and hid anything short of a 30 % kernel regression.
+
+**Check that the workload does not drift.** `saturation_benchmark` ran `apply_boost` over
+its own output; saturation compounds, so after a few iterations it was measuring a
+different operation than the first one performed.
+
+
 ## Build & Test
 
 **System prerequisite:** `nasm` (required by `turbojpeg-sys` for libjpeg-turbo SIMD).
@@ -72,7 +116,7 @@ cargo build --release
 cargo test                                                          # fast unit tests
 # These are ignored by default and must be run explicitly:
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
-cargo bench --bench <name>                                          # benchmarks — keep each bench binary ≤ ~30 s on CI; use `sample_size(10)`, short warm-up (~500 ms), and 1–2 s `measurement_time` (see `benches/background_benchmark.rs`). Feed inputs via `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()` inside `b.iter`: a 2712x1538x3 clone is ~14 ms, which was 77 % of the reported `fused_stretch_frame` figure and hid anything short of a 30 % kernel regression.
+cargo bench --bench <name>                                          # benchmarks — see **Benchmark sizing** below before adding or editing one.
 cargo bench --bench <name> -- --noplot                              # ~4x faster wall clock: without gnuplot installed, criterion's plotters fallback dominates the run (debayer_benchmark: 95 s -> 22 s) while the measurements are identical. Prefer this unless you want the HTML report.
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry

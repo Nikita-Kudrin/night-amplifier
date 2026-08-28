@@ -48,6 +48,9 @@ fn planet_frame(width: usize, height: usize, channels: usize, shift_x: f32, shif
     frame
 }
 
+/// Stacks per measured iteration. See the note on the mono case below.
+const REPS: usize = 2;
+
 fn bench_planetary_stack(c: &mut Criterion) {
     let mut group = c.benchmark_group("planetary_align");
     group.sample_size(10);
@@ -71,7 +74,16 @@ fn bench_planetary_stack(c: &mut Criterion) {
         stacker.add_frame(&reference).unwrap();
         stacker.add_frame(&shifted).unwrap();
 
-        group.bench_function(label, |b| b.iter(|| black_box(stacker.stack().unwrap())));
+        // `resample_mono` is ~5.5 ms on its own, below the point where the figure is
+        // stable run to run; `stack` takes `&self`, so repeating it measures the same
+        // work. **The reported `time:` is for `REPS` stacks, not one.**
+        group.bench_function(format!("{}_x{}", label, REPS), |b| {
+            b.iter(|| {
+                for _ in 0..REPS {
+                    black_box(stacker.stack().unwrap());
+                }
+            })
+        });
     }
 
     group.finish();

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use night_amplifier::background::{
     BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundExtractor,
 };
@@ -33,8 +33,19 @@ fn bench_background_estimation_grid(c: &mut Criterion) {
         BackgroundConfig::default().with_algorithm(BackgroundExtractionAlgorithm::GridBilinear);
     let extractor_grid = BackgroundExtractor::new(config_grid);
 
-    group.bench_function("estimate_grid", |b| {
-        b.iter(|| extractor_grid.estimate(black_box(&frame)).unwrap())
+    // One estimate over a 2712x1538x3 frame is ~0.8 ms — an order of magnitude below the
+    // point where the reported figure is stable run to run. `estimate` takes `&Frame` and
+    // returns a fresh model, so repeating it measures the same work each time.
+    // **The reported `time:` is for `REPS` estimates, not one.**
+    const REPS: usize = 16;
+
+    group.throughput(Throughput::Elements((REPS * 2712 * 1538) as u64));
+    group.bench_function(format!("estimate_grid_x{}", REPS), |b| {
+        b.iter(|| {
+            for _ in 0..REPS {
+                black_box(extractor_grid.estimate(black_box(&frame)).unwrap());
+            }
+        })
     });
 
     group.finish();
