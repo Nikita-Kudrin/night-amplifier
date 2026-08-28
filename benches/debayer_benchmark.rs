@@ -7,7 +7,7 @@
 //! A single 2712x1538 bilinear pass is ~4.4 ms. At that scale criterion's own timing
 //! noise and the machine's thermal management move the number by more than a real
 //! regression would, so the reported figures were not comparable between runs. Every
-//! case here therefore repeats the kernel until the measured region clears ~10 ms, and
+//! case here therefore repeats the kernel until the measured region clears ~100 ms, and
 //! declares `Throughput::Elements(REPS * pixels)` so the per-pixel rate stays readable.
 //!
 //! **The reported `time:` is for `REPS` invocations, not one.** Divide by `REPS` for a
@@ -22,13 +22,13 @@
 //! padded out: they exercised the same kernel as their larger siblings, and the ~30 s
 //! budget per bench binary is better spent on the shapes production actually sees.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput};
 use night_amplifier::{CfaPattern, DebayerAlgorithm, DebayerConfig, Frame};
 use std::hint::black_box;
 use std::time::Duration;
 
 /// Kernel invocations per measured iteration. See the module docs.
-const REPS: usize = 5;
+const REPS: usize = 25;
 
 /// Generate a synthetic Bayer frame for benchmarking
 fn generate_bayer_frame(width: usize, height: usize) -> Frame {
@@ -55,6 +55,7 @@ const BILINEAR_SIZES: [(usize, usize); 2] = [(2048, 2048), (2712, 1538)];
 
 fn debayer_bilinear_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_bilinear");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
@@ -103,14 +104,17 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
 
     // The 8-bit streaming path, which had no coverage. Note it is not a like-for-like
     // control against the f32 path above: 8-bit output is a quarter of the write
-    // volume, so the gap between them is mostly bytes written, not layout.
+    // volume, so the gap between them is mostly bytes written, not layout. At ~2.4 ms
+    // per call it needs more repeats than the f32 path to clear the ~100 ms floor.
+    const TO_RGB8_REPS: usize = 50;
     let frame = generate_bayer_frame(2712, 1538);
+    group.throughput(Throughput::Elements((TO_RGB8_REPS * 2712 * 1538) as u64));
     group.bench_with_input(
-        BenchmarkId::from_parameter(format!("2712x1538_to_rgb8_x{}", REPS)),
+        BenchmarkId::from_parameter(format!("2712x1538_to_rgb8_x{}", TO_RGB8_REPS)),
         &frame,
         |b, frame| {
             b.iter(|| {
-                for _ in 0..REPS {
+                for _ in 0..TO_RGB8_REPS {
                     black_box(
                         night_amplifier::debayer::debayer_bilinear_to_rgb8_fast(
                             black_box(frame),
@@ -128,24 +132,30 @@ fn debayer_bilinear_benchmark(c: &mut Criterion) {
 
 fn debayer_vng_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("debayer_vng");
+    group.sampling_mode(SamplingMode::Flat);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(500));
     group.measurement_time(Duration::from_secs(2));
 
-    // One size: VNG at 2048x2048 is ~19 ms on its own, already well clear of the noise
-    // floor, and the 1024x1024 case only re-measured the same kernel.
+    // One size: VNG at 2048x2048 is ~19 ms on its own, and the 1024x1024 case only
+    // re-measured the same kernel. `VNG_REPS` repeats clear the ~100 ms floor.
+    const VNG_REPS: usize = 7;
     let size = 2048;
     let frame = generate_bayer_frame(size, size);
     let config = DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Vng);
 
-    group.throughput(Throughput::Elements((size * size) as u64));
+    group.throughput(Throughput::Elements((VNG_REPS * size * size) as u64));
     group.bench_with_input(
-        BenchmarkId::from_parameter(format!("{}x{}", size, size)),
+        BenchmarkId::from_parameter(format!("{}x{}_x{}", size, size, VNG_REPS)),
         &frame,
         |b, frame| {
             b.iter(|| {
-                night_amplifier::debayer_with_config(black_box(frame), config.clone())
-                    .expect("Debayer failed")
+                for _ in 0..VNG_REPS {
+                    black_box(
+                        night_amplifier::debayer_with_config(black_box(frame), config.clone())
+                            .expect("Debayer failed"),
+                    );
+                }
             })
         },
     );
