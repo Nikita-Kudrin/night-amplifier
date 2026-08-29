@@ -427,6 +427,33 @@ const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
 /// is the whole point of the eyepiece view.
 const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
 
+/// Map the denoise settings onto the config the encoders read.
+///
+/// Skipped for planetary the same way `cfa::fpn` is: lucky imaging exists to
+/// recover the fine detail these filters remove, and a lunar disc is exactly the
+/// low-contrast large-scale structure a wavelet threshold flattens.
+fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
+    use crate::render::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
+
+    if settings.stacking_type == crate::stacking::StackingType::Planetary {
+        return DenoiseConfig::OFF;
+    }
+
+    let d = &settings.denoise;
+    DenoiseConfig {
+        chroma: ChromaDenoiseConfig {
+            enabled: d.chroma,
+            strength: d.chroma_strength.clamp(0.0, 1.0),
+            ..ChromaDenoiseConfig::default()
+        },
+        luma: LumaDenoiseConfig {
+            enabled: d.luma,
+            strength: d.luma_strength.clamp(0.0, 2.0),
+            ..LumaDenoiseConfig::default()
+        },
+    }
+}
+
 pub fn get_render_pipeline_config(
     settings: &CaptureSettings,
     for_fits: bool,
@@ -467,6 +494,8 @@ pub fn get_render_pipeline_config(
         config.display = crate::render::DisplayOutput::default()
             .with_pedestal(settings.eyepiece.black_floor)
             .with_dither(settings.eyepiece.dither);
+
+        config.denoise = denoise_config(settings);
 
         // Apply eyepiece dark background enhancement
         let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;

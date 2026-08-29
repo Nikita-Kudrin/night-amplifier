@@ -81,6 +81,14 @@ export const BLACK_FLOOR_LIMITS = {
     default: 0.04,
 }
 
+// Denoise strength, as a fraction of the tuned defaults
+export const DENOISE_STRENGTH_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 1.0,
+}
+
 // How far above its brightest same-colour neighbour a sample must sit to be
 // treated as a hot pixel
 export const HOT_PIXEL_SIGMA_LIMITS = {
@@ -216,6 +224,12 @@ export const DEFAULT_SETTINGS = {
         fpn_removal: true,
         superpixel_debayer: false,
     },
+    denoise: {
+        chroma: true,
+        chroma_strength: 1.0,
+        luma: true,
+        luma_strength: 1.0,
+    },
     eyepiece: {
         binoview: true,
         screen_width: 140.0,
@@ -295,6 +309,14 @@ export const HELP_TEXTS = {
         'Flattens the small brightness offset every sensor row and column reads out with. Like hot pixels it does not average away with more frames, and on a drifting mount it shows up as soft banding. Not applied to planetary targets, where a bright disc fills enough of each line to move its level.',
     superpixel_debayer:
         'Turns each 2x2 sensor square into one colour pixel instead of interpolating. Halves the width and height, invents no colour noise, and keeps any surviving hot pixel to a single dot. Free on a large sensor that already oversamples your screen; a real loss of detail on a smaller one.',
+    denoise_chroma:
+        'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
+    denoise_chroma_strength:
+        'How far the colour planes move toward the smoothed result. Lower it if faint colour in the target starts washing out.',
+    denoise_luma:
+        'Removes background grain by scale, leaving stars and the target\'s broad structure alone. Measured on a real frame it takes visible sky noise down by about a third. This is the setting that can turn nebulae to plastic if pushed — judge it at the eyepiece, and turn it off if the target starts looking smeared.',
+    denoise_luma_strength:
+        'Scales every brightness-denoising threshold. 100% is the tuned default; lower it if the target looks soft or plastic, raise it only if the sky still looks grainy.',
     eyepiece_dither:
         'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
     auto_stretch_intensity:

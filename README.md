@@ -45,6 +45,9 @@ Enable features for specific manufacturers when compiling:
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
 - **Eyepiece view** - Simulation of the eyepiece view (binocular/monocular)
+- **Sensor corrections** - Hot-pixel rejection and row/column pattern removal on the raw mosaic, before demosaic.
+- **Noise reduction** - Guided-filter colour smoothing and scale-selective grain removal, run at the resolution you
+  actually view.
 
 > [!NOTE]
 > Pro features are available in the 'Night Amplifier Pro' version:

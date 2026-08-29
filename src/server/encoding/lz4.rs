@@ -1,6 +1,7 @@
 use lz4_flex::compress_prepend_size;
 
 use crate::server::encoding::format::*;
+use crate::server::encoding::fused::frame_to_rgb8_downsampled;
 
 pub fn encode_rgb8_lz4(
     ready_frame: &crate::server::state::RenderReadyFrame,

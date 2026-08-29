@@ -10,7 +10,7 @@ mod tests {
     use crate::render::StretchAggressiveness;
     use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
     use crate::server::state::{
-        CameraCaptureProfile, CaptureSettings, EyepieceSettings, SensorCorrectionSettings,
+        CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, SensorCorrectionSettings,
         TelescopeSettings,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -55,6 +55,12 @@ mod tests {
                 hot_pixel_sigma: 7.5,
                 fpn_removal: false,
                 superpixel_debayer: true,
+            },
+            denoise: DenoiseSettings {
+                chroma: true,
+                chroma_strength: 0.8,
+                luma: false,
+                luma_strength: 0.5,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,
@@ -188,6 +194,7 @@ mod tests {
         );
         assert_eq!(restored.eyepiece.intensity, settings.eyepiece.intensity);
         assert_eq!(restored.sensor_correction, settings.sensor_correction);
+        assert_eq!(restored.denoise, settings.denoise);
         assert_eq!(
             restored.telescope.focal_length_mm,
             settings.telescope.focal_length_mm
@@ -275,6 +282,7 @@ mod tests {
             planetary_auto_tracking: true,
             planetary_multi_point_alignment: false,
             sensor_correction: SensorCorrectionSettings::default(),
+            denoise: DenoiseSettings::default(),
             eyepiece: EyepieceSettings {
                 binoview: true,
                 screen_width: 140.0,

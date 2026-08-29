@@ -296,6 +296,47 @@ describe('SettingsPanel', () => {
         })
     })
 
+    describe('Noise Reduction Section', () => {
+        it('sends the whole denoise object when a filter is toggled', async () => {
+            const wrapper = mountSettingsPanel()
+
+            await findToggleByLabel(wrapper, 'Background Grain').setValue(false)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({luma: false, chroma: true}),
+            })
+        })
+
+        it('hides a filter\'s strength slider while that filter is off', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {
+                    denoise: {
+                        chroma: true,
+                        chroma_strength: 1.0,
+                        luma: false,
+                        luma_strength: 1.0,
+                    },
+                },
+            })
+            await flushPromises()
+
+            const labels = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .map((s) => s.props('label'))
+            expect(labels).toContain('Colour strength')
+            expect(labels).not.toContain('Grain strength')
+        })
+
+        it('falls back to defaults when the server sends no denoise settings', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            expect(findToggleByLabel(wrapper, 'Colour Mottle').element.checked).toBe(true)
+            expect(findToggleByLabel(wrapper, 'Background Grain').element.checked).toBe(true)
+        })
+    })
+
     describe('Storage Section Visibility', () => {
         it('hides storage section in live view mode (stacking disabled)', () => {
             const wrapper = mountSettingsPanel({

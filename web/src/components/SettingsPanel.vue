@@ -18,6 +18,7 @@ import {
   AUTO_STRETCH_INTENSITY,
   BLACK_LEVEL_LIMITS,
     BLACK_FLOOR_LIMITS,
+  DENOISE_STRENGTH_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
@@ -88,6 +89,9 @@ watch(
           sensor_correction: newSettings.sensor_correction
               ? {...newSettings.sensor_correction}
               : {...DEFAULT_SETTINGS.sensor_correction},
+          denoise: newSettings.denoise
+              ? {...newSettings.denoise}
+              : {...DEFAULT_SETTINGS.denoise},
         }
       }
     },
@@ -174,6 +178,65 @@ const HELP = HELP_TEXTS
             label="Superpixel Debayer"
             :help="HELP.superpixel_debayer"
             @update:model-value="applySetting('sensor_correction', localSettings.sensor_correction)"
+        />
+      </div>
+    </div>
+
+    <!-- Noise reduction: runs on the streamed image, at the size you view it -->
+    <div class="settings-section">
+      <h3 class="section-title">Noise Reduction</h3>
+
+      <div class="control-group" style="margin-top: 0.5rem">
+        <BaseToggle
+            v-model="localSettings.denoise.chroma"
+            label="Colour Mottle"
+            :help="HELP.denoise_chroma"
+            @update:model-value="applySetting('denoise', localSettings.denoise)"
+        />
+      </div>
+
+      <div
+          v-if="localSettings.denoise.chroma"
+          class="control-group"
+          style="margin-bottom: 1.5rem"
+      >
+        <BaseSlider
+            v-model="localSettings.denoise.chroma_strength"
+            label="Colour strength"
+            large-gap
+            :min="DENOISE_STRENGTH_LIMITS.min"
+            :max="DENOISE_STRENGTH_LIMITS.max"
+            :step="DENOISE_STRENGTH_LIMITS.step"
+            :format-value="formatPercent"
+            :help="HELP.denoise_chroma_strength"
+            @change="applySetting('denoise', localSettings.denoise)"
+        />
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.denoise.luma"
+            label="Background Grain"
+            :help="HELP.denoise_luma"
+            @update:model-value="applySetting('denoise', localSettings.denoise)"
+        />
+      </div>
+
+      <div
+          v-if="localSettings.denoise.luma"
+          class="control-group"
+          style="margin-bottom: 1.5rem"
+      >
+        <BaseSlider
+            v-model="localSettings.denoise.luma_strength"
+            label="Grain strength"
+            large-gap
+            :min="DENOISE_STRENGTH_LIMITS.min"
+            :max="DENOISE_STRENGTH_LIMITS.max"
+            :step="DENOISE_STRENGTH_LIMITS.step"
+            :format-value="formatPercent"
+            :help="HELP.denoise_luma_strength"
+            @change="applySetting('denoise', localSettings.denoise)"
         />
       </div>
     </div>

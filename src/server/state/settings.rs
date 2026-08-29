@@ -86,6 +86,8 @@ pub struct CaptureSettings {
     pub auto_resume_capture: bool,
     /// Corrections applied to the raw sensor mosaic, before demosaic
     pub sensor_correction: SensorCorrectionSettings,
+    /// Spatial denoising, applied at stream resolution inside the encoders
+    pub denoise: DenoiseSettings,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -268,6 +270,58 @@ impl Default for SensorCorrectionSettings {
     }
 }
 
+/// Spatial denoising of the streamed image.
+///
+/// Runs in the encoders at the resolution the client asked for, not at sensor
+/// resolution: the filters cost `1/4.5` as much there and the box downsample
+/// has already halved the noise before they start. Both are off for
+/// `StackingType::Planetary`, where the fine detail lucky imaging exists to
+/// recover is exactly what a denoiser removes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DenoiseSettings {
+    /// Guided-filter smoothing of the chroma planes, against luminance as the
+    /// guide. Removes colour mottle; the eye resolves little chroma detail, so
+    /// this is the cheap half with almost nothing to lose.
+    #[serde(default = "default_chroma_denoise")]
+    pub chroma: bool,
+    /// How far the chroma planes move toward the filtered result, `0..=1`.
+    #[serde(default = "default_denoise_strength")]
+    pub chroma_strength: f32,
+    /// À trous wavelet denoising of the luminance plane.
+    ///
+    /// The half that can destroy signal: every denoiser has a setting at which
+    /// nebulae turn to plastic, and only an observer at the eyepiece can find
+    /// where that is. Hence a genuine off switch and a visible strength.
+    #[serde(default = "default_luma_denoise")]
+    pub luma: bool,
+    /// Scales every wavelet threshold, `0..=2`. `1.0` is the tuned default.
+    #[serde(default = "default_denoise_strength")]
+    pub luma_strength: f32,
+}
+
+fn default_chroma_denoise() -> bool {
+    true
+}
+
+fn default_luma_denoise() -> bool {
+    true
+}
+
+fn default_denoise_strength() -> f32 {
+    1.0
+}
+
+impl Default for DenoiseSettings {
+    fn default() -> Self {
+        Self {
+            chroma: default_chroma_denoise(),
+            chroma_strength: default_denoise_strength(),
+            luma: default_luma_denoise(),
+            luma_strength: default_denoise_strength(),
+        }
+    }
+}
+
 /// Settings specifically for the eyepiece view feature
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EyepieceSettings {
@@ -375,6 +429,7 @@ impl Default for CaptureSettings {
             auto_reconnect: true,
             auto_resume_capture: true,
             sensor_correction: SensorCorrectionSettings::default(),
+            denoise: DenoiseSettings::default(),
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),

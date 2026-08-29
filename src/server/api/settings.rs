@@ -219,6 +219,10 @@ pub async fn update_settings(
         if let Some(wanderer_mode) = request.wanderer_mode {
             settings.wanderer_mode = wanderer_mode;
         }
+        if let Some(denoise) = request.denoise {
+            settings.denoise = denoise;
+        }
+
         if let Some(sensor_correction) = request.sensor_correction {
             settings.sensor_correction = sensor_correction;
         }

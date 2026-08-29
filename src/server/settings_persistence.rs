@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use super::state::{
-    CameraCaptureProfile, CaptureSettings, EyepieceSettings, SensorCorrectionSettings,
+    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, SensorCorrectionSettings,
     TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
@@ -90,6 +90,8 @@ pub struct PersistedSettings {
     pub eyepiece: EyepieceSettings,
     #[serde(default)]
     pub sensor_correction: SensorCorrectionSettings,
+    #[serde(default)]
+    pub denoise: DenoiseSettings,
     #[serde(default)]
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -212,6 +214,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             wanderer_mode: settings.wanderer_mode,
             eyepiece: settings.eyepiece.clone(),
             sensor_correction: settings.sensor_correction.clone(),
+            denoise: settings.denoise.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
@@ -263,6 +266,7 @@ impl From<PersistedSettings> for CaptureSettings {
             wanderer_mode: persisted.wanderer_mode,
             eyepiece: persisted.eyepiece,
             sensor_correction: persisted.sensor_correction,
+            denoise: persisted.denoise,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
             camera_profiles: persisted.camera_profiles,

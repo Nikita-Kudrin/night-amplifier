@@ -18,7 +18,8 @@ export default defineConfig({
         items: [
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Live Stacking', link: '/stacking' },
-          { text: 'Sensor Corrections', link: '/sensor-corrections' }
+          { text: 'Sensor Corrections', link: '/sensor-corrections' },
+          { text: 'Noise Reduction', link: '/noise-reduction' }
         ]
       }
     ],

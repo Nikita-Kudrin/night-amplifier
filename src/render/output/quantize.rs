@@ -1,7 +1,7 @@
 //! Final f32 → 8-bit conversion for display: black floor, ordered dither, quantize.
 //!
 //! Every byte that reaches a screen crosses this boundary exactly once, in the
-//! tail of the two fused streaming kernels in `server::encoding::format` and in
+//! tail of the two fused streaming kernels in `server::encoding::fused` and in
 //! [`super::frame_to_rgb8`]. Keeping the three of them on one helper is what
 //! stops them drifting — `AGENTS.md` records several bugs that came from
 //! parallel 8-bit conversions disagreeing by an LSB.
