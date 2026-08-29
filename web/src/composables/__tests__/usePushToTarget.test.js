@@ -20,6 +20,7 @@ vi.mock('../api.js', () => ({
     setTargetByName: vi.fn(),
     setTargetByCoordinates: vi.fn(),
     clearTarget: vi.fn(),
+    cancelPushToSolve: vi.fn(),
 }))
 
 describe('usePushToTarget', () => {
@@ -78,5 +79,69 @@ describe('usePushToTarget', () => {
         await refreshStatus()
 
         expect(currentTarget.value).toEqual(mockStatus.current_target)
+    })
+
+    describe('isSolving', () => {
+        it('follows the event stream once a solve starts', async () => {
+            // Regression: `isSolving` was a plain ref written only by the mount-time
+            // status poll and by cancelSolve(). Nothing ever set it true afterwards,
+            // so the panel's spinner and its Cancel button never appeared no matter
+            // how long a solve ran -- which is what "no indicator in the UI" meant.
+            api.getPushToStatus.mockResolvedValue({
+                current_target: null, last_position: null, direction: null, is_solving: false,
+            })
+
+            const eventStream = {
+                currentTarget: ref(null),
+                pushDirection: ref(null),
+                plateSolving: ref({inProgress: false, targetName: null, lastResult: null, stage: null}),
+            }
+            const {isSolving} = usePushToTarget({eventStream})
+
+            expect(isSolving.value).toBe(false)
+
+            eventStream.plateSolving.value = {
+                inProgress: true, targetName: 'M31', lastResult: null, stage: null,
+            }
+            expect(isSolving.value).toBe(true)
+
+            eventStream.plateSolving.value = {
+                inProgress: false, targetName: 'M31', lastResult: 'success', stage: null,
+            }
+            expect(isSolving.value).toBe(false)
+        })
+
+        it('falls back to the status poll when there is no event stream', async () => {
+            api.getPushToStatus.mockResolvedValue({
+                current_target: null, last_position: null, direction: null, is_solving: true,
+            })
+
+            const {isSolving, refreshStatus} = usePushToTarget()
+            await refreshStatus()
+
+            expect(isSolving.value).toBe(true)
+        })
+
+        it('clears immediately on cancel rather than waiting for the round trip', async () => {
+            api.cancelPushToSolve.mockResolvedValue({})
+            api.getPushToStatus.mockResolvedValue({
+                current_target: null, last_position: null, direction: null, is_solving: true,
+            })
+
+            const clearPlateSolving = vi.fn()
+            const eventStream = {
+                currentTarget: ref(null),
+                pushDirection: ref(null),
+                plateSolving: ref({inProgress: true, targetName: 'M31', lastResult: null, stage: null}),
+                clearPlateSolving,
+            }
+            const {isSolving, cancelSolve} = usePushToTarget({eventStream})
+
+            expect(isSolving.value).toBe(true)
+            await cancelSolve()
+
+            expect(api.cancelPushToSolve).toHaveBeenCalled()
+            expect(clearPlateSolving).toHaveBeenCalled()
+        })
     })
 })

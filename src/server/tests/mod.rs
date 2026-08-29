@@ -14,6 +14,7 @@ mod capabilities;
 mod capture_start_stop;
 mod capture_status;
 mod events;
+mod push_to_state;
 mod server_config;
 mod settings;
 mod state_management;

@@ -81,6 +81,100 @@ impl InstallStage {
     }
 }
 
+/// What one call to [`PushToSolverPlugin::process_new_frame`] actually did.
+///
+/// The caller needs this to know whether the position it was handed is news. Without
+/// it every frame that merely reuses the previous solve is announced as a fresh one:
+/// the field log for 2026-08-22 carries ~1500 identical `Plate solve succeeded`
+/// lines at one per second, and each of those also overwrites a genuine failure in
+/// the UI on the very next frame.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SolveOutcome {
+    /// A plate solve ran on this frame and succeeded.
+    Solved,
+    /// No solve ran; any position returned is the previous solve's.
+    #[default]
+    Cached,
+    /// No solve ran and there is nothing cached to report.
+    Idle,
+}
+
+/// The result of offering one frame to the Push-To system.
+#[derive(Debug, Clone, Default)]
+pub struct FrameOutcome {
+    /// Whether `position` came from a solve on this frame or from the cache.
+    pub outcome: SolveOutcome,
+    /// Current pointing, freshly solved or cached.
+    pub position: Option<PushToPositionResponse>,
+    /// Direction to the current target, if both are known.
+    pub direction: Option<PushToDirectionResponse>,
+}
+
+impl FrameOutcome {
+    /// Nothing known and nothing done.
+    pub fn idle() -> Self {
+        Self {
+            outcome: SolveOutcome::Idle,
+            position: None,
+            direction: None,
+        }
+    }
+
+    /// A position and direction reused from an earlier solve.
+    pub fn cached(
+        position: Option<PushToPositionResponse>,
+        direction: Option<PushToDirectionResponse>,
+    ) -> Self {
+        Self {
+            outcome: if position.is_none() {
+                SolveOutcome::Idle
+            } else {
+                SolveOutcome::Cached
+            },
+            position,
+            direction,
+        }
+    }
+
+    /// A position solved on this frame.
+    pub fn solved(
+        position: PushToPositionResponse,
+        direction: Option<PushToDirectionResponse>,
+    ) -> Self {
+        Self {
+            outcome: SolveOutcome::Solved,
+            position: Some(position),
+            direction,
+        }
+    }
+}
+
+/// Why Push-To is not attempting to solve right now.
+///
+/// Reported so the UI can say *which* precondition is missing. Before this, every
+/// one of these cases logged at `debug!` and returned, which is what "I installed
+/// ASTAP and nothing happens" looks like from the outside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushToBlocker {
+    /// No target has been selected.
+    NoTarget,
+    /// ASTAP binary or star database is missing.
+    SolverNotReady,
+    /// A solve failed recently; the next attempt is being held off.
+    BackingOff,
+}
+
+impl PushToBlocker {
+    /// Human-readable explanation for the UI.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::NoTarget => "No target selected",
+            Self::SolverNotReady => "ASTAP or its star database is not installed",
+            Self::BackingOff => "Waiting before the next solve attempt",
+        }
+    }
+}
+
 /// Plate solving, position tracking, and direction calculation.
 #[async_trait]
 pub trait PushToSolverPlugin: Send + Sync {
@@ -88,22 +182,35 @@ pub trait PushToSolverPlugin: Send + Sync {
     fn init(&self, _events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>) {}
 
     /// Process a new frame for plate solving.
-    /// Returns both the position result (if successful) and the direction result (if target is set)
+    ///
+    /// The returned [`FrameOutcome`] says whether a solve actually ran, so callers can
+    /// tell a fresh position from a cached one.
     async fn process_new_frame(
         &self,
         frame: &Frame,
         detector: &StarDetector,
         wanderer_mode: bool,
-    ) -> PushToResult<(
-        Option<PushToPositionResponse>,
-        Option<PushToDirectionResponse>,
-    )>;
+    ) -> PushToResult<FrameOutcome>;
 
     /// Get the current Push-To navigation status
     async fn get_status(&self) -> PushToStatusResponse;
 
-    /// Cancel the current plate solving process
-    async fn cancel_solve(&self) -> PushToResult<()>;
+    /// Cancel the current plate solving process.
+    ///
+    /// Returns `true` if a solve was actually in flight. Callers use this to avoid
+    /// announcing a cancellation that never happened — an unconditional
+    /// `PositionSolveFailed` on every settings save reads as "Failed to find M31" in
+    /// the status bar.
+    async fn cancel_solve(&self) -> PushToResult<bool>;
+
+    /// Cancel any solve in flight and arm the system to solve again on the next
+    /// settled frame.
+    ///
+    /// This is what an equipment change needs: the in-flight solve was computed
+    /// against the old focal length or sensor and is worthless, but the user still
+    /// wants a position. A bare cancel leaves the movement detector reporting `Idle`
+    /// for an unchanged star field, so nothing would ever restart it.
+    async fn restart_solve(&self) -> PushToResult<()>;
 
     /// Get the current push direction to target
     async fn get_direction(&self) -> Option<PushToDirectionResponse>;

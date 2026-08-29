@@ -545,6 +545,19 @@ impl AppState {
         }
     }
 
+    /// Record that the target changed: update the cached flag and drop the
+    /// de-duplication record for the push direction.
+    ///
+    /// The direction is only re-broadcast when its numbers change, so without this a
+    /// new target whose arrow happens to point the same way would leave the client
+    /// showing a distance and heading computed for the *old* target.
+    pub async fn push_to_target_changed(&self, has_target: bool) {
+        if let Some(ref mut pt) = *self.push_to.write().await {
+            pt.has_target = has_target;
+            pt.forget_direction();
+        }
+    }
+
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
         telemetry_metrics::record_frame_dropped();

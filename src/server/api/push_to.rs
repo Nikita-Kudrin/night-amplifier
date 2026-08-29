@@ -104,10 +104,14 @@ pub async fn clear_push_to_target(State(state): State<Arc<AppState>>) -> impl In
 /// Cancel the current plate solving process
 pub async fn cancel_push_to_solve(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match PushToService::cancel_solve(&state).await {
-        Ok(()) => (
+        Ok(was_solving) => (
             StatusCode::OK,
             ApiResponse::ok(MessageResponse {
-                message: "Plate solve cancelled".to_string(),
+                message: if was_solving {
+                    "Plate solve cancelled".to_string()
+                } else {
+                    "No plate solve was running".to_string()
+                },
                 camera_id: None,
             }),
         ),

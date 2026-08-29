@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Push-To position response (from plate solve)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PushToPositionResponse {
     /// Right Ascension in degrees
     pub ra_degrees: f64,
@@ -26,7 +26,7 @@ pub struct PushToPositionResponse {
 }
 
 /// Push-To direction response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PushToDirectionResponse {
     /// Angle to push in degrees, in the image frame:
     /// 0 = screen up, 90 = screen right, rotation is clockwise.
@@ -49,7 +49,7 @@ pub struct PushToDirectionResponse {
 }
 
 /// Coordinate response (simplified)
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CoordinateResponse {
     pub ra_degrees: f64,
     pub dec_degrees: f64,

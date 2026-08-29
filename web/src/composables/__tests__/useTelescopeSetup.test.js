@@ -160,4 +160,101 @@ describe('useTelescopeSetup', () => {
             })
         }))
     })
+
+    it('keeps each camera profile when switching back and forth', async () => {
+        // The outgoing camera's profile was never saved: the callback destructured the
+        // old-values array in its parameter list and then indexed it again, so the
+        // previous camera name was always undefined. Switching away from a camera lost
+        // whatever had been set for it since the last debounced save.
+        const {focalLength, pixelSizeX} = setupComposable()
+
+        settingsRef.value = {
+            telescope: {},
+            camera_telescope_profiles: {},
+            last_camera_name: null,
+        }
+        await nextTick()
+        await flushPromises()
+
+        // Camera A, configured by hand.
+        connectedCameraInfoRef.value = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3000, max_height: 2000}
+        await nextTick()
+        await flushPromises()
+        focalLength.value = 1200
+        await nextTick()
+
+        // Switch to camera B, which has a different sensor.
+        connectedCameraInfoRef.value = {name: 'Camera B', pixel_size_x_um: 2.4, max_width: 1000, max_height: 1000}
+        await nextTick()
+        await flushPromises()
+        focalLength.value = 400
+        await nextTick()
+
+        expect(pixelSizeX.value).toBe(2.4)
+
+        // Back to A: its own focal length and pixel size must come back.
+        connectedCameraInfoRef.value = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3000, max_height: 2000}
+        await nextTick()
+        await flushPromises()
+
+        expect(focalLength.value).toBe(1200)
+        expect(pixelSizeX.value).toBe(3.76)
+    })
+
+    it('does not re-apply driver defaults when the camera list refreshes', async () => {
+        // `connectedCameraInfo` is a computed over the camera list, so every
+        // refreshCameras() hands the watcher a new object for the *same* camera. With
+        // the same-camera guard broken, each of those re-ran the resolve block and
+        // overwrote a manually entered pixel size with the driver's value.
+        const {pixelSizeX} = setupComposable()
+
+        settingsRef.value = {
+            telescope: {},
+            camera_telescope_profiles: {},
+            last_camera_name: null,
+        }
+        await nextTick()
+        await flushPromises()
+
+        connectedCameraInfoRef.value = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3000, max_height: 2000}
+        await nextTick()
+        await flushPromises()
+
+        // The user overrides the pixel size by hand.
+        pixelSizeX.value = 9.99
+        await nextTick()
+
+        // A camera list refresh: same camera, new object identity.
+        connectedCameraInfoRef.value = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3000, max_height: 2000}
+        await nextTick()
+        await flushPromises()
+
+        expect(pixelSizeX.value).toBe(9.99)
+    })
+
+    it('does not push a computed FOV to the solver', async () => {
+        // The backend derives the image-height FOV from the telescope block itself and
+        // prefers a FOV measured by a previous solve. Posting max(fovX, fovY) here
+        // overwrote that a few milliseconds later -- with the sensor *width* field, on
+        // any non-square sensor.
+        const {focalLength, pixelSizeX, pixelSizeY, sensorWidthPx, sensorHeightPx} = setupComposable()
+
+        settingsRef.value = {telescope: {}}
+        await nextTick()
+        await flushPromises()
+
+        focalLength.value = 1200
+        pixelSizeX.value = 2.9
+        pixelSizeY.value = 2.9
+        sensorWidthPx.value = 2712
+        sensorHeightPx.value = 1538
+        await nextTick()
+
+        vi.runAllTimers()
+        await nextTick()
+        await flushPromises()
+
+        expect(api.updateSettings).toHaveBeenCalled()
+        expect(api.updatePushToConfig).not.toHaveBeenCalled()
+    })
 })

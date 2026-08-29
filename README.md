@@ -440,6 +440,47 @@ The server provides:
 
 Static files are served from the `web/` directory (Vue 3 frontend included).
 
+#### Push-To Solve Lifecycle
+
+A plate solve is offered a frame at most once a second, and only when the view has settled.
+Whether that offer becomes a solve is decided by two independent things:
+
+- the **movement detector**, which asks whether the star field has changed enough to be worth
+  re-solving, and
+- the **solve gate**, which asks whether we should be attempting one at all.
+
+The gate exists because those are different questions and answering them together produced
+several of the worst Push-To bugs. It holds three states:
+
+| State      | Set by                                     | Cleared by                                          |
+|------------|--------------------------------------------|-----------------------------------------------------|
+| open       | success, startup                           | —                                                   |
+| backing off| a failed solve (5 s, doubling, capped 120s)| the delay expiring, or any of the "arming" events    |
+| suppressed | a user cancel, clearing the target         | a new target, slewing the scope, an equipment change |
+
+A **cancel** and a **failure** are deliberately different. A cancel keeps the last solved
+position — it is still the best thing known, and it is what keeps the guide arrow on screen —
+and stops further attempts until the user expresses fresh intent. A failure discards the
+position, because we settled somewhere new and could not match it, and schedules a retry.
+
+Changing focal length, sensor, or binning does not merely cancel: it calls `restart_solve`,
+which aborts the solve in flight *and* asks the movement detector for a fresh one. A bare
+cancel would leave the star field unchanged, so the detector would report `Idle` on every
+later frame and nothing would ever be solved against the new optics.
+
+Push-To events on `/ws/events`:
+
+| Event                     | Meaning                                                            |
+|---------------------------|--------------------------------------------------------------------|
+| `plate_solving_started`   | A solve began; carries the target name                              |
+| `plate_solving_progress`  | Which strategy in the ladder is in flight                           |
+| `position_solved`         | A solve **on this frame** succeeded — never a cached position       |
+| `position_solve_failed`   | The sky could not be matched                                        |
+| `plate_solving_cancelled` | Abandoned on request; the last position is still good               |
+| `plate_solving_restarted` | Abandoned because something it depended on changed; a retry follows |
+| `push_to_blocked`         | Why solving is idle (`reason: null` clears the notice)              |
+| `push_direction_updated`  | Sent only when the direction actually changes                       |
+
 #### Live Stream Scaling
 
 The JPEG streams are encoded once per frame in the render task rather than once per connected

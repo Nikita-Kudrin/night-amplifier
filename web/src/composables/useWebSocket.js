@@ -179,6 +179,11 @@ export function useEventStream() {
     const currentTarget = ref(null)
     const plateSolving = ref({inProgress: false, targetName: null, lastResult: null, stage: null})
 
+    // Why Push-To is idle, when it is idle for a reason the user can act on
+    // (no target, ASTAP not installed, waiting out a retry backoff). The server
+    // sends this only on a transition, so it is safe to render directly.
+    const pushToBlocked = ref(null)
+
     const solvingMessage = computed(() => {
         const {inProgress, lastResult, targetName, stage} = plateSolving.value
         const targetSuffix = targetName ? ` : ${targetName}` : ''
@@ -200,7 +205,13 @@ export function useEventStream() {
             return targetName ? `Failed to find${targetSuffix}` : 'Update failed'
         }
 
-        return null
+        if (lastResult === 'cancelled') {
+            return 'Solving cancelled'
+        }
+
+        // Nothing happened and nothing is wrong with the last attempt -- but
+        // something may still be preventing the next one.
+        return pushToBlocked.value
     })
 
     // ASTAP installation state
@@ -264,6 +275,8 @@ export function useEventStream() {
             plateSolving.value = {
                 inProgress: true, targetName: data.target_name, lastResult: null, stage: null,
             }
+            // Solving has resumed, so whatever was holding it up no longer is.
+            pushToBlocked.value = null
         },
         plate_solving_progress(data) {
             // A cold solve works down several strategies and the last one can run for
@@ -285,6 +298,25 @@ export function useEventStream() {
                 inProgress: false, targetName: plateSolving.value.targetName,
                 lastResult: 'failed', stage: null,
             }
+        },
+        plate_solving_cancelled() {
+            // Distinct from a failure: the user asked for this, and the last known
+            // position is still good. Showing it as "Failed to find M31" made an
+            // ordinary settings save look like a solver problem.
+            plateSolving.value = {
+                inProgress: false, targetName: plateSolving.value.targetName,
+                lastResult: 'cancelled', stage: null,
+            }
+        },
+        plate_solving_restarted() {
+            plateSolving.value = {
+                inProgress: false, targetName: plateSolving.value.targetName,
+                lastResult: null, stage: null,
+            }
+            pushToBlocked.value = null
+        },
+        push_to_blocked(data) {
+            pushToBlocked.value = data.reason ?? null
         },
         push_direction_updated(data) {
             pushDirection.value = {
@@ -412,6 +444,7 @@ export function useEventStream() {
 
     function clearPlateSolving() {
         plateSolving.value = {inProgress: false, targetName: null, lastResult: null, stage: null}
+        pushToBlocked.value = null
     }
 
     function clearAstapInstallProgress() {
@@ -446,6 +479,7 @@ export function useEventStream() {
         pushDirection,
         currentTarget,
         plateSolving,
+        pushToBlocked,
         solvingMessage,
         astapInstallProgress,
         catalogInstallProgress,
