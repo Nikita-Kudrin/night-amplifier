@@ -38,7 +38,15 @@
 //!   passed for exactly that reason: fixture and consumer were wrong in the same way.
 //! - `src/frame/layout_tests.rs` pushes a frame with distinct constant channels
 //!   through every output path listed above — including JPEG (SA10) and the chunked
-//!   LZ4 (SA09) framing. Add a row when you add a format.
+//!   LZ4 (SA09) framing. Add a row when you add a format. A format with two
+//!   traversals needs a row for each: the SER rows run at both 8 and 16 bits because
+//!   `encode_8bit` and `encode_16bit` carry separate plane gathers, and only the
+//!   16-bit one used to be covered.
+//! - Every 8-bit consumer converts through [`sample_to_u8`], which rounds. The 16-bit
+//!   writers (SER, FITS) truncate, and agree with each other. SER's 8-bit arm had its
+//!   own truncating conversion, so one frame produced different bytes in SER than in
+//!   the PNG beside it; `ser_8bit_samples_match_the_canonical_8bit_conversion` pins
+//!   the two together.
 //! - Sweep such a fixture over the whole interior, never one pixel: an interleaved
 //!   write lands sample `c * area + p` exactly where the planar read expects it
 //!   whenever `p % 3 == 0`, so a spot check passes against a scrambled buffer.

@@ -40,6 +40,10 @@ pub enum ToneMappingAlgorithm {
 /// * `strength` - Algorithm-specific strength parameter:
 ///   - For Asinh: stretch factor (typical: 1.0-20.0)
 ///   - For MTF: midtone parameter (typical: 0.1-0.4 for boost)
+/// * `color_intensity` - How far channels may diverge from the luminance scaling.
+///   **Asinh only.** MTF applies its curve per channel by design, so it has no
+///   luminance ratio to blend against and ignores this; see [`mtf_stretch_frame`],
+///   which no longer accepts the parameter at all.
 pub fn apply_tone_mapping(
     frame: &mut Frame,
     algorithm: ToneMappingAlgorithm,
@@ -48,9 +52,7 @@ pub fn apply_tone_mapping(
 ) -> Result<()> {
     match algorithm {
         ToneMappingAlgorithm::Asinh => asinh_stretch_frame(frame, strength, color_intensity),
-        ToneMappingAlgorithm::Mtf => {
-            mtf_stretch_frame(frame, [strength, strength, strength], color_intensity)
-        }
+        ToneMappingAlgorithm::Mtf => mtf_stretch_frame(frame, [strength, strength, strength]),
     }
 }
 

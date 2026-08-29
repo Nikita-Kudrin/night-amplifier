@@ -121,8 +121,21 @@ pub fn frame_to_rgb8_downsampled(
     Ok((rgb8, target_width as u32, target_height as u32))
 }
 
-/// Encode RGB8 data with LZ4 compression for high-speed streaming (legacy SA08 format)
-pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame) -> Vec<u8> {
+/// Expand a frame that already fits the bounding box to interleaved RGB8, fusing the
+/// stretch, saturation and contrast stages into the one traversal.
+///
+/// `pub(crate)`, not `pub`: the `channels == 1` test below is an `if`/`else`, so the
+/// `else` arm reads `plane_size * 2 + idx` for *any* other channel count and would run
+/// off the end of a 2-channel frame. [`frame_to_rgb8_downsampled`] rejects
+/// `channels ∉ {1, 3}` before calling either fused kernel, and keeping these two
+/// crate-private is what makes it the only door in rather than merely the usual one.
+pub(crate) fn expand_to_rgb8_fused(
+    ready_frame: &crate::server::state::RenderReadyFrame,
+) -> Vec<u8> {
+    debug_assert!(
+        matches!(ready_frame.linear_frame.channels(), 1 | 3),
+        "expand_to_rgb8_fused requires 1 or 3 channels; frame_to_rgb8_downsampled is the guard"
+    );
     use rayon::prelude::*;
     use std::cell::RefCell;
 
@@ -223,11 +236,18 @@ pub fn expand_to_rgb8_fused(ready_frame: &crate::server::state::RenderReadyFrame
 /// or brighten faint detail in a downsampled tier relative to the old order, never dim it.
 /// See `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample` for a
 /// pinned numerical example.
-pub fn box_downsample_to_rgb8_fused(
+///
+/// `pub(crate)` for the same reason as [`expand_to_rgb8_fused`]: its `else` arm indexes
+/// `plane_size * 2` unconditionally, and [`frame_to_rgb8_downsampled`] is the guard.
+pub(crate) fn box_downsample_to_rgb8_fused(
     ready_frame: &crate::server::state::RenderReadyFrame,
     target_width: usize,
     target_height: usize,
 ) -> Vec<u8> {
+    debug_assert!(
+        matches!(ready_frame.linear_frame.channels(), 1 | 3),
+        "box_downsample_to_rgb8_fused requires 1 or 3 channels; frame_to_rgb8_downsampled is the guard"
+    );
     use rayon::prelude::*;
     use std::cell::RefCell;
 

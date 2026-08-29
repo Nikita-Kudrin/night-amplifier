@@ -36,13 +36,14 @@ mod adaptive;
 mod background;
 mod config;
 mod detector;
-mod luminance;
+pub mod luminance;
 mod star;
 
 pub use adaptive::{detect_stars_adaptive, detect_stars_adaptive_thorough};
 pub use background::BackgroundStats;
 pub use config::DetectionConfig;
 pub use detector::StarDetector;
+pub use luminance::{luminance_frame, mean_luminance};
 pub use star::Star;
 
 use crate::error::Result;

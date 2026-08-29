@@ -11,10 +11,15 @@
 
 mod config;
 mod extractor;
+pub mod grid;
 mod model;
 
 pub use config::{BackgroundConfig, BackgroundExtractionAlgorithm};
 pub use extractor::BackgroundExtractor;
+pub use grid::{
+    compute_box_size, extract_node_value, mad, mad_with_scratch, median, prune_nebulosity, GridNode,
+    PruneConfig,
+};
 pub use model::BackgroundModel;
 
 use crate::error::Result;

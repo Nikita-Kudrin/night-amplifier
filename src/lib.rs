@@ -65,12 +65,13 @@ pub use registration::{
 pub use render::{
     apply_contrast_frame, apply_s_curve, apply_tone_mapping, asinh, asinh_stretch,
     asinh_stretch_frame, auto_stretch_default, auto_stretch_frame, calculate_black_point,
-    calculate_black_points, compute_neutralization_multipliers, finalize_for_display,
-    frame_to_rgb8, frame_to_rgb8_simple, frame_to_rgb8_with_contrast, neutralize_background,
+    calculate_black_points, compute_neutralization_multipliers, compute_white_balance_grid,
+    compute_white_balance_grid_with_config, finalize_for_display, frame_to_rgb8,
+    frame_to_rgb8_simple, frame_to_rgb8_with_contrast, neutralize_background,
     neutralize_background_auto, render_to_rgb8, render_with_auto_stretch, render_with_stretch,
     subtract_black_point, subtract_black_point_auto, AutoStretchConfig, AutoStretchResult,
     BlackPointConfig, ContrastConfig, OutputConfig, RenderPipeline, RenderPipelineConfig,
-    ToneMappingAlgorithm,
+    ToneMappingAlgorithm, WhiteBalanceConfig,
 };
 pub use stacking::{
     warp_frame, warp_frame_into, FrameProcessingResult, MasterStack, PipelineConfig,

@@ -50,17 +50,41 @@ pub fn mtf_stretch_color_preserving(
     )
 }
 
+/// Entries in a per-channel MTF lookup table.
+const LUT_SIZE: usize = 65536;
+
+/// Tabulate `mtf(x, midtone)` over `[0, 1]`, so the per-pixel work is one index.
+fn build_mtf_lut(midtone: f32) -> Vec<f32> {
+    (0..LUT_SIZE)
+        .map(|i| mtf(i as f32 / (LUT_SIZE - 1) as f32, midtone))
+        .collect()
+}
+
+/// Index a 65536-entry LUT by a normalised sample.
+///
+/// The `as usize` cast saturates, so a negative sample lands at 0 rather than wrapping.
+#[inline]
+fn lut_lookup(lut: &[f32], value: f32) -> f32 {
+    lut[((value * 65535.0) as usize).min(LUT_SIZE - 1)]
+}
+
 /// Apply MTF to an entire frame in-place
 ///
 /// `midtone == 0.5` is the identity (see `mtf`), so it skips the pass entirely. That also
 /// skips the incidental `[0, 1]` clamp the pass would have applied, which is safe because
 /// pixel data is normalised to `[0, 1]` by contract; the 1e-6 window keeps any residual
 /// curve error four orders of magnitude below one 8-bit LSB.
-pub fn mtf_stretch_frame(
-    frame: &mut Frame,
-    midtones: [f32; 3],
-    _color_intensity: f32,
-) -> Result<()> {
+///
+/// # No `color_intensity` parameter
+///
+/// Unlike [`asinh_stretch_frame`](crate::render::stretch::asinh_stretch_frame), this
+/// applies the curve to each channel independently rather than scaling all three by a
+/// luminance ratio — see the note on `test_mtf_stretch_frame` and the comment at
+/// `stretch/mod.rs`. It used to *accept* a `color_intensity` and bind it as
+/// `_color_intensity`, so a caller could not tell from the signature that the setting
+/// had no effect on this path. [`mtf_stretch_color_preserving`] is the per-pixel
+/// colour-preserving variant, and it does take one.
+pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3]) -> Result<()> {
     if (midtones[0] - 0.5).abs() < 1e-6
         && (midtones[1] - 0.5).abs() < 1e-6
         && (midtones[2] - 0.5).abs() < 1e-6
@@ -76,40 +100,30 @@ pub fn mtf_stretch_frame(
         )));
     }
 
-    let data = frame.data_mut();
-
-    // Pre-compute LUT to avoid expensive division per pixel
-    const LUT_SIZE: usize = 65536;
-    let mut lut_r = vec![0.0f32; LUT_SIZE];
-    let mut lut_g = vec![0.0f32; LUT_SIZE];
-    let mut lut_b = vec![0.0f32; LUT_SIZE];
-
-    for i in 0..LUT_SIZE {
-        let x = i as f32 / (LUT_SIZE - 1) as f32;
-        lut_r[i] = mtf(x, midtones[0]);
-        lut_g[i] = mtf(x, midtones[1]);
-        lut_b[i] = mtf(x, midtones[2]);
-    }
-
+    // One LUT per channel the frame actually has. Building all three unconditionally
+    // allocated and filled 768 KB for a mono frame that reads only the first.
     if channels == 1 {
-        data.par_iter_mut().for_each(|pixel| {
-            let idx = (*pixel * 65535.0) as usize;
-            *pixel = lut_r[idx.min(65535)];
-        });
-    } else {
-        let (r, g, b) = frame.planes_mut();
-        r.par_iter_mut()
-            .zip_eq(g.par_iter_mut())
-            .zip_eq(b.par_iter_mut())
-            .for_each(|((p_r, p_g), p_b)| {
-                let r_idx = (*p_r * 65535.0) as usize;
-                let g_idx = (*p_g * 65535.0) as usize;
-                let b_idx = (*p_b * 65535.0) as usize;
-                *p_r = lut_r[r_idx.min(65535)];
-                *p_g = lut_g[g_idx.min(65535)];
-                *p_b = lut_b[b_idx.min(65535)];
-            });
+        let lut = build_mtf_lut(midtones[0]);
+        frame
+            .data_mut()
+            .par_iter_mut()
+            .for_each(|pixel| *pixel = lut_lookup(&lut, *pixel));
+        return Ok(());
     }
+
+    let lut_r = build_mtf_lut(midtones[0]);
+    let lut_g = build_mtf_lut(midtones[1]);
+    let lut_b = build_mtf_lut(midtones[2]);
+
+    let (r, g, b) = frame.planes_mut();
+    r.par_iter_mut()
+        .zip_eq(g.par_iter_mut())
+        .zip_eq(b.par_iter_mut())
+        .for_each(|((p_r, p_g), p_b)| {
+            *p_r = lut_lookup(&lut_r, *p_r);
+            *p_g = lut_lookup(&lut_g, *p_g);
+            *p_b = lut_lookup(&lut_b, *p_b);
+        });
 
     Ok(())
 }
@@ -178,17 +192,19 @@ mod tests {
 
     #[test]
     fn test_mtf_stretch_frame() {
-        let mut data = vec![0.0f32; 32 * 32 * 3];
-        let plane = 32 * 32;
-        for i in 0..plane {
-            data[i] = 0.1;
-            data[plane + i] = 0.2;
-            data[plane * 2 + i] = 0.3;
+        // `set_pixel` rather than hand-computed plane offsets: a fixture that encodes the
+        // layout cannot detect a layout bug.
+        let original_pixel = (0.1f32, 0.2, 0.3);
+        let mut frame = Frame::zeros(32, 32, 3).unwrap();
+        for y in 0..32 {
+            for x in 0..32 {
+                frame.set_pixel(x, y, 0, original_pixel.0);
+                frame.set_pixel(x, y, 1, original_pixel.1);
+                frame.set_pixel(x, y, 2, original_pixel.2);
+            }
         }
-        let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
-        let original_pixel = (0.1, 0.2, 0.3);
 
-        mtf_stretch_frame(&mut frame, [0.2, 0.2, 0.2], 1.0).unwrap();
+        mtf_stretch_frame(&mut frame, [0.2, 0.2, 0.2]).unwrap();
 
         let r_out = frame.get_pixel(16, 16, 0);
         let g_out = frame.get_pixel(16, 16, 1);
@@ -201,5 +217,66 @@ mod tests {
 
         // Color ratios are no longer strictly preserved by MTF because we apply it independently
         // to each channel to allow autonomous divergence control.
+    }
+
+    /// Each channel gets its own curve, so distinct midtones must produce distinct
+    /// results — and the plane a midtone lands on must be the one it was written for.
+    /// A constant-plane fixture swept over the whole interior, because an interleaved
+    /// read lands correctly wherever `p % 3 == 0`.
+    #[test]
+    fn per_channel_midtones_reach_their_own_planes() {
+        let (w, h) = (19usize, 13);
+        let mut frame = Frame::zeros(w, h, 3).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                frame.set_pixel(x, y, 0, 0.25);
+                frame.set_pixel(x, y, 1, 0.25);
+                frame.set_pixel(x, y, 2, 0.25);
+            }
+        }
+
+        let midtones = [0.2f32, 0.3, 0.4];
+        mtf_stretch_frame(&mut frame, midtones).unwrap();
+
+        for (c, &m) in midtones.iter().enumerate() {
+            let want = mtf(0.25, m);
+            for y in 0..h {
+                for x in 0..w {
+                    let got = frame.get_pixel(x, y, c);
+                    assert!(
+                        (got - want).abs() < 1e-3,
+                        "channel {c} at ({x}, {y}) is {got}, expected ~{want} for midtone {m}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The mono arm builds and reads only one LUT; it must still be the one for
+    /// `midtones[0]`.
+    #[test]
+    fn a_mono_frame_uses_the_first_midtone() {
+        let mut frame = Frame::filled(8, 8, 1, 0.25).unwrap();
+        mtf_stretch_frame(&mut frame, [0.2, 0.9, 0.9]).unwrap();
+        let want = mtf(0.25, 0.2);
+        for y in 0..8 {
+            for x in 0..8 {
+                let got = frame.get_pixel(x, y, 0);
+                assert!((got - want).abs() < 1e-3, "({x}, {y}) is {got}, expected ~{want}");
+            }
+        }
+    }
+
+    /// A negative sample (possible after a calibration overshoot) must land at the
+    /// bottom of the LUT rather than wrapping the `as usize` cast to a huge index.
+    #[test]
+    fn out_of_range_samples_stay_in_the_table() {
+        let mut frame = Frame::filled(4, 4, 1, -0.5).unwrap();
+        mtf_stretch_frame(&mut frame, [0.2, 0.2, 0.2]).unwrap();
+        assert_eq!(frame.get_pixel(0, 0, 0), mtf(0.0, 0.2));
+
+        let mut frame = Frame::filled(4, 4, 1, 5.0).unwrap();
+        mtf_stretch_frame(&mut frame, [0.2, 0.2, 0.2]).unwrap();
+        assert_eq!(frame.get_pixel(0, 0, 0), mtf(1.0, 0.2));
     }
 }
