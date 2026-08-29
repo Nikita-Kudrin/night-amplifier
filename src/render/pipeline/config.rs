@@ -1,5 +1,6 @@
 use crate::background::BackgroundConfig;
 use crate::render::autostretch::AutoStretchConfig;
+use crate::render::denoise::DenoiseConfig;
 use crate::render::output::{ContrastConfig, DisplayOutput};
 use crate::render::stretch::SaturationBoostConfig;
 
@@ -38,6 +39,15 @@ pub struct RenderPipelineConfig {
     /// bytes, because that is the only place the output pixel coordinate the
     /// dither needs actually exists.
     pub display: DisplayOutput,
+
+    /// Spatial denoising, applied at **stream** resolution.
+    ///
+    /// Not a pipeline stage either, and for the same reason as `display`: the
+    /// filters run in the encoders, between the resample and the tone curve.
+    /// Denoising the sensor-resolution frame and then discarding three quarters
+    /// of it costs 4.5x the memory traffic for no visible benefit, and the
+    /// encoders' box downsample has already removed some of the noise by then.
+    pub denoise: DenoiseConfig,
 }
 
 impl Default for RenderPipelineConfig {
@@ -54,6 +64,7 @@ impl Default for RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            denoise: DenoiseConfig::OFF,
         }
     }
 }
@@ -135,6 +146,12 @@ impl RenderPipelineConfig {
         self
     }
 
+    /// Set the spatial denoising the encoders apply at stream resolution.
+    pub fn with_denoise(mut self, denoise: DenoiseConfig) -> Self {
+        self.denoise = denoise;
+        self
+    }
+
     /// Preset for deep sky imaging (nebulae, galaxies)
     pub fn deep_sky() -> Self {
         Self {
@@ -154,6 +171,7 @@ impl RenderPipelineConfig {
             scnr: true,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            denoise: DenoiseConfig::OFF,
         }
     }
 
@@ -171,6 +189,7 @@ impl RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            denoise: DenoiseConfig::OFF,
         }
     }
 
@@ -188,6 +207,7 @@ impl RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            denoise: DenoiseConfig::OFF,
         }
     }
 }

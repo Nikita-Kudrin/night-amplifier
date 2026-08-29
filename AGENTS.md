@@ -137,6 +137,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 | `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
 | `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG + Superpixel                          |
 | `cfa/`                        | Raw-CFA stage run before demosaic: hot pixels, row/column FPN                        |
+| `render/denoise/`             | Guided-filter chroma + à trous wavelet luma, run at *stream* resolution              |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
@@ -451,10 +452,69 @@ Rules:
   pixels via hand-computed offsets). Thresholds the two genuinely disagree on pass in via
   `PruneConfig`; grid *placement* stays per-crate.
 
+### Spatial denoising (`render::denoise`) — runs in the encoder, not the pipeline
+
+Nothing did any spatial denoising before this. Two filters now do, and both live
+in `server::encoding::fused` rather than in `render::pipeline`:
+
+- **`denoise::guided`** — fast guided filter on the two chroma planes with luma
+  as the guide. Removes colour mottle. Both planes are filtered in one call: the
+  guide's window mean and variance and the bilinear upsample geometry do not
+  depend on which plane is being filtered, and that sharing is most of the
+  stage's cost.
+- **`denoise::wavelet`** — à trous (B3 spline, 4 levels) soft-thresholding on
+  luma, with sigma measured by MAD on the level-1 detail plane and per-level
+  thresholds derived through the standard Starck-Murtagh propagation factors.
+
+**They run at stream resolution, after the resample and before the tone curve.**
+Denoising a 9 MP frame and then discarding three quarters of it is 4.5x the
+memory traffic for the same visible result (~576 MB against ~128 MB per frame at
+four levels), and the encoders' box downsample has already halved the noise by
+then. Measured on a 20-core x86 box at 1440²: chroma 7.0 ms, luma 13.9 ms, both
+16.8 ms — `denoise_benchmark`.
+
+Three things here are load-bearing:
+
+- **The encoders have two drivers.** `RowSource` produces one interleaved RGB f32
+  row at output resolution; with denoising off, each row is gathered,
+  transformed and written inside one closure against a thread-local scratch row —
+  exactly the pre-denoise behaviour, and `every_disabled_denoise_config_is_byte_identical_through_both_kernels`
+  pins that every spelling of "off" reaches it. With either filter on, the driver
+  stages the whole resampled image as f32, denoises it, then runs the tail per
+  row. Neither filter can fuse into the row closure: both need neighbourhood
+  access across rows. `layout_tests` covers the staged traversal separately from
+  the two fused ones — the gather is shared, but the row the tail sees is a
+  different buffer reached a different way, and the filters split it into YCbCr
+  and back.
+- **The thresholds get *weaker* with scale, not stronger.** `k = [0, 3, 2, 1]`,
+  finest first. Denoising hardest at the coarse scales is the intuitive tuning
+  and it erases the target: the Dumbbell's outer lobes are level-3 and level-4
+  structure. `k[0] = 0` leaves star cores alone.
+- **`k[0] = 0` is a deliberate trade, and it costs grain.** A B3 spline à trous
+  transform puts ~94 % of a *white* signal's variance in level 1, so on synthetic
+  white noise the default `k` reduces sigma by only ~1.1x
+  (`the_default_thresholds_barely_touch_white_noise`). Real sky noise is not
+  white by the time it gets here — the box downsample correlates it first — so on
+  the IMX533 fixture the same configuration takes sky sigma from 7.41 to 4.45
+  output levels with the chroma filter, against 5.93 for chroma alone. Raising
+  `k[0]` to 1.0 takes it to 1.48. `display_output_tests` reports all three
+  alongside integrated nebulosity flux, which is the number that catches a filter
+  eating signal — grain reduction alone is not a passing result.
+
+Skipped for `StackingType::Planetary`, the same way `cfa::fpn` is: lucky imaging
+exists to recover the detail these remove.
+
+One cost worth knowing: the stage runs **per encode**, not per frame, so a
+session with the lossless stream and two JPEG tiers active denoises three times.
+That is the same structure as the encodes themselves — the render task's shared
+native RGB8 buffer already collapses the tiers that do not downsample — but it
+means the figure to budget against is `denoise` x active payloads. The `denoise`
+span reports it under `--span-timings`.
+
 ### The f32 -> 8-bit boundary (`render::output::quantize`)
 
 Every byte that reaches a screen crosses this boundary exactly once: the tails of both
-fused kernels in `server::encoding::format` and `render::frame_to_rgb8`. All three go
+fused kernels in `server::encoding::fused` and `render::frame_to_rgb8`. All three go
 through `write_row_rgb8` / `write_pixel_rgb8`, which wrap the canonical `sample_to_u8`.
 Keeping them on one helper is the same rule as the rest of the layout contract — parallel
 8-bit conversions in this repo have drifted by an LSB before.
@@ -584,6 +644,10 @@ Selectively enhances color saturation in faint signal regions.
 
 ### Phase 13: Final Output Mapping & Contrast
 
+Spatial denoising is *not* one of these phases — it runs in the streaming
+encoders at display resolution rather than in the pipeline. See **Spatial
+denoising** above.
+
 #### S-Curve Contrast (`ContrastConfig`)
 
 Luminance-preserving contrast adjustment using a parametric S-curve:
@@ -596,7 +660,7 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 ### Pipeline performance instrumentation
 
 `--span-timings` turns on `FmtSpan::NEW | CLOSE`, so every stage span (`camera_capture`, `Debayerer::debayer`,
-`stacking_iteration`, `render_iteration`, `process_preview_frame`, `encode_jpeg_tiers`) logs its duration. This is
+`stacking_iteration`, `render_iteration`, `process_preview_frame`, `encode_jpeg_tiers`, `denoise`) logs its duration. This is
 the on-device breakdown — no OTLP collector required.
 
 Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping and

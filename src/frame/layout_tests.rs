@@ -796,6 +796,57 @@ fn display_transform_preserves_channel_order_in_both_fused_kernels() {
     );
 }
 
+/// The staged traversal that Tier 2's denoisers introduced.
+///
+/// With denoising on, both kernels stop transforming a thread-local scratch row
+/// and instead resample the whole frame into one interleaved f32 buffer, filter
+/// it, and only then run the tone curve and the 8-bit write. That is a third
+/// path across the planar/interleaved boundary — the gather is shared with the
+/// fused drivers, but the row the tail and the writer see is a different buffer
+/// reached a different way, and the denoisers themselves split it into YCbCr and
+/// back. A channel swap anywhere in there is invisible to the filters' own unit
+/// tests, which use grey inputs.
+///
+/// Both sources get a row, per the rule at the top of this file.
+#[test]
+fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
+    let denoise = crate::render::DenoiseConfig {
+        luma: crate::render::LumaDenoiseConfig::default(),
+        chroma: crate::render::ChromaDenoiseConfig::default(),
+    };
+
+    // A constant frame has no detail at any scale and no chroma structure, so
+    // neither filter may change it — which makes an exact sweep the right
+    // assertion and any channel mixing immediately visible.
+    let mut ready = passthrough_ready(tricolour_frame(W, H));
+    ready.pipeline_config.denoise = denoise;
+    let (expanded, w, h) =
+        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+    assert_eq!((w as usize, h as usize), (W, H));
+    assert_interleaved_rgb8_within(
+        &expanded,
+        W,
+        H,
+        (R_U8, G_U8, B_U8),
+        1,
+        "expand source + denoise",
+    );
+
+    let mut ready_big = passthrough_ready(tricolour_frame(W * 4, H * 4));
+    ready_big.pipeline_config.denoise = denoise;
+    let (reduced, rw, rh) =
+        crate::server::encoding::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
+    assert!((rw as usize) < W * 4, "fixture did not downsample");
+    assert_interleaved_rgb8_within(
+        &reduced,
+        rw as usize,
+        rh as usize,
+        (R_U8, G_U8, B_U8),
+        1,
+        "downsample source + denoise",
+    );
+}
+
 /// Like [`assert_interleaved_rgb8`], but with a tolerance: ordered dithering
 /// moves individual samples by up to one level by design, so an exact sweep
 /// would fail on a correct implementation.

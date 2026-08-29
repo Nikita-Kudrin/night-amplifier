@@ -1,7 +1,7 @@
 //! Interleaved-row luminance kernels.
 //!
 //! These take genuinely interleaved `[R, G, B, R, G, B, ...]` f32 rows, which is what
-//! the streaming encoder assembles per row in `server::encoding::format`. For the planar
+//! the streaming encoder assembles per row in `server::encoding::fused`. For the planar
 //! `Frame` equivalents see [`super::planar`].
 
 use super::scale_lut_lookup;

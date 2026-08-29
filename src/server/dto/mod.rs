@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::state::{
-    CameraCaptureProfile, CaptureSession, CaptureSettings, EyepieceSettings,
+    CameraCaptureProfile, CaptureSession, CaptureSettings, DenoiseSettings, EyepieceSettings,
     SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
@@ -236,6 +236,8 @@ pub struct SettingsResponse {
     pub auto_reconnect: bool,
     pub auto_resume_capture: bool,
     pub sensor_correction: SensorCorrectionSettings,
+    #[serde(default)]
+    pub denoise: DenoiseSettings,
     pub eyepiece: EyepieceSettings,
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -304,6 +306,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             auto_reconnect: settings.auto_reconnect,
             auto_resume_capture: settings.auto_resume_capture,
             sensor_correction: settings.sensor_correction.clone(),
+            denoise: settings.denoise.clone(),
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
@@ -449,6 +452,9 @@ pub struct UpdateSettingsRequest {
 
     #[serde(default)]
     pub sensor_correction: Option<SensorCorrectionSettings>,
+
+    #[serde(default)]
+    pub denoise: Option<DenoiseSettings>,
 
     #[serde(default)]
     pub eyepiece: Option<EyepieceSettings>,

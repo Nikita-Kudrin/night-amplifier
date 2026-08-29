@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use crate::server::encoding::format::*;
+use crate::server::encoding::fused::frame_to_rgb8_downsampled;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, warn};

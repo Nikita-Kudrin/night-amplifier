@@ -28,8 +28,8 @@ pub use session::{
     REJECTION_RATE_WINDOW,
 };
 pub use settings::{
-    CameraCaptureProfile, CaptureSettings, EyepieceSettings, SensorCorrectionSettings,
-    TelescopeSettings,
+    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
+    SensorCorrectionSettings, TelescopeSettings,
 };
 pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
 

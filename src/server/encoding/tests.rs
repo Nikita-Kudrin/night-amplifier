@@ -1,6 +1,7 @@
 use crate::frame::Frame;
 
 use crate::server::encoding::format::*;
+use crate::server::encoding::fused::*;
 use crate::server::encoding::jpeg::calculate_dynamic_jpeg_quality;
 use crate::server::encoding::jpeg::*;
 use crate::server::encoding::lz4::*;
@@ -864,5 +865,166 @@ fn lz4_encodes_into_the_requested_box() {
     assert!(
         encoded.len() < native.len(),
         "a smaller box must produce a smaller payload"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Spatial denoising through the fused kernels (Tier 2)
+// ---------------------------------------------------------------------------
+
+/// A frame carrying deterministic noise, so a denoiser has something to remove
+/// and the result is reproducible.
+fn noisy_frame(width: usize, height: usize, base: f32, amplitude: f32) -> Frame {
+    let mut frame = Frame::filled(width, height, 3, base).unwrap();
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    for y in 0..height {
+        for x in 0..width {
+            for c in 0..3 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let n = ((state >> 40) as f32 / 16777216.0) - 0.5;
+                frame.set_pixel(x, y, c, base + n * amplitude + c as f32 * 0.02);
+            }
+        }
+    }
+    frame
+}
+
+fn ready_with_denoise(
+    frame: &Frame,
+    denoise: crate::render::DenoiseConfig,
+) -> crate::server::state::RenderReadyFrame {
+    let mut ready = to_ready_frame(frame);
+    ready.pipeline_config.denoise = denoise;
+    ready
+}
+
+/// Every spelling of "off" must take the fused traversal, not a staged one that
+/// happens to compute the same thing. `is_enabled` is what routes between them,
+/// so its contract is pinned at the byte level on both kernels.
+#[test]
+fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
+    let variants = [
+        crate::render::DenoiseConfig::OFF,
+        crate::render::DenoiseConfig {
+            luma: crate::render::LumaDenoiseConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            chroma: crate::render::ChromaDenoiseConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        },
+        crate::render::DenoiseConfig {
+            luma: crate::render::LumaDenoiseConfig {
+                strength: 0.0,
+                ..Default::default()
+            },
+            chroma: crate::render::ChromaDenoiseConfig {
+                strength: 0.0,
+                ..Default::default()
+            },
+        },
+        crate::render::DenoiseConfig {
+            luma: crate::render::LumaDenoiseConfig {
+                k: [0.0; 4],
+                ..Default::default()
+            },
+            chroma: crate::render::ChromaDenoiseConfig {
+                radius: 0,
+                ..Default::default()
+            },
+        },
+    ];
+
+    let small = noisy_frame(96, 72, 0.2, 0.05);
+    let (expand_baseline, _, _) =
+        frame_to_rgb8_downsampled(&to_ready_frame(&small), 3840, 2160).unwrap();
+    let big = noisy_frame(200, 150, 0.2, 0.05);
+    let (reduce_baseline, _, _) =
+        frame_to_rgb8_downsampled(&to_ready_frame(&big), 100, 75).unwrap();
+
+    for (i, denoise) in variants.into_iter().enumerate() {
+        let (off, _, _) =
+            frame_to_rgb8_downsampled(&ready_with_denoise(&small, denoise), 3840, 2160).unwrap();
+        assert_eq!(expand_baseline, off, "expand kernel changed for variant {i}");
+
+        let (off, _, _) =
+            frame_to_rgb8_downsampled(&ready_with_denoise(&big, denoise), 100, 75).unwrap();
+        assert_eq!(reduce_baseline, off, "downsample kernel changed for variant {i}");
+    }
+}
+
+/// The staged path must actually filter, on both traversals — a config that is
+/// wired but never reaches the kernels would pass every layout test in the repo.
+#[test]
+fn denoising_reduces_sky_sigma_through_both_kernels() {
+    let denoise = crate::render::DenoiseConfig {
+        luma: crate::render::LumaDenoiseConfig {
+            k: [1.0, 3.0, 2.0, 1.0],
+            ..Default::default()
+        },
+        chroma: crate::render::ChromaDenoiseConfig::default(),
+    };
+
+    let sigma = |bytes: &[u8]| {
+        let vals: Vec<f64> = bytes.iter().skip(1).step_by(3).map(|&v| v as f64).collect();
+        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+        (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt()
+    };
+
+    let small = noisy_frame(128, 128, 0.3, 0.1);
+    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&small), 3840, 2160).unwrap();
+    let (filtered, _, _) =
+        frame_to_rgb8_downsampled(&ready_with_denoise(&small, denoise), 3840, 2160).unwrap();
+    assert!(
+        sigma(&filtered) < sigma(&plain) * 0.6,
+        "expand kernel: sigma only fell from {:.2} to {:.2}",
+        sigma(&plain),
+        sigma(&filtered)
+    );
+
+    let big = noisy_frame(256, 256, 0.3, 0.1);
+    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&big), 128, 128).unwrap();
+    let (filtered, _, _) =
+        frame_to_rgb8_downsampled(&ready_with_denoise(&big, denoise), 128, 128).unwrap();
+    assert!(
+        sigma(&filtered) < sigma(&plain) * 0.6,
+        "downsample kernel: sigma only fell from {:.2} to {:.2}",
+        sigma(&plain),
+        sigma(&filtered)
+    );
+}
+
+/// The staged path still has to run the tone curve, and in the same order: the
+/// denoisers sit between the resample and the stretch, not after it. A staged
+/// buffer that skipped or reordered the tail would produce a visibly different
+/// image while passing every layout and sigma assertion above.
+#[test]
+fn the_staged_path_still_applies_the_stretch_before_quantizing() {
+    let frame = Frame::filled(32, 24, 3, 0.1).unwrap();
+    let lut: std::sync::Arc<Vec<f32>> =
+        std::sync::Arc::new((0..1024).map(|i| 1.0 + i as f32 / 1024.0 * 4.0).collect());
+
+    let mut ready = to_ready_frame_with_stretch(&frame, 0.02, lut);
+    let (unfiltered, _, _) = frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+
+    ready.pipeline_config.denoise = crate::render::DenoiseConfig {
+        luma: crate::render::LumaDenoiseConfig::default(),
+        chroma: crate::render::ChromaDenoiseConfig::default(),
+    };
+    let (staged, _, _) = frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+
+    // A constant frame has nothing for either filter to remove, so the staged
+    // path must reproduce the fused one exactly — including the stretch.
+    assert_eq!(
+        unfiltered, staged,
+        "staged path disagrees with the fused one on a frame neither filter can change"
+    );
+    assert!(
+        unfiltered.iter().any(|&b| b > 26),
+        "stretch did not run: 0.1 should be lifted well above its linear byte"
     );
 }
