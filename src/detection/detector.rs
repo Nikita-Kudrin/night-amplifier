@@ -530,7 +530,10 @@ mod tests {
         let width = 80;
         let height = 80;
         let channels = 3;
-        let mut data = vec![0.05f32; width * height * channels];
+        // Through `get_pixel`/`set_pixel`, not a hand-computed `c * area + y * width + x`
+        // offset: a fixture that encodes the planar layout itself cannot catch a layout
+        // bug in the code under test. See the "Frame memory layout" note in AGENTS.md.
+        let mut frame = Frame::filled(width, height, channels, 0.05).unwrap();
 
         let sigma = 3.0f32;
         let peak = 0.8f32;
@@ -541,16 +544,16 @@ mod tests {
                     let x = 40 + dx;
                     let y = 40 + dy;
                     if x >= 0 && y >= 0 && (x as usize) < width && (y as usize) < height {
+                        let (x, y) = (x as usize, y as usize);
                         let dist_sq = (dx * dx + dy * dy) as f32;
                         let intensity = peak * (-dist_sq / (2.0 * sigma * sigma)).exp();
-                        let idx = c * (width * height) + (y as usize) * width + (x as usize);
-                        data[idx] += intensity;
+                        let value = frame.get_pixel(x, y, c) + intensity;
+                        frame.set_pixel(x, y, c, value);
                     }
                 }
             }
         }
 
-        let frame = Frame::from_f32_vec(data, width, height, channels).unwrap();
         let stars = StarDetector::with_defaults().detect(&frame).unwrap();
 
         assert!(!stars.is_empty(), "Should detect star in RGB image");
