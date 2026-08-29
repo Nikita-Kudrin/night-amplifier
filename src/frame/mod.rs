@@ -24,7 +24,7 @@
 //!
 //! | Consumer | Layout |
 //! |---|---|
-//! | JPEG (SA10), LZ4 (SA08/SA09), PNG, TIFF RGB8 | interleaved |
+//! | JPEG (SA10), LZ4 (SA08/SA09), PNG | interleaved |
 //! | SER `Rgb` / `Bgr` payloads | interleaved |
 //! | FITS (NAXIS3 = 3) | **planar** — passes through unchanged |
 //!

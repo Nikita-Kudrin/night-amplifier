@@ -365,7 +365,7 @@ plugins — none of which the compiler or the test suite noticed.
 
 | Consumer | Layout |
 |---|---|
-| JPEG (SA10), LZ4 (SA08/SA09), PNG, TIFF RGB8, SER `Rgb`/`Bgr` | interleaved |
+| JPEG (SA10), LZ4 (SA08/SA09), PNG, SER `Rgb`/`Bgr` | interleaved |
 | FITS (NAXIS3 = 3) | planar — passes straight through |
 
 Rules:
