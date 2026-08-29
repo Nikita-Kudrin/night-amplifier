@@ -359,6 +359,19 @@ pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
 }
 
 /// Helper to get a full render pipeline configuration from capture settings
+/// How much of the eyepiece intensity slider's range actually reaches the
+/// stretch. The slider is a comfort control, not a full remap of the tone curve.
+const EYEPIECE_INTENSITY_SCALE: f32 = 0.4;
+
+/// Sky level the eyepiece view aims for at full intensity.
+const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
+
+/// Black-point factor the eyepiece view aims for at full intensity. Higher than
+/// any stretch profile's default: trading faint-tail detail for a smoother sky
+/// is the whole point of the eyepiece view.
+const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
+
+
 pub fn get_render_pipeline_config(
     settings: &CaptureSettings,
     for_fits: bool,
@@ -393,16 +406,32 @@ pub fn get_render_pipeline_config(
             .with_saturation_boost(settings.saturation_boost)
             .with_contrast(settings.auto_stretch);
 
-        // Apply eyepiece dark background enhancement
-        let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * 0.4;
-        if intensity > 0.0 && config.auto_stretch {
-            // Interpolate target_background down to 0.01 for pitch-black sky
-            config.stretch_config.target_background =
-                config.stretch_config.target_background * (1.0 - intensity) + 0.01 * intensity;
+        // The 8-bit conversion is not a pipeline stage; the encoders apply it
+        // where they write output bytes. It is set unconditionally because a
+        // zero pedestal with dithering off reproduces a plain conversion.
+        config.display = crate::render::DisplayOutput::default()
+            .with_pedestal(settings.eyepiece.black_floor)
+            .with_dither(settings.eyepiece.dither);
 
-            // Interpolate black_point_sigma down to 1.0 to clip noise
-            config.stretch_config.black_point_sigma =
-                config.stretch_config.black_point_sigma * (1.0 - intensity) + 1.0 * intensity;
+        // Apply eyepiece dark background enhancement
+        let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;
+        if intensity > 0.0 && config.auto_stretch {
+            // Interpolate target_background down for a darker sky
+            config.stretch_config.target_background =
+                config.stretch_config.target_background * (1.0 - intensity)
+                    + EYEPIECE_TARGET_BACKGROUND * intensity;
+
+            // Interpolate black_point_sigma *up*, which is what actually clips
+            // noise: the black point is `mode - sigma * black_point_sigma`, so a
+            // larger factor puts more of the sky's noise below black. This used
+            // to interpolate down toward 1.0 under a comment claiming it clipped
+            // noise, which had the opposite effect — at full intensity it left
+            // more grain visible (9.7 output levels against 6.0) *and* clamped
+            // more sky pixels to pure black (9.7 % against 1.8 %).
+            config.stretch_config.black_point_sigma = (config.stretch_config.black_point_sigma
+                * (1.0 - intensity)
+                + EYEPIECE_BLACK_POINT_SIGMA * intensity)
+                .clamp(0.5, 5.0);
 
             // Enhance contrast to make objects pop
             config.contrast = true;
@@ -459,20 +488,35 @@ mod tests {
         settings.eyepiece.intensity = 1.0;
         let max_config = get_render_pipeline_config(&settings, false);
 
-        let expected_bg = base_config.stretch_config.target_background * 0.6 + 0.01 * 0.4;
-        let expected_sigma = base_config.stretch_config.black_point_sigma * 0.6 + 1.0 * 0.4;
-        let expected_contrast = base_config.contrast_config.strength * 0.6 + 1.0 * 0.4;
+        let blend = |base: f32, target: f32| base * 0.6 + target * 0.4;
+        let expected_bg = blend(
+            base_config.stretch_config.target_background,
+            EYEPIECE_TARGET_BACKGROUND,
+        );
+        let expected_sigma = blend(
+            base_config.stretch_config.black_point_sigma,
+            EYEPIECE_BLACK_POINT_SIGMA,
+        );
+        let expected_contrast = blend(base_config.contrast_config.strength, 1.0);
 
-        // Target background and black point sigma should decrease
+        // Target background falls: a darker sky.
         assert!(
             max_config.stretch_config.target_background
                 < base_config.stretch_config.target_background
         );
         assert!((max_config.stretch_config.target_background - expected_bg).abs() < 1e-5);
 
+        // Black point sigma *rises*. The black point is `mode - sigma * factor`,
+        // so a larger factor pushes more of the sky's noise below black — which
+        // is what "clip noise" means. This assertion used to run the other way
+        // and pinned a slider that made the eyepiece view grainier the further
+        // it was pushed.
         assert!(
             max_config.stretch_config.black_point_sigma
-                < base_config.stretch_config.black_point_sigma
+                > base_config.stretch_config.black_point_sigma,
+            "eyepiece intensity must raise black_point_sigma, got {} from {}",
+            max_config.stretch_config.black_point_sigma,
+            base_config.stretch_config.black_point_sigma
         );
         assert!((max_config.stretch_config.black_point_sigma - expected_sigma).abs() < 1e-5);
 
@@ -484,8 +528,84 @@ mod tests {
         settings.eyepiece.intensity = 0.5;
         let half_config = get_render_pipeline_config(&settings, false);
 
-        let expected_half_bg = base_config.stretch_config.target_background * 0.8 + 0.01 * 0.2;
+        let expected_half_bg =
+            base_config.stretch_config.target_background * 0.8 + EYEPIECE_TARGET_BACKGROUND * 0.2;
         assert!((half_config.stretch_config.target_background - expected_half_bg).abs() < 1e-5);
+    }
+
+    /// The slider must move monotonically toward a smoother sky across its whole
+    /// range, not just at the endpoints.
+    #[test]
+    fn eyepiece_intensity_monotonically_raises_the_black_point_factor() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+
+        let mut previous = f32::MIN;
+        for step in 0..=10 {
+            settings.eyepiece.intensity = step as f32 / 10.0;
+            let sigma = get_render_pipeline_config(&settings, false)
+                .stretch_config
+                .black_point_sigma;
+            assert!(
+                sigma >= previous,
+                "black_point_sigma fell from {previous} to {sigma} at intensity {}",
+                settings.eyepiece.intensity
+            );
+            previous = sigma;
+        }
+    }
+
+    /// `black_point_sigma` is written directly rather than through
+    /// `with_black_point_sigma`, so it carries its own clamp; a profile starting
+    /// near the ceiling must not be pushed out of the solver's supported range.
+    #[test]
+    fn eyepiece_black_point_factor_stays_in_range() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+        for step in 0..=10 {
+            settings.eyepiece.intensity = step as f32 / 10.0;
+            let sigma = get_render_pipeline_config(&settings, false)
+                .stretch_config
+                .black_point_sigma;
+            assert!(
+                (0.5..=5.0).contains(&sigma),
+                "black_point_sigma {sigma} outside the solver's range"
+            );
+        }
+    }
+
+    /// The display transform has to reach the encoders through the pipeline
+    /// config — it is the only channel between the settings and the fused
+    /// f32-to-u8 kernels.
+    #[test]
+    fn eyepiece_display_settings_reach_the_pipeline_config() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = 0.05;
+        settings.eyepiece.dither = true;
+
+        let config = get_render_pipeline_config(&settings, false);
+        assert!((config.display.pedestal - 0.05).abs() < 1e-6);
+        assert!(config.display.dither);
+
+        settings.eyepiece.black_floor = 0.0;
+        settings.eyepiece.dither = false;
+        let plain = get_render_pipeline_config(&settings, false);
+        assert!(
+            plain.display.is_plain(),
+            "both settings off must reproduce a plain conversion"
+        );
+    }
+
+    /// FITS is 32-bit linear data; the display transform is a property of the
+    /// 8-bit conversion and must not follow the frame onto disk.
+    #[test]
+    fn fits_output_never_carries_the_display_transform() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = 0.05;
+        settings.eyepiece.dither = true;
+
+        let config = get_render_pipeline_config(&settings, true);
+        assert!(config.display.is_plain());
     }
 
     #[test]

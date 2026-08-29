@@ -82,7 +82,7 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_imx464_rgb_x{}", RGB_REPS), |b| {
         b.iter(|| {
             for _ in 0..RGB_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb))).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_rgb)), 3840, 2160).unwrap());
             }
         })
     });
@@ -92,7 +92,7 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_imx464_mono_x{}", MONO_REPS), |b| {
         b.iter(|| {
             for _ in 0..MONO_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono))).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_imx464_mono)), 3840, 2160).unwrap());
             }
         })
     });
@@ -102,14 +102,14 @@ fn bench_encoding(c: &mut Criterion) {
     group.bench_function(format!("encode_4k_x{}", FOUR_K_REPS), |b| {
         b.iter(|| {
             for _ in 0..FOUR_K_REPS {
-                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k))).unwrap());
+                black_box(encode_rgb8_lz4(black_box(&to_ready_frame(&frame_4k)), 3840, 2160).unwrap());
             }
         })
     });
 
     // Already ~145 ms on its own — clears the floor without repeating.
     group.bench_function("encode_8k", |b| {
-        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_8k))).unwrap())
+        b.iter(|| encode_rgb8_lz4(black_box(&to_ready_frame(&frame_8k)), 3840, 2160).unwrap())
     });
 
     group.finish();
@@ -160,7 +160,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 1, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -172,7 +172,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 4, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -184,7 +184,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNK_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_rgb)), 8, 3840, 2160)
                         .unwrap(),
                 );
             }
@@ -199,7 +199,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..CHUNKED_MONO_REPS {
                 black_box(
-                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4)
+                    encode_rgb8_lz4_chunked(black_box(&to_ready_frame(&frame_imx464_mono)), 4, 3840, 2160)
                         .unwrap(),
                 );
             }

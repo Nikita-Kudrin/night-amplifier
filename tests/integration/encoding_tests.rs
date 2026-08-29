@@ -35,7 +35,7 @@ fn test_encode_imx464_no_downsample() {
     let height = 1538;
     let frame = Frame::zeros(width, height, 3).unwrap();
 
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
 
@@ -63,7 +63,7 @@ fn test_encode_8k_downsamples_to_4k() {
         }
     }
 
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
     let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
 
@@ -96,7 +96,7 @@ fn test_lz4_payload_preserves_channel_order() {
         }
     }
 
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
     let decompressed = decompress_size_prepended(&encoded[16..]).unwrap();
     assert_eq!(decompressed.len(), width * height * 3);
 
@@ -225,12 +225,12 @@ fn load_first_fixture_frame(dir: &Path) -> Option<(PathBuf, Frame)> {
 /// Encodes once for size, then times `ENCODE_TIMING_ITERATIONS` runs.
 /// Returns (avg_ms, encoded_wire_bytes).
 fn time_encode(frame: &Frame, chunks: usize) -> (f64, usize) {
-    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks).expect("encode failed");
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks, 3840, 2160).expect("encode failed");
     let size = encoded.len();
 
     let start = Instant::now();
     for _ in 0..ENCODE_TIMING_ITERATIONS {
-        let _ = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks).expect("encode failed");
+        let _ = encode_rgb8_lz4_chunked(&to_ready_frame(frame), chunks, 3840, 2160).expect("encode failed");
     }
     let avg_ms = start.elapsed().as_secs_f64() * 1000.0 / ENCODE_TIMING_ITERATIONS as f64;
     (avg_ms, size)
@@ -299,7 +299,7 @@ fn baseline_live_view_stream_encoding() {
         // Encode of the *linear* (unstretched) frame — isolates how much the
         // stretch costs in LZ4 compressibility.
         let linear_encoded =
-            encode_rgb8_lz4_chunked(&to_ready_frame(&frame), live_chunks).expect("linear encode");
+            encode_rgb8_lz4_chunked(&to_ready_frame(&frame), live_chunks, 3840, 2160).expect("linear encode");
 
         // Preview render with default capture settings (live-view path)
         let mut preview = frame.clone();

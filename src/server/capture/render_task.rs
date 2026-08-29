@@ -98,6 +98,12 @@ pub fn run_render_task(
         let fits_in_4k =
             raw_frame.linear_frame.width() <= 3840 && raw_frame.linear_frame.height() <= 2160;
         let lz4_active = state.lz4_clients.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        // The lossless stream now encodes into the box its clients asked for, so
+        // it can only reuse the shared native conversion when that box does not
+        // shrink the frame. Otherwise it needs its own downsampled traversal.
+        let (lz4_w, lz4_h) = state.lossless_target_box();
+        let lz4_wants_native = raw_frame.linear_frame.width() <= lz4_w as usize
+            && raw_frame.linear_frame.height() <= lz4_h as usize;
         let mut original_jpeg_active = false;
         for tier in JpegTier::all() {
             if state.jpeg_tier_client_count(tier) > 0
@@ -112,7 +118,7 @@ pub fn run_render_task(
         }
 
         let mut shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>> = None;
-        if fits_in_4k && (lz4_active || original_jpeg_active) {
+        if fits_in_4k && ((lz4_active && lz4_wants_native) || original_jpeg_active) {
             let _span = tracing::info_span!("frame_to_rgb8_shared").entered();
             if let Ok(data) =
                 crate::server::encoding::frame_to_rgb8_downsampled(&raw_frame, 3840, 2160)
@@ -127,15 +133,19 @@ pub fn run_render_task(
                 let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
                 let _timer =
                     telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
-                if let Some(ref shared) = shared_native_rgb8 {
-                    crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
+                match shared_native_rgb8.as_ref().filter(|_| lz4_wants_native) {
+                    Some(shared) => crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
                         &shared.0,
                         shared.1,
                         shared.2,
                         chunk_count,
-                    )
-                } else {
-                    crate::server::encoding::encode_rgb8_lz4_chunked(&raw_frame, chunk_count)
+                    ),
+                    None => crate::server::encoding::encode_rgb8_lz4_chunked(
+                        &raw_frame,
+                        chunk_count,
+                        lz4_w,
+                        lz4_h,
+                    ),
                 }
             };
             match encode_result {
@@ -421,6 +431,156 @@ mod tests {
             new_counter,
             initial_counter + 1,
             "frame_counter did not increment when lz4_clients was 0"
+        );
+    }
+
+    /// Dimensions of the LZ4 payload the render task published, read out of the
+    /// SA09 header.
+    fn lz4_payload_dimensions(payload: &[u8]) -> (u32, u32) {
+        (
+            u32::from_le_bytes(payload[4..8].try_into().unwrap()),
+            u32::from_le_bytes(payload[8..12].try_into().unwrap()),
+        )
+    }
+
+    /// Render one frame with a lossless client registered against `tier`, and
+    /// report the size the published payload came out at.
+    async fn lossless_payload_size_for(tier: JpegTier, width: usize, height: usize) -> (u32, u32) {
+        use crate::server::state::{StreamKind, TierClientGuard};
+
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        state.lz4_clients.store(1, Ordering::SeqCst);
+        let _guard = TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, tier);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(super::StackedFrame {
+            display_frame: std::sync::Arc::new(
+                crate::frame::Frame::filled(width, height, 3, 0.25).unwrap(),
+            ),
+            was_stacked: false,
+            frame_number: 1,
+            settings: passthrough_settings(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let rt = tokio::runtime::Handle::current();
+        let task_state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+            .await
+            .unwrap();
+
+        let payload = state
+            .get_latest_frame()
+            .await
+            .expect("render task published no lossless payload");
+        lz4_payload_dimensions(&payload)
+    }
+
+    /// The point of T0.1: a 1440p eyepiece must receive a 1440p frame, not a
+    /// near-native one for the GPU to minify. An IMX533 frame is square and
+    /// 3008 on a side, so the 1440 box takes it to 1440x1440.
+    #[tokio::test]
+    async fn lossless_stream_encodes_into_the_clients_tier() {
+        assert_eq!(
+            lossless_payload_size_for(JpegTier::Qhd1440, 3008, 3008).await,
+            (1440, 1440)
+        );
+    }
+
+    /// A client on a smaller tier gets a correspondingly smaller frame — the
+    /// bandwidth half of the same change.
+    #[tokio::test]
+    async fn lossless_stream_follows_a_smaller_tier_down() {
+        assert_eq!(
+            lossless_payload_size_for(JpegTier::Hd1080, 3008, 3008).await,
+            (1080, 1080)
+        );
+    }
+
+    /// With no tier registered the stream keeps its historical 4K cap, so an
+    /// older client that never reports a viewport is unaffected.
+    #[tokio::test]
+    async fn lossless_stream_without_a_reported_viewport_keeps_the_4k_cap() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        state.lz4_clients.store(1, Ordering::SeqCst);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(super::StackedFrame {
+            display_frame: std::sync::Arc::new(
+                crate::frame::Frame::filled(3008, 3008, 3, 0.25).unwrap(),
+            ),
+            was_stacked: false,
+            frame_number: 1,
+            settings: passthrough_settings(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let rt = tokio::runtime::Handle::current();
+        let task_state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+            .await
+            .unwrap();
+
+        let payload = state.get_latest_frame().await.expect("no payload");
+        assert_eq!(lz4_payload_dimensions(&payload), (2160, 2160));
+    }
+
+    /// The native-resolution RGB8 buffer is shared between the lossless and
+    /// JPEG encoders. Once the lossless stream downsamples, it must stop reusing
+    /// that buffer — reusing it would silently ship a native-size payload and
+    /// undo the whole change.
+    #[tokio::test]
+    async fn lossless_downsample_does_not_reuse_the_shared_native_buffer() {
+        use crate::server::state::{StreamKind, TierClientGuard};
+
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        state.lz4_clients.store(1, Ordering::SeqCst);
+        // A JPEG client on a non-downsampling tier forces the shared native
+        // buffer to be built, so the lossless path has something to wrongly reuse.
+        state.jpeg_tier_clients[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
+        let _guard =
+            TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Hd1080);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Below 4K, so `fits_in_4k` holds and the shared buffer is native-size.
+        tx.send(super::StackedFrame {
+            display_frame: std::sync::Arc::new(
+                crate::frame::Frame::filled(IMX464.0, IMX464.1, 3, 0.25).unwrap(),
+            ),
+            was_stacked: false,
+            frame_number: 1,
+            settings: passthrough_settings(),
+        })
+        .unwrap();
+        drop(tx);
+
+        let rt = tokio::runtime::Handle::current();
+        let task_state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+            .await
+            .unwrap();
+
+        let payload = state.get_latest_frame().await.expect("no payload");
+        let (w, h) = lz4_payload_dimensions(&payload);
+        assert!(
+            w < IMX464.0 as u32 && h < IMX464.1 as u32,
+            "lossless payload came out at {w}x{h}, i.e. the shared native buffer \
+             was reused instead of downsampling to the client's tier"
+        );
+
+        // The JPEG tier that did want native size must still have got it.
+        let counter = state.frame_counter.load(Ordering::SeqCst);
+        let jpeg = state
+            .get_tier_jpeg(JpegTier::Uhd2160, counter)
+            .expect("Uhd2160 payload missing");
+        assert_eq!(
+            u32::from_le_bytes(jpeg[4..8].try_into().unwrap()),
+            IMX464.0 as u32
         );
     }
 

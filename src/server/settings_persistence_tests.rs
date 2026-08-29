@@ -58,6 +58,8 @@ mod tests {
                 screen_resolution_y: 1440,
                 circular_view: true,
                 intensity: 0.5,
+                black_floor: 0.04,
+                dither: true,
             },
             telescope: TelescopeSettings {
                 focal_length_mm: Some(1000.0),
@@ -273,6 +275,8 @@ mod tests {
                 screen_resolution_y: 1440,
                 circular_view: true,
                 intensity: 0.5,
+                black_floor: 0.04,
+                dither: true,
             },
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),

@@ -254,7 +254,7 @@ fn jpeg_sa10_payload_is_interleaved() {
 fn lz4_sa09_payload_is_interleaved() {
     const CHUNKS: usize = 4;
     let ready = passthrough_ready(tricolour_frame(W, H));
-    let payload = crate::server::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS).unwrap();
+    let payload = crate::server::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS, 3840, 2160).unwrap();
 
     assert_eq!(
         u32::from_le_bytes(payload[0..4].try_into().unwrap()),
@@ -694,4 +694,82 @@ fn production_fits_loader_round_trips_f32() {
 
     assert_eq!(back.channels(), 3, "loader lost the colour planes");
     assert_frame_is_tricolour(&back, "write_fits -> production load_fits");
+}
+
+/// The display transform (black floor + ordered dither) rewrote the tail of
+/// every 8-bit conversion, so it has to be swept for layout too: a channel swap
+/// inside `write_row_rgb8` would be invisible to the transform's own unit tests,
+/// which use symmetric grey inputs.
+///
+/// Both fused traversals are covered separately, per the rule at the top of this
+/// file — they gather planes independently, so a gap in one does not show up via
+/// the other.
+#[test]
+fn display_transform_preserves_channel_order_in_both_fused_kernels() {
+    let display = crate::render::DisplayOutput::default()
+        .with_pedestal(0.04)
+        .with_dither(true);
+
+    // Pedestal maps [0, 1] onto [pedestal, 1]; the dither can move a sample by
+    // at most one level either way.
+    let lift = |v: u8| {
+        let x = 0.04 + (v as f32 / 255.0) * 0.96;
+        (x * 255.0 + 0.5) as u8
+    };
+    let expect = (lift(R_U8), lift(G_U8), lift(B_U8));
+
+    let frame = tricolour_frame(W, H);
+    let mut ready = passthrough_ready(frame.clone());
+    ready.pipeline_config.display = display;
+
+    // Expand traversal: frame fits the box, so it is sent at native size.
+    let (expanded, w, h) =
+        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+    assert_eq!((w as usize, h as usize), (W, H));
+    assert_interleaved_rgb8_within(
+        &expanded,
+        W,
+        H,
+        expect,
+        1,
+        "expand_to_rgb8_fused + display transform",
+    );
+
+    // Downsample traversal: a constant frame box-averages to the same colour,
+    // so the expected values are unchanged and any channel mixing shows up.
+    let big = tricolour_frame(W * 4, H * 4);
+    let mut ready_big = passthrough_ready(big);
+    ready_big.pipeline_config.display = display;
+    let (reduced, rw, rh) =
+        crate::server::encoding::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
+    assert_interleaved_rgb8_within(
+        &reduced,
+        rw as usize,
+        rh as usize,
+        expect,
+        1,
+        "box_downsample_to_rgb8_fused + display transform",
+    );
+}
+
+/// Like [`assert_interleaved_rgb8`], but with a tolerance: ordered dithering
+/// moves individual samples by up to one level by design, so an exact sweep
+/// would fail on a correct implementation.
+fn assert_interleaved_rgb8_within(
+    rgb8: &[u8],
+    width: usize,
+    height: usize,
+    expect: (u8, u8, u8),
+    tolerance: i32,
+    ctx: &str,
+) {
+    let close = |got: u8, want: u8| (got as i32 - want as i32).abs() <= tolerance;
+    for i in 0..(width * height) {
+        let got = (rgb8[i * 3], rgb8[i * 3 + 1], rgb8[i * 3 + 2]);
+        assert!(
+            close(got.0, expect.0) && close(got.1, expect.1) && close(got.2, expect.2),
+            "{ctx}: pixel {i} is {got:?}, expected {expect:?} +/-{tolerance} — channels \
+             are interleaved wrongly (planar buffer read as interleaved?)"
+        );
+    }
 }

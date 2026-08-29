@@ -124,7 +124,80 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     // Fast forward debounce timer
     vi.advanceTimersByTime(250)
     
+    // No canvas layout in jsdom, so this exercises the window fallback.
     expect(sendResolution).toHaveBeenCalledWith(2000, 1600) // 1000 * 2, 800 * 2
+    vi.useRealTimers()
+  })
+
+  // The reason the report is canvas-derived rather than window-derived: in
+  // binoview each eye canvas shows the whole frame at roughly half the window
+  // width, so reporting the window would have the server send twice the pixels
+  // either eye can display and leave the GPU to minify the rest away.
+  it('reports the per-eye canvas size in binoview, not the window size', async () => {
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
+    window.innerWidth = 1440
+    window.innerHeight = 1440
+    window.devicePixelRatio = 1
+
+    // jsdom reports 0 for every element's offset size; stand in for a laid-out
+    // binoview where each eye canvas is half the window wide.
+    const offsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {configurable: true, get: () => 720})
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {configurable: true, get: () => 720})
+
+    try {
+      const EyepieceView = (await import('../EyepieceView.vue')).default
+      mount(EyepieceView, {
+        global: {
+          provide: {
+            settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+            eventStream: {
+              pushDirection: ref(null),
+              currentTarget: ref(null),
+            }
+          }
+        }
+      })
+
+      const { sendResolution } = useImageStream.mock.results[0].value
+      expect(sendResolution).toHaveBeenCalledWith(720, 720)
+      expect(sendResolution).not.toHaveBeenCalledWith(1440, 1440)
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidth)
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeight)
+    }
+  })
+
+  // Re-reporting an unchanged viewport on every ResizeObserver callback would
+  // put a socket write on every layout tick.
+  it('does not repeat an unchanged viewport report', async () => {
+    vi.useFakeTimers()
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
+    window.innerWidth = 1440
+    window.innerHeight = 1440
+    window.devicePixelRatio = 1
+
+    const EyepieceView = (await import('../EyepieceView.vue')).default
+    mount(EyepieceView, {
+      global: {
+        provide: {
+          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
+          eventStream: {
+            pushDirection: ref(null),
+            currentTarget: ref(null),
+          }
+        }
+      }
+    })
+
+    const { sendResolution } = useImageStream.mock.results[0].value
+    const afterMount = sendResolution.mock.calls.length
+
+    window.dispatchEvent(new Event('resize'))
+    vi.advanceTimersByTime(250)
+
+    expect(sendResolution.mock.calls.length).toBe(afterMount)
     vi.useRealTimers()
   })
 })

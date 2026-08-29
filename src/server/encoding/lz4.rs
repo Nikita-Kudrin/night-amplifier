@@ -4,10 +4,12 @@ use crate::server::encoding::format::*;
 
 pub fn encode_rgb8_lz4(
     ready_frame: &crate::server::state::RenderReadyFrame,
+    max_w: u32,
+    max_h: u32,
 ) -> Result<Vec<u8>, String> {
     use lz4_flex::block::{compress_into, get_maximum_output_size};
 
-    let (rgb8_data, width, height) = frame_to_rgb8_downsampled(ready_frame, 3840, 2160)?;
+    let (rgb8_data, width, height) = frame_to_rgb8_downsampled(ready_frame, max_w, max_h)?;
 
     let uncompressed_len = rgb8_data.len() as u32;
     let max_compressed_len = get_maximum_output_size(rgb8_data.len());
@@ -38,13 +40,15 @@ pub fn encode_rgb8_lz4(
 pub fn encode_rgb8_lz4_chunked(
     ready_frame: &crate::server::state::RenderReadyFrame,
     chunk_count: usize,
+    max_w: u32,
+    max_h: u32,
 ) -> Result<Vec<u8>, String> {
     use rayon::prelude::*;
 
     let chunk_count = chunk_count.max(1);
     let (rgb8_data, width, height) = {
         let _span = tracing::info_span!("frame_to_rgb8").entered();
-        frame_to_rgb8_downsampled(ready_frame, 3840, 2160)?
+        frame_to_rgb8_downsampled(ready_frame, max_w, max_h)?
     };
 
     encode_rgb8_lz4_chunked_from_u8(&rgb8_data, width, height, chunk_count)

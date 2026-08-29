@@ -235,6 +235,18 @@ pub struct EyepieceSettings {
     /// Dark background enhancement intensity (0.0 to 1.0)
     #[serde(default = "default_intensity")]
     pub intensity: f32,
+    /// Lowest brightness the eyepiece view may output, normalized to [0, 1).
+    ///
+    /// An OLED switches a zero pixel fully off. The autostretch black point
+    /// clamps a few per cent of sky pixels to zero, which at eyepiece
+    /// magnification reads as black speckle rather than as sky, so the display
+    /// output is lifted off the floor by this much.
+    #[serde(default = "default_black_floor")]
+    pub black_floor: f32,
+    /// Ordered dithering at the 8-bit conversion, to keep smooth gradients from
+    /// banding once denoising removes the noise that currently masks the steps.
+    #[serde(default = "default_dither")]
+    pub dither: bool,
 }
 
 fn default_intensity() -> f32 {
@@ -242,6 +254,14 @@ fn default_intensity() -> f32 {
 }
 
 fn default_circular_view() -> bool {
+    true
+}
+
+fn default_black_floor() -> f32 {
+    0.04
+}
+
+fn default_dither() -> bool {
     true
 }
 
@@ -256,6 +276,8 @@ impl Default for EyepieceSettings {
             screen_resolution_y: 1440,
             circular_view: true,
             intensity: 0.3,
+            black_floor: default_black_floor(),
+            dither: default_dither(),
         }
     }
 }

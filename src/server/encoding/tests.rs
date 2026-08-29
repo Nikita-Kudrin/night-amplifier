@@ -44,7 +44,7 @@ fn to_ready_frame_with_stretch(
 #[test]
 fn test_rgb8_lz4_encode_header_format() {
     let frame = Frame::filled(2, 2, 3, 0.5).unwrap();
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
 
     assert!(encoded.len() >= 16);
     let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
@@ -65,7 +65,7 @@ fn test_rgb8_lz4_encode_decode_roundtrip() {
     frame.set_pixel(1, 1, 1, 0.5);
     frame.set_pixel(2, 2, 2, 0.25);
 
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
     let compressed_data = &encoded[16..];
     let decompressed = decompress_size_prepended(compressed_data).unwrap();
 
@@ -95,7 +95,7 @@ fn test_rgb8_lz4_encode_decode_roundtrip() {
 #[test]
 fn test_rgb8_lz4_compression_ratio() {
     let frame = Frame::filled(100, 100, 3, 0.01).unwrap();
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
 
     let raw_size = 100 * 100 * 3;
     let compressed_size = encoded.len() - 16;
@@ -107,7 +107,7 @@ fn test_rgb8_lz4_various_frame_sizes() {
     let test_cases = [(1, 1), (10, 10), (100, 50), (1920, 1080)];
     for (width, height) in test_cases {
         let frame = Frame::zeros(width, height, 3).unwrap();
-        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+        let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
         let enc_width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
         let enc_height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
         assert_eq!(enc_width, width as u32);
@@ -119,7 +119,7 @@ fn test_rgb8_lz4_various_frame_sizes() {
 fn test_rgb8_lz4_grayscale_to_rgb_conversion() {
     use lz4_flex::decompress_size_prepended;
     let frame = Frame::filled(8, 8, 1, 0.5).unwrap();
-    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let encoded = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
 
     let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
@@ -188,7 +188,7 @@ fn decode_sa09(encoded: &[u8]) -> (u32, u32, Vec<u8>) {
 #[test]
 fn test_sa09_header_format() {
     let frame = Frame::filled(4, 4, 3, 0.5).unwrap();
-    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 2).unwrap();
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 2, 3840, 2160).unwrap();
 
     assert!(encoded.len() >= SA09_HEADER_SIZE);
     let magic = u32::from_le_bytes([encoded[0], encoded[1], encoded[2], encoded[3]]);
@@ -210,7 +210,7 @@ fn test_sa09_roundtrip() {
     frame.set_pixel(3, 3, 1, 0.5);
     frame.set_pixel(7, 7, 2, 0.25);
 
-    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4).unwrap();
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4, 3840, 2160).unwrap();
     let (width, height, decompressed) = decode_sa09(&encoded);
 
     assert_eq!(width, 8);
@@ -234,7 +234,7 @@ fn test_sa09_roundtrip() {
 #[test]
 fn test_sa09_single_chunk() {
     let frame = Frame::filled(10, 10, 3, 0.3).unwrap();
-    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 1).unwrap();
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 1, 3840, 2160).unwrap();
 
     let chunk_count = u32::from_le_bytes([encoded[16], encoded[17], encoded[18], encoded[19]]);
     assert_eq!(chunk_count, 1);
@@ -251,7 +251,7 @@ fn test_sa09_various_chunk_counts() {
     let frame = Frame::filled(100, 100, 3, 0.42).unwrap();
 
     for chunks in [1, 2, 3, 4, 7, 8] {
-        let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks).unwrap();
+        let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), chunks, 3840, 2160).unwrap();
         let (w, h, decompressed) = decode_sa09(&encoded);
         assert_eq!(w, 100);
         assert_eq!(h, 100);
@@ -268,10 +268,10 @@ fn test_sa09_matches_sa08_pixel_data() {
 
     let frame = Frame::filled(20, 20, 3, 0.7).unwrap();
 
-    let sa08 = encode_rgb8_lz4(&to_ready_frame(&frame)).unwrap();
+    let sa08 = encode_rgb8_lz4(&to_ready_frame(&frame), 3840, 2160).unwrap();
     let sa08_pixels = decompress_size_prepended(&sa08[16..]).unwrap();
 
-    let sa09 = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4).unwrap();
+    let sa09 = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 4, 3840, 2160).unwrap();
     let (_, _, sa09_pixels) = decode_sa09(&sa09);
 
     assert_eq!(sa08_pixels, sa09_pixels);
@@ -671,5 +671,198 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
         "downsample-then-stretch ({}) should be brighter than stretch-then-downsample \
              ({reference_u8}) for a concave curve — the ordering guarantee has regressed",
         actual[0]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Display transform (black floor + ordered dither) through the fused kernels
+// ---------------------------------------------------------------------------
+
+/// Ready frame carrying a display transform, with every render stage off so a
+/// test observes only what the 8-bit conversion did.
+fn to_ready_frame_with_display(
+    frame: &Frame,
+    display: crate::render::DisplayOutput,
+) -> crate::server::state::RenderReadyFrame {
+    let mut ready = to_ready_frame(frame);
+    ready.pipeline_config.display = display;
+    ready
+}
+
+/// Frame large enough that `frame_to_rgb8_downsampled` takes the box-downsample
+/// traversal rather than the expand one.
+const OVERSIZE: (usize, usize) = (3900, 2200);
+
+/// The dark blocks this was built to remove. A sky at zero must not reach an
+/// OLED as an off pixel — through the traversal that streams a frame small
+/// enough to send at native size.
+#[test]
+fn display_pedestal_lifts_black_off_zero_in_the_expand_kernel() {
+    let frame = Frame::zeros(64, 48, 3).unwrap();
+    let display = crate::render::DisplayOutput::default().with_pedestal(0.04);
+
+    let (bytes, w, h) = frame_to_rgb8_downsampled(&to_ready_frame_with_display(&frame, display), 3840, 2160)
+        .expect("encode failed");
+    assert_eq!((w, h), (64, 48), "frame should not have been downsampled");
+    assert!(
+        bytes.iter().all(|&b| b > 0),
+        "pedestal did not reach the expand kernel"
+    );
+
+    // And without it the same frame is all zeros, so the assertion above is
+    // actually detecting the transform rather than something else.
+    let (plain, _, _) = frame_to_rgb8_downsampled(
+        &to_ready_frame_with_display(&frame, crate::render::DisplayOutput::PLAIN),
+        3840,
+        2160,
+    )
+    .unwrap();
+    assert!(plain.iter().all(|&b| b == 0));
+}
+
+/// The same property through the *other* fused traversal. `AGENTS.md` asks for
+/// each traversal to be covered separately: the two kernels gather planes
+/// independently, so a gap in one does not show up via the other.
+#[test]
+fn display_pedestal_lifts_black_off_zero_in_the_downsample_kernel() {
+    let (width, height) = OVERSIZE;
+    let frame = Frame::zeros(width, height, 3).unwrap();
+    let display = crate::render::DisplayOutput::default().with_pedestal(0.04);
+
+    let (bytes, w, h) = frame_to_rgb8_downsampled(&to_ready_frame_with_display(&frame, display), 1920, 1080)
+        .expect("encode failed");
+    assert!(w < width as u32 && h < height as u32, "expected a downsample");
+    assert!(
+        bytes.iter().all(|&b| b > 0),
+        "pedestal did not reach the downsample kernel"
+    );
+}
+
+/// A plain transform must leave both kernels byte-identical to what they
+/// produced before they carried one, so enabling the feature is the only thing
+/// that can change a streamed frame.
+#[test]
+fn plain_display_transform_leaves_both_kernels_unchanged() {
+    let mut frame = Frame::zeros(200, 120, 3).unwrap();
+    let mut seed = 0x1234_5678u32;
+    for y in 0..120 {
+        for x in 0..200 {
+            for c in 0..3 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                frame.set_pixel(x, y, c, (seed >> 8) as f32 / 16_777_216.0);
+            }
+        }
+    }
+
+    // Expand traversal: identical to the canonical whole-frame conversion.
+    let (expanded, _, _) = frame_to_rgb8_downsampled(
+        &to_ready_frame_with_display(&frame, crate::render::DisplayOutput::PLAIN),
+        3840,
+        2160,
+    )
+    .unwrap();
+    assert_eq!(expanded, frame.to_rgb8_fast());
+
+    // Downsample traversal: stable across runs and unaffected by the field.
+    let default_cfg = frame_to_rgb8_downsampled(&to_ready_frame(&frame), 100, 60).unwrap();
+    let plain_cfg = frame_to_rgb8_downsampled(
+        &to_ready_frame_with_display(&frame, crate::render::DisplayOutput::PLAIN),
+        100,
+        60,
+    )
+    .unwrap();
+    assert_eq!(default_cfg, plain_cfg);
+}
+
+/// Dither must be indexed in *output* coordinates. If a kernel indexed the
+/// source pixel instead, the pattern would survive at the source's period
+/// rather than the output's — so assert the tile repeats every 8 output pixels
+/// after a downsample that is not a multiple of 8.
+#[test]
+fn dither_tiles_in_output_coordinates_after_downsampling() {
+    let (width, height) = OVERSIZE;
+    // A flat mid-grey between two 8-bit levels, so only the dither varies.
+    let frame = Frame::filled(width, height, 3, 40.5 / 255.0).unwrap();
+    let display = crate::render::DisplayOutput::default().with_dither(true);
+
+    let (bytes, w, _h) =
+        frame_to_rgb8_downsampled(&to_ready_frame_with_display(&frame, display), 1920, 1080)
+            .expect("encode failed");
+
+    let row = &bytes[..w as usize * 3];
+    for x in 0..16usize {
+        assert_eq!(
+            row[x * 3],
+            row[(x + 8) * 3],
+            "output column {x} and {} differ; dither is not tiling in output space",
+            x + 8
+        );
+    }
+    // A flat input between levels must produce more than one output level, or
+    // the dither is not doing anything.
+    let distinct: std::collections::HashSet<u8> = row.iter().step_by(3).copied().collect();
+    assert!(
+        distinct.len() > 1,
+        "dithered flat field collapsed to a single level"
+    );
+}
+
+/// The reason the dither exists: a flat field sitting between two 8-bit levels
+/// must average to that value across a tile instead of snapping to one level.
+#[test]
+fn dither_preserves_sub_lsb_level_through_the_streaming_kernel() {
+    let value = 40.25 / 255.0;
+    let frame = Frame::filled(64, 64, 3, value).unwrap();
+
+    let (dithered, w, h) = frame_to_rgb8_downsampled(
+        &to_ready_frame_with_display(
+            &frame,
+            crate::render::DisplayOutput::default().with_dither(true),
+        ),
+        3840,
+        2160,
+    )
+    .unwrap();
+    let mean = dithered.iter().step_by(3).map(|&v| v as f64).sum::<f64>()
+        / (w as f64 * h as f64);
+    assert!(
+        (mean - 40.25).abs() < 0.1,
+        "dithered mean {mean} should track 40.25"
+    );
+
+    let (plain, _, _) = frame_to_rgb8_downsampled(
+        &to_ready_frame_with_display(&frame, crate::render::DisplayOutput::PLAIN),
+        3840,
+        2160,
+    )
+    .unwrap();
+    assert!(
+        plain.iter().step_by(3).all(|&v| v == 40),
+        "undithered conversion should snap the whole field to one level"
+    );
+}
+
+/// The lossless encoder must honour the box it is handed, since that box is now
+/// the client's viewport rather than a hardcoded 4K cap.
+#[test]
+fn lz4_encodes_into_the_requested_box() {
+    let frame = Frame::filled(3008, 3008, 3, 0.25).unwrap();
+
+    let encoded = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 2, 2560, 1440).unwrap();
+    let width = u32::from_le_bytes(encoded[4..8].try_into().unwrap());
+    let height = u32::from_le_bytes(encoded[8..12].try_into().unwrap());
+    assert_eq!(
+        (width, height),
+        (1440, 1440),
+        "3008x3008 fitted into a 2560x1440 box should be 1440x1440"
+    );
+
+    // The old behaviour, still reachable by passing the cap.
+    let native = encode_rgb8_lz4_chunked(&to_ready_frame(&frame), 2, 3840, 2160).unwrap();
+    let native_h = u32::from_le_bytes(native[8..12].try_into().unwrap());
+    assert_eq!(native_h, 2160);
+    assert!(
+        encoded.len() < native.len(),
+        "a smaller box must produce a smaller payload"
     );
 }

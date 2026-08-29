@@ -74,6 +74,13 @@ export const BLACK_LEVEL_LIMITS = {
     default: 0.3,
 }
 
+export const BLACK_FLOOR_LIMITS = {
+    min: 0.0,
+    max: 0.15,
+    step: 0.01,
+    default: 0.04,
+}
+
 // Simulated camera preload limits
 export const SIMULATED_PRELOAD_LIMITS = {
     min: 1,
@@ -203,6 +210,8 @@ export const DEFAULT_SETTINGS = {
         screen_resolution_y: 1440,
         circular_view: true,
         intensity: 0.3,
+        black_floor: 0.04,
+        dither: true,
     },
     dew_heater_enabled: true,
     dew_heater_power: 10,
@@ -260,7 +269,11 @@ export const HELP_TEXTS = {
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     eyepiece_intensity:
-        'Darkens the background sky to pitch-black for OLED screens and pulls up the contrast of objects.',
+        'Darkens the background sky for OLED screens and pulls up the contrast of objects. Higher values also push more of the sky\'s noise below black, so the background looks smoother.',
+    eyepiece_black_floor:
+        'Keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise this if the background looks grainy with hard black dots; lower it for maximum contrast.',
+    eyepiece_dither:
+        'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
     auto_stretch_intensity:
         'Intensifies the colors of the image while perfectly preserving the luminance/black level.',
     rejection_method:

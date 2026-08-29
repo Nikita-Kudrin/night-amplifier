@@ -514,7 +514,8 @@ export function useImageStream(options = {}) {
     const width = options.width || null
     const height = options.height || null
 
-    // JPEG endpoints support dynamic resolution; the LZ4 endpoint does not
+    // Selects the decoder, not whether resolution can be negotiated: both the
+    // JPEG and the lossless endpoints size their output from the client's report.
     const isDynamicJpeg = endpoint !== '/ws/eyepiece_quality'
 
     // Use shallowRef for large binary data to avoid deep reactivity overhead
@@ -601,12 +602,17 @@ export function useImageStream(options = {}) {
     })
 
     /**
-     * Send a resolution update to the server (JPEG endpoints only)
+     * Report the viewport this client will actually display, so the server can
+     * resample to it instead of shipping a larger frame for the GPU to minify.
+     *
+     * Both stream families accept this. It matters most on the lossless
+     * endpoint, where the browser would otherwise minify a near-native frame
+     * with a four-tap bilinear filter that discards most of the averaging a
+     * server-side box downsample would have delivered.
      */
     function sendResolution(w, h) {
-        if (isDynamicJpeg) {
-            send(JSON.stringify({width: w, height: h}))
-        }
+        if (!(w > 0 && h > 0)) return
+        send(JSON.stringify({width: Math.round(w), height: Math.round(h)}))
     }
 
     return {

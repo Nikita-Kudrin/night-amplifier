@@ -1,6 +1,6 @@
 use crate::background::BackgroundConfig;
 use crate::render::autostretch::AutoStretchConfig;
-use crate::render::output::ContrastConfig;
+use crate::render::output::{ContrastConfig, DisplayOutput};
 use crate::render::stretch::SaturationBoostConfig;
 
 /// Configuration for the unified render pipeline
@@ -30,6 +30,14 @@ pub struct RenderPipelineConfig {
     pub scnr: bool,
     /// Amount of SCNR to apply (0.0 to 1.0)
     pub scnr_amount: f32,
+
+    /// Black floor and dithering applied where the frame becomes 8-bit.
+    ///
+    /// Unlike every other field this one is not a pipeline *stage* — the fused
+    /// streaming encoders apply it in the same traversal that writes the output
+    /// bytes, because that is the only place the output pixel coordinate the
+    /// dither needs actually exists.
+    pub display: DisplayOutput,
 }
 
 impl Default for RenderPipelineConfig {
@@ -45,6 +53,7 @@ impl Default for RenderPipelineConfig {
             contrast_config: ContrastConfig::default(),
             scnr: false,
             scnr_amount: 1.0,
+            display: DisplayOutput::PLAIN,
         }
     }
 }
@@ -120,6 +129,12 @@ impl RenderPipelineConfig {
         self
     }
 
+    /// Set the black floor and dithering used at the 8-bit conversion.
+    pub fn with_display(mut self, display: DisplayOutput) -> Self {
+        self.display = display;
+        self
+    }
+
     /// Preset for deep sky imaging (nebulae, galaxies)
     pub fn deep_sky() -> Self {
         Self {
@@ -138,6 +153,7 @@ impl RenderPipelineConfig {
             contrast_config: ContrastConfig::default(),
             scnr: true,
             scnr_amount: 1.0,
+            display: DisplayOutput::PLAIN,
         }
     }
 
@@ -154,6 +170,7 @@ impl RenderPipelineConfig {
             contrast_config: ContrastConfig::subtle(),
             scnr: false,
             scnr_amount: 1.0,
+            display: DisplayOutput::PLAIN,
         }
     }
 
@@ -170,6 +187,7 @@ impl RenderPipelineConfig {
             contrast_config: ContrastConfig::default(),
             scnr: false,
             scnr_amount: 1.0,
+            display: DisplayOutput::PLAIN,
         }
     }
 }

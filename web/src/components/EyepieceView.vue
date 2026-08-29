@@ -295,13 +295,34 @@ function handleTouchEnd(e) {
 let resizeObserver = null
 let windowResizeTimeout = null
 
+/**
+ * The canvas a frame is actually drawn into, in device pixels.
+ *
+ * Not the window: in binoview each eye canvas shows the whole frame at roughly
+ * half the window's width, so reporting the window would have the server send
+ * twice the pixels either eye can display and leave the GPU to minify the rest
+ * away — which is exactly the averaging this reporting exists to reclaim.
+ */
+function displayedCanvasSize() {
+  const dpr = window.devicePixelRatio || 1
+  const canvas = isBinoview.value ? canvasLeftRef.value : canvasSingleRef.value
+  const width = canvas?.offsetWidth || window.innerWidth
+  const height = canvas?.offsetHeight || window.innerHeight
+  return {width: width * dpr, height: height * dpr}
+}
+
+let lastReported = {width: 0, height: 0}
+
+function reportViewportResolution() {
+  const {width, height} = displayedCanvasSize()
+  if (width === lastReported.width && height === lastReported.height) return
+  lastReported = {width, height}
+  sendResolution(width, height)
+}
+
 function handleWindowResize() {
   if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
-  windowResizeTimeout = setTimeout(() => {
-    const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
-    const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
-    sendResolution(newWidth, newHeight)
-  }, 200)
+  windowResizeTimeout = setTimeout(reportViewportResolution, 200)
 }
 
 function updateBounds() {
@@ -332,6 +353,9 @@ function updateBounds() {
       }
     }
   }
+  // Runs on mount, on every layout change the ResizeObserver sees, and on the
+  // first frame — so a binoview toggle re-reports without its own watcher.
+  reportViewportResolution()
 }
 
 watch(hasFrame, (newVal) => {
