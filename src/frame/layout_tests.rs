@@ -319,13 +319,23 @@ fn png_preview_is_interleaved() {
 /// SER frame data starts after a fixed 178-byte header.
 const SER_HEADER_SIZE: usize = 178;
 
-/// Writes one tricolour frame and returns the raw 16-bit samples of the frame payload.
+/// Writes one tricolour frame at `bit_depth` and returns the frame payload's samples,
+/// widened to `u32` so the 8-bit and 16-bit cases share one set of assertions.
 ///
 /// Asserting on the bytes rather than on a read-back round trip is deliberate: the
 /// writer and reader can be wrong in mutually inverse ways, which a round trip
 /// cannot see. SER is consumed by third-party tools (AutoStakkert, PIPP, Registax),
 /// so the on-disk layout *is* the contract.
-fn write_ser_and_read_samples(color_id: crate::ser::SerColorId, name: &str) -> (Vec<u16>, Frame) {
+///
+/// Parameterised over bit depth because `encode_8bit` and `encode_16bit` are two
+/// separate traversals, each with its own `Rgb`/`Bgr`/`Mono` plane gather. Only the
+/// 16-bit one used to be covered here, and 8-bit is reachable: `disk_writer::worker`
+/// picks it when a session's first frame is `Raw8`/`Rgb24`.
+fn write_ser_and_read_samples(
+    color_id: crate::ser::SerColorId,
+    bit_depth: u32,
+    name: &str,
+) -> (Vec<u32>, Frame) {
     use crate::ser::{SerHeader, SerReader, SerWriter};
 
     let frame = tricolour_frame(W, H);
@@ -333,94 +343,142 @@ fn write_ser_and_read_samples(color_id: crate::ser::SerColorId, name: &str) -> (
     let path = dir.path().join(name);
 
     let mut writer =
-        SerWriter::create(&path, SerHeader::new(W as u32, H as u32, color_id, 16)).unwrap();
+        SerWriter::create(&path, SerHeader::new(W as u32, H as u32, color_id, bit_depth)).unwrap();
     writer.write_frame(&frame, None).unwrap();
     writer.finalize().unwrap();
 
     let bytes = std::fs::read(&path).unwrap();
-    let payload = &bytes[SER_HEADER_SIZE..SER_HEADER_SIZE + W * H * 3 * 2];
-    let samples: Vec<u16> = payload
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
+    let channels = color_id.channels();
+    let samples = read_ser_samples(&bytes, W * H * channels, bit_depth);
 
     let mut reader = SerReader::open(&path).unwrap();
     let round_tripped = reader.read_frame(0).unwrap();
     (samples, round_tripped)
 }
 
-/// SER `Mono` from a colour source is a Rec. 709 combine across the three planes, so it
-/// reads all three and is exactly as exposed to the layout as `Rgb`/`Bgr` are — but it
-/// had no row here.
-#[test]
-fn ser_mono_payload_is_per_pixel_luminance() {
-    use crate::ser::{SerColorId, SerHeader, SerWriter};
-
-    let frame = tricolour_frame(W, H);
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("mono.ser");
-
-    let mut writer = SerWriter::create(
-        &path,
-        SerHeader::new(W as u32, H as u32, SerColorId::Mono, 16),
-    )
-    .unwrap();
-    writer.write_frame(&frame, None).unwrap();
-    writer.finalize().unwrap();
-
-    let bytes = std::fs::read(&path).unwrap();
-    let payload = &bytes[SER_HEADER_SIZE..SER_HEADER_SIZE + W * H * 2];
-    let samples: Vec<u16> = payload
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-
-    // Derived from the fixture rather than hardcoded, so the expectation stays legible:
-    // one pixel's own three channels, not three neighbouring samples of one plane.
-    let want = as_u16(0.2126 * R_VAL + 0.7152 * G_VAL + 0.0722 * B_VAL);
-    assert_eq!(samples.len(), W * H);
-    for (i, &got) in samples.iter().enumerate() {
-        assert!(
-            got.abs_diff(want) <= 1,
-            "SER Mono sample {i} is {got}, expected ~{want}"
-        );
+/// Decodes `count` payload samples of `bit_depth` bits from a SER file's bytes.
+fn read_ser_samples(file: &[u8], count: usize, bit_depth: u32) -> Vec<u32> {
+    let bytes_per_sample = if bit_depth <= 8 { 1 } else { 2 };
+    let payload = &file[SER_HEADER_SIZE..SER_HEADER_SIZE + count * bytes_per_sample];
+    if bytes_per_sample == 1 {
+        return payload.iter().map(|&b| b as u32).collect();
     }
+    payload
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]) as u32)
+        .collect()
 }
 
-fn as_u16(v: f32) -> u16 {
-    (v.clamp(0.0, 1.0) * 65535.0) as u16
+/// The expected on-disk sample for a normalised value at a given bit depth.
+///
+/// 8-bit goes through the canonical `sample_to_u8` rounding — the same one PNG, JPEG and
+/// LZ4 use — because SER now shares it rather than truncating on its own.
+fn as_ser_sample(v: f32, bit_depth: u32) -> u32 {
+    if bit_depth <= 8 {
+        return crate::frame::sample_to_u8(v) as u32;
+    }
+    (v.clamp(0.0, 1.0) * 65535.0) as u32
+}
+
+/// SER `Mono` from a colour source is a Rec. 709 combine across the three planes, so it
+/// reads all three and is exactly as exposed to the layout as `Rgb`/`Bgr` are.
+#[test]
+fn ser_mono_payload_is_per_pixel_luminance() {
+    for bit_depth in [8u32, 16] {
+        let (samples, _) = write_ser_and_read_samples(
+            crate::ser::SerColorId::Mono,
+            bit_depth,
+            &format!("mono{bit_depth}.ser"),
+        );
+
+        // Derived from the fixture rather than hardcoded, so the expectation stays
+        // legible: one pixel's own three channels, not three neighbouring samples of one
+        // plane.
+        let want = as_ser_sample(0.2126 * R_VAL + 0.7152 * G_VAL + 0.0722 * B_VAL, bit_depth);
+        assert_eq!(samples.len(), W * H, "{bit_depth}-bit sample count");
+        for (i, &got) in samples.iter().enumerate() {
+            assert!(
+                got.abs_diff(want) <= 1,
+                "SER Mono {bit_depth}-bit sample {i} is {got}, expected ~{want}"
+            );
+        }
+    }
 }
 
 #[test]
 fn ser_rgb_payload_is_interleaved_and_round_trips() {
-    let (samples, back) = write_ser_and_read_samples(crate::ser::SerColorId::Rgb, "rgb.ser");
-
-    for i in 0..(W * H) {
-        let got = (samples[i * 3], samples[i * 3 + 1], samples[i * 3 + 2]);
-        assert_eq!(
-            got,
-            (as_u16(R_VAL), as_u16(G_VAL), as_u16(B_VAL)),
-            "SER Rgb on-disk pixel {i} is {got:?} — payload must be interleaved RGB"
+    for bit_depth in [8u32, 16] {
+        let (samples, back) = write_ser_and_read_samples(
+            crate::ser::SerColorId::Rgb,
+            bit_depth,
+            &format!("rgb{bit_depth}.ser"),
         );
-    }
 
-    assert_frame_is_tricolour(&back, "SER Rgb round trip");
+        let want = (
+            as_ser_sample(R_VAL, bit_depth),
+            as_ser_sample(G_VAL, bit_depth),
+            as_ser_sample(B_VAL, bit_depth),
+        );
+        for i in 0..(W * H) {
+            let got = (samples[i * 3], samples[i * 3 + 1], samples[i * 3 + 2]);
+            assert_eq!(
+                got, want,
+                "SER Rgb {bit_depth}-bit on-disk pixel {i} is {got:?} — payload must be interleaved RGB"
+            );
+        }
+
+        assert_frame_is_tricolour(&back, &format!("SER Rgb {bit_depth}-bit round trip"));
+    }
 }
 
 #[test]
 fn ser_bgr_payload_is_interleaved_and_round_trips() {
-    let (samples, back) = write_ser_and_read_samples(crate::ser::SerColorId::Bgr, "bgr.ser");
+    for bit_depth in [8u32, 16] {
+        let (samples, back) = write_ser_and_read_samples(
+            crate::ser::SerColorId::Bgr,
+            bit_depth,
+            &format!("bgr{bit_depth}.ser"),
+        );
 
-    for i in 0..(W * H) {
-        let got = (samples[i * 3], samples[i * 3 + 1], samples[i * 3 + 2]);
+        let want = (
+            as_ser_sample(B_VAL, bit_depth),
+            as_ser_sample(G_VAL, bit_depth),
+            as_ser_sample(R_VAL, bit_depth),
+        );
+        for i in 0..(W * H) {
+            let got = (samples[i * 3], samples[i * 3 + 1], samples[i * 3 + 2]);
+            assert_eq!(
+                got, want,
+                "SER Bgr {bit_depth}-bit on-disk pixel {i} is {got:?} — payload must be interleaved BGR"
+            );
+        }
+
+        assert_frame_is_tricolour(&back, &format!("SER Bgr {bit_depth}-bit round trip"));
+    }
+}
+
+/// The 8-bit SER payload must be byte-identical to what every other 8-bit output writes
+/// for the same frame. It used to truncate while the rest rounded, so a mid-grey channel
+/// came out one LSB darker in SER than in the PNG beside it.
+#[test]
+fn ser_8bit_samples_match_the_canonical_8bit_conversion() {
+    let (samples, _) =
+        write_ser_and_read_samples(crate::ser::SerColorId::Rgb, 8, "rounding.ser");
+
+    let frame = tricolour_frame(W, H);
+    let png_bytes = frame.to_rgb8_fast();
+
+    assert_eq!(samples.len(), png_bytes.len());
+    for (i, (&ser, &png)) in samples.iter().zip(png_bytes.iter()).enumerate() {
         assert_eq!(
-            got,
-            (as_u16(B_VAL), as_u16(G_VAL), as_u16(R_VAL)),
-            "SER Bgr on-disk pixel {i} is {got:?} — payload must be interleaved BGR"
+            ser, png as u32,
+            "sample {i}: SER wrote {ser}, the shared 8-bit conversion writes {png}"
         );
     }
-
-    assert_frame_is_tricolour(&back, "SER Bgr round trip");
+    // G_VAL = 0.5 is the value that separates the two conversions: 127 truncated, 128
+    // rounded. Assert it explicitly so the test cannot pass on a fixture that happens to
+    // avoid the boundary.
+    assert_eq!(samples[1], G_U8 as u32, "0.5 must round to {G_U8}, not truncate");
 }
 
 #[test]

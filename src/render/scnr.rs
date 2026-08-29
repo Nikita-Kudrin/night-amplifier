@@ -73,14 +73,13 @@ mod tests {
 
     #[test]
     fn test_scnr_basic() {
+        // `set_pixel` rather than hand-computed plane offsets. The old fixture happened
+        // to encode the planar layout correctly, but a fixture that encodes the layout
+        // cannot detect a change to it.
         let mut frame = Frame::filled(2, 2, 3, 0.0).unwrap();
-
-        let mut data = vec![0.0f32; 2 * 2 * 3];
-        data[0] = 0.1; // R
-        data[2 * 2] = 0.5; // G (spike)
-        data[2 * 2 * 2] = 0.1; // B
-
-        frame.data_mut().copy_from_slice(&data);
+        frame.set_pixel(0, 0, 0, 0.1); // R
+        frame.set_pixel(0, 0, 1, 0.5); // G (spike)
+        frame.set_pixel(0, 0, 2, 0.1); // B
 
         let l_old = (0.1 * 0.2126) + (0.5 * 0.7152) + (0.1 * 0.0722);
 

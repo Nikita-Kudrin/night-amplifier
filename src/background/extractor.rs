@@ -4,44 +4,23 @@ use rayon::prelude::*;
 use tracing::{debug, instrument, warn};
 
 use super::config::{BackgroundConfig, BackgroundExtractionAlgorithm};
+use super::grid::{
+    compute_box_size, extract_node_value, mad, median, prune_nebulosity, GridNode, PruneConfig,
+};
 use super::model::BackgroundModel;
 
-/// Box size as a percentage of image width (1.5%)
-const BOX_SIZE_PERCENTAGE: f32 = 0.015;
-
-/// Minimum box size in pixels for reliable median estimation
-const MIN_BOX_SIZE: usize = 9;
-
-/// Number of iterations for sigma clipping star rejection
-const SIGMA_CLIP_ITERATIONS: usize = 3;
-
-/// Sigma threshold for star rejection within a sample box
-const SIGMA_CLIP_THRESHOLD: f32 = 3.0;
-
-/// Sigma threshold for global nebulosity rejection
-const GLOBAL_PRUNING_SIGMA: f32 = 2.5;
-
-/// Threshold for nebulosity rejection: node value must not exceed
-/// the neighbor median by more than this factor (5%)
-const NEBULOSITY_THRESHOLD: f32 = 1.05;
+/// Nebulosity pruning thresholds for the bilinear grid.
+///
+/// Looser than the RBF extractor's, which prunes at 1.0 sigma and 2 %: a thin-plate
+/// spline bends through a nebulosity node, while bilinear interpolation only smears it
+/// into the cells that touch it.
+const PRUNE: PruneConfig = PruneConfig {
+    global_sigma: 2.5,
+    neighbour_threshold: 1.05,
+};
 
 /// Minimum surviving nodes before falling back to flat-field subtraction
 const MIN_VALID_NODES: usize = 4;
-
-/// A grid sample node for background estimation
-#[derive(Debug, Clone, Copy)]
-struct GridNode {
-    /// Center x coordinate in pixels
-    x: usize,
-    /// Center y coordinate in pixels
-    y: usize,
-    /// Grid column index (for neighbor lookup)
-    col: usize,
-    /// Grid row index (for neighbor lookup)
-    row: usize,
-    /// Estimated background value (`None` if rejected)
-    value: Option<f32>,
-}
 
 /// Completed bilinear grid model ready for evaluation
 struct BilinearModel {
@@ -169,42 +148,6 @@ impl BackgroundExtractor {
         ))
     }
 
-    /// Compute median of a slice using O(N) selection instead of O(N log N) sort
-    pub(crate) fn median(values: &mut [f32]) -> f32 {
-        if values.is_empty() {
-            return 0.0;
-        }
-        let mid = values.len() / 2;
-        let cmp = |a: &f32, b: &f32| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
-        values.select_nth_unstable_by(mid, cmp);
-        let median_val = values[mid];
-        if values.len().is_multiple_of(2) {
-            // The element at mid-1 is the max of the lower partition
-            let max_lower = values[..mid]
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .copied()
-                .unwrap_or(median_val);
-            (median_val + max_lower) / 2.0
-        } else {
-            median_val
-        }
-    }
-
-    /// Compute Median Absolute Deviation
-    pub(crate) fn median_absolute_deviation(
-        values: &[f32],
-        median: f32,
-        deviations: &mut Vec<f32>,
-    ) -> f32 {
-        if values.is_empty() {
-            return 0.0;
-        }
-        deviations.clear();
-        deviations.extend(values.iter().map(|&v| (v - median).abs()));
-        Self::median(deviations)
-    }
-
     /// Estimate and subtract background in one step
     #[instrument(skip(self, frame), fields(
         resolution = %format!("{}x{}", frame.width(), frame.height()),
@@ -221,17 +164,6 @@ impl BackgroundExtractor {
 // ---------------------------------------------------------------------------
 // Private pipeline functions for bilinear estimation
 // ---------------------------------------------------------------------------
-
-/// Compute the box size for sampling, ensuring it is odd and at least `MIN_BOX_SIZE`.
-fn compute_box_size(image_width: usize) -> usize {
-    let raw = (image_width as f32 * BOX_SIZE_PERCENTAGE) as usize;
-    let clamped = raw.max(MIN_BOX_SIZE);
-    if clamped.is_multiple_of(2) {
-        clamped + 1
-    } else {
-        clamped
-    }
-}
 
 /// Initialize a boundary-hugging grid.
 ///
@@ -266,150 +198,11 @@ fn initialize_grid(
     let mut nodes = Vec::with_capacity(grid_cols * grid_rows);
     for (row, &y) in nodes_y.iter().enumerate() {
         for (col, &x) in nodes_x.iter().enumerate() {
-            nodes.push(GridNode {
-                x,
-                y,
-                col,
-                row,
-                value: None,
-            });
+            nodes.push(GridNode::new(x, y, col, row));
         }
     }
 
     (nodes, nodes_x, nodes_y)
-}
-
-/// Extract the background value for a single node using iterative sigma clipping.
-fn extract_node_value(
-    frame: &Frame,
-    node: &GridNode,
-    box_size: usize,
-    channel: usize,
-) -> Option<f32> {
-    let width = frame.width();
-    let height = frame.height();
-    let half = box_size / 2;
-
-    let x_start = node.x.saturating_sub(half);
-    let y_start = node.y.saturating_sub(half);
-    let x_end = (node.x + half + 1).min(width);
-    let y_end = (node.y + half + 1).min(height);
-
-    let data = frame.data();
-
-    let capacity = (x_end - x_start) * (y_end - y_start);
-    let mut pixels = Vec::with_capacity(capacity);
-
-    let area = width * height;
-    let plane_offset = channel * area;
-    for y in y_start..y_end {
-        let row_offset = plane_offset + y * width;
-        for x in x_start..x_end {
-            pixels.push(data[row_offset + x]);
-        }
-    }
-
-    if pixels.is_empty() {
-        return None;
-    }
-
-    let mut mad_buf = Vec::with_capacity(pixels.len());
-
-    for _ in 0..SIGMA_CLIP_ITERATIONS {
-        let median = BackgroundExtractor::median(&mut pixels);
-        let mad = BackgroundExtractor::median_absolute_deviation(&pixels, median, &mut mad_buf);
-
-        if mad < 1e-9 {
-            break;
-        }
-
-        let threshold = median + SIGMA_CLIP_THRESHOLD * mad * 1.4826;
-        let before = pixels.len();
-        pixels.retain(|&v| v <= threshold);
-
-        if pixels.is_empty() {
-            return Some(median);
-        }
-        if pixels.len() == before {
-            break;
-        }
-    }
-
-    Some(BackgroundExtractor::median(&mut pixels))
-}
-
-/// O(N) median on a mutable slice (used by pipeline helpers).
-fn fast_median(values: &mut [f32]) -> f32 {
-    BackgroundExtractor::median(values)
-}
-
-/// Median Absolute Deviation (allocating variant for pruning).
-fn fast_mad(values: &[f32], median: f32) -> f32 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    let mut deviations: Vec<f32> = values.iter().map(|&v| (v - median).abs()).collect();
-    fast_median(&mut deviations)
-}
-
-/// Prune nodes that landed on nebulosity using a two-stage approach:
-///
-/// 1. **Global rejection**: reject nodes above `global_median + sigma * MAD * 1.4826`.
-/// 2. **Neighbor rejection**: reject nodes exceeding the local 8-neighbor median by 5%.
-fn prune_nebulosity(nodes: &mut [GridNode], grid_cols: usize, grid_rows: usize) {
-    // Stage 1: Global sigma-based rejection
-    let mut all_values: Vec<f32> = nodes.iter().filter_map(|n| n.value).collect();
-    if all_values.len() < 4 {
-        return;
-    }
-
-    let global_median = fast_median(&mut all_values);
-    let global_mad = fast_mad(&all_values, global_median);
-    let global_threshold = global_median + GLOBAL_PRUNING_SIGMA * global_mad * 1.4826;
-
-    for node in nodes.iter_mut() {
-        if let Some(v) = node.value {
-            if v > global_threshold {
-                node.value = None;
-            }
-        }
-    }
-
-    // Stage 2: Neighbor-based rejection on survivors
-    let snapshot: Vec<Option<f32>> = nodes.iter().map(|n| n.value).collect();
-
-    for node in nodes.iter_mut() {
-        let val = match node.value {
-            Some(v) => v,
-            None => continue,
-        };
-
-        let mut neighbor_values = Vec::with_capacity(8);
-        for dr in -1i32..=1 {
-            for dc in -1i32..=1 {
-                if dr == 0 && dc == 0 {
-                    continue;
-                }
-                let nr = node.row as i32 + dr;
-                let nc = node.col as i32 + dc;
-                if nr >= 0 && nr < grid_rows as i32 && nc >= 0 && nc < grid_cols as i32 {
-                    let idx = nr as usize * grid_cols + nc as usize;
-                    if let Some(nv) = snapshot[idx] {
-                        neighbor_values.push(nv);
-                    }
-                }
-            }
-        }
-
-        if neighbor_values.is_empty() {
-            continue;
-        }
-
-        let local_median = fast_median(&mut neighbor_values);
-        if val > local_median * NEBULOSITY_THRESHOLD {
-            node.value = None;
-        }
-    }
 }
 
 /// Iteratively fill `None` nodes using the average of valid 4-connected neighbors.
@@ -493,7 +286,12 @@ fn build_bilinear_model(
 
     // Prune using green channel (or first channel for mono)
     let stats_channel = if channels > 1 { 1 } else { 0 };
-    prune_nebulosity(&mut per_channel_grids[stats_channel], grid_cols, grid_rows);
+    prune_nebulosity(
+        &mut per_channel_grids[stats_channel],
+        grid_cols,
+        grid_rows,
+        PRUNE,
+    );
 
     // Build rejection mask from the reference channel
     let rejection_mask: Vec<bool> = per_channel_grids[stats_channel]
@@ -548,7 +346,7 @@ fn build_bilinear_model(
         let fallback_value = if all_values.is_empty() {
             0.0
         } else {
-            fast_median(&mut all_values)
+            median(&mut all_values)
         };
 
         let grid = vec![vec![fallback_value; total_nodes]; channels];

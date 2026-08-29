@@ -380,13 +380,23 @@ Rules:
   path — `to_rgb8{,_fast}`, `write_rgb8_into`, `render::frame_to_rgb8`, `render_to_rgb8`,
   the fused encoder expansion *and* `box_downsample_to_rgb8_fused` (a separate
   traversal — the downsampled tiers are what most clients receive), JPEG (SA10),
-  chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono`, FITS f32/u16 both directions,
-  `downsample`, `warp_frame_into` and `debayer_bilinear_to_rgb8`. Add a row when you
-  add a format, and note that a uniform-grey fixture proves nothing here: it is
-  layout-invariant by construction.
+  chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono` **at both 8 and 16 bits**, FITS
+  f32/u16 both directions, `downsample`, `warp_frame_into` and
+  `debayer_bilinear_to_rgb8`. Add a row when you add a format, and note that a
+  uniform-grey fixture proves nothing here: it is layout-invariant by construction.
   `tests/integration/common.rs` provides `mean_chroma_spread_*` for asserting on real
   fixture data — a correct colour render of the bundled fixtures scores ~32, a
   planar-read-as-interleaved one ~0.5.
+- **One row per traversal, not per format.** `encode_8bit` and `encode_16bit` in
+  `ser/writer.rs` are separate functions with separate `Rgb`/`Bgr`/`Mono` plane
+  gathers, and for a long time only the 16-bit one had coverage — the same shape of
+  gap `box_downsample_to_rgb8_fused` had. 8-bit SER is reachable:
+  `disk_writer/worker.rs` selects it when a session's first frame is `Raw8`/`Rgb24`.
+- **8 bits round, 16 bits truncate.** Every 8-bit consumer goes through
+  `frame::sample_to_u8` (`* 255.0 + 0.5`); the 16-bit writers (SER, `write_fits_u16`)
+  truncate and agree with each other. SER's 8-bit arm had its own truncating lambda, so
+  a 0.5 channel wrote 127 there and 128 everywhere else. If you add an 8-bit output,
+  call `sample_to_u8` rather than open-coding the multiply.
 - A constant-plane fixture must be swept over the whole interior, not spot-checked. An
   interleaved write lands sample `c * area + p` exactly where the planar read expects it
   whenever `p % 3 == 0`, so a single-pixel assertion passes against a fully scrambled
@@ -401,6 +411,25 @@ Rules:
   2712x1538 plane, 4.9 ms on a 1999x1999 one, and collapsed to a single chunk — no
   parallelism at all — whenever the plane size had no convenient divisor. Dispatch per
   plane instead; see `render::black_point::subtract_black_point`.
+- **`get_pixel` in a whole-frame loop is a review flag too**, not just a correctness one.
+  It is fine for fixtures and spot checks; it is wrong for a traversal that visits every
+  sample, because planar layout has already handed you the contiguous run that makes the
+  loop a slice copy. `render::white_balance::block_medians` was the one hot consumer the
+  planar migration walked past, and it cost **120 ms per preview frame** — 90 % of a
+  pipeline whose other five stages total 15 ms — until it was rewritten onto `planes()`
+  plus one `into_par_iter` over the grid blocks (27 ms, bit-identical output). Three
+  things made it slow, none of them the layout: a per-sample `get_pixel`, three `Vec`
+  allocations per block, and no rayon at all. A controlled A/B of the same gather over
+  planar and interleaved buffers differed by 3 %, so do not reach for a cache-stride
+  explanation before checking those three.
+- **Grid-node background sampling lives in `background::grid`, and both repos use it.**
+  `GridNode`, `compute_box_size`, `extract_node_value`, `median`/`mad` and
+  `prune_nebulosity` were duplicated verbatim between Community's `background::extractor`
+  and Pro's `plugins::rbf`, both reaching pixels through `frame.data()` and a
+  hand-computed `channel * area`. They are now one `pub` module reading through
+  `channel_data`, with the thresholds the two extractors genuinely disagree about passed
+  in as `PruneConfig`. Grid *placement* is still per-crate: Community hugs the boundaries
+  for delta-stepping, Pro centres nodes in cells for the TPS solve.
 
 ### Phase 2: Debayering (Demosaicing)
 

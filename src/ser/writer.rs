@@ -171,13 +171,24 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
+/// # Rounding
+///
+/// Uses [`crate::frame::sample_to_u8`], the same conversion PNG, JPEG (SA10) and
+/// LZ4 (SA08/SA09) go through, so one frame produces the same 8-bit samples whichever
+/// output it is written to. This truncated instead (`* 255.0 as u8`), which put every
+/// SER sample up to one LSB below the same frame's PNG.
+///
+/// [`encode_16bit`] deliberately keeps its own truncating conversion: it agrees with
+/// `write_fits_u16`, so the two 16-bit writers match each other. Aligning it with the
+/// 8-bit rounding would move SER and FITS apart rather than together.
 fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
+    use crate::frame::sample_to_u8 as to_u8;
+
     let (rp, gp, bp) = planes_of(frame);
     let dst_channels = header.color_id.channels();
     let pixels = header.width as usize * header.height as usize;
 
     let mut bytes = Vec::with_capacity(pixels * dst_channels);
-    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
 
     match header.color_id {
         SerColorId::Mono => {
@@ -210,6 +221,11 @@ fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
     bytes
 }
 
+/// # Rounding
+///
+/// Truncates, matching `fits::write_fits_u16`. Kept deliberately out of step with
+/// [`encode_8bit`]'s rounding so that the two *16-bit* writers agree with each other;
+/// see that function's note.
 fn encode_16bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
     let (rp, gp, bp) = planes_of(frame);
     let dst_channels = header.color_id.channels();

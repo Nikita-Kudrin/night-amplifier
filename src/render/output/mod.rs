@@ -84,40 +84,50 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
     let contrast = config.contrast;
 
     let mut output = vec![0u8; num_pixels * 3];
+
+    // Chunked by pixel run, not by pixel. `par_chunks_mut(3)` zipped three deep made one
+    // rayon item per pixel through a four-level `Zip`, so the split and index bookkeeping
+    // cost about as much as the conversion: measured against `Frame::to_rgb8_fast` doing
+    // identical work (contrast and gamma both off) on a 2712x1538x3 frame, 3.07 ms
+    // against 1.55 ms. `Frame::gather_interleaved_into` was moved off this shape for the
+    // same reason; this is the same fix applied to the same traversal.
+    let pixels_per_chunk = crate::parallel::balanced_chunk_len(num_pixels);
     output
-        .par_chunks_mut(3)
-        .zip(
-            r_plane
-                .par_iter()
-                .zip(g_plane.par_iter())
-                .zip(b_plane.par_iter()),
-        )
-        .for_each(|(out_px, ((&pr, &pg), &pb))| {
-            let (mut r, mut g, mut b) = (pr, pg, pb);
+        .par_chunks_mut(pixels_per_chunk * 3)
+        .zip(r_plane.par_chunks(pixels_per_chunk))
+        .zip(g_plane.par_chunks(pixels_per_chunk))
+        .zip(b_plane.par_chunks(pixels_per_chunk))
+        .for_each(|(((px_block, r_block), g_block), b_block)| {
+            for (i, out_px) in px_block.chunks_exact_mut(3).enumerate() {
+                let (mut r, mut g, mut b) = (r_block[i], g_block[i], b_block[i]);
 
-            if apply_contrast {
-                let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                if luminance > 1e-8 {
-                    let luminance_adjusted = apply_s_curve(luminance, &contrast);
-                    let scale = luminance_adjusted / luminance;
-                    r = (r * scale).clamp(0.0, 1.0);
-                    g = (g * scale).clamp(0.0, 1.0);
-                    b = (b * scale).clamp(0.0, 1.0);
+                if apply_contrast {
+                    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    if luminance > 1e-8 {
+                        let luminance_adjusted = apply_s_curve(luminance, &contrast);
+                        let scale = luminance_adjusted / luminance;
+                        r = (r * scale).clamp(0.0, 1.0);
+                        g = (g * scale).clamp(0.0, 1.0);
+                        b = (b * scale).clamp(0.0, 1.0);
+                    }
                 }
-            }
 
-            if let Some(ref lut) = gamma_lut {
-                let r_idx = (r * 255.0).round().clamp(0.0, 255.0) as usize;
-                let g_idx = (g * 255.0).round().clamp(0.0, 255.0) as usize;
-                let b_idx = (b * 255.0).round().clamp(0.0, 255.0) as usize;
-                r = lut[r_idx];
-                g = lut[g_idx];
-                b = lut[b_idx];
-            }
+                if let Some(ref lut) = gamma_lut {
+                    let r_idx = (r * 255.0).round().clamp(0.0, 255.0) as usize;
+                    let g_idx = (g * 255.0).round().clamp(0.0, 255.0) as usize;
+                    let b_idx = (b * 255.0).round().clamp(0.0, 255.0) as usize;
+                    r = lut[r_idx];
+                    g = lut[g_idx];
+                    b = lut[b_idx];
+                }
 
-            out_px[0] = (r * 255.0).round().clamp(0.0, 255.0) as u8;
-            out_px[1] = (g * 255.0).round().clamp(0.0, 255.0) as u8;
-            out_px[2] = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+                // The canonical conversion rather than a fourth open-coded copy of it.
+                // Identical output: over the clamped, non-negative range both
+                // `(v * 255.0).round()` and `v * 255.0 + 0.5` truncate to the same byte.
+                out_px[0] = crate::frame::sample_to_u8(r);
+                out_px[1] = crate::frame::sample_to_u8(g);
+                out_px[2] = crate::frame::sample_to_u8(b);
+            }
         });
 
     if config.dither {
@@ -188,6 +198,61 @@ mod tests {
         assert_eq!(rgb8.len(), 64 * 64 * 3);
         assert_eq!(rgb8[0], 0);
         assert_eq!(rgb8[64 * 64 * 3 - 1], 255);
+    }
+
+    /// With contrast and gamma both off this does exactly what `Frame::to_rgb8_fast`
+    /// does, so it must produce exactly the same bytes. Pins both the shared
+    /// `sample_to_u8` conversion and the block traversal: an off-by-one in the chunk
+    /// arithmetic shows up here as a shifted buffer.
+    #[test]
+    fn passthrough_config_matches_to_rgb8_fast() {
+        // 271x153 is deliberately awkward: 41463 pixels is prime-ish enough that no
+        // chunk length divides it, so the last block is a short one.
+        let mut frame = Frame::zeros(271, 153, 3).unwrap();
+        let mut seed = 0x9E37_79B9u32;
+        for y in 0..153 {
+            for x in 0..271 {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    frame.set_pixel(x, y, c, (seed >> 8) as f32 / 16_777_216.0);
+                }
+            }
+        }
+
+        let passthrough = OutputConfig {
+            contrast: ContrastConfig::new(0.0, 0.5),
+            gamma: 1.0,
+            dither: false,
+        };
+        assert_eq!(
+            frame_to_rgb8(&frame, passthrough).unwrap(),
+            frame.to_rgb8_fast()
+        );
+    }
+
+    /// The block split must not change the answer, whatever rayon does with it.
+    #[test]
+    fn output_is_invariant_to_thread_count() {
+        let mut frame = Frame::zeros(97, 61, 3).unwrap();
+        for y in 0..61 {
+            for x in 0..97 {
+                for c in 0..3 {
+                    frame.set_pixel(x, y, c, ((x * 7 + y * 13 + c * 29) % 251) as f32 / 250.0);
+                }
+            }
+        }
+        let config = OutputConfig::new()
+            .with_contrast(ContrastConfig::moderate())
+            .with_gamma(1.8);
+
+        let run = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| frame_to_rgb8(&frame, config).unwrap())
+        };
+        assert_eq!(run(1), run(8));
     }
 
     #[test]

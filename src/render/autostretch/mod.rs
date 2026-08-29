@@ -53,11 +53,7 @@ pub fn auto_stretch_frame(
 
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
             let _span = tracing::info_span!("mtf_stretch_frame").entered();
-            crate::render::stretch::mtf_stretch_frame(
-                frame,
-                result.midtones,
-                config.color_intensity,
-            )?;
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
             if let Some(c_cfg) = contrast_config {
                 let _span = tracing::info_span!("apply_contrast_frame").entered();
                 crate::render::output::apply_contrast_frame(frame, c_cfg)?;
@@ -77,11 +73,7 @@ pub fn auto_stretch_frame(
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
             subtract_black_point_uniform(frame, result.black_point)?;
             let _span = tracing::info_span!("mtf_stretch_frame").entered();
-            crate::render::stretch::mtf_stretch_frame(
-                frame,
-                result.midtones,
-                config.color_intensity,
-            )?;
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
             if let Some(c_cfg) = contrast_config {
                 let _span = tracing::info_span!("apply_contrast_frame").entered();
                 crate::render::output::apply_contrast_frame(frame, c_cfg)?;
@@ -101,11 +93,7 @@ pub fn auto_stretch_frame(
         subtract_black_point_uniform(frame, result.black_point)?;
         let _span = tracing::info_span!("apply_tone_mapping").entered();
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
-            crate::render::stretch::mtf_stretch_frame(
-                frame,
-                result.midtones,
-                config.color_intensity,
-            )?;
+            crate::render::stretch::mtf_stretch_frame(frame, result.midtones)?;
         } else {
             apply_tone_mapping(
                 frame,

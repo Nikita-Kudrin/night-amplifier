@@ -151,8 +151,26 @@ pub fn debayer_with_config(frame: &Frame, config: DebayerConfig) -> Result<Frame
     Debayerer::new(config).debayer(frame)
 }
 
-/// Fast path: Debayer with bilinear directly to RGB8
+/// Fast path: debayer with bilinear interpolation straight to interleaved RGB8,
+/// skipping the intermediate f32 `Frame`.
+///
+/// # Errors
+/// Returns `StackError::ChannelMismatch` unless the frame is single-channel CFA data.
+/// The check is not redundant with [`Debayerer::debayer`]'s: this function bypasses
+/// `Debayerer` entirely, and without it a 3-channel frame would be silently demosaiced
+/// out of its red plane — `frame.data()` starts at plane 0, and a Bayer walk over
+/// `width * height` samples stays in bounds, so nothing would fault.
+///
+/// No in-tree production caller as of 2026-08: the streaming encoder debayers at capture
+/// instead. Kept because it is public API and because `layout_tests` uses it to cover the
+/// interleaved-write half of the debayer kernels, which its f32 sibling cannot.
 pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
+    if frame.channels() != 1 {
+        return Err(StackError::ChannelMismatch {
+            expected: 1,
+            actual: frame.channels(),
+        });
+    }
     debayer_bilinear_to_rgb8(frame, pattern)
 }
 

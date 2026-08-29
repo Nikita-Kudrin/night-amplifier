@@ -287,18 +287,38 @@ mod tests {
         assert!((ch.signal_range() - 0.6).abs() < 1e-6);
     }
 
+    /// Built with `set_pixel`, not `data[i * 3 + c]`. The old fixture wrote *interleaved*
+    /// offsets into a planar frame, so every plane held a mix of all three values. It
+    /// passed only because global min and max are layout-invariant — and it would have
+    /// validated any per-channel assertion added later against a scrambled buffer, which
+    /// is exactly the trap the layout rules exist to close.
     #[test]
     fn test_global_min_max() {
-        let mut data = vec![0.0f32; 64 * 64 * 3];
-        for i in 0..(64 * 64) {
-            data[i * 3] = 0.1;
-            data[i * 3 + 1] = 0.5;
-            data[i * 3 + 2] = 0.9;
+        let (r_val, g_val, b_val) = (0.1f32, 0.5, 0.9);
+        let mut frame = Frame::zeros(64, 64, 3).unwrap();
+        for y in 0..64 {
+            for x in 0..64 {
+                frame.set_pixel(x, y, 0, r_val);
+                frame.set_pixel(x, y, 1, g_val);
+                frame.set_pixel(x, y, 2, b_val);
+            }
         }
-        let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
+
         let stats = compute_image_stats(&frame).unwrap();
-        assert!((stats.global_min() - 0.1).abs() < 0.01);
-        assert!((stats.global_max() - 0.9).abs() < 0.01);
+        assert!((stats.global_min() - r_val).abs() < 0.01);
+        assert!((stats.global_max() - b_val).abs() < 0.01);
+
+        // The assertion the corrected fixture makes possible: each channel's statistics
+        // must come from its own plane. Against the old fixture every channel median
+        // landed on the same mixture and this could not have been written.
+        assert_eq!(stats.channels.len(), 3);
+        for (c, want) in [r_val, g_val, b_val].iter().enumerate() {
+            let median = stats.channels[c].median;
+            assert!(
+                (median - want).abs() < 1e-4,
+                "channel {c} median is {median}, expected {want} — planes are mixed"
+            );
+        }
     }
 
     use proptest::prelude::*;

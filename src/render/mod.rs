@@ -32,8 +32,9 @@ pub use stretch::{
     SaturationBoostConfig, SaturationPlugin, ToneMappingAlgorithm, SATURATION_PLUGIN,
 };
 pub use white_balance::{
-    compute_neutralization_multipliers, compute_white_balance_grid, neutralize_background,
-    neutralize_background_auto,
+    compute_neutralization_multipliers, compute_white_balance_grid,
+    compute_white_balance_grid_with_config, neutralize_background, neutralize_background_auto,
+    WhiteBalanceConfig,
 };
 
 // Re-export pipeline types for convenient access
