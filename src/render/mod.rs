@@ -24,7 +24,7 @@ pub use black_point::{
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, finalize_for_display, frame_to_rgb8, frame_to_rgb8_simple,
-    frame_to_rgb8_with_contrast, ContrastConfig, OutputConfig,
+    frame_to_rgb8_with_contrast, ContrastConfig, DisplayOutput, OutputConfig,
 };
 pub use stretch::{
     apply_shadow_saturation_boost, apply_tone_mapping, asinh, asinh_stretch,

@@ -8,10 +8,11 @@ use crate::frame::Frame;
 use rayon::prelude::*;
 
 mod contrast;
-mod dither;
+mod quantize;
 
 pub use contrast::{apply_contrast_frame, apply_contrast_slice, apply_s_curve, ContrastConfig};
-use dither::apply_ordered_dither;
+pub use quantize::DisplayOutput;
+pub(crate) use quantize::{write_pixel_rgb8, write_row_rgb8};
 
 /// Configuration for the final output conversion
 #[derive(Debug, Clone, Copy)]
@@ -20,8 +21,8 @@ pub struct OutputConfig {
     pub contrast: ContrastConfig,
     /// Final gamma correction (applied after contrast)
     pub gamma: f32,
-    /// Dithering to reduce banding in gradients
-    pub dither: bool,
+    /// Black floor and dithering applied at the 8-bit conversion.
+    pub display: DisplayOutput,
 }
 
 impl Default for OutputConfig {
@@ -29,7 +30,7 @@ impl Default for OutputConfig {
         Self {
             contrast: ContrastConfig::default(),
             gamma: 1.0,
-            dither: false,
+            display: DisplayOutput::PLAIN,
         }
     }
 }
@@ -49,8 +50,8 @@ impl OutputConfig {
         self
     }
 
-    pub fn with_dither(mut self, dither: bool) -> Self {
-        self.dither = dither;
+    pub fn with_display(mut self, display: DisplayOutput) -> Self {
+        self.display = display;
         self
     }
 }
@@ -92,12 +93,18 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
     // against 1.55 ms. `Frame::gather_interleaved_into` was moved off this shape for the
     // same reason; this is the same fix applied to the same traversal.
     let pixels_per_chunk = crate::parallel::balanced_chunk_len(num_pixels);
+    let width = frame.width();
+    let display = config.display;
     output
         .par_chunks_mut(pixels_per_chunk * 3)
         .zip(r_plane.par_chunks(pixels_per_chunk))
         .zip(g_plane.par_chunks(pixels_per_chunk))
         .zip(b_plane.par_chunks(pixels_per_chunk))
-        .for_each(|(((px_block, r_block), g_block), b_block)| {
+        .enumerate()
+        .for_each(|(chunk_idx, (((px_block, r_block), g_block), b_block))| {
+            // Chunks are pixel runs, not rows, so the dither's output coordinate
+            // has to be recovered from the absolute pixel index.
+            let base = chunk_idx * pixels_per_chunk;
             for (i, out_px) in px_block.chunks_exact_mut(3).enumerate() {
                 let (mut r, mut g, mut b) = (r_block[i], g_block[i], b_block[i]);
 
@@ -121,18 +128,14 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
                     b = lut[b_idx];
                 }
 
-                // The canonical conversion rather than a fourth open-coded copy of it.
-                // Identical output: over the clamped, non-negative range both
-                // `(v * 255.0).round()` and `v * 255.0 + 0.5` truncate to the same byte.
-                out_px[0] = crate::frame::sample_to_u8(r);
-                out_px[1] = crate::frame::sample_to_u8(g);
-                out_px[2] = crate::frame::sample_to_u8(b);
+                // The shared conversion rather than a fourth open-coded copy of it.
+                // Over the clamped, non-negative range both `(v * 255.0).round()`
+                // and `v * 255.0 + 0.5` truncate to the same byte, so the plain
+                // path is unchanged from before this carried a `DisplayOutput`.
+                let pixel = base + i;
+                write_pixel_rgb8(out_px, r, g, b, pixel % width, pixel / width, display);
             }
         });
-
-    if config.dither {
-        return Ok(apply_ordered_dither(output, frame.width(), frame.height()));
-    }
 
     debug_assert_eq!(output.len(), num_pixels * 3);
     Ok(output)
@@ -145,7 +148,7 @@ pub fn frame_to_rgb8_simple(frame: &Frame) -> Result<Vec<u8>> {
         OutputConfig {
             contrast: ContrastConfig::new(0.0, 0.5),
             gamma: 1.0,
-            dither: false,
+            display: DisplayOutput::PLAIN,
         },
     )
 }
@@ -166,7 +169,7 @@ pub fn finalize_for_display(
     let config = OutputConfig {
         contrast: contrast.unwrap_or_else(|| ContrastConfig::new(0.0, 0.5)),
         gamma,
-        dither: false,
+        display: DisplayOutput::PLAIN,
     };
     frame_to_rgb8(frame, config)
 }
@@ -222,7 +225,7 @@ mod tests {
         let passthrough = OutputConfig {
             contrast: ContrastConfig::new(0.0, 0.5),
             gamma: 1.0,
-            dither: false,
+            display: DisplayOutput::PLAIN,
         };
         assert_eq!(
             frame_to_rgb8(&frame, passthrough).unwrap(),

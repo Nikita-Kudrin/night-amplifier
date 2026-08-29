@@ -1,4 +1,3 @@
-use crate::frame::sample_to_u8;
 /// Binary header magic number for RGB8+LZ4 stream format (legacy single-block)
 ///
 /// Header layout (16 bytes):
@@ -153,6 +152,7 @@ pub(crate) fn expand_to_rgb8_fused(
     let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
     let has_saturate = config.saturation_boost;
     let has_contrast = config.contrast;
+    let display = config.display;
 
     let (black_point, scale_lut) = if has_stretch {
         let sr = ready_frame.stretch_result.as_ref().unwrap();
@@ -214,9 +214,7 @@ pub(crate) fn expand_to_rgb8_fused(
                     );
                 }
 
-                for i in 0..row_len {
-                    row_out[i] = sample_to_u8(f32_row[i]);
-                }
+                crate::render::output::write_row_rgb8(row_out, &f32_row, y, display);
             });
         });
 
@@ -266,6 +264,7 @@ pub(crate) fn box_downsample_to_rgb8_fused(
     let has_stretch = config.auto_stretch && ready_frame.stretch_result.is_some();
     let has_saturate = config.saturation_boost;
     let has_contrast = config.contrast;
+    let display = config.display;
 
     let (black_point, scale_lut) = if has_stretch {
         let sr = ready_frame.stretch_result.as_ref().unwrap();
@@ -355,9 +354,7 @@ pub(crate) fn box_downsample_to_rgb8_fused(
                     );
                 }
 
-                for i in 0..row_len {
-                    row_out[i] = sample_to_u8(f32_row[i]);
-                }
+                crate::render::output::write_row_rgb8(row_out, &f32_row, y, display);
             });
         });
 

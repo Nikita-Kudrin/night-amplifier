@@ -37,12 +37,14 @@
 //! - `stacking_tests` - Tests for the complete stacking pipeline
 //! - `stretch_tests` - Tests for auto-stretch and rendering
 //! - `detection_tests` - Tests for star detection on real images
+//! - `display_output_tests` - Black floor, dithering and stream resolution, measured in output levels
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 pub mod background_tests;
 pub mod common;
 pub mod debayer_tests;
 pub mod detection_tests;
+pub mod display_output_tests;
 pub mod encoding_tests;
 pub mod fixture_processing;
 pub mod image_loading;

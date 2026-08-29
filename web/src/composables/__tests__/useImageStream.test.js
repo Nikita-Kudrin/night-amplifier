@@ -19,11 +19,11 @@ import {useImageStream as originalUseImageStream} from '../useWebSocket.js'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;
-function useImageStream() {
+function useImageStream(options) {
     let result;
     currentApp = mount({
         setup() {
-            result = originalUseImageStream()
+            result = originalUseImageStream(options)
             return () => {}
         }
     })
@@ -38,6 +38,52 @@ describe('useImageStream', () => {
             currentApp.unmount()
             currentApp = null
         }
+    })
+
+    describe('resolution reporting', () => {
+        // The lossless stream sizes its output from this report, exactly like
+        // the JPEG stream does. Before it did, the server always sent a
+        // near-native frame and left the browser to minify it with a four-tap
+        // bilinear filter, which discards most of the noise averaging a
+        // server-side box downsample delivers.
+        it('reports the viewport on the lossless endpoint', async () => {
+            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+            await openWebSocket()
+
+            sendResolution(1440, 1440)
+
+            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
+        })
+
+        it('reports the viewport on the JPEG endpoint', async () => {
+            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece'})
+            await openWebSocket()
+
+            sendResolution(1920, 1080)
+
+            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1920, height: 1080})
+        })
+
+        it('rounds fractional device-pixel sizes', async () => {
+            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+            await openWebSocket()
+
+            sendResolution(719.5, 1439.4)
+
+            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 720, height: 1439})
+        })
+
+        // A canvas that has not been laid out yet reports 0, which would
+        // otherwise be sent as a viewport and clamp the server to its smallest tier.
+        it('ignores a zero-sized viewport', async () => {
+            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+            await openWebSocket()
+            MockWebSocket.lastSent = null
+
+            sendResolution(0, 0)
+
+            expect(MockWebSocket.lastSent).toBeNull()
+        })
     })
 
     it('connects to /ws/stream', () => {

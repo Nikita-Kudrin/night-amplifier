@@ -22,7 +22,7 @@ mod settings;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
-pub use jpeg_tiers::{JpegTier, JpegTierCache, JpegTierClientGuard};
+pub use jpeg_tiers::{JpegTier, JpegTierCache, StreamKind, TierClientGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
@@ -112,6 +112,12 @@ pub struct AppState {
     pub jpeg_tier_cache: StdRwLock<JpegTierCache>,
     /// Number of active LZ4 stream clients
     pub lz4_clients: AtomicUsize,
+    /// Per-tier client counts for the lossless stream.
+    ///
+    /// Separate from `lz4_clients`, which only answers "is anyone watching".
+    /// A client that has not yet reported a viewport is counted in the former
+    /// but not the latter, which is why the target box falls back to the 4K cap.
+    pub lz4_tier_clients: [AtomicUsize; JpegTier::COUNT],
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -206,6 +212,7 @@ impl AppState {
             jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
             lz4_clients: AtomicUsize::new(0),
+            lz4_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
         };
 
         (state, disk_writer)
@@ -349,7 +356,42 @@ impl AppState {
 
     /// Number of clients currently watching a resolution tier.
     pub fn jpeg_tier_client_count(&self, tier: JpegTier) -> usize {
-        self.jpeg_tier_clients[tier as usize].load(Ordering::SeqCst)
+        self.tier_client_count(StreamKind::Jpeg, tier)
+    }
+
+    /// Per-tier client counters for one stream family.
+    pub fn tier_clients(&self, kind: StreamKind) -> &[AtomicUsize; JpegTier::COUNT] {
+        match kind {
+            StreamKind::Jpeg => &self.jpeg_tier_clients,
+            StreamKind::Lossless => &self.lz4_tier_clients,
+        }
+    }
+
+    pub fn tier_client_count(&self, kind: StreamKind, tier: JpegTier) -> usize {
+        self.tier_clients(kind)[tier as usize].load(Ordering::SeqCst)
+    }
+
+    /// Bounding box the lossless stream should encode into.
+    ///
+    /// The stream keeps a single payload rather than one per tier, so it is
+    /// served at the largest tier any connected client asked for: a client on a
+    /// smaller tier then receives more pixels than it needs, which is what every
+    /// client got before tiers reached this path.
+    ///
+    /// Falls back to the 4K cap when no client has reported a viewport, so a
+    /// client that never sends one is served exactly as it was before.
+    pub fn lossless_target_box(&self) -> (u32, u32) {
+        let (cap_w, cap_h) = crate::server::encoding::JPEG_MAX_BOUNDING_BOX;
+        let largest = JpegTier::all()
+            .into_iter()
+            .rfind(|&tier| self.tier_client_count(StreamKind::Lossless, tier) > 0);
+        match largest {
+            Some(tier) => {
+                let (w, h) = tier.bounding_box();
+                (w.min(cap_w), h.min(cap_h))
+            }
+            None => (cap_w, cap_h),
+        }
     }
 
     /// Look up the pre-encoded JPEG for a tier at the given frame.

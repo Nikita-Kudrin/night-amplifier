@@ -10,6 +10,20 @@ vi.mock('../composables/api.js', () => ({
 
 import {updateSettings} from '../composables/api.js'
 
+/**
+ * A toggle's checkbox, found by the label text next to it.
+ *
+ * `findAll('.toggle')[n]` was how these were selected; every control added above
+ * one silently retargeted the assertion at a different setting.
+ */
+function findToggleByLabel(wrapper, label) {
+    const found = wrapper
+        .findAll('.toggle-label')
+        .find((el) => el.text().includes(label))
+    if (!found) throw new Error(`no toggle labelled "${label}"`)
+    return found.find('input[type="checkbox"]')
+}
+
 describe('SettingsPanel', () => {
     beforeEach(() => {
         vi.clearAllMocks()
@@ -117,9 +131,9 @@ describe('SettingsPanel', () => {
                 settings: {background_subtraction: true},
             })
 
-            // Find the background subtraction toggle (first processing toggle now)
-            const toggles = wrapper.findAll('.toggle')
-            const bgSubToggle = toggles[0] // was [1] when auto_stretch was there
+            // Selected by label, not by index: a positional lookup breaks every
+            // time a control is added above this one, which it has twice now.
+            const bgSubToggle = findToggleByLabel(wrapper, 'Background Subtraction')
 
             await bgSubToggle.setValue(false)
             await bgSubToggle.trigger('change')

@@ -34,7 +34,7 @@ heavy operations should not be performed on the fly.
 Remember to optimize imports and remove unused code you have created.
 Try to avoid deep nesting. Use if+return to simplify the code.
 ALWAYS prefer editing an existing file to creating a new one.
-Proactively update documentation files (\\*.md, especially the VitePress user manual in `manual/`) or README files after changes in the code.
+Proactively update documentation files (\\*.md, especially the VitePress user manual in `manual/`) or README files after changes in the code but keep the docs concise and focused.  
 After making big changes, run backend and frontend tests.
 
 ## Architecture
@@ -288,7 +288,7 @@ client never sees a counter whose payloads are still missing.
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
-Full-resolution lossless path for the eyepiece quality view.
+Lossless (unquantized-beyond-8-bit) path for the eyepiece quality view.
 
 ```
 Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload
@@ -296,6 +296,36 @@ Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed siz
 
 SA09 is the chunked variant (parallel LZ4 compression). Frontend renders via WebGL with
 Canvas2D fallback.
+
+#### It is resolution-negotiated, not full-resolution — and that is a noise decision
+
+This stream used to hardcode a 3840x2160 box and ignore the client's viewport. It now
+takes a `{width, height}` report like the JPEG path, maps it through the same `JpegTier`,
+and box-averages down to it.
+
+**The resampling is the point, not a bandwidth saving.** A server-side box downsample is an
+area average, so it removes noise in proportion to the reduction. The browser's fallback is
+`TEXTURE_MIN_FILTER = LINEAR` with no mipmaps, which takes four taps however far it is
+minifying — capped around 1.45x of noise reduction and discarding the rest as aliasing.
+Measured on `250mm-dob-imx533-dumbbell-fits`, encoding into a 1440 tier rather than the 4K
+cap takes sky sigma from 8.90 to 7.41 output levels and the payload to 2.25x smaller;
+`display_output_tests` reports both figures.
+
+Two structural consequences:
+
+- **Client accounting is per tier, via `StreamKind`.** `lz4_clients` still only answers "is
+  anyone watching"; `lz4_tier_clients` carries the viewport. The stream keeps *one* payload
+  rather than one per tier, so `AppState::lossless_target_box` serves the **largest** tier
+  any client asked for, and falls back to the 4K cap when nobody has reported one — which
+  is exactly the old behaviour for a client that never sends a viewport.
+- **The shared native RGB8 buffer is no longer unconditionally reusable.** The render task
+  builds one conversion for LZ4 and the non-downsampling JPEG tiers to share. Once the
+  lossless stream downsamples, reusing it silently ships a native-size payload and undoes
+  the whole change; `lz4_downsample_does_not_reuse_the_shared_native_buffer` pins that.
+
+The frontend reports the **canvas** size, not the window size. In binoview each eye canvas
+shows the whole frame at roughly half the window width, so reporting the window doubles the
+pixels either eye can use — that difference is 1.20x against 2.19x of grain reduction.
 
 ## Adding a Stacking Type
 
@@ -374,6 +404,44 @@ Rules:
   `background::extractor` and Pro's `plugins::rbf` (previously duplicated, each reaching
   pixels via hand-computed offsets). Thresholds the two genuinely disagree on pass in via
   `PruneConfig`; grid *placement* stays per-crate.
+
+### The f32 -> 8-bit boundary (`render::output::quantize`)
+
+Every byte that reaches a screen crosses this boundary exactly once: the tails of both
+fused kernels in `server::encoding::format` and `render::frame_to_rgb8`. All three go
+through `write_row_rgb8` / `write_pixel_rgb8`, which wrap the canonical `sample_to_u8`.
+Keeping them on one helper is the same rule as the rest of the layout contract — parallel
+8-bit conversions in this repo have drifted by an LSB before.
+
+`DisplayOutput` carries two things, both defaulting to off (`DisplayOutput::PLAIN` is
+byte-identical to a bare `sample_to_u8`, which is what makes the feature safe to add to a
+path everything already uses):
+
+- **`pedestal`** maps `[0, 1]` onto `[pedestal, 1]`. The autostretch black point is
+  `mode - black_point_sigma * sigma` with a hard clamp at zero, so a real stretched frame
+  lands ~0.8 % of its samples on exactly 0 (measured). An OLED switches those fully off,
+  and at ~1.7 arcmin per pixel through an eyepiece they read as black speckle rather than
+  as sky. Reached from `EyepieceSettings::black_floor`.
+- **`dither`** adds a sub-LSB ordered-dither offset **before** rounding, so the expected
+  output equals the true value and quantization error becomes a pattern the eye integrates
+  away. This replaced an implementation that added +/-8 LSB to the *already-rounded* byte,
+  which recovers no sub-LSB information and is simply visible crosshatch — and which was
+  unreachable from the streaming path anyway.
+
+Two things are easy to get wrong here:
+
+- **Index the dither in output coordinates.** A pattern applied before resampling is
+  averaged into mush by the downsample. Both fused kernels hold the output row index; the
+  flat-run traversal in `frame_to_rgb8` recovers it from the absolute pixel index.
+- **The matrix is 8x8, not the conventional 4x4.** At the eyepiece a 4x4 cell's ~7 arcmin
+  period sits inside what the eye resolves, so it reads as texture instead of disappearing.
+
+`black_point_sigma` is the only parameter in the current design that moves displayed sky
+grain: the MTF solve pins `mtf(black_point_sigma * sigma) -> target_background`, which is
+scale-invariant, so grain amplitude does **not** fall with stack depth or exposure. The
+eyepiece intensity slider interpolates it *upward* (toward `EYEPIECE_BLACK_POINT_SIGMA`)
+for that reason; it used to interpolate downward under a comment claiming it clipped noise,
+which left more grain visible and clamped more sky to pure black.
 
 ### Phase 2: Debayering (Demosaicing)
 

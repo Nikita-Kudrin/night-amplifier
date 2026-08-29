@@ -420,7 +420,7 @@ The server provides:
 | `/api/settings`                | POST   | Update settings                   |
 | `/ws/stream`                   | WS     | Live image stream (dynamic JPEG) |
 | `/ws/eyepiece`                 | WS     | Eyepiece image stream (dynamic JPEG) |
-| `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8) |
+| `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8), sized to the client's reported viewport |
 | `/ws/events`                   | WS     | Server events (JSON)              |
 
 > [!IMPORTANT]

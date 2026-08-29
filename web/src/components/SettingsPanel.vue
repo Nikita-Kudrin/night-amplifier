@@ -17,6 +17,7 @@ import {
   SATURATION_BOOST_LIMITS,
   AUTO_STRETCH_INTENSITY,
   BLACK_LEVEL_LIMITS,
+    BLACK_FLOOR_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
   WEIGHTING_PRESET_OPTIONS,
@@ -148,6 +149,29 @@ const HELP = HELP_TEXTS
             :format-value="formatPercent"
             :help="HELP.eyepiece_intensity"
             @change="applySetting('eyepiece', localSettings.eyepiece)"
+        />
+      </div>
+
+      <div class="control-group" style="margin-bottom: 1.5rem">
+        <BaseSlider
+            v-model="localSettings.eyepiece.black_floor"
+            label="Black floor"
+            large-gap
+            :min="BLACK_FLOOR_LIMITS.min"
+            :max="BLACK_FLOOR_LIMITS.max"
+            :step="BLACK_FLOOR_LIMITS.step"
+            :format-value="formatPercent"
+            :help="HELP.eyepiece_black_floor"
+            @change="applySetting('eyepiece', localSettings.eyepiece)"
+        />
+      </div>
+
+      <div class="control-group" style="margin-bottom: 1.5rem">
+        <BaseToggle
+            v-model="localSettings.eyepiece.dither"
+            label="Dithering"
+            :help="HELP.eyepiece_dither"
+            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
         />
       </div>
 
