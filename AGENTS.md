@@ -65,50 +65,35 @@ Tests might run a minute or two - you should wait for them to finish. Benches mi
 
 ## Benchmark sizing
 
-Two hard rules, both learned from figures that turned out to mean nothing:
+Two hard rules:
 
-1. **Every case must report at least ~100 ms.** Below that, criterion's own overhead and
-   the machine's thermal management move the number by more than a real regression does,
-   so runs are not comparable. The ≥10 ms floor this replaced removed the worst
-   offenders — nineteen of thirty-two cases used to sit under 10 ms, six under 1 ms, four
-   in the *nanosecond* range — but 10 ms turned out to still be inside the same noise
-   floor on this machine, not a thermally-driven problem the earlier fix had solved.
-2. **Every bench binary must stay ≤ ~30 s wall clock** so CI stays usable.
+1. **Every case must report ≥~100 ms.** Below that, criterion's own overhead and the
+   machine's thermal management move the number more than a real regression does.
+2. **Every bench binary must stay ≤~30 s wall clock** so CI stays usable.
 
-Those pull against each other, so pick the cheapest technique that satisfies both:
+Techniques to satisfy both:
 
 | Situation | Technique |
 |---|---|
-| Routine is pure (`&Frame` in, fresh value out) | Repeat it `REPS` times inside `b.iter`, declare `Throughput::Elements(REPS * n)`, and put `_xN` in the case name. See `debayer_benchmark`. |
-| Routine mutates its input in place | `iter_batched_ref` over a `Vec<_>` of `REPS` clones — repeating is *not* available, iteration two would see iteration one's output. See `render_benchmark`. |
-| The input size is itself the unrealistic part | Resize to what production actually produces. `rejection_benchmark` ran on a 1-megapixel buffer the pipeline never generates; one IMX464 plane is both faster to justify and 4x the work. |
-| Small size that only re-measures a bigger sibling's kernel | Delete it. The 1024x1024 debayer and warp cases went this way. |
+| Routine is pure (`&Frame` in, fresh value out) | Repeat `REPS` times inside `b.iter`, declare `Throughput::Elements(REPS * n)`, suffix the case name `_xN`. See `debayer_benchmark`. |
+| Routine mutates its input in place | `iter_batched_ref` over a `Vec<_>` of `REPS` clones — plain repetition would feed iteration N+1 iteration N's output. See `render_benchmark`. |
+| Input size is itself unrealistic | Resize to what production actually produces (e.g. one sensor plane, not an arbitrary megapixel buffer). |
+| Small case only re-measures a bigger sibling's kernel | Delete it. |
 
-Then keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
-`measurement_time`. Always set `group.sampling_mode(SamplingMode::Flat)`: criterion's
-default linear scheme runs 1+2+...+10 = 55 iterations per case, which is what put
-`encoding_benchmark` at 50 s. Flat brought it to 30 s and `catalog_search_benchmark` from
-51 s to 13 s. At a 100 ms floor every case pays that 55x multiplier if Flat is left off,
-so there is no case small enough for Linear to still be the right call.
+Keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
+`measurement_time`. Always set `group.sampling_mode(SamplingMode::Flat)` — criterion's
+default Linear scheme runs 55 iterations per case at `sample_size(10)`, which is enough
+on its own to blow the 30 s budget.
 
-**Say so in the case name when a figure covers more than one call.** `_x5` means the
-reported `time:` is five invocations. A reader who divides by the wrong number is worse
-off than one who had no benchmark.
-
-**Never let setup leak into the measured region, and never let it dominate wall clock.**
-`iter_batched` excludes setup from the *measurement* but still runs it every iteration:
-`planetary_benchmark` rebuilt a `PlanetaryStacker` — quality scoring plus a
-search-radius-50 cross-correlation — per iteration, and spent 78 s to report two numbers.
-`stack` takes `&self`; hoisting the stacker out of the loop made it 14 s.
-
-**Feed inputs via `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()`
-inside `b.iter`.** A 2712x1538x3 clone is ~14 ms, which was 77 % of the reported
-`fused_stretch_frame` figure and hid anything short of a 30 % kernel regression.
-
-**Check that the workload does not drift.** `saturation_benchmark` ran `apply_boost` over
-its own output; saturation compounds, so after a few iterations it was measuring a
-different operation than the first one performed.
-
+- Suffix the case name (`_x5`) whenever the reported `time:` covers more than one call —
+  a reader who divides by the wrong number is worse off than one with no benchmark.
+- Setup must not leak into the measured region *or* dominate wall clock: `iter_batched`
+  excludes setup from measurement but still runs it every iteration, so hoist anything
+  reusable (e.g. a stacker built once) outside the loop instead.
+- Feed inputs via `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()`
+  inside `b.iter` — a full-frame clone can dominate the reported figure on its own.
+- Watch for workloads that drift across iterations (e.g. an op applied to its own prior
+  output, so iteration N stops measuring the same thing iteration 1 did).
 
 ## Build & Test
 
@@ -201,49 +186,39 @@ Behavior that's not obvious from the code:
 
 ### Handle ownership — non-obvious and load-bearing
 
-**A vendor close takes a device *index*, not a handle.** `POACloseCamera(0)` / `ASICloseCamera(0)` /
-`SVBCloseCamera(0)` close whatever occupies index 0 *at that moment*. Handles get abandoned as a matter
-of routine — `capture_frame_bounded` and `poll_camera_status_bounded` hand a stuck call to a detached
-thread and stop waiting — and that thread's `Drop` runs whenever the SDK finally returns, which can be
-minutes later.
+**A vendor close takes a device *index*, not a handle** — `POACloseCamera(0)` / `ASICloseCamera(0)` /
+`SVBCloseCamera(0)` close whatever occupies index 0 *at that moment*. A stuck FFI call gets handed to a
+detached thread whose `Drop` can fire minutes later, closing a camera that has since reconnected.
 
-On 2026-08-22 that closed a camera 80 s *after* a successful reconnect: the reconnect opened index 0
-cleanly, seeded the cooler without complaint, and then every call started returning
-`POA_ERROR_NOT_OPENED` once the abandoned handle unwound. Three restarts of the application, and an
-hour of integration lost each time.
-
-- Every shim-level handle holds a `camera::DeviceLease`, and **every vendor close goes through
-  `lease.begin_close()`** — which authorizes exactly one close, and only for the lease that still owns
-  the slot. Add a lease to any new provider; a `Drop` that calls the SDK directly is a review flag.
-- Do not "fix" an abandoned handle by closing it eagerly. There is no way to cancel a stuck synchronous
-  FFI call; the lease is what makes abandoning safe.
-- `connect()` **probes the handle before reporting success.** `open()` returning proves nothing — the
-  field failure opened cleanly. Keep the probe.
+- Every shim-level handle holds a `camera::DeviceLease`; **every vendor close goes through
+  `lease.begin_close()`**, which authorizes exactly one close for the lease that still owns the slot.
+  A `Drop` that calls the SDK directly is a review flag.
+- Never close an abandoned handle eagerly — a stuck synchronous FFI call can't be cancelled; the lease
+  is what makes abandoning safe.
+- `connect()` **probes the handle before reporting success** — `open()` returning proves nothing.
 
 ### Device-loss classification
 
-`CameraError::is_sdk_disconnected()` knows no vendor vocabulary. Each shim classifies its **own numeric
-or enum code** and tags the message with `camera::device_lost::mark`. Matching vendor substrings after
-the fact only ever worked for PlayerOne, which is the one provider that renders its error enum
-symbolically; ZWO, SVBony, QHY and ToupTek all printed a bare integer, so device loss on those was
-never detected at all.
+`CameraError::is_sdk_disconnected()` knows no vendor vocabulary — each shim classifies its **own
+numeric/enum code** and tags the message via `camera::device_lost::mark` (matching vendor substrings
+after the fact doesn't generalize: only PlayerOne renders errors symbolically, the rest print bare
+integers).
 
-`status()` reads go through `device_lost::tolerate_unsupported`, not `.unwrap_or(default)`. An
-unsupported parameter still falls back; a lost device propagates. Every provider used to swallow both,
-so `status()` returned `Ok` with a temperature of 0.0 on a dead camera and the monitor polled it
-indefinitely.
+`status()` reads go through `device_lost::tolerate_unsupported`, not `.unwrap_or(default)`, so an
+unsupported parameter falls back while a lost device still propagates instead of reading as a fake
+`Ok`.
 
 ### Fault detection and recovery
 
-One detector, in `server::camera_health`: one `PERSISTENT_FAULT_THRESHOLD`, one streak in
-`AppState.consecutive_watchdog_timeouts`, fed by the capture watchdog, the status-poll watchdog and the
-monitor alike. A counter per call site means each site has to reach the threshold on its own, so a
-fault alternating between them escalates from neither. The streak ages out (`FAULT_STREAK_TTL`) rather
-than resetting on any success, so an intermittent fault cannot hide behind the occasional good poll.
+One detector, `server::camera_health`: one `PERSISTENT_FAULT_THRESHOLD`, one streak
+(`AppState.consecutive_watchdog_timeouts`) fed by the capture watchdog, status-poll watchdog and
+monitor alike, so a fault alternating between call sites still escalates. The streak ages out
+(`FAULT_STREAK_TTL`) rather than resetting on success, so intermittent faults can't hide behind
+occasional good polls.
 
-`camera_session::reconnect` owns the recovery policy — bounded attempts, exponential backoff,
-re-enumeration before each try, and a liveness probe before declaring success. `finalize_disconnect`
-takes a `DisconnectCause`, not a bool: a warmup teardown must not be reconnected.
+`camera_session::reconnect` owns recovery policy — bounded attempts, exponential backoff,
+re-enumeration before each try, and a liveness probe before declaring success.
+`finalize_disconnect` takes a `DisconnectCause`, not a bool: a warmup teardown must not be reconnected.
 
 ## Storage Formats
 
@@ -276,7 +251,7 @@ Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS/frame_NNNNNN.fits` and `capt
 ### Dynamic JPEG (SA10) — `/ws/stream`, `/ws/eyepiece`
 
 Default streaming format. Encoded via TurboJPEG (SIMD) in the render task, not in the
-WebSocket handlers — see *Demand-driven resolution tiers* below.
+WebSocket handlers.
 
 ```
 Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
@@ -284,8 +259,10 @@ Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u
 
 #### Demand-driven resolution tiers
 
-Clients send `{width, height}` JSON. The tier is selected from the viewport's **shorter edge**
-clamped to 1080 … 2160 — its display-resolution class — not by fitting both edges into a box:
+Clients send `{width, height}` JSON. The tier is selected from the viewport's **shorter
+edge** clamped to 1080…2160 (its display-resolution class), not by fitting both edges into
+a box — this is deliberate: testing both edges against a 16:9 box would put a portrait
+phone in the 4K tier at 2× the bandwidth, and rotating a device must not change its tier.
 
 | Tier       | Bounding box  | Serves class | IMX464 (2712×1538) output |
 |------------|---------------|--------------|---------------------------|
@@ -294,26 +271,20 @@ clamped to 1080 … 2160 — its display-resolution class — not by fitting bot
 | `Uhd2160`  | 3840×2160     | ≤ 2160       | 2712×1538 (no downsample) |
 | `Original` | unbounded     | —            | 2712×1538                 |
 
-Short-edge selection is deliberate and load-bearing. Frames are fitted to the viewport with their
-aspect ratio intact, so the usable pixels are bounded by the shorter edge in either orientation.
-Testing both edges against a 16:9 box would put a portrait 1080×2220 phone in the 4K tier — a
-2× bandwidth increase to display 1080 px of a full-resolution frame. Rotating a device must not
-change which tier it uses.
+`clamp_client_resolution` clamps per axis, but only inside `encode_rgb8_jpeg_dynamic`; tier
+selection doesn't go through it.
 
-`clamp_client_resolution` still clamps per axis, but only for `encode_rgb8_jpeg_dynamic`; tier
-selection does not go through it.
+Each tier tracks its client count (`AppState.jpeg_tier_clients`, `JpegTierClientGuard`). The
+render task encodes one payload per tier that has clients and caches it in
+`AppState.jpeg_tier_cache` (tiers that don't downsample the frame share one encode — for
+sub-4K sensors that's `Uhd2160`/`Original`). Handlers wake on `frame_ready` and write the
+cached payload — no per-client encoding — except a client that just connected or changed
+tier, which encodes once inline so its view isn't blank, then publishes that for others on
+the tier.
 
-Each tier has an `AtomicUsize` client counter in `AppState.jpeg_tier_clients`, held by a
-`JpegTierClientGuard` for the lifetime of a connection. The render task encodes one payload per
-tier that has clients and caches it in `AppState.jpeg_tier_cache`; tiers that do not downsample
-the frame share a single encode (for sub-4K sensors that collapses `Uhd2160` and `Original`).
-Handlers wake on `frame_ready` and write the cached payload — no encoding, no `spawn_blocking`.
-The exception is a client that has just connected or changed tier: it encodes once inline so the
-view is not blank until the next frame, and publishes the result for others on that tier.
-
-Frame publication is split so this stays race-free: the render task calls `begin_frame()` to claim
-the counter, stores every payload against it, then `publish_frame()` to wake clients. A woken
-client therefore never sees a counter whose payloads are still missing.
+Publication is race-free by construction: the render task calls `begin_frame()` to claim the
+counter, stores every payload against it, then `publish_frame()` to wake clients — so a woken
+client never sees a counter whose payloads are still missing.
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
@@ -338,8 +309,7 @@ methods: `display_name`, `description`, `uses_star_registration`, `supports_stac
 
 ## Full Image Processing Pipeline
 
-The image processing engine implements a comprehensive, multi-phase linear and non-linear mathematical pipeline designed
-to extract the maximum possible signal from noisy astronomical data:
+Multi-phase linear/non-linear pipeline that extracts maximum signal from noisy astronomical data:
 
 ### Phase 1: Sensor Data Acquisition & Calibration
 
@@ -352,16 +322,15 @@ Corrects for sensor imperfections:
 
 ### Frame memory layout (planar) — non-obvious and load-bearing
 
-`Frame` stores samples **plane-major**: `idx = channel * width * height + y * width + x`.
-An RGB frame is `RRR...GGG...BBB`, not `RGBRGB...`. This is what lets SIMD and spatial
-filters read a channel as a contiguous run rather than a stride-3 gather.
+`Frame` stores samples **plane-major**: `idx = channel * width * height + y * width + x`
+(`RRR...GGG...BBB`, not `RGBRGB...`) — this is what lets SIMD and spatial filters read a
+channel as a contiguous run instead of a stride-3 gather.
 
 **`Frame` is planar; every 8-bit output format is interleaved.** Crossing that boundary
-wrongly still compiles, and produces an image whose channels have collapsed toward grey
-(three adjacent samples of one channel become one output pixel). This has already
-happened once, simultaneously across `Frame::to_rgb8_fast`, `render::frame_to_rgb8`, the
-PNG preview writer, the SER writer *and* reader, and the Pro saturation and comet
-plugins — none of which the compiler or the test suite noticed.
+wrongly still compiles and produces an image whose channels collapse toward grey. This has
+already happened simultaneously across `to_rgb8_fast`, `render::frame_to_rgb8`, the PNG
+writer, the SER writer/reader, and the Pro saturation/comet plugins — none of which the
+compiler or test suite noticed.
 
 | Consumer | Layout |
 |---|---|
@@ -370,66 +339,41 @@ plugins — none of which the compiler or the test suite noticed.
 
 Rules:
 
-- Use `planes()` / `planes_mut()` / `channel_data()` / `get_pixel()`. Treat a new
-  `frame.data()` next to `* 3` or `* channels` as a review flag.
-- `planes()` and `planes_mut()` **panic** unless `channels() == 3`.
+- Use `planes()` / `planes_mut()` / `channel_data()` / `get_pixel()`. A new `frame.data()`
+  next to `* 3` or `* channels` is a review flag. `planes()`/`planes_mut()` **panic**
+  unless `channels() == 3`.
 - Build fixtures with `set_pixel`, never hand-computed offsets — a fixture that encodes
-  the layout cannot catch a layout bug, and several tests passed only because the
-  fixture and the code under test were wrong in the same way.
+  the layout can't catch a layout bug in the code under test.
 - `src/frame/layout_tests.rs` pushes distinct constant channels through every output
-  path — `to_rgb8{,_fast}`, `write_rgb8_into`, `render::frame_to_rgb8`, `render_to_rgb8`,
-  the fused encoder expansion *and* `box_downsample_to_rgb8_fused` (a separate
-  traversal — the downsampled tiers are what most clients receive), JPEG (SA10),
-  chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono` **at both 8 and 16 bits**, FITS
-  f32/u16 both directions, `downsample`, `warp_frame_into` and
-  `debayer_bilinear_to_rgb8`. Add a row when you add a format, and note that a
-  uniform-grey fixture proves nothing here: it is layout-invariant by construction.
-  `tests/integration/common.rs` provides `mean_chroma_spread_*` for asserting on real
-  fixture data — a correct colour render of the bundled fixtures scores ~32, a
-  planar-read-as-interleaved one ~0.5.
-- **One row per traversal, not per format.** `encode_8bit` and `encode_16bit` in
-  `ser/writer.rs` are separate functions with separate `Rgb`/`Bgr`/`Mono` plane
-  gathers, and for a long time only the 16-bit one had coverage — the same shape of
-  gap `box_downsample_to_rgb8_fused` had. 8-bit SER is reachable:
-  `disk_writer/worker.rs` selects it when a session's first frame is `Raw8`/`Rgb24`.
-- **8 bits round, 16 bits truncate.** Every 8-bit consumer goes through
-  `frame::sample_to_u8` (`* 255.0 + 0.5`); the 16-bit writers (SER, `write_fits_u16`)
-  truncate and agree with each other. SER's 8-bit arm had its own truncating lambda, so
-  a 0.5 channel wrote 127 there and 128 everywhere else. If you add an 8-bit output,
-  call `sample_to_u8` rather than open-coding the multiply.
-- A constant-plane fixture must be swept over the whole interior, not spot-checked. An
-  interleaved write lands sample `c * area + p` exactly where the planar read expects it
-  whenever `p % 3 == 0`, so a single-pixel assertion passes against a fully scrambled
-  buffer. Both the pro planetary warp and the simulated camera reached that state.
-- Partition rayon work with `parallel::balanced_chunk_len`, and **do not require the
-  chunk length to divide anything**. Chunking a contiguous plane by `width` is fine —
-  measured, switching `apply_scnr` to plane-sized chunks moved it 1.17 → 1.56 ms and
-  adding `with_min_len(32)` to `warp_frame` moved it 6.82 → 7.87 ms, i.e. rayon's
-  adaptive splitting already handles row granularity. What is *not* fine is deriving a
-  channel index from a flat chunk index: that forces the chunk length to divide the
-  plane size, and the divisor search it used to take cost 0.115 ms per call on a
-  2712x1538 plane, 4.9 ms on a 1999x1999 one, and collapsed to a single chunk — no
-  parallelism at all — whenever the plane size had no convenient divisor. Dispatch per
-  plane instead; see `render::black_point::subtract_black_point`.
-- **`get_pixel` in a whole-frame loop is a review flag too**, not just a correctness one.
-  It is fine for fixtures and spot checks; it is wrong for a traversal that visits every
-  sample, because planar layout has already handed you the contiguous run that makes the
-  loop a slice copy. `render::white_balance::block_medians` was the one hot consumer the
-  planar migration walked past, and it cost **120 ms per preview frame** — 90 % of a
-  pipeline whose other five stages total 15 ms — until it was rewritten onto `planes()`
-  plus one `into_par_iter` over the grid blocks (27 ms, bit-identical output). Three
-  things made it slow, none of them the layout: a per-sample `get_pixel`, three `Vec`
-  allocations per block, and no rayon at all. A controlled A/B of the same gather over
-  planar and interleaved buffers differed by 3 %, so do not reach for a cache-stride
-  explanation before checking those three.
-- **Grid-node background sampling lives in `background::grid`, and both repos use it.**
-  `GridNode`, `compute_box_size`, `extract_node_value`, `median`/`mad` and
-  `prune_nebulosity` were duplicated verbatim between Community's `background::extractor`
-  and Pro's `plugins::rbf`, both reaching pixels through `frame.data()` and a
-  hand-computed `channel * area`. They are now one `pub` module reading through
-  `channel_data`, with the thresholds the two extractors genuinely disagree about passed
-  in as `PruneConfig`. Grid *placement* is still per-crate: Community hugs the boundaries
-  for delta-stepping, Pro centres nodes in cells for the TPS solve.
+  path (raster and downsample-fused traversals, all supported bit depths and pixel
+  formats). Add a row when you add a format — a uniform-grey fixture proves nothing here,
+  it's layout-invariant by construction; use `tests/integration/common.rs`'s
+  `mean_chroma_spread_*` to assert on real fixture data instead.
+- **Cover each traversal separately, not just each format** — e.g. `ser/writer.rs`'s
+  8-bit and 16-bit encoders gather planes independently, so a gap in one's coverage
+  doesn't show up via the other.
+- **8 bits round, 16 bits truncate.** Every 8-bit consumer must go through
+  `frame::sample_to_u8` (`* 255.0 + 0.5`), never an open-coded multiply — a local
+  truncating lambda in one SER arm once disagreed with every other 8-bit path by 1 LSB.
+- Sweep constant-plane fixtures over the whole interior, not one pixel — an interleaved
+  write can land on the exact offset a planar read expects for some positions, letting a
+  spot-check pass against an otherwise-scrambled buffer.
+- Partition rayon work with `parallel::balanced_chunk_len`; **never derive a channel
+  index from a flat chunk index** — that forces the chunk length to divide the plane
+  size, which gets expensive to compute or, worse, silently collapses to a single chunk
+  (no parallelism) when it doesn't divide evenly. Dispatch per plane instead; see
+  `render::black_point::subtract_black_point`.
+- **`get_pixel` in a whole-frame loop is a review flag too, not just a correctness one.**
+  It's fine for fixtures and spot checks, but wrong for a traversal that visits every
+  sample — planar layout already hands you the contiguous run that makes the loop a slice
+  copy. `render::white_balance::block_medians` was the one hot consumer this was missed
+  in: per-sample `get_pixel`, per-block `Vec` allocations, and no rayon cost it **120 ms
+  per preview frame** (90% of the whole pipeline budget) until rewritten onto `planes()`
+  plus `into_par_iter` over grid blocks (27 ms, bit-identical output).
+- **Grid-node background sampling lives in `background::grid`**, shared by Community's
+  `background::extractor` and Pro's `plugins::rbf` (previously duplicated, each reaching
+  pixels via hand-computed offsets). Thresholds the two genuinely disagree on pass in via
+  `PruneConfig`; grid *placement* stays per-crate.
 
 ### Phase 2: Debayering (Demosaicing)
 
@@ -439,15 +383,13 @@ Converts mono Bayer pattern (CFA) data into full RGB color.
 - Bilinear Algorithm: Fast interpolation for live preview or less critical data.
 - VNG (Variable Number of Gradients): High-quality interpolation avoiding color artifacts on edge transitions.
 
-Non-obvious invariant, and the source of a fixed GRBG colour bug: at a green pixel, whether red is
-interpolated horizontally or vertically depends on the **row only, never the column**. A green pixel
-sits either in a red-and-green row or in a blue-and-green row, and its horizontal neighbours are
-whichever colour the row carries. That is why `get_rb_orientation` keys on `y & 1` alone and why RGGB
-and GRBG share an arm (as do BGGR and GBRG) despite their green pixels sitting at opposite column
-parities. Keying it on `x` too used to send GRBG's odd-row greens down a "not a green position" path
-that filled blue from the two *red* neighbours above and below — a quarter of every GRBG frame.
-`test_debayer_reproduces_constant_colour_planes` pins this against ground truth for all four
-patterns; keep it passing rather than adjusting it.
+Non-obvious invariant, source of a fixed GRBG colour bug: at a green pixel, whether red interpolates
+horizontally or vertically depends on the **row only, never the column** — a green pixel's row is
+either red-and-green or blue-and-green, and its horizontal neighbours follow from that. This is why
+`get_rb_orientation` keys on `y & 1` alone, so RGGB/GRBG share an arm (as do BGGR/GBRG) despite
+opposite green column parities; keying on `x` too used to misroute GRBG's odd-row greens, filling blue
+from red neighbours across a quarter of every frame. `test_debayer_reproduces_constant_colour_planes`
+pins this for all four patterns — keep it passing rather than adjusting it.
 
 ### Phase 3: Star Detection & Centroiding
 
