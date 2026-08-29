@@ -1,13 +1,13 @@
 import {ref, computed, watch, inject} from 'vue'
-import {updateSettings, updatePushToConfig} from './api.js'
+import {updateSettings} from './api.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 
 /**
  * Composable for telescope setup and FOV calculation.
  *
  * Manages focal length, camera sensor selection (pixel size + resolution),
- * and barlow/reducer coefficient. Computes field of view and sends it
- * to the plate solver whenever the parameters change.
+ * and barlow/reducer coefficient. Computes field of view for display and
+ * persists the parameters; the backend derives the solver's FOV hint from them.
  *
  * When a camera is connected, automatically resolves telescope settings:
  * 1. Restore stored per-camera profile if this camera was seen before
@@ -75,7 +75,7 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
         return {x: fovXDeg, y: fovYDeg}
     })
 
-    // ── Persist and send FOV to ASTAP when params change ──────────────
+    // ── Persist when params change ────────────────────────────────────
     let saveTimer = null
 
     function buildTelescopePayload() {
@@ -99,23 +99,22 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
                 cameraProfiles.value[lastCameraName.value] = {...telescope}
             }
 
+            // Posting `telescope` is all the solver needs: the backend derives the
+            // image-height FOV from these parameters itself, and prefers a FOV
+            // measured by a previous solve on this rig over any computed one.
+            //
+            // This used to also POST /push-to/config with `max(fovX, fovY)`, which
+            // overwrote that decision unconditionally a few milliseconds later. Two
+            // problems: it discarded a solved FOV in favour of a computed one, and
+            // `max(x, y)` is the *width* field on a non-square sensor while ASTAP's
+            // `-fov` wants the height. On a 2712x1538 sensor that is a 1.76x error,
+            // and a wrong FOV does not slow a hinted attempt down -- it makes it fail.
             const doSave = async () => {
                 await updateSettings({
                     telescope,
                     camera_telescope_profiles: cameraProfiles.value,
                     last_camera_name: lastCameraName.value,
                 })
-
-                // Send calculated FOV to ASTAP
-                const fov = calculatedFov.value
-                if (fov) {
-                    const fovHint = Math.max(fov.x, fov.y)
-                    try {
-                        await updatePushToConfig({fov_degrees: fovHint})
-                    } catch {
-                        // Push-to config may fail if plugin not available; ignore
-                    }
-                }
             }
 
             if (withErrorHandling) {
@@ -178,22 +177,36 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     if (connectedCameraInfo) {
         watch(
             [connectedCameraInfo, () => initialSyncDone.value],
-            ([newInfo, syncDone], [oldInfo]) => {
+            ([newInfo, syncDone], oldValues) => {
                 if (!syncDone) return
                 if (!newInfo) return
 
                 const cameraName = newInfo.name
                 if (!cameraName) return
 
-                // Use the oldInfo from the array destructuring.
-                // It will be the first element in the old values array.
-                const oldCameraName = oldInfo?.[0]?.name
+                // `oldValues` is the array of previous watch sources, so the previous
+                // camera info is its first element. Destructuring it in the parameter
+                // list and then indexing again read `cameraInfo[0]`, which is always
+                // undefined -- so the same-camera guard below never fired and the
+                // outgoing camera's profile was never saved. The whole block then
+                // re-ran on every `refreshCameras()`, re-applying driver defaults over
+                // the values that had just been restored.
+                const oldCameraName = oldValues?.[0]?.name
 
-                // Don't re-process if the same camera is re-selected
-                if (oldCameraName === cameraName) return
+                // This watcher has two triggers, and they need opposite treatment.
+                // Settings finishing their load is the *first* chance to resolve a
+                // camera that connected before them, so it must run even though the
+                // camera did not change. A camera list refresh for a camera we already
+                // resolved must not.
+                const justSynced = !oldValues?.[1]
+                if (!justSynced && oldCameraName === cameraName) return
 
-                // Save current settings as a profile for the outgoing camera
-                if (oldCameraName) {
+                // Save the outgoing camera's settings -- but only when there really is
+                // an outgoing camera. On the initial sync the "old" camera is this
+                // same one, and its current values have not been restored yet, so
+                // saving here would overwrite the stored profile with defaults and
+                // step 1 below would then restore what it had just destroyed.
+                if (oldCameraName && oldCameraName !== cameraName) {
                     saveCurrentAsProfile(oldCameraName)
                 }
 

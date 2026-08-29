@@ -7,7 +7,7 @@ use super::super::camera_session::lifecycle::camera_profile_key;
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
-use super::super::state::{AppState, CaptureState, StackingType};
+use super::super::state::{AppState, CaptureSettings, CaptureState, StackingType};
 use crate::disk_writer::WritingSessionType;
 
 /// Returns the profile key (`"{provider}/{model}"`) for the currently
@@ -39,6 +39,46 @@ pub async fn get_stacking_types() -> impl IntoResponse {
     (StatusCode::OK, ApiResponse::ok(types))
 }
 
+/// Which Push-To-relevant inputs a settings update actually changes.
+///
+/// Deliberately about *change*, not presence. The frontend posts the whole telescope
+/// block on every debounced save, so testing `is_some()` fired on saves that changed
+/// nothing — and since these flags now abort and restart a plate solve, an ordinary
+/// settings write could kill a solve the user was waiting on. The field log for
+/// 2026-08-22 has settings updates arriving ten to a minute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OpticsChange {
+    /// Telescope optics (focal length, pixel size, sensor dimensions, barlow).
+    pub telescope: bool,
+    /// Framing: binning or sensor mode. Both change the effective field of view
+    /// without touching the telescope block.
+    pub framing: bool,
+}
+
+impl OpticsChange {
+    /// Whether anything that invalidates a plate solve changed.
+    pub fn any(&self) -> bool {
+        self.telescope || self.framing
+    }
+}
+
+/// Compare a settings request against the settings currently in force.
+pub fn optics_change(request: &UpdateSettingsRequest, current: &CaptureSettings) -> OpticsChange {
+    let bin_changed = request.bin.is_some_and(|b| b != current.bin);
+    let sensor_mode_changed = request
+        .sensor_mode_override
+        .as_ref()
+        .is_some_and(|m| Some(m) != current.sensor_mode_override.as_ref());
+
+    OpticsChange {
+        telescope: request
+            .telescope
+            .as_ref()
+            .is_some_and(|t| *t != current.telescope),
+        framing: bin_changed || sensor_mode_changed,
+    }
+}
+
 /// POST /api/settings
 ///
 /// Update capture settings
@@ -57,7 +97,7 @@ pub async fn update_settings(
         }
     }
 
-    let telescope_updated = request.telescope.is_some();
+    let optics = optics_change(&request, &*state.settings.read().await);
     let cooler_fields_changed = request.cooler_enabled.is_some()
         || request.target_temp_c.is_some()
         || request.cooler_fast_mode.is_some();
@@ -297,13 +337,17 @@ pub async fn update_settings(
     }
 
     // Propagate telescope settings to plate solver for FOV calculation
-    if telescope_updated {
+    if optics.telescope {
         let telescope = state.settings.read().await.telescope.clone();
         let _ = PushToService::set_telescope_settings(&state, telescope).await;
     }
 
-    if telescope_updated || request.bin.is_some() || request.sensor_mode_override.is_some() {
-        let _ = PushToService::cancel_solve(&state).await;
+    // Anything that changes the field of view invalidates a solve in flight — it was
+    // planned against the old optics — and equally invalidates the cached pointing.
+    // Restart rather than cancel: a bare cancel leaves the star field unchanged, so
+    // the movement detector reports `Idle` forever after and nothing re-solves.
+    if optics.any() {
+        let _ = PushToService::restart_solve(&state, "Equipment settings changed").await;
     }
 
     // Persist settings to disk

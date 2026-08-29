@@ -2,15 +2,16 @@
 //!
 //! Service layer for plate solving and telescope navigation guidance.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::{Duration, Instant};
 
 use super::super::dto::{
     CatalogEntryResponse, CoordinateResponse, PushToDirectionResponse, PushToStatusResponse,
 };
 use super::super::events::ServerEvent;
 use super::super::state::{AppState, TelescopeSettings};
-use crate::push_to::{PushToError, PUSH_TO_PLUGIN};
+use crate::push_to::{PushToBlocker, PushToError, PUSH_TO_PLUGIN};
 
 /// Push-To navigation service
 pub struct PushToService;
@@ -39,18 +40,41 @@ impl PushToService {
         }
     }
 
-    /// Cancel current plate solving process
-    pub async fn cancel_solve(state: &AppState) -> Result<(), String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            let result = plugin.cancel_solve().await.map_err(|e| e.to_string());
-            // Clear solving status on frontend immediately
-            let _ = state
-                .events
-                .send(ServerEvent::position_solve_failed("Cancelled by user"));
-            result
-        } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+    /// Cancel the current plate solving process.
+    ///
+    /// The event is sent only when a solve was actually in flight. Announcing an
+    /// unconditional `PositionSolveFailed` meant every settings save that touched
+    /// the telescope block rendered as "Failed to find M31" in the status bar, and
+    /// a cancel is not a failure in any case — reporting it as one made a still-good
+    /// last position look untrustworthy.
+    pub async fn cancel_solve(state: &AppState) -> Result<bool, String> {
+        let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) else {
+            return Err("Push-To navigation requires Night Amplifier Pro".to_string());
+        };
+
+        let was_solving = plugin.cancel_solve().await.map_err(|e| e.to_string())?;
+        if was_solving {
+            let _ = state.events.send(ServerEvent::plate_solving_cancelled());
         }
+        Ok(was_solving)
+    }
+
+    /// Abandon any solve in flight and arm a fresh one.
+    ///
+    /// For changes that invalidate the solve rather than the pointing — focal length,
+    /// sensor, binning. A bare cancel is not enough: the star field has not changed,
+    /// so the movement detector would report `Idle` on every later frame and nothing
+    /// would ever re-solve against the new optics.
+    pub async fn restart_solve(state: &AppState, reason: &str) -> Result<(), String> {
+        let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) else {
+            return Ok(()); // No plugin available; nothing to restart.
+        };
+
+        plugin.restart_solve().await.map_err(|e| e.to_string())?;
+        let _ = state
+            .events
+            .send(ServerEvent::plate_solving_restarted(reason));
+        Ok(())
     }
 
     /// Search the catalog
@@ -85,7 +109,7 @@ impl PushToService {
     ) -> Result<CatalogEntryResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_name(name).await?;
-            state.set_push_to_has_target(true).await;
+            state.push_to_target_changed(true).await;
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
                 Some(result.designation.clone()),
@@ -106,7 +130,7 @@ impl PushToService {
     ) -> Result<CoordinateResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
-            state.set_push_to_has_target(true).await;
+            state.push_to_target_changed(true).await;
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
                 Some(result.ra_string.clone() + " " + &result.dec_string),
@@ -128,7 +152,7 @@ impl PushToService {
             // the plugin holding the target, and claiming otherwise would stop
             // plate solving for a target that is still set.
             if result.is_ok() {
-                state.set_push_to_has_target(false).await;
+                state.push_to_target_changed(false).await;
             }
             let _ = state.events.send(ServerEvent::target_cleared());
             result
@@ -181,17 +205,123 @@ impl PushToService {
 /// whether a plate solve is worth preparing a frame for without awaiting the
 /// plugin's own locks.
 ///
-/// Both fields are caches, not the source of truth — the plugin is. They exist
-/// only to keep `capture::solving::plate_solve_available` synchronous and cheap;
-/// every consequential check is repeated against the plugin inside
+/// The first two fields are caches, not the source of truth — the plugin is. They
+/// exist only to keep `capture::solving::plate_solve_available` synchronous and
+/// cheap; every consequential check is repeated against the plugin inside
 /// `try_plate_solve`. Write `has_target` through
 /// [`AppState::set_push_to_has_target`].
+///
+/// The last two are event de-duplication state, owned here because they are about
+/// what this server has already told its clients, which the plugin has no view of.
 #[derive(Default)]
 pub struct PushToState {
-    /// Latch owned by `try_plate_solve`: set before a solve is spawned, cleared
-    /// when it finishes. Nothing else may write it.
-    pub solving_in_progress: bool,
+    /// Latch owned by `try_plate_solve`: raised before a solve is spawned, cleared
+    /// when it finishes.
+    ///
+    /// An `Arc<AtomicBool>` rather than a plain field so [`SolveLatch`] can release
+    /// it from `Drop`. As a plain field it was a set/clear pair straddling an
+    /// `.await`, and any panic in between left it raised for the life of the
+    /// process — with plate solving silently dead from that point on.
+    solving: Arc<AtomicBool>,
+    /// When a frame was last offered to the solver — see
+    /// [`PushToState::try_begin_solve`].
+    last_attempt: std::sync::Mutex<Option<Instant>>,
     /// Whether the plugin currently holds a target. Written by the target
     /// mutations in [`PushToService`] and re-synced from `try_plate_solve`.
     pub has_target: bool,
+    /// Last push direction announced to clients, rounded — see
+    /// [`PushToState::direction_is_news`].
+    last_direction_key: Option<DirectionKey>,
+    /// Last blocker announced to clients. The outer `Option` distinguishes "never
+    /// reported" from "reported that nothing is blocking".
+    last_blocker: Option<Option<PushToBlocker>>,
+}
+
+/// A push direction rounded to the precision a person can act on.
+///
+/// Rounded rather than compared exactly because the direction is recomputed from
+/// floating-point spherical geometry every frame: bit-identical values are not
+/// guaranteed even when nothing has changed, and a de-duplication that compares
+/// exactly would let the spam straight back through.
+type DirectionKey = (i64, i64, bool);
+
+impl PushToState {
+    /// Whether a solve is running right now.
+    pub fn is_solving(&self) -> bool {
+        self.solving.load(Ordering::SeqCst)
+    }
+
+    /// Claim the solve slot, or `None` if one is already running or the previous
+    /// offer was too recent.
+    ///
+    /// The compare-and-swap is what makes this a claim rather than a check followed
+    /// by a set: two frames arriving together would both pass a bare read.
+    ///
+    /// `min_interval` bounds the cost of the movement check. Every offered frame runs
+    /// a full sensitive star detection over the whole sensor — 3008x3008x3 in the
+    /// field log — purely to decide whether the view has changed, and the answer is
+    /// almost always "no". At the ~1 fps of a deep-sky session this changes nothing;
+    /// it stops a short-exposure run from paying that per frame.
+    pub fn try_begin_solve(&self, now: Instant, min_interval: Duration) -> Option<SolveLatch> {
+        if let Some(previous) = *self.last_attempt.lock().unwrap() {
+            if now.saturating_duration_since(previous) < min_interval {
+                return None;
+            }
+        }
+
+        let latch = self
+            .solving
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| SolveLatch(Arc::clone(&self.solving)))?;
+
+        *self.last_attempt.lock().unwrap() = Some(now);
+        Some(latch)
+    }
+
+    /// Whether this direction differs from the last one announced, updating the
+    /// record if it does.
+    ///
+    /// Push direction only really changes when the position or the target changes,
+    /// but it was recomputed and broadcast on every captured frame regardless — one
+    /// WebSocket message per frame per client, saying the same thing.
+    pub fn direction_is_news(&mut self, angle_deg: f64, distance_deg: f64, is_close: bool) -> bool {
+        let key = (
+            (angle_deg * 10.0).round() as i64,
+            (distance_deg * 1000.0).round() as i64,
+            is_close,
+        );
+        if self.last_direction_key == Some(key) {
+            return false;
+        }
+        self.last_direction_key = Some(key);
+        true
+    }
+
+    /// Forget the last announced direction, so the next one is sent even if it is
+    /// numerically identical. Used when the target changes: the arrow means something
+    /// different now even when it points the same way.
+    pub fn forget_direction(&mut self) {
+        self.last_direction_key = None;
+    }
+
+    /// Whether this blocker differs from the last one announced, updating the record
+    /// if it does. Keeps the "why is nothing happening" notice to one event per
+    /// transition instead of one per frame.
+    pub fn blocker_is_news(&mut self, blocker: Option<PushToBlocker>) -> bool {
+        if self.last_blocker == Some(blocker) {
+            return false;
+        }
+        self.last_blocker = Some(blocker);
+        true
+    }
+}
+
+/// Holds the solve latch raised for as long as it lives.
+pub struct SolveLatch(Arc<AtomicBool>);
+
+impl Drop for SolveLatch {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }

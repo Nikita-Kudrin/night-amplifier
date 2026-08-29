@@ -137,6 +137,24 @@ pub enum ServerEvent {
     /// Position solve failed
     PositionSolveFailed { reason: String },
 
+    /// A solve in flight was abandoned on request.
+    ///
+    /// Separate from [`ServerEvent::PositionSolveFailed`] because the two mean
+    /// opposite things to the user: a failure says the sky could not be matched,
+    /// a cancel says "you asked me to stop". Reporting a cancel as a failure also
+    /// left the last known position looking untrustworthy when it was still good.
+    PlateSolvingCancelled,
+
+    /// A solve was abandoned and will be retried, because something it depended on
+    /// changed (telescope optics, binning, sensor mode).
+    PlateSolvingRestarted { reason: String },
+
+    /// Plate solving cannot run, and why.
+    ///
+    /// Emitted only when the reason changes, so it costs nothing per frame. `reason`
+    /// is `None` once solving is possible again, which clears the notice.
+    PushToBlocked { reason: Option<String> },
+
     /// Push direction updated
     PushDirectionUpdated {
         angle_deg: f64,
@@ -434,6 +452,20 @@ impl ServerEvent {
         ServerEvent::PositionSolveFailed {
             reason: reason.into(),
         }
+    }
+
+    pub fn plate_solving_cancelled() -> Self {
+        ServerEvent::PlateSolvingCancelled
+    }
+
+    pub fn plate_solving_restarted(reason: impl Into<String>) -> Self {
+        ServerEvent::PlateSolvingRestarted {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn push_to_blocked(reason: Option<String>) -> Self {
+        ServerEvent::PushToBlocked { reason }
     }
 
     pub fn push_direction_updated(

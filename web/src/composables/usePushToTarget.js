@@ -1,4 +1,4 @@
-import {ref, onMounted} from 'vue'
+import {computed, ref, onMounted} from 'vue'
 import {
     getPushToStatus,
     setTargetByName,
@@ -20,7 +20,15 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
     const currentTarget = eventStream?.currentTarget || ref(null)
     const pushDirection = eventStream?.pushDirection || ref(null)
     const currentPosition = ref(null)
-    const isSolving = ref(false)
+
+    // Seeded from the status poll on mount, then owned by the event stream. As a
+    // plain ref it was only ever written by that one poll and by cancelSolve(), so
+    // it was false for the entire life of the page: the panel's spinner and its
+    // Cancel button never appeared, no matter how long a solve ran.
+    const solvingAtMount = ref(false)
+    const isSolving = eventStream?.plateSolving
+        ? computed(() => eventStream.plateSolving.value?.inProgress ?? solvingAtMount.value)
+        : solvingAtMount
 
     async function refreshStatus() {
         try {
@@ -39,7 +47,7 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             } else {
                 pushDirection.value = null
             }
-            isSolving.value = status.is_solving
+            solvingAtMount.value = status.is_solving
         } catch {
             // Ignore - push-to may not be initialized
         }
@@ -94,7 +102,9 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
     async function cancelSolve() {
         const execute = async () => {
             await apiCancelSolve()
-            isSolving.value = false
+            solvingAtMount.value = false
+            // The server also broadcasts `plate_solving_cancelled`, but clearing here
+            // keeps the button from lingering for a round trip.
             if (eventStream?.clearPlateSolving) {
                 eventStream.clearPlateSolving()
             }

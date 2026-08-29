@@ -188,7 +188,11 @@ impl CameraCaptureProfile {
 }
 
 /// Telescope and camera parameters for FOV calculation
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+///
+/// `PartialEq` so callers can act on a telescope block that actually *changed*
+/// rather than one that was merely present in the request. Every field feeds the
+/// FOV, so any difference matters and a whole-struct comparison is the right test.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub struct TelescopeSettings {
     /// Telescope focal length in mm
     #[serde(default)]

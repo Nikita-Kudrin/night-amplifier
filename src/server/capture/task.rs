@@ -284,6 +284,11 @@ pub async fn run_capture_loop(
     // End capture session
     state.disk_writer.end_session();
 
+    // A plate solve runs on a detached task and can outlive the frame it was given
+    // by minutes. Left alone it keeps the solve latch raised, so the *next* capture
+    // session cannot solve either.
+    super::solving::abandon_solve_on_shutdown(&state).await;
+
     info!(camera_id = %camera_id, "Capture pipeline ended");
 
     // Return the camera handle to the session (or finalize disconnect if lost).

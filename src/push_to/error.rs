@@ -17,6 +17,16 @@ pub enum PushToError {
     #[error("Plate solve failed: {0}")]
     SolveFailed(String),
 
+    /// The solve was abandoned on request, not because it could not find the field.
+    ///
+    /// Kept distinct from [`PushToError::SolveFailed`] because the two demand opposite
+    /// responses: a failure means the cached position is stale and the solver should
+    /// try again, while a cancel means the user asked it to stop — the cached position
+    /// is still the best thing known, and re-solving on the next frame would make the
+    /// cancel button do nothing.
+    #[error("Plate solve cancelled")]
+    Cancelled,
+
     #[error("Not enough stars for plate solving (found {found}, need {required})")]
     NotEnoughStars { found: usize, required: usize },
 

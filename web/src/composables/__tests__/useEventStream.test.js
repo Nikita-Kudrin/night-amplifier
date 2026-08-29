@@ -374,5 +374,79 @@ describe('useEventStream', () => {
             expect(plateSolving.value.inProgress).toBe(false)
             expect(plateSolving.value.targetName).toBe(null)
         })
+
+        it('reports a cancel as a cancel, not as a failure', async () => {
+            // The server used to answer every cancel with `position_solve_failed`, so
+            // an ordinary settings save rendered as "Failed to find M31" and made a
+            // still-good last position look untrustworthy.
+            const {plateSolving, solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            expect(plateSolving.value.inProgress).toBe(true)
+
+            await sendEvent({type: 'plate_solving_cancelled'})
+
+            expect(plateSolving.value.inProgress).toBe(false)
+            expect(plateSolving.value.lastResult).toBe('cancelled')
+            expect(solvingMessage.value).toBe('Solving cancelled')
+        })
+
+        it('surfaces why Push-To is idle', async () => {
+            // Every one of these branches used to be a `debug!` and a silent return,
+            // which is exactly what "I installed ASTAP and nothing happens" looked
+            // like from the outside.
+            const {pushToBlocked, solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({
+                type: 'push_to_blocked',
+                reason: 'ASTAP or its star database is not installed',
+            })
+
+            expect(pushToBlocked.value).toBe('ASTAP or its star database is not installed')
+            expect(solvingMessage.value).toBe('ASTAP or its star database is not installed')
+        })
+
+        it('clears the blocked notice once solving resumes', async () => {
+            const {pushToBlocked} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'push_to_blocked', reason: 'No target selected'})
+            expect(pushToBlocked.value).toBe('No target selected')
+
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            expect(pushToBlocked.value).toBe(null)
+        })
+
+        it('clears the blocked notice when the server says nothing is blocking', async () => {
+            const {pushToBlocked} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'push_to_blocked', reason: 'No target selected'})
+            await sendEvent({type: 'push_to_blocked', reason: null})
+
+            expect(pushToBlocked.value).toBe(null)
+        })
+
+        it('shows solving again after an equipment change restarts it', async () => {
+            // Issue 3: an equipment change aborts the solve in flight. The UI must not
+            // be left showing a stale result for a solve that no longer applies.
+            const {plateSolving} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'position_solve_failed', reason: 'no match'})
+            expect(plateSolving.value.lastResult).toBe('failed')
+
+            await sendEvent({
+                type: 'plate_solving_restarted',
+                reason: 'Equipment settings changed',
+            })
+            expect(plateSolving.value.lastResult).toBe(null)
+
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            expect(plateSolving.value.inProgress).toBe(true)
+        })
     })
 })
