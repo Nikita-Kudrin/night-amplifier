@@ -18,6 +18,7 @@ import {
   AUTO_STRETCH_INTENSITY,
   BLACK_LEVEL_LIMITS,
     BLACK_FLOOR_LIMITS,
+  HOT_PIXEL_SIGMA_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
   WEIGHTING_PRESET_OPTIONS,
@@ -84,6 +85,9 @@ watch(
           eyepiece: newSettings.eyepiece
               ? {...newSettings.eyepiece}
               : {...DEFAULT_SETTINGS.eyepiece},
+          sensor_correction: newSettings.sensor_correction
+              ? {...newSettings.sensor_correction}
+              : {...DEFAULT_SETTINGS.sensor_correction},
         }
       }
     },
@@ -108,6 +112,10 @@ function formatPercent(v) {
   return `${(v * 100).toFixed(0)}%`
 }
 
+function formatSigma(v) {
+  return `${v.toFixed(1)}\u03c3`
+}
+
 const HELP = HELP_TEXTS
 </script>
 
@@ -119,6 +127,56 @@ const HELP = HELP_TEXTS
 
     <CoolerControl/>
     <DewHeaterControl/>
+
+    <!-- Sensor corrections: applied to the raw mosaic, before demosaic -->
+    <div class="settings-section">
+      <h3 class="section-title">Sensor</h3>
+
+      <div class="control-group" style="margin-top: 0.5rem">
+        <BaseToggle
+            v-model="localSettings.sensor_correction.hot_pixel_rejection"
+            label="Hot Pixel Rejection"
+            :help="HELP.hot_pixel_rejection"
+            @update:model-value="applySetting('sensor_correction', localSettings.sensor_correction)"
+        />
+      </div>
+
+      <div
+          v-if="localSettings.sensor_correction.hot_pixel_rejection"
+          class="control-group"
+          style="margin-bottom: 1.5rem"
+      >
+        <BaseSlider
+            v-model="localSettings.sensor_correction.hot_pixel_sigma"
+            label="Detection threshold"
+            large-gap
+            :min="HOT_PIXEL_SIGMA_LIMITS.min"
+            :max="HOT_PIXEL_SIGMA_LIMITS.max"
+            :step="HOT_PIXEL_SIGMA_LIMITS.step"
+            :format-value="formatSigma"
+            :help="HELP.hot_pixel_sigma"
+            @change="applySetting('sensor_correction', localSettings.sensor_correction)"
+        />
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.sensor_correction.fpn_removal"
+            label="Row/Column Pattern Removal"
+            :help="HELP.fpn_removal"
+            @update:model-value="applySetting('sensor_correction', localSettings.sensor_correction)"
+        />
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.sensor_correction.superpixel_debayer"
+            label="Superpixel Debayer"
+            :help="HELP.superpixel_debayer"
+            @update:model-value="applySetting('sensor_correction', localSettings.sensor_correction)"
+        />
+      </div>
+    </div>
 
     <!-- Processing settings -->
     <div class="settings-section">

@@ -84,6 +84,8 @@ pub struct CaptureSettings {
     /// same mode, same settings, same stack. Without this the camera comes
     /// back but the session does not.
     pub auto_resume_capture: bool,
+    /// Corrections applied to the raw sensor mosaic, before demosaic
+    pub sensor_correction: SensorCorrectionSettings,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -214,6 +216,58 @@ pub struct TelescopeSettings {
     pub barlow_coeff: Option<f32>,
 }
 
+/// Corrections that run on the raw CFA mosaic, before demosaic.
+///
+/// These target the defects stacking cannot remove: a hot pixel and a readout
+/// offset are in the same place in every sub, so averaging frames leaves them
+/// exactly where they were. Both are only well defined on the mosaic — after
+/// demosaic a hot site has already been smeared into a coloured 3x3 cross, and
+/// neighbouring sensor rows have been mixed together.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SensorCorrectionSettings {
+    /// Replace isolated hot samples with their same-colour neighbourhood mean.
+    #[serde(default = "default_hot_pixel_rejection")]
+    pub hot_pixel_rejection: bool,
+    /// How far above its brightest same-colour neighbour a sample must sit to
+    /// count as hot, in sigmas of that colour site's own noise.
+    #[serde(default = "default_hot_pixel_sigma")]
+    pub hot_pixel_sigma: f32,
+    /// Flatten per-row and per-column readout offsets.
+    #[serde(default = "default_fpn_removal")]
+    pub fpn_removal: bool,
+    /// Bin each 2x2 CFA quad to one RGB pixel instead of interpolating.
+    ///
+    /// Halves both dimensions. Free on a sensor that oversamples the eyepiece
+    /// screen (IMX533's 3008² becomes 1504², still above 1440²) and a real loss
+    /// on one that does not (IMX464 lands at 1356x769), which is why it is off
+    /// by default.
+    #[serde(default)]
+    pub superpixel_debayer: bool,
+}
+
+fn default_hot_pixel_rejection() -> bool {
+    true
+}
+
+fn default_hot_pixel_sigma() -> f32 {
+    5.0
+}
+
+fn default_fpn_removal() -> bool {
+    true
+}
+
+impl Default for SensorCorrectionSettings {
+    fn default() -> Self {
+        Self {
+            hot_pixel_rejection: default_hot_pixel_rejection(),
+            hot_pixel_sigma: default_hot_pixel_sigma(),
+            fpn_removal: default_fpn_removal(),
+            superpixel_debayer: false,
+        }
+    }
+}
+
 /// Settings specifically for the eyepiece view feature
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EyepieceSettings {
@@ -320,6 +374,7 @@ impl Default for CaptureSettings {
             wanderer_mode: false,
             auto_reconnect: true,
             auto_resume_capture: true,
+            sensor_correction: SensorCorrectionSettings::default(),
             eyepiece: EyepieceSettings::default(),
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),

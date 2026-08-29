@@ -81,6 +81,15 @@ export const BLACK_FLOOR_LIMITS = {
     default: 0.04,
 }
 
+// How far above its brightest same-colour neighbour a sample must sit to be
+// treated as a hot pixel
+export const HOT_PIXEL_SIGMA_LIMITS = {
+    min: 3.0,
+    max: 12.0,
+    step: 0.5,
+    default: 5.0,
+}
+
 // Simulated camera preload limits
 export const SIMULATED_PRELOAD_LIMITS = {
     min: 1,
@@ -201,6 +210,12 @@ export const DEFAULT_SETTINGS = {
     cooler_enabled: false,
     target_temp_c: null,
     cooler_fast_mode: false,
+    sensor_correction: {
+        hot_pixel_rejection: true,
+        hot_pixel_sigma: 5.0,
+        fpn_removal: true,
+        superpixel_debayer: false,
+    },
     eyepiece: {
         binoview: true,
         screen_width: 140.0,
@@ -272,6 +287,14 @@ export const HELP_TEXTS = {
         'Darkens the background sky for OLED screens and pulls up the contrast of objects. Higher values also push more of the sky\'s noise below black, so the background looks smoother.',
     eyepiece_black_floor:
         'Keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise this if the background looks grainy with hard black dots; lower it for maximum contrast.',
+    hot_pixel_rejection:
+        'Replaces isolated bright pixels on the raw sensor mosaic — the coloured dots scattered through the background. They sit in the same place in every frame, so stacking never removes them. Only a pixel far brighter than its own neighbours is touched, so stars are left alone.',
+    hot_pixel_sigma:
+        'How far above its brightest neighbour a pixel must sit to count as hot. Lower catches more dots but risks the faintest stars; raise it if stars look softer or the count drops.',
+    fpn_removal:
+        'Flattens the small brightness offset every sensor row and column reads out with. Like hot pixels it does not average away with more frames, and on a drifting mount it shows up as soft banding. Not applied to planetary targets, where a bright disc fills enough of each line to move its level.',
+    superpixel_debayer:
+        'Turns each 2x2 sensor square into one colour pixel instead of interpolating. Halves the width and height, invents no colour noise, and keeps any surviving hot pixel to a single dot. Free on a large sensor that already oversamples your screen; a real loss of detail on a smaller one.',
     eyepiece_dither:
         'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
     auto_stretch_intensity:

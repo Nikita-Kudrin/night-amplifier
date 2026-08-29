@@ -135,7 +135,8 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 |-------------------------------|--------------------------------------------------------------------------------------|
 | `frame/`                      | `Frame` with normalized f32 pixels; format conversion                                |
 | `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
-| `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG                                       |
+| `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG + Superpixel                          |
+| `cfa/`                        | Raw-CFA stage run before demosaic: hot pixels, row/column FPN                        |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
@@ -350,6 +351,51 @@ Corrects for sensor imperfections:
   `calibrated = (raw - dark) / flat`.
 - Applies math purely in 32-bit floating-point precision.
 
+### The raw-CFA stage (`cfa/`) — where pre-demosaic corrections live
+
+Every provider used to debayer inside its capture shim, so the first thing any pipeline
+code saw was already RGB and there was nowhere to put a correction that is only defined on
+the mosaic. `RawFrame::to_cfa_frame` now yields a `CfaFrame` — still mosaiced for a colour
+sensor — and the **stacking task** owns the demosaic, after running a `CfaPipeline` over it.
+`RawFrame::to_frame` is kept as `to_cfa_frame` + an empty pipeline + a bilinear demosaic,
+which is the pre-seam behaviour; `the_raw_stage_with_no_registered_corrections_is_bit_identical`
+pins the two together.
+
+Three corrections need this seam, and `Calibration` / `MasterDark` / `MasterFlat` are the
+reason it exists at all — they are fully implemented and still have no call sites in
+`src/server/`, because `(raw - dark) / flat` is defined on raw samples. It lands as one more
+`Box<dyn CfaStage>`.
+
+- **Both filters work one colour site at a time.** `CfaFrame::planes()` describes the
+  sub-lattice: four sites at `step` 2 for a Bayer mosaic, one at `step` 1 for mono, so
+  neither filter needs a separate mono path. Mixing sites is the bug this prevents — an R
+  sample and the B sample beside it sit at different levels, so a filter that treats them
+  as neighbours reads the mosaic itself as signal.
+- **`cfa::hot_pixels` is one-sided *and* isolation-gated, multiplicatively.** The plain
+  `centre - max(8 neighbours) > tau` form still clips the core of a bright star: 38 % of a
+  200-sigma peak is 76 sigma. What separates a defect from a PSF regardless of brightness
+  is the *fraction* of the centre's amplitude its brightest neighbour carries — a star keeps
+  60 % or more one sample out, sky beside a hot pixel keeps a few per cent. Max-of-eight
+  rather than a median-of-9 sorting network: the brightest neighbour *is* the second-brightest
+  of the 3x3 whenever the centre is the brightest, which is the only case the filter acts on.
+  No de-interleave into planar buffers either — row triples `step` apart with stride-`step`
+  reads hit the same cache lines without two 36 MB copies per frame.
+- **`cfa::fpn` levels each row then each column against the median of the line medians**,
+  not against a whole-site median: offsets built that way sum to zero, so the correction
+  cannot shift the frame's overall level and change what the autostretch solves for.
+  It is **skipped for `StackingType::Planetary`** — a lunar disc fills enough of each line
+  to move its level, and flattening that carves bands across the disc.
+  On the IMX533 fixture it subtracts ~5.8 ADU RMS per row and ~6.2 per column, matching the
+  measured excess; `cfa_tests` reports how much of that is genuinely line-to-line (about a
+  quarter of the row figure, and none of the column figure) versus smooth structure.
+- Detection is separated from application in both filters, so a corrected sample never feeds
+  the test for one of its neighbours and the result does not depend on how rayon split the rows.
+
+`server::capture::pipeline::{build_cfa_pipeline, debayer_algorithm, convert_captured_frame}`
+own the settings-to-stages mapping; `cfa/` itself knows nothing about `CaptureSettings`. The
+probe frame in `task.rs` sizes the pipeline's channels through the *same* call, because
+superpixel debayering changes the frame size by 4x.
+
 ### Frame memory layout (planar) — non-obvious and load-bearing
 
 `Frame` stores samples **plane-major**: `idx = channel * width * height + y * width + x`
@@ -450,6 +496,12 @@ Converts mono Bayer pattern (CFA) data into full RGB color.
 - Auto-detects patterns (RGGB, BGGR, GRBG, GBRG).
 - Bilinear Algorithm: Fast interpolation for live preview or less critical data.
 - VNG (Variable Number of Gradients): High-quality interpolation avoiding color artifacts on edge transitions.
+- Superpixel: one RGB pixel per 2x2 quad, at half the width and height. Interpolates nothing,
+  so it invents no chroma noise and keeps a surviving hot sample inside one output pixel.
+  Opt-in (`sensor_correction.superpixel_debayer`) because it is free only on a sensor that
+  already oversamples the display — IMX533's 3008² lands at 1504², above a 1440² eyepiece
+  screen; IMX464's 2712x1538 lands at 1356x769, below it. It is a **separate traversal** from
+  the two interpolating kernels, so `layout_tests` carries its own row for it.
 
 Non-obvious invariant, source of a fixed GRBG colour bug: at a green pixel, whether red interpolates
 horizontally or vertically depends on the **row only, never the column** — a green pixel's row is

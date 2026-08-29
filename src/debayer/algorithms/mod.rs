@@ -4,9 +4,11 @@
 //! Bayer pattern data to RGB images.
 
 mod bilinear;
+mod superpixel;
 mod vng;
 
 pub use bilinear::{debayer_bilinear, debayer_bilinear_to_rgb8};
+pub use superpixel::debayer_superpixel;
 pub use vng::debayer_vng;
 
 use crate::debayer::CfaPattern;

@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
-use super::state::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
+use super::state::{
+    CameraCaptureProfile, CaptureSettings, EyepieceSettings, SensorCorrectionSettings,
+    TelescopeSettings,
+};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
@@ -85,6 +88,8 @@ pub struct PersistedSettings {
     // contain the key; serde ignores it, and Pro relearns the FOV on its first solve.
     #[serde(default)]
     pub eyepiece: EyepieceSettings,
+    #[serde(default)]
+    pub sensor_correction: SensorCorrectionSettings,
     #[serde(default)]
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -206,6 +211,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
             wanderer_mode: settings.wanderer_mode,
             eyepiece: settings.eyepiece.clone(),
+            sensor_correction: settings.sensor_correction.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
@@ -256,6 +262,7 @@ impl From<PersistedSettings> for CaptureSettings {
             planetary_multi_point_alignment: persisted.planetary_multi_point_alignment,
             wanderer_mode: persisted.wanderer_mode,
             eyepiece: persisted.eyepiece,
+            sensor_correction: persisted.sensor_correction,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
             camera_profiles: persisted.camera_profiles,

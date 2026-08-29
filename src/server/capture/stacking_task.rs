@@ -2,8 +2,10 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, info};
 
+use crate::cfa::CfaPipeline;
+use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
-use crate::server::state::{AppState, StackingType};
+use crate::server::state::{AppState, SensorCorrectionSettings, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -41,6 +43,15 @@ pub fn run_stacking_task(
     let mut was_stacking_enabled = false;
     let mut last_stacking_type = StackingType::DeepSky;
 
+    // The raw-CFA stage, rebuilt only when what it is derived from moves: a stage
+    // may own precomputed state, so it must not be reconstructed per frame. The
+    // key carries `stacking_type` as well as the correction settings because the
+    // FPN stage is gated on it — switching to Planetary has to drop that stage
+    // even though no sensor setting changed.
+    let mut cfa_stage_key: Option<(SensorCorrectionSettings, StackingType)> = None;
+    let mut cfa_pipeline = CfaPipeline::new();
+    let mut debayer = DebayerAlgorithm::Bilinear;
+
     while let Ok(msg) = stacking_rx.recv() {
         let CapturedFrame {
             frame: raw_frame,
@@ -49,10 +60,29 @@ pub fn run_stacking_task(
             camera_info,
         } = msg;
 
-        // Perform debayering/conversion in the stacking task to keep the camera thread responsive
+        let stage_key = (settings.sensor_correction.clone(), settings.stacking_type);
+        if cfa_stage_key.as_ref() != Some(&stage_key) {
+            cfa_stage_key = Some(stage_key);
+            cfa_pipeline = pipeline::build_cfa_pipeline(&settings);
+            debayer = pipeline::debayer_algorithm(&settings);
+            info!(
+                stages = ?cfa_pipeline.stage_names(),
+                ?debayer,
+                stacking_type = ?settings.stacking_type,
+                "Raw-CFA stage configured"
+            );
+        }
+
+        // Decode, correct on the mosaic, then debayer — all in the stacking task
+        // so the camera thread stays free to start the next exposure.
         let frame = {
             let _span = tracing::info_span!("frame_conversion").entered();
-            match raw_frame.to_frame(&camera_info.info) {
+            match pipeline::convert_captured_frame(
+                &raw_frame,
+                &camera_info.info,
+                &cfa_pipeline,
+                debayer,
+            ) {
                 Ok(f) => Arc::new(f),
                 Err(e) => {
                     tracing::warn!(error = %e, "Frame conversion failed");

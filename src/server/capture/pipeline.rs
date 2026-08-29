@@ -2,9 +2,65 @@ use tracing::{debug, info, instrument, warn};
 
 use super::context::{PlanetaryStackingContext, StackingContext};
 use crate::background::{subtract_background_with_config, BackgroundConfig};
+use crate::camera::{CameraInfo, CameraResult, RawFrame};
+use crate::cfa::{CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
+use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
 use crate::server::state::CaptureSettings;
 use crate::stacking::{CometContext, COMET_PLUGIN};
+
+/// The raw-CFA stage for the current settings.
+///
+/// Built when settings change rather than per frame — a stage may own
+/// precomputed state, and a master dark will be the first that does.
+pub fn build_cfa_pipeline(settings: &CaptureSettings) -> CfaPipeline {
+    let correction = &settings.sensor_correction;
+    let mut pipeline = CfaPipeline::new();
+
+    // Hot pixels first: a column carrying hundreds of them would otherwise drag
+    // its own median, and the FPN correction would spread that across the column.
+    if correction.hot_pixel_rejection {
+        pipeline = pipeline.with_stage(Box::new(HotPixelFilter::new(HotPixelConfig {
+            sigma: correction.hot_pixel_sigma,
+            ..HotPixelConfig::default()
+        })));
+    }
+    // Not for planetary: the correction assumes each sensor line is mostly sky,
+    // so its level measures readout rather than signal. A lunar or planetary
+    // disc fills enough of a line to move that level, and flattening it would
+    // carve bands across the disc.
+    if correction.fpn_removal && settings.stacking_type != crate::stacking::StackingType::Planetary
+    {
+        pipeline = pipeline.with_stage(Box::new(FpnFilter));
+    }
+    pipeline
+}
+
+/// The demosaic the raw stage ends with.
+pub fn debayer_algorithm(settings: &CaptureSettings) -> DebayerAlgorithm {
+    if settings.sensor_correction.superpixel_debayer {
+        DebayerAlgorithm::Superpixel
+    } else {
+        DebayerAlgorithm::Bilinear
+    }
+}
+
+/// Decode a captured buffer, run the pre-debayer corrections, and demosaic.
+///
+/// The whole raw-CFA stage in one call, so the probe frame that sizes the
+/// pipeline's channels and the frames that flow through them are produced the
+/// same way — with `superpixel_debayer` on they differ by 4x in memory.
+pub fn convert_captured_frame(
+    raw: &RawFrame,
+    info: &CameraInfo,
+    cfa_pipeline: &CfaPipeline,
+    algorithm: DebayerAlgorithm,
+) -> CameraResult<Frame> {
+    let mut cfa = raw.to_cfa_frame(info)?;
+    cfa_pipeline.apply(&mut cfa);
+    cfa.debayer(algorithm)
+        .map_err(|e| crate::camera::CameraError::ImageReadFailed(e.to_string()))
+}
 
 /// Process a frame through the stacking pipeline
 #[instrument(skip_all, fields(
@@ -371,7 +427,6 @@ const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
 /// is the whole point of the eyepiece view.
 const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
 
-
 pub fn get_render_pipeline_config(
     settings: &CaptureSettings,
     for_fits: bool,
@@ -417,9 +472,9 @@ pub fn get_render_pipeline_config(
         let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;
         if intensity > 0.0 && config.auto_stretch {
             // Interpolate target_background down for a darker sky
-            config.stretch_config.target_background =
-                config.stretch_config.target_background * (1.0 - intensity)
-                    + EYEPIECE_TARGET_BACKGROUND * intensity;
+            config.stretch_config.target_background = config.stretch_config.target_background
+                * (1.0 - intensity)
+                + EYEPIECE_TARGET_BACKGROUND * intensity;
 
             // Interpolate black_point_sigma *up*, which is what actually clips
             // noise: the black point is `mode - sigma * black_point_sigma`, so a
@@ -448,6 +503,8 @@ mod tests {
     use super::*;
     use crate::background::BackgroundExtractionAlgorithm;
     use crate::frame::Frame;
+    use crate::server::state::SensorCorrectionSettings;
+    use crate::stacking::StackingType;
 
     #[test]
     fn test_get_render_pipeline_config_respects_toggles() {
@@ -631,5 +688,61 @@ mod tests {
         // return a config with background_subtraction = true if settings say so.
         let config = get_render_pipeline_config(&settings, false);
         assert!(config.background_subtraction);
+    }
+    fn settings_with(
+        correction: SensorCorrectionSettings,
+        stacking_type: StackingType,
+    ) -> CaptureSettings {
+        CaptureSettings {
+            sensor_correction: correction,
+            stacking_type,
+            ..CaptureSettings::default()
+        }
+    }
+
+    #[test]
+    fn the_default_stage_list_corrects_hot_pixels_then_flattens_lines() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels", "row_column_fpn"]
+        );
+    }
+
+    #[test]
+    fn disabling_both_corrections_leaves_the_pre_debayer_seam_empty() {
+        let settings = settings_with(
+            SensorCorrectionSettings {
+                hot_pixel_rejection: false,
+                fpn_removal: false,
+                ..SensorCorrectionSettings::default()
+            },
+            StackingType::DeepSky,
+        );
+        assert!(build_cfa_pipeline(&settings).is_empty());
+    }
+
+    #[test]
+    fn planetary_keeps_hot_pixel_rejection_but_not_line_flattening() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::Planetary);
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
+    }
+
+    #[test]
+    fn superpixel_is_opt_in() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        assert_eq!(debayer_algorithm(&settings), DebayerAlgorithm::Bilinear);
+
+        let settings = settings_with(
+            SensorCorrectionSettings {
+                superpixel_debayer: true,
+                ..SensorCorrectionSettings::default()
+            },
+            StackingType::DeepSky,
+        );
+        assert_eq!(debayer_algorithm(&settings), DebayerAlgorithm::Superpixel);
     }
 }

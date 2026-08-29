@@ -18,6 +18,8 @@
 //! - **Bilinear**: Fast, simple averaging of neighbors. Good for live stacking.
 //! - **VNG** (Variable Number of Gradients): Higher quality, uses edge detection
 //!   to avoid interpolating across sharp boundaries. Better for final output.
+//! - **Superpixel**: One RGB pixel per 2x2 quad. Interpolates nothing, so it
+//!   invents no chroma noise, at half the width and height.
 //!
 //! # Module Structure
 //!
@@ -36,7 +38,7 @@ use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use tracing::instrument;
 
-use algorithms::{debayer_bilinear, debayer_bilinear_to_rgb8, debayer_vng};
+use algorithms::{debayer_bilinear, debayer_bilinear_to_rgb8, debayer_superpixel, debayer_vng};
 
 /// Debayering algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,6 +49,14 @@ pub enum DebayerAlgorithm {
     /// Variable Number of Gradients - higher quality, edge-aware
     #[default]
     Vng,
+
+    /// One RGB pixel per 2x2 CFA quad - half resolution, no interpolation
+    ///
+    /// Interpolates nothing, so it invents no chroma noise and keeps a surviving
+    /// hot sample inside one output pixel. Halves both dimensions, which is free
+    /// on a sensor that oversamples the eyepiece screen and a real loss on one
+    /// that does not.
+    Superpixel,
 }
 
 /// Configuration for debayering operations
@@ -132,6 +142,7 @@ impl Debayerer {
         match self.config.algorithm {
             DebayerAlgorithm::Bilinear => debayer_bilinear(frame, self.config.pattern),
             DebayerAlgorithm::Vng => debayer_vng(frame, self.config.pattern),
+            DebayerAlgorithm::Superpixel => debayer_superpixel(frame, self.config.pattern),
         }
     }
 }
