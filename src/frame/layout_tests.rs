@@ -12,7 +12,8 @@
 //! `to_rgb8`/`to_rgb8_fast`/`write_rgb8_into`, `render::frame_to_rgb8`,
 //! `render_to_rgb8`, the fused encoder expansion *and* its downsampling sibling,
 //! JPEG (SA10), chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono`, FITS f32/u16 (both
-//! directions), `Frame::downsample`, `warp_frame_into` and the debayer-to-RGB8 path.
+//! directions), `Frame::downsample`, `warp_frame_into` and both debayer traversals
+//! (bilinear-to-RGB8 and the superpixel quad walk).
 
 use super::Frame;
 use crate::frame::PixelFormat;
@@ -254,7 +255,8 @@ fn jpeg_sa10_payload_is_interleaved() {
 fn lz4_sa09_payload_is_interleaved() {
     const CHUNKS: usize = 4;
     let ready = passthrough_ready(tricolour_frame(W, H));
-    let payload = crate::server::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS, 3840, 2160).unwrap();
+    let payload =
+        crate::server::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS, 3840, 2160).unwrap();
 
     assert_eq!(
         u32::from_le_bytes(payload[0..4].try_into().unwrap()),
@@ -342,8 +344,11 @@ fn write_ser_and_read_samples(
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(name);
 
-    let mut writer =
-        SerWriter::create(&path, SerHeader::new(W as u32, H as u32, color_id, bit_depth)).unwrap();
+    let mut writer = SerWriter::create(
+        &path,
+        SerHeader::new(W as u32, H as u32, color_id, bit_depth),
+    )
+    .unwrap();
     writer.write_frame(&frame, None).unwrap();
     writer.finalize().unwrap();
 
@@ -462,8 +467,7 @@ fn ser_bgr_payload_is_interleaved_and_round_trips() {
 /// came out one LSB darker in SER than in the PNG beside it.
 #[test]
 fn ser_8bit_samples_match_the_canonical_8bit_conversion() {
-    let (samples, _) =
-        write_ser_and_read_samples(crate::ser::SerColorId::Rgb, 8, "rounding.ser");
+    let (samples, _) = write_ser_and_read_samples(crate::ser::SerColorId::Rgb, 8, "rounding.ser");
 
     let frame = tricolour_frame(W, H);
     let png_bytes = frame.to_rgb8_fast();
@@ -478,7 +482,10 @@ fn ser_8bit_samples_match_the_canonical_8bit_conversion() {
     // G_VAL = 0.5 is the value that separates the two conversions: 127 truncated, 128
     // rounded. Assert it explicitly so the test cannot pass on a fixture that happens to
     // avoid the boundary.
-    assert_eq!(samples[1], G_U8 as u32, "0.5 must round to {G_U8}, not truncate");
+    assert_eq!(
+        samples[1], G_U8 as u32,
+        "0.5 must round to {G_U8}, not truncate"
+    );
 }
 
 #[test]
@@ -617,6 +624,43 @@ fn debayer_to_rgb8_is_interleaved() {
                 );
             }
         }
+    }
+}
+
+/// Superpixel debayering is a separate traversal from the two interpolating
+/// kernels: it walks quads rather than rows of neighbours, gathers four samples
+/// per output pixel, and writes into a half-size planar frame. A gap in its
+/// coverage does not show up through the bilinear row.
+#[test]
+fn superpixel_debayer_lands_in_planes() {
+    use crate::debayer::{CfaPattern, DebayerAlgorithm, DebayerConfig, Debayerer};
+
+    let (w, h) = (32usize, 16usize);
+    for pattern in CfaPattern::all() {
+        let mut cfa = Frame::zeros(w, h, 1).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                let level = match pattern.color_at(x, y) {
+                    0 => R_VAL,
+                    2 => B_VAL,
+                    _ => G_VAL,
+                };
+                cfa.set_pixel(x, y, 0, level);
+            }
+        }
+
+        let out = Debayerer::new(
+            DebayerConfig::new(pattern).with_algorithm(DebayerAlgorithm::Superpixel),
+        )
+        .debayer(&cfa)
+        .unwrap();
+
+        assert_eq!(
+            (out.width(), out.height(), out.channels()),
+            (w / 2, h / 2, 3)
+        );
+        // No interpolation and no border case: every output pixel is exact.
+        assert_frame_is_tricolour(&out, &format!("superpixel {pattern:?}"));
     }
 }
 

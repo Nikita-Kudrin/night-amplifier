@@ -208,8 +208,14 @@ impl RawFrame {
         &self.data[..len]
     }
 
-    /// Converts the raw buffer into a processed `Frame`.
-    pub fn to_frame(&self, info: &CameraInfo) -> CameraResult<crate::Frame> {
+    /// Decodes the raw buffer into a frame that still carries its CFA mosaic.
+    ///
+    /// This is the seam the raw-CFA stage opens: hot-pixel rejection, row/column
+    /// FPN removal and dark/flat calibration are only defined on the mosaic, and
+    /// debayering here — as every provider used to — left nowhere to put them.
+    /// The demosaic now happens in the stacking task, after
+    /// [`CfaPipeline`](crate::cfa::CfaPipeline) has run.
+    pub fn to_cfa_frame(&self, info: &CameraInfo) -> CameraResult<crate::cfa::CfaFrame> {
         use crate::PixelFormat;
 
         let channels = if info.sensor_type == SensorType::Color && self.format == ImageFormat::Rgb24
@@ -236,26 +242,37 @@ impl RawFrame {
             ImageFormat::Rgb24 => PixelFormat::Rgb8,
         };
 
-        if info.sensor_type == SensorType::Color && channels == 1 {
-            let pattern = info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            crate::Frame::from_bayer(
-                self.data_slice(),
-                self.width as usize,
-                self.height as usize,
-                pixel_format,
-                pattern,
-            )
-            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        } else {
-            crate::Frame::from_raw(
-                self.data_slice(),
-                self.width as usize,
-                self.height as usize,
-                channels,
-                pixel_format,
-            )
-            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+        let frame = crate::Frame::from_raw(
+            self.data_slice(),
+            self.width as usize,
+            self.height as usize,
+            channels,
+            pixel_format,
+        )
+        .map_err(|e| CameraError::ImageReadFailed(e.to_string()))?;
+
+        if info.sensor_type != SensorType::Color || channels != 1 {
+            return Ok(crate::cfa::CfaFrame::direct(frame));
         }
+
+        // A colour sensor that reported no pattern still has one; RGGB is what
+        // this path has always assumed, and changing that here would silently
+        // re-colour every simulator fixture.
+        let pattern = info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
+        crate::cfa::CfaFrame::mosaic(frame, pattern)
+            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
+    }
+
+    /// Converts the raw buffer into a debayered `Frame`.
+    ///
+    /// Equivalent to [`Self::to_cfa_frame`] followed by a bilinear demosaic and
+    /// no pre-debayer stages — the behaviour every caller had before the raw
+    /// stage existed. The capture pipeline uses the two halves separately so it
+    /// can run corrections in between.
+    pub fn to_frame(&self, info: &CameraInfo) -> CameraResult<crate::Frame> {
+        self.to_cfa_frame(info)?
+            .debayer(crate::debayer::DebayerAlgorithm::Bilinear)
+            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
     }
 }
 

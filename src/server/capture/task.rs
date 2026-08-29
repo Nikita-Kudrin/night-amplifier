@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
+use super::pipeline;
 use super::render_task::run_render_task;
 use super::stacking_task::run_stacking_task;
 use super::storage;
@@ -154,7 +155,15 @@ pub async fn run_capture_loop(
             return;
         }
     };
-    let probe_frame = match probe_raw.to_frame(&camera_info.info) {
+    // Sized through the same raw-CFA stage the pipeline will use: with
+    // superpixel debayering on, a frame is a quarter of the size a full-
+    // resolution demosaic would suggest, and the channel budget follows it.
+    let probe_frame = match pipeline::convert_captured_frame(
+        &probe_raw,
+        &camera_info.info,
+        &pipeline::build_cfa_pipeline(&settings),
+        pipeline::debayer_algorithm(&settings),
+    ) {
         Ok(f) => f,
         Err(e) => {
             error!(error = %e, "Failed to decode probe frame");

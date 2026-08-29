@@ -27,7 +27,10 @@ pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
 };
-pub use settings::{CameraCaptureProfile, CaptureSettings, EyepieceSettings, TelescopeSettings};
+pub use settings::{
+    CameraCaptureProfile, CaptureSettings, EyepieceSettings, SensorCorrectionSettings,
+    TelescopeSettings,
+};
 pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
 
 /// The main application state shared across all handlers

@@ -33,6 +33,7 @@
 //! - `common` - Shared constants, types, and fixture discovery utilities
 //! - `image_loading` - TIFF and FITS file loading, frame saving
 //! - `prefetch` - Parallel frame prefetching for optimized loading
+//! - `cfa_tests` - Raw-CFA stage: hot pixels, row/column FPN, superpixel debayer
 //! - `debayer_tests` - Tests for Bayer pattern detection and debayering
 //! - `stacking_tests` - Tests for the complete stacking pipeline
 //! - `stretch_tests` - Tests for auto-stretch and rendering
@@ -41,6 +42,7 @@
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 pub mod background_tests;
+pub mod cfa_tests;
 pub mod common;
 pub mod debayer_tests;
 pub mod detection_tests;

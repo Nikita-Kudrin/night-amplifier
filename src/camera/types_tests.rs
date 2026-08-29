@@ -259,3 +259,108 @@ fn test_pooled_buffer_deref() {
     assert_eq!(buf[4], 99);
     assert_eq!(buf.len(), 5);
 }
+
+fn test_camera_info(sensor_type: SensorType, bayer_pattern: Option<CfaPattern>) -> CameraInfo {
+    CameraInfo {
+        name: "Test Camera".to_string(),
+        id: 0,
+        max_width: 64,
+        max_height: 48,
+        pixel_size_x_um: 2.9,
+        pixel_size_y_um: 2.9,
+        sensor_type,
+        bayer_pattern,
+        has_cooler: false,
+        has_dew_heater: false,
+        min_temp_c: None,
+        max_temp_c: None,
+        has_shutter: false,
+        is_usb3: true,
+        bit_depth: 16,
+        supported_bins: vec![1],
+        supported_formats: vec![ImageFormat::Raw16],
+        min_exposure_us: 100,
+        max_exposure_us: 3_600_000_000,
+        min_gain: 0,
+        max_gain: 500,
+        unity_gain: 100,
+        hcg_gain: 120,
+        sensor_modes: Vec::new(),
+    }
+}
+
+/// A deterministic 16-bit mosaic with structure in both axes, so a routing
+/// mistake in the new seam shows up rather than averaging out.
+fn raw16_frame(width: u32, height: u32) -> RawFrame {
+    let pool = BufferPool::new();
+    let mut data = pool.get((width * height * 2) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let value = (x * 977 + y * 613 + (x & 1) * 9_000 + (y & 1) * 4_000) as u16;
+            let i = ((y * width + x) * 2) as usize;
+            data[i..i + 2].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    RawFrame {
+        data,
+        width,
+        height,
+        format: ImageFormat::Raw16,
+    }
+}
+
+/// The T1.1 seam guarantee: opening a raw-CFA stage must not change a single
+/// sample while no stage is registered. `to_frame` is the pre-seam behaviour,
+/// kept as one call so this comparison is possible at all.
+#[test]
+fn the_raw_stage_with_no_registered_corrections_is_bit_identical() {
+    use crate::cfa::CfaPipeline;
+    use crate::debayer::DebayerAlgorithm;
+
+    for (sensor_type, pattern) in [
+        (SensorType::Color, Some(CfaPattern::Rggb)),
+        (SensorType::Color, Some(CfaPattern::Gbrg)),
+        // A colour sensor that reports no pattern: this path has always
+        // assumed RGGB, and the seam must not quietly change that.
+        (SensorType::Color, None),
+        (SensorType::Mono, None),
+    ] {
+        let info = test_camera_info(sensor_type, pattern);
+        let raw = raw16_frame(64, 48);
+
+        let direct = raw.to_frame(&info).unwrap();
+
+        let mut cfa = raw.to_cfa_frame(&info).unwrap();
+        CfaPipeline::new().apply(&mut cfa);
+        let staged = cfa.debayer(DebayerAlgorithm::Bilinear).unwrap();
+
+        assert_eq!(direct.channels(), staged.channels(), "{sensor_type:?}");
+        assert_eq!(
+            direct.data(),
+            staged.data(),
+            "{sensor_type:?} / {pattern:?} diverged across the raw stage"
+        );
+    }
+}
+
+#[test]
+fn a_colour_sensor_reaches_the_raw_stage_still_mosaiced() {
+    let info = test_camera_info(SensorType::Color, Some(CfaPattern::Bggr));
+    let cfa = raw16_frame(64, 48).to_cfa_frame(&info).unwrap();
+
+    assert!(cfa.is_mosaic());
+    assert_eq!(cfa.pattern(), Some(CfaPattern::Bggr));
+    assert_eq!(cfa.frame().channels(), 1);
+    assert_eq!(cfa.step(), 2);
+}
+
+#[test]
+fn a_mono_sensor_reaches_the_raw_stage_with_no_pattern() {
+    let info = test_camera_info(SensorType::Mono, None);
+    let cfa = raw16_frame(64, 48).to_cfa_frame(&info).unwrap();
+
+    assert!(!cfa.is_mosaic());
+    assert_eq!(cfa.pattern(), None);
+    assert_eq!(cfa.frame().channels(), 1);
+    assert_eq!(cfa.step(), 1);
+}

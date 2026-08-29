@@ -124,6 +124,10 @@ strip = false
 debug = 1
 
 [[bench]]
+name = "cfa_benchmark"
+harness = false
+
+[[bench]]
 name = "debayer_benchmark"
 harness = false
 

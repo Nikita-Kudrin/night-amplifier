@@ -13,6 +13,7 @@
 pub mod background;
 pub mod calibration;
 pub mod camera;
+pub mod cfa;
 pub mod debayer;
 pub mod detection;
 pub mod disk_writer;
@@ -45,6 +46,7 @@ pub use background::{
 pub use calibration::{
     create_master_dark, create_master_flat, Calibration, MasterDark, MasterFlat, FLAT_MIN_THRESHOLD,
 };
+pub use cfa::{CfaFrame, CfaPipeline, CfaStage};
 pub use debayer::{
     debayer, debayer_auto, debayer_auto_with_algorithm, debayer_with_config, debayer_with_pattern,
     detect_cfa_pattern, CfaPattern, DebayerAlgorithm, DebayerConfig, Debayerer,
