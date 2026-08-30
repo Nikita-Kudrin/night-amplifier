@@ -40,24 +40,21 @@ pub async fn eyepiece_quality_handler(
 /// render task box-averages down to it rather than shipping a near-native frame
 /// for the browser to minify. That resampling is not cosmetic: an area average
 /// down to display size removes noise the GPU's four-tap bilinear minification
-/// discards as aliasing instead, measured at 1.33x fewer ADU of sky sigma for a
-/// single 1440p view and 2.19x for the per-eye canvases of binoview.
+/// discards as aliasing instead, measured at 1.22x fewer output levels of sky
+/// sigma for a 1440p view of an IMX533 frame.
+///
+/// How much it is worth depends on how much spare resolution the sensor has: the
+/// same measurement on an IMX464, which the 1440 tier barely shrinks, comes out
+/// at 1.03x. `display_output_tests` reports both.
 async fn handle_eyepiece_quality(mut socket: WebSocket, state: Arc<AppState>) {
-    struct ClientGuard(Arc<AppState>);
-    impl Drop for ClientGuard {
-        fn drop(&mut self) {
-            self.0.lz4_clients.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-    state.lz4_clients.fetch_add(1, Ordering::SeqCst);
-    let _guard = ClientGuard(state.clone());
-
-    // Held for the life of the connection so the render task knows what box to
-    // encode into; dropped (and decremented) even if this handler unwinds.
+    // The only registration this connection makes: the render task reads both
+    // "is anyone watching" and "what box" off the tier counters, so one guard
+    // carries both and they cannot drift apart. Dropped — and decremented —
+    // even if this handler unwinds.
     let mut tier_guard = TierClientGuard::new(
         Arc::clone(&state),
         StreamKind::Lossless,
-        JpegTier::for_request(None, None),
+        JpegTier::LOSSLESS_DEFAULT,
     );
 
     let mut last_frame_counter: u64 = state.frame_counter.load(Ordering::SeqCst);

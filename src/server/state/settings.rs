@@ -295,8 +295,26 @@ pub struct DenoiseSettings {
     #[serde(default = "default_luma_denoise")]
     pub luma: bool,
     /// Scales every wavelet threshold, `0..=2`. `1.0` is the tuned default.
+    ///
+    /// Note what this can and cannot reach: it multiplies all four per-level
+    /// thresholds, and the level-1 threshold is zero unless `star_protection`
+    /// lowers it — so raising this alone leans harder on the *coarse* scales,
+    /// which is where faint nebulosity lives. It is the "the target still looks
+    /// too noisy" control, not the "the sky still looks grainy" one.
     #[serde(default = "default_denoise_strength")]
     pub luma_strength: f32,
+    /// How much of the finest scale is left alone, `0..=1`.
+    ///
+    /// The finest wavelet scale carries both the sky grain and the star cores,
+    /// and a B3 spline transform puts ~94 % of the noise variance there — so
+    /// this is the only setting that moves visible grain much. At `1.0` (the
+    /// default, and what shipped before it was a control) the scale is untouched
+    /// and stars are exactly as they were. Lowering it to zero takes measured
+    /// sky sigma on the IMX533 fixture from 4.71 output levels to 1.47, and on
+    /// the IMX464 fixture from 10.00 to 1.48, while integrated target flux moves
+    /// under 1.5 % — at the cost of softening the tightest stars.
+    #[serde(default = "default_star_protection")]
+    pub star_protection: f32,
 }
 
 fn default_chroma_denoise() -> bool {
@@ -311,6 +329,10 @@ fn default_denoise_strength() -> f32 {
     1.0
 }
 
+fn default_star_protection() -> f32 {
+    1.0
+}
+
 impl Default for DenoiseSettings {
     fn default() -> Self {
         Self {
@@ -318,6 +340,7 @@ impl Default for DenoiseSettings {
             chroma_strength: default_denoise_strength(),
             luma: default_luma_denoise(),
             luma_strength: default_denoise_strength(),
+            star_protection: default_star_protection(),
         }
     }
 }

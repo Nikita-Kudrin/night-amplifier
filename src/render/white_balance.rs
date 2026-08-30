@@ -61,29 +61,6 @@ pub fn compute_neutralization_multipliers(stats: &ImageStats) -> Result<[f32; 3]
     ])
 }
 
-/// Compute white balance multipliers by scaling Red and Blue to match Green
-///
-/// This is used before background subtraction to ensure the color ratios
-/// are preserved and aligned to the green channel.
-pub fn compute_green_reference_multipliers(stats: &ImageStats) -> Result<[f32; 3]> {
-    if stats.channels.len() != 3 {
-        return Err(StackError::ChannelMismatch {
-            expected: 3,
-            actual: stats.channels.len(),
-        });
-    }
-
-    let r_median = stats.channels[0].median;
-    let g_median = stats.channels[1].median;
-    let b_median = stats.channels[2].median;
-
-    let k_r = g_median / r_median.max(1e-8);
-    let k_g = 1.0;
-    let k_b = g_median / b_median.max(1e-8);
-
-    Ok([k_r.clamp(0.2, 5.0), k_g, k_b.clamp(0.2, 5.0)])
-}
-
 /// Neutralize the sky background color in-place
 pub fn neutralize_background(frame: &mut Frame, multipliers: &[f32; 3]) -> Result<()> {
     if frame.channels() != 3 {
@@ -114,16 +91,6 @@ pub fn neutralize_background(frame: &mut Frame, multipliers: &[f32; 3]) -> Resul
 pub fn neutralize_background_auto(frame: &mut Frame) -> Result<[f32; 3]> {
     let stats = compute_image_stats(frame)?;
     let multipliers = compute_neutralization_multipliers(&stats)?;
-    neutralize_background(frame, &multipliers)?;
-    Ok(multipliers)
-}
-
-/// Convenience function: neutralize background by matching Red and Blue to Green
-pub fn neutralize_background_green_reference(
-    frame: &mut Frame,
-    stats: &ImageStats,
-) -> Result<[f32; 3]> {
-    let multipliers = compute_green_reference_multipliers(stats)?;
     neutralize_background(frame, &multipliers)?;
     Ok(multipliers)
 }

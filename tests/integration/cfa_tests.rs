@@ -73,6 +73,24 @@ struct LineSpread {
     high_frequency_excess: f64,
 }
 
+/// The Dumbbell's box in this fixture's full-resolution frame.
+///
+/// The same region `display_output_tests` measures on the 1440-tier encode,
+/// scaled back up by 3008/1440.
+const TARGET_BOX: (usize, usize, usize, usize) = (1170, 1170, 1838, 1838);
+
+/// Integrated green-channel flux inside [`TARGET_BOX`].
+fn target_flux(frame: &Frame) -> f64 {
+    let (x0, y0, x1, y1) = TARGET_BOX;
+    let mut flux = 0.0;
+    for y in y0..y1.min(frame.height()) {
+        for x in x0..x1.min(frame.width()) {
+            flux += frame.get_pixel(x, y, 1) as f64;
+        }
+    }
+    flux
+}
+
 fn line_spread(frame: &Frame, origin: (usize, usize), horizontal: bool) -> LineSpread {
     let (width, height) = (frame.width(), frame.height());
     let (x0, y0) = origin;
@@ -176,21 +194,47 @@ fn row_and_column_fpn_falls_to_the_noise_floor() {
                 after.high_frequency_excess
             );
 
+            // The correction is a high-pass, so it is judged on the
+            // high-frequency half. Asserting the *total* falls is asserting that
+            // real gradients get flattened too, which is the behaviour that
+            // drained 5 % of the target's flux.
             assert!(
-                after.total_excess < before.total_excess * 0.25,
-                "site {origin:?} {axis}: total excess {:.2} -> {:.2} ADU",
-                before.total_excess,
-                after.total_excess
-            );
-            assert!(
-                after.high_frequency_excess <= before.high_frequency_excess + 0.05,
-                "site {origin:?} {axis}: correction *added* line-to-line spread, \
-                 {:.2} -> {:.2} ADU",
+                after.high_frequency_excess < 0.05,
+                "site {origin:?} {axis}: line-to-line excess {:.2} -> {:.2} ADU, \
+                 expected the noise floor",
                 before.high_frequency_excess,
                 after.high_frequency_excess
             );
+            assert!(
+                after.total_excess <= before.total_excess + 0.05,
+                "site {origin:?} {axis}: correction *added* spread, {:.2} -> {:.2} ADU",
+                before.total_excess,
+                after.total_excess
+            );
         }
     }
+
+    // The other half of "tracked the readout, not the signal": the correction
+    // subtracts each line's *raw* offset against the reference, so it removes the
+    // whole low-frequency component of each axis, not only the line-to-line part.
+    // If that were eating real structure it would show up as integrated flux
+    // draining out of the target, which is the number nothing else here measures.
+    let before_rgb = night_amplifier::debayer_with_pattern(&frame, CfaPattern::Rggb).unwrap();
+    let after_rgb = night_amplifier::debayer_with_pattern(corrected, CfaPattern::Rggb).unwrap();
+    let flux_before = target_flux(&before_rgb);
+    let flux_after = target_flux(&after_rgb);
+    let drift = flux_after / flux_before - 1.0;
+    println!(
+        "target flux: {flux_before:.4e} -> {flux_after:.4e} ({:+.3} %)",
+        drift * 100.0
+    );
+    assert!(
+        drift.abs() < 0.002,
+        "flattening lines moved integrated target flux by {:.2} % — the correction \
+         is removing real large-scale structure along with the readout offsets, and \
+         its offsets need high-passing along the axis before they are subtracted",
+        drift * 100.0
+    );
 
     // Flattening lines must not cost stars: a correction that tracked the
     // signal instead of the readout would carve bands through the field.

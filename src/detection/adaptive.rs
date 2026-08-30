@@ -50,6 +50,9 @@ pub fn detect_stars_adaptive_thorough(frame: &Frame) -> Result<Vec<Star>> {
     StarDetector::new(DetectionConfig::aggressive()).detect(frame)
 }
 
+/// Only some fields are read; the rest are kept because the struct is the
+/// analysis record a `Debug` log prints whole.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ImageAnalysis {
     median: f32,

@@ -81,8 +81,28 @@ export const BLACK_FLOOR_LIMITS = {
     default: 0.04,
 }
 
-// Denoise strength, as a fraction of the tuned defaults
-export const DENOISE_STRENGTH_LIMITS = {
+// How far the chroma planes move toward the guided-filter result. A blend, so
+// 100% is the whole way and there is nothing beyond it.
+export const DENOISE_CHROMA_STRENGTH_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 1.0,
+}
+
+// Multiplier on the wavelet thresholds. Ranges to 200% because the backend
+// clamps there (`render::MAX_LUMA_STRENGTH`) — a slider that stopped at the
+// default could not be "raised" the way the manual says to.
+export const DENOISE_LUMA_STRENGTH_LIMITS = {
+    min: 0.0,
+    max: 2.0,
+    step: 0.05,
+    default: 1.0,
+}
+
+// How much of the finest wavelet scale is left alone. 100% is the shipped
+// behaviour; lowering it is the only control that moves sky grain much.
+export const STAR_PROTECTION_LIMITS = {
     min: 0.0,
     max: 1.0,
     step: 0.05,
@@ -229,6 +249,7 @@ export const DEFAULT_SETTINGS = {
         chroma_strength: 1.0,
         luma: true,
         luma_strength: 1.0,
+        star_protection: 1.0,
     },
     eyepiece: {
         binoview: true,
@@ -316,7 +337,9 @@ export const HELP_TEXTS = {
     denoise_luma:
         'Removes background grain by scale, leaving stars and the target\'s broad structure alone. Measured on a real frame it takes visible sky noise down by about a third. This is the setting that can turn nebulae to plastic if pushed — judge it at the eyepiece, and turn it off if the target starts looking smeared.',
     denoise_luma_strength:
-        'Scales every brightness-denoising threshold. 100% is the tuned default; lower it if the target looks soft or plastic, raise it only if the sky still looks grainy.',
+        'Scales the thresholds for the larger structures — the soft mottle across the target, not the fine speckle. 100% is the tuned default. Lower it if the target looks soft or plastic. Raising it leans harder on faint nebulosity, so go carefully.',
+    denoise_star_protection:
+        'How much of the finest detail is left untouched. That scale holds both the sky speckle and the cores of stars, and it is where almost all the grain lives — so this is the one control that visibly changes how smooth the background looks. At 100% stars are exactly as captured and the speckle stays. Lower it and the background smooths dramatically; the tightest stars soften first, so bring it down until you can see them change, then back off.',
     eyepiece_dither:
         'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
     auto_stretch_intensity:

@@ -61,6 +61,7 @@ mod tests {
                 chroma_strength: 0.8,
                 luma: false,
                 luma_strength: 0.5,
+                star_protection: 0.25,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,

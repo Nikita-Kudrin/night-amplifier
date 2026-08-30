@@ -13,11 +13,10 @@ use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
 use super::super::error::{CameraError, CameraResult};
-use super::super::types::{CameraInfo, CaptureConfig, ImageFormat, SensorType};
+use super::super::types::{CameraInfo, CaptureConfig, ImageFormat};
 use super::sensor_mode;
 use crate::camera::types::RawFrame;
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{CfaPattern, Frame, PixelFormat};
 
 pub fn apply_config(
     camera: &mut POACamera,
@@ -199,53 +198,6 @@ pub fn get_capture_dimensions(info: &CameraInfo, config: &CaptureConfig) -> (u32
             info.max_width / config.bin as u32,
             info.max_height / config.bin as u32,
         )
-    }
-}
-
-pub fn buffer_to_frame(
-    info: &CameraInfo,
-    buffer: &[u8],
-    width: u32,
-    height: u32,
-    config: &CaptureConfig,
-) -> CameraResult<Frame> {
-    let (pixel_format, channels) = match config.format {
-        ImageFormat::Raw8 => {
-            if info.sensor_type == SensorType::Color {
-                (PixelFormat::Bayer8, 1)
-            } else {
-                (PixelFormat::Rgb8, 1)
-            }
-        }
-        ImageFormat::Raw16 => {
-            if info.sensor_type == SensorType::Color {
-                (PixelFormat::Bayer16, 1)
-            } else {
-                (PixelFormat::Rgb16, 1)
-            }
-        }
-        ImageFormat::Rgb24 => (PixelFormat::Rgb8, 3),
-    };
-
-    if info.sensor_type == SensorType::Color && channels == 1 {
-        let pattern = info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-        Frame::from_bayer(
-            buffer,
-            width as usize,
-            height as usize,
-            pixel_format,
-            pattern,
-        )
-        .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-    } else {
-        Frame::from_raw(
-            buffer,
-            width as usize,
-            height as usize,
-            channels,
-            pixel_format,
-        )
-        .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
     }
 }
 

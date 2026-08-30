@@ -215,6 +215,11 @@ pub fn record_latest_frame_size(_bytes: u64) {}
 pub enum FrameStage {
     /// Blocking `Camera::capture` call. Dominated by exposure time on real hardware.
     Capture,
+    /// The raw-CFA stage (`cfa::CfaPipeline`): hot pixels and row/column FPN,
+    /// on the mosaic, before demosaic. Separate from `Debayer` because these are
+    /// per-frame corrections that can be turned off, and turning them off is a
+    /// decision an observer makes against this number.
+    CfaCorrection,
     /// Bayer → RGB conversion, wherever it runs (camera provider or simulator).
     Debayer,
     /// One full iteration of the stacking task.
@@ -233,9 +238,13 @@ pub enum FrameStage {
 }
 
 impl FrameStage {
+    /// Only reached from the OTLP histogram builder, which is behind the
+    /// `telemetry` feature.
+    #[allow(dead_code)]
     const fn metric_name(self) -> &'static str {
         match self {
             Self::Capture => "frame.capture_ms",
+            Self::CfaCorrection => "frame.cfa_correction_ms",
             Self::Debayer => "frame.debayer_ms",
             Self::Stack => "frame.stack_ms",
             Self::Render => "frame.render_ms",
@@ -299,6 +308,7 @@ fn pipeline_histogram(
     use std::sync::OnceLock;
 
     static CAPTURE: OnceLock<Histogram<f64>> = OnceLock::new();
+    static CFA_CORRECTION: OnceLock<Histogram<f64>> = OnceLock::new();
     static DEBAYER: OnceLock<Histogram<f64>> = OnceLock::new();
     static STACK: OnceLock<Histogram<f64>> = OnceLock::new();
     static RENDER: OnceLock<Histogram<f64>> = OnceLock::new();
@@ -309,6 +319,7 @@ fn pipeline_histogram(
 
     let cell = match stage {
         FrameStage::Capture => &CAPTURE,
+        FrameStage::CfaCorrection => &CFA_CORRECTION,
         FrameStage::Debayer => &DEBAYER,
         FrameStage::Stack => &STACK,
         FrameStage::Render => &RENDER,

@@ -28,8 +28,15 @@ drop or stars start to look soft.
 
 Every sensor row and column reads out with its own small brightness offset. It
 does not average down with frame count, and on a drifting mount it smears into
-the soft banding you may see across a deep stack. This flattens it by levelling
-each row and then each column against the frame's own background.
+the soft banding you may see across a deep stack. This levels each row, and then
+each column, against its immediate neighbours.
+
+Against its *neighbours*, not against the whole frame — and that distinction is
+the whole reason the correction is safe to leave on. A readout offset differs
+from one line to the next; a real gradient, or a target spanning hundreds of
+lines, changes only gradually. Levelling each line against the frame as a whole
+would remove both, and on the reference frame that drained 5 % of the Dumbbell's
+brightness along with the banding.
 
 It is skipped automatically for **Planetary** targets: a bright lunar or
 planetary disc fills enough of each line to move its measured level, and

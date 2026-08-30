@@ -36,7 +36,7 @@ mod guided;
 mod wavelet;
 
 pub use guided::ChromaDenoiseConfig;
-pub use wavelet::LumaDenoiseConfig;
+pub use wavelet::{LumaDenoiseConfig, MAX_LEVEL1_K, MAX_STRENGTH as MAX_LUMA_STRENGTH};
 
 /// Rec. 709 luma weights. The chroma planes are the plain differences
 /// `b - y` and `r - y`, which makes the inverse exact in f32 rather than
@@ -77,6 +77,44 @@ impl DenoiseConfig {
     }
 }
 
+/// Reusable working buffers for one denoise pass.
+///
+/// At 1440² a pass allocates about 75 MB — a staged interleaved RGB buffer,
+/// three planar channels and the wavelet's three — all freshly zero-initialised
+/// and dropped again, once per payload, once per frame. Measured on a 20-core
+/// x86 box that is 13 ms of the 20 ms denoising adds to an encode: page faults,
+/// not arithmetic.
+///
+/// Owned by the render task for the life of its thread and passed down, rather
+/// than kept in a thread-local: the inline encode that primes a newly-connected
+/// client runs on a pooled tokio blocking thread, and a thread-local there would
+/// strand 75 MB on every thread that pool ever grows to. A caller with no
+/// scratch to lend — a test, a benchmark, that same inline encode — uses
+/// [`denoise_rgb_interleaved`] and pays the allocation once.
+#[derive(Default)]
+pub struct DenoiseScratch {
+    /// Interleaved RGB at output resolution, between the resample and the tone
+    /// curve. Filled by the encoder, not by this module, so it is taken out
+    /// rather than borrowed.
+    pub(crate) staged: Vec<f32>,
+    /// Luma, Cb, Cr.
+    planes: [Vec<f32>; 3],
+    /// The wavelet's ping-pong pair and its separable-convolution intermediate.
+    wavelet: [Vec<f32>; 3],
+}
+
+/// Grow `buf` to hold at least `len` samples and hand back exactly `len`.
+///
+/// Grow-only, and deliberately not re-zeroed between passes: every consumer here
+/// fills what it takes before reading it, so clearing a 25 MB buffer each frame
+/// would be a memset with no reader.
+pub(crate) fn take(buf: &mut Vec<f32>, len: usize) -> &mut [f32] {
+    if buf.len() < len {
+        buf.resize(len, 0.0);
+    }
+    &mut buf[..len]
+}
+
 /// Denoise an interleaved RGB f32 image in place, at the resolution it will be
 /// displayed at.
 ///
@@ -87,6 +125,17 @@ pub fn denoise_rgb_interleaved(
     width: usize,
     height: usize,
     config: &DenoiseConfig,
+) {
+    denoise_rgb_interleaved_with(buf, width, height, config, &mut DenoiseScratch::default());
+}
+
+/// [`denoise_rgb_interleaved`], reusing a caller-owned set of buffers.
+pub fn denoise_rgb_interleaved_with(
+    buf: &mut [f32],
+    width: usize,
+    height: usize,
+    config: &DenoiseConfig,
+    scratch: &mut DenoiseScratch,
 ) {
     let pixels = width * height;
     if pixels == 0 || buf.len() < pixels * 3 || !config.is_enabled() {
@@ -100,19 +149,26 @@ pub fn denoise_rgb_interleaved(
     // than the image would run off the end of them.
     let buf = &mut buf[..pixels * 3];
 
-    let mut luma = vec![0.0f32; pixels];
-    let mut cb = vec![0.0f32; pixels];
-    let mut cr = vec![0.0f32; pixels];
-    split_ycbcr(buf, &mut luma, &mut cb, &mut cr);
+    // Destructured in one binding so the planes and the wavelet's buffers are
+    // borrowed disjointly — `denoise_luma_with` needs the latter while `luma` is
+    // still out on loan from the former.
+    let DenoiseScratch {
+        planes, wavelet, ..
+    } = scratch;
+    let [luma_buf, cb_buf, cr_buf] = planes;
+    let luma = take(luma_buf, pixels);
+    let cb = take(cb_buf, pixels);
+    let cr = take(cr_buf, pixels);
+    split_ycbcr(buf, luma, cb, cr);
 
     if config.chroma.is_enabled() {
-        guided::denoise_chroma(&luma, &mut cb, &mut cr, width, height, &config.chroma);
+        guided::denoise_chroma(luma, cb, cr, width, height, &config.chroma);
     }
     if config.luma.is_enabled() {
-        wavelet::denoise_luma(&mut luma, width, height, &config.luma);
+        wavelet::denoise_luma_with(luma, width, height, &config.luma, wavelet);
     }
 
-    merge_ycbcr(buf, &luma, &cb, &cr);
+    merge_ycbcr(buf, luma, cb, cr);
 }
 
 /// Interleaved RGB -> three planar channels.

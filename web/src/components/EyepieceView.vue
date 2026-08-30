@@ -311,12 +311,15 @@ function displayedCanvasSize() {
   return {width: width * dpr, height: height * dpr}
 }
 
-let lastReported = {width: 0, height: 0}
-
+/**
+ * Report the canvas size to the server.
+ *
+ * Deliberately not memoised here: `sendResolution` remembers the last viewport
+ * and replays it on reconnect, so a local "same size, skip it" guard would
+ * suppress exactly the report a fresh socket needs.
+ */
 function reportViewportResolution() {
   const {width, height} = displayedCanvasSize()
-  if (width === lastReported.width && height === lastReported.height) return
-  lastReported = {width, height}
   sendResolution(width, height)
 }
 

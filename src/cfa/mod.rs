@@ -242,7 +242,11 @@ impl CfaPipeline {
             return;
         }
         for stage in &self.stages {
-            let _span = tracing::debug_span!("cfa_stage", stage = stage.name()).entered();
+            // `info_span!`, not `debug_span!`: these run per captured frame and
+            // cost real milliseconds on a Pi, and `--span-timings` — which
+            // AGENTS.md names as *the* on-device breakdown — filters at INFO.
+            // A stage nobody can measure is a stage nobody can decide about.
+            let _span = tracing::info_span!("cfa_stage", stage = stage.name()).entered();
             if let Err(e) = stage.apply(frame) {
                 tracing::warn!(stage = stage.name(), error = %e, "CFA stage failed, skipping");
             }

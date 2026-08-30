@@ -31,8 +31,8 @@ The filter is *guided* by the brightness image, which means it stops smoothing
 wherever the brightness has an edge — a star keeps its own colour instead of
 bleeding it across the sky beside it.
 
-On the reference IMX533 frame this alone takes visible sky noise from 7.4 to 5.9
-output levels, with integrated nebula brightness unchanged to within 0.2 %.
+On the reference IMX533 frame this alone takes visible sky noise from 6.8 to 5.7
+output levels, with integrated target brightness unchanged to within 0.2 %.
 Leave it on.
 
 **Colour strength** controls how far the colour planes move toward the smoothed
@@ -49,14 +49,28 @@ at the *coarse* scales would remove the most visible mottle, but coarse scales
 are also where faint nebulosity lives — the Dumbbell's outer lobes are coarse
 structure, and a filter tuned that way erases them along with the noise.
 
-The finest scale of all is left untouched, because that is where star cores sit.
-On the reference frame, with the colour filter also on, sky noise goes from 7.4
-to 4.5 output levels — a third less grain — while integrated nebula brightness
-moves by 0.4 % and the brightest star is unchanged.
+By default the finest scale of all is left untouched, because that is where star
+cores sit. On the reference frame, with the colour filter also on, sky noise goes
+from 6.8 to 4.7 output levels while integrated target brightness moves by 0.4 %
+and the brightest star is unchanged.
 
-**Grain strength** scales every threshold. 100 % is the tuned default. Lower it
-if the target starts looking soft or plastic; raise it only if the background
-still looks grainy and the target does not.
+**Structure strength** scales the thresholds for the larger scales — the soft
+mottle across the target rather than the fine speckle. 100 % is the tuned
+default. Lower it if the target starts looking soft or plastic; raising it leans
+harder on faint nebulosity, so go carefully.
+
+**Star protection** is the one that actually moves the background. It decides how
+much of that finest scale is left alone — and since almost all the grain lives
+there, it is the only control that visibly changes how smooth the sky looks. At
+100 % nothing about the stars changes and the speckle stays; at 0 % sky noise on
+the reference frame falls from 4.7 to 1.5 output levels, a 4.6x reduction, with
+target brightness still within half a per cent.
+
+The trade is real, so find it by eye: bring protection down until the tightest
+stars start to soften, then back off a step. On a camera whose frames arrive at
+close to your screen's resolution — an IMX464 on a 1440p display, say — this
+control is doing nearly all the work, because there is no spare resolution for
+the resize to average away first.
 
 ::: tip When to turn this one off
 This is the setting that can destroy signal. If the target starts looking

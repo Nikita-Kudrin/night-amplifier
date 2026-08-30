@@ -169,9 +169,12 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     }
   })
 
-  // Re-reporting an unchanged viewport on every ResizeObserver callback would
-  // put a socket write on every layout tick.
-  it('does not repeat an unchanged viewport report', async () => {
+  // The de-duplication that used to live here moved into `useImageStream`. It is
+  // the only layer that can tell "same size, same socket" (skip) from "same size,
+  // new socket" (must re-send) — and a memo here suppressed exactly the report a
+  // reconnect needs, pinning the lossless stream to the server's default tier for
+  // the rest of the session.
+  it('keeps reporting the viewport so a reconnect can replay it', async () => {
     vi.useFakeTimers()
     window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
     window.innerWidth = 1440
@@ -197,7 +200,8 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     window.dispatchEvent(new Event('resize'))
     vi.advanceTimersByTime(250)
 
-    expect(sendResolution.mock.calls.length).toBe(afterMount)
+    expect(sendResolution.mock.calls.length).toBeGreaterThan(afterMount)
+    expect(sendResolution).toHaveBeenLastCalledWith(1440, 1440)
     vi.useRealTimers()
   })
 })

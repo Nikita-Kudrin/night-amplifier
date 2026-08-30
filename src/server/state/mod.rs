@@ -113,13 +113,11 @@ pub struct AppState {
     pub jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
     /// JPEG payloads pre-encoded by the render task, one slot per tier.
     pub jpeg_tier_cache: StdRwLock<JpegTierCache>,
-    /// Number of active LZ4 stream clients
-    pub lz4_clients: AtomicUsize,
     /// Per-tier client counts for the lossless stream.
     ///
-    /// Separate from `lz4_clients`, which only answers "is anyone watching".
-    /// A client that has not yet reported a viewport is counted in the former
-    /// but not the latter, which is why the target box falls back to the 4K cap.
+    /// The only record of who is watching it: `lossless_client_count` sums these
+    /// rather than a second counter, because two counters for one connection are
+    /// two things that can disagree.
     pub lz4_tier_clients: [AtomicUsize; JpegTier::COUNT],
 }
 
@@ -214,7 +212,6 @@ impl AppState {
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
             jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
-            lz4_clients: AtomicUsize::new(0),
             lz4_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
         };
 
@@ -372,6 +369,20 @@ impl AppState {
 
     pub fn tier_client_count(&self, kind: StreamKind, tier: JpegTier) -> usize {
         self.tier_clients(kind)[tier as usize].load(Ordering::SeqCst)
+    }
+
+    /// How many clients the lossless stream currently has, across every tier.
+    ///
+    /// The render task encodes the LZ4 payload only when this is non-zero. Every
+    /// lossless connection holds a `TierClientGuard` for its whole life — a
+    /// client that has not reported a viewport holds one at
+    /// [`JpegTier::LOSSLESS_DEFAULT`] — so this is a complete count and needs no
+    /// counter of its own.
+    pub fn lossless_client_count(&self) -> usize {
+        self.lz4_tier_clients
+            .iter()
+            .map(|c| c.load(Ordering::SeqCst))
+            .sum()
     }
 
     /// Bounding box the lossless stream should encode into.

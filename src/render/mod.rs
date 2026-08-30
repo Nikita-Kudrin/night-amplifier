@@ -23,7 +23,9 @@ pub use black_point::{
     subtract_black_point, subtract_black_point_auto, subtract_black_point_uniform,
     BlackPointConfig,
 };
-pub use denoise::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
+pub use denoise::{
+    ChromaDenoiseConfig, DenoiseConfig, DenoiseScratch, LumaDenoiseConfig, MAX_LUMA_STRENGTH,
+};
 pub use output::{
     apply_contrast_frame, apply_s_curve, finalize_for_display, frame_to_rgb8, frame_to_rgb8_simple,
     frame_to_rgb8_with_contrast, ContrastConfig, DisplayOutput, OutputConfig,

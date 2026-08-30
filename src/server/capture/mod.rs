@@ -19,6 +19,7 @@
 pub mod channel;
 mod context;
 pub mod pipeline;
+mod stage_config;
 mod render_task;
 mod solving;
 mod stacking_task;

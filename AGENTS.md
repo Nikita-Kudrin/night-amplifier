@@ -309,25 +309,42 @@ and box-averages down to it.
 area average, so it removes noise in proportion to the reduction. The browser's fallback is
 `TEXTURE_MIN_FILTER = LINEAR` with no mipmaps, which takes four taps however far it is
 minifying — capped around 1.45x of noise reduction and discarding the rest as aliasing.
-Measured on `250mm-dob-imx533-dumbbell-fits`, encoding into a 1440 tier rather than the 4K
-cap takes sky sigma from 8.90 to 7.41 output levels and the payload to 2.25x smaller;
-`display_output_tests` reports both figures.
+How much this is worth depends entirely on how much spare resolution the sensor has, and
+`display_output_tests` reports it for both fixtures with denoising off, so the figure is the
+resample alone: `250mm-dob-imx533-dumbbell-fits` (3008², square) goes from 8.26 to 6.76
+output levels of sky sigma at a 2.25x smaller payload, while
+`130mm-imx464-dumbell-nebulae-png` (2712x1538) goes from 11.32 to 11.00 — **1.03x, i.e.
+nothing**, because the 1440 tier barely shrinks it. On that sensor the grain has to come out
+somewhere else; see *Spatial denoising* below.
 
-Two structural consequences:
+Three structural consequences:
 
-- **Client accounting is per tier, via `StreamKind`.** `lz4_clients` still only answers "is
-  anyone watching"; `lz4_tier_clients` carries the viewport. The stream keeps *one* payload
-  rather than one per tier, so `AppState::lossless_target_box` serves the **largest** tier
-  any client asked for, and falls back to the 4K cap when nobody has reported one — which
-  is exactly the old behaviour for a client that never sends a viewport.
-- **The shared native RGB8 buffer is no longer unconditionally reusable.** The render task
-  builds one conversion for LZ4 and the non-downsampling JPEG tiers to share. Once the
-  lossless stream downsamples, reusing it silently ships a native-size payload and undoes
-  the whole change; `lz4_downsample_does_not_reuse_the_shared_native_buffer` pins that.
+- **Client accounting is per tier, via `StreamKind`.** `lz4_tier_clients` is the *only*
+  record of a lossless client: `AppState::lossless_client_count` sums it rather than keeping
+  a second counter, because two counters for one connection are two things that can
+  disagree. The stream keeps *one* payload rather than one per tier, so
+  `AppState::lossless_target_box` serves the **largest** tier any client asked for.
+- **A client that has not reported a viewport holds `JpegTier::LOSSLESS_DEFAULT`, which is
+  the 4K cap, not the 1080 floor.** This stream shipped a hardcoded 3840x2160 box before
+  tiers reached it, so an older frontend — or one whose first report is still in flight —
+  must not be *downgraded* by a change that exists to improve it. The JPEG path defaults to
+  the floor instead, because there a wrong guess costs a whole wasted encode rather than a
+  slightly larger payload.
+- **The RGB8 conversion is shared by output size, not by "is it native".** See
+  `render_task::ConversionCache` under *Spatial denoising*.
 
 The frontend reports the **canvas** size, not the window size. In binoview each eye canvas
 shows the whole frame at roughly half the window width, so reporting the window doubles the
-pixels either eye can use — that difference is 1.20x against 2.19x of grain reduction.
+pixels either eye can use.
+
+**The viewport is re-reported on every connect, including reconnects.** The server registers
+a fresh tier per connection, so a socket that reconnects without re-reporting is served at
+the server's default for the rest of the session. `useImageStream` therefore owns the last
+reported viewport, replays it from `onOpen`, and only treats it as delivered when `send`
+says the socket actually took it — a report made before the socket opened is silently
+dropped by `WebSocket.send`. Callers must **not** memoise "same size, skip it" themselves:
+`EyepieceView` did, and it suppressed exactly the report a reconnect needed, pinning the
+lossless stream to the smallest tier until the window was resized or the page reloaded.
 
 ## Adding a Stacking Type
 
@@ -381,14 +398,38 @@ reason it exists at all — they are fully implemented and still have no call si
   of the 3x3 whenever the centre is the brightest, which is the only case the filter acts on.
   No de-interleave into planar buffers either — row triples `step` apart with stride-`step`
   reads hit the same cache lines without two 36 MB copies per frame.
-- **`cfa::fpn` levels each row then each column against the median of the line medians**,
-  not against a whole-site median: offsets built that way sum to zero, so the correction
-  cannot shift the frame's overall level and change what the autostretch solves for.
-  It is **skipped for `StackingType::Planetary`** — a lunar disc fills enough of each line
-  to move its level, and flattening that carves bands across the disc.
-  On the IMX533 fixture it subtracts ~5.8 ADU RMS per row and ~6.2 per column, matching the
-  measured excess; `cfa_tests` reports how much of that is genuinely line-to-line (about a
-  quarter of the row figure, and none of the column figure) versus smooth structure.
+- **`cfa::fpn` levels each line against its own neighbours, not against the frame.** This is
+  the load-bearing part and it was not always so: subtracting each line's raw median against
+  a whole-site reference removes the entire low-frequency component of the axis, and a target
+  spanning hundreds of lines *is* low-frequency. On the IMX533 fixture that drained **5.2 %
+  of the Dumbbell's integrated flux** — an order of magnitude more than the denoisers
+  downstream are allowed to move it, and completely invisible to a test that only asks
+  whether the lines got flatter. Flattening lines was never the goal; removing what smooth
+  structure cannot explain was.
+
+  So each site's line levels are high-passed first, against a **centred moving average of
+  even order**. The even order is not an implementation detail: it annihilates a period-2
+  component exactly, and odd/even line readout is period 2. A *median* filter is worse than
+  useless — an odd-width median has a strict alternation as a root, so it reproduces the
+  pattern and the residual comes out zero. The residual is also centred by construction,
+  which is what the old whole-site reference was there to guarantee.
+
+  The window is deliberately **narrow** — eight lines of one site either side — and the
+  sweep that settled it is worth not repeating. Widening it removes no more readout offset:
+  the line-to-line excess already reaches the noise floor at every width from 8 to 192. It
+  only eats more real structure, and at 48 the correction measurably *added* spread to one
+  site of the fixture, which is a correction inventing the defect it exists to remove.
+
+  With the high-pass at 8, integrated target flux on the fixture moves **0.008 %**, against
+  the 5.2 % the whole-frame reference cost, and star count is unchanged at 200. `cfa_tests`
+  asserts on both ends — line-to-line excess to the noise floor *and* flux to 0.2 %. The
+  unit tests assert on the line-to-line component too, and per colour site: a whole-row
+  median mixes the two x-parities, which receive different offsets, so their difference reads
+  as residual no per-site correction could remove. Never assert on the total — that is
+  asserting that real gradients get flattened.
+
+  Skipped for `StackingType::Planetary` — a lunar disc fills enough of each line to move its
+  level, and flattening that carves bands across the disc.
 - Detection is separated from application in both filters, so a corrected sample never feeds
   the test for one of its neighbours and the result does not depend on how rayon split the rows.
 
@@ -396,6 +437,26 @@ reason it exists at all — they are fully implemented and still have no call si
 own the settings-to-stages mapping; `cfa/` itself knows nothing about `CaptureSettings`. The
 probe frame in `task.rs` sizes the pipeline's channels through the *same* call, because
 superpixel debayering changes the frame size by 4x.
+
+**Planetary gets hot-pixel rejection and nothing else.** A hot pixel is in the same place in
+all 5000 frames of a lucky-imaging run, so it survives that stack exactly as it survives a
+deep-sky one, and the filter is one-sided and isolation-gated so it cannot bite the disc.
+FPN removal and superpixel debayering are both skipped: the first reads a lunar disc as
+readout level and carves bands across it, the second halves both dimensions, which is the
+opposite of the entire point of the mode. Each of the three gates says so at its own site —
+the asymmetry is a decision, not an oversight.
+
+**The stage is timed.** `cfa_stage` is an `info_span!`, not a `debug_span!`, and
+`convert_captured_frame` wraps the pipeline in `FrameStage::CfaCorrection`. These run per
+captured frame and cost real milliseconds on a Pi (7.0 ms hot pixels, 7.2 ms FPN on an
+IMX533, on a 20-core x86 box), and `--span-timings` filters at INFO — a stage nobody can
+measure is a stage nobody can make a decision about.
+
+**`HotPixelFilter` owns precomputed state, which is why `CfaPipeline` is built per
+settings-change rather than per frame.** Its per-site background and MAD are two median
+passes over ~34 000 samples for each of four colour sites; what they measure moves on the
+timescale of the sky, not the frame rate, so they are reused for `SITE_STATS_TTL_FRAMES` and
+dropped outright whenever the frame's shape changes.
 
 ### Frame memory layout (planar) — non-obvious and load-bearing
 
@@ -490,26 +551,57 @@ Three things here are load-bearing:
   finest first. Denoising hardest at the coarse scales is the intuitive tuning
   and it erases the target: the Dumbbell's outer lobes are level-3 and level-4
   structure. `k[0] = 0` leaves star cores alone.
-- **`k[0] = 0` is a deliberate trade, and it costs grain.** A B3 spline à trous
-  transform puts ~94 % of a *white* signal's variance in level 1, so on synthetic
-  white noise the default `k` reduces sigma by only ~1.1x
-  (`the_default_thresholds_barely_touch_white_noise`). Real sky noise is not
-  white by the time it gets here — the box downsample correlates it first — so on
-  the IMX533 fixture the same configuration takes sky sigma from 7.41 to 4.45
-  output levels with the chroma filter, against 5.93 for chroma alone. Raising
-  `k[0]` to 1.0 takes it to 1.48. `display_output_tests` reports all three
-  alongside integrated nebulosity flux, which is the number that catches a filter
-  eating signal — grain reduction alone is not a passing result.
+- **`k[0]` is the only threshold that moves grain much, and it is a user
+  setting.** A B3 spline à trous transform puts ~94 % of a *white* signal's
+  variance in level 1, so with `k[0] = 0` the default `k` reduces synthetic white
+  noise by only ~1.1x (`the_default_thresholds_barely_touch_white_noise`). Real
+  sky noise is not white by the time it gets here — the box downsample correlates
+  it first — so on the IMX533 fixture the default takes sky sigma from 6.76 to
+  4.71 output levels, against 5.67 for chroma alone. Taking `k[0]` to
+  `MAX_LEVEL1_K` takes it to 1.47.
+
+  `DenoiseSettings::star_protection` is that lever, mapped through
+  `LumaDenoiseConfig::thresholds_for_star_protection`: `1.0` is `k[0] = 0` and is
+  the shipped default, `0.0` is the ceiling. It exists because `strength`
+  *cannot* reach it — `strength` multiplies all four thresholds and `0.0 * s` is
+  still zero, so before this the only exposed control moved exclusively the
+  coarse thresholds, which are the ones that flatten nebulosity. On the IMX464
+  fixture, where the resample gives nothing away for free, the default manages
+  1.10x and zero protection manages 7.43x: the control *is* the feature there.
+  `display_output_tests` reports every case on both fixtures alongside integrated
+  target flux, which is the number that catches a filter eating signal — grain
+  reduction alone is not a passing result.
 
 Skipped for `StackingType::Planetary`, the same way `cfa::fpn` is: lucky imaging
 exists to recover the detail these remove.
 
-One cost worth knowing: the stage runs **per encode**, not per frame, so a
-session with the lossless stream and two JPEG tiers active denoises three times.
-That is the same structure as the encodes themselves — the render task's shared
-native RGB8 buffer already collapses the tiers that do not downsample — but it
-means the figure to budget against is `denoise` x active payloads. The `denoise`
-span reports it under `--span-timings`.
+### The cost, and the two things that hold it down
+
+Denoising is roughly **5x the cost of the encode it sits inside** — measured on a
+20-core x86 box at the 1440 tier on the IMX533 fixture, 4.7 ms without it and
+17.9 ms with. Two structures keep that from multiplying, and both are load-bearing:
+
+- **`render_task::ConversionCache` shares one RGB8 conversion per distinct output
+  size.** The stage runs per *payload*, not per frame, so a session with the
+  lossless stream and two JPEG tiers would otherwise denoise three times. Payloads
+  are keyed on `encoding::output_dimensions` — the one copy of the arithmetic
+  `frame_to_rgb8_downsampled` itself uses — so two clients that asked for
+  different boxes but resolve to the same size are one conversion and one encode.
+  This replaced a narrower "share the native buffer between LZ4 and the tiers that
+  do not downsample" special case; native size is simply the case where every box
+  resolves to the frame's own dimensions.
+- **`DenoiseScratch` is owned by the render thread, not allocated per pass.** A
+  pass at 1440² allocates ~75 MB — the staged interleaved buffer, three planar
+  channels, the wavelet's three — and on the same box that is **13 ms of the 20 ms**
+  the filters were adding. Page faults, not arithmetic. It is passed down
+  explicitly rather than kept in a thread-local because `ws.rs`'s inline encode for
+  a newly-connected client runs on a pooled tokio blocking thread, where a
+  thread-local would strand 75 MB per thread the pool ever grows to. Callers that
+  convert once use the plain `frame_to_rgb8_downsampled` / `denoise_rgb_interleaved`
+  and pay the allocation once. The guided filter's subsampled coefficient maps are
+  *not* pooled yet — about 12 % of the total, and the fiddliest part.
+
+The `denoise` and `frame_to_rgb8` spans report both under `--span-timings`.
 
 ### The f32 -> 8-bit boundary (`render::output::quantize`)
 
@@ -542,8 +634,8 @@ Two things are easy to get wrong here:
 - **The matrix is 8x8, not the conventional 4x4.** At the eyepiece a 4x4 cell's ~7 arcmin
   period sits inside what the eye resolves, so it reads as texture instead of disappearing.
 
-`black_point_sigma` is the only parameter in the current design that moves displayed sky
-grain: the MTF solve pins `mtf(black_point_sigma * sigma) -> target_background`, which is
+Before the wavelet denoiser existed, `black_point_sigma` was the only parameter that moved displayed sky
+grain (`DenoiseSettings::star_protection` is the other one now): the MTF solve pins `mtf(black_point_sigma * sigma) -> target_background`, which is
 scale-invariant, so grain amplitude does **not** fall with stack depth or exposure. The
 eyepiece intensity slider interpolates it *upward* (toward `EYEPIECE_BLACK_POINT_SIGMA`)
 for that reason; it used to interpolate downward under a comment claiming it clipped noise,
@@ -659,9 +751,11 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 
 ### Pipeline performance instrumentation
 
-`--span-timings` turns on `FmtSpan::NEW | CLOSE`, so every stage span (`camera_capture`, `Debayerer::debayer`,
-`stacking_iteration`, `render_iteration`, `process_preview_frame`, `encode_jpeg_tiers`, `denoise`) logs its duration. This is
-the on-device breakdown — no OTLP collector required.
+`--span-timings` turns on `FmtSpan::NEW | CLOSE`, so every stage span (`camera_capture`, `cfa_stage`,
+`Debayerer::debayer`, `stacking_iteration`, `render_iteration`, `process_preview_frame`, `frame_to_rgb8`,
+`denoise`, `encode_jpeg_tiers`) logs its duration. This is the on-device breakdown — no OTLP collector
+required. Anything that runs per frame or per payload belongs at `info_span!`, not `debug_span!`, or it
+is invisible here.
 
 Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping and
 S-curve contrast run as a single pass under `auto_stretch` → `apply_fused_stretch_frame`. There is no
