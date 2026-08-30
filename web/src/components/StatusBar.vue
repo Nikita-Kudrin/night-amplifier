@@ -48,6 +48,14 @@ const connectionStatus = computed(() => {
 
 const rejectedCount = computed(() => eventStream.rejectedCount.value)
 
+// "Rejected 9" on its own leaves the user with no idea whether to refocus,
+// wait out a cloud, or check the mount. The server already decides why.
+const framesTooltip = computed(() => {
+  const base = 'Total: Frames captured and processed. Rejected: Captured frames that failed alignment or quality checks. Dropped: Frames discarded because the CPU was too busy to process them.'
+  const reason = eventStream.lastRejectionReason.value
+  return reason ? `${base} Most recent rejection: ${reason}.` : base
+})
+
 
 </script>
 
@@ -269,7 +277,7 @@ const rejectedCount = computed(() => eventStream.rejectedCount.value)
       
       <BaseInfoIcon 
         v-if="eventStream.frameCount.value > 0 || eventStream.droppedCount.value > 0"
-        message="Total: Frames captured and processed. Rejected: Captured frames that failed alignment or quality checks. Dropped: Frames discarded because the CPU was too busy to process them." 
+        :message="framesTooltip" 
       />
     </div>
 

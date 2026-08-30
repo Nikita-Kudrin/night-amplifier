@@ -38,13 +38,46 @@ impl Default for AdaptiveRegistration {
     }
 }
 
+/// Star cap for the live ladder's first rung.
+///
+/// Triangle generation is O(n³) in the stars it is handed, so this constant sets
+/// the per-frame cost far more than anything else in registration. Median
+/// registration time over 8 frame pairs per bundled fixture set, release build:
+///
+/// | first rung          | orion   | ring    | dumbell | dumbbell-fits | failures |
+/// |---------------------|---------|---------|---------|---------------|----------|
+/// | `default` (50)      | 79.3 ms | 1.72 ms | 1.09 ms | 0.16 ms       | 2        |
+/// | `default(30)`       |  5.2 ms | 0.23 ms | 0.18 ms | 0.09 ms       | 2        |
+/// | `default(25)`       |  2.1 ms | 0.16 ms | 0.13 ms | 0.09 ms       | 4        |
+///
+/// 30 is the smallest cap that fails no more often than the uncapped preset. The
+/// dense-field case is what makes this matter: 50 stars generate ~20,800
+/// triangles against 30's ~4,000, and the target platform is a Raspberry Pi 5.
+const LIVE_FIRST_RUNG_MAX_STARS: usize = 30;
+
 impl AdaptiveRegistration {
-    /// Creates a new adaptive registration with fast configuration progression.
-    /// Only tries 2 configs for speed - default and robust fallback.
+    /// Creates a new adaptive registration: two configs, tried in order.
+    ///
+    /// `fast` used to lead. Measured across the bundled fixtures it failed on
+    /// almost every frame — all 34 of the 250 mm dumbbell set, 15 of 19 on the
+    /// 130 mm one — so nearly every frame paid for a doomed attempt before
+    /// `robust` did the real work. `default` succeeds where `fast` fails, at
+    /// equal or better fit quality, which makes the common case one attempt
+    /// instead of two.
+    ///
+    /// The first rung is capped at [`LIVE_FIRST_RUNG_MAX_STARS`]. Reordering the
+    /// ladder on attempt *count* alone was a regression: the discarded `fast`
+    /// attempt cost 0.01–0.07 ms, while uncapped `default` costs up to 80 ms on a
+    /// dense field. Fit quality is unchanged by the cap — registration accuracy
+    /// comes from RANSAC over the correspondences, not from feeding more stars
+    /// into the triangle matcher.
     pub fn new() -> Self {
         Self {
             configs: vec![
-                ("fast".to_string(), RegistrationConfig::fast()),
+                (
+                    "default".to_string(),
+                    RegistrationConfig::default().with_max_stars(LIVE_FIRST_RUNG_MAX_STARS),
+                ),
                 ("robust".to_string(), RegistrationConfig::robust()),
             ],
         }
@@ -155,8 +188,12 @@ impl AdaptiveRegistration {
         let correspondences =
             get_correspondences_for_transform(ref_stars, tgt_stars, transform, threshold);
 
+        // Infinity, not zero: 0.0 is the *best* residual a fit can report, so a
+        // caller folding this into a running median would read "no fit at all"
+        // as "a perfect fit". `FrameGate` scores frames against exactly such a
+        // median.
         if correspondences.is_empty() {
-            return (0, 0.0);
+            return (0, f32::INFINITY);
         }
 
         let mean_residual = correspondences
@@ -323,6 +360,49 @@ mod tests {
 
         assert!(result.matched_stars >= 3);
         assert!(result.mean_residual < 5.0);
+    }
+
+    /// Triangle generation is O(n³) in the stars handed to the matcher, so the
+    /// live ladder's first rung is what sets per-frame registration cost. An
+    /// uncapped `default` (50 stars) measured 80 ms per frame on a dense field
+    /// against `robust`'s 2 ms — pinned here because the cap is invisible at the
+    /// call site and easy to lift back out while "tidying".
+    #[test]
+    fn the_live_ladder_caps_its_first_rung() {
+        let adaptive = AdaptiveRegistration::new();
+        let (name, first) = &adaptive.configs[0];
+
+        assert_eq!(name, "default");
+        assert!(
+            first.max_stars <= LIVE_FIRST_RUNG_MAX_STARS,
+            "first rung matches over {} stars; triangle generation is O(n³)",
+            first.max_stars
+        );
+    }
+
+    /// 0.0 is the *best* residual a fit can report. Handing it back for a
+    /// transform nothing corresponds to lets a caller averaging residuals read
+    /// "no fit" as "perfect fit" — `FrameGate` keeps exactly such a median.
+    #[test]
+    fn a_fit_with_no_correspondences_reports_an_infinite_residual() {
+        let adaptive = AdaptiveRegistration::new();
+        let ref_stars = create_test_stars();
+        let tgt_stars = create_test_stars();
+
+        // A transform that throws every star clean out of correspondence range.
+        let nonsense = AffineTransform {
+            tx: 1.0e6,
+            ty: 1.0e6,
+            ..AffineTransform::identity()
+        };
+        let (matched, residual) =
+            adaptive.compute_diagnostics(&ref_stars, &tgt_stars, &nonsense, 3.0);
+
+        assert_eq!(matched, 0);
+        assert!(
+            residual.is_infinite(),
+            "no correspondences must not read as a perfect fit: {residual}"
+        );
     }
 
     #[test]

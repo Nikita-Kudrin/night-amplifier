@@ -2,7 +2,7 @@ mod comet_plugin;
 mod config;
 mod incremental_pixel;
 mod pipeline;
-mod quality_limits;
+mod quality_baseline;
 mod rejection;
 mod stack;
 mod stacker;

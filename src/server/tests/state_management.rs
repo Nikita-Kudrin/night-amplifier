@@ -49,8 +49,8 @@ async fn test_app_state_reset_session() {
     let state = create_test_state();
 
     // Add some data
-    state.frame_captured(true).await;
-    state.frame_captured(true).await;
+    state.frame_captured(true, None).await;
+    state.frame_captured(true, None).await;
     state.frame_rejected("test".to_string()).await;
 
     // Reset
@@ -172,14 +172,14 @@ async fn test_frame_captured_increments_counts() {
     state.reset_session().await;
 
     // Capture stacked frame
-    state.frame_captured(true).await;
+    state.frame_captured(true, None).await;
     let session = state.session.read().await;
     assert_eq!(session.frame_count, 1);
     assert_eq!(session.stacked_count, 1);
     drop(session);
 
     // Capture non-stacked frame
-    state.frame_captured(false).await;
+    state.frame_captured(false, None).await;
     let session = state.session.read().await;
     assert_eq!(session.frame_count, 2);
     assert_eq!(session.stacked_count, 1);
@@ -204,7 +204,7 @@ async fn test_frame_captured_broadcasts_event() {
     let mut events_rx = state.subscribe_events();
     state.reset_session().await;
 
-    state.frame_captured(true).await;
+    state.frame_captured(true, None).await;
 
     let event = events_rx.recv().await.unwrap();
     match event {
@@ -212,13 +212,46 @@ async fn test_frame_captured_broadcasts_event() {
             frame_number,
             stacked_count,
             rejected_count,
+            rejection_reason,
         } => {
             assert_eq!(frame_number, 1);
             assert_eq!(stacked_count, 1);
             assert_eq!(rejected_count, 0);
+            assert_eq!(rejection_reason, None);
         }
         _ => panic!("Expected FrameCaptured event"),
     }
+}
+
+/// A frame that arrived fine and merely aligned badly must reach the UI with a
+/// reason, and must *not* go through `frame_rejected` — that path feeds the
+/// capture-abort burst detector, so a night of soft seeing would stop the
+/// capture.
+#[tokio::test]
+async fn a_gate_rejection_carries_its_reason_without_arming_the_abort_detector() {
+    let state = create_test_state();
+    let mut events_rx = state.subscribe_events();
+    state.reset_session().await;
+
+    state
+        .frame_captured(false, Some("stars far larger than the session median"))
+        .await;
+
+    match events_rx.recv().await.unwrap() {
+        ServerEvent::FrameCaptured {
+            rejection_reason, ..
+        } => assert_eq!(
+            rejection_reason.as_deref(),
+            Some("stars far larger than the session median")
+        ),
+        other => panic!("Expected FrameCaptured event, got {other:?}"),
+    }
+
+    let session = state.session.read().await;
+    assert!(
+        session.rejection_timestamps.is_empty(),
+        "a badly aligned frame must not count towards the capture-abort burst"
+    );
 }
 
 #[tokio::test]
@@ -331,8 +364,8 @@ async fn test_session_reset_clears_all_counts() {
     let state = create_test_state();
 
     // Add some data
-    state.frame_captured(true).await;
-    state.frame_captured(true).await;
+    state.frame_captured(true, None).await;
+    state.frame_captured(true, None).await;
     state.frame_rejected("test".to_string()).await;
 
     // Verify data exists

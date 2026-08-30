@@ -12,7 +12,7 @@ use tracing::{info_span, warn};
 
 use super::config::{FrameQuality, StackingConfig};
 use super::incremental_pixel::IncrementalPixel;
-use super::quality_limits::QualityLimits;
+use super::quality_baseline::QualityBaseline;
 use super::rejection::{RejectionMethod, REJECTION_PLUGIN};
 
 pub struct MasterStack {
@@ -22,7 +22,7 @@ pub struct MasterStack {
     config: StackingConfig,
     frame_count: usize,
     pixels: Vec<IncrementalPixel>,
-    quality_limits: QualityLimits,
+    quality_baseline: QualityBaseline,
     frame_qualities: Vec<FrameQuality>,
 }
 
@@ -62,7 +62,7 @@ impl MasterStack {
             config,
             frame_count: 0,
             pixels: vec![IncrementalPixel::new(); pixel_count],
-            quality_limits: QualityLimits::default(),
+            quality_baseline: QualityBaseline::default(),
             frame_qualities: Vec::new(),
         })
     }
@@ -114,11 +114,13 @@ impl MasterStack {
 
         let data = frame.data();
 
-        // 1. Update running quality limits and calculate this frame's dynamic weight
-        self.quality_limits.update(&quality);
+        // 1. Weigh this frame against the frames already stacked, then fold it
+        //    into the baseline. Recording first would let the frame help define
+        //    the yardstick it is measured against.
         let weight = self
-            .quality_limits
+            .quality_baseline
             .calculate_weight(&quality, &self.config.weighting);
+        self.quality_baseline.record(&quality);
 
         let needs_rejection = matches!(
             self.config.rejection,
@@ -226,7 +228,7 @@ impl MasterStack {
     pub fn clear(&mut self) {
         self.frame_count = 0;
         self.pixels.par_iter_mut().for_each(|p| p.reset());
-        self.quality_limits = QualityLimits::default();
+        self.quality_baseline.clear();
         self.frame_qualities.clear();
     }
 

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use night_amplifier::{Frame, PixelFormat};
 
 use crate::integration::common::{
-    find_fixture_sets, LoadedImage, FITS_EXTENSIONS, TIFF_EXTENSIONS,
+    find_fixture_sets, LoadedImage, FITS_EXTENSIONS, PNG_EXTENSIONS, TIFF_EXTENSIONS,
 };
 
 // ============================================================================
@@ -97,6 +97,49 @@ pub fn load_tiff(path: &Path) -> Result<LoadedImage, String> {
 }
 
 // ============================================================================
+// PNG Loading
+// ============================================================================
+
+/// Loads a PNG file and converts it to a Frame.
+///
+/// Several of the bundled fixture sets are 16-bit greyscale PNGs of undebayered
+/// sensor output, the same thing the TIFF loader treats as CFA data. Without
+/// this they are invisible to `find_fixture_sets`, so tests that iterate the
+/// fixtures silently skip three of the four managed sets.
+pub fn load_png(path: &Path) -> Result<LoadedImage, String> {
+    let img = image::open(path).map_err(|e| format!("Failed to open PNG {:?}: {}", path, e))?;
+    let (width, height) = (img.width() as usize, img.height() as usize);
+
+    let (raw_bytes, format, channels, is_bayer) = match img {
+        image::DynamicImage::ImageLuma16(g) => {
+            let bytes: Vec<u8> = g.as_raw().iter().flat_map(|&v| v.to_le_bytes()).collect();
+            (bytes, PixelFormat::Bayer16, 1, true)
+        }
+        image::DynamicImage::ImageLuma8(g) => (g.into_raw(), PixelFormat::Bayer8, 1, true),
+        image::DynamicImage::ImageRgb8(rgb) => (rgb.into_raw(), PixelFormat::Rgb8, 3, false),
+        image::DynamicImage::ImageRgb16(rgb) => {
+            let bytes: Vec<u8> = rgb.as_raw().iter().flat_map(|&v| v.to_le_bytes()).collect();
+            (bytes, PixelFormat::Rgb16, 3, false)
+        }
+        other => {
+            let rgb = other.to_rgb8();
+            (rgb.into_raw(), PixelFormat::Rgb8, 3, false)
+        }
+    };
+
+    let frame = Frame::from_raw(&raw_bytes, width, height, channels, format)
+        .map_err(|e| format!("Failed to create Frame from PNG {:?}: {}", path, e))?;
+
+    Ok(LoadedImage {
+        frame,
+        path: path.to_path_buf(),
+        width,
+        height,
+        is_bayer,
+    })
+}
+
+// ============================================================================
 // FITS Loading
 // ============================================================================
 
@@ -137,6 +180,8 @@ pub fn load_image(path: &Path) -> Result<LoadedImage, String> {
         load_tiff(path)
     } else if FITS_EXTENSIONS.contains(&ext.as_str()) {
         load_fits(path)
+    } else if PNG_EXTENSIONS.contains(&ext.as_str()) {
+        load_png(path)
     } else {
         Err(format!("Unsupported file extension: {}", ext))
     }

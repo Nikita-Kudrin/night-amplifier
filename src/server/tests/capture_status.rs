@@ -42,9 +42,9 @@ async fn test_capture_status_with_frame_counts() {
 
     // Simulate some frame captures
     state.reset_session().await;
-    state.frame_captured(true).await;
-    state.frame_captured(true).await;
-    state.frame_captured(false).await;
+    state.frame_captured(true, None).await;
+    state.frame_captured(true, None).await;
+    state.frame_captured(false, None).await;
     state.frame_rejected("Test rejection".to_string()).await;
 
     let (status, json) = get_json(&app, "/api/capture/status").await;
