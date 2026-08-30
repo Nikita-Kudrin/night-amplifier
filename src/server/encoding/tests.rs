@@ -613,7 +613,7 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
     let scale_lut = std::sync::Arc::new(vec![2.0f32; 8192]); // flat 2x scale
     let ready = to_ready_frame_with_stretch(&frame, 0.1, scale_lut);
 
-    let rgb8 = expand_to_rgb8_fused(&ready);
+    let rgb8 = expand_to_rgb8_fused(&ready, &mut Default::default());
 
     // (0,0): (0.2 - 0.1).max(0) * 2.0 = 0.2 -> u8 51
     assert_eq!(&rgb8[0..3], &[51, 51, 51]);
@@ -652,7 +652,7 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
     let ready = to_ready_frame_with_stretch(&frame, 0.0, scale_lut);
 
-    let actual = box_downsample_to_rgb8_fused(&ready, 1, 1);
+    let actual = box_downsample_to_rgb8_fused(&ready, 1, 1, &mut Default::default());
 
     // Production order (downsample-then-stretch): average = 0.4, curve(0.4) =
     // sqrt(0.4) ~= 0.632456 -> u8 ~= 161 (+-1 for LUT interpolation error).

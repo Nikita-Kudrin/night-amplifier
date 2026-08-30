@@ -26,7 +26,7 @@ use std::cell::RefCell;
 
 use rayon::prelude::*;
 
-use crate::render::denoise::DenoiseConfig;
+use crate::render::denoise::{DenoiseConfig, DenoiseScratch};
 use crate::render::output::{write_row_rgb8, DisplayOutput};
 use crate::server::state::RenderReadyFrame;
 
@@ -56,6 +56,26 @@ pub fn frame_to_rgb8_downsampled(
     max_width: u32,
     max_height: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    frame_to_rgb8_downsampled_with(
+        ready_frame,
+        max_width,
+        max_height,
+        &mut DenoiseScratch::default(),
+    )
+}
+
+/// [`frame_to_rgb8_downsampled`], reusing a caller-owned set of denoise buffers.
+///
+/// The render task holds one for the life of its thread: with denoising on, the
+/// buffers this saves re-allocating are 13 ms of the 20 ms the filters add to an
+/// encode. Callers that convert once — the inline encode for a newly-connected
+/// client, tests, benchmarks — use the plain form and pay it once.
+pub fn frame_to_rgb8_downsampled_with(
+    ready_frame: &RenderReadyFrame,
+    max_width: u32,
+    max_height: u32,
+    scratch: &mut DenoiseScratch,
+) -> Result<(Vec<u8>, u32, u32), String> {
     let frame = &ready_frame.linear_frame;
     let width = frame.width();
     let height = frame.height();
@@ -68,12 +88,36 @@ pub fn frame_to_rgb8_downsampled(
         ));
     }
 
-    if width <= max_width as usize && height <= max_height as usize {
+    let (target_width, target_height) = output_dimensions(width, height, max_width, max_height);
+    if (target_width, target_height) == (width, height) {
         return Ok((
-            expand_to_rgb8_fused(ready_frame),
+            expand_to_rgb8_fused(ready_frame, scratch),
             width as u32,
             height as u32,
         ));
+    }
+
+    let rgb8 = box_downsample_to_rgb8_fused(ready_frame, target_width, target_height, scratch);
+    Ok((rgb8, target_width as u32, target_height as u32))
+}
+
+/// The exact size [`frame_to_rgb8_downsampled`] produces for a frame fitted into
+/// a bounding box, without doing the conversion.
+///
+/// The render task keys its per-frame conversion cache on this: two payloads
+/// whose clients asked for different boxes but that resolve to the same output
+/// size are the *same* conversion, and since tier 2 that conversion carries the
+/// denoisers and costs several times the encode that follows it. Sharing it is
+/// only sound if the size is decided by exactly the arithmetic the conversion
+/// will use, which is why this is the one copy of that arithmetic.
+pub fn output_dimensions(
+    width: usize,
+    height: usize,
+    max_width: u32,
+    max_height: u32,
+) -> (usize, usize) {
+    if width <= max_width as usize && height <= max_height as usize {
+        return (width, height);
     }
 
     let aspect_ratio = width as f32 / height as f32;
@@ -89,11 +133,7 @@ pub fn frame_to_rgb8_downsampled(
                 max_height as usize,
             )
         };
-    let target_width = target_width.max(1);
-    let target_height = target_height.max(1);
-
-    let rgb8 = box_downsample_to_rgb8_fused(ready_frame, target_width, target_height);
-    Ok((rgb8, target_width as u32, target_height as u32))
+    (target_width.max(1), target_height.max(1))
 }
 
 /// Expand a frame that already fits the bounding box to interleaved RGB8, fusing the
@@ -104,7 +144,10 @@ pub fn frame_to_rgb8_downsampled(
 /// off the end of a 2-channel frame. [`frame_to_rgb8_downsampled`] rejects
 /// `channels ∉ {1, 3}` before calling either kernel, and keeping these two
 /// crate-private is what makes it the only door in rather than merely the usual one.
-pub(crate) fn expand_to_rgb8_fused(ready_frame: &RenderReadyFrame) -> Vec<u8> {
+pub(crate) fn expand_to_rgb8_fused(
+    ready_frame: &RenderReadyFrame,
+    scratch: &mut DenoiseScratch,
+) -> Vec<u8> {
     debug_assert!(
         matches!(ready_frame.linear_frame.channels(), 1 | 3),
         "expand_to_rgb8_fused requires 1 or 3 channels; frame_to_rgb8_downsampled is the guard"
@@ -117,7 +160,7 @@ pub(crate) fn expand_to_rgb8_fused(ready_frame: &RenderReadyFrame) -> Vec<u8> {
         channels: frame.channels(),
         src: frame.data(),
     };
-    render_rgb8(&source, ready_frame)
+    render_rgb8(&source, ready_frame, scratch)
 }
 
 /// Box-average `frame` to `target_width` x `target_height` in **linear light**, then apply
@@ -140,6 +183,7 @@ pub(crate) fn box_downsample_to_rgb8_fused(
     ready_frame: &RenderReadyFrame,
     target_width: usize,
     target_height: usize,
+    scratch: &mut DenoiseScratch,
 ) -> Vec<u8> {
     debug_assert!(
         matches!(ready_frame.linear_frame.channels(), 1 | 3),
@@ -169,7 +213,7 @@ pub(crate) fn box_downsample_to_rgb8_fused(
         y_scale: height as f32 / target_height as f32,
         col_ranges,
     };
-    render_rgb8(&source, ready_frame)
+    render_rgb8(&source, ready_frame, scratch)
 }
 
 /// One interleaved RGB f32 row at output resolution.
@@ -335,7 +379,11 @@ impl<'a> RowTail<'a> {
 
 /// Drive a row source to interleaved RGB8, staging the resampled image only when
 /// a denoiser needs to see across rows.
-fn render_rgb8<S: RowSource>(source: &S, ready_frame: &RenderReadyFrame) -> Vec<u8> {
+fn render_rgb8<S: RowSource>(
+    source: &S,
+    ready_frame: &RenderReadyFrame,
+    scratch: &mut DenoiseScratch,
+) -> Vec<u8> {
     let tail = RowTail::new(ready_frame);
     let display = ready_frame.pipeline_config.display;
     let denoise = ready_frame.pipeline_config.denoise;
@@ -362,7 +410,7 @@ fn render_rgb8<S: RowSource>(source: &S, ready_frame: &RenderReadyFrame) -> Vec<
         return output;
     }
 
-    stage_and_denoise(source, &tail, display, &denoise, &mut output);
+    stage_and_denoise(source, &tail, display, &denoise, &mut output, scratch);
     output
 }
 
@@ -374,23 +422,30 @@ fn stage_and_denoise<S: RowSource>(
     display: DisplayOutput,
     denoise: &DenoiseConfig,
     output: &mut [u8],
+    scratch: &mut DenoiseScratch,
 ) {
     let target_width = source.target_width();
     let target_height = source.target_height();
     let row_len = target_width * 3;
+    let staged_len = row_len * target_height;
 
-    let mut staged = vec![0.0f32; row_len * target_height];
+    // Taken out rather than borrowed: the denoiser needs the rest of `scratch`
+    // at the same time, and moving a `Vec` out and back costs a pointer swap.
+    let mut owned = std::mem::take(&mut scratch.staged);
+    let staged = crate::render::denoise::take(&mut owned, staged_len);
+
     staged
         .par_chunks_mut(row_len)
         .with_min_len(32)
         .enumerate()
         .for_each(|(y, row)| source.gather_row(y, row));
 
-    crate::render::denoise::denoise_rgb_interleaved(
-        &mut staged,
+    crate::render::denoise::denoise_rgb_interleaved_with(
+        staged,
         target_width,
         target_height,
         denoise,
+        scratch,
     );
 
     output
@@ -402,4 +457,6 @@ fn stage_and_denoise<S: RowSource>(
             tail.apply(row);
             write_row_rgb8(row_out, row, y, display);
         });
+
+    scratch.staged = owned;
 }

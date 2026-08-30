@@ -37,15 +37,31 @@
 //! Walking row triples `step` apart with stride-`step` reads inside each row
 //! touches the same cache lines without the copies.
 
+use std::sync::Mutex;
+
 use rayon::prelude::*;
 
 use crate::error::{Result, StackError};
 use crate::statistics::fast_median;
 
-use super::{CfaFrame, CfaStage};
+use super::{CfaFrame, CfaPlanes, CfaStage};
 
 /// Samples drawn from the centre crop to estimate one site's noise level.
 const MAX_SIGMA_SAMPLES: usize = 32_768;
+
+/// How many frames one set of per-site background and noise estimates is reused
+/// for.
+///
+/// The estimate is two median passes over ~34 000 samples for each of the four
+/// colour sites, and on a 9 MP frame it is a large share of what this filter
+/// costs. What it measures — the sky level and its MAD — moves on the timescale
+/// of the sky itself: twilight, a passing cloud, a gain change. Recomputing it
+/// per sub buys nothing a 32-frame refresh does not, and a stale estimate shifts
+/// the threshold only by however much the sky actually drifted underneath it.
+///
+/// The estimate is also dropped outright whenever the frame's shape changes, so
+/// binning or an ROI change cannot be served from a stale one.
+const SITE_STATS_TTL_FRAMES: u32 = 32;
 
 /// Scales a MAD into a Gaussian sigma.
 const MAD_TO_SIGMA: f32 = 1.4826;
@@ -84,16 +100,73 @@ pub struct HotPixelStats {
     pub sites_skipped: usize,
 }
 
+/// Per-site background and noise, and how long it has been in use.
+#[derive(Debug)]
+struct CachedSites {
+    /// Frame shape the estimate was taken on. A change to any of it — binning,
+    /// an ROI, a mono/colour swap — invalidates the estimate outright.
+    shape: (usize, usize, usize),
+    /// `(background, sigma)` per colour site, in [`CfaPlanes::origins`] order.
+    /// `None` for a site whose estimate was unusable.
+    sites: Vec<Option<(f32, f32)>>,
+    /// Frames served from this estimate so far.
+    age: u32,
+}
+
 /// A registered [`CfaStage`] wrapper around [`reject_hot_pixels`].
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// Owns the per-site noise estimate across frames — the precomputed state
+/// [`super::CfaPipeline`] is built per settings-change to hold. Rebuilding the
+/// stage (which the stacking task does whenever the correction settings or the
+/// stacking type move) drops it.
+#[derive(Debug, Default)]
 pub struct HotPixelFilter {
     config: HotPixelConfig,
+    /// A `Mutex` rather than a `RefCell` because `CfaStage` is `Sync`; it is
+    /// uncontended in practice, since one stacking task owns the pipeline.
+    cached: Mutex<Option<CachedSites>>,
 }
 
 impl HotPixelFilter {
     /// Build the stage with explicit tuning.
     pub fn new(config: HotPixelConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            cached: Mutex::new(None),
+        }
+    }
+
+    /// Per-site estimates for this frame, reusing the cached set while it is
+    /// still fresh and describes the same frame shape.
+    fn site_stats(&self, cfa: &CfaFrame, planes: &CfaPlanes) -> Vec<Option<(f32, f32)>> {
+        let shape = (planes.width, planes.height, planes.step);
+        let mut guard = match self.cached.lock() {
+            Ok(guard) => guard,
+            // A poisoned lock means a previous estimate panicked. Recomputing is
+            // always correct, so this must not cost the exposure.
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if let Some(cached) = guard.as_mut() {
+            if cached.shape == shape && cached.age < SITE_STATS_TTL_FRAMES {
+                cached.age += 1;
+                return cached.sites.clone();
+            }
+        }
+
+        let data = cfa.frame().data();
+        let sites: Vec<Option<(f32, f32)>> = planes
+            .origins()
+            .map(|(x0, y0)| {
+                site_background(data, planes.width, planes.height, x0, y0, planes.step)
+            })
+            .collect();
+        *guard = Some(CachedSites {
+            shape,
+            sites: sites.clone(),
+            age: 0,
+        });
+        sites
     }
 }
 
@@ -103,7 +176,14 @@ impl CfaStage for HotPixelFilter {
     }
 
     fn apply(&self, frame: &mut CfaFrame) -> Result<()> {
-        let stats = reject_hot_pixels(frame, &self.config)?;
+        let Some(planes) = frame.planes() else {
+            return Err(StackError::ChannelMismatch {
+                expected: 1,
+                actual: frame.frame().channels(),
+            });
+        };
+        let sites = self.site_stats(frame, &planes);
+        let stats = reject_hot_pixels_with(frame, &self.config, &sites)?;
         tracing::debug!(
             corrected = stats.corrected,
             sites_skipped = stats.sites_skipped,
@@ -125,6 +205,30 @@ pub fn reject_hot_pixels(cfa: &mut CfaFrame, config: &HotPixelConfig) -> Result<
             actual: cfa.frame().channels(),
         });
     };
+    let data = cfa.frame().data();
+    let sites: Vec<Option<(f32, f32)>> = planes
+        .origins()
+        .map(|(x0, y0)| site_background(data, planes.width, planes.height, x0, y0, planes.step))
+        .collect();
+    reject_hot_pixels_with(cfa, config, &sites)
+}
+
+/// [`reject_hot_pixels`] against per-site estimates the caller already holds.
+///
+/// `sites` is `(background, sigma)` in [`CfaPlanes::origins`] order, `None` for a
+/// site whose estimate was unusable. Splitting the estimate from the sweep is
+/// what lets [`HotPixelFilter`] keep it across frames.
+pub fn reject_hot_pixels_with(
+    cfa: &mut CfaFrame,
+    config: &HotPixelConfig,
+    sites: &[Option<(f32, f32)>],
+) -> Result<HotPixelStats> {
+    let Some(planes) = cfa.planes() else {
+        return Err(StackError::ChannelMismatch {
+            expected: 1,
+            actual: cfa.frame().channels(),
+        });
+    };
 
     let (width, height, step) = (planes.width, planes.height, planes.step);
     let mut stats = HotPixelStats::default();
@@ -135,9 +239,8 @@ pub fn reject_hot_pixels(cfa: &mut CfaFrame, config: &HotPixelConfig) -> Result<
     let mut corrections: Vec<(usize, f32)> = Vec::new();
     {
         let data = cfa.frame().data();
-        for (x0, y0) in planes.origins() {
-            let Some((background, sigma)) = site_background(data, width, height, x0, y0, step)
-            else {
+        for (site, (x0, y0)) in sites.iter().zip(planes.origins()) {
+            let Some((background, sigma)) = *site else {
                 stats.sites_skipped += 1;
                 continue;
             };
@@ -385,6 +488,65 @@ mod tests {
 
         assert_eq!(stats.corrected, 1);
         assert!((cfa.frame().get_pixel(64, 64, 0) - 0.10).abs() < 0.01);
+    }
+
+    /// The estimate is reused across frames — that is the point of caching it —
+    /// but a hot sample must still be corrected on every frame, not only on the
+    /// one the estimate was taken from.
+    #[test]
+    fn a_reused_estimate_still_corrects_every_frame() {
+        let filter = HotPixelFilter::new(HotPixelConfig::default());
+
+        for round in 0..3 {
+            let mut frame = sky(64, 64, 0.2, 0.02);
+            frame.set_pixel(20, 20, 0, 0.95);
+            let mut cfa = mosaic(frame);
+            filter.apply(&mut cfa).unwrap();
+            assert!(
+                cfa.frame().get_pixel(20, 20, 0) < 0.4,
+                "round {round}: hot sample survived at {}",
+                cfa.frame().get_pixel(20, 20, 0)
+            );
+        }
+    }
+
+    /// A stale estimate must never be served to a differently-shaped frame: a
+    /// binning or ROI change moves both the sample count and the level.
+    #[test]
+    fn a_shape_change_drops_the_cached_estimate() {
+        let filter = HotPixelFilter::new(HotPixelConfig::default());
+
+        let mut small = mosaic(sky(64, 64, 0.2, 0.02));
+        filter.apply(&mut small).unwrap();
+        let shape_after_first = filter.cached.lock().unwrap().as_ref().unwrap().shape;
+        assert_eq!(shape_after_first, (64, 64, 2));
+
+        // A brighter, larger frame: if the estimate were reused the threshold
+        // would still be the small frame's.
+        let mut large = mosaic(sky(96, 96, 0.5, 0.02));
+        filter.apply(&mut large).unwrap();
+        let cached = filter.cached.lock().unwrap();
+        let cached = cached.as_ref().unwrap();
+        assert_eq!(cached.shape, (96, 96, 2));
+        assert_eq!(cached.age, 0, "a reshaped frame must re-estimate, not age");
+    }
+
+    /// The estimate ages out rather than being kept forever, so a sky that
+    /// drifts — twilight, cloud, a gain change — is eventually re-measured.
+    #[test]
+    fn the_estimate_is_re_derived_once_it_ages_out() {
+        let filter = HotPixelFilter::new(HotPixelConfig::default());
+        // The first frame estimates and sets `age` to 0, the next TTL frames are
+        // served from it, and the one after that re-estimates.
+        for _ in 0..SITE_STATS_TTL_FRAMES + 2 {
+            let mut cfa = mosaic(sky(64, 64, 0.2, 0.02));
+            filter.apply(&mut cfa).unwrap();
+        }
+        assert_eq!(
+            filter.cached.lock().unwrap().as_ref().unwrap().age,
+            0,
+            "estimate should have been refreshed on the frame after the TTL"
+        );
     }
 
     #[test]

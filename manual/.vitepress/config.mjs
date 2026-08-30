@@ -19,7 +19,8 @@ export default defineConfig({
           { text: 'Getting Started', link: '/getting-started' },
           { text: 'Live Stacking', link: '/stacking' },
           { text: 'Sensor Corrections', link: '/sensor-corrections' },
-          { text: 'Noise Reduction', link: '/noise-reduction' }
+          { text: 'Noise Reduction', link: '/noise-reduction' },
+          { text: 'Eyepiece Display', link: '/eyepiece-display' }
         ]
       }
     ],

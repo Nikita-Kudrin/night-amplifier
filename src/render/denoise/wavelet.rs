@@ -41,6 +41,11 @@ pub const MAX_LEVELS: usize = 4;
 /// before a full-plane sort is worth 2 M elements of work per frame.
 const MAX_SIGMA_SAMPLES: usize = 1 << 16;
 
+/// Largest overall strength multiplier. The settings layer, the UI slider and
+/// this clamp all have to agree, or the top of the slider does nothing — or
+/// worse, does something the slider cannot express.
+pub const MAX_STRENGTH: f32 = 2.0;
+
 /// À trous wavelet denoising of the luminance plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LumaDenoiseConfig {
@@ -66,7 +71,24 @@ impl Default for LumaDenoiseConfig {
 }
 
 /// Hardest at the finest scale above the stars, backing off as scale grows.
+///
+/// `k[0]` is the level-1 threshold and is not a fixed part of the tuning — it is
+/// what [`LumaDenoiseConfig::thresholds_for_star_protection`] moves. The value
+/// here is full protection, i.e. level 1 untouched.
 pub const DEFAULT_K: [f32; MAX_LEVELS] = [0.0, 3.0, 2.0, 1.0];
+
+/// Level-1 threshold at zero star protection.
+///
+/// A B3 spline à trous transform puts ~94 % of a white signal's variance in
+/// level 1, so this is the only threshold that can move sky grain much. On the
+/// IMX533 fixture it takes sky sigma from 4.71 output levels to 1.47 — 4.6x
+/// against the 1.44x the rest of the tuning manages — while integrated target
+/// flux moves 0.43 % and the brightest star core does not move at all. On the
+/// IMX464 fixture, which the 1440 tier barely resamples, the gap is starker
+/// still: 1.10x against 7.43x. That is what sets the far end at 1.0 rather than
+/// higher: past it, star cores start losing their peak while keeping their
+/// wings, which reads as a bloated blob rather than a cleaner frame.
+pub const MAX_LEVEL1_K: f32 = 1.0;
 
 impl LumaDenoiseConfig {
     pub const OFF: Self = Self {
@@ -79,15 +101,44 @@ impl LumaDenoiseConfig {
         self.enabled && self.strength > 0.0 && self.k.iter().any(|&k| k > 0.0)
     }
 
+    /// Per-level thresholds for a given star protection, `0..=1`.
+    ///
+    /// Protection moves `k[0]` alone. The coarser levels are where faint
+    /// nebulosity lives and their tuning is not a matter of taste; level 1 is
+    /// where both the sky grain and the star cores are, which is exactly the
+    /// trade only an observer at the eyepiece can settle. `1.0` leaves level 1
+    /// untouched, which is what shipped before this was a control.
+    pub fn thresholds_for_star_protection(protection: f32) -> [f32; MAX_LEVELS] {
+        let mut k = DEFAULT_K;
+        k[0] = (1.0 - protection.clamp(0.0, 1.0)) * MAX_LEVEL1_K;
+        k
+    }
+
     /// Thresholds actually applied, in sigmas of each level's own noise.
     fn scaled_k(&self) -> [f32; MAX_LEVELS] {
-        let s = self.strength.clamp(0.0, 4.0);
+        let s = self.strength.clamp(0.0, MAX_STRENGTH);
         std::array::from_fn(|i| self.k[i].max(0.0) * s)
     }
 }
 
 /// Denoise `luma` in place. `width * height` samples, linear light.
+///
+/// Only the tests take this door: production reaches the transform through
+/// [`super::denoise_rgb_interleaved_with`], which lends it buffers.
+#[cfg(test)]
 pub fn denoise_luma(luma: &mut [f32], width: usize, height: usize, config: &LumaDenoiseConfig) {
+    denoise_luma_with(luma, width, height, config, &mut Default::default());
+}
+
+/// [`denoise_luma`], reusing the caller's ping-pong pair and convolution
+/// intermediate instead of allocating three full-size buffers per call.
+pub(super) fn denoise_luma_with(
+    luma: &mut [f32],
+    width: usize,
+    height: usize,
+    config: &LumaDenoiseConfig,
+    buffers: &mut [Vec<f32>; 3],
+) {
     let n = width * height;
     if n == 0 || luma.len() < n {
         return;
@@ -98,9 +149,13 @@ pub fn denoise_luma(luma: &mut [f32], width: usize, height: usize, config: &Luma
     // `luma` becomes the reconstruction accumulator: the detail planes are added
     // into it and the coarsest residual last, so no fourth full-size buffer is
     // needed to hold the sum.
-    let mut coarse = luma[..n].to_vec();
-    let mut next = vec![0.0f32; n];
-    let mut scratch = vec![0.0f32; n];
+    let [coarse_buf, next_buf, scratch_buf] = buffers;
+    // `coarse` and `next` are swapped each level, so these are re-bindings of
+    // the slices rather than of the buffers behind them.
+    let mut coarse = super::take(coarse_buf, n);
+    let mut next = super::take(next_buf, n);
+    let scratch = super::take(scratch_buf, n);
+    coarse.copy_from_slice(&luma[..n]);
     luma[..n].fill(0.0);
 
     let mut level_sigma = 0.0f32;
@@ -114,14 +169,14 @@ pub fn denoise_luma(luma: &mut [f32], width: usize, height: usize, config: &Luma
             break;
         }
 
-        atrous_smooth(&coarse, &mut next, &mut scratch, width, height, hole);
+        atrous_smooth(coarse, next, scratch, width, height, hole);
 
         if level == 0 {
-            level_sigma = estimate_detail_sigma(&coarse, &next, n);
+            level_sigma = estimate_detail_sigma(coarse, next, n);
         }
 
         let threshold = k[level] * level_sigma * (LEVEL_SIGMA[level] / LEVEL_SIGMA[0]);
-        accumulate_detail(&mut luma[..n], &coarse, &next, threshold);
+        accumulate_detail(&mut luma[..n], coarse, next, threshold);
 
         std::mem::swap(&mut coarse, &mut next);
     }
@@ -414,9 +469,10 @@ mod tests {
     /// Real sky noise is not white by the time it reaches here: the encoder's
     /// box downsample correlates neighbouring samples first, which moves
     /// variance into levels 2-4 where the default thresholds do bite. On the
-    /// IMX533 fixture the same configuration takes sky sigma from 7.41 to 4.45
-    /// output levels — see `display_output_tests`. Raising `k[0]` takes it to
-    /// 1.48 and is the lever that trades star cores for grain.
+    /// IMX533 fixture the same configuration takes sky sigma from 6.76 to 4.71
+    /// output levels — see `display_output_tests`. Lowering star protection to
+    /// zero takes it to 1.47, and is the lever that trades star cores for
+    /// grain.
     #[test]
     fn the_default_thresholds_barely_touch_white_noise() {
         let (w, h) = (128, 128);
@@ -451,6 +507,72 @@ mod tests {
             luma[32 * w + 32] > peak * 0.9,
             "star core fell to {} from {peak}",
             luma[32 * w + 32]
+        );
+    }
+
+    /// The star-protection control, at both ends.
+    ///
+    /// Full protection must leave the level-1 threshold at zero — that is
+    /// exactly the shipped default — and no protection must put it at the
+    /// measured ceiling. A mapping that ran the other way would be the worst
+    /// kind of bug here: the control would still move grain, just backwards.
+    #[test]
+    fn star_protection_maps_onto_the_level_one_threshold() {
+        let full = LumaDenoiseConfig::thresholds_for_star_protection(1.0);
+        assert_eq!(full, DEFAULT_K);
+        assert_eq!(full[0], 0.0);
+
+        let none = LumaDenoiseConfig::thresholds_for_star_protection(0.0);
+        assert_eq!(none[0], MAX_LEVEL1_K);
+        assert_eq!(&none[1..], &DEFAULT_K[1..], "only level 1 may move");
+
+        let half = LumaDenoiseConfig::thresholds_for_star_protection(0.5);
+        assert!((half[0] - MAX_LEVEL1_K / 2.0).abs() < 1e-6);
+
+        // Out-of-range input must clamp rather than invert the relationship.
+        assert_eq!(
+            LumaDenoiseConfig::thresholds_for_star_protection(-1.0)[0],
+            MAX_LEVEL1_K
+        );
+        assert_eq!(
+            LumaDenoiseConfig::thresholds_for_star_protection(2.0)[0],
+            0.0
+        );
+    }
+
+    /// What makes the far end of the control safe to offer: at zero protection
+    /// the level-1 threshold bites hard on white noise, and the star core still
+    /// keeps its peak. This is the kernel-level half of the fixture measurement
+    /// in `display_output_tests`.
+    #[test]
+    fn no_protection_cuts_grain_and_still_keeps_a_star_core() {
+        let (w, h) = (128, 128);
+        let config = LumaDenoiseConfig {
+            enabled: true,
+            k: LumaDenoiseConfig::thresholds_for_star_protection(0.0),
+            strength: 1.0,
+        };
+
+        let noisy = xorshift_noise(w * h, 0.2, 0.02);
+        let mut denoised = noisy.clone();
+        denoise_luma(&mut denoised, w, h, &config);
+        let ratio = sigma(&noisy) / sigma(&denoised);
+        assert!(
+            ratio > 2.0,
+            "no protection should bite hard on white noise; got {ratio:.2}x"
+        );
+
+        let mut luma = flat(w, h, 0.05);
+        let peak = 0.9;
+        luma[64 * w + 64] = peak;
+        for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+            luma[(64 + dy) as usize * w + (64 + dx) as usize] = 0.4;
+        }
+        denoise_luma(&mut luma, w, h, &config);
+        assert!(
+            luma[64 * w + 64] > peak * 0.9,
+            "star core fell to {} from {peak} at zero protection",
+            luma[64 * w + 64]
         );
     }
 

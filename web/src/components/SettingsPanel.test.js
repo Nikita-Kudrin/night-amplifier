@@ -308,7 +308,7 @@ describe('SettingsPanel', () => {
             })
         })
 
-        it('hides a filter\'s strength slider while that filter is off', async () => {
+        it('hides a filter\'s sliders while that filter is off', async () => {
             const wrapper = mountSettingsPanel({
                 settings: {
                     denoise: {
@@ -316,6 +316,7 @@ describe('SettingsPanel', () => {
                         chroma_strength: 1.0,
                         luma: false,
                         luma_strength: 1.0,
+                        star_protection: 1.0,
                     },
                 },
             })
@@ -325,7 +326,41 @@ describe('SettingsPanel', () => {
                 .findAllComponents({name: 'BaseSlider'})
                 .map((s) => s.props('label'))
             expect(labels).toContain('Colour strength')
-            expect(labels).not.toContain('Grain strength')
+            expect(labels).not.toContain('Structure strength')
+            expect(labels).not.toContain('Star protection')
+        })
+
+        // The only control that moves sky grain much, and it was previously
+        // hardcoded at full protection with no way to reach it.
+        it('offers star protection, and sends it with the rest of the object', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Star protection')
+            expect(slider).toBeDefined()
+            expect(slider.props('max')).toBe(1.0)
+
+            slider.vm.$emit('update:modelValue', 0.4)
+            slider.vm.$emit('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({star_protection: 0.4}),
+            })
+        })
+
+        // The manual tells the observer to raise this one; a slider that stopped
+        // at its own default could not be raised at all.
+        it('lets structure strength go above the tuned default', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Structure strength')
+            expect(slider.props('max')).toBe(2.0)
         })
 
         it('falls back to defaults when the server sends no denoise settings', async () => {

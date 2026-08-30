@@ -2,8 +2,6 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::frame::Frame;
-use crate::server::encoding::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4_chunked};
 use crate::server::state::{AppState, JpegTier};
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -33,6 +31,10 @@ pub fn run_render_task(
         .map(|n| n.get())
         .unwrap_or(4)
         .clamp(2, 8);
+
+    // Outlives the loop: its per-frame conversions are cleared each iteration,
+    // but the denoise buffers behind them are the whole point and are kept.
+    let mut conversions = ConversionCache::default();
 
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
@@ -93,70 +95,37 @@ pub fn run_render_task(
         // under the same frame, then wake clients once they are all in place.
         let counter = state.begin_frame();
 
-        // Deduplicate f32 -> u8 conversion for native resolution streams.
-        // If the frame fits in 4K, LZ4's 4K limit and JPEG's native resolution are identical.
-        let fits_in_4k =
-            raw_frame.linear_frame.width() <= 3840 && raw_frame.linear_frame.height() <= 2160;
-        let lz4_active = state.lz4_clients.load(std::sync::atomic::Ordering::SeqCst) > 0;
-        // The lossless stream now encodes into the box its clients asked for, so
-        // it can only reuse the shared native conversion when that box does not
-        // shrink the frame. Otherwise it needs its own downsampled traversal.
-        let (lz4_w, lz4_h) = state.lossless_target_box();
-        let lz4_wants_native = raw_frame.linear_frame.width() <= lz4_w as usize
-            && raw_frame.linear_frame.height() <= lz4_h as usize;
-        let mut original_jpeg_active = false;
-        for tier in JpegTier::all() {
-            if state.jpeg_tier_client_count(tier) > 0
-                && !tier.would_downsample(
-                    raw_frame.linear_frame.width(),
-                    raw_frame.linear_frame.height(),
-                )
-            {
-                original_jpeg_active = true;
-                break;
-            }
-        }
+        // One RGB8 conversion per distinct output size, shared by every payload
+        // that resolves to it. Since tier 2 the conversion carries the
+        // denoisers and costs several times the encode it feeds, so this is
+        // where the frame's time goes if two clients are watching.
+        conversions.begin_frame();
 
-        let mut shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>> = None;
-        if fits_in_4k && ((lz4_active && lz4_wants_native) || original_jpeg_active) {
-            let _span = tracing::info_span!("frame_to_rgb8_shared").entered();
-            if let Ok(data) =
-                crate::server::encoding::frame_to_rgb8_downsampled(&raw_frame, 3840, 2160)
-            {
-                shared_native_rgb8 = Some(Arc::new(data));
-            }
-        }
-
-        if lz4_active {
-            // Encode frame as RGB8+LZ4 for streaming
-            let encode_result = {
-                let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
-                let _timer =
-                    telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
-                match shared_native_rgb8.as_ref().filter(|_| lz4_wants_native) {
-                    Some(shared) => crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
-                        &shared.0,
-                        shared.1,
-                        shared.2,
+        if state.lossless_client_count() > 0 {
+            let (max_w, max_h) = state.lossless_target_box();
+            let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
+            match conversions.get(&raw_frame, max_w, max_h) {
+                Some(rgb) => {
+                    let _encode_span = tracing::info_span!("encode_rgb8_lz4").entered();
+                    match crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
+                        &rgb.0,
+                        rgb.1,
+                        rgb.2,
                         chunk_count,
-                    ),
-                    None => crate::server::encoding::encode_rgb8_lz4_chunked(
-                        &raw_frame,
-                        chunk_count,
-                        lz4_w,
-                        lz4_h,
-                    ),
+                    ) {
+                        Ok(encoded_data) => rt.block_on(state.set_latest_frame(encoded_data)),
+                        Err(e) => rt.block_on(
+                            state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)),
+                        ),
+                    }
                 }
-            };
-            match encode_result {
-                Ok(encoded_data) => rt.block_on(state.set_latest_frame(encoded_data)),
-                Err(e) => {
-                    rt.block_on(state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)))
-                }
+                None => rt.block_on(
+                    state.frame_rejected("RGB8 conversion failed for the lossless stream".into()),
+                ),
             }
         }
 
-        encode_jpeg_tiers(&state, &raw_frame, counter, shared_native_rgb8);
+        encode_jpeg_tiers(&state, &raw_frame, counter, &mut conversions);
 
         state.publish_frame();
     }
@@ -164,52 +133,128 @@ pub fn run_render_task(
     debug!("Render task ended");
 }
 
+/// The RGB8 conversions one frame needs, at most one per distinct output size.
+///
+/// Two payloads whose clients asked for different bounding boxes are the same
+/// conversion whenever those boxes resolve to the same output size — a 2712x1538
+/// sensor fitted into the 4K box and into no box at all are both 2712x1538. This
+/// generalises the "share the native buffer between LZ4 and the tiers that do not
+/// downsample" special case it replaces; native size is simply the case where
+/// every box resolves to the frame's own dimensions.
+///
+/// A `Vec` rather than a map: there are at most five payloads per frame, and a
+/// linear scan over five pairs beats hashing them.
+#[derive(Default)]
+struct ConversionCache {
+    entries: Vec<((usize, usize), Arc<(Vec<u8>, u32, u32)>)>,
+    /// The denoisers' working buffers, reused for the life of the render thread.
+    /// Kept here rather than in a thread-local so nothing else in the process
+    /// can strand 75 MB behind a pooled worker.
+    scratch: crate::render::denoise::DenoiseScratch,
+}
+
+impl ConversionCache {
+    /// Drop the previous frame's conversions, keeping the buffers that produced
+    /// them.
+    fn begin_frame(&mut self) {
+        self.entries.clear();
+    }
+
+    /// The RGB8 buffer for a bounding box, converting only if nothing already
+    /// built has the same output size.
+    fn get(
+        &mut self,
+        frame: &crate::server::state::RenderReadyFrame,
+        max_w: u32,
+        max_h: u32,
+    ) -> Option<Arc<(Vec<u8>, u32, u32)>> {
+        let key = crate::server::encoding::output_dimensions(
+            frame.linear_frame.width(),
+            frame.linear_frame.height(),
+            max_w,
+            max_h,
+        );
+        if let Some((_, data)) = self.entries.iter().find(|(k, _)| *k == key) {
+            return Some(Arc::clone(data));
+        }
+
+        let _span = tracing::info_span!("frame_to_rgb8", width = key.0, height = key.1).entered();
+        match crate::server::encoding::frame_to_rgb8_downsampled_with(
+            frame,
+            max_w,
+            max_h,
+            &mut self.scratch,
+        ) {
+            Ok(data) => {
+                let data = Arc::new(data);
+                self.entries.push((key, Arc::clone(&data)));
+                Some(data)
+            }
+            Err(e) => {
+                // Logged, not raised: the LZ4 caller turns a missing conversion
+                // into a rejected frame and a JPEG tier simply goes unencoded,
+                // so raising here too would report one failure twice.
+                warn!(error = %e, width = key.0, height = key.1, "RGB8 conversion failed");
+                None
+            }
+        }
+    }
+
+    /// How many conversions were actually performed, for tests that need to see
+    /// that sharing happened rather than infer it from a payload.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 /// Encode one JPEG per resolution tier that has clients.
 ///
-/// Tiers whose bounding box does not shrink the frame all produce the same
-/// native-resolution payload, so the first such encode is shared with the rest.
-/// For sensors below 4K that collapses `Uhd2160` and `Original` into a single
-/// encode.
+/// Tiers that resolve to the same output size produce the same bytes, so the
+/// first one encodes and the rest are handed the same `Bytes`. For a sub-4K
+/// sensor that collapses `Uhd2160` and `Original` into one encode *and* one
+/// conversion.
 fn encode_jpeg_tiers(
     state: &AppState,
     frame: &crate::server::state::RenderReadyFrame,
     counter: u64,
-    shared_native_rgb8: Option<Arc<(Vec<u8>, u32, u32)>>,
+    conversions: &mut ConversionCache,
 ) {
     let _span = tracing::info_span!("encode_jpeg_tiers").entered();
-    let mut native: Option<bytes::Bytes> = None;
+    let mut encoded: Vec<((usize, usize), bytes::Bytes)> = Vec::new();
 
     for tier in JpegTier::all() {
         if state.jpeg_tier_client_count(tier) == 0 {
             continue;
         }
 
-        let downsamples =
-            tier.would_downsample(frame.linear_frame.width(), frame.linear_frame.height());
-        if !downsamples {
-            if let Some(shared) = &native {
-                state.set_tier_jpeg(tier, counter, shared.clone());
-                continue;
-            }
+        let (max_w, max_h) = tier.bounding_box();
+        let key = crate::server::encoding::output_dimensions(
+            frame.linear_frame.width(),
+            frame.linear_frame.height(),
+            max_w,
+            max_h,
+        );
+
+        if let Some((_, payload)) = encoded.iter().find(|(k, _)| *k == key) {
+            state.set_tier_jpeg(tier, counter, payload.clone());
+            continue;
         }
 
-        let (max_w, max_h) = tier.bounding_box();
-        let started = std::time::Instant::now();
-        let encoded = if let (false, Some(data)) = (downsamples, shared_native_rgb8.as_ref()) {
-            crate::server::encoding::encode_rgb8_jpeg_bounded_from_u8(&data.0, data.1, data.2)
-        } else {
-            crate::server::encoding::encode_rgb8_jpeg_bounded(frame, max_w, max_h)
+        let Some(rgb) = conversions.get(frame, max_w, max_h) else {
+            continue;
         };
+
+        let started = std::time::Instant::now();
+        let result = crate::server::encoding::encode_rgb8_jpeg_bounded_from_u8(&rgb.0, rgb.1, rgb.2);
         telemetry_metrics::record_jpeg_encode_ms(
             tier.metric_label(),
             started.elapsed().as_secs_f64() * 1000.0,
         );
-        match encoded {
-            Ok(encoded) => {
-                let stored = state.set_tier_jpeg(tier, counter, encoded);
-                if !downsamples {
-                    native = Some(stored);
-                }
+        match result {
+            Ok(payload) => {
+                let stored = state.set_tier_jpeg(tier, counter, payload);
+                encoded.push((key, stored));
             }
             Err(e) => warn!(?tier, error = %e, "JPEG encoding failed for tier"),
         }
@@ -416,7 +461,7 @@ mod tests {
         let state = Arc::new(state);
 
         // Ensure no LZ4 clients are connected (this is the default, but let's be explicit)
-        assert_eq!(state.lz4_clients.load(Ordering::SeqCst), 0);
+        assert_eq!(state.lossless_client_count(), 0);
 
         let initial_counter = state.frame_counter.load(Ordering::SeqCst);
         render_one_frame(
@@ -450,7 +495,6 @@ mod tests {
 
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.lz4_clients.store(1, Ordering::SeqCst);
         let _guard = TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, tier);
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -499,13 +543,23 @@ mod tests {
         );
     }
 
-    /// With no tier registered the stream keeps its historical 4K cap, so an
-    /// older client that never reports a viewport is unaffected.
+    /// A client that never reports a viewport keeps the historical 4K cap.
+    ///
+    /// `handle_eyepiece_quality` registers `JpegTier::LOSSLESS_DEFAULT` for the
+    /// life of the connection, so this models the real handler rather than an
+    /// unreachable zero-tier state: an older frontend, or one whose first report
+    /// is still in flight, must not be *downgraded* by a change meant to help it.
     #[tokio::test]
     async fn lossless_stream_without_a_reported_viewport_keeps_the_4k_cap() {
+        use crate::server::state::{StreamKind, TierClientGuard};
+
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.lz4_clients.store(1, Ordering::SeqCst);
+        let _guard = TierClientGuard::new(
+            Arc::clone(&state),
+            StreamKind::Lossless,
+            JpegTier::LOSSLESS_DEFAULT,
+        );
 
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(super::StackedFrame {
@@ -529,19 +583,19 @@ mod tests {
         assert_eq!(lz4_payload_dimensions(&payload), (2160, 2160));
     }
 
-    /// The native-resolution RGB8 buffer is shared between the lossless and
-    /// JPEG encoders. Once the lossless stream downsamples, it must stop reusing
-    /// that buffer — reusing it would silently ship a native-size payload and
-    /// undo the whole change.
+    /// The conversion cache shares a buffer between the lossless and JPEG
+    /// encoders only when both resolve to the same output size. A lossless
+    /// client on a smaller tier must get its own conversion — serving it the
+    /// native one would silently ship a native-size payload and undo the whole
+    /// change.
     #[tokio::test]
-    async fn lossless_downsample_does_not_reuse_the_shared_native_buffer() {
+    async fn lossless_downsample_is_not_served_from_a_native_conversion() {
         use crate::server::state::{StreamKind, TierClientGuard};
 
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.lz4_clients.store(1, Ordering::SeqCst);
-        // A JPEG client on a non-downsampling tier forces the shared native
-        // buffer to be built, so the lossless path has something to wrongly reuse.
+        // A JPEG client on a non-downsampling tier puts a native-size buffer in
+        // the cache, so the lossless path has something to wrongly reuse.
         state.jpeg_tier_clients[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
         let _guard =
             TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Hd1080);
@@ -582,6 +636,36 @@ mod tests {
             u32::from_le_bytes(jpeg[4..8].try_into().unwrap()),
             IMX464.0 as u32
         );
+    }
+
+    /// What the cache exists for: two payloads whose clients asked for different
+    /// bounding boxes but that resolve to the same output size are one
+    /// conversion. Since tier 2 that conversion carries the denoisers and costs
+    /// several times the encode it feeds, so doing it twice is the difference
+    /// between one stream and two on a Pi.
+    #[test]
+    fn conversion_cache_shares_one_buffer_across_equivalent_boxes() {
+        let frame =
+            to_ready_frame(&crate::frame::Frame::filled(IMX464.0, IMX464.1, 3, 0.25).unwrap());
+        let mut cache = super::ConversionCache::default();
+
+        // An IMX464 frame fits both the 4K box and no box at all, so `Uhd2160`
+        // and `Original` are the same conversion.
+        let uhd = cache.get(&frame, 3840, 2160).expect("conversion");
+        let original = cache
+            .get(&frame, u32::MAX, u32::MAX)
+            .expect("conversion");
+        assert_eq!(cache.len(), 1, "equivalent boxes converted twice");
+        assert!(Arc::ptr_eq(&uhd, &original));
+
+        // A box that genuinely shrinks the frame is a different conversion.
+        let hd = cache.get(&frame, 1920, 1080).expect("conversion");
+        assert_eq!(cache.len(), 2);
+        assert_ne!((hd.1, hd.2), (uhd.1, uhd.2));
+
+        // ...and asking for it again is free.
+        cache.get(&frame, 1920, 1080).expect("conversion");
+        assert_eq!(cache.len(), 2);
     }
 
     #[tokio::test]
@@ -638,7 +722,12 @@ mod tests {
         let frame = Arc::new(crate::frame::Frame::filled(width, height, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
-            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+            super::encode_jpeg_tiers(
+                &state_clone,
+                &to_ready_frame(&frame),
+                1,
+                &mut super::ConversionCache::default(),
+            )
         })
         .await
         .unwrap();
@@ -667,7 +756,12 @@ mod tests {
         let frame = Arc::new(crate::frame::Frame::filled(width, height, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
-            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+            super::encode_jpeg_tiers(
+                &state_clone,
+                &to_ready_frame(&frame),
+                1,
+                &mut super::ConversionCache::default(),
+            )
         })
         .await
         .unwrap();
@@ -701,7 +795,12 @@ mod tests {
         let frame = Arc::new(crate::frame::Frame::filled(2000, 1200, 3, 0.25).unwrap());
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
-            super::encode_jpeg_tiers(&state_clone, &to_ready_frame(&frame), 1, None)
+            super::encode_jpeg_tiers(
+                &state_clone,
+                &to_ready_frame(&frame),
+                1,
+                &mut super::ConversionCache::default(),
+            )
         })
         .await
         .unwrap();

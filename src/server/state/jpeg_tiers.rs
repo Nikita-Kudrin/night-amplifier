@@ -70,6 +70,16 @@ impl JpegTier {
         [Self::Hd1080, Self::Qhd1440, Self::Uhd2160, Self::Original]
     }
 
+    /// Tier a lossless client holds until it reports a viewport.
+    ///
+    /// The 4K cap, not the 1080 floor: this stream shipped a hardcoded
+    /// 3840x2160 box before tiers reached it, and a client that never reports —
+    /// an older frontend, or one whose report is still in flight — must not be
+    /// silently *downgraded* by a change that exists to improve it. The JPEG
+    /// path defaults to the floor instead, because there a wrong guess costs an
+    /// entire wasted encode rather than a slightly larger payload.
+    pub const LOSSLESS_DEFAULT: Self = Self::Uhd2160;
+
     /// Maximum output dimensions for the tier. `Original` is unbounded so the
     /// frame is encoded at its native size.
     pub const fn bounding_box(self) -> (u32, u32) {

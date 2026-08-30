@@ -11,7 +11,6 @@ pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{CfaPattern, Frame, PixelFormat};
 use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
 
 use super::device_lost::tolerate_unsupported;
@@ -19,7 +18,6 @@ use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
     BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
-    SensorType,
 };
 
 mod props;
@@ -273,53 +271,6 @@ impl ZwoCamera {
                 self.info.max_width / config.bin as u32,
                 self.info.max_height / config.bin as u32,
             )
-        }
-    }
-
-    fn buffer_to_frame(
-        &self,
-        buffer: &[u8],
-        width: u32,
-        height: u32,
-        config: &CaptureConfig,
-    ) -> CameraResult<Frame> {
-        let (pixel_format, channels) = match config.format {
-            ImageFormat::Raw8 => {
-                if self.info.sensor_type == SensorType::Color {
-                    (PixelFormat::Bayer8, 1)
-                } else {
-                    (PixelFormat::Rgb8, 1)
-                }
-            }
-            ImageFormat::Raw16 => {
-                if self.info.sensor_type == SensorType::Color {
-                    (PixelFormat::Bayer16, 1)
-                } else {
-                    (PixelFormat::Rgb16, 1)
-                }
-            }
-            ImageFormat::Rgb24 => (PixelFormat::Rgb8, 3),
-        };
-
-        if self.info.sensor_type == SensorType::Color && channels == 1 {
-            let pattern = self.info.bayer_pattern.unwrap_or(CfaPattern::Rggb);
-            Frame::from_bayer(
-                buffer,
-                width as usize,
-                height as usize,
-                pixel_format,
-                pattern,
-            )
-            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
-        } else {
-            Frame::from_raw(
-                buffer,
-                width as usize,
-                height as usize,
-                channels,
-                pixel_format,
-            )
-            .map_err(|e| CameraError::ImageReadFailed(e.to_string()))
         }
     }
 }
