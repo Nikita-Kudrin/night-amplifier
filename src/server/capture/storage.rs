@@ -226,12 +226,13 @@ mod tests {
 
     /// Regression guard: the stacked-PNG export path must apply the full tone-curve
     /// stretch, not just background/black-point subtraction. `process_preview_frame`
-    /// defers the stretch for the live-view fused encoders; if `prepare_stacked_png_frame`
-    /// were ever routed back through it without also applying the returned
-    /// `StretchResult`, this would fail — the pixel would stay near its dim linear input
-    /// instead of landing near the auto-stretch target background.
+    /// defers the stretch for the live-view fused encoders; if `render_stacked_png`
+    /// were ever routed through it without also applying the returned `StretchResult`
+    /// (which `frame_to_rgb8_downsampled`'s row tail does), this would fail — the pixel
+    /// would stay near its dim linear input instead of landing near the auto-stretch
+    /// target background.
     #[test]
-    fn prepare_stacked_png_frame_applies_the_stretch() {
+    fn render_stacked_png_applies_the_stretch() {
         let mut settings = CaptureSettings::default();
         settings.auto_stretch = true;
         settings.background_subtraction = false;
@@ -253,41 +254,110 @@ mod tests {
                 data[c * plane + i] = background + noise;
             }
         }
-        let mut frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
+        let frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        prepare_stacked_png_frame(&mut frame, &settings).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
-        // its original value once the tone curve is actually applied. With the bug
-        // (routing through `process_preview_frame` and discarding its `StretchResult`),
-        // the frame only gets black-point subtraction and stays near-black.
-        let stretched = frame.get_pixel(16, 16, 0);
+        // its original value once the tone curve is actually applied to the bytes that
+        // get written to disk, not just prepared and discarded.
+        let idx = (16 * width as usize + 16) * 3;
+        let stretched = rgb8[idx] as f32 / 255.0;
         assert!(
             stretched > 0.07,
             "stacked PNG frame was not stretched: pixel stayed at {stretched} (background was ~{background})"
         );
     }
+
+    /// Regression guard for the bug `render_stacked_png` replaced: routing the export
+    /// through `RenderPipeline::process` directly compiled and passed the stretch test
+    /// above, but `RenderPipelineConfig::denoise` is not one of that pipeline's stages —
+    /// it only means anything to the streaming encoders (see AGENTS.md's *Spatial
+    /// denoising*) — so the saved file carried none of the noise reduction the operator
+    /// had been looking at live. A single-pixel assertion can't catch a silently-skipped
+    /// stage; comparing denoise-on against denoise-off on the same noisy input can.
+    #[test]
+    fn render_stacked_png_applies_denoising() {
+        fn noisy_frame() -> crate::frame::Frame {
+            let (w, h) = (64, 64);
+            let mut data = vec![0.0f32; w * h * 3];
+            let mut seed: u32 = 98765;
+            let plane = w * h;
+            for i in 0..(w * h) {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.1;
+                    data[c * plane + i] = (0.2 + noise).clamp(0.0, 1.0);
+                }
+            }
+            crate::frame::Frame::from_f32_vec(data, w, h, 3).unwrap()
+        }
+
+        fn byte_sigma(rgb8: &[u8]) -> f64 {
+            let n = rgb8.len() as f64;
+            let mean = rgb8.iter().map(|&v| v as f64).sum::<f64>() / n;
+            (rgb8.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n).sqrt()
+        }
+
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = false;
+        settings.background_subtraction = false;
+
+        settings.denoise.chroma = true;
+        settings.denoise.luma = true;
+        let (denoised, _, _) = render_stacked_png(noisy_frame(), &settings).unwrap();
+
+        settings.denoise.chroma = false;
+        settings.denoise.luma = false;
+        let (plain, _, _) = render_stacked_png(noisy_frame(), &settings).unwrap();
+
+        assert!(
+            byte_sigma(&denoised) < byte_sigma(&plain) * 0.9,
+            "denoise settings had no measurable effect on the saved PNG bytes \
+             (denoised sigma {:.3}, plain sigma {:.3})",
+            byte_sigma(&denoised),
+            byte_sigma(&plain)
+        );
+    }
 }
 
-/// Fully render a stacked frame for PNG export (background, stretch, saturation, contrast).
+/// Fully render a stacked frame for PNG export, producing the exact interleaved RGB8
+/// bytes a live viewer at the "Original" resolution tier would see: background,
+/// stretch, saturation, contrast, spatial denoise and 8-bit display quantization.
 ///
-/// Deliberately does NOT use `process_preview_frame`: that function defers the stretch so it
-/// can be fused into the live-view encode loop, which only pays off on the per-frame hot path.
-/// This runs once per stacking session, so applying the full pipeline eagerly is both simpler
-/// and correct — do not "simplify" this back to `process_preview_frame` without also applying
-/// its returned `StretchResult` before the frame reaches `write_png`, which has no tone-curve
-/// logic of its own.
-fn prepare_stacked_png_frame(
-    frame: &mut Frame,
+/// Routes through `process_preview_frame` and
+/// `crate::server::encoding::frame_to_rgb8_downsampled` — the same two calls the render
+/// task makes per frame for a connected client — with the bounding box left unbounded so
+/// nothing downsamples. This used to call `RenderPipeline::process` directly instead,
+/// which only knows the four *pipeline* stages (background, stretch, saturation,
+/// contrast). Spatial denoise and the display pedestal/dither live only in the streaming
+/// encoders (see AGENTS.md's *Spatial denoising* and *The f32 -> 8-bit boundary* — both
+/// are deliberately not pipeline stages), so that path silently produced a PNG missing
+/// whatever noise reduction the operator had been looking at live. Going through the
+/// encoder is what picks those up instead of reimplementing them a second time here.
+///
+/// This runs once per stacking session, not per frame, so paying for the plain
+/// (non-scratch-reusing) conversion is the right trade — see
+/// `frame_to_rgb8_downsampled`'s own doc comment.
+fn render_stacked_png(
+    mut frame: Frame,
     settings: &CaptureSettings,
-) -> crate::error::Result<()> {
-    use super::pipeline::get_render_pipeline_config;
-    use crate::render::RenderPipeline;
+) -> crate::error::Result<(Vec<u8>, u32, u32)> {
+    use super::pipeline::process_preview_frame;
+    use crate::error::StackError;
+    use crate::server::encoding::frame_to_rgb8_downsampled;
+    use crate::server::state::RenderReadyFrame;
 
-    let pipeline_config = get_render_pipeline_config(settings, false);
-    RenderPipeline::new(pipeline_config).process(frame)?;
-    Ok(())
+    let (pipeline_config, stretch_result) = process_preview_frame(&mut frame, settings)?;
+    let ready_frame = RenderReadyFrame {
+        linear_frame: Arc::new(frame),
+        pipeline_config,
+        stretch_result,
+    };
+
+    frame_to_rgb8_downsampled(&ready_frame, u32::MAX, u32::MAX)
+        .map_err(StackError::InvalidConfiguration)
 }
 
 /// Save stacked result if stacking was enabled and we have frames
@@ -350,17 +420,18 @@ pub async fn save_stacked_result(
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
-        let mut stretched_frame = stacked_frame;
-        if let Err(e) = prepare_stacked_png_frame(&mut stretched_frame, &settings) {
-            warn!(error = %e, "Failed to process frame for PNG output");
-            return;
-        }
-
-        if let Err(e) = state
-            .disk_writer
-            .queue_stacked_png(Arc::new(stretched_frame), stacked_count)
-        {
-            warn!(error = %e, "Failed to queue stretched PNG for saving");
+        match render_stacked_png(stacked_frame, &settings) {
+            Ok((rgb8, width, height)) => {
+                if let Err(e) = state.disk_writer.queue_stacked_png(
+                    Arc::new(rgb8),
+                    width,
+                    height,
+                    stacked_count,
+                ) {
+                    warn!(error = %e, "Failed to queue stretched PNG for saving");
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to process frame for PNG output"),
         }
     }
 }

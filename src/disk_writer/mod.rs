@@ -24,7 +24,7 @@ pub use handle::DiskWriterHandle;
 pub use worker::DiskWriter;
 
 #[cfg(test)]
-pub(crate) use utils::write_png;
+pub(crate) use utils::write_rgb8_png;
 
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -271,5 +271,52 @@ mod tests {
     fn test_disk_writer_error_display() {
         let err = DiskWriterError::QueueFull;
         assert_eq!(err.to_string(), "Disk writer queue is full");
+    }
+
+    /// Regression guard: `stacked_dir` is only created once, at `DiskWriter::new`.
+    /// Something outside the process can still remove it mid-session — an unmounted
+    /// USB drive, a tidy-up script — and every following write used to fail with
+    /// ENOENT for the rest of the process's life. A write after the directory
+    /// reappears (or, as here, is simply removed once and never touched again) must
+    /// recreate it rather than staying broken.
+    #[test]
+    fn test_disk_writer_recreates_missing_stacked_dir() {
+        let temp_dir =
+            std::env::temp_dir().join("night_amplifier_test_missing_stacked_dir");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
+        let (writer, handle) = DiskWriter::new(config);
+
+        handle
+            .start_session(WritingSessionType::IndividualFrames)
+            .unwrap();
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        let stacked_dir = temp_dir.join("stacked");
+        assert!(stacked_dir.exists(), "precondition: DiskWriter::new should have created it");
+        std::fs::remove_dir_all(&stacked_dir).unwrap();
+        assert!(!stacked_dir.exists(), "precondition: directory must actually be gone");
+
+        let frame = Frame::filled(4, 4, 3, 0.5).unwrap();
+        handle
+            .queue_stacked_frame(std::sync::Arc::new(frame), FitsMetadata::new())
+            .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(&stacked_dir)
+            .expect("stacked dir was not recreated")
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "stacked FITS file was not written after the missing directory should \
+             have been recreated"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 }

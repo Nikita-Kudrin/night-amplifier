@@ -1,15 +1,30 @@
 use chrono::{Local, Utc};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use tracing::{debug, error, info, instrument, warn};
 
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
-use super::utils::write_png;
+use super::utils::write_rgb8_png;
 use crate::fits::{write_fits, write_fits_from_raw, write_fits_u16};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
+
+/// Recreate a captures directory if it has gone missing since the writer started.
+///
+/// `stacked_dir` is created once, at server startup; a session's `raw` directory is
+/// created once, at session start. Either can still vanish under an observer's feet —
+/// an unmounted USB drive, a network share dropping, a tidy-up script — and every
+/// following write would otherwise fail with ENOENT for the rest of the process's
+/// life. The call is idempotent and cheap (one syscall once the directory is back),
+/// so paying it before every write is simpler than tracking "have we already seen
+/// this directory disappear".
+fn ensure_dir(path: &Path) -> Result<(), DiskWriterError> {
+    std::fs::create_dir_all(path).map_err(|e| {
+        DiskWriterError::DirectoryCreationFailed(format!("{}: {}", path.display(), e))
+    })
+}
 
 /// The disk writer background task.
 ///
@@ -106,7 +121,7 @@ impl DiskWriter {
                 }
             }
             FrameType::Stacked(_) => self.process_fits_stacked(request),
-            FrameType::StackedPng(_) => self.process_png_stacked(request),
+            FrameType::StackedPng { .. } => self.process_png_stacked(request),
         }
     }
 
@@ -129,9 +144,12 @@ impl DiskWriter {
                         1
                     },
                 ),
-                FrameType::Stacked(s) | FrameType::StackedPng(s) => {
-                    (s.width() as u32, s.height() as u32, s.channels())
-                }
+                FrameType::Stacked(s) => (s.width() as u32, s.height() as u32, s.channels()),
+                // Unreachable in practice: `process_request` only ever routes
+                // `FrameType::Raw` into `process_ser_frame`. Handled explicitly
+                // rather than folded into the arm above because `StackedPng`
+                // carries pre-rendered RGB8 bytes, not a `Frame`.
+                FrameType::StackedPng { width, height, .. } => (*width, *height, 3),
             };
 
             let color_id = match frame_channels {
@@ -175,11 +193,13 @@ impl DiskWriter {
         if let Some(writer) = &mut self.ser_writer {
             let frame_width = match &request.frame_type {
                 FrameType::Raw(r) => r.width,
-                FrameType::Stacked(s) | FrameType::StackedPng(s) => s.width() as u32,
+                FrameType::Stacked(s) => s.width() as u32,
+                FrameType::StackedPng { width, .. } => *width,
             };
             let frame_height = match &request.frame_type {
                 FrameType::Raw(r) => r.height,
-                FrameType::Stacked(s) | FrameType::StackedPng(s) => s.height() as u32,
+                FrameType::Stacked(s) => s.height() as u32,
+                FrameType::StackedPng { height, .. } => *height,
             };
 
             // Check dimensions for consistency
@@ -207,10 +227,19 @@ impl DiskWriter {
                         .write_raw_bytes(r.data_slice(), Some(timestamp))
                         .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
                 }
-                FrameType::Stacked(s) | FrameType::StackedPng(s) => {
+                FrameType::Stacked(s) => {
                     writer
                         .write_frame(s, Some(timestamp))
                         .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+                }
+                FrameType::StackedPng { .. } => {
+                    // Unreachable in practice: `process_request` only ever routes
+                    // `FrameType::Raw` into `process_ser_frame`, and a PNG export
+                    // carries pre-rendered RGB8 bytes anyway, not a `Frame` a SER
+                    // container could accept.
+                    return Err(DiskWriterError::WriteFailed(
+                        "Stretched PNG frames cannot be written to a SER container".to_string(),
+                    ));
                 }
             }
         }
@@ -223,6 +252,8 @@ impl DiskWriter {
         let session_dir = session_dir.as_ref().ok_or_else(|| {
             DiskWriterError::DirectoryCreationFailed("No active session".to_string())
         })?;
+
+        ensure_dir(session_dir)?;
 
         let filename = format!("frame_{:06}.fits", request.frame_number);
         let path = session_dir.join(filename);
@@ -255,6 +286,8 @@ impl DiskWriter {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| Local::now().format("%d-%m-%Y_%H-%M-%S").to_string());
 
+        ensure_dir(&self.stacked_dir)?;
+
         let filename = format!("{}.fits", session_name);
         let path = self.stacked_dir.join(filename);
 
@@ -286,13 +319,19 @@ impl DiskWriter {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| Local::now().format("%d-%m-%Y_%H-%M-%S").to_string());
 
+        ensure_dir(&self.stacked_dir)?;
+
         let filename = format!("{}_stretched.png", session_name);
         let path = self.stacked_dir.join(filename);
 
         debug!(path = ?path, "Writing stretched PNG file");
 
-        let stacked_frame = match &request.frame_type {
-            FrameType::StackedPng(f) => f,
+        let (rgb8, width, height) = match &request.frame_type {
+            FrameType::StackedPng {
+                rgb8,
+                width,
+                height,
+            } => (rgb8, *width, *height),
             _ => {
                 return Err(DiskWriterError::WriteFailed(
                     "Invalid frame type for PNG write".to_string(),
@@ -300,7 +339,8 @@ impl DiskWriter {
             }
         };
 
-        write_png(stacked_frame, &path).map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+        write_rgb8_png(rgb8, width, height, &path)
+            .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stretched PNG file written successfully");
         Ok(())

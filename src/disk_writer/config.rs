@@ -18,14 +18,53 @@ pub enum WritingSessionType {
 }
 
 /// Type of frame being saved, along with its payload
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum FrameType {
     /// Raw captured frame (FITS or SER depending on session type)
     Raw(Arc<RawFrame>),
     /// Stacked result frame (FITS)
     Stacked(Arc<Frame>),
-    /// Stretched stacked frame (PNG for sharing)
-    StackedPng(Arc<Frame>),
+    /// Stretched stacked frame, already rendered to interleaved 8-bit RGB (PNG for sharing).
+    ///
+    /// Carries finished bytes rather than a `Frame`: they come from
+    /// `crate::server::encoding::frame_to_rgb8_downsampled`, the same conversion
+    /// the live view streams through, so the saved file matches on-screen output
+    /// instead of skipping the encoder-only stages (spatial denoise, display
+    /// quantization) a bare `Frame` render would miss. Rendering happens in
+    /// `server::capture::storage` — a server-layer concern — and only the
+    /// resulting bytes cross into this module, keeping `disk_writer` itself
+    /// unaware of the render/encoding pipeline.
+    StackedPng {
+        rgb8: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+    },
+}
+
+/// Hand-written rather than derived: `Raw`/`Stacked` delegate to `RawFrame`/`Frame`,
+/// which already print `data_len` instead of their pixel buffers (see their own
+/// `Debug` impls) — but a derive can't apply that same care to `StackedPng`'s bare
+/// `Arc<Vec<u8>>`. `Vec<u8>` has no such override, so a derived impl here would print
+/// every byte of a multi-megapixel RGB buffer on every `#[instrument]`-logged write —
+/// which is exactly what happened before this impl existed: one call to
+/// `process_request` was enough to put a multi-megabyte line in the log.
+impl std::fmt::Debug for FrameType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Raw(frame) => f.debug_tuple("Raw").field(frame).finish(),
+            Self::Stacked(frame) => f.debug_tuple("Stacked").field(frame).finish(),
+            Self::StackedPng {
+                rgb8,
+                width,
+                height,
+            } => f
+                .debug_struct("StackedPng")
+                .field("rgb8_len", &rgb8.len())
+                .field("width", width)
+                .field("height", height)
+                .finish(),
+        }
+    }
 }
 
 /// A request to write a frame to disk
@@ -99,5 +138,35 @@ impl DiskWriterConfig {
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard: `FrameType::StackedPng` used to derive `Debug`, which for a
+    /// bare `Arc<Vec<u8>>` prints every byte — a multi-megapixel RGB buffer turned one
+    /// `#[instrument]`-logged write into a multi-megabyte log line. The custom impl
+    /// must report a length instead of walking the buffer.
+    #[test]
+    fn stacked_png_debug_reports_length_not_bytes() {
+        let rgb8 = vec![7u8; 2712 * 1538 * 3];
+        let len = rgb8.len();
+        let frame_type = FrameType::StackedPng {
+            rgb8: Arc::new(rgb8),
+            width: 2712,
+            height: 1538,
+        };
+
+        let debug_str = format!("{:?}", frame_type);
+        assert!(
+            debug_str.len() < 200,
+            "StackedPng's Debug output is {} bytes long — it is walking the pixel \
+             buffer instead of reporting its length: {debug_str:.200}",
+            debug_str.len()
+        );
+        assert!(debug_str.contains(&len.to_string()));
+        assert!(!debug_str.contains("7, 7, 7"));
     }
 }
