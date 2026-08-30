@@ -299,9 +299,10 @@ fn lz4_sa09_payload_is_interleaved() {
 #[test]
 fn png_preview_is_interleaved() {
     let frame = tricolour_frame(W, H);
+    let rgb8 = frame.to_rgb8_fast();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("preview.png");
-    crate::disk_writer::write_png(&frame, &path).unwrap();
+    crate::disk_writer::write_rgb8_png(&rgb8, W as u32, H as u32, &path).unwrap();
 
     let file = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
     let decoder = png::Decoder::new(file);
@@ -314,7 +315,7 @@ fn png_preview_is_interleaved() {
         W,
         H,
         (R_U8, G_U8, B_U8),
-        "write_png",
+        "write_rgb8_png",
     );
 }
 

@@ -223,13 +223,25 @@ impl DiskWriterHandle {
         })
     }
 
+    /// Queue an already-rendered stretched PNG for writing.
+    ///
+    /// `rgb8` must be interleaved 8-bit RGB at `width` x `height`, produced by
+    /// `crate::server::encoding::frame_to_rgb8_downsampled` (or an equivalent
+    /// call through the same encoder) so the file matches what the live view
+    /// rendered — see `FrameType::StackedPng`.
     pub fn queue_stacked_png(
         &self,
-        frame: std::sync::Arc<Frame>,
+        rgb8: std::sync::Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
         stacked_count: u64,
     ) -> Result<bool, DiskWriterError> {
         self.queue_frame(WriteRequest {
-            frame_type: FrameType::StackedPng(frame),
+            frame_type: FrameType::StackedPng {
+                rgb8,
+                width,
+                height,
+            },
             frame_number: stacked_count,
             metadata: FitsMetadata::new(),
             sensor_type: crate::camera::SensorType::Color,

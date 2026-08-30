@@ -231,6 +231,16 @@ re-enumeration before each try, and a liveness probe before declaring success.
 | Stacked preview  | PNG    | 8-bit           |
 | Planetary frames | SER    | 16-bit unsigned |
 
+**The stacked preview PNG is rendered through the live-view encoder, not the render
+pipeline.** `server::capture::storage::render_stacked_png` calls `process_preview_frame`
++ `server::encoding::frame_to_rgb8_downsampled` (bounding box unbounded, so nothing
+downsamples) rather than `RenderPipeline::process`, because spatial denoise and the
+`DisplayOutput` pedestal/dither are encoder-only stages (see *Spatial denoising* and *The
+f32 -> 8-bit boundary* below) that a bare pipeline call skips silently. This is also why
+the file is always RGB8, even for a mono sensor: `frame_to_rgb8_downsampled` replicates
+mono into RGB the same way the live stream does, rather than writing a smaller greyscale
+PNG that a live viewer's screen never showed.
+
 ### SER Video File Format
 
 SER is the standard format for planetary imaging - uncompressed with per-frame timestamps.
