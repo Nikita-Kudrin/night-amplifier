@@ -52,14 +52,19 @@ pub struct CapturedFrame {
 /// A processed frame ready for preview rendering and streaming.
 ///
 /// Produced by the stacking task after registration, accumulation, and
-/// compute. `display_frame` is an `Arc<Frame>` so the raw-fallback path (live
-/// view, registration failure, wanderer reset) can share the captured
+/// compute. `display_frame` is an `Arc<Frame>` so the raw-fallback path (stacking
+/// disabled or not yet initialised, wanderer reset) can share the captured
 /// allocation instead of copying it, and so plate solving can hold the same
 /// frame without a second copy. The render task takes ownership back with
 /// `Arc::try_unwrap` when it holds the only handle, which is the common case.
 pub struct StackedFrame {
     /// The frame to display (stacked result or raw fallback).
     pub display_frame: Arc<Frame>,
+    /// Whether `display_frame` is the accumulated stack rather than a single sub.
+    ///
+    /// Distinct from `was_stacked`: a frame that fails registration leaves the
+    /// stack untouched but still displayable, so the live view keeps showing it.
+    pub showing_stack: bool,
     /// Whether this frame was successfully added to the stack.
     pub was_stacked: bool,
     /// Sequential frame number within the capture session.

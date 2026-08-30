@@ -226,10 +226,18 @@ export function useEventStream() {
     // Catalog installation state
     const catalogInstallProgress = ref(null)
 
+    // Why the most recent frame was kept out of the stack. Held rather than
+    // cleared per frame, so the reason a rejection burst is happening stays
+    // readable while good frames come and go between the bad ones.
+    const lastRejectionReason = ref(null)
+
     function handleFrameEvent(data) {
         frameCount.value = data.frame_number
         stackedCount.value = data.stacked_count
         rejectedCount.value = data.rejected_count
+        if (data.rejection_reason) {
+            lastRejectionReason.value = data.rejection_reason
+        }
     }
 
     const eventHandlers = {
@@ -240,6 +248,7 @@ export function useEventStream() {
                 stackedCount.value = 0
                 rejectedCount.value = 0
                 droppedCount.value = 0
+                lastRejectionReason.value = null
             }
         },
         frame_captured: handleFrameEvent,
@@ -477,6 +486,7 @@ export function useEventStream() {
         frameCount,
         stackedCount,
         rejectedCount,
+        lastRejectionReason,
         droppedCount,
         lastError,
         diskWriterWarning,

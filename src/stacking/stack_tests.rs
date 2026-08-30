@@ -144,6 +144,17 @@ fn test_weighted_stacking_equal_quality() {
     }
 }
 
+/// Fills the stack with typical frames so weighting has a median to score
+/// against. Scoring is suspended until the sample is big enough to say what
+/// typical looks like, so a two-frame stack weighs both frames equally by
+/// design — the baseline has to exist before quality can tell frames apart.
+fn seed_baseline(stack: &mut MasterStack, quality: FrameQuality) {
+    let typical = Frame::filled(4, 4, 1, 0.5).unwrap();
+    for _ in 0..6 {
+        stack.add_frame_with_quality(&typical, quality).unwrap();
+    }
+}
+
 #[test]
 fn test_weighted_stacking_favor_sharp() {
     let config = StackingConfig::default()
@@ -151,15 +162,16 @@ fn test_weighted_stacking_favor_sharp() {
         .with_weighting(WeightingConfig::fwhm_only());
 
     let mut stack = MasterStack::new(4, 4, 1, config).unwrap();
+    seed_baseline(&mut stack, FrameQuality::from_fwhm(3.0));
 
-    let frame_sharp = Frame::filled(4, 4, 1, 0.8).unwrap();
-    let frame_blurry = Frame::filled(4, 4, 1, 0.2).unwrap();
+    let frame_sharp = Frame::filled(4, 4, 1, 1.0).unwrap();
+    let frame_blurry = Frame::filled(4, 4, 1, 0.0).unwrap();
 
     stack
-        .add_frame_with_quality(&frame_sharp, FrameQuality::from_fwhm(2.0))
+        .add_frame_with_quality(&frame_sharp, FrameQuality::from_fwhm(1.5))
         .unwrap();
     stack
-        .add_frame_with_quality(&frame_blurry, FrameQuality::from_fwhm(5.0))
+        .add_frame_with_quality(&frame_blurry, FrameQuality::from_fwhm(6.0))
         .unwrap();
 
     let result = stack.compute().unwrap();
@@ -179,9 +191,10 @@ fn test_weighted_stacking_favor_high_snr() {
         .with_weighting(WeightingConfig::snr_only());
 
     let mut stack = MasterStack::new(4, 4, 1, config).unwrap();
+    seed_baseline(&mut stack, FrameQuality::from_snr(10.0));
 
-    let frame_clean = Frame::filled(4, 4, 1, 0.8).unwrap();
-    let frame_noisy = Frame::filled(4, 4, 1, 0.2).unwrap();
+    let frame_clean = Frame::filled(4, 4, 1, 1.0).unwrap();
+    let frame_noisy = Frame::filled(4, 4, 1, 0.0).unwrap();
 
     stack
         .add_frame_with_quality(&frame_clean, FrameQuality::from_snr(20.0))

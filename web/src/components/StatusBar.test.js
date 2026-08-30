@@ -13,6 +13,7 @@ describe('StatusBar', () => {
                 frameCount: ref(0),
                 stackedCount: ref(0),
                 rejectedCount: ref(0),
+                lastRejectionReason: ref(null),
                 droppedCount: ref(0),
                 lastError: ref(null),
                 unresponsiveWarning: ref(null),
@@ -166,6 +167,31 @@ describe('StatusBar', () => {
             expect(frames.exists()).toBe(true)
             expect(frames.text()).toContain('Total 42')
             expect(frames.text()).not.toContain('Rejected')
+        })
+
+        it('names the most recent rejection reason in the tooltip', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    frameCount: ref(42),
+                    rejectedCount: ref(9),
+                    lastRejectionReason: ref('stars far larger than the session median'),
+                },
+            })
+
+            const info = wrapper.findComponent({name: 'BaseInfoIcon'})
+            expect(info.exists()).toBe(true)
+            expect(info.props('message')).toContain(
+                'Most recent rejection: stars far larger than the session median.'
+            )
+        })
+
+        it('leaves the tooltip alone until something has been rejected', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {frameCount: ref(42)},
+            })
+
+            const info = wrapper.findComponent({name: 'BaseInfoIcon'})
+            expect(info.props('message')).not.toContain('Most recent rejection')
         })
 
         it('shows only total when stacking is disabled (Live View)', () => {

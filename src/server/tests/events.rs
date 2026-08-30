@@ -12,7 +12,7 @@ async fn test_event_to_json_all_variants() {
     assert_eq!(json["state"], "Capturing");
 
     // FrameCaptured
-    let event = ServerEvent::frame_captured(42, 10, 2);
+    let event = ServerEvent::frame_captured(42, 10, 2, None);
     let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
     assert_eq!(json["type"], "frame_captured");
     assert_eq!(json["frame_number"], 42);

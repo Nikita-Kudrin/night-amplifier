@@ -18,11 +18,12 @@
 
 pub mod channel;
 mod context;
+mod frame_gate;
 pub mod pipeline;
-mod stage_config;
 mod render_task;
 mod solving;
 mod stacking_task;
+mod stage_config;
 mod storage;
 
 pub mod config_overrides;
@@ -33,4 +34,5 @@ pub mod watchdog;
 pub mod watchdog_tests;
 
 pub use context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
+pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
 pub use task::run_capture_loop;

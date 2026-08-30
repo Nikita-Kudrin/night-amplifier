@@ -10,6 +10,7 @@ use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, StackedFrame};
+use super::frame_gate::RejectionReason;
 use super::context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 use super::{pipeline, solving, storage};
 
@@ -134,6 +135,9 @@ pub fn run_stacking_task(
 
         // Process frame through stacking pipeline
         let registration_succeeded;
+        let mut showing_stack;
+        let stack_reset;
+        let mut rejected_because;
         let mut display_frame = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,
@@ -142,7 +146,7 @@ pub fn run_stacking_task(
             );
 
             // The pipeline functions expect &Frame — Arc<Frame> derefs transparently
-            let (res_frame, matched) = match settings.stacking_type {
+            let outcome = match settings.stacking_type {
                 StackingType::Comet => rt.block_on(pipeline::process_frame_with_comet_stacking(
                     &frame,
                     &settings,
@@ -164,8 +168,11 @@ pub fn run_stacking_task(
                     &mut stacking_failed,
                 )),
             };
-            registration_succeeded = matched;
-            Arc::new(res_frame)
+            registration_succeeded = outcome.frame_added;
+            showing_stack = outcome.showing_stack;
+            stack_reset = outcome.stack_reset;
+            rejected_because = outcome.rejected_because;
+            Arc::new(outcome.display_frame)
         } else {
             debug!(
                 stacking = settings.stacking,
@@ -174,44 +181,48 @@ pub fn run_stacking_task(
                 "Stacking disabled or failed, using raw frame"
             );
             registration_succeeded = false;
+            showing_stack = false;
+            stack_reset = false;
+            rejected_because = None;
             Arc::clone(&frame)
         };
 
-        // Fallback to raw frame for live view when registration fails
-        if stacking_enabled && !registration_succeeded {
-            debug!("Registration failed, falling back to raw frame for live view");
-            display_frame = Arc::clone(&frame);
+        // The stack restarted on a sharper reference, so the integration the
+        // counters describe no longer exists.
+        if stack_reset {
+            rt.block_on(state.reset_counters());
         }
 
+        // Note there is deliberately no raw-frame fallback for a frame that
+        // merely failed to register — see `StackingOutcome`.
+
         // Wanderer mode: reset stack if movement detected
-        if settings.wanderer_mode && stacking_enabled && !registration_succeeded {
-            info!("Wanderer mode: movement detected (registration failed), resetting stack");
+        if wanderer_detected_movement(
+            settings.wanderer_mode,
+            stacking_enabled,
+            registration_succeeded,
+            rejected_because,
+        ) {
+            info!(
+                reason = rejected_because.map(|r| r.describe()).unwrap_or("registration failed"),
+                "Wanderer mode: movement detected, resetting stack"
+            );
             stacking_ctx = None;
             comet_ctx = None;
             planetary_ctx = None;
             rt.block_on(state.reset_counters());
             display_frame = Arc::clone(&frame);
+            showing_stack = false;
+            // The stack this frame failed against no longer exists, so the
+            // verdict against it describes nothing the user can act on. Wanderer
+            // treats a failed registration as the *signal*, not as a fault.
+            rejected_because = None;
         }
 
-        // Track whether this frame was successfully stacked
-        let was_stacked = if stacking_enabled {
-            match settings.stacking_type {
-                StackingType::Comet => comet_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.frame_count() > 0)
-                    .unwrap_or(false),
-                StackingType::Planetary => planetary_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.frame_count() > 0)
-                    .unwrap_or(false),
-                _ => stacking_ctx
-                    .as_ref()
-                    .map(|ctx| ctx.frame_count() > 0)
-                    .unwrap_or(false),
-            }
-        } else {
-            false
-        };
+        // Whether *this* frame joined the stack. Deriving it from the context's
+        // frame count instead would report every frame after the first as
+        // stacked, leaving the UI's rejection counter pinned at zero.
+        let was_stacked = stacking_enabled && registration_succeeded;
 
         // Trigger plate solving asynchronously. Gated up front: without the
         // Push-To plugin the solve is a no-op, and spawning it would keep a
@@ -227,8 +238,13 @@ pub fn run_stacking_task(
             });
         }
 
-        // Update frame counters
-        rt.block_on(state.frame_captured(was_stacked));
+        // Update frame counters. The reason rides on `frame_captured`, never on
+        // `frame_rejected` — that one feeds the capture-abort burst detector and
+        // is for a camera that failed to deliver a frame at all.
+        rt.block_on(state.frame_captured(
+            was_stacked,
+            rejected_because.map(|reason| reason.describe()),
+        ));
 
         // Release our handle on the captured frame before handing the display
         // frame downstream. On the raw-fallback paths the two are the same
@@ -240,6 +256,7 @@ pub fn run_stacking_task(
         // Send to render channel (non-blocking — skip if render is busy)
         let render_msg = StackedFrame {
             display_frame,
+            showing_stack,
             was_stacked,
             frame_number,
             settings,
@@ -266,6 +283,29 @@ pub fn run_stacking_task(
     });
 
     debug!("Stacking task ended");
+}
+
+/// Whether Wanderer mode should treat this frame as the user having moved the
+/// telescope, and start the stack again.
+///
+/// Only a frame that could not be placed against the reference counts. Before
+/// the frame gate existed every rejection meant exactly that, so the condition
+/// was simply "did not stack"; the gate also rejects frames that aligned
+/// perfectly well but were soft or loose, and resetting on those hands the user
+/// a stack that restarts every time a cloud crosses.
+///
+/// A mode that reports no reason (comet, planetary) keeps the original
+/// behaviour: not stacking is the only signal available.
+fn wanderer_detected_movement(
+    wanderer_mode: bool,
+    stacking_enabled: bool,
+    registration_succeeded: bool,
+    rejected_because: Option<RejectionReason>,
+) -> bool {
+    if !wanderer_mode || !stacking_enabled || registration_succeeded {
+        return false;
+    }
+    rejected_because.is_none_or(|reason| reason.means_the_sky_moved())
 }
 
 /// Check if frame dimensions match any existing stacking context.
@@ -320,11 +360,65 @@ fn save_stacked_result(
 
 #[cfg(test)]
 mod tests {
+    use super::wanderer_detected_movement as moved;
+    use super::RejectionReason;
+
     #[test]
     fn test_check_dimension_mismatch_no_context() {
         let frame = crate::frame::Frame::zeros(100, 100, 3).unwrap();
         assert!(!super::check_dimension_mismatch(
             &frame, &None, &None, &None
         ));
+    }
+
+    #[test]
+    fn wanderer_resets_when_the_frame_cannot_be_placed_at_all() {
+        for reason in [
+            RejectionReason::NoStars,
+            RejectionReason::TooFewStars,
+            RejectionReason::RegistrationFailed,
+            RejectionReason::TooFewCorrespondences,
+        ] {
+            assert!(
+                moved(true, true, false, Some(reason)),
+                "{reason:?} means the field no longer matches the reference"
+            );
+        }
+    }
+
+    /// The regression the frame gate introduced: it rejects frames that aligned
+    /// perfectly well but were soft or loose, and Wanderer read every rejection
+    /// as the user having swung the scope. A cloud crossing would restart the
+    /// stack, which is the opposite of what the mode is for.
+    #[test]
+    fn wanderer_holds_the_stack_through_a_cloud() {
+        for reason in [
+            RejectionReason::ResidualTooHigh,
+            RejectionReason::StarsTooLarge,
+            RejectionReason::StackerError,
+        ] {
+            assert!(
+                !moved(true, true, false, Some(reason)),
+                "{reason:?} is a bad frame, not a new target"
+            );
+        }
+    }
+
+    #[test]
+    fn wanderer_leaves_a_stacked_frame_alone() {
+        assert!(!moved(true, true, true, None));
+    }
+
+    /// Comet and planetary report no reason, so "did not stack" stays the only
+    /// signal available to them.
+    #[test]
+    fn a_mode_without_reasons_keeps_the_original_wanderer_behaviour() {
+        assert!(moved(true, true, false, None));
+    }
+
+    #[test]
+    fn wanderer_does_nothing_when_it_is_off_or_stacking_is_not_running() {
+        assert!(!moved(false, true, false, None), "wanderer mode is off");
+        assert!(!moved(true, false, false, None), "stacking is not running");
     }
 }

@@ -43,13 +43,15 @@ pub fn run_render_task(
 
         let StackedFrame {
             mut display_frame,
+            showing_stack,
             was_stacked,
             frame_number,
             settings,
         } = latest;
 
         let _iter_span =
-            tracing::info_span!("render_iteration", frame_number, was_stacked,).entered();
+            tracing::info_span!("render_iteration", frame_number, showing_stack, was_stacked,)
+                .entered();
 
         // The preview pipeline mutates in place. `make_mut` hands back the
         // buffer untouched when we hold the only handle — the usual case, since
@@ -79,8 +81,10 @@ pub fn run_render_task(
             }
         };
 
-        // Use max parallel chunks for live view, single chunk during stacking
-        let chunk_count = if was_stacked { 1 } else { max_chunks };
+        // Use max parallel chunks for live view, single chunk during stacking.
+        // Keyed on what is being displayed, not on whether this frame joined the
+        // stack: a rejected frame still leaves the slow-moving stack on screen.
+        let chunk_count = if showing_stack { 1 } else { max_chunks };
 
         let ready_frame = Arc::new(crate::server::state::RenderReadyFrame {
             linear_frame: display_frame,
@@ -298,6 +302,7 @@ mod tests {
         let frame = crate::frame::Frame::zeros(4, 4, 3).unwrap();
         let msg = super::StackedFrame {
             display_frame: std::sync::Arc::new(frame),
+            showing_stack: true,
             was_stacked: true,
             frame_number: 1,
             settings,
@@ -317,6 +322,7 @@ mod tests {
         let settings = crate::server::state::CaptureSettings::default();
         let initial = super::StackedFrame {
             display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
+            showing_stack: false,
             was_stacked: false,
             frame_number: 0,
             settings: settings.clone(),
@@ -326,6 +332,7 @@ mod tests {
         for n in 0..3 {
             let msg = super::StackedFrame {
                 display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
+                showing_stack: false,
                 was_stacked: false,
                 frame_number: n + 1,
                 settings: settings.clone(),
@@ -335,6 +342,7 @@ mod tests {
         // Last frame is the "latest"
         let last = super::StackedFrame {
             display_frame: Arc::new(crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap()),
+            showing_stack: true,
             was_stacked: true,
             frame_number: 4,
             settings: settings.clone(),
@@ -363,6 +371,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(super::StackedFrame {
             display_frame: std::sync::Arc::new(frame),
+            showing_stack: false,
             was_stacked: false,
             frame_number: 1,
             settings: CaptureSettings::default(),
@@ -405,6 +414,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(super::StackedFrame {
             display_frame: shared,
+            showing_stack: false,
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
@@ -502,6 +512,7 @@ mod tests {
             display_frame: std::sync::Arc::new(
                 crate::frame::Frame::filled(width, height, 3, 0.25).unwrap(),
             ),
+            showing_stack: false,
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
@@ -566,6 +577,7 @@ mod tests {
             display_frame: std::sync::Arc::new(
                 crate::frame::Frame::filled(3008, 3008, 3, 0.25).unwrap(),
             ),
+            showing_stack: false,
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
@@ -606,6 +618,7 @@ mod tests {
             display_frame: std::sync::Arc::new(
                 crate::frame::Frame::filled(IMX464.0, IMX464.1, 3, 0.25).unwrap(),
             ),
+            showing_stack: false,
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),

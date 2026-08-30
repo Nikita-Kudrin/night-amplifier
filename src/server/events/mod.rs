@@ -20,6 +20,14 @@ pub enum ServerEvent {
         frame_number: u64,
         stacked_count: u64,
         rejected_count: u64,
+        /// Why this frame did not join the stack, when it did not.
+        ///
+        /// Separate from [`ServerEvent::FrameRejected`], which means the camera
+        /// failed to deliver a frame at all and feeds the capture-abort burst
+        /// detector. A frame that arrived fine and merely aligned badly must not
+        /// go through that path — a night of soft seeing would stop the capture.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rejection_reason: Option<String>,
     },
 
     /// Frame was rejected
@@ -294,11 +302,17 @@ impl ServerEvent {
         }
     }
 
-    pub fn frame_captured(frame_number: u64, stacked_count: u64, rejected_count: u64) -> Self {
+    pub fn frame_captured(
+        frame_number: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        rejection_reason: Option<&str>,
+    ) -> Self {
         ServerEvent::FrameCaptured {
             frame_number,
             stacked_count,
             rejected_count,
+            rejection_reason: rejection_reason.map(str::to_owned),
         }
     }
 
@@ -524,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_frame_captured_serialization() {
-        let event = ServerEvent::frame_captured(42, 10, 2);
+        let event = ServerEvent::frame_captured(42, 10, 2, None);
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "frame_captured");

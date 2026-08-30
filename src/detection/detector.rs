@@ -286,7 +286,7 @@ impl StarDetector {
     /// `2.3548·√(2·Σd²/(2r+1))` — 10.53 px at `centroid_radius = 5`, independent of
     /// the actual star. Real frames pinned against that ceiling (p10 10.19 / p90
     /// 10.56 px on the 250 mm-dob fixture), which silently disabled FWHM-based frame
-    /// weighting in `QualityLimits` (every frame scoring identically) and made the
+    /// weighting in `QualityBaseline` (every frame scoring identically) and made the
     /// Pro solver's bloat detection fire on every frame.
     ///
     /// Half maximum is measured against a **local** background taken from the window's

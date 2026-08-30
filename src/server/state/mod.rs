@@ -251,8 +251,19 @@ impl AppState {
         let _ = self.events.send(ServerEvent::state_changed(state));
     }
 
-    /// Increment frame count and broadcast event
-    pub async fn frame_captured(&self, stacked: bool) {
+    /// Increment frame count and broadcast event.
+    ///
+    /// `rejection_reason` says why the frame did not join the stack and is only
+    /// meaningful when `stacked` is false. It rides on the `frame_captured`
+    /// event rather than going through [`AppState::frame_rejected`], which is
+    /// for a camera that failed to deliver a frame and feeds the capture-abort
+    /// burst detector — a frame that arrived fine and merely aligned badly must
+    /// never reach that.
+    pub async fn frame_captured(&self, stacked: bool, rejection_reason: Option<&str>) {
+        debug_assert!(
+            !(stacked && rejection_reason.is_some()),
+            "a stacked frame has no rejection reason"
+        );
         let (frame_number, stacked_count, rejected_count) = {
             let mut session = self.session.write().await;
             session.frame_count += 1;
@@ -274,6 +285,7 @@ impl AppState {
             frame_number,
             stacked_count,
             rejected_count,
+            rejection_reason,
         ));
     }
 
@@ -687,9 +699,9 @@ mod tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         state.reset_session().await;
 
-        state.frame_captured(true).await;
-        state.frame_captured(true).await;
-        state.frame_captured(false).await;
+        state.frame_captured(true, None).await;
+        state.frame_captured(true, None).await;
+        state.frame_captured(false, None).await;
 
         let session = state.session.read().await;
         assert_eq!(session.frame_count, 3);

@@ -5,18 +5,33 @@ use super::config::DetectionConfig;
 use super::detector::StarDetector;
 use super::star::Star;
 
+/// Number of stars the first rung must find before the more permissive — and
+/// slower — fallbacks are skipped.
+const ENOUGH_STARS: usize = 10;
+
+/// Star cap for every rung of the ladder.
+///
+/// Registration quality is limited by how much of the star field it can see. On a
+/// 9 MP sub the old 30-star first rung registered 26 of 34 fixture frames with a
+/// 2.6 px mean residual; lifting the cap takes that to 33 of 34 at 1.7 px for the
+/// same 25 ms, because the cost is in the threshold pass, not in the stars kept.
+const MAX_STARS: usize = 200;
+
 /// Detects stars with adaptive parameters based on image characteristics
 pub fn detect_stars_adaptive(frame: &Frame) -> Result<Vec<Star>> {
-    // Fast path: try fast config first
-    let detector = StarDetector::new(DetectionConfig::fast());
+    // First rung: default sensitivity. `fast()` used to sit here, but its 30-star
+    // cap starved registration and its 3 px centroid radius is too small to
+    // measure a typical star — `compute_fwhm` hit the window border and returned
+    // None on half the frames, which silently neutered quality weighting too.
+    let detector = StarDetector::new(DetectionConfig::default().with_max_stars(MAX_STARS));
     if let Ok(stars) = detector.detect(frame) {
-        if stars.len() >= 10 {
+        if stars.len() >= ENOUGH_STARS {
             return Ok(stars);
         }
     }
 
     // Second attempt: sensitive config
-    let detector = StarDetector::new(DetectionConfig::sensitive().with_max_stars(50));
+    let detector = StarDetector::new(DetectionConfig::sensitive().with_max_stars(MAX_STARS));
     if let Ok(stars) = detector.detect(frame) {
         if stars.len() >= 3 {
             return Ok(stars);
@@ -24,7 +39,7 @@ pub fn detect_stars_adaptive(frame: &Frame) -> Result<Vec<Star>> {
     }
 
     // Final fallback: aggressive
-    StarDetector::new(DetectionConfig::aggressive().with_max_stars(50)).detect(frame)
+    StarDetector::new(DetectionConfig::aggressive().with_max_stars(MAX_STARS)).detect(frame)
 }
 
 /// Full adaptive detection that tries more configurations (slower)

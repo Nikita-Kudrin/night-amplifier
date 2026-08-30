@@ -24,6 +24,45 @@ pub const MIN_STARS_FOR_REGISTRATION: usize = 10;
 /// If fewer frames stack, the registration algorithm may have issues.
 pub const MIN_STACKING_SUCCESS_RATE: f64 = 0.5;
 
+/// Minimum fraction of frames the live-stacking path must get into the stack.
+///
+/// Higher than `MIN_STACKING_SUCCESS_RATE` because that constant covers the
+/// batch path, which has no quality gate to lose frames to. The live path
+/// deliberately drops badly fitted frames — but dropping a third of a clean
+/// fixture set means detection, registration, or the gate's thresholds have
+/// regressed, not that the fixtures went bad.
+///
+/// Measured against the stack rather than against admissions, so an early
+/// re-base — which discards everything before it — shows up here as the lost
+/// integration it is. The managed sets currently sit at 83–100 %.
+pub const MIN_LIVE_STACKING_RETENTION: f64 = 0.7;
+
+/// Re-bases a clean fixture set may make before the gate is chasing noise.
+///
+/// A re-base discards the integration built so far and drops the preview back to
+/// a single sub, so it has to be rare and early. Star size is measured from an
+/// integer count of pixels above half maximum, which quantises it in ~10 % steps
+/// at the sharp end — a margin inside that resolution re-bases on the estimator
+/// rather than on the sky.
+pub const MAX_REBASES_PER_SESSION: usize = 1;
+
+/// Share of a well-tracked session's frames that may be dropped for a high
+/// registration residual.
+///
+/// "Well tracked" means the session aligns to well inside one star's width, so
+/// there is nothing left for the gate to catch. Anything above this is the
+/// residual limit having drifted back to scoring a session's precision against
+/// itself.
+pub const MAX_RESIDUAL_REJECTION_SHARE: f64 = 0.1;
+
+/// Share of a real session Wanderer mode may restart the stack on.
+///
+/// A frame that genuinely will not register has always meant "the telescope
+/// moved", and a rough night produces a few of those. What must not happen is
+/// the frame gate's quality verdicts — soft stars, a loose fit — being read the
+/// same way, which would restart the integration every time a cloud crossed.
+pub const MAX_WANDERER_RESET_SHARE: f64 = 0.25;
+
 /// Minimum mean pixel value for output (ensures image is not all black)
 pub const MIN_OUTPUT_MEAN_VALUE: f64 = 1.0;
 
@@ -39,11 +78,25 @@ pub const MIN_STRETCH_FACTOR: f32 = 1.0;
 /// Maximum stretch factor (beyond this suggests problematic data)
 pub const MAX_STRETCH_FACTOR: f32 = 10000.0;
 
+/// Fixture sets this suite downloads and knows the shape of.
+///
+/// `tests/fixtures/` is gitignored, so on any given machine it may also hold
+/// stray capture output or hand-dropped images. A regression test that asserts
+/// on whatever happens to be on disk is not reproducible — assert on these.
+pub const MANAGED_FIXTURE_SETS: &[&str] = &[
+    "250mm-dob-imx533-dumbbell-fits",
+    "250mm-dob-imx464-orion-png",
+    "130mm-imx464-dumbell-nebulae-png",
+    "130mm-imx464-ring-nebulae-png",
+];
+
 /// Supported image file extensions
 pub const TIFF_EXTENSIONS: &[&str] = &["tif", "tiff"];
 pub const FITS_EXTENSIONS: &[&str] = &["fit", "fits"];
+pub const PNG_EXTENSIONS: &[&str] = &["png"];
 
 /// Test output subdirectory names
+pub const PROCESSED_OUTPUT_DIR: &str = "processed";
 pub const STACKED_OUTPUT_DIR: &str = "stacked";
 pub const DEBAYER_OUTPUT_DIR: &str = "debayer";
 
@@ -196,8 +249,14 @@ pub fn find_fixture_sets() -> Vec<FixtureSet> {
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.path().is_dir())
         .filter(|entry| {
-            // Skip the processed directory
-            entry.file_name().to_str() != Some("processed")
+            // Skip this suite's own output. `stacked/` holds saved stacks and
+            // their stretched PNG previews — since PNG became a recognised
+            // fixture extension it looked like an eight-frame fixture set of
+            // mismatched geometry, and `test_process_all_fixture_sets` was
+            // happily "processing" it.
+            let name = entry.file_name();
+            let name = name.to_str();
+            name != Some(PROCESSED_OUTPUT_DIR) && name != Some(STACKED_OUTPUT_DIR)
         })
         .filter_map(|entry| {
             let dir_path = entry.path();
@@ -239,6 +298,7 @@ pub fn find_image_files_in_dir(dir_path: &Path) -> Vec<PathBuf> {
                     let ext_lower = ext.to_lowercase();
                     TIFF_EXTENSIONS.contains(&ext_lower.as_str())
                         || FITS_EXTENSIONS.contains(&ext_lower.as_str())
+                        || PNG_EXTENSIONS.contains(&ext_lower.as_str())
                 })
                 .unwrap_or(false)
         })
@@ -445,12 +505,7 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
 pub fn ensure_fixtures_sync() {
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(ensure_fixtures(Some(&[
-            "250mm-dob-imx533-dumbbell-fits",
-            "250mm-dob-imx464-orion-png",
-            "130mm-imx464-dumbell-nebulae-png",
-            "130mm-imx464-ring-nebulae-png",
-        ])));
+        .block_on(ensure_fixtures(Some(MANAGED_FIXTURE_SETS)));
 }
 
 use regex::Regex;
