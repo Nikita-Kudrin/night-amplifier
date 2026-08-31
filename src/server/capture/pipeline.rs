@@ -121,13 +121,19 @@ pub async fn process_frame_with_stacking(
                 None => info!(
                     frame_count = ctx.frame_count(),
                     matched_stars = admission.matched_stars,
-                    residual = admission.mean_residual,
+                    // Debug, not the bare f32: NaN/inf are legitimate sentinels here
+                    // (see FrameAdmission::mean_residual) but OTel exports them as a
+                    // double attribute, and Jaeger's query API 500s trying to JSON-encode
+                    // a non-finite float — taking down every trace search that touches
+                    // one, not just this span. Recording via Debug makes it a string
+                    // attribute instead, which is immune.
+                    residual = ?admission.mean_residual,
                     "Frame added to stack"
                 ),
                 Some(reason) => info!(
                     frame_count = ctx.frame_count(),
                     matched_stars = admission.matched_stars,
-                    residual = admission.mean_residual,
+                    residual = ?admission.mean_residual,
                     reason = reason.describe(),
                     "Frame not added to stack"
                 ),

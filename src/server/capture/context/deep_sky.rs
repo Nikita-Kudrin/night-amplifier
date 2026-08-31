@@ -160,7 +160,12 @@ impl StackingContext {
                 debug!(
                     config = %result.config_used,
                     matched_stars = result.matched_stars,
-                    residual = result.mean_residual,
+                    // Debug, not the bare f32: mean_residual is f32::INFINITY when
+                    // registration matched but no correspondences survived the
+                    // diagnostic pass (see AdaptiveRegistration::compute_diagnostics).
+                    // A non-finite double attribute makes Jaeger's query API 500 on
+                    // any trace search that includes it; Debug records it as a string.
+                    residual = ?result.mean_residual,
                     "Registration succeeded"
                 );
                 result
@@ -177,7 +182,10 @@ impl StackingContext {
 
         let span = Span::current();
         span.record("matched_stars", result.matched_stars);
-        span.record("residual", result.mean_residual);
+        // field::debug, not the bare f32: see the "Registration succeeded" debug!
+        // above — mean_residual can be non-finite and Jaeger's query API 500s on a
+        // non-finite double attribute.
+        span.record("residual", field::debug(result.mean_residual));
 
         // Compute quality metrics from detected stars for weighted stacking
         let quality = FrameQuality {
