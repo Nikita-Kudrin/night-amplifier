@@ -103,7 +103,12 @@ fn bench_auto_stretch(c: &mut Criterion) {
             || vec![frame.clone(); REPS],
             |frames| {
                 for test_frame in frames.iter_mut() {
-                    let _ = auto_stretch_frame(black_box(test_frame), stretch_config, None);
+                    let _ = auto_stretch_frame(
+                        black_box(test_frame),
+                        stretch_config,
+                        None,
+                        night_amplifier::render::ShadowFloorRequest::NONE,
+                    );
                 }
             },
             BatchSize::LargeInput,
@@ -140,6 +145,7 @@ fn bench_fused_stretch(c: &mut Criterion) {
                         0.15,
                         1.0,
                         None,
+                        night_amplifier::render::ShadowFloor::NONE,
                     )
                     .unwrap();
                 }

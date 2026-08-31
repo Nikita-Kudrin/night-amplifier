@@ -73,6 +73,7 @@ mod tests {
                 circular_view: true,
                 intensity: 0.5,
                 black_floor: 0.04,
+                darker_sky: false,
                 dither: true,
             },
             telescope: TelescopeSettings {
@@ -294,6 +295,7 @@ mod tests {
                 circular_view: true,
                 intensity: 0.5,
                 black_floor: 0.04,
+                darker_sky: false,
                 dither: true,
             },
             telescope: TelescopeSettings::default(),

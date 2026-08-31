@@ -104,6 +104,7 @@ pub fn compute_auto_stretch_with_algorithm(
 
     AutoStretchResult {
         stretch_factor,
+        target_background,
         midtones,
         black_point,
         original_median: mode,

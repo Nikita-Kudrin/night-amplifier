@@ -27,7 +27,9 @@ use std::cell::RefCell;
 use rayon::prelude::*;
 
 use crate::render::denoise::{DenoiseConfig, DenoiseScratch};
-use crate::render::output::{write_row_rgb8, DisplayOutput};
+use crate::render::output::{
+    apply_shadow_floor_slice, write_row_rgb8, DisplayOutput, ShadowFloorTable,
+};
 use crate::server::state::RenderReadyFrame;
 
 thread_local! {
@@ -333,6 +335,11 @@ struct RowTail<'a> {
     has_contrast: bool,
     black_point: f32,
     scale_lut: std::sync::Arc<Vec<f32>>,
+    /// Set only when the floor could not ride the scale LUT — see
+    /// `StretchResult::deferred_shadow_floor`. Resampled once per *frame* by
+    /// `process_preview_frame` and shared across every payload, rather than
+    /// evaluated per pixel or rebuilt per encode.
+    floor: Option<&'a ShadowFloorTable>,
 }
 
 impl<'a> RowTail<'a> {
@@ -345,6 +352,11 @@ impl<'a> RowTail<'a> {
             _ => (0.0, std::sync::Arc::new(vec![])),
         };
 
+        let floor = ready_frame
+            .stretch_result
+            .as_ref()
+            .and_then(|sr| sr.deferred_shadow_floor.as_deref());
+
         Self {
             config,
             has_stretch,
@@ -352,6 +364,7 @@ impl<'a> RowTail<'a> {
             has_contrast: config.contrast,
             black_point,
             scale_lut,
+            floor,
         }
     }
 
@@ -373,6 +386,12 @@ impl<'a> RowTail<'a> {
         }
         if self.has_contrast {
             crate::render::output::apply_contrast_slice(f32_row, &self.config.contrast_config);
+        }
+        // Last, and after contrast: the fused path puts it last inside the scale
+        // LUT for the same reason, so one slider position means one thing on
+        // both paths.
+        if let Some(table) = self.floor {
+            apply_shadow_floor_slice(f32_row, table);
         }
     }
 }

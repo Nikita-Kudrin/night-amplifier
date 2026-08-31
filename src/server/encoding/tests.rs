@@ -35,6 +35,7 @@ fn to_ready_frame_with_stretch(
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: Some(crate::server::state::StretchResult {
+            deferred_shadow_floor: None,
             black_point,
             scale_lut,
             color_intensity: 1.0,

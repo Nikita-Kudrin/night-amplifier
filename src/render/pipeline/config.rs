@@ -1,7 +1,7 @@
 use crate::background::BackgroundConfig;
 use crate::render::autostretch::AutoStretchConfig;
 use crate::render::denoise::DenoiseConfig;
-use crate::render::output::{ContrastConfig, DisplayOutput};
+use crate::render::output::{ContrastConfig, DisplayOutput, ShadowFloorRequest};
 use crate::render::stretch::SaturationBoostConfig;
 
 /// Configuration for the unified render pipeline
@@ -40,6 +40,19 @@ pub struct RenderPipelineConfig {
     /// dither needs actually exists.
     pub display: DisplayOutput,
 
+    /// How far below the sky black sits, as the observer asked for it.
+    ///
+    /// Not a pipeline stage either, and unlike the others it is not yet a
+    /// transform: it only becomes one once the solver reports where the sky
+    /// landed, which happens after this config is built. The resolved curve
+    /// travels on `StretchResult`.
+    ///
+    /// It is applied immediately after contrast, in whichever of the two places
+    /// contrast runs: fused into the scale LUT when the LUT carries the S-curve,
+    /// and in the encoder's row tail when saturation boost has pushed contrast
+    /// out of it.
+    pub shadow_floor: ShadowFloorRequest,
+
     /// Spatial denoising, applied at **stream** resolution.
     ///
     /// Not a pipeline stage either, and for the same reason as `display`: the
@@ -64,6 +77,7 @@ impl Default for RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
         }
     }
@@ -146,6 +160,12 @@ impl RenderPipelineConfig {
         self
     }
 
+    /// Set the shadow floor applied after contrast.
+    pub fn with_shadow_floor(mut self, floor: ShadowFloorRequest) -> Self {
+        self.shadow_floor = floor;
+        self
+    }
+
     /// Set the spatial denoising the encoders apply at stream resolution.
     pub fn with_denoise(mut self, denoise: DenoiseConfig) -> Self {
         self.denoise = denoise;
@@ -171,6 +191,7 @@ impl RenderPipelineConfig {
             scnr: true,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
         }
     }
@@ -189,6 +210,7 @@ impl RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
         }
     }
@@ -207,6 +229,7 @@ impl RenderPipelineConfig {
             scnr: false,
             scnr_amount: 1.0,
             display: DisplayOutput::PLAIN,
+            shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
         }
     }

@@ -399,10 +399,34 @@ pub fn process_preview_frame(
                     None
                 };
 
+                // The floor anchors to where the sky ends up *after* contrast,
+                // so the anchor asks whether contrast runs at all — not whether
+                // it runs inside the table. Those differ exactly when saturation
+                // boost is on, and using `contrast_for_lut` here would move the
+                // slider's meaning between Community and Pro.
+                let contrast_applied = (pipeline_config.contrast
+                    && !pipeline_config.contrast_config.is_disabled())
+                .then_some(&pipeline_config.contrast_config);
+                let shadow_floor = pipeline_config.shadow_floor.resolve(
+                    crate::render::sky_level_after_contrast(
+                        res.target_background,
+                        contrast_applied,
+                    ),
+                );
+
                 let scale_lut = crate::render::stretch::cached_scale_lut(
                     pipeline_config.stretch_config.tone_mapping,
                     res.stretch_factor,
                     contrast_for_lut,
+                    // Only fused here when contrast was. Otherwise the row tail
+                    // applies it after the separate contrast pass, so that the
+                    // order is stretch -> saturation -> contrast -> floor either
+                    // way.
+                    if can_fuse_contrast {
+                        shadow_floor
+                    } else {
+                        crate::render::ShadowFloor::NONE
+                    },
                 );
 
                 if can_fuse_contrast {
@@ -413,6 +437,10 @@ pub fn process_preview_frame(
                     black_point: res.black_point,
                     scale_lut,
                     color_intensity: pipeline_config.stretch_config.color_intensity,
+                    deferred_shadow_floor: (!can_fuse_contrast && !shadow_floor.is_none())
+                        .then(|| {
+                            std::sync::Arc::new(crate::render::ShadowFloorTable::new(shadow_floor))
+                        }),
                 })
             }
             Err(e) => {

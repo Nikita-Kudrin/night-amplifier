@@ -196,6 +196,16 @@ const HELP = HELP_TEXTS
 
       <div class="control-group" style="margin-bottom: 1.5rem">
         <BaseToggle
+            v-model="localSettings.eyepiece.darker_sky"
+            label="Darker sky"
+            :disabled="localSettings.eyepiece.black_floor >= 0"
+            :help="HELP.eyepiece_darker_sky"
+            @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
+        />
+      </div>
+
+      <div class="control-group" style="margin-bottom: 1.5rem">
+        <BaseToggle
             v-model="localSettings.eyepiece.dither"
             label="Dithering"
             :help="HELP.eyepiece_dither"

@@ -366,14 +366,34 @@ pub struct EyepieceSettings {
     /// Dark background enhancement intensity (0.0 to 1.0)
     #[serde(default = "default_intensity")]
     pub intensity: f32,
-    /// Lowest brightness the eyepiece view may output, normalized to [0, 1).
+    /// Where black sits, as a signed fraction of full scale, in `[-0.09, 0.5]`.
     ///
-    /// An OLED switches a zero pixel fully off. The autostretch black point
+    /// **Positive** lifts the output floor by this fraction of full scale. An
+    /// OLED switches a zero pixel fully off, and the autostretch black point
     /// clamps a few per cent of sky pixels to zero, which at eyepiece
-    /// magnification reads as black speckle rather than as sky, so the display
-    /// output is lifted off the floor by this much.
+    /// magnification reads as black speckle rather than as sky.
+    ///
+    /// **Negative** pushes the sky toward black instead. The number still reads
+    /// as a fraction of full scale, but what it *does* is anchored to the sky:
+    /// `-0.052` puts the floor at the sky level under a nominal sky and still
+    /// puts it at the sky level under a brighter one, so one setting behaves the
+    /// same on every target. The sky otherwise lands at 14-17 output levels,
+    /// which is a clearly visible grey at the eyepiece, and lowering it through
+    /// the stretch instead dims the target along with it — see
+    /// [`intensity`](Self::intensity).
     #[serde(default = "default_black_floor")]
     pub black_floor: f32,
+
+    /// Let the darkening half of `black_floor` clip to true black instead of
+    /// rolling off into it.
+    ///
+    /// Sky noise is as wide as the sky level, so a hard floor puts around 40 %
+    /// of all samples on exactly zero. That buys the deepest possible sky and a
+    /// little more separation between target and background, and costs the black
+    /// speckle the positive half of `black_floor` exists to remove. Off by
+    /// default; no effect while `black_floor` is positive.
+    #[serde(default)]
+    pub darker_sky: bool,
     /// Ordered dithering at the 8-bit conversion, to keep smooth gradients from
     /// banding once denoising removes the noise that currently masks the steps.
     #[serde(default = "default_dither")]
@@ -408,6 +428,7 @@ impl Default for EyepieceSettings {
             circular_view: true,
             intensity: 0.3,
             black_floor: default_black_floor(),
+            darker_sky: false,
             dither: default_dither(),
         }
     }

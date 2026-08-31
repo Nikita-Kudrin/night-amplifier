@@ -95,7 +95,45 @@ pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
         .with_algorithm(settings.background_extraction_algorithm)
 }
 
-/// Helper to get a full render pipeline configuration from capture settings
+/// The sky level the black floor's percentage is quoted against.
+///
+/// The slider reads in fractions of full scale on both sides, because that is
+/// what its positive half has always meant and what the manual documents. The
+/// darkening half is anchored to the sky rather than to full scale, though, so
+/// the two have to be related by something: this is the post-contrast sky level
+/// at the shipped stretch settings — `sky_level_after_contrast(0.08, default)`,
+/// which is where a deep-sky frame lands. A setting of `-0.052` therefore puts
+/// the floor at the sky level under a nominal sky, and *still* puts it at the
+/// sky level under a brighter one, which is the whole point of anchoring.
+const NOMINAL_SKY_LEVEL: f32 = 0.052;
+
+/// Pedestal held under a soft shadow floor, in fractions of full scale.
+///
+/// About 1.5 output levels. The soft floor compresses the sub-floor sky toward
+/// zero rather than clipping it, so nothing lands on zero by construction — this
+/// is what makes that hold after rounding as well.
+const DARKENED_FLOOR_PEDESTAL: f32 = 0.006;
+
+/// Slider positions this close to zero mean zero.
+///
+/// The sign of `black_floor` picks between two different transforms against two
+/// different references, so it is an exact float test on a value that arrives
+/// over JSON. A range input stepping onto its own zero can land a few ULPs below
+/// it, and that would swap in the guard pedestal — one and a half output levels
+/// — for a floor of nothing.
+const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
+
+/// How far down the slider reaches, matching `BLACK_FLOOR_LIMITS` in the
+/// frontend. Enforced here rather than trusted: `POST /api/settings` takes any
+/// `f32`, and the darkening half is the half where a wild value has somewhere to
+/// go — `ShadowFloor::from_sky` caps the depth it produces, but the fraction it
+/// is handed would still make one slider step mean nothing.
+const MIN_BLACK_FLOOR: f32 = -0.09;
+
+/// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
+/// lifting half is clamped in the same place as the darkening one.
+const MAX_BLACK_FLOOR: f32 = 0.5;
+
 /// How much of the eyepiece intensity slider's range actually reaches the
 /// stretch. The slider is a comfort control, not a full remap of the tone curve.
 const EYEPIECE_INTENSITY_SCALE: f32 = 0.4;
@@ -137,6 +175,48 @@ fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
     }
 }
 
+/// `black_floor` with the nonsense taken out: dead-banded at zero, clamped to
+/// the slider's own range, and finite.
+fn sanitized_black_floor(settings: &CaptureSettings) -> f32 {
+    let value = settings.eyepiece.black_floor;
+    if !value.is_finite() || value.abs() < BLACK_FLOOR_DEADBAND {
+        return 0.0;
+    }
+    value.clamp(MIN_BLACK_FLOOR, MAX_BLACK_FLOOR)
+}
+
+/// The slider's darkening half, or `None` when it is off or cannot be honoured.
+///
+/// Two conditions beyond the sign, because the floor is anchored to a sky level
+/// that something else has to measure first:
+///
+/// - **Auto-stretch must be on.** The anchor is the solver's own
+///   `target_background`, and `process_preview_frame` produces no
+///   `StretchResult` without a solve — so the curve would have nothing to travel
+///   on. Letting the request through anyway leaves only the guard pedestal,
+///   which *raises* the sky: measured 2 to 3 output levels on the IMX533
+///   fixture, a control labelled "darker" making the background brighter.
+/// - **Not Planetary.** The anchor is the frame's own median, which on a lunar
+///   or planetary frame is the disc rather than the sky, so the floor lands on
+///   the subject. This is the same asymmetry `cfa::fpn`, superpixel debayering
+///   and both denoisers each state at their own site.
+fn darkening_request(settings: &CaptureSettings) -> Option<crate::render::ShadowFloorRequest> {
+    let black_floor = sanitized_black_floor(settings);
+    if black_floor >= 0.0 {
+        return None;
+    }
+    if !settings.auto_stretch {
+        return None;
+    }
+    if settings.stacking_type == crate::stacking::StackingType::Planetary {
+        return None;
+    }
+    Some(crate::render::ShadowFloorRequest {
+        fraction: -black_floor / NOMINAL_SKY_LEVEL,
+        hard: settings.eyepiece.darker_sky,
+    })
+}
+
 pub fn get_render_pipeline_config(
     settings: &CaptureSettings,
     for_fits: bool,
@@ -174,9 +254,30 @@ pub fn get_render_pipeline_config(
         // The 8-bit conversion is not a pipeline stage; the encoders apply it
         // where they write output bytes. It is set unconditionally because a
         // zero pedestal with dithering off reproduces a plain conversion.
+        // One signed slider, two transforms. They are not the same operation
+        // with the sign flipped: the pedestal is a property of the panel, so it
+        // is an absolute fraction of full scale, while the floor is a property
+        // of the sky, so it is a fraction of wherever the sky landed. The
+        // resolve happens later, once the solver reports that level.
+        let darkening = darkening_request(settings);
+        let pedestal = match darkening {
+            // The point of the hard floor is reaching true black; guarding it
+            // off the panel's off state would undo exactly that.
+            Some(request) if request.hard => 0.0,
+            // The soft floor approaches zero without arriving, and this is what
+            // turns that into a guarantee: roughly one and a half output levels,
+            // enough that no sample rounds to the off state.
+            Some(_) => DARKENED_FLOOR_PEDESTAL,
+            // The lifting half — or a darkening this frame cannot honour, in
+            // which case the pedestal must stay where a zero floor leaves it
+            // rather than becoming the only half of the request that lands.
+            None => sanitized_black_floor(settings).max(0.0),
+        };
         config.display = crate::render::DisplayOutput::default()
-            .with_pedestal(settings.eyepiece.black_floor)
+            .with_pedestal(pedestal)
             .with_dither(settings.eyepiece.dither);
+
+        config.shadow_floor = darkening.unwrap_or(crate::render::ShadowFloorRequest::NONE);
 
         config.denoise = denoise_config(settings);
 
@@ -365,6 +466,163 @@ mod tests {
         );
     }
 
+    /// The signed slider drives two different transforms against two different
+    /// references, and which one it reaches is decided here and nowhere else.
+    #[test]
+    fn a_negative_black_floor_darkens_instead_of_lifting() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -NOMINAL_SKY_LEVEL;
+        settings.eyepiece.darker_sky = false;
+
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(
+            (config.shadow_floor.fraction - 1.0).abs() < 1e-5,
+            "a floor of one nominal sky level must resolve to a fraction of 1.0,              got {}",
+            config.shadow_floor.fraction
+        );
+        assert!(!config.shadow_floor.hard);
+        assert!(
+            (config.display.pedestal - DARKENED_FLOOR_PEDESTAL).abs() < 1e-6,
+            "the soft floor must keep a pedestal under it, got {}",
+            config.display.pedestal
+        );
+
+        // And the positive half is untouched by any of it.
+        settings.eyepiece.black_floor = 0.05;
+        let config = get_render_pipeline_config(&settings, false);
+        assert!((config.display.pedestal - 0.05).abs() < 1e-6);
+        assert!(config.shadow_floor.is_none());
+    }
+
+    /// "Darker sky" trades the roll-off for a clip, and the pedestal has to go
+    /// with it — guarding the output off zero is precisely what it is asking not
+    /// to have done.
+    #[test]
+    fn darker_sky_clips_and_drops_the_guard_pedestal() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.darker_sky = true;
+
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.hard);
+        assert_eq!(config.display.pedestal, 0.0);
+
+        // It says nothing while the slider is on its lifting half.
+        settings.eyepiece.black_floor = 0.04;
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.is_none());
+        assert!((config.display.pedestal - 0.04).abs() < 1e-6);
+    }
+
+    /// The floor is anchored to the sky level the *solver* reports, and there is
+    /// no solver without auto-stretch — `process_preview_frame` produces no
+    /// `StretchResult` for the curve to travel on. Letting the request through
+    /// anyway left only the guard pedestal, which raises the sky: measured 2 to
+    /// 3 output levels on the IMX533 fixture, a control labelled "darker"
+    /// making the background brighter.
+    #[test]
+    fn a_negative_black_floor_is_inert_without_auto_stretch() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = false;
+        settings.eyepiece.black_floor = -0.09;
+        settings.eyepiece.dither = false;
+
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.is_plain(),
+            "the guard pedestal outlived the floor it was guarding: {}",
+            config.display.pedestal
+        );
+
+        // The same position with a solve behind it is the live feature.
+        settings.auto_stretch = true;
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(!config.shadow_floor.is_none());
+    }
+
+    /// A lunar disc is most of its own frame, so the median the floor anchors to
+    /// is the subject rather than the sky. The same asymmetry `cfa::fpn`,
+    /// superpixel debayering and both denoisers each state at their own site.
+    #[test]
+    fn planetary_does_not_get_the_shadow_floor() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.dither = false;
+        settings.stacking_type = crate::stacking::StackingType::Planetary;
+
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.is_plain(),
+            "planetary kept the guard pedestal without the floor: {}",
+            config.display.pedestal
+        );
+
+        for stacking_type in [
+            crate::stacking::StackingType::DeepSky,
+            crate::stacking::StackingType::Comet,
+        ] {
+            settings.stacking_type = stacking_type;
+            let config = get_render_pipeline_config(&settings, false);
+            assert!(
+                !config.shadow_floor.is_none(),
+                "{stacking_type:?} lost the floor along with Planetary"
+            );
+        }
+    }
+
+    /// The sign of `black_floor` picks between two transforms against two
+    /// references, so it is an exact float test on a number that arrives over
+    /// JSON. A slider landing a few ULPs below its own zero must not swap in the
+    /// guard pedestal for a floor of nothing.
+    #[test]
+    fn a_black_floor_that_rounds_to_zero_is_zero() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.dither = false;
+
+        // `-0.09 + 9 * 0.01` in binary floating point, which is what a range
+        // input stepping onto zero can produce.
+        for value in [-1.3877788e-17f32, -0.0, 0.0, 5e-5, -5e-5] {
+            settings.eyepiece.black_floor = value;
+            let config = get_render_pipeline_config(&settings, false);
+            assert!(
+                config.shadow_floor.is_none() && config.display.is_plain(),
+                "black_floor {value:e} was not treated as zero: floor {:?}, \
+                 pedestal {}",
+                config.shadow_floor,
+                config.display.pedestal
+            );
+        }
+    }
+
+    /// `POST /api/settings` takes any `f32`. The slider's own range is enforced
+    /// here rather than trusted, so one step of a wild value still means one
+    /// step.
+    #[test]
+    fn an_out_of_range_black_floor_is_clamped_to_the_sliders_travel() {
+        let mut settings = CaptureSettings::default();
+
+        settings.eyepiece.black_floor = -5.0;
+        let clamped = get_render_pipeline_config(&settings, false).shadow_floor;
+        settings.eyepiece.black_floor = MIN_BLACK_FLOOR;
+        let end_stop = get_render_pipeline_config(&settings, false).shadow_floor;
+        assert_eq!(clamped, end_stop);
+
+        settings.eyepiece.black_floor = f32::NAN;
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.pedestal.is_finite(),
+            "a NaN setting reached the 8-bit conversion"
+        );
+
+        settings.eyepiece.black_floor = 10.0;
+        let config = get_render_pipeline_config(&settings, false);
+        assert!(config.shadow_floor.is_none());
+        assert!((config.display.pedestal - MAX_BLACK_FLOOR).abs() < 1e-6);
+    }
+
     /// FITS is 32-bit linear data; the display transform is a property of the
     /// 8-bit conversion and must not follow the frame onto disk.
     #[test]
@@ -375,6 +633,14 @@ mod tests {
 
         let config = get_render_pipeline_config(&settings, true);
         assert!(config.display.is_plain());
+
+        // Nor may the darkening half, which would bake a display curve into
+        // linear data that is meant to be re-stretched later.
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.darker_sky = true;
+        let config = get_render_pipeline_config(&settings, true);
+        assert!(config.display.is_plain());
+        assert!(config.shadow_floor.is_none());
     }
 
     fn settings_with(

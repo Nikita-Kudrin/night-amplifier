@@ -143,7 +143,7 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
 | `stacking/`                   | `MasterStack` accumulator, rejection, warping, quality weighting                     |
 | `background/`                 | Grid-based gradient extraction (gradient_only / adaptive modes)                      |
-| `render/`                     | Stretch (asinh/MTF), autostretch solver, white balance, black point, S-curve, output |
+| `render/`                     | Stretch (asinh/MTF), autostretch solver, white balance, black point, S-curve, shadow floor, output |
 | `statistics/`                 | Robust per-channel median/MAD (sampling-based)                                       |
 | `camera/`                     | Traits + ZWO/PlayerOne/QHY/ToupTek SDKs + simulator (see Camera Notes below)         |
 | `planetary/`                  | Correlation-based alignment, percentile stacking (Moon/planets)                      |
@@ -651,6 +651,62 @@ eyepiece intensity slider interpolates it *upward* (toward `EYEPIECE_BLACK_POINT
 for that reason; it used to interpolate downward under a comment claiming it clipped noise,
 which left more grain visible and clamped more sky to pure black.
 
+### The shadow floor (`render::output::shadow_floor`) — the other half of one slider
+
+`EyepieceSettings::black_floor` is **signed**, and its two halves are different transforms
+against different references, not one operation with the sign flipped. Positive is the
+`DisplayOutput::pedestal` above — a property of the panel, so an absolute fraction of full
+scale. Negative is the shadow floor — a property of the *sky*, so a fraction of wherever
+the sky actually landed. Measured on the two fixtures at `-5 %`: sky 71 % and 65 % darker
+with target contrast *up* 9 % and 25 %, against the black-level slider's 50 % darker for
+62 % of the contrast.
+
+Four things here are load-bearing:
+
+- **It is a tone-curve stage, not a display stage**, so it runs before quantization and
+  gets applied in exactly **two** places, which must agree or one slider position means two
+  things: fused into the scale LUT (`build_scale_lut`, last, after the S-curve) when the LUT
+  carries contrast, and in `server::encoding::fused`'s `RowTail` (last, after
+  `apply_contrast_slice`) when saturation boost pushed contrast out of that table. The order
+  is `stretch -> saturation -> contrast -> floor` either way.
+  `the_deferred_floor_adds_no_disagreement_to_the_fused_one` pins the two together — against
+  a *control* rather than against zero, because fusing contrast already diverges from
+  running it as a pass on clipped highlights.
+- **The anchor is `AutoStretchResult::target_background`, not the configured one.** A frame
+  that is mostly signal has its target raised by up to 30 %, and anchoring to the configured
+  value would leave the floor that much too shallow on exactly the frames with the most to
+  protect. It is then carried through the S-curve by `sky_level_after_contrast`, which asks
+  whether contrast *runs*, not whether it runs inside the table — those differ exactly when
+  saturation boost is on.
+- **A scale table's entry 0 is a limit, not a sample**, which is why `slope_at_zero` exists
+  next to `apply`. `curve(L)/L` cannot represent a curve that misses the origin, so the
+  softplus has its value at zero subtracted before normalizing, and white must stay white or
+  star cores move with the sky.
+- **Three gates, all in `stage_config::darkening_request`.** The darkening half needs the
+  sign, **auto-stretch on** (there is no solved sky level to anchor to without it, and
+  `process_preview_frame` produces no `StretchResult` for the curve to travel on — letting
+  it through left only the guard pedestal, which measured the sky going *up* from 2 to 3
+  levels on a control labelled "darker"), and **not `StackingType::Planetary`** (a lunar
+  disc is its own frame median, so the anchor lands on the subject — the same asymmetry
+  `cfa::fpn`, superpixel debayering and both denoisers each state at their own site). The
+  sign test is dead-banded, because it is an exact float comparison on a number that arrives
+  over JSON.
+
+`auto_stretch_frame` can only fuse the floor on its Asinh arms: MTF stretches each channel
+through its own midtone, so there is no single scale table to fold it into, and a mono frame
+never reaches that kernel. Those arms get `apply_shadow_floor_frame` explicitly, after
+contrast. They silently dropped the request once — and MTF is what
+`StretchAggressiveness::Medium` ships — so `the_floor_reaches_every_arm_of_the_stretch`
+sweeps all five.
+
+Cost: nothing on the fused path, since the curve rides a table paid 8192 times per slider
+position (a floored `build_scale_lut` is 34 µs against 23 µs). On the deferred path it is
+one extra luminance-preserving pass per row, measured at ~1.3 ms of a 28 ms 1440² encode on
+a 20-core x86 box. `ShadowFloorTable` is resampled once per *frame* in
+`process_preview_frame` and shared through `StretchResult`, for the reason
+`render_task::ConversionCache` exists — per payload it would be four identical tables and
+four allocations a frame.
+
 ### Phase 2: Debayering (Demosaicing)
 
 Converts mono Bayer pattern (CFA) data into full RGB color.
@@ -767,11 +823,13 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 required. Anything that runs per frame or per payload belongs at `info_span!`, not `debug_span!`, or it
 is invisible here.
 
-Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping and
-S-curve contrast run as a single pass under `auto_stretch` → `apply_fused_stretch_frame`. There is no
-`contrast_adjustment` span on that path. Contrast falls back to its own `contrast_adjustment` pass only when
-`saturation_boost` is on (saturation sits between stretch and contrast and is a cross-channel op that breaks the
-fusion) or when auto-stretch is off or failed.
+Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping,
+S-curve contrast and the shadow floor run as a single pass under `auto_stretch` → `apply_fused_stretch_frame`.
+There is no `contrast_adjustment` span on that path, and no span for the floor either — it is table contents, not
+work. Contrast falls back to its own `contrast_adjustment` pass only when `saturation_boost` is on (saturation sits
+between stretch and contrast and is a cross-channel op that breaks the fusion) or when auto-stretch is off or
+failed; the floor follows it out into the row tail, where it is deliberately *not* instrumented — per-row spans
+distort what they measure. Its measured cost is recorded under *The shadow floor* instead.
 
 With `--features telemetry`, the same stages also export OTel histograms from `telemetry::metrics`:
 `frame.capture_ms`, `frame.debayer_ms`, `frame.stack_ms`, `frame.render_ms`, `frame.encode_lz4_ms`,

@@ -28,6 +28,7 @@ pub fn auto_stretch_frame(
     frame: &mut Frame,
     config: AutoStretchConfig,
     contrast_config: Option<&crate::render::output::ContrastConfig>,
+    floor: crate::render::output::ShadowFloorRequest,
 ) -> Result<AutoStretchResult> {
     let channels = frame.channels();
     if channels != 1 && channels != 3 {
@@ -42,6 +43,18 @@ pub fn auto_stretch_frame(
         compute_image_stats(frame)?
     };
     let result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
+    let floor = floor.resolve(crate::render::output::sky_level_after_contrast(
+        result.target_background,
+        contrast_config,
+    ));
+
+    // Only the fused kernel can carry the floor for free, and only two of the
+    // five arms below reach it: MTF stretches each channel through its own
+    // midtone, so there is no single scale table to fold the curve into, and a
+    // mono frame never reaches that kernel at all. Those arms get it as an
+    // explicit pass instead — after contrast, which is where the fused table and
+    // the encoder's row tail both put it.
+    let mut floor_pending = !floor.is_none();
 
     if channels == 3 && config.per_channel_black_point {
         let bp_config = BlackPointConfig::new(config.black_point_sigma);
@@ -67,7 +80,9 @@ pub fn auto_stretch_frame(
                 result.stretch_factor,
                 config.color_intensity,
                 contrast_config,
+                floor,
             )?;
+            floor_pending = false;
         }
     } else if channels == 3 {
         if config.tone_mapping == ToneMappingAlgorithm::Mtf {
@@ -87,7 +102,9 @@ pub fn auto_stretch_frame(
                 result.stretch_factor,
                 config.color_intensity,
                 contrast_config,
+                floor,
             )?;
+            floor_pending = false;
         }
     } else {
         subtract_black_point_uniform(frame, result.black_point)?;
@@ -102,6 +119,11 @@ pub fn auto_stretch_frame(
                 config.color_intensity,
             )?;
         }
+    }
+
+    if floor_pending {
+        let _span = tracing::info_span!("apply_shadow_floor_frame").entered();
+        crate::render::output::apply_shadow_floor_frame(frame, floor)?;
     }
 
     Ok(result)
@@ -149,12 +171,18 @@ pub fn prepare_auto_stretch_frame(
 
 /// Automatically stretch a frame with default configuration
 pub fn auto_stretch_default(frame: &mut Frame) -> Result<AutoStretchResult> {
-    auto_stretch_frame(frame, AutoStretchConfig::default(), None)
+    auto_stretch_frame(
+        frame,
+        AutoStretchConfig::default(),
+        None,
+        crate::render::output::ShadowFloorRequest::NONE,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::output::ShadowFloorRequest;
 
     #[test]
     fn test_autostretch_config_defaults() {
@@ -181,7 +209,14 @@ mod tests {
             }
         }
         let config = AutoStretchConfig::new().with_target_background(0.15);
-        let result = auto_stretch_frame(&mut frame, config, None).unwrap();
+        let result =
+            auto_stretch_frame(
+                &mut frame,
+                config,
+                None,
+                crate::render::output::ShadowFloorRequest::NONE,
+            )
+                .unwrap();
 
         assert!(result.converged);
         let bg = frame.get_pixel(0, 0, 0);
@@ -205,7 +240,13 @@ mod tests {
         data[plane * 2 + idx] = 0.2;
 
         let mut frame = Frame::from_f32_vec(data, 32, 32, 3).unwrap();
-        auto_stretch_frame(&mut frame, AutoStretchConfig::default(), None).unwrap();
+        auto_stretch_frame(
+            &mut frame,
+            AutoStretchConfig::default(),
+            None,
+            ShadowFloorRequest::NONE,
+        )
+        .unwrap();
 
         let star_r = frame.get_pixel(16, 16, 0);
         let star_g = frame.get_pixel(16, 16, 1);
@@ -215,10 +256,149 @@ mod tests {
         assert!(star_g > star_b);
     }
 
+    /// A noisy sky with a few stars, so the solver has real statistics to work
+    /// from. `set_pixel` rather than index arithmetic, for the reason
+    /// `test_auto_stretch_frame_end_to_end` gives.
+    fn noisy_sky(channels: usize, background: f32) -> Frame {
+        let mut frame = Frame::zeros(64, 64, channels).unwrap();
+        let mut seed: u32 = 12345;
+        for y in 0..64 {
+            for x in 0..64 {
+                for c in 0..channels {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.01;
+                    frame.set_pixel(x, y, c, (background + noise).max(0.0));
+                }
+            }
+        }
+        for k in 0..8 {
+            for c in 0..channels {
+                frame.set_pixel(4 + k * 7, 5 + k * 5, c, 0.8);
+            }
+        }
+        frame
+    }
+
+    fn median_of_channel(frame: &Frame, channel: usize) -> f32 {
+        let mut values: Vec<f32> = frame.channel_data(channel).to_vec();
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        values[values.len() / 2]
+    }
+
+    /// Every arm of this function has to honour the floor it is handed, and only
+    /// two of the five can fuse it into the scale LUT.
+    ///
+    /// The Asinh arms did; the MTF arms and the mono arm accepted the request and
+    /// dropped it on the floor, which meant the shipped configuration — MTF, from
+    /// `StretchAggressiveness::Medium` — was the one that silently ignored it.
+    /// Not visible through `process_preview_frame`, which composes the curve
+    /// itself, so nothing downstream would have caught this.
+    #[test]
+    fn the_floor_reaches_every_arm_of_the_stretch() {
+        let request = ShadowFloorRequest {
+            fraction: 1.0,
+            hard: false,
+        };
+
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for per_channel_black_point in [false, true] {
+                for channels in [1usize, 3] {
+                    // Per-channel black points are a three-channel concept; the
+                    // mono arm ignores the flag, so testing it twice measures
+                    // the same arm twice.
+                    if channels == 1 && per_channel_black_point {
+                        continue;
+                    }
+
+                    let config = AutoStretchConfig {
+                        per_channel_black_point,
+                        ..AutoStretchConfig::default().with_tone_mapping(algorithm)
+                    };
+
+                    let mut plain = noisy_sky(channels, 0.02);
+                    auto_stretch_frame(&mut plain, config, None, ShadowFloorRequest::NONE).unwrap();
+                    let mut floored = noisy_sky(channels, 0.02);
+                    auto_stretch_frame(&mut floored, config, None, request).unwrap();
+
+                    let before = median_of_channel(&plain, 0);
+                    let after = median_of_channel(&floored, 0);
+                    assert!(
+                        after < before * 0.5,
+                        "{algorithm:?} per_channel={per_channel_black_point} \
+                         channels={channels}: the floor left the sky at {after} \
+                         from {before} — this arm is ignoring the request"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The other half of the claim: a floor moves the sky, not the stars. An arm
+    /// that dimmed everything would pass the assertion above while producing the
+    /// complaint the whole feature exists to avoid.
+    #[test]
+    fn the_floor_leaves_white_alone_on_every_arm() {
+        let request = ShadowFloorRequest {
+            fraction: 1.0,
+            hard: false,
+        };
+
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for channels in [1usize, 3] {
+                let config = AutoStretchConfig::default().with_tone_mapping(algorithm);
+                let mut floored = noisy_sky(channels, 0.02);
+                auto_stretch_frame(&mut floored, config, None, request).unwrap();
+                let star = floored.get_pixel(4, 5, 0);
+                assert!(
+                    star > 0.9,
+                    "{algorithm:?} channels={channels}: the floor pulled a star \
+                     core down to {star}"
+                );
+            }
+        }
+    }
+
+    /// A `NONE` request must leave the frame bit-identical, so that turning the
+    /// feature on is the only thing that can change what an observer sees.
+    #[test]
+    fn a_none_request_changes_nothing_on_any_arm() {
+        for algorithm in [ToneMappingAlgorithm::Asinh, ToneMappingAlgorithm::Mtf] {
+            for channels in [1usize, 3] {
+                let config = AutoStretchConfig::default().with_tone_mapping(algorithm);
+                let mut reference = noisy_sky(channels, 0.02);
+                auto_stretch_frame(&mut reference, config, None, ShadowFloorRequest::NONE).unwrap();
+
+                let mut zero_fraction = noisy_sky(channels, 0.02);
+                auto_stretch_frame(
+                    &mut zero_fraction,
+                    config,
+                    None,
+                    ShadowFloorRequest {
+                        fraction: 0.0,
+                        hard: true,
+                    },
+                )
+                .unwrap();
+
+                assert_eq!(
+                    reference.data(),
+                    zero_fraction.data(),
+                    "{algorithm:?} channels={channels}: a zero-fraction request \
+                     was not the identity"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_auto_stretch_frame_wrong_channels() {
         let mut frame = Frame::filled(10, 10, 2, 0.5).unwrap();
-        let result = auto_stretch_frame(&mut frame, AutoStretchConfig::default(), None);
+        let result = auto_stretch_frame(
+            &mut frame,
+            AutoStretchConfig::default(),
+            None,
+            ShadowFloorRequest::NONE,
+        );
         assert!(matches!(result, Err(StackError::InvalidConfiguration(_))));
     }
 

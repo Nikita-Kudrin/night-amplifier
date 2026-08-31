@@ -2,6 +2,13 @@
 #[derive(Debug, Clone, Copy)]
 pub struct AutoStretchResult {
     pub stretch_factor: f32,
+    /// The background level the solver actually aimed the sky at.
+    ///
+    /// Not the same as `AutoStretchConfig::target_background`: a frame that is
+    /// mostly signal has its target raised, so this is the only place the level
+    /// the sky was *really* mapped to is recorded. The shadow floor anchors to
+    /// it, which is why it has to be reported rather than recomputed.
+    pub target_background: f32,
     pub midtones: [f32; 3],
     pub black_point: f32,
     pub original_median: f32,

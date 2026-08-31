@@ -705,7 +705,7 @@ fn probe_fused_render_clamp_difference() {
         // then contrast as its own luminance-preserving pass. The intermediate is captured
         // so we can tell which pixels the stretch stage clamped.
         let mut reference = rgb.clone();
-        let stretch = auto_stretch_frame(&mut reference, stretch_config, None).unwrap();
+        let stretch = auto_stretch_frame(&mut reference, stretch_config, None, night_amplifier::render::ShadowFloorRequest::NONE).unwrap();
         let after_stretch = reference.data().to_vec();
         apply_contrast_frame(&mut reference, &contrast_config).unwrap();
 
@@ -713,7 +713,7 @@ fn probe_fused_render_clamp_difference() {
         // real code rather than a hand-written model of it is the point — a reimplementation
         // here would measure an implementation nobody ships.
         let mut fused = rgb.clone();
-        auto_stretch_frame(&mut fused, stretch_config, Some(&contrast_config)).unwrap();
+        auto_stretch_frame(&mut fused, stretch_config, Some(&contrast_config), night_amplifier::render::ShadowFloorRequest::NONE).unwrap();
 
         let midtone = stretch.stretch_factor;
         let black_point = stretch.black_point;
