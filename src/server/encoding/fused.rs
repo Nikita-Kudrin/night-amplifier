@@ -453,11 +453,30 @@ fn stage_and_denoise<S: RowSource>(
     let mut owned = std::mem::take(&mut scratch.staged);
     let staged = crate::render::denoise::take(&mut owned, staged_len);
 
-    staged
-        .par_chunks_mut(row_len)
-        .with_min_len(32)
-        .enumerate()
-        .for_each(|(y, row)| source.gather_row(y, row));
+    // `resample` and `row_tail` are separated because they scale with different things
+    // and only the staged path can tell them apart: the gather's cost follows the
+    // *input* pixel count (a box average reads every source pixel), the tail's follows
+    // the *output* one. `frame_to_rgb8` reported 75 ms as one number, of which `denoise`
+    // explained 39 — leaving 36 ms that could have been either, and therefore no way to
+    // predict what serving a smaller tier would save.
+    //
+    // The fused path above deliberately has no equivalent: it gathers, transforms and
+    // writes one row inside a single closure against a thread-local scratch row, which
+    // is the whole reason it is cheaper. Splitting it would mean instrumenting per row,
+    // which AGENTS.md rules out — per-row spans distort what they measure.
+    {
+        let _span = tracing::info_span!(
+            "resample",
+            width = target_width,
+            height = target_height
+        )
+        .entered();
+        staged
+            .par_chunks_mut(row_len)
+            .with_min_len(32)
+            .enumerate()
+            .for_each(|(y, row)| source.gather_row(y, row));
+    }
 
     crate::render::denoise::denoise_rgb_interleaved_with(
         staged,
@@ -467,15 +486,18 @@ fn stage_and_denoise<S: RowSource>(
         scratch,
     );
 
-    output
-        .par_chunks_mut(row_len)
-        .zip(staged.par_chunks_mut(row_len))
-        .with_min_len(32)
-        .enumerate()
-        .for_each(|(y, (row_out, row))| {
-            tail.apply(row);
-            write_row_rgb8(row_out, row, y, display);
-        });
+    {
+        let _span = tracing::info_span!("row_tail", samples = staged_len).entered();
+        output
+            .par_chunks_mut(row_len)
+            .zip(staged.par_chunks_mut(row_len))
+            .with_min_len(32)
+            .enumerate()
+            .for_each(|(y, (row_out, row))| {
+                tail.apply(row);
+                write_row_rgb8(row_out, row, y, display);
+            });
+    }
 
     scratch.staged = owned;
 }

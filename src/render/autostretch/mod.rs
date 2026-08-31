@@ -148,8 +148,14 @@ pub fn prepare_auto_stretch_frame(
         let _span = tracing::info_span!("compute_image_stats").entered();
         compute_image_stats(frame)?
     };
-    let mut result =
-        compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
+    // The two halves scale with completely different things — the solve is a bounded
+    // Newton/bisection iteration over scalars, the subtraction is one pass over every
+    // sample — so 7.0 ms of unattributed self time here could have been either. It is
+    // almost entirely the subtraction, and now says so.
+    let mut result = {
+        let _span = tracing::info_span!("solve_stretch", algorithm = ?config.tone_mapping).entered();
+        compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping)
+    };
 
     if channels == 3 && config.per_channel_black_point {
         let bp_config = BlackPointConfig::new(config.black_point_sigma);
@@ -157,10 +163,12 @@ pub fn prepare_auto_stretch_frame(
             let _span = tracing::info_span!("calculate_black_points").entered();
             calculate_black_points(frame, &stats, bp_config)?
         };
+        let _span = tracing::info_span!("subtract_black_point", per_channel = true).entered();
         subtract_black_point(frame, &black_points)?;
         // Set black point to 0 in the result since we already subtracted it per-channel
         result.black_point = 0.0;
     } else {
+        let _span = tracing::info_span!("subtract_black_point", per_channel = false).entered();
         subtract_black_point_uniform(frame, result.black_point)?;
         // Set black point to 0 in the result since we already subtracted it uniformly
         result.black_point = 0.0;

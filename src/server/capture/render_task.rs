@@ -93,11 +93,20 @@ pub fn run_render_task(
         });
 
         let raw_frame = ready_frame;
-        rt.block_on(state.set_latest_raw_frame(Arc::clone(&raw_frame)));
 
-        // Claim the counter before encoding so every payload below is filed
-        // under the same frame, then wake clients once they are all in place.
-        let counter = state.begin_frame();
+        // An async lock taken by `rt.block_on` from a thread that is not a tokio worker,
+        // so the cost is a park/unpark round trip rather than a lock acquisition. This
+        // and `publish_frame()` at the end of the loop are most of the 6.7 ms of
+        // `render_iteration` self time that had no name. Only this end is spanned —
+        // `publish_frame` is on the far side of the encode, so one span cannot cover
+        // both without also covering the work between them.
+        let counter = {
+            let _span = tracing::info_span!("publish_state").entered();
+            rt.block_on(state.set_latest_raw_frame(Arc::clone(&raw_frame)));
+            // Claim the counter before encoding so every payload below is filed
+            // under the same frame, then wake clients once they are all in place.
+            state.begin_frame()
+        };
 
         // One RGB8 conversion per distinct output size, shared by every payload
         // that resolves to it. Since tier 2 the conversion carries the

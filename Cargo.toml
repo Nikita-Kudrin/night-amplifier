@@ -167,3 +167,7 @@ harness = false
 name = "frame_ingest_benchmark"
 harness = false
 
+[[bench]]
+name = "statistics_benchmark"
+harness = false
+

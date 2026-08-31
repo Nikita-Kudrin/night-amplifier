@@ -353,10 +353,25 @@ pub fn process_preview_frame(
     let mut pipeline_config = get_render_pipeline_config(settings, false);
 
     // Stage 0: Background Neutralization (Pre-subtraction)
+    //
+    // Split into `wb_grid` (the estimate) and `wb_apply` (the multiply) because they
+    // scale with different things and only one of them is expensive: the grid reads the
+    // frame to produce three numbers, the apply is one pass over every sample. A single
+    // span here reported 97 ms with no way to tell which half owned it.
     if pipeline_config.background_subtraction && frame.channels() == 3 {
         let _span0 = tracing::info_span!("background_neutralization").entered();
-        match crate::render::compute_white_balance_grid(frame, 16, 25.0) {
+        let multipliers = {
+            let _span = tracing::info_span!("wb_grid").entered();
+            crate::render::compute_white_balance_grid_with_config(
+                frame,
+                16,
+                25.0,
+                crate::render::WhiteBalanceConfig::preview(),
+            )
+        };
+        match multipliers {
             Ok(multipliers) => {
+                let _span = tracing::info_span!("wb_apply").entered();
                 if let Err(e) = crate::render::neutralize_background(frame, &multipliers) {
                     warn!(error = %e, "Background neutralization failed");
                 }

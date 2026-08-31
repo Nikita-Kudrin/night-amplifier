@@ -115,7 +115,9 @@ pub fn neutralize_background_auto(frame: &mut Frame) -> Result<[f32; 3]> {
 ///
 /// The default is [`Self::exact`] deliberately: sampling moves the coefficients (~1e-3
 /// on a noise field, more on a structured one) and this runs on the live preview path,
-/// so a call site opts into that trade rather than inheriting it.
+/// so a call site opts into that trade rather than inheriting it. The live preview does
+/// opt in, via [`Self::preview`]; the offline FITS export in
+/// `server::capture::storage` does not, because it runs once per session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhiteBalanceConfig {
     /// Upper bound on samples read per block, per channel.
@@ -145,6 +147,27 @@ impl WhiteBalanceConfig {
         Self {
             max_samples_per_block,
         }
+    }
+
+    /// What the live preview path uses.
+    ///
+    /// This stage is the single most expensive thing in the preview pipeline when it
+    /// reads every pixel: 97 ms of a 300 ms render iteration on a 3008x3008 frame,
+    /// measured in production OTLP traces, against 41 ms for the whole RBF background
+    /// model and 27 ms for the JPEG encode. `white_balance_grid/exact_x4` and
+    /// `sampled_4k_x50` in `render_benchmark` put the gap at 28.5 ms against 2.1 ms
+    /// per call on an IMX464-shaped frame — 13.9x.
+    ///
+    /// 4096 is the first power of two that actually forces a stride at the resolutions
+    /// this pipeline sees (see `sampled_4k` in `render_benchmark`): stride 2 on a
+    /// 2712x1538 frame, stride 3 on a 3008x3008 one. What it buys is bounded and
+    /// measured — `sampling_moves_the_coefficients_by_under_one_percent` pins the
+    /// drift, and the coefficients are clamped to [0.5, 2.0] downstream regardless.
+    ///
+    /// A block median is a *background* estimate. Reading all 35 000 pixels of a block
+    /// to produce one number was never buying accuracy proportional to its cost.
+    pub const fn preview() -> Self {
+        Self::sampled(4096)
     }
 
     /// Stride that keeps a `block_w` x `block_h` block within the sample budget.
@@ -510,6 +533,41 @@ mod tests {
             );
         }
         assert!(sampled[0] < 1.0 && sampled[2] > 1.0, "sampled lost the cast direction: {sampled:?}");
+    }
+
+    /// The drift [`WhiteBalanceConfig::preview`] trades 13.9x of its cost for.
+    ///
+    /// Grid 8 over 640x640 rather than the production grid 16 over a sensor-shaped
+    /// frame: what matters is that the block (80x80 = 6400) is larger than the 4096
+    /// budget, so a real stride is forced. A frame small enough for `set_pixel` to
+    /// build quickly cannot have both a fine grid and blocks over the budget.
+    ///
+    /// The assertion is on relative movement, not absolute, because that is the claim
+    /// the doc comment on `preview` makes and the coefficients are ratios.
+    #[test]
+    fn sampling_moves_the_coefficients_by_under_one_percent() {
+        let frame = cast_gradient_frame(640, 640);
+        let exact = compute_white_balance_grid(&frame, 8, 25.0).unwrap();
+        let preview =
+            compute_white_balance_grid_with_config(&frame, 8, 25.0, WhiteBalanceConfig::preview())
+                .unwrap();
+
+        assert_eq!(
+            WhiteBalanceConfig::preview().stride_for(80, 80),
+            2,
+            "the fixture must force a stride or this test proves nothing"
+        );
+
+        for c in 0..3 {
+            let drift = (exact[c] - preview[c]).abs() / exact[c].max(1e-6);
+            assert!(
+                drift < 0.01,
+                "channel {c}: preview {} is {:.3}% off exact {}",
+                preview[c],
+                drift * 100.0,
+                exact[c]
+            );
+        }
     }
 
     /// A budget at or above the block area must take the contiguous path and produce

@@ -52,11 +52,18 @@ impl StarDetector {
             self.find_local_maxima(&luminance, width, height, &stats)
         };
 
+        // Each candidate's centroid window is read-only and independent of every other
+        // candidate's, so this is one rayon dispatch rather than a sequential fold. It
+        // measured 16.5 ms of a 137 ms `stacking_iteration` on a 3008x3008 frame with
+        // 3 258 candidates — one core doing work that has no ordering constraint at all.
+        //
+        // `collect` on an indexed parallel iterator preserves order, so the flux sort
+        // below (and any tie it resolves) sees exactly the sequence it saw before.
         let mut stars: Vec<Star> = {
             let _span =
                 tracing::info_span!("compute_centroids", candidates = candidates.len()).entered();
             candidates
-                .into_iter()
+                .into_par_iter()
                 .filter_map(|(x, y)| self.compute_centroid(&luminance, width, height, x, y, &stats))
                 .collect()
         };
