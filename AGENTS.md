@@ -79,6 +79,13 @@ Techniques to satisfy both:
 | Routine mutates its input in place | `iter_batched_ref` over a `Vec<_>` of `REPS` clones — plain repetition would feed iteration N+1 iteration N's output. See `render_benchmark`. |
 | Input size is itself unrealistic | Resize to what production actually produces (e.g. one sensor plane, not an arbitrary megapixel buffer). |
 | Small case only re-measures a bigger sibling's kernel | Delete it. |
+| Input *shape* is unrealistic | Add the shape production runs, don't just resize. `star_detection_benchmark` was mono-only, so it never reached `mean_luminance`'s three-channel arm — for `channels == 1` that function is a `to_vec`, and the 24.9 ms it costs a colour frame was invisible to CI. Every DeepSky camera this stacks for is OSC. |
+
+**A case that exists to bound another one earns its place.** `image_stats/full_precision`
+is not a production configuration — it reads every pixel — but it puts 42x the samples
+through the same median and MAD arithmetic with no gather at all, which is what proved the
+strided gather was *not* what the stage costs. A benchmark that can only confirm the
+hypothesis you already have is worth less than one that can refute it.
 
 Keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
 `measurement_time`. Always set `group.sampling_mode(SamplingMode::Flat)` — criterion's
@@ -517,7 +524,15 @@ Rules:
   copy. `render::white_balance::block_medians` was the one hot consumer this was missed
   in: per-sample `get_pixel`, per-block `Vec` allocations, and no rayon cost it **120 ms
   per preview frame** (90% of the whole pipeline budget) until rewritten onto `planes()`
-  plus `into_par_iter` over grid blocks (27 ms, bit-identical output).
+  plus `into_par_iter` over grid blocks (27 ms, bit-identical output). It then stayed the
+  largest item in the preview pipeline anyway — 97 ms of a 300 ms `render_iteration` on a
+  3008x3008 frame — because reading *every* pixel of every block to produce one median is
+  the wrong amount of work for a background estimate, however fast the loop is. The live
+  path now passes `WhiteBalanceConfig::preview()` (`sampled(4096)`); `render_benchmark`
+  measures the two side by side at 28.5 ms against 2.1 ms, and
+  `sampling_moves_the_coefficients_by_under_one_percent` bounds what it costs. The offline
+  FITS export in `server::capture::storage` still uses `exact()` — it runs once per
+  session, so it has nothing to buy.
 - **Grid-node background sampling lives in `background::grid`**, shared by Community's
   `background::extractor` and Pro's `plugins::rbf` (previously duplicated, each reaching
   pixels via hand-computed offsets). Thresholds the two genuinely disagree on pass in via
@@ -822,6 +837,26 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 `denoise`, `encode_jpeg_tiers`) logs its duration. This is the on-device breakdown — no OTLP collector
 required. Anything that runs per frame or per payload belongs at `info_span!`, not `debug_span!`, or it
 is invisible here.
+
+**A span with a large self time and no children is a blind spot, not a leaf.** Reading a
+production trace means subtracting the union of a span's children from its duration; what
+is left is unattributed. These were added because that residue was the largest thing in
+the trace:
+
+| Span | Sits inside | What it separates |
+|---|---|---|
+| `wb_grid` / `wb_apply` | `background_neutralization` | The estimate (reads the frame, returns three numbers) from the application (one pass over every sample). The parent reported 97 ms as one figure. |
+| `blend_pixels` | `add_frame` | Pro's `blend_incremental` had no span at all, so the single largest item in the stacking iteration showed only as parent self time. Same name as Community's no-rejection arm, so the output reads the same whichever accumulator ran. |
+| `resample` / `row_tail` | `frame_to_rgb8` | The gather scales with *input* pixels, the tone tail with *output* pixels. Only the staged (denoise-on) driver can separate them — the fused row closure deliberately cannot, and must not be split, because that would mean per-row spans. |
+| `publish_state` | `render_iteration`, `stacking_iteration` | The `rt.block_on(state.…)` calls — async locks reached from a non-tokio thread. ~7 ms and ~9 ms respectively, previously nameless. |
+| `solve_stretch` / `subtract_black_point` | `prepare_auto_stretch_frame` | A bounded scalar iteration against a full-frame pass. |
+
+`camera_capture` gained an **`overhead_us` field** rather than children: it wraps one
+blocking vendor call, and on the continuous path that call is `get_video_data` handing
+back an already-completed frame, so exposure and transfer are not separable events from
+outside the shim. The field is everything the frame cost that the exposure does not
+explain — the number that says whether a slow link or a long exposure is setting the
+cadence, which is the first thing to check on a Pi.
 
 Inside `process_preview_frame`, note that the render tail is **fused**: black point subtraction, tone mapping,
 S-curve contrast and the shadow floor run as a single pass under `auto_stretch` → `apply_fused_stretch_frame`.

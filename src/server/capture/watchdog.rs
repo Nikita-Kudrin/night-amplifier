@@ -235,16 +235,43 @@ pub(crate) fn capture_frame_bounded(
         .spawn(move || {
             let mut camera = camera;
             let _parent_guard = parent_span.enter();
-            let _span = tracing::info_span!(
+            let span = tracing::info_span!(
                 "camera_capture",
                 frame_number,
                 exposure_us = config.exposure_us,
                 gain = config.gain,
                 bin = config.bin,
-            )
-            .entered();
+                overhead_us = tracing::field::Empty,
+            );
+            let _entered = span.enter();
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Capture);
+            let started = std::time::Instant::now();
             let result = camera.capture(&config);
+
+            // Everything the frame cost that the exposure does not explain: readout,
+            // the USB transfer, the buffer copy, and — in video mode — however much of
+            // the stream's frame period we arrived in the middle of.
+            //
+            // This is a field rather than a child span because there is no seam to put
+            // one in. `Camera::capture` is a single blocking vendor call, and on the
+            // continuous path it is `get_video_data` handing back an already-completed
+            // frame: the exposure and the transfer are not separable events from out
+            // here. Splitting the span would mean instrumenting inside all five shims to
+            // expose a boundary that, in the mode live stacking actually uses, does not
+            // exist.
+            //
+            // What the number is for: `camera_capture` reported 131 ms against a 100 ms
+            // exposure in production traces, and nothing said whether the extra 31 ms was
+            // a slow link or a long exposure. On a Pi 5, where USB3 is shared and this is
+            // the first thing to degrade, that is the difference between the setting and
+            // the hardware.
+            span.record(
+                "overhead_us",
+                started
+                    .elapsed()
+                    .as_micros()
+                    .saturating_sub(config.exposure_us as u128) as u64,
+            );
             let _ = tx.send((camera, result));
         })
     {

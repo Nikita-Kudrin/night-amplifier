@@ -241,10 +241,18 @@ pub fn run_stacking_task(
         // Update frame counters. The reason rides on `frame_captured`, never on
         // `frame_rejected` — that one feeds the capture-abort burst detector and
         // is for a camera that failed to deliver a frame at all.
-        rt.block_on(state.frame_captured(
-            was_stacked,
-            rejected_because.map(|reason| reason.describe()),
-        ));
+        //
+        // Spanned for the same reason as the render task's `publish_state`: this is an
+        // async lock reached by `rt.block_on` from a non-tokio thread, and it is part of
+        // the 8.7 ms of `stacking_iteration` self time that had no name. On the thread
+        // that is dropping camera frames, 8.7 ms is worth being able to see.
+        {
+            let _span = tracing::info_span!("publish_state").entered();
+            rt.block_on(state.frame_captured(
+                was_stacked,
+                rejected_because.map(|reason| reason.describe()),
+            ));
+        }
 
         // Release our handle on the captured frame before handing the display
         // frame downstream. On the raw-fallback paths the two are the same
