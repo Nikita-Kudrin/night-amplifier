@@ -136,7 +136,11 @@ impl AdaptiveRegistration {
                     let span = Span::current();
                     span.record("config_used", name.as_str());
                     span.record("matched_stars", matched_stars);
-                    span.record("mean_residual", mean_residual);
+                    // field::debug, not the bare f32: mean_residual is f32::INFINITY
+                    // when compute_diagnostics found no correspondences (see its
+                    // comment above). A non-finite double attribute makes Jaeger's
+                    // query API 500 on any trace search that touches it.
+                    span.record("mean_residual", field::debug(mean_residual));
                     span.record("attempts", attempt + 1);
 
                     return Ok(AdaptiveRegistrationResult {
