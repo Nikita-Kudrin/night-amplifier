@@ -9,9 +9,14 @@ use rayon::prelude::*;
 
 mod contrast;
 mod quantize;
+mod shadow_floor;
 
 pub use contrast::{apply_contrast_frame, apply_contrast_slice, apply_s_curve, ContrastConfig};
 pub use quantize::DisplayOutput;
+pub use shadow_floor::{
+    apply_shadow_floor_frame, apply_shadow_floor_slice, sky_level_after_contrast, ShadowFloor,
+    ShadowFloorRequest, ShadowFloorTable,
+};
 pub(crate) use quantize::{write_pixel_rgb8, write_row_rgb8};
 
 /// Configuration for the final output conversion

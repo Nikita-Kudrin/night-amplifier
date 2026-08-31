@@ -145,7 +145,12 @@ impl RenderPipeline {
 
         if self.config.auto_stretch {
             let _span = tracing::info_span!("auto_stretch").entered();
-            match auto_stretch_frame(frame, self.config.stretch_config, contrast_config) {
+            match auto_stretch_frame(
+                frame,
+                self.config.stretch_config,
+                contrast_config,
+                self.config.shadow_floor,
+            ) {
                 Ok(stretch_result) => {
                     result.stretch_result = Some(stretch_result);
                     debug!(

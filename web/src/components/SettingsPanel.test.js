@@ -406,4 +406,64 @@ describe('SettingsPanel', () => {
             expect(storageTitle).toBeTruthy()
         })
     })
+
+    // One signed slider drives two different transforms, and the toggle belongs
+    // to only one of them. Leaving it live on the other half offers a control
+    // that does nothing.
+    describe('Eyepiece black floor', () => {
+        function blackFloorSlider(wrapper) {
+            return wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Black floor')
+        }
+
+        function darkerSkyToggle(wrapper) {
+            return wrapper
+                .findAllComponents({name: 'BaseToggle'})
+                .find((t) => t.props('label') === 'Darker sky')
+        }
+
+        it('lets the slider reach the darkening half', () => {
+            const wrapper = mountSettingsPanel()
+            const slider = blackFloorSlider(wrapper)
+            expect(slider).toBeDefined()
+            expect(slider.props('min')).toBe(-0.09)
+            expect(slider.props('max')).toBe(0.15)
+        })
+
+        it('disables Darker sky while the floor is on its lifting half', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {eyepiece: {black_floor: 0.04, darker_sky: false}},
+            })
+            await flushPromises()
+
+            expect(darkerSkyToggle(wrapper).props('disabled')).toBe(true)
+        })
+
+        it('enables Darker sky once the floor goes negative', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {eyepiece: {black_floor: -0.05, darker_sky: false}},
+            })
+            await flushPromises()
+
+            expect(darkerSkyToggle(wrapper).props('disabled')).toBe(false)
+        })
+
+        it('sends the whole eyepiece object when Darker sky is toggled', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {eyepiece: {black_floor: -0.05, darker_sky: false}},
+            })
+            await flushPromises()
+
+            await findToggleByLabel(wrapper, 'Darker sky').setValue(true)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                eyepiece: expect.objectContaining({
+                    black_floor: -0.05,
+                    darker_sky: true,
+                }),
+            })
+        })
+    })
 })

@@ -15,6 +15,7 @@ pub use saturation::{
 };
 
 use crate::error::Result;
+use crate::render::output::ShadowFloor;
 use crate::frame::Frame;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,8 @@ struct LutCacheKey {
     strength: i32,
     contrast_strength: i32,
     contrast_midpoint: i32,
+    floor_depth: i32,
+    floor_knee: i32,
 }
 
 impl LutCacheKey {
@@ -83,6 +86,7 @@ impl LutCacheKey {
         algorithm: ToneMappingAlgorithm,
         strength: f32,
         contrast: Option<&crate::render::output::ContrastConfig>,
+        floor: ShadowFloor,
     ) -> Self {
         // Quantize parameters to avoid recalculating on tiny float jitter
         // 10000.0 gives 4 decimals of precision, which is plenty for these params
@@ -91,11 +95,18 @@ impl LutCacheKey {
             Some(c) => (quantize(c.strength), quantize(c.midpoint)),
             None => (0, 0),
         };
+        // The floor belongs in the key where the black point deliberately does
+        // not: it changes the table's contents rather than being subtracted
+        // per pixel. It is cache-friendly for the same reason the stretch factor
+        // is — it is anchored to `target_background`, which the solver holds
+        // steady, not to a per-frame statistic.
         Self {
             algorithm,
             strength: quantize(strength),
             contrast_strength: cs,
             contrast_midpoint: cm,
+            floor_depth: quantize(floor.depth),
+            floor_knee: quantize(floor.knee),
         }
     }
 }
@@ -139,6 +150,7 @@ fn scale_limit_at_zero(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
+    floor: ShadowFloor,
 ) -> f32 {
     // `asinh_stretch` returns its input unchanged for a non-positive strength, so the limit
     // is 1.0. MTF has no meaningful limit there, but `solve_mtf_midtone` clamps the midtone
@@ -164,32 +176,42 @@ fn scale_limit_at_zero(
         _ => 1.0,
     };
 
-    tone_limit * contrast_slope
+    // The floor's own limit, which for the clipping form is genuinely zero —
+    // the one case where a zero at entry 0 is faithful rather than a bug, since
+    // "everything under the floor is black" is exactly what was asked for.
+    tone_limit * contrast_slope * floor.slope_at_zero()
 }
 
 fn build_scale_lut(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
+    floor: ShadowFloor,
 ) -> Vec<f32> {
     #[cfg(test)]
     LUT_BUILDS.with(|c| c.set(c.get() + 1));
 
+    // The floor goes last, after contrast, because that is where it goes in the
+    // unfused path too — the encoder's row tail applies it on the far side of
+    // `apply_contrast_slice`. Matching the two is what keeps one slider position
+    // meaning one thing whether or not saturation boost pushed contrast out of
+    // this table.
     let curve = |l: f32| {
         let stretched = match algorithm {
             ToneMappingAlgorithm::Asinh => asinh::asinh_stretch(l, strength),
             ToneMappingAlgorithm::Mtf => mtf::mtf(l, strength),
         };
-        match contrast {
+        let contrasted = match contrast {
             Some(config) => crate::render::output::apply_s_curve(stretched, config),
             None => stretched,
-        }
+        };
+        floor.apply(contrasted)
     };
 
     let mut lut = vec![0.0f32; SCALE_LUT_SIZE];
     // Entry 0 is the limit, not zero: a hard 0 here forces every pixel below one bin
     // width to pure black, discarding up to ~28 LSB of the faintest signal.
-    lut[0] = scale_limit_at_zero(algorithm, strength, contrast);
+    lut[0] = scale_limit_at_zero(algorithm, strength, contrast, floor);
     for (i, entry) in lut.iter_mut().enumerate().skip(1) {
         let l_in = i as f32 / (SCALE_LUT_SIZE - 1) as f32;
         *entry = curve(l_in) / l_in;
@@ -201,12 +223,13 @@ pub fn cached_scale_lut(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
+    floor: ShadowFloor,
 ) -> Arc<Vec<f32>> {
-    let key = LutCacheKey::new(algorithm, strength, contrast);
+    let key = LutCacheKey::new(algorithm, strength, contrast, floor);
     SCALE_LUT_CACHE.with(|cell| {
         let mut cache = cell.borrow_mut();
         if cache.key != Some(key) {
-            cache.lut = Arc::new(build_scale_lut(algorithm, strength, contrast));
+            cache.lut = Arc::new(build_scale_lut(algorithm, strength, contrast, floor));
             cache.key = Some(key);
         }
         Arc::clone(&cache.lut)
@@ -230,6 +253,7 @@ pub fn apply_fused_stretch_frame(
     strength: f32,
     color_intensity: f32,
     contrast: Option<&crate::render::output::ContrastConfig>,
+    floor: ShadowFloor,
 ) -> Result<()> {
     if frame.channels() != 3 {
         return Err(crate::error::StackError::InvalidConfiguration(
@@ -237,7 +261,7 @@ pub fn apply_fused_stretch_frame(
         ));
     }
 
-    let scale_lut = cached_scale_lut(algorithm, strength, contrast);
+    let scale_lut = cached_scale_lut(algorithm, strength, contrast, floor);
     apply_scale_lut_frame(frame, black_point, &scale_lut, color_intensity)
 }
 
@@ -380,6 +404,7 @@ mod tests {
             strength,
             1.0,
             None,
+            ShadowFloor::NONE,
         )
         .unwrap();
 
@@ -408,8 +433,16 @@ mod tests {
         let faint = 0.5 / (SCALE_LUT_SIZE - 1) as f32;
         let mut frame = Frame::filled(8, 8, 3, faint).unwrap();
 
-        apply_fused_stretch_frame(&mut frame, 0.0, ToneMappingAlgorithm::Mtf, 0.01, 1.0, None)
-            .unwrap();
+        apply_fused_stretch_frame(
+            &mut frame,
+            0.0,
+            ToneMappingAlgorithm::Mtf,
+            0.01,
+            1.0,
+            None,
+            ShadowFloor::NONE,
+        )
+        .unwrap();
 
         let out = frame.get_pixel(4, 4, 0);
         assert!(
@@ -424,7 +457,15 @@ mod tests {
     fn test_fused_stretch_rejects_non_rgb() {
         let mut frame = Frame::filled(8, 8, 1, 0.2).unwrap();
         let result =
-            apply_fused_stretch_frame(&mut frame, 0.0, ToneMappingAlgorithm::Mtf, 0.2, 1.0, None);
+            apply_fused_stretch_frame(
+                &mut frame,
+                0.0,
+                ToneMappingAlgorithm::Mtf,
+                0.2,
+                1.0,
+                None,
+                ShadowFloor::NONE,
+            );
         assert!(result.is_err());
     }
 
@@ -443,6 +484,7 @@ mod tests {
             0.123,
             1.0,
             None,
+            ShadowFloor::NONE,
         )
         .unwrap();
 
@@ -456,6 +498,7 @@ mod tests {
                 0.123,
                 1.0,
                 None,
+                ShadowFloor::NONE,
             )
             .unwrap();
         }
@@ -474,6 +517,7 @@ mod tests {
             0.321,
             1.0,
             None,
+            ShadowFloor::NONE,
         )
         .unwrap();
         assert_eq!(builds(), before + 1);
@@ -484,7 +528,7 @@ mod tests {
     #[test]
     fn test_scale_lut_zero_entry_is_the_curve_limit() {
         for midtone in [0.005, 0.02, 0.1, 0.3] {
-            let lut = build_scale_lut(ToneMappingAlgorithm::Mtf, midtone, None);
+            let lut = build_scale_lut(ToneMappingAlgorithm::Mtf, midtone, None, ShadowFloor::NONE);
             let expected = (1.0 - midtone) / midtone;
             assert!(
                 (lut[0] - expected).abs() / expected < 1e-4,
@@ -509,7 +553,7 @@ mod tests {
         }
 
         for strength in [5.0, 20.0, 100.0] {
-            let lut = build_scale_lut(ToneMappingAlgorithm::Asinh, strength, None);
+            let lut = build_scale_lut(ToneMappingAlgorithm::Asinh, strength, None, ShadowFloor::NONE);
             let expected = strength / asinh::asinh(strength);
             assert!(
                 (lut[0] - expected).abs() / expected < 1e-4,
@@ -536,7 +580,12 @@ mod tests {
 
         let midtone = 0.02;
         let contrast = ContrastConfig::default();
-        let lut = build_scale_lut(ToneMappingAlgorithm::Mtf, midtone, Some(&contrast));
+        let lut = build_scale_lut(
+            ToneMappingAlgorithm::Mtf,
+            midtone,
+            Some(&contrast),
+            ShadowFloor::NONE,
+        );
 
         let expected = ((1.0 - midtone) / midtone)
             * (1.0 - 4.0 * contrast.strength * contrast.midpoint).max(0.0);

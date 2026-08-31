@@ -75,7 +75,7 @@ export const BLACK_LEVEL_LIMITS = {
 }
 
 export const BLACK_FLOOR_LIMITS = {
-    min: 0.0,
+    min: -0.09,
     max: 0.15,
     step: 0.01,
     default: 0.04,
@@ -261,6 +261,7 @@ export const DEFAULT_SETTINGS = {
         circular_view: true,
         intensity: 0.3,
         black_floor: 0.04,
+        darker_sky: false,
         dither: true,
     },
     dew_heater_enabled: true,
@@ -321,7 +322,9 @@ export const HELP_TEXTS = {
     eyepiece_intensity:
         'Darkens the background sky for OLED screens and pulls up the contrast of objects. Higher values also push more of the sky\'s noise below black, so the background looks smoother.',
     eyepiece_black_floor:
-        'Keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise this if the background looks grainy with hard black dots; lower it for maximum contrast.',
+        'Sets where black sits.\n• Positive keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise it if the background shows hard black dots.\n• Negative pushes the sky itself toward black without dimming the target, which is what lowering Black level does instead. Around -5% puts the floor at the sky level and takes the background down by about two thirds; the far end takes it down by around 85%. The negative half needs a measured sky level, so it does nothing with Auto stretch off or in Planetary mode.',
+    eyepiece_darker_sky:
+        'Lets the darkening half of Black floor reach true black instead of rolling off into it. Buys the deepest possible sky and a little more separation between the target and the background, and costs the black speckle the positive half of Black floor exists to remove - around a third of the sky ends up fully off. No effect while Black floor is positive.',
     hot_pixel_rejection:
         'Replaces isolated bright pixels on the raw sensor mosaic — the coloured dots scattered through the background. They sit in the same place in every frame, so stacking never removes them. Only a pixel far brighter than its own neighbours is touched, so stars are left alone.',
     hot_pixel_sigma:
