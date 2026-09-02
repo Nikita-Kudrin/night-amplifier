@@ -8,15 +8,15 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Supported Platforms
 
-| OS                        | Architecture | Supported |
-|---------------------------|--------------|-----------|
-| Linux                     | x86_64       | ✅        |
-| Linux                     | ARM64        | ✅        |
-| Raspberry Pi5, Orange Pi5 | ARM64        | ✅        |
-| Windows                   | x86_64       | ✅        |
-| Windows                   | ARM64        | ✅        |
-| macOS                     | x86_64       | ✅        |
-| macOS                     | ARM64        | ✅        |
+| OS                        | Architecture | Supported                                                 |
+|---------------------------|--------------|-----------------------------------------------------------|
+| Linux                     | x86_64       | ✅                                                        |
+| Linux                     | ARM64        | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| Raspberry Pi5, Orange Pi5 | ARM64        | ✅                                                        |
+| Windows                   | x86_64       | ✅                                                        |
+| Windows                   | ARM64        | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| macOS                     | x86_64       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| macOS                     | ARM64        | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
 
 [![CI](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikita-Kudrin/night-amplifier/actions/workflows/ci.yml)
 
@@ -28,15 +28,15 @@ disabled.
 
 Enable features for specific manufacturers when compiling:
 
-| Provider       | SDK Required                                                         | Supported                                                 |
-|----------------|----------------------------------------------------------------------|-----------------------------------------------------------|
-| Player One     | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                        |
-| ZWO (ASI)      | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| INDI           | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| ToupTek        | [ToupTek SDK](http://www.touptek.com/download/)                      | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| QHYCCD         | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| SVBony         | [SVBony SDK](https://www.svbony.com/downloads)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| Simulated      | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                        |
+| Provider   | SDK Required                                                         | Supported                                                 |
+|------------|----------------------------------------------------------------------|-----------------------------------------------------------|
+| Player One | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                        |
+| ZWO (ASI)  | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| ToupTek    | [ToupTek SDK](http://www.touptek.com/download/)                      | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| QHYCCD     | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| SVBony     | [SVBony SDK](https://www.svbony.com/downloads)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| INDI       | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
+| Simulated  | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                        |
 
 ## Features
 
@@ -410,21 +410,21 @@ cargo run --release --features telemetry -- --telemetry
 
 The server provides:
 
-| Endpoint                       | Method | Description                       |
-|--------------------------------|--------|-----------------------------------|
-| `/api/cameras`                 | GET    | List available cameras            |
-| `/api/cameras/{id}/connect`    | POST   | Connect to a camera               |
-| `/api/cameras/{id}/disconnect` | POST   | Disconnect from a camera          |
-| `/api/cameras/{id}`            | GET    | Get camera info                   |
-| `/api/capture/start`           | POST   | Start capture session             |
-| `/api/capture/stop`            | POST   | Stop capture session              |
-| `/api/capture/status`          | GET    | Get capture status                |
-| `/api/settings`                | GET    | Get current settings              |
-| `/api/settings`                | POST   | Update settings                   |
-| `/ws/stream`                   | WS     | Live image stream (dynamic JPEG) |
-| `/ws/eyepiece`                 | WS     | Eyepiece image stream (dynamic JPEG) |
+| Endpoint                       | Method | Description                                                                          |
+|--------------------------------|--------|--------------------------------------------------------------------------------------|
+| `/api/cameras`                 | GET    | List available cameras                                                               |
+| `/api/cameras/{id}/connect`    | POST   | Connect to a camera                                                                  |
+| `/api/cameras/{id}/disconnect` | POST   | Disconnect from a camera                                                             |
+| `/api/cameras/{id}`            | GET    | Get camera info                                                                      |
+| `/api/capture/start`           | POST   | Start capture session                                                                |
+| `/api/capture/stop`            | POST   | Stop capture session                                                                 |
+| `/api/capture/status`          | GET    | Get capture status                                                                   |
+| `/api/settings`                | GET    | Get current settings                                                                 |
+| `/api/settings`                | POST   | Update settings                                                                      |
+| `/ws/stream`                   | WS     | Live image stream (dynamic JPEG)                                                     |
+| `/ws/eyepiece`                 | WS     | Eyepiece image stream (dynamic JPEG)                                                 |
 | `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8), sized to the client's reported viewport |
-| `/ws/events`                   | WS     | Server events (JSON)              |
+| `/ws/events`                   | WS     | Server events (JSON)                                                                 |
 
 > [!IMPORTANT]
 > The following endpoints require the **Night Amplifier Pro** plugin to be installed and configured:
@@ -445,36 +445,27 @@ Static files are served from the `web/` directory (Vue 3 frontend included).
 
 #### Push-To Solve Lifecycle
 
-A plate solve is offered a frame at most once a second, and only when the view has settled.
-Whether that offer becomes a solve is decided by two independent things:
+A plate solve is offered a frame at most once a second, only once the view has settled. Two independent checks decide
+whether that offer is taken: the **movement detector** (has the star field changed enough to re-solve?) and the
+**solve gate** (should we even try?). Conflating these two questions caused some of the worst Push-To bugs.
 
-- the **movement detector**, which asks whether the star field has changed enough to be worth
-  re-solving, and
-- the **solve gate**, which asks whether we should be attempting one at all.
+The gate holds three states:
 
-The gate exists because those are different questions and answering them together produced
-several of the worst Push-To bugs. It holds three states:
+| State       | Set by                                      | Cleared by                                           |
+|-------------|---------------------------------------------|------------------------------------------------------|
+| open        | success, startup                            | —                                                    |
+| backing off | a failed solve (5 s, doubling, capped 120s) | the delay expiring, or any of the "arming" events    |
+| suppressed  | a user cancel, clearing the target          | a new target, slewing the scope, an equipment change |
 
-| State      | Set by                                     | Cleared by                                          |
-|------------|--------------------------------------------|-----------------------------------------------------|
-| open       | success, startup                           | —                                                   |
-| backing off| a failed solve (5 s, doubling, capped 120s)| the delay expiring, or any of the "arming" events    |
-| suppressed | a user cancel, clearing the target         | a new target, slewing the scope, an equipment change |
-
-A **cancel** and a **failure** are deliberately different. A cancel keeps the last solved
-position — it is still the best thing known, and it is what keeps the guide arrow on screen —
-and stops further attempts until the user expresses fresh intent. A failure discards the
-position, because we settled somewhere new and could not match it, and schedules a retry.
-
-Changing focal length, sensor, or binning does not merely cancel: it calls `restart_solve`,
-which aborts the solve in flight *and* asks the movement detector for a fresh one. A bare
-cancel would leave the star field unchanged, so the detector would report `Idle` on every
-later frame and nothing would ever be solved against the new optics.
+A cancel keeps the last solved position (still the best guess, still what drives the guide arrow) and waits for fresh
+user intent. A failure discards it and schedules a retry instead. Changing focal length, sensor, or binning calls
+`restart_solve` rather than a plain cancel: it aborts the in-flight solve *and* resets the movement detector, since a
+bare cancel would leave the star field looking unchanged and nothing would ever re-solve against the new optics.
 
 Push-To events on `/ws/events`:
 
-| Event                     | Meaning                                                            |
-|---------------------------|--------------------------------------------------------------------|
+| Event                     | Meaning                                                             |
+|---------------------------|---------------------------------------------------------------------|
 | `plate_solving_started`   | A solve began; carries the target name                              |
 | `plate_solving_progress`  | Which strategy in the ladder is in flight                           |
 | `position_solved`         | A solve **on this frame** succeeded — never a cached position       |
@@ -486,12 +477,11 @@ Push-To events on `/ws/events`:
 
 #### Live Stream Scaling
 
-The JPEG streams are encoded once per frame in the render task rather than once per connected
-client. Clients announce their viewport (`{width, height}` JSON) and are mapped to the nearest of
-four fixed resolution tiers — 1920×1080, 2560×1440, 3840×2160, and native sensor resolution. Only
-tiers with at least one connected client are encoded, and tiers that would not downsample the frame
-share a single encode. Ten phones on the same tier therefore cost one JPEG encode per frame, and a
-tier nobody is watching costs nothing.
+The JPEG streams are encoded once per frame in the render task rather than once per connected client. Clients announce
+their viewport (`{width, height}` JSON) and are mapped to the nearest of four fixed resolution tiers — 1920×1080,
+2560×1440, 3840×2160, and native sensor resolution. Only tiers with at least one connected client are encoded, and tiers
+that would not downsample the frame share a single encode. Ten phones on the same tier therefore cost one JPEG encode
+per frame, and a tier nobody is watching costs nothing.
 
 #### Adding New Camera Providers
 
