@@ -16,6 +16,7 @@
 //! the async orchestrator, so it can call `handle.block_on()` for async
 //! state access and `handle.spawn()` for fire-and-forget async work.
 
+pub mod analysis;
 pub mod channel;
 mod context;
 mod frame_gate;
@@ -33,6 +34,7 @@ pub mod watchdog;
 #[cfg(test)]
 pub mod watchdog_tests;
 
+pub use analysis::{AnalysisContext, PreviewAnalysis};
 pub use context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
 pub use task::run_capture_loop;

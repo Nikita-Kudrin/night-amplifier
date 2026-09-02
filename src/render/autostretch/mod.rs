@@ -148,20 +148,46 @@ pub fn prepare_auto_stretch_frame(
         let _span = tracing::info_span!("compute_image_stats").entered();
         compute_image_stats(frame)?
     };
+    prepare_auto_stretch_frame_with_stats(frame, config, &stats)
+}
+
+/// [`prepare_auto_stretch_frame`] against statistics the caller already holds.
+///
+/// Splitting the measurement from the solve is what lets the render task reuse one set
+/// of statistics across several frames of the same stack; see
+/// `server::capture::analysis` for when that is sound.
+///
+/// **The statistics must describe the frame as it is now** — after neutralisation,
+/// background subtraction and SCNR — because the black point they yield is subtracted
+/// from it. Handing in statistics measured before those stages would remove a pedestal
+/// the frame no longer has.
+pub fn prepare_auto_stretch_frame_with_stats(
+    frame: &mut Frame,
+    config: AutoStretchConfig,
+    stats: &crate::statistics::ImageStats,
+) -> Result<AutoStretchResult> {
+    let channels = frame.channels();
+    if channels != 1 && channels != 3 {
+        return Err(StackError::InvalidConfiguration(format!(
+            "prepare_auto_stretch_frame requires 1 or 3 channels, got {}",
+            channels
+        )));
+    }
+
     // The two halves scale with completely different things — the solve is a bounded
     // Newton/bisection iteration over scalars, the subtraction is one pass over every
     // sample — so 7.0 ms of unattributed self time here could have been either. It is
     // almost entirely the subtraction, and now says so.
     let mut result = {
         let _span = tracing::info_span!("solve_stretch", algorithm = ?config.tone_mapping).entered();
-        compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping)
+        compute_auto_stretch_with_algorithm(frame, stats, config, config.tone_mapping)
     };
 
     if channels == 3 && config.per_channel_black_point {
         let bp_config = BlackPointConfig::new(config.black_point_sigma);
         let black_points = {
             let _span = tracing::info_span!("calculate_black_points").entered();
-            calculate_black_points(frame, &stats, bp_config)?
+            calculate_black_points(frame, stats, bp_config)?
         };
         let _span = tracing::info_span!("subtract_black_point", per_channel = true).entered();
         subtract_black_point(frame, &black_points)?;

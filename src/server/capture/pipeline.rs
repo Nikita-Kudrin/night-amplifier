@@ -6,9 +6,9 @@
 
 use tracing::{info, instrument, warn};
 
+use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::context::{PlanetaryStackingContext, StackingContext};
 use super::frame_gate::RejectionReason;
-use crate::background::subtract_background_with_config;
 use crate::frame::Frame;
 use crate::server::state::CaptureSettings;
 use crate::stacking::{CometContext, COMET_PLUGIN};
@@ -33,7 +33,12 @@ pub use super::stage_config::{
 pub struct StackingOutcome {
     /// The frame to display: the accumulated stack, or a single sub when there
     /// is no stack to show yet.
-    pub display_frame: Frame,
+    ///
+    /// `None` when the caller passed `want_display: false` — the render task already
+    /// has a frame queued, so building another copy of the accumulator would be work
+    /// whose only destination is `drain_to_latest`. The stack itself is unaffected;
+    /// only this copy of it is skipped.
+    pub display_frame: Option<Frame>,
     /// `display_frame` is the accumulated stack rather than a single sub.
     pub showing_stack: bool,
     /// This frame registered and was added to the stack.
@@ -44,28 +49,52 @@ pub struct StackingOutcome {
     /// Why the frame did not join the stack, when it did not. `None` when it
     /// did, or when the mode does not report a reason.
     pub rejected_because: Option<RejectionReason>,
+    /// Frames in the accumulated stack after this pass. `0` when there is no stack.
+    ///
+    /// Carried so the render task can tell how much the statistics it caches have
+    /// moved: they fall as `1/sqrt(N)`, so proportional growth in this number is what
+    /// decides when they have to be measured again.
+    pub stack_depth: u32,
 }
 
 impl StackingOutcome {
     /// A single sub standing in for a stack that does not exist yet.
     fn single_frame(frame: &Frame, frame_added: bool) -> Self {
         Self {
-            display_frame: frame.clone(),
+            display_frame: Some(frame.clone()),
             showing_stack: false,
             frame_added,
             stack_reset: false,
             rejected_because: None,
+            stack_depth: 0,
         }
     }
 
     /// The accumulated stack.
-    fn stacked(display_frame: Frame, frame_added: bool) -> Self {
+    fn stacked(display_frame: Frame, frame_added: bool, stack_depth: u32) -> Self {
         Self {
-            display_frame,
+            display_frame: Some(display_frame),
             showing_stack: true,
             frame_added,
             stack_reset: false,
             rejected_because: None,
+            stack_depth,
+        }
+    }
+
+    /// The frame joined the stack, but no copy of the accumulator was made.
+    ///
+    /// `showing_stack` stays true: it describes what the *live view* is showing, and the
+    /// view keeps showing the stack it was already showing. The counters read
+    /// `frame_added`, not this.
+    fn stacked_not_displayed(frame_added: bool, stack_depth: u32) -> Self {
+        Self {
+            display_frame: None,
+            showing_stack: true,
+            frame_added,
+            stack_reset: false,
+            rejected_because: None,
+            stack_depth,
         }
     }
 }
@@ -81,6 +110,7 @@ pub async fn process_frame_with_stacking(
     settings: &CaptureSettings,
     stacking_ctx: &mut Option<StackingContext>,
     stacking_failed: &mut bool,
+    want_display: bool,
 ) -> StackingOutcome {
     // Initialize stacking context on first frame
     if stacking_ctx.is_none() {
@@ -146,12 +176,24 @@ pub async fn process_frame_with_stacking(
         }
     };
 
+    // The frame is in the stack now. What follows is only the copy the live view needs,
+    // and the render task already having one queued means this copy's only destination
+    // is `drain_to_latest`.
+    if !want_display {
+        return StackingOutcome {
+            stack_reset: admission.rebased,
+            rejected_because: admission.rejected_because,
+            ..StackingOutcome::stacked_not_displayed(admission.added, ctx.frame_count() as u32)
+        };
+    }
+
     // Return the current stacked result for display (raw, background subtraction applied in preview)
+    let depth = ctx.frame_count() as u32;
     match ctx.compute() {
         Ok(stacked) => StackingOutcome {
             stack_reset: admission.rebased,
             rejected_because: admission.rejected_because,
-            ..StackingOutcome::stacked(stacked, admission.added)
+            ..StackingOutcome::stacked(stacked, admission.added, depth)
         },
         Err(e) => {
             warn!(error = %e, "Failed to compute stack, using raw frame");
@@ -171,6 +213,7 @@ pub async fn process_frame_with_comet_stacking(
     settings: &CaptureSettings,
     comet_ctx: &mut Option<Box<dyn CometContext>>,
     stacking_failed: &mut bool,
+    want_display: bool,
 ) -> StackingOutcome {
     // Initialize comet stacking context on first frame using plugin
     if comet_ctx.is_none() {
@@ -247,9 +290,16 @@ pub async fn process_frame_with_comet_stacking(
         }
     };
 
+    // See `process_frame_with_stacking`: the accumulator is already updated, and this
+    // copy of it has nowhere to go while the render task still holds one.
+    if !want_display {
+        return StackingOutcome::stacked_not_displayed(frame_added, ctx.frame_count() as u32);
+    }
+
     // Return the current stacked result for display (raw, background subtraction applied in preview)
+    let depth = ctx.frame_count() as u32;
     match ctx.compute() {
-        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added),
+        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added, depth),
         Err(e) => {
             warn!(error = %e, "Failed to compute comet stack, using raw frame");
             StackingOutcome::single_frame(frame, false)
@@ -268,6 +318,7 @@ pub async fn process_frame_with_planetary_stacking(
     settings: &CaptureSettings,
     planetary_ctx: &mut Option<PlanetaryStackingContext>,
     stacking_failed: &mut bool,
+    want_display: bool,
 ) -> StackingOutcome {
     // Initialize planetary stacking context on first frame
     if planetary_ctx.is_none() {
@@ -325,9 +376,15 @@ pub async fn process_frame_with_planetary_stacking(
         }
     };
 
+    // See `process_frame_with_stacking`.
+    if !want_display {
+        return StackingOutcome::stacked_not_displayed(frame_added, ctx.frame_count() as u32);
+    }
+
     // Return the current stacked result for display (raw, background subtraction applied in preview)
+    let depth = ctx.frame_count() as u32;
     match ctx.compute() {
-        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added),
+        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added, depth),
         Err(e) => {
             warn!(error = %e, "Failed to compute planetary stack, using raw frame");
             StackingOutcome::single_frame(frame, false)
@@ -338,6 +395,10 @@ pub async fn process_frame_with_planetary_stacking(
 /// Process a frame for preview display using the unified render pipeline.
 /// Now returns a RenderReadyFrame instead of applying the non-linear stretch,
 /// allowing the stretch to be fused into the downsampling pass.
+///
+/// Analyses the frame from scratch. The render task uses
+/// [`process_preview_frame_with_analysis`] instead, which reuses the estimates a
+/// previous frame of the same stack already produced.
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
@@ -345,12 +406,56 @@ pub fn process_preview_frame(
     crate::render::RenderPipelineConfig,
     Option<crate::server::state::StretchResult>,
 )> {
-    use crate::background::subtract_background_with_config;
-    use crate::render::autostretch::prepare_auto_stretch_frame;
+    process_preview_frame_with_analysis(
+        frame,
+        settings,
+        AnalysisContext::ONE_SHOT,
+        &mut PreviewAnalysis::new(),
+    )
+}
 
-    let _span = tracing::info_span!("process_preview_frame").entered();
+/// [`process_preview_frame`] reusing the estimates a previous frame of the same stack
+/// already produced.
+///
+/// The three estimates — white balance, background model, image statistics — describe
+/// the stack rather than this frame, and a stack moves by 1/N per render. `analysis`
+/// decides per frame whether the stored set still applies; see
+/// [`super::analysis`] for the four things that invalidate it.
+///
+/// Everything that touches pixels still runs every frame. Only the measuring is reused.
+pub fn process_preview_frame_with_analysis(
+    frame: &mut Frame,
+    settings: &CaptureSettings,
+    ctx: AnalysisContext,
+    analysis: &mut PreviewAnalysis,
+) -> crate::error::Result<(
+    crate::render::RenderPipelineConfig,
+    Option<crate::server::state::StretchResult>,
+)> {
+    use crate::background::BackgroundExtractor;
+    use crate::render::autostretch::prepare_auto_stretch_frame_with_stats;
+
+    // `analysis_reused` is declared here, not just recorded below: `Span::record` on a
+    // field the macro never declared is a silent no-op, so the one thing that says
+    // whether the cache is working would have been invisible in every trace.
+    let _span = tracing::info_span!(
+        "process_preview_frame",
+        analysis_reused = tracing::field::Empty
+    )
+    .entered();
 
     let mut pipeline_config = get_render_pipeline_config(settings, false);
+
+    let reused = analysis.begin_frame(
+        ctx,
+        (frame.width(), frame.height(), frame.channels()),
+        pipeline_config.background_subtraction,
+        &pipeline_config.background_config,
+        pipeline_config.scnr,
+        pipeline_config.scnr_amount,
+        pipeline_config.auto_stretch,
+    );
+    tracing::Span::current().record("analysis_reused", reused);
 
     // Stage 0: Background Neutralization (Pre-subtraction)
     //
@@ -360,7 +465,7 @@ pub fn process_preview_frame(
     // span here reported 97 ms with no way to tell which half owned it.
     if pipeline_config.background_subtraction && frame.channels() == 3 {
         let _span0 = tracing::info_span!("background_neutralization").entered();
-        let multipliers = {
+        let multipliers = analysis.white_balance(|| {
             let _span = tracing::info_span!("wb_grid").entered();
             crate::render::compute_white_balance_grid_with_config(
                 frame,
@@ -368,7 +473,7 @@ pub fn process_preview_frame(
                 25.0,
                 crate::render::WhiteBalanceConfig::preview(),
             )
-        };
+        });
         match multipliers {
             Ok(multipliers) => {
                 let _span = tracing::info_span!("wb_apply").entered();
@@ -381,12 +486,19 @@ pub fn process_preview_frame(
     }
 
     // Stage 1: Background subtraction (modifies linear data)
+    //
+    // The estimate and the subtraction are separated here, rather than going through
+    // `subtract_background_with_config`, because only the estimate is reusable — the
+    // model still has to be subtracted from every frame.
     if pipeline_config.background_subtraction {
         let _span1 = tracing::info_span!("background_subtraction").entered();
-        if let Err(e) =
-            subtract_background_with_config(frame, pipeline_config.background_config.clone())
-        {
-            warn!(error = %e, "Background subtraction failed");
+        let config = pipeline_config.background_config.clone();
+        match analysis.background(|| BackgroundExtractor::new(config).estimate(frame)) {
+            Ok(model) => {
+                let _span = tracing::info_span!("subtract_model").entered();
+                model.subtract_from(frame);
+            }
+            Err(e) => warn!(error = %e, "Background subtraction failed"),
         }
     }
 
@@ -399,9 +511,30 @@ pub fn process_preview_frame(
     }
 
     // Stage 2: Prepare auto-stretch (computes stats, subtracts black point, but does not stretch)
+    //
+    // The statistics are measured here, after the three stages above have run, which is
+    // what makes them reusable: a cached set describes a frame that went through the
+    // *same* cached white balance and background model, so the whole analysis is
+    // internally consistent or none of it is.
     let stretch_result = if pipeline_config.auto_stretch {
         let _span2 = tracing::info_span!("prepare_auto_stretch").entered();
-        match prepare_auto_stretch_frame(frame, pipeline_config.stretch_config) {
+        // Not `?`: a frame too small for robust statistics (below `StatsConfig`'s
+        // 1000-sample minimum) has always rendered unstretched rather than not at all,
+        // and the error handling below is what keeps it that way. Propagating from here
+        // would make the render task drop the whole frame.
+        let prepared = analysis
+            .stats(|| {
+                let _span = tracing::info_span!("compute_image_stats").entered();
+                crate::statistics::compute_image_stats(frame)
+            })
+            .and_then(|stats| {
+                prepare_auto_stretch_frame_with_stats(
+                    frame,
+                    pipeline_config.stretch_config,
+                    &stats,
+                )
+            });
+        match prepared {
             Ok(res) => {
                 // When saturation boost is off and contrast is enabled, fuse the
                 // contrast S-curve into the scale LUT — the same optimization that
@@ -532,13 +665,13 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        let first = process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed).await;
+        let first = process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
         assert!(!failed, "reference frame should have initialised the stack");
         assert!(first.frame_added);
 
         // A blank frame has nothing to register against.
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed).await;
+        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed, true).await;
 
         assert!(
             !outcome.frame_added,
@@ -559,10 +692,10 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed).await;
+        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
 
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed).await;
+        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed, true).await;
 
         let reason = outcome
             .rejected_because
@@ -595,14 +728,14 @@ mod tests {
         for i in 0..8 {
             let frame = starfield(150, 150, i as f32 * 0.25);
             let outcome =
-                process_frame_with_stacking(&frame, &settings, &mut ctx, &mut failed).await;
+                process_frame_with_stacking(&frame, &settings, &mut ctx, &mut failed, true).await;
             assert!(outcome.frame_added, "sharp frame {i} should have stacked");
         }
 
         // Same field, same star positions, stars twice as wide.
         let defocused = starfield_with_spread(150, 150, 0.0, 2.2);
         let outcome =
-            process_frame_with_stacking(&defocused, &settings, &mut ctx, &mut failed).await;
+            process_frame_with_stacking(&defocused, &settings, &mut ctx, &mut failed, true).await;
 
         assert_eq!(
             outcome.rejected_because,
@@ -632,10 +765,10 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed).await;
+        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed).await;
+        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, true).await;
 
         assert!(outcome.frame_added);
         assert_eq!(outcome.rejected_because, None);
@@ -649,15 +782,81 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed).await;
+        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed).await;
+        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, true).await;
 
         assert!(outcome.showing_stack);
         assert!(
             outcome.frame_added,
             "a cleanly shifted starfield should register and stack"
+        );
+    }
+
+    /// A frame too small for robust statistics renders unstretched, not not-at-all.
+    ///
+    /// `StatsConfig` refuses anything under 1000 pixels, and the render task treats an
+    /// error out of `process_preview_frame` as "drop this frame". Splitting the
+    /// statistics out so the analysis cache could hold them briefly turned that refusal
+    /// into a propagating `?`, which stopped the preview dead on a small ROI — caught by
+    /// the render-task tests, which build 10x10 fixtures.
+    #[test]
+    fn a_frame_too_small_for_statistics_still_renders() {
+        let mut frame = Frame::filled(10, 10, 3, 0.2).unwrap();
+        let settings = CaptureSettings::default();
+
+        let (_, stretch) = process_preview_frame(&mut frame, &settings)
+            .expect("a frame too small to measure must still render");
+        assert!(
+            stretch.is_none(),
+            "there is no stretch to report without statistics"
+        );
+    }
+
+    /// Skipping the display copy must skip *only* the copy.
+    ///
+    /// The whole point of `want_display` is that it is a rendering optimisation, not a
+    /// stacking one: the frame still registers, still joins the accumulator, and still
+    /// moves the frame count. Getting this wrong would silently throw away integration
+    /// time whenever the render thread fell behind — which is exactly the condition the
+    /// flag exists to detect, so it would bite hardest on the slowest machines.
+    #[tokio::test]
+    async fn skipping_the_display_copy_still_stacks_the_frame() {
+        let settings = CaptureSettings::default();
+        let mut ctx = None;
+        let mut failed = false;
+
+        let reference = starfield(150, 150, 0.0);
+        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+
+        let shifted = starfield(150, 150, 2.0);
+        let outcome =
+            process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, false).await;
+
+        assert!(
+            outcome.display_frame.is_none(),
+            "want_display: false must not build the copy"
+        );
+        assert!(
+            outcome.frame_added,
+            "the frame must still join the stack — the flag is about the preview only"
+        );
+        assert!(
+            outcome.showing_stack,
+            "the live view is still showing the stack it was already showing"
+        );
+
+        // The accumulator moved: a later frame that does ask for the copy gets one, and
+        // it carries the integration this iteration contributed.
+        let third = starfield(150, 150, 4.0);
+        let outcome =
+            process_frame_with_stacking(&third, &settings, &mut ctx, &mut failed, true).await;
+        assert!(outcome.display_frame.is_some());
+        assert_eq!(
+            ctx.as_ref().expect("context").frame_count(),
+            3,
+            "all three frames must be in the stack, including the undisplayed one"
         );
     }
 

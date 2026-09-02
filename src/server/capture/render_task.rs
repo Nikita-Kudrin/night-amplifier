@@ -5,7 +5,8 @@ use tracing::{debug, warn};
 use crate::server::state::{AppState, JpegTier};
 use crate::telemetry::metrics as telemetry_metrics;
 
-use super::channel::StackedFrame;
+use super::analysis::{AnalysisContext, PreviewAnalysis};
+use super::channel::{RenderQueueDepth, StackedFrame};
 use super::pipeline;
 
 /// Preview rendering and encoding, running on a dedicated OS thread.
@@ -23,6 +24,7 @@ use super::pipeline;
 pub fn run_render_task(
     state: Arc<AppState>,
     render_rx: mpsc::Receiver<StackedFrame>,
+    render_depth: RenderQueueDepth,
     rt: tokio::runtime::Handle,
 ) {
     debug!("Render task started");
@@ -36,10 +38,24 @@ pub fn run_render_task(
     // but the denoise buffers behind them are the whole point and are kept.
     let mut conversions = ConversionCache::default();
 
+    // Also outlives the loop, for the same reason and with the same ownership: the
+    // white-balance coefficients, background model and image statistics describe the
+    // stack, not the frame, so a frame of the same stack can be served the previous
+    // frame's measurements. `analysis` decides that per frame; see `capture::analysis`.
+    let mut analysis = PreviewAnalysis::new();
+
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
         let (latest, skipped) = drain_to_latest(msg, &render_rx);
         telemetry_metrics::record_frames_skipped_to_latest(skipped);
+
+        // Once per message taken off the channel, not once per iteration: a drained
+        // frame is still one the stacking task no longer has to account for, and
+        // undercounting here would leave the depth permanently above zero and stop it
+        // ever building another display frame.
+        for _ in 0..=skipped {
+            render_depth.taken();
+        }
 
         let StackedFrame {
             mut display_frame,
@@ -47,6 +63,7 @@ pub fn run_render_task(
             was_stacked,
             frame_number,
             settings,
+            stack_depth,
         } = latest;
 
         let _iter_span =
@@ -69,10 +86,36 @@ pub fn run_render_task(
             debug!("Preview frame still shared, copying before render");
         }
 
+        // Bin to what the clients actually asked for before the pipeline touches the
+        // frame, rather than after. See `preview_bin_factor` for why this is an integer
+        // and what it costs when it comes out 1.
+        let bin = preview_bin_factor(
+            display_frame.width(),
+            display_frame.height(),
+            state.preview_target_box(),
+        );
+        if bin > 1 {
+            let _span = tracing::info_span!("preview_bin", factor = bin).entered();
+            match display_frame.downsample(bin) {
+                Ok(binned) => display_frame = Arc::new(binned),
+                // Not fatal: the pipeline is perfectly capable of running at sensor
+                // resolution, it is just slower. A failure here must not cost the frame.
+                Err(e) => warn!(error = %e, factor = bin, "Preview binning failed, rendering at full resolution"),
+            }
+        }
+
         // Process frame through unified render pipeline
         let (pipeline_config, stretch_result) = {
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Render);
-            match pipeline::process_preview_frame(Arc::make_mut(&mut display_frame), &settings) {
+            match pipeline::process_preview_frame_with_analysis(
+                Arc::make_mut(&mut display_frame),
+                &settings,
+                AnalysisContext {
+                    showing_stack,
+                    stack_depth,
+                },
+                &mut analysis,
+            ) {
                 Ok(res) => res,
                 Err(e) => {
                     state.send_error(format!("Preview processing failed: {}", e));
@@ -144,6 +187,56 @@ pub fn run_render_task(
     }
 
     debug!("Render task ended");
+}
+
+/// Largest integer bin that still leaves every connected client the pixels it asked for.
+///
+/// # Why the preview pipeline should not run at sensor resolution
+///
+/// Background neutralisation, background subtraction, SCNR and the black-point pass all
+/// walk every sample of the frame, and `frame_to_rgb8_downsampled` then throws away
+/// whatever the client's tier does not need — 76 % of a 3008x3008 frame for a client on
+/// the 1440 tier. This is the same argument `AGENTS.md` already makes for running the
+/// denoisers at stream resolution rather than sensor resolution; every stage above them
+/// has the property too.
+///
+/// # Why an integer factor and not the exact tier
+///
+/// `Frame::downsample` bins by an integer, which keeps it an exact box average with no
+/// resampling phase to get wrong, and leaves the encoder's existing fractional resample
+/// to land the final size. So this is deliberately conservative: it never produces a
+/// frame smaller than the largest box a client asked for, and returns 1 whenever
+/// halving would go under it.
+///
+/// The consequence is that the win is **all or nothing at the 2x boundary**. A
+/// 3008x3008 sensor with a client on the 2160 tier bins by 1 and saves nothing; the same
+/// sensor with a client on the 1440 or 1080 tier bins by 2 and the whole preview
+/// pipeline runs on a quarter of the samples. Phones, tablets and the eyepiece view are
+/// the second case.
+///
+/// Capped at 4: past that the analysis stages are estimating a background from so few
+/// samples that the grid is no longer meaningful, and nothing the pipeline serves is
+/// under 1080 anyway.
+///
+/// The bound is the **output size** the encoder will produce, not the bounding box
+/// itself: a 3008x3008 frame fitted into the 2560x1440 box comes out 1440x1440, because
+/// the short edge binds and the aspect ratio is preserved. Comparing against the raw box
+/// would refuse to bin a square sensor for any tier. `encoding::output_dimensions` is
+/// the one copy of that arithmetic — the same reason `ConversionCache` keys on it — so
+/// asking it here is what keeps this decision and the encoder's from disagreeing.
+fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize {
+    const MAX_BIN: usize = 4;
+    if target.0 == 0 || target.1 == 0 {
+        return 1;
+    }
+
+    let (out_w, out_h) =
+        crate::server::encoding::output_dimensions(width, height, target.0, target.1);
+
+    (1..=MAX_BIN)
+        .rev()
+        .find(|&f| width / f >= out_w && height / f >= out_h)
+        .unwrap_or(1)
 }
 
 /// The RGB8 conversions one frame needs, at most one per distinct output size.
@@ -294,6 +387,63 @@ fn drain_to_latest(
 
 #[cfg(test)]
 mod tests {
+    use crate::server::capture::channel::RenderQueueDepth;
+
+    /// The tests here drive the render task directly rather than through the capture
+    /// pipeline, so nothing on the other end of the depth counter is running. A fresh
+    /// counter per call is the honest stand-in: it starts at zero and nothing reads it.
+    fn no_depth() -> RenderQueueDepth {
+        RenderQueueDepth::default()
+    }
+
+    /// Binning must never take the frame below what a client asked for — that is the
+    /// whole safety property, and every other case is an optimisation on top of it.
+    #[test]
+    fn preview_binning_never_goes_under_the_requested_box() {
+        use super::preview_bin_factor;
+
+        // IMX533, 3008x3008. The 2160 tier does not survive a halving (1504 < 2160), so
+        // it must bin by 1 — this is the traced configuration, and it saves nothing.
+        assert_eq!(preview_bin_factor(3008, 3008, (3840, 2160)), 1);
+        assert_eq!(preview_bin_factor(3008, 3008, (2560, 2160)), 1);
+
+        // A 1440 or 1080 client leaves room for one halving: 1504 clears both.
+        assert_eq!(preview_bin_factor(3008, 3008, (2560, 1440)), 2);
+        assert_eq!(preview_bin_factor(3008, 3008, (1920, 1080)), 2);
+
+        // IMX464, 2712x1538 — the short edge is what binds. 1356x769 is under 1080, so
+        // even the smallest tier cannot bin this sensor.
+        assert_eq!(preview_bin_factor(2712, 1538, (1920, 1080)), 1);
+    }
+
+    /// The exact boundary, in both directions, on a frame where one more pixel decides
+    /// it. An off-by-one here is a preview served below the resolution its client asked
+    /// for, which no test downstream of the encoder would catch.
+    #[test]
+    fn preview_binning_is_exact_at_the_boundary() {
+        use super::preview_bin_factor;
+
+        assert_eq!(
+            preview_bin_factor(2160, 2160, (1080, 1080)),
+            2,
+            "2160 / 2 == 1080 exactly, which still covers the box"
+        );
+        assert_eq!(
+            preview_bin_factor(2159, 2159, (1080, 1080)),
+            1,
+            "one pixel short of twice the box must not bin"
+        );
+    }
+
+    /// A frame far larger than anything asked for still stops at the cap, and a
+    /// degenerate box cannot produce a divide-by-zero or an unbounded factor.
+    #[test]
+    fn preview_binning_is_bounded() {
+        use super::preview_bin_factor;
+
+        assert_eq!(preview_bin_factor(16_000, 16_000, (1920, 1080)), 4);
+        assert_eq!(preview_bin_factor(3008, 3008, (0, 0)), 1);
+    }
 
     fn to_ready_frame(frame: &crate::frame::Frame) -> crate::server::state::RenderReadyFrame {
         crate::server::state::RenderReadyFrame {
@@ -315,6 +465,7 @@ mod tests {
             was_stacked: true,
             frame_number: 1,
             settings,
+            stack_depth: 0,
         };
 
         // No extra messages — should return initial
@@ -335,6 +486,7 @@ mod tests {
             was_stacked: false,
             frame_number: 0,
             settings: settings.clone(),
+            stack_depth: 0,
         };
 
         // Queue additional frames
@@ -345,6 +497,7 @@ mod tests {
                 was_stacked: false,
                 frame_number: n + 1,
                 settings: settings.clone(),
+                stack_depth: 0,
             };
             tx.send(msg).unwrap();
         }
@@ -355,6 +508,7 @@ mod tests {
             was_stacked: true,
             frame_number: 4,
             settings: settings.clone(),
+            stack_depth: 0,
         };
         tx.send(last).unwrap();
 
@@ -384,13 +538,14 @@ mod tests {
             was_stacked: false,
             frame_number: 1,
             settings: CaptureSettings::default(),
+            stack_depth: 0,
         })
         .unwrap();
         // Closing the channel lets run_render_task exit after this frame.
         drop(tx);
 
         let rt = tokio::runtime::Handle::current();
-        tokio::task::spawn_blocking(move || super::run_render_task(state, rx, rt))
+        tokio::task::spawn_blocking(move || super::run_render_task(state, rx, no_depth(), rt))
             .await
             .unwrap();
     }
@@ -427,13 +582,14 @@ mod tests {
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
+            stack_depth: 0,
         })
         .unwrap();
         drop(tx);
 
         let rt = tokio::runtime::Handle::current();
         let task_state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, no_depth(), rt))
             .await
             .unwrap();
         drop(extra_handle);
@@ -525,13 +681,14 @@ mod tests {
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
+            stack_depth: 0,
         })
         .unwrap();
         drop(tx);
 
         let rt = tokio::runtime::Handle::current();
         let task_state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, no_depth(), rt))
             .await
             .unwrap();
 
@@ -590,13 +747,14 @@ mod tests {
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
+            stack_depth: 0,
         })
         .unwrap();
         drop(tx);
 
         let rt = tokio::runtime::Handle::current();
         let task_state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, no_depth(), rt))
             .await
             .unwrap();
 
@@ -631,13 +789,14 @@ mod tests {
             was_stacked: false,
             frame_number: 1,
             settings: passthrough_settings(),
+            stack_depth: 0,
         })
         .unwrap();
         drop(tx);
 
         let rt = tokio::runtime::Handle::current();
         let task_state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, rt))
+        tokio::task::spawn_blocking(move || super::run_render_task(task_state, rx, no_depth(), rt))
             .await
             .unwrap();
 

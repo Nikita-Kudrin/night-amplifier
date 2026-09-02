@@ -420,6 +420,38 @@ impl AppState {
         }
     }
 
+    /// Largest bounding box any connected client has asked for, across both streams.
+    ///
+    /// The preview pipeline runs on a frame binned down to this, so it is the resolution
+    /// below which no payload would be able to tell the difference. Taking the maximum
+    /// over *both* stream kinds is the load-bearing part: a lossless client on the 4K
+    /// tier and a JPEG client on the 1080 tier must not have the frame binned for the
+    /// smaller of them.
+    ///
+    /// Falls back to the 4K cap when nobody is watching, which bins nothing. A render
+    /// with no clients is not the case worth optimising, and guessing small here would
+    /// serve the first client to connect a degraded frame.
+    pub fn preview_target_box(&self) -> (u32, u32) {
+        let (cap_w, cap_h) = crate::server::encoding::JPEG_MAX_BOUNDING_BOX;
+        let largest = [StreamKind::Jpeg, StreamKind::Lossless]
+            .into_iter()
+            .filter_map(|kind| {
+                JpegTier::all()
+                    .into_iter()
+                    .rfind(|&tier| self.tier_client_count(kind, tier) > 0)
+            })
+            .map(|tier| tier.bounding_box())
+            .fold(None, |acc: Option<(u32, u32)>, (w, h)| match acc {
+                Some((aw, ah)) => Some((aw.max(w), ah.max(h))),
+                None => Some((w, h)),
+            });
+
+        match largest {
+            Some((w, h)) => (w.min(cap_w), h.min(cap_h)),
+            None => (cap_w, cap_h),
+        }
+    }
+
     /// Look up the pre-encoded JPEG for a tier at the given frame.
     pub fn get_tier_jpeg(&self, tier: JpegTier, counter: u64) -> Option<bytes::Bytes> {
         self.jpeg_tier_cache

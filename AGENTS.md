@@ -87,6 +87,12 @@ through the same median and MAD arithmetic with no gather at all, which is what 
 strided gather was *not* what the stage costs. A benchmark that can only confirm the
 hypothesis you already have is worth less than one that can refute it.
 
+**Benchmark the sum, not only the pieces.** `process_preview_frame` was 190 ms of a
+300 ms `render_iteration` and had no benchmark of its own — every stage inside it was
+covered somewhere, so nothing looked missing, but there was no number a *structural*
+change could be measured against. `preview_pipeline_benchmark` exists for that, and its
+`analysis` case is what decided whether cross-frame caching was worth building.
+
 Keep the binary inside budget with `sample_size(10)`, ~500 ms warm-up, and a 1–2 s
 `measurement_time`. Always set `group.sampling_mode(SamplingMode::Flat)` — criterion's
 default Linear scheme runs 55 iterations per case at `sample_size(10)`, which is enough
@@ -829,6 +835,82 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 
 `RUST_LOG` overrides levels. `tracing` + daily file rotation via `tracing-appender`. Telemetry via `--telemetry` /
 `OTEL_EXPORTER_OTLP_ENDPOINT` when built with `--features telemetry`.
+
+### Three things the render and stacking threads deliberately do not do every frame
+
+All three came out of the same production trace, where both worker threads sat at 97 %
+utilisation and 34.7 % of captured frames were being dropped for want of a stacking
+thread to receive them. A dropped render frame costs preview smoothness; a dropped
+*capture* frame costs signal, and no amount of stretching downstream recovers it. That
+asymmetry is why two of these three live on the stacking side.
+
+- **The display copy, when the render task already has one.**
+  `MasterStack::compute()` copies the running mean out of the accumulator into a fresh
+  frame (434 MB read, 108 MB allocated and written on a 3008x3008 colour stack) and the
+  render task then `drain_to_latest`es about half of them away unread.
+  `channel::RenderQueueDepth` is the channel length `SyncSender` does not expose;
+  `want_display` carries the answer into all three stacking pipelines. **It gates the
+  copy only** — the frame still registers, still joins the accumulator, still moves the
+  frame count, and `skipping_the_display_copy_still_stacks_the_frame` pins that. Getting
+  it wrong would silently discard integration time exactly when the render thread is
+  behind, which is the condition the flag exists to detect.
+
+- **The preview pipeline at sensor resolution.** `render_task::preview_bin_factor` bins
+  the frame to the largest integer factor that still covers every connected client's
+  tier, before Stage 0 rather than after. This is the argument *Spatial denoising* already
+  makes, applied to the four stages above the denoisers. The bound is
+  `encoding::output_dimensions`, not the tier's bounding box — a 3008x3008 frame in the
+  2560x1440 box comes out 1440x1440, and comparing against the box would refuse to bin a
+  square sensor at all. **The win is all-or-nothing at the 2x boundary**: that same
+  sensor bins by 1 for a 2160-tier client and saves nothing, and by 2 for a 1440 or 1080
+  client, which is a quarter of the samples through the whole pipeline. Phones, tablets
+  and the eyepiece view are the second case.
+
+- **The estimates, on every frame of the same stack.** `capture::analysis` holds the
+  white-balance coefficients, the background model and the image statistics across
+  frames. `preview_pipeline_benchmark` puts `process_preview_frame` at 11.3 ms on an
+  IMX464-shaped frame and those three at 6.4 ms of it; a frame that reuses them costs
+  **6.5 ms against 11.3 ms**. Everything that touches pixels still runs every frame —
+  only the measuring is reused.
+
+  The refresh rule is the part worth reading the module for. MAD falls as `1/sqrt(N)`,
+  so what moves the statistics is *proportional* growth in stack depth, not elapsed
+  frames: 1 sub to 2 halves the noise, 140 to 141 does not move it. A frame-count TTL
+  would therefore be far too slow exactly where the stretch changes fastest. Live view
+  (`showing_stack` false) never reuses anything, because every sub is a different image
+  rather than a refinement of the same one.
+
+  Splitting the statistics out of `prepare_auto_stretch_frame` so they could be cached
+  turned `StatsConfig`'s 1000-sample refusal into a propagating `?`, which stopped the
+  preview dead on a small ROI instead of rendering it unstretched. See
+  `a_frame_too_small_for_statistics_still_renders` — an error out of
+  `process_preview_frame` means the render task drops the frame entirely.
+
+### The accumulator layout, and why it has not been changed
+
+`IncrementalPixel` is 16 bytes and there is one per sample, so a 3008x3008 colour stack
+carries a **434 MB** accumulator that `add_frame` reads and writes in full every frame.
+At the 26.7 ms that measured in production that is ~32 GB/s — already this machine's
+memory ceiling, so there is no arithmetic win available on x86, only a traffic one.
+
+Two restructurings would take traffic out, and both are blocked on the same thing:
+
+- **Dropping `m2` when rejection is off** halves the blend to 8 bytes per sample.
+  `m2` is written by `IncrementalPixel::blend` and read by exactly one thing — Pro's
+  `blend_incremental` — so Community, and Pro with `RejectionMethod::None`, carry it for
+  nothing.
+- **Struct-of-arrays** would additionally make `MasterStack::compute()` a memcpy of the
+  mean plane rather than a strided gather across 434 MB, which is a 4x on an 18 ms stage
+  *for both paths*, Pro included.
+
+The blocker is `RejectionPlugin::blend_incremental`, which hands the plugin
+`&mut [IncrementalPixel]` — a cross-crate public signature, so either change breaks Pro
+and needs the two repositories moved together. `update_config` also permits switching
+rejection method mid-stack, which a two-layout accumulator has to answer for (converting
+mean-only to Welford has no `m2` to restore).
+
+`blend_pixels` now covers both arms, so the next trace says how much of a real session
+this is under each rejection method. Do that before paying for the API break.
 
 ### Pipeline performance instrumentation
 
