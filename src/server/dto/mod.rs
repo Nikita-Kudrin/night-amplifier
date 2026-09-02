@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{
     CameraCaptureProfile, CaptureSession, CaptureSettings, DenoiseSettings, EyepieceSettings,
-    SensorCorrectionSettings, TelescopeSettings,
+    PreviewResolution, SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
@@ -238,6 +238,8 @@ pub struct SettingsResponse {
     pub sensor_correction: SensorCorrectionSettings,
     #[serde(default)]
     pub denoise: DenoiseSettings,
+    #[serde(default)]
+    pub preview_resolution: PreviewResolution,
     pub eyepiece: EyepieceSettings,
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -307,6 +309,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             auto_resume_capture: settings.auto_resume_capture,
             sensor_correction: settings.sensor_correction.clone(),
             denoise: settings.denoise.clone(),
+            preview_resolution: settings.preview_resolution,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
@@ -455,6 +458,9 @@ pub struct UpdateSettingsRequest {
 
     #[serde(default)]
     pub denoise: Option<DenoiseSettings>,
+
+    #[serde(default)]
+    pub preview_resolution: Option<PreviewResolution>,
 
     #[serde(default)]
     pub eyepiece: Option<EyepieceSettings>,

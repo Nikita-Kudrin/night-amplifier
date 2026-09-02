@@ -2,11 +2,11 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::server::state::{AppState, JpegTier};
+use crate::server::state::{AppState, JpegTier, PreviewResolution};
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::channel::{RenderQueueDepth, StackedFrame};
+use super::channel::{QueueDepth, StackedFrame};
 use super::pipeline;
 
 /// Preview rendering and encoding, running on a dedicated OS thread.
@@ -24,7 +24,7 @@ use super::pipeline;
 pub fn run_render_task(
     state: Arc<AppState>,
     render_rx: mpsc::Receiver<StackedFrame>,
-    render_depth: RenderQueueDepth,
+    render_depth: QueueDepth,
     rt: tokio::runtime::Handle,
 ) {
     debug!("Render task started");
@@ -43,6 +43,10 @@ pub fn run_render_task(
     // stack, not the frame, so a frame of the same stack can be served the previous
     // frame's measurements. `analysis` decides that per frame; see `capture::analysis`.
     let mut analysis = PreviewAnalysis::new();
+
+    // Same lifetime, and for a stronger reason: the factor decides what the tone-curve
+    // solve measures, so it must not move under a viewer. See `SessionBinFactor`.
+    let mut session_bin = SessionBinFactor::default();
 
     while let Ok(msg) = render_rx.recv() {
         // Drain to the latest frame — skip intermediate stacked states
@@ -86,13 +90,13 @@ pub fn run_render_task(
             debug!("Preview frame still shared, copying before render");
         }
 
-        // Bin to what the clients actually asked for before the pipeline touches the
-        // frame, rather than after. See `preview_bin_factor` for why this is an integer
-        // and what it costs when it comes out 1.
-        let bin = preview_bin_factor(
+        // Bin before the pipeline touches the frame, rather than after. See
+        // `preview_bin_factor` for why this is an integer and what it costs when it
+        // comes out 1, and `SessionBinFactor` for why it is not re-derived per frame.
+        let bin = session_bin.resolve(
             display_frame.width(),
             display_frame.height(),
-            state.preview_target_box(),
+            settings.preview_resolution,
         );
         if bin > 1 {
             let _span = tracing::info_span!("preview_bin", factor = bin).entered();
@@ -189,7 +193,70 @@ pub fn run_render_task(
     debug!("Render task ended");
 }
 
-/// Largest integer bin that still leaves every connected client the pixels it asked for.
+/// The preview bin factor for one capture session, resolved once and held.
+///
+/// # Why this is not recomputed per frame
+///
+/// It used to be: `preview_bin_factor` was called every iteration against the largest
+/// bounding box any *connected client* had asked for, so the factor flipped between 1
+/// and 2 whenever the client set crossed a 2x boundary — a phone opening the page, a tab
+/// closing. Binning is not neutral to the analysis that follows it: the tone curve is
+/// solved from the frame's median and MAD, and a 2x2 box average cuts MAD by about half,
+/// which moves the black point and the whole curve with it. Measured on a 1200x1200 sky
+/// with 400 stars, the solved `scale_lut` gained 25.7 % at the 1 % input point and 16.1 %
+/// at 10 %. Every connected viewer saw that jump, not just the client that arrived.
+///
+/// So the factor is a property of the session: it comes from the sensor shape and
+/// [`PreviewResolution`], both of which the observer controls, and it is held until one
+/// of them actually changes.
+///
+/// # Why the shape is still part of the key
+///
+/// Hardware binning, an ROI change or a mono/colour swap all reshape the frame mid
+/// session, and a factor solved for the old shape would be meaningless against the new
+/// one. Those are deliberate acts by the observer, not other people's browser tabs, and
+/// they already reset the stack — so re-solving there is the same class of event as
+/// starting a session. It is logged for that reason.
+#[derive(Default)]
+struct SessionBinFactor {
+    resolved: Option<((usize, usize), PreviewResolution)>,
+    factor: usize,
+}
+
+impl SessionBinFactor {
+    fn resolve(
+        &mut self,
+        width: usize,
+        height: usize,
+        resolution: PreviewResolution,
+    ) -> usize {
+        let key = ((width, height), resolution);
+        if self.resolved == Some(key) {
+            return self.factor;
+        }
+
+        let factor = match resolution.target_box() {
+            Some(target) => preview_bin_factor(width, height, target),
+            None => 1,
+        };
+        // `info`, not `debug`: this fires once per session and on the two changes the
+        // observer makes deliberately, and it re-grades the picture when it moves.
+        tracing::info!(
+            width,
+            height,
+            ?resolution,
+            factor,
+            previous = ?self.resolved,
+            "Preview bin factor resolved"
+        );
+        self.resolved = Some(key);
+        self.factor = factor;
+        factor
+    }
+}
+
+/// Largest integer bin that still leaves the preview the pixels [`PreviewResolution`]
+/// asks for.
 ///
 /// # Why the preview pipeline should not run at sensor resolution
 ///
@@ -207,6 +274,11 @@ pub fn run_render_task(
 /// to land the final size. So this is deliberately conservative: it never produces a
 /// frame smaller than the largest box a client asked for, and returns 1 whenever
 /// halving would go under it.
+///
+/// `target` comes from [`PreviewResolution::target_box`], never from the connected
+/// clients — see [`SessionBinFactor`]. [`PreviewResolution::Native`] has no box at all
+/// and never reaches here, which is what makes "no downsampling" the default rather than
+/// a property the client-set arithmetic has to be careful not to break.
 ///
 /// The consequence is that the win is **all or nothing at the 2x boundary**. A
 /// 3008x3008 sensor with a client on the 2160 tier bins by 1 and saves nothing; the same
@@ -387,13 +459,178 @@ fn drain_to_latest(
 
 #[cfg(test)]
 mod tests {
-    use crate::server::capture::channel::RenderQueueDepth;
+    use super::{SessionBinFactor};
+    use crate::server::capture::channel::QueueDepth;
+    use crate::server::state::PreviewResolution;
 
     /// The tests here drive the render task directly rather than through the capture
     /// pipeline, so nothing on the other end of the depth counter is running. A fresh
     /// counter per call is the honest stand-in: it starts at zero and nothing reads it.
-    fn no_depth() -> RenderQueueDepth {
-        RenderQueueDepth::default()
+    fn no_depth() -> QueueDepth {
+        QueueDepth::default()
+    }
+
+    /// The default must bin nothing, whatever the sensor and whoever is connected.
+    ///
+    /// [`JpegTier::Original`] is documented as "native sensor resolution, no
+    /// downsampling", and the frame this produces is also what `set_latest_raw_frame`
+    /// stores — `ws::payload_for_new_client` encodes the first payload of every arriving
+    /// client straight out of it, and `encode_rgb8_jpeg_bounded` does not upscale.
+    ///
+    /// The predecessor chose the factor from the connected client set against a box
+    /// clamped to `JPEG_MAX_BOUNDING_BOX`, which downsampled both cases: an ASI294MM Pro
+    /// unbinned is 8288x5644, fits the 4K box at 3172x2160, and so had room for a
+    /// halving; an IMX411-class sensor lost a factor of four.
+    #[test]
+    fn the_default_preview_resolution_bins_nothing() {
+        let mut session = SessionBinFactor::default();
+        for (w, h) in [(8288, 5644), (14192, 10640), (3008, 3008), (2712, 1538)] {
+            assert_eq!(
+                session.resolve(w, h, PreviewResolution::default()),
+                1,
+                "{w}x{h} was binned at the default preview resolution"
+            );
+        }
+    }
+
+    /// The factor is a property of the session, not of who is watching.
+    ///
+    /// This is the whole point of `SessionBinFactor`: the tone curve is solved from the
+    /// binned frame, so a factor that tracked the connected client set would re-solve
+    /// the curve for *every* viewer whenever one of them opened or closed a tab.
+    #[test]
+    fn the_bin_factor_does_not_move_while_the_session_runs() {
+        use crate::server::state::{AppState, JpegTier, StreamKind, TierClientGuard};
+        use std::sync::Arc;
+
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+
+        let mut session = SessionBinFactor::default();
+        let first = session.resolve(3008, 3008, PreviewResolution::Qhd1440);
+        assert_eq!(first, 2, "a 3008x3008 sensor halves into the 1440 box");
+
+        // A phone arrives, then a 4K browser, then both leave.
+        {
+            let _phone = TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Hd1080);
+            assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
+            let _desktop =
+                TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Original);
+            assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
+        }
+        assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
+    }
+
+    /// The two things the observer *does* control still re-solve it.
+    #[test]
+    fn a_shape_or_setting_change_re_resolves_the_bin_factor() {
+        let mut session = SessionBinFactor::default();
+        assert_eq!(session.resolve(3008, 3008, PreviewResolution::Native), 1);
+        assert_eq!(
+            session.resolve(3008, 3008, PreviewResolution::Hd1080),
+            2,
+            "the observer asked for a cheaper preview"
+        );
+        assert_eq!(
+            session.resolve(1504, 1504, PreviewResolution::Hd1080),
+            1,
+            "hardware binning already halved the frame; binning again would go under 1080"
+        );
+    }
+
+    /// How far binning moves the tone curve, as a number rather than an assumption.
+    ///
+    /// Binning is not neutral to the analysis that follows it. The stretch is solved from
+    /// the frame's median and MAD, and a 2x2 box average cuts MAD by roughly half, so the
+    /// black point and the whole curve land somewhere else. This is why
+    /// [`SessionBinFactor`] holds the factor for the session instead of tracking the
+    /// connected client set: at the measured size, a phone opening a tab would have
+    /// re-graded the picture for everyone watching.
+    ///
+    /// The bound is deliberately loose — it exists to keep the number in the repository
+    /// and to catch the shift *growing*, not to claim it is small. A change that makes
+    /// the solve less sensitive to resolution should tighten it.
+    #[test]
+    fn binning_moves_the_tone_curve_by_a_bounded_amount() {
+        use crate::frame::Frame;
+        use crate::server::capture::pipeline::process_preview_frame;
+        use crate::server::state::CaptureSettings;
+
+        // A light-pollution gradient with read noise — the shape the solver is for.
+        let (w, h) = (1200usize, 1200usize);
+        let mut seed = 0x51A2_B3C4u32;
+        let mut rand = move || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 16_777_216.0
+        };
+        let mut frame = Frame::zeros(w, h, 3).unwrap();
+        for y in 0..h {
+            for x in 0..w {
+                let grad = 0.02 + 0.06 * (x as f32 / w as f32) + 0.03 * (y as f32 / h as f32);
+                for c in 0..3 {
+                    frame.set_pixel(x, y, c, grad + (rand() - 0.5) * 0.02);
+                }
+            }
+        }
+        // Stars, so the solve has real structure above the sky rather than only noise.
+        for _ in 0..400 {
+            let cx = (rand() * (w - 16) as f32) as usize + 8;
+            let cy = (rand() * (h - 16) as f32) as usize + 8;
+            let peak = 0.2 + rand() * 0.7;
+            for dy in 0..7usize {
+                for dx in 0..7usize {
+                    let (x, y) = (cx + dx - 3, cy + dy - 3);
+                    let d2 = (dx as f32 - 3.0).powi(2) + (dy as f32 - 3.0).powi(2);
+                    let v = peak * (-d2 / 2.6).exp();
+                    for c in 0..3 {
+                        let cur = frame.get_pixel(x, y, c);
+                        frame.set_pixel(x, y, c, (cur + v).min(1.0));
+                    }
+                }
+            }
+        }
+
+        let settings = CaptureSettings::default();
+        let mut full = frame.clone();
+        let mut binned = frame.downsample(2).unwrap();
+
+        let (_, full_stretch) = process_preview_frame(&mut full, &settings).unwrap();
+        let (_, binned_stretch) = process_preview_frame(&mut binned, &settings).unwrap();
+
+        let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
+        let binned_lut = binned_stretch.expect("binned stretch").scale_lut;
+        assert_eq!(full_lut.len(), binned_lut.len());
+
+        let worst = full_lut
+            .iter()
+            .zip(binned_lut.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+
+        // Measured on this fixture: gain 2.7351 -> 3.4380 at the 1 % input point
+        // (+25.7 %) and 5.0621 -> 5.8775 at 10 % (+16.1 %), with the curve unchanged by
+        // mid-tones. Shadows are exactly where an EAA viewer is looking.
+        let sample = |lut: &[f32], t: f32| lut[((lut.len() - 1) as f32 * t) as usize];
+        eprintln!(
+            "curve at 1%/10%/50%: full {:.4}/{:.4}/{:.4}  binned {:.4}/{:.4}/{:.4}  worst {worst:.4}",
+            sample(&full_lut, 0.01),
+            sample(&full_lut, 0.10),
+            sample(&full_lut, 0.50),
+            sample(&binned_lut, 0.01),
+            sample(&binned_lut, 0.10),
+            sample(&binned_lut, 0.50),
+        );
+
+        assert!(
+            worst > 0.1,
+            "binning no longer moves the tone curve ({worst:.4}) — if the solve has been \
+             made resolution-independent, tighten this bound rather than deleting it"
+        );
+        assert!(
+            worst < 1.5,
+            "binning moved the tone curve by {worst:.4}, up from the 1.0640 measured when \
+             SessionBinFactor was introduced"
+        );
     }
 
     /// Binning must never take the frame below what a client asked for — that is the

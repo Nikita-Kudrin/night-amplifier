@@ -157,6 +157,15 @@ export const BACKGROUND_ALGORITHM_OPTIONS = [
     {value: 'rbf', label: 'RBF (Quality)', pro: true},
 ]
 
+// How much sensor resolution the preview pipeline may bin away before it runs.
+// Fixed for the whole capture session — see the Rust `PreviewResolution`.
+export const PREVIEW_RESOLUTION_OPTIONS = [
+    {value: 'native', label: 'Native'},
+    {value: 'uhd2160', label: '4K'},
+    {value: 'qhd1440', label: '1440p'},
+    {value: 'hd1080', label: '1080p'},
+]
+
 // Telescope setup limits
 export const TELESCOPE_LIMITS = {
     focal_length_min: 50,
@@ -251,6 +260,7 @@ export const DEFAULT_SETTINGS = {
         luma_strength: 1.0,
         star_protection: 1.0,
     },
+    preview_resolution: 'native',
     eyepiece: {
         binoview: true,
         screen_width: 140.0,
@@ -333,6 +343,8 @@ export const HELP_TEXTS = {
         'Flattens the small brightness offset every sensor row and column reads out with. Like hot pixels it does not average away with more frames, and on a drifting mount it shows up as soft banding. Not applied to planetary targets, where a bright disc fills enough of each line to move its level.',
     superpixel_debayer:
         'Turns each 2x2 sensor square into one colour pixel instead of interpolating. Halves the width and height, invents no colour noise, and keeps any surviving hot pixel to a single dot. Free on a large sensor that already oversamples your screen; a real loss of detail on a smaller one.',
+    preview_resolution:
+        'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
     denoise_chroma:
         'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
     denoise_chroma_strength:

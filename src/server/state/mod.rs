@@ -28,7 +28,7 @@ pub use session::{
     REJECTION_RATE_WINDOW,
 };
 pub use settings::{
-    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
+    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
     SensorCorrectionSettings, TelescopeSettings,
 };
 pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
@@ -67,6 +67,13 @@ pub struct AppState {
     pub active_camera_cancel_token: RwLock<Option<Arc<AtomicBool>>>,
     /// Counter for frames dropped due to pipeline back-pressure
     pub dropped_frames: AtomicU64,
+    /// Frames the camera actually handed the pipeline this session.
+    ///
+    /// The denominator [`Self::dropped_frames`] needs. A drop *count* grows all night
+    /// and says nothing on its own — 40 drops is a bad evening at 30 s subs and a
+    /// rounding error at 100 ms. The rate is what tells an observer they are integrating
+    /// at 65 % of the cadence their settings imply.
+    pub delivered_frames: AtomicU64,
     /// Latest reported camera status keyed by camera name (for cooled cameras)
     pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
     /// Long-lived camera handle. `Some` while connected and not capturing.
@@ -200,6 +207,7 @@ impl AppState {
             settings_persistence,
             active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
+            delivered_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
             active_camera: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
@@ -420,38 +428,6 @@ impl AppState {
         }
     }
 
-    /// Largest bounding box any connected client has asked for, across both streams.
-    ///
-    /// The preview pipeline runs on a frame binned down to this, so it is the resolution
-    /// below which no payload would be able to tell the difference. Taking the maximum
-    /// over *both* stream kinds is the load-bearing part: a lossless client on the 4K
-    /// tier and a JPEG client on the 1080 tier must not have the frame binned for the
-    /// smaller of them.
-    ///
-    /// Falls back to the 4K cap when nobody is watching, which bins nothing. A render
-    /// with no clients is not the case worth optimising, and guessing small here would
-    /// serve the first client to connect a degraded frame.
-    pub fn preview_target_box(&self) -> (u32, u32) {
-        let (cap_w, cap_h) = crate::server::encoding::JPEG_MAX_BOUNDING_BOX;
-        let largest = [StreamKind::Jpeg, StreamKind::Lossless]
-            .into_iter()
-            .filter_map(|kind| {
-                JpegTier::all()
-                    .into_iter()
-                    .rfind(|&tier| self.tier_client_count(kind, tier) > 0)
-            })
-            .map(|tier| tier.bounding_box())
-            .fold(None, |acc: Option<(u32, u32)>, (w, h)| match acc {
-                Some((aw, ah)) => Some((aw.max(w), ah.max(h))),
-                None => Some((w, h)),
-            });
-
-        match largest {
-            Some((w, h)) => (w.min(cap_w), h.min(cap_h)),
-            None => (cap_w, cap_h),
-        }
-    }
-
     /// Look up the pre-encoded JPEG for a tier at the given frame.
     pub fn get_tier_jpeg(&self, tier: JpegTier, counter: u64) -> Option<bytes::Bytes> {
         self.jpeg_tier_cache
@@ -549,6 +525,7 @@ impl AppState {
         );
         drop(session);
         self.dropped_frames.store(0, Ordering::SeqCst);
+        self.delivered_frames.store(0, Ordering::SeqCst);
     }
 
     /// Reset frame counters without resetting session start time
@@ -560,6 +537,7 @@ impl AppState {
         session.rejection_timestamps.clear();
         drop(session);
         self.dropped_frames.store(0, Ordering::SeqCst);
+        self.delivered_frames.store(0, Ordering::SeqCst);
     }
 
     /// Set active camera cancel token
@@ -658,11 +636,23 @@ impl AppState {
         }
     }
 
+    /// Record a frame the camera handed the pipeline, dropped or not.
+    ///
+    /// Counted at the point of hand-off rather than in the stacking task, because a
+    /// frame that never reached a channel is exactly the one the rate has to account
+    /// for.
+    pub fn frame_delivered(&self) -> u64 {
+        self.delivered_frames.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
         telemetry_metrics::record_frame_dropped();
         let count = self.dropped_frames.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.events.send(ServerEvent::frame_dropped(count));
+        let _ = self.events.send(ServerEvent::frame_dropped(
+            count,
+            self.delivered_frames.load(Ordering::SeqCst),
+        ));
         count
     }
 
@@ -670,11 +660,53 @@ impl AppState {
     pub fn dropped_count(&self) -> u64 {
         self.dropped_frames.load(Ordering::SeqCst)
     }
+
+    /// Share of delivered frames the pipeline could not take, `0.0..=1.0`.
+    ///
+    /// `0.0` before any frame has been delivered rather than a division by zero: no
+    /// frames means no evidence, not a perfect session.
+    pub fn drop_rate(&self) -> f64 {
+        let delivered = self.delivered_frames.load(Ordering::SeqCst);
+        if delivered == 0 {
+            return 0.0;
+        }
+        self.dropped_frames.load(Ordering::SeqCst) as f64 / delivered as f64
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The count alone is not the number an observer needs.
+    ///
+    /// 40 drops is a ruined evening at 30 s subs and a rounding error at 100 ms, so the
+    /// rate is what says "you are integrating at 65 % of the cadence you set".
+    #[test]
+    fn the_drop_rate_is_a_share_of_what_the_camera_delivered() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+
+        assert_eq!(state.drop_rate(), 0.0, "no frames is no evidence");
+
+        for _ in 0..100 {
+            state.frame_delivered();
+        }
+        assert_eq!(state.drop_rate(), 0.0);
+
+        for _ in 0..35 {
+            state.frame_dropped();
+        }
+        assert!(
+            (state.drop_rate() - 0.35).abs() < 1e-9,
+            "35 of 100 delivered frames is {}",
+            state.drop_rate()
+        );
+
+        // A drop with no delivery behind it must not divide by zero or exceed 1.
+        let (fresh, _fresh_writer) = AppState::new_for_testing();
+        fresh.frame_dropped();
+        assert_eq!(fresh.drop_rate(), 0.0);
+    }
 
     #[test]
     fn test_capture_state_default() {

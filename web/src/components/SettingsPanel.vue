@@ -91,6 +91,8 @@ watch(
           denoise: newSettings.denoise
               ? {...newSettings.denoise}
               : {...DEFAULT_SETTINGS.denoise},
+          preview_resolution:
+              newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
         }
       }
     },
@@ -143,6 +145,7 @@ const HELP = HELP_TEXTS
     <ImageQualitySettings
         :sensor-correction="localSettings.sensor_correction"
         :denoise="localSettings.denoise"
+        :preview-resolution="localSettings.preview_resolution"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
         @apply="applyGroup"

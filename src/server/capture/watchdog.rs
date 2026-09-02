@@ -241,6 +241,7 @@ pub(crate) fn capture_frame_bounded(
                 exposure_us = config.exposure_us,
                 gain = config.gain,
                 bin = config.bin,
+                call_us = tracing::field::Empty,
                 overhead_us = tracing::field::Empty,
             );
             let _entered = span.enter();
@@ -248,11 +249,10 @@ pub(crate) fn capture_frame_bounded(
             let started = std::time::Instant::now();
             let result = camera.capture(&config);
 
-            // Everything the frame cost that the exposure does not explain: readout,
-            // the USB transfer, the buffer copy, and — in video mode — however much of
-            // the stream's frame period we arrived in the middle of.
+            // How long the vendor call actually blocked, and how that compares to the
+            // exposure it was asked for.
             //
-            // This is a field rather than a child span because there is no seam to put
+            // These are fields rather than a child span because there is no seam to put
             // one in. `Camera::capture` is a single blocking vendor call, and on the
             // continuous path it is `get_video_data` handing back an already-completed
             // frame: the exposure and the transfer are not separable events from out
@@ -260,17 +260,25 @@ pub(crate) fn capture_frame_bounded(
             // expose a boundary that, in the mode live stacking actually uses, does not
             // exist.
             //
-            // What the number is for: `camera_capture` reported 131 ms against a 100 ms
-            // exposure in production traces, and nothing said whether the extra 31 ms was
-            // a slow link or a long exposure. On a Pi 5, where USB3 is shared and this is
-            // the first thing to degrade, that is the difference between the setting and
-            // the hardware.
+            // What the numbers are for: `camera_capture` reported 131 ms against a
+            // 100 ms exposure in production traces, and nothing said whether the extra
+            // 31 ms was a slow link or a long exposure. On a Pi 5, where USB3 is shared
+            // and this is the first thing to degrade, that is the difference between the
+            // setting and the hardware.
+            //
+            // `overhead_us` is **signed**, and has to be. It was a saturating unsigned
+            // subtraction, which reported `0` on exactly the path the field was added
+            // for: in continuous mode `get_video_data` returns an already-completed
+            // frame in less than one exposure, so every sample saturated and the field
+            // answered nothing. Negative now means the frame was already waiting when we
+            // asked, and the magnitude is how far into the stream's frame period we
+            // arrived. `call_us` carries the raw measurement so a reader can do the
+            // arithmetic any other way they need to.
+            let call_us = started.elapsed().as_micros().min(i64::MAX as u128) as i64;
+            span.record("call_us", call_us);
             span.record(
                 "overhead_us",
-                started
-                    .elapsed()
-                    .as_micros()
-                    .saturating_sub(config.exposure_us as u128) as u64,
+                call_us.saturating_sub(config.exposure_us as i64),
             );
             let _ = tx.send((camera, result));
         })

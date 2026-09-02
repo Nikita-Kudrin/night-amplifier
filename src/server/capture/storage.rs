@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLockReadGuard;
 use tracing::{debug, warn};
 
-use super::channel::CapturedFrame;
+use super::channel::{CapturedFrame, QueueDepth};
 use crate::camera::RawFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
@@ -21,6 +21,7 @@ use crate::stacking::StackingType;
 pub fn run_storage_task(
     state: Arc<AppState>,
     storage_rx: mpsc::Receiver<CapturedFrame>,
+    storage_depth: QueueDepth,
     rt: tokio::runtime::Handle,
 ) {
     debug!("Storage task started");
@@ -29,6 +30,8 @@ pub fn run_storage_task(
     let mut last_warning_time = std::time::Instant::now();
 
     while let Ok(msg) = storage_rx.recv() {
+        storage_depth.taken();
+
         let CapturedFrame {
             frame,
             frame_number,

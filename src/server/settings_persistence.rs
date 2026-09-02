@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use super::state::{
-    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, SensorCorrectionSettings,
-    TelescopeSettings,
+    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
+    SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
@@ -92,6 +92,8 @@ pub struct PersistedSettings {
     pub sensor_correction: SensorCorrectionSettings,
     #[serde(default)]
     pub denoise: DenoiseSettings,
+    #[serde(default)]
+    pub preview_resolution: PreviewResolution,
     #[serde(default)]
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -215,6 +217,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             eyepiece: settings.eyepiece.clone(),
             sensor_correction: settings.sensor_correction.clone(),
             denoise: settings.denoise.clone(),
+            preview_resolution: settings.preview_resolution,
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
@@ -267,6 +270,7 @@ impl From<PersistedSettings> for CaptureSettings {
             eyepiece: persisted.eyepiece,
             sensor_correction: persisted.sensor_correction,
             denoise: persisted.denoise,
+            preview_resolution: persisted.preview_resolution,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
             camera_profiles: persisted.camera_profiles,

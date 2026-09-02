@@ -395,6 +395,36 @@ pub fn record_frame_published() {
 #[cfg(not(feature = "telemetry"))]
 pub fn record_frame_published() {}
 
+/// Record how full one of the three pipeline channels is.
+///
+/// `SyncSender` exposes no length, so this is the only signal that separates "the stage
+/// behind this channel is slower than capture" — a depth that sits at the ceiling — from
+/// "it stalled once" — a depth that spikes and drains. The capacity travels alongside
+/// because it is derived per session from the frame size and the exposure, so a raw
+/// depth means nothing without it.
+#[cfg(feature = "telemetry")]
+pub fn record_pipeline_queue_depth(channel: &'static str, depth: u64, capacity: u64) {
+    if let Some(provider) = super::METER_PROVIDER.get() {
+        let meter = provider.meter("night_amplifier.pipeline");
+        let attrs = [opentelemetry::KeyValue::new("channel", channel)];
+        meter
+            .u64_gauge("pipeline.queue_depth")
+            .with_description("Frames queued in a pipeline channel and not yet taken")
+            .with_unit("{frames}")
+            .build()
+            .record(depth, &attrs);
+        meter
+            .u64_gauge("pipeline.queue_capacity")
+            .with_description("Slots in a pipeline channel")
+            .with_unit("{frames}")
+            .build()
+            .record(capacity, &attrs);
+    }
+}
+
+#[cfg(not(feature = "telemetry"))]
+pub fn record_pipeline_queue_depth(_channel: &'static str, _depth: u64, _capacity: u64) {}
+
 /// Count a frame dropped by pipeline back-pressure.
 #[cfg(feature = "telemetry")]
 pub fn record_frame_dropped() {

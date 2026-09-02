@@ -510,9 +510,21 @@ these favor the stacking side for that reason.
 - **Display copy skipped when unneeded.** `MasterStack::compute()`'s copy (434MB read/108MB
   written) is gated by `want_display`; the frame still stacks regardless.
 - **Queue budget sized from the board**: `min(MemTotal/5, 1GiB)`, floored at 64MiB. Each
-  channel is sized from its own payload (raw vs. debayered), not one shared figure.
-- **Preview runs binned**, not sensor-native — largest integer factor covering every
-  connected tier. All-or-nothing at the 2x boundary.
+  channel is sized from its own payload (raw vs. debayered), not one shared figure. The
+  capture→stacking channel is additionally **bounded by latency** (2s of exposures): a
+  deeper queue does not raise throughput, it delays the drop and pays in preview lag —
+  memory alone put 19 frames / 2.9s in front of the stacking thread. The storage channel
+  keeps its memory depth; backlog there is not lag. All three report
+  `pipeline.queue_depth`/`_capacity` under `--features telemetry`, which is what separates
+  "the stage is slow" from "it stalled once".
+- **Preview may run binned**, by the largest integer factor `PreviewResolution` allows.
+  All-or-nothing at the 2x boundary, and **fixed for the capture session** — resolved from
+  the sensor shape plus that setting, never from the connected client set. Binning is not
+  neutral to what follows it: the tone curve is solved from median and MAD, and 2x2 binning
+  moved the solved `scale_lut` by +25.7% at the 1% input point, so a client-driven factor
+  re-graded the picture for every viewer whenever somebody opened a tab. Default is
+  `Native` (no binning), which is also what makes `JpegTier::Original`'s "no downsampling"
+  structurally true.
 - **Per-stack estimates (white balance, background, stats) are reused across frames**,
   refreshed by *proportional* stack-depth growth (MAD ~ 1/√N), not frame count. Live view
   never reuses — every sub there is a different image.
@@ -543,11 +555,17 @@ residue (duration minus children) was the largest thing in a production trace:
 | `resample`/`row_tail` | `frame_to_rgb8` | input-scaled gather vs. output-scaled tail |
 | `publish_state` | render/stacking iteration | async-lock overhead off-tokio |
 
-`camera_capture` has an `overhead_us` field instead (one opaque vendor call).
+`camera_capture` has `call_us` + a **signed** `overhead_us` instead (one opaque vendor
+call, no seam for a child span). Signed because the saturating unsigned version read `0`
+on the continuous path it was added for — `get_video_data` returns an already-completed
+frame in under one exposure. Negative now means the frame was already waiting.
 `process_preview_frame`'s render tail is fused, so it carries no per-sub-stage span.
 
 `--features telemetry` adds histograms `frame.{capture,debayer,stack,render,encode_jpeg}_ms`
-and counters `frame.published/dropped/render_skipped`.
+and counters `frame.published/dropped/render_skipped`, plus per-channel
+`pipeline.queue_depth`/`queue_capacity` gauges. The **drop rate**, not the count, is what
+the UI shows: `AppState::drop_rate()` divides by `delivered_frames`, because 40 drops is a
+ruined evening at 30s subs and a rounding error at 100ms.
 
 Rules: stage granularity only; cache instruments in a `OnceLock`, never rebuild per frame.
 

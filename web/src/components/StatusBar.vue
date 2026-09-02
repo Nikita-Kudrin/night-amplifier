@@ -48,6 +48,15 @@ const connectionStatus = computed(() => {
 
 const rejectedCount = computed(() => eventStream.rejectedCount.value)
 
+// "Dropped: 40" on its own says nothing — it is a ruined evening at 30 s subs and a
+// rounding error at 100 ms. The share of delivered frames is the number that tells the
+// observer they are integrating at a fraction of the cadence they set.
+const dropRate = computed(() => {
+  const delivered = eventStream.deliveredCount?.value ?? 0
+  if (!delivered) return null
+  return eventStream.droppedCount.value / delivered
+})
+
 // "Rejected 9" on its own leaves the user with no idea whether to refocus,
 // wait out a cloud, or check the mount. The server already decides why.
 const framesTooltip = computed(() => {
@@ -293,7 +302,10 @@ const framesTooltip = computed(() => {
       >
         <path d="M12 2v6l-2 2M12 22v-6l2-2M2 12h6l2 2M22 12h-6l-2-2"/>
       </svg>
-      <span>Dropped: {{ eventStream.droppedCount.value }}</span>
+      <span>
+        Dropped: {{ eventStream.droppedCount.value }}<template v-if="dropRate !== null">
+          ({{ (dropRate * 100).toFixed(0) }}%)</template>
+      </span>
     </div>
 
     <!-- Capture state -->
