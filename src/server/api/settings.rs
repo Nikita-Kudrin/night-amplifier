@@ -8,7 +8,6 @@ use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
 use super::super::state::{AppState, CaptureSettings, CaptureState, StackingType};
-use crate::disk_writer::WritingSessionType;
 
 /// Returns the profile key (`"{provider}/{model}"`) for the currently
 /// connected camera, if any. `None` when no camera is attached — callers
@@ -110,6 +109,12 @@ pub async fn update_settings(
     // reversed order here could deadlock under contention.
     let active_key = active_camera_profile_key(&state).await;
 
+    // Same reason as `active_key`: `sync_disk_session` needs this but must not read the
+    // session lock while `settings.write()` is held — `frame_processed` takes those two
+    // in the opposite order.
+    let capture_active = state.capture_state().await == CaptureState::Capturing;
+
+    let applied_settings;
     {
         let mut settings = state.settings.write().await;
 
@@ -144,8 +149,8 @@ pub async fn update_settings(
         if let Some(algorithm) = request.background_extraction_algorithm {
             settings.background_extraction_algorithm = algorithm;
         }
-        if let Some(save_raw_frames) = request.save_raw_frames {
-            settings.save_raw_frames = save_raw_frames;
+        if let Some(raw_frame_saving) = request.raw_frame_saving {
+            settings.raw_frame_saving = raw_frame_saving;
         }
         if let Some(save_stacked_image) = request.save_stacked_image {
             settings.save_stacked_image = save_stacked_image;
@@ -291,30 +296,10 @@ pub async fn update_settings(
             settings.camera_profiles.insert(key, snapshot);
         }
 
-        // Enable disk writer only in stacking mode (not live view or wanderer)
-        // This must be done after all mode settings are updated
-        let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
-        let disk_enabled =
-            is_stacking_mode && (settings.save_raw_frames || settings.save_stacked_image);
-        state.disk_writer.set_enabled(disk_enabled);
-
-        // Turning saving on partway through a capture leaves the writer enabled
-        // with no session directory — `initialize_capture_session` only runs at
-        // capture start. Every frame after that was then lost to "No active
-        // session"; observed in the field for frames 514 and 515.
-        if disk_enabled {
-            let session_type = match settings.stacking_type {
-                StackingType::Planetary => WritingSessionType::VideoContainer,
-                _ => WritingSessionType::IndividualFrames,
-            };
-            if let Err(e) = state.disk_writer.ensure_session(session_type) {
-                tracing::warn!(error = %e, "Could not open a capture directory for saving");
-                state.send_error(format!(
-                    "Saving is on but no folder could be created: {}",
-                    e
-                ));
-            }
-        }
+        // Snapshot for `sync_disk_session`, which runs once the write guard is gone.
+        // Taken here rather than at the top of the block because which modes save is
+        // part of the decision, so every mode field has to be applied first.
+        applied_settings = settings.clone();
 
         // If exposure-impacting settings changed while capturing, cancel current exposure
         // so changes take effect immediately.
@@ -331,6 +316,12 @@ pub async fn update_settings(
             }
         }
     }
+
+    // Match the disk writer to the settings just applied. Deliberately outside the
+    // block above: this takes `session_resume_plan`, and holding `settings.write()`
+    // across another lock is an ordering constraint worth not having.
+    crate::server::capture::storage::sync_disk_session(&state, &applied_settings, capture_active)
+        .await;
 
     let _ = state.events.send(ServerEvent::SettingsUpdated);
 

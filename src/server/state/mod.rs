@@ -16,12 +16,14 @@ use crate::camera::{Camera, CameraStatus};
 use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use crate::telemetry::metrics as telemetry_metrics;
 
+mod capture_mode;
 mod jpeg_tiers;
 mod session;
 mod settings;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
+pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use jpeg_tiers::{JpegTier, JpegTierCache, StreamKind, TierClientGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
@@ -235,10 +237,26 @@ impl AppState {
     }
 
     /// Create new application state for testing
+    ///
+    /// Captures go to a directory of their own under the system temp dir, not to the
+    /// `./captures` the default config points at — tests that open a capture session
+    /// really do create the folder, and against the default they accumulated hundreds of
+    /// dated directories in whatever tree the suite was run from. Cleanup is left to the
+    /// OS: the paths outlive the call, and nothing here can say when a test is done with
+    /// one.
     #[cfg(test)]
     pub fn new_for_testing() -> (Self, DiskWriter) {
+        use std::sync::atomic::AtomicU64;
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let captures_dir = std::env::temp_dir().join(format!(
+            "night_amplifier_test_captures/{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+
         Self::build(
-            DiskWriterConfig::default(),
+            DiskWriterConfig::new(captures_dir),
             SettingsPersistence::new("/nonexistent/test/settings.json"),
             CaptureSettings::default(),
             None,

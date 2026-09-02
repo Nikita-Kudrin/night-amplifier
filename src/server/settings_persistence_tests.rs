@@ -11,7 +11,7 @@ mod tests {
     use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
     use crate::server::state::{
         CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
-        SensorCorrectionSettings, TelescopeSettings,
+        RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
@@ -30,7 +30,11 @@ mod tests {
             rejection_method: RejectionMethod::SigmaClip,
             background_subtraction: false,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
-            save_raw_frames: true,
+            raw_frame_saving: RawFrameSaving {
+                live_view: true,
+                wanderer: false,
+                stacking: true,
+            },
             save_stacked_image: true,
             stacking_type: StackingType::Planetary,
             weighting_preset: WeightingPreset::Galaxies,
@@ -152,7 +156,7 @@ mod tests {
             restored.background_subtraction,
             settings.background_subtraction
         );
-        assert_eq!(restored.save_raw_frames, settings.save_raw_frames);
+        assert_eq!(restored.raw_frame_saving, settings.raw_frame_saving);
         assert_eq!(restored.save_stacked_image, settings.save_stacked_image);
         assert_eq!(restored.stacking_type, settings.stacking_type);
         assert_eq!(restored.weighting_preset, settings.weighting_preset);
@@ -267,7 +271,7 @@ mod tests {
             rejection_method: RejectionMethod::WinsorizedSigmaClip,
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::Rbf,
-            save_raw_frames: false,
+            raw_frame_saving: RawFrameSaving::default(),
             save_stacked_image: true,
             stacking_type: StackingType::DeepSky,
             weighting_preset: WeightingPreset::Nebulae,
@@ -353,6 +357,8 @@ mod tests {
     fn test_load_settings_without_planetary_fields() {
         // Verify backward compatibility: a settings.json from before the planetary
         // tracking commits (missing the fields) deserializes with correct defaults.
+        // `save_raw_frames` is the legacy raw-saving key such a file still carries —
+        // see `legacy_save_raw_frames_migrates_to_the_stacking_switch`.
         let json = serde_json::json!({
             "exposure_us": 1000,
             "gain": 100,
@@ -385,6 +391,103 @@ mod tests {
             !persisted.planetary_multi_point_alignment,
             "Missing field should default to false"
         );
+    }
+
+    /// A settings.json written before the per-mode switches carries `save_raw_frames`
+    /// and no `raw_frame_saving`. Read as an unknown field it is silently dropped, and
+    /// the first save writes the loss back out — the observer comes back from a night
+    /// with nothing on the card and no error anywhere.
+    #[test]
+    fn legacy_save_raw_frames_migrates_to_the_stacking_switch() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": true,
+            "rejection_sigma": 2.5,
+            "rejection_method": "None",
+            "background_subtraction": true,
+            "background_extraction_algorithm": "grid_bilinear",
+            "save_raw_frames": true,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "weighting_preset": "balanced",
+            "stretch_aggressiveness": "medium",
+            "saturation_boost": false,
+            "saturation_boost_strength": 0.5,
+            "use_simulated_camera": false,
+            "simulated_preload_images": 5,
+            "wanderer_mode": false
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let settings: CaptureSettings = persisted.into();
+
+        assert!(
+            settings.raw_frame_saving.stacking,
+            "legacy save_raw_frames=true was dropped: the user's raw saving silently \
+             turned off on upgrade"
+        );
+        assert!(settings.saves_raw_frames());
+        assert!(
+            !settings.raw_frame_saving.live_view && !settings.raw_frame_saving.wanderer,
+            "the legacy switch only ever saved in Stacking: migrating it into another \
+             mode starts writing frames the user never asked for"
+        );
+    }
+
+    /// The legacy key must not resurface once migrated, or the next load would keep
+    /// re-applying it over a selection the user has since changed.
+    #[test]
+    fn a_migrated_selection_is_written_back_without_the_legacy_key() {
+        let settings = CaptureSettings {
+            raw_frame_saving: RawFrameSaving {
+                live_view: true,
+                ..Default::default()
+            },
+            ..CaptureSettings::default()
+        };
+
+        let json = serde_json::to_value(PersistedSettings::from(&settings)).unwrap();
+
+        assert!(json.get("save_raw_frames").is_none());
+        assert_eq!(json["raw_frame_saving"]["live_view"], true);
+    }
+
+    /// A file this version wrote states the selection outright, so an all-off group
+    /// must stay all-off rather than falling through to the legacy default.
+    #[test]
+    fn an_explicit_all_off_selection_is_not_treated_as_a_legacy_file() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": true,
+            "rejection_sigma": 2.5,
+            "rejection_method": "None",
+            "background_subtraction": true,
+            "background_extraction_algorithm": "grid_bilinear",
+            "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": false},
+            "save_raw_frames": true,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "weighting_preset": "balanced",
+            "stretch_aggressiveness": "medium",
+            "saturation_boost": false,
+            "saturation_boost_strength": 0.5,
+            "use_simulated_camera": false,
+            "simulated_preload_images": 5,
+            "wanderer_mode": false
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let settings: CaptureSettings = persisted.into();
+
+        assert_eq!(settings.raw_frame_saving, RawFrameSaving::default());
     }
 
     #[test]

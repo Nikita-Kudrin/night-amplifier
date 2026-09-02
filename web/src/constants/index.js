@@ -157,6 +157,13 @@ export const BACKGROUND_ALGORITHM_OPTIONS = [
     {value: 'rbf', label: 'RBF (Quality)', pro: true},
 ]
 
+// Capture modes that can write raw frames, in the order the capture-mode switch shows them
+export const RAW_FRAME_SAVING_MODES = [
+    {key: 'live_view', label: 'Live view'},
+    {key: 'wanderer', label: 'Wanderer'},
+    {key: 'stacking', label: 'Stacking'},
+]
+
 // How much sensor resolution the preview pipeline may bin away before it runs.
 // Fixed for the whole capture session — see the Rust `PreviewResolution`.
 export const PREVIEW_RESOLUTION_OPTIONS = [
@@ -228,7 +235,7 @@ export const DEFAULT_SETTINGS = {
     stacking: true,
     background_subtraction: true,
     background_extraction_algorithm: 'grid_bilinear',
-    save_raw_frames: false,
+    raw_frame_saving: {live_view: false, wanderer: false, stacking: false},
     save_stacked_image: false,
     weighting_preset: 'balanced',
     rejection_method: 'None',
@@ -286,6 +293,17 @@ export const DEFAULT_SETTINGS = {
     },
 }
 
+/**
+ * A fresh copy of the defaults.
+ *
+ * `DEFAULT_SETTINGS` has nested objects, so spreading it hands out references into the
+ * shared constant: bind one to a v-model and the user's first click edits the defaults
+ * every later fallback reads. Take a copy instead of a reference.
+ */
+export function defaultSettings() {
+    return structuredClone(DEFAULT_SETTINGS)
+}
+
 // Help tooltips for UI elements
 export const HELP_TEXTS = {
     bin: 'Combines adjacent pixels to increase sensitivity and Signal-to-Noise Ratio (SNR) at the cost of resolution. 2x2 binning is 4x more sensitive. Changing binning will automatically reset the current stack.',
@@ -301,10 +319,10 @@ export const HELP_TEXTS = {
         "Intensifies colors in the darkest parts of the image, helping faint nebulae and galaxy arms 'pop' without over-saturating stars.",
     saturation_boost_strength:
         'Adjusts the intensity of the Shadow Saturation Boost. Higher values create more vibrant colors in faint areas.',
-    save_raw_frames:
-        "Saves individual captured frames as FITS files to 'captures/raw/'. Only works in Stacking mode.",
+    raw_frame_saving:
+        "Saves captured frames to 'captures/raw/', chosen per capture mode. Deep Sky and Comet write one FITS file per exposure; Planetary writes a single SER container per session. Each session gets its own folder, tagged with the mode that filled it: '-live', '-wanderer' or '-stacking'.\nLive view writes a frame per exposure, so at short focusing exposures it can fill a card quickly and outrun a slow disk - frames are dropped rather than delaying capture.",
     save_stacked_image:
-        "Saves the final stack as a FITS and a stretched PNG to 'captures/stacked/'. Only works in Stacking mode.",
+        "Saves the final stack as a FITS and a stretched PNG to 'captures/stacked/'. Stacking mode only - Live view builds no stack, and Wanderer discards its stack whenever the telescope moves.",
     weighting_preset:
         'Determines how much each frame contributes based on quality:\n• Disabled: All frames weighted equally.\n• Balanced: General purpose blending.\n• Galaxies: Favors sharpest frames (FWHM).\n• Nebulae: Favors highest signal (SNR).\n• FWHM Only: Ignores SNR, prioritizes sharpness.\n• SNR Only: Ignores sharpness, prioritizes signal.\nChanges apply immediately to subsequent frames.',
     simulated_camera: 'Uses images from a directory instead of a real camera.',

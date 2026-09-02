@@ -61,7 +61,9 @@ Enable features for specific manufacturers when compiling:
 
 ## Frame Storage
 
-Captured frames are automatically saved to FITS files when the "Save Frames to Disk" setting is enabled (default: on).
+Raw frames are saved to FITS files in the capture modes selected under **Settings → Storage → Save Raw Frames**.
+Live view, Wanderer and Stacking are chosen independently; all three are off by default. The finished stack is
+saved separately, in Stacking mode only.
 
 **Image Storage Formats:**
 
@@ -74,16 +76,24 @@ Captured frames are automatically saved to FITS files when the "Save Frames to D
 
 **Directory Structure:**
 
+Each session gets its own directory, named for the time capture started and the mode that filled it:
+
 ```
 captures/
 ├── raw/
-│   └── DD-MM-YYYY_HH-MM-SS/     # Session directory (timestamp when capture started)
-│       ├── frame_000001.fits    # Individual raw frames
-│       ├── frame_000002.fits
+│   ├── DD-MM-YYYY_HH-MM-SS-live/        # Live view session
+│   ├── DD-MM-YYYY_HH-MM-SS-wanderer/    # Wanderer session
+│   └── DD-MM-YYYY_HH-MM-SS-stacking/    # Stacking session
+│       ├── frame_000001.fits            # Individual raw frames (Deep Sky, Comet)
+│       ├── frame_000002.fits            # Planetary writes one capture.ser instead
 │       └── ...
 └── stacked/
-    └── DD-MM-YYYY_HH-MM-SS.fits # Final stacked result (same name as session)
+    └── DD-MM-YYYY_HH-MM-SS-stacking.fits # Final stacked result (same name as session)
 ```
+
+Changing capture mode without stopping opens a new directory, so a folder only holds frames captured
+in the mode it names. Sessions starting within the same second get a counter before the suffix
+(`DD-MM-YYYY_HH-MM-SS_2-stacking`).  
 
 **FITS Metadata:** Each file includes standard FITS headers:
 

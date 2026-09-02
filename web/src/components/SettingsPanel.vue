@@ -21,6 +21,8 @@ import {
     BLACK_FLOOR_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
+  defaultSettings,
+  RAW_FRAME_SAVING_MODES,
   WEIGHTING_PRESET_OPTIONS,
   BACKGROUND_ALGORITHM_OPTIONS,
   REJECTION_METHOD_OPTIONS,
@@ -47,7 +49,7 @@ const simulatorEnabled = computed({
   },
 })
 
-const localSettings = ref({...DEFAULT_SETTINGS})
+const localSettings = ref(defaultSettings())
 
 watch(
     settings,
@@ -63,7 +65,9 @@ watch(
               DEFAULT_SETTINGS.background_extraction_algorithm,
           auto_stretch_intensity:
               newSettings.auto_stretch_intensity ?? DEFAULT_SETTINGS.auto_stretch_intensity,
-          save_raw_frames: newSettings.save_raw_frames ?? DEFAULT_SETTINGS.save_raw_frames,
+          raw_frame_saving: newSettings.raw_frame_saving
+              ? {...newSettings.raw_frame_saving}
+              : {...DEFAULT_SETTINGS.raw_frame_saving},
           save_stacked_image: newSettings.save_stacked_image ?? DEFAULT_SETTINGS.save_stacked_image,
           wanderer_mode: newSettings.wanderer_mode ?? DEFAULT_SETTINGS.wanderer_mode,
           auto_reconnect: newSettings.auto_reconnect ?? DEFAULT_SETTINGS.auto_reconnect,
@@ -106,6 +110,14 @@ watch(
 function applyGroup(key, value) {
   localSettings.value[key] = value
   return applySetting(key, value)
+}
+
+/**
+ * Flip one mode's raw-frame switch, sending the whole group so the server never sees a
+ * partial selection.
+ */
+function applyRawFrameSaving(mode, enabled) {
+  return applyGroup('raw_frame_saving', {...localSettings.value.raw_frame_saving, [mode]: enabled})
 }
 
 async function applySetting(key, value) {
@@ -290,20 +302,27 @@ const HELP = HELP_TEXTS
       </BaseSlider>
     </div>
 
-    <!-- Storage settings -->
-    <div v-if="localSettings.stacking && !localSettings.wanderer_mode" class="settings-section">
+    <!-- Storage settings: raw frames are per capture mode, the stack only exists in Stacking -->
+    <div class="settings-section">
       <h3 class="section-title">Storage</h3>
 
       <div class="control-group">
+        <span class="storage-group-label">
+          Save Raw Frames
+          <BaseInfoIcon :message="HELP.raw_frame_saving"/>
+        </span>
+
         <BaseToggle
-            v-model="localSettings.save_raw_frames"
-            label="Save Raw Frames"
-            :help="HELP.save_raw_frames"
-            @update:model-value="applySetting('save_raw_frames', $event)"
+            v-for="mode in RAW_FRAME_SAVING_MODES"
+            :key="mode.key"
+            v-model="localSettings.raw_frame_saving[mode.key]"
+            :label="mode.label"
+            class="storage-mode-toggle"
+            @update:model-value="applyRawFrameSaving(mode.key, $event)"
         />
       </div>
 
-      <div class="control-group">
+      <div v-if="localSettings.stacking && !localSettings.wanderer_mode" class="control-group">
         <BaseToggle
             v-model="localSettings.save_stacked_image"
             label="Save Stacked Image"
@@ -634,5 +653,22 @@ const HELP = HELP_TEXTS
 
 .settings-section {
   margin-bottom: 0.625rem;
+}
+
+/* Heading for a set of related switches, matching .control-label's type without its
+   space-between, which would strand the info icon at the far edge. */
+.storage-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.825rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.375rem;
+}
+
+.storage-mode-toggle {
+  margin-left: 0.75rem;
+  margin-top: 0.25rem;
 }
 </style>

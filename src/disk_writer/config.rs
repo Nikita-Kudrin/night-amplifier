@@ -1,7 +1,9 @@
+use std::path::PathBuf;
+
+use super::handle::{DiskWriterHandle, OpenSession};
 use crate::camera::RawFrame;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Maximum queue depth before warning
@@ -72,6 +74,17 @@ impl std::fmt::Debug for FrameType {
 pub struct WriteRequest {
     /// Type of frame and its payload
     pub frame_type: FrameType,
+    /// The session that was open when this frame was queued.
+    ///
+    /// Filled in by [`DiskWriterHandle::queue_frame`]; whatever a caller sets here is
+    /// overwritten, since only the handle knows what is open at that moment.
+    ///
+    /// Resolved at enqueue time rather than at write time, so a session rolled while
+    /// the queue still holds frames — which is what a mid-capture mode change does —
+    /// cannot retarget frames that belong to the session before it, nor write them in
+    /// the wrong container. `None` only when nothing was open, which is an error for a
+    /// raw frame and a fallback to a bare timestamp for a stacked one.
+    pub session: Option<OpenSession>,
     /// Frame number (for raw frames)
     pub frame_number: u64,
     /// Metadata for FITS headers
@@ -83,15 +96,13 @@ pub struct WriteRequest {
 }
 
 /// Message sent to the disk writer worker
+///
+/// There is no "start session" message: every frame carries the session it belongs to,
+/// so the worker learns of a new one from the first frame written into it. Only the
+/// *end* of a session needs announcing, and only because a SER container that is never
+/// finalized is unreadable.
 #[derive(Debug)]
 pub enum DiskWriterMessage {
-    /// Start a new capture session
-    StartSession {
-        /// Directory for the session
-        path: PathBuf,
-        /// Type of session (Individual or Video)
-        session_type: WritingSessionType,
-    },
     /// Queue a frame for writing
     WriteFrame(WriteRequest),
     /// End the current capture session

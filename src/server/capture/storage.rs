@@ -5,11 +5,14 @@ use tokio::sync::RwLockReadGuard;
 use tracing::{debug, warn};
 
 use super::channel::{CapturedFrame, QueueDepth};
+use super::drop_log::DropLog;
 use crate::camera::RawFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CaptureSession, CaptureSettings, ConnectedCameraInfo};
+use crate::server::state::{
+    AppState, CaptureMode, CaptureSession, CaptureSettings, ConnectedCameraInfo,
+};
 use crate::stacking::StackingType;
 
 /// Dedicated storage task running on its own OS thread.
@@ -26,8 +29,7 @@ pub fn run_storage_task(
 ) {
     debug!("Storage task started");
 
-    let mut queue_warning_active = false;
-    let mut last_warning_time = std::time::Instant::now();
+    let mut warnings = StorageWarnings::default();
 
     while let Ok(msg) = storage_rx.recv() {
         storage_depth.taken();
@@ -39,31 +41,104 @@ pub fn run_storage_task(
             camera_info,
         } = msg;
 
-        // Only save if raw frame saving is still enabled
-        let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
-        if !settings.save_raw_frames || !is_stacking_mode || !state.disk_writer.is_enabled() {
+        // Only save if raw frame saving is still enabled for the mode this frame was
+        // captured in — the settings travel with the frame, so a mode change mid-flight
+        // does not retroactively decide the fate of frames already in the queue.
+        if !settings.saves_raw_frames() || !state.disk_writer.is_enabled() {
             continue;
         }
 
-        let (new_warning_active, new_last_time) = rt.block_on(save_frame_to_disk(
+        rt.block_on(save_frame_to_disk(
             &state,
             &frame,
             frame_number,
             &settings,
             &camera_info,
-            queue_warning_active,
-            last_warning_time,
+            &mut warnings,
         ));
-        queue_warning_active = new_warning_active;
-        last_warning_time = new_last_time;
     }
 
-    if queue_warning_active {
-        state.disk_writer.clear_queue_warning();
-        let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
-    }
+    warnings.finish(&state);
 
     debug!("Storage task ended");
+}
+
+/// How far behind the disk is, as the storage task has reported it so far.
+///
+/// One value threaded through the loop rather than three: the SSE warning latch, the
+/// throttle behind it, and the drop counter are all the same story about the same disk,
+/// and splitting them across parameters was what pushed this past a readable signature.
+struct StorageWarnings {
+    /// Whether the frontend currently believes the queue is backed up.
+    active: bool,
+    /// When the last `DiskWriterWarning` event went out.
+    last_sent: std::time::Instant,
+    /// Frames the writer would not take, rate-limited for the log.
+    drops: DropLog,
+}
+
+impl Default for StorageWarnings {
+    fn default() -> Self {
+        Self {
+            active: false,
+            last_sent: std::time::Instant::now(),
+            drops: DropLog::default(),
+        }
+    }
+}
+
+impl StorageWarnings {
+    /// How often the frontend is told the queue is still backed up.
+    const RESEND_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Report a frame the writer had no room for.
+    fn record_drop(&mut self, frame_number: u64, error: &crate::disk_writer::DiskWriterError) {
+        // Rate-limited for the same reason the capture-side drop is: at the short
+        // exposures raw-saving Live view allows, a disk that cannot keep up turns away
+        // most frames, and a line each buries everything else in the log.
+        if let Some(dropped) = self.drops.record() {
+            warn!(error = %error, frame_number, dropped, "Frames dropped: could not be queued for saving");
+        }
+    }
+
+    /// Tell the frontend where the queue stands, no more often than the interval.
+    fn observe_depth(&mut self, state: &AppState, queue_depth: usize) {
+        use crate::disk_writer::QUEUE_WARNING_THRESHOLD;
+
+        if queue_depth > QUEUE_WARNING_THRESHOLD {
+            let now = std::time::Instant::now();
+            if self.active && now.duration_since(self.last_sent) < Self::RESEND_INTERVAL {
+                return;
+            }
+            self.active = true;
+            self.last_sent = now;
+            let _ = state
+                .events
+                .send(ServerEvent::DiskWriterWarning { queue_depth });
+            return;
+        }
+
+        if self.active {
+            self.active = false;
+            state.disk_writer.clear_queue_warning();
+            let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
+        }
+    }
+
+    /// Close the books at the end of the session: report the tail of a drop burst the
+    /// interval swallowed, and clear a warning the frontend would otherwise keep showing.
+    fn finish(&mut self, state: &AppState) {
+        if let Some(dropped) = self.drops.flush() {
+            warn!(
+                dropped,
+                "Frames dropped since the last report: could not be queued for saving"
+            );
+        }
+        if self.active {
+            state.disk_writer.clear_queue_warning();
+            let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
+        }
+    }
 }
 
 /// Get camera info from state
@@ -83,45 +158,126 @@ pub async fn initialize_capture_session(
     resume_dir: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
     let settings: RwLockReadGuard<'_, CaptureSettings> = state.settings.read().await;
-    let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
-    let save_raw = settings.save_raw_frames;
-    let save_stacked = settings.save_stacked_image;
+    let enabled = settings.disk_writing_enabled();
+    state.disk_writer.set_enabled(enabled);
 
-    let save_enabled = is_stacking_mode && (save_raw || save_stacked);
-    if save_enabled {
-        state.disk_writer.set_enabled(true);
-
-        // Map StackingType to WritingSessionType
-        let session_type = match settings.stacking_type {
-            StackingType::Planetary => WritingSessionType::VideoContainer,
-            _ => WritingSessionType::IndividualFrames,
-        };
-
-        match resume_dir {
-            Some(dir) => state
-                .disk_writer
-                .resume_session(dir, session_type)
-                .map_err(|e| format!("Failed to reopen capture directory: {}", e))?,
-            None => state
-                .disk_writer
-                .start_session(session_type)
-                .map_err(|e| format!("Failed to create capture directory: {}", e))?,
-        };
+    // A session can still be open here: a settings update lands between the capture
+    // state flipping and this call, or a previous capture ended without one. Either way
+    // this capture opens its own, so let go of the old one rather than letting
+    // `ensure_session` adopt it later.
+    state.disk_writer.abandon_session();
+    if !enabled {
+        return Ok(());
     }
+
+    let session_type = session_type_for(&settings);
+
+    match resume_dir {
+        Some(dir) => state
+            .disk_writer
+            .resume_session(dir, session_type)
+            .map_err(|e| format!("Failed to reopen capture directory: {}", e))?,
+        None => state
+            .disk_writer
+            .start_session(session_type, settings.capture_mode().session_dir_suffix())
+            .map_err(|e| format!("Failed to create capture directory: {}", e))?,
+    };
     Ok(())
 }
 
+/// The container a session's raw frames go into.
+///
+/// Keyed on the stacking *type*, not the capture mode: a Planetary live-view run wants
+/// the same SER container a Planetary stacking run does.
+pub fn session_type_for(settings: &CaptureSettings) -> WritingSessionType {
+    match settings.stacking_type {
+        StackingType::Planetary => WritingSessionType::VideoContainer,
+        _ => WritingSessionType::IndividualFrames,
+    }
+}
+
+/// Bring the disk writer in line with settings that just changed.
+///
+/// `POST /api/settings` can turn saving on, or change which mode is being captured,
+/// long after `initialize_capture_session` ran. The writer's enabled flag, whether a
+/// session directory is open, and whether that directory's name still matches the mode
+/// being captured are one decision, so they are made in one place.
+///
+/// Rolling the directory on a mode change is what stops a folder from lying about its
+/// contents. Focusing in Live view and then switching to Stacking without stopping is an
+/// ordinary workflow, and `ensure_session` alone would leave every stacked sub in a
+/// folder named `-live`.
+///
+/// # Locking
+///
+/// Both arguments are passed in rather than read here. `AppState::frame_processed` takes
+/// `session` *then* `settings`, so reading either lock from under a settings guard would
+/// invert an order the rest of the server relies on; the caller resolves both before
+/// taking that guard and calls this once it has dropped it. This call takes
+/// `session_resume_plan` itself.
+pub async fn sync_disk_session(
+    state: &AppState,
+    settings: &CaptureSettings,
+    capture_active: bool,
+) {
+    let enabled = settings.disk_writing_enabled();
+    state.disk_writer.set_enabled(enabled);
+    if !enabled {
+        return;
+    }
+
+    // Nothing is being captured, so there is nothing to file yet: opening a directory
+    // now would leave an empty one behind every time a switch is flipped between
+    // sessions, and capture start opens the right one anyway.
+    if !capture_active {
+        return;
+    }
+
+    let session_type = session_type_for(settings);
+    let mode = settings.capture_mode();
+
+    // A directory whose name names no mode predates the suffixes or was renamed by hand;
+    // leave it alone rather than rolling a session on every settings update.
+    let open_mode = state
+        .disk_writer
+        .session_name()
+        .and_then(|name| CaptureMode::from_session_dir_name(&name));
+    if let Some(open_mode) = open_mode {
+        if open_mode != mode {
+            debug!(?open_mode, new_mode = ?mode, "Capture mode changed, rolling raw session directory");
+            // Abandoned rather than ended: `end_session` waits on the writer, which is
+            // the wrong thing to do on a request thread. Frames already queued keep the
+            // directory they were stamped with, and a SER container is closed out by the
+            // worker as soon as a frame from the new session reaches it.
+            state.disk_writer.abandon_session();
+        }
+    }
+
+    if let Err(e) = state
+        .disk_writer
+        .ensure_session(session_type, mode.session_dir_suffix())
+    {
+        warn!(error = %e, "Could not open a capture directory for saving");
+        state.send_error(format!("Saving is on but no folder could be created: {}", e));
+        return;
+    }
+
+    // A reconnect rejoins the directory recorded in the resume plan. Left stale, it would
+    // rejoin the folder this call just abandoned.
+    if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
+        plan.disk_session_dir = state.disk_writer.session_dir();
+    }
+}
+
 /// Save a frame to disk and handle queue warnings
-pub async fn save_frame_to_disk(
+async fn save_frame_to_disk(
     state: &AppState,
     frame: &Arc<RawFrame>,
     frame_number: u64,
     settings: &CaptureSettings,
     camera_info: &ConnectedCameraInfo,
-    mut queue_warning_active: bool,
-    mut last_warning_time: std::time::Instant,
-) -> (bool, std::time::Instant) {
-    use crate::disk_writer::QUEUE_WARNING_THRESHOLD;
+    warnings: &mut StorageWarnings,
+) {
     use crate::fits::FitsMetadata;
     use chrono::Utc;
 
@@ -151,26 +307,10 @@ pub async fn save_frame_to_disk(
         camera_info.info.sensor_type,
         camera_info.info.bayer_pattern,
     ) {
-        warn!(error = %e, frame_number = frame_number, "Failed to queue frame for saving");
+        warnings.record_drop(frame_number, &e);
     }
 
-    let queue_depth = state.disk_writer.queue_depth();
-    if queue_depth > QUEUE_WARNING_THRESHOLD {
-        let now = std::time::Instant::now();
-        if !queue_warning_active || now.duration_since(last_warning_time).as_secs() >= 2 {
-            queue_warning_active = true;
-            last_warning_time = now;
-            let _ = state
-                .events
-                .send(ServerEvent::DiskWriterWarning { queue_depth });
-        }
-    } else if queue_depth <= QUEUE_WARNING_THRESHOLD && queue_warning_active {
-        queue_warning_active = false;
-        state.disk_writer.clear_queue_warning();
-        let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
-    }
-
-    (queue_warning_active, last_warning_time)
+    warnings.observe_depth(state, state.disk_writer.queue_depth());
 }
 
 /// Check if we should stop due to a burst of *current* camera-capture failures.
@@ -208,6 +348,54 @@ mod tests {
             }
         }
         assert!(should_stop_on_errors(&state).await);
+    }
+
+    /// A capture must not inherit whatever directory happened to be open. A settings
+    /// update can land between the capture state changing and this call, and a previous
+    /// capture can end without one being closed — either way `ensure_session` would
+    /// later adopt the stale folder and file this session's frames into it.
+    #[tokio::test]
+    async fn initialize_capture_session_never_adopts_an_open_session() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state
+            .disk_writer
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+        let stale = state.disk_writer.session_dir().unwrap();
+
+        // Saving is off in every mode by default, so this opens nothing of its own.
+        initialize_capture_session(&state, None).await.unwrap();
+
+        assert_eq!(
+            state.disk_writer.session_dir(),
+            None,
+            "the capture kept {stale:?} open, so a later ensure_session would adopt it"
+        );
+    }
+
+    /// With saving on, the capture opens its own directory rather than continuing the
+    /// one that was already there.
+    #[tokio::test]
+    async fn initialize_capture_session_opens_a_directory_of_its_own() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.write().await.raw_frame_saving = crate::server::state::RawFrameSaving {
+            stacking: true,
+            ..Default::default()
+        };
+        state
+            .disk_writer
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+        let stale = state.disk_writer.session_dir().unwrap();
+
+        initialize_capture_session(&state, None).await.unwrap();
+
+        let opened = state.disk_writer.session_dir().expect("a session");
+        assert_ne!(opened, stale);
+        assert_eq!(
+            CaptureMode::from_session_dir_name(&state.disk_writer.session_name().unwrap()),
+            Some(CaptureMode::Stacking)
+        );
     }
 
     /// The `stacked_count == 0` gate must survive the switch from a lifetime
@@ -373,7 +561,7 @@ pub async fn save_stacked_result(
     use chrono::Utc;
 
     let settings: RwLockReadGuard<'_, CaptureSettings> = state.settings.read().await;
-    if !settings.save_stacked_image || !settings.stacking || settings.wanderer_mode {
+    if !settings.saves_stacked_image() {
         return;
     }
 

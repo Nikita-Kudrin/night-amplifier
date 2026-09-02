@@ -4,7 +4,9 @@ use axum::http::StatusCode;
 
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
-use crate::server::state::{CaptureSession, CaptureSettings, CaptureState, StackingType};
+use crate::server::state::{
+    CaptureSession, CaptureSettings, CaptureState, RawFrameSaving, StackingType,
+};
 use crate::server::{CameraInfoResponse, CaptureStatusResponse, SettingsResponse};
 
 // ============================================================================
@@ -122,7 +124,7 @@ fn test_settings_response_from_settings() {
         stacking: false,
         rejection_sigma: 3.0,
         background_subtraction: false,
-        save_raw_frames: false,
+        raw_frame_saving: RawFrameSaving::default(),
         save_stacked_image: true,
         stacking_type: StackingType::DeepSky,
         ..Default::default()
@@ -138,6 +140,6 @@ fn test_settings_response_from_settings() {
     assert!(!response.stacking);
     assert_eq!(response.rejection_sigma, 3.0);
     assert!(!response.background_subtraction);
-    assert!(!response.save_raw_frames);
+    assert_eq!(response.raw_frame_saving, RawFrameSaving::default());
     assert!(response.save_stacked_image);
 }

@@ -19,13 +19,14 @@
 pub mod analysis;
 pub mod channel;
 mod context;
+mod drop_log;
 mod frame_gate;
 pub mod pipeline;
 mod render_task;
 mod solving;
 mod stacking_task;
 mod stage_config;
-mod storage;
+pub mod storage;
 
 pub mod config_overrides;
 pub mod task;
@@ -35,6 +36,7 @@ pub mod watchdog;
 pub mod watchdog_tests;
 
 pub use analysis::{AnalysisContext, PreviewAnalysis};
+pub use drop_log::DropLog;
 pub use context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
 pub use task::run_capture_loop;

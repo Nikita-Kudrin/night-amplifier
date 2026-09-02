@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{
     CameraCaptureProfile, CaptureSession, CaptureSettings, DenoiseSettings, EyepieceSettings,
-    PreviewResolution, SensorCorrectionSettings, TelescopeSettings,
+    PreviewResolution, RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
@@ -200,7 +200,8 @@ pub struct SettingsResponse {
     pub background_subtraction: bool,
     /// Algorithm for background extraction
     pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
-    pub save_raw_frames: bool,
+    /// Which capture modes write their raw frames to disk
+    pub raw_frame_saving: RawFrameSaving,
     pub save_stacked_image: bool,
     pub stacking_type: StackingType,
     /// Quality-based frame weighting preset for stacking
@@ -288,7 +289,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             rejection_method: settings.rejection_method,
             background_subtraction: settings.background_subtraction,
             background_extraction_algorithm: settings.background_extraction_algorithm,
-            save_raw_frames: settings.save_raw_frames,
+            raw_frame_saving: settings.raw_frame_saving,
             save_stacked_image: settings.save_stacked_image,
             stacking_type: settings.stacking_type,
             weighting_preset: settings.weighting_preset,
@@ -401,8 +402,9 @@ pub struct UpdateSettingsRequest {
     /// Algorithm for background extraction
     #[serde(default)]
     pub background_extraction_algorithm: Option<BackgroundExtractionAlgorithm>,
+    /// Which capture modes write their raw frames to disk
     #[serde(default)]
-    pub save_raw_frames: Option<bool>,
+    pub raw_frame_saving: Option<RawFrameSaving>,
     #[serde(default)]
     pub save_stacked_image: Option<bool>,
     #[serde(default)]

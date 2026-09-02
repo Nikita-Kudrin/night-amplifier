@@ -40,7 +40,7 @@ fn bench_disk_writer_fits_throughput(c: &mut Criterion) {
                 let (writer, handle) = DiskWriter::new(config);
 
                 handle
-                    .start_session(WritingSessionType::IndividualFrames)
+                    .start_session(WritingSessionType::IndividualFrames, "")
                     .unwrap();
 
                 let writer_task = std::thread::spawn(move || writer.run());
@@ -113,7 +113,7 @@ fn bench_disk_writer_cpu_contention(c: &mut Criterion) {
                 let (writer, handle) = DiskWriter::new(config);
 
                 handle
-                    .start_session(WritingSessionType::IndividualFrames)
+                    .start_session(WritingSessionType::IndividualFrames, "")
                     .unwrap();
 
                 let writer_task = std::thread::spawn(move || writer.run());

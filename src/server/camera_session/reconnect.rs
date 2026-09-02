@@ -269,7 +269,7 @@ async fn restore_settings(state: &Arc<AppState>, plan: &SessionResumePlan) {
     settings.stacking = planned.stacking;
     settings.stacking_type = planned.stacking_type;
     settings.wanderer_mode = planned.wanderer_mode;
-    settings.save_raw_frames = planned.save_raw_frames;
+    settings.raw_frame_saving = planned.raw_frame_saving;
     settings.save_stacked_image = planned.save_stacked_image;
     settings.comet_roi = planned.comet_roi;
     settings.planetary_roi = planned.planetary_roi;

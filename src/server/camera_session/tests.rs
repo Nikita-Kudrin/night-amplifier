@@ -1502,7 +1502,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
     state.disk_writer.set_enabled(true);
     let session_dir = state
         .disk_writer
-        .start_session(WritingSessionType::IndividualFrames)
+        .start_session(WritingSessionType::IndividualFrames, "")
         .expect("session dir");
     {
         let mut session = state.session.write().await;
@@ -1558,7 +1558,7 @@ async fn enabling_saving_mid_capture_opens_a_session() {
 
     state
         .disk_writer
-        .ensure_session(WritingSessionType::IndividualFrames)
+        .ensure_session(WritingSessionType::IndividualFrames, "")
         .expect("session opens");
     assert!(
         state.disk_writer.session_dir().is_some(),
@@ -1569,7 +1569,7 @@ async fn enabling_saving_mid_capture_opens_a_session() {
     let first = state.disk_writer.session_dir();
     state
         .disk_writer
-        .ensure_session(WritingSessionType::IndividualFrames)
+        .ensure_session(WritingSessionType::IndividualFrames, "")
         .expect("no-op");
     assert_eq!(state.disk_writer.session_dir(), first);
 }
