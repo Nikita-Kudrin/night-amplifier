@@ -2,7 +2,7 @@ use super::channel;
 use super::config_overrides::*;
 use super::watchdog::*;
 use crate::frame::Frame;
-use crate::server::capture::channel::max_queue_capacity;
+use crate::server::capture::channel::{max_queue_capacity, RenderQueueDepth};
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CaptureState, SessionResumePlan, StackingType};
@@ -190,6 +190,9 @@ pub async fn run_capture_loop(
     let (stacking_tx, stacking_rx) = mpsc::sync_channel::<CapturedFrame>(channel_capacity);
     let (storage_tx, storage_rx) = mpsc::sync_channel::<CapturedFrame>(channel_capacity);
     let (render_tx, render_rx) = mpsc::sync_channel::<StackedFrame>(channel_capacity);
+    // Shared between the two tasks that own the ends of the render channel, so the
+    // stacking task can tell whether the copy it is about to build has anywhere to go.
+    let render_depth = RenderQueueDepth::default();
 
     // Send the probe frame as the first frame through the pipeline
     let first_raw = Arc::new(probe_raw);
@@ -213,6 +216,9 @@ pub async fn run_capture_loop(
     let state_stacking = Arc::clone(&state);
     let state_render = Arc::clone(&state);
     let state_storage = Arc::clone(&state);
+
+    let depth_stacking = render_depth.clone();
+    let depth_render = render_depth;
 
     let rt_capture = rt_handle.clone();
     let rt_stacking = rt_handle.clone();
@@ -243,6 +249,7 @@ pub async fn run_capture_loop(
                 state_stacking,
                 stacking_rx,
                 render_tx,
+                depth_stacking,
                 rt_stacking,
                 carryover,
             );
@@ -252,7 +259,7 @@ pub async fn run_capture_loop(
     let render_handle = std::thread::Builder::new()
         .name("render-task".into())
         .spawn(move || {
-            run_render_task(state_render, render_rx, rt_render);
+            run_render_task(state_render, render_rx, depth_render, rt_render);
         })
         .expect("Failed to spawn render thread");
 

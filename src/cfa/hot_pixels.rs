@@ -233,35 +233,80 @@ pub fn reject_hot_pixels_with(
     let (width, height, step) = (planes.width, planes.height, planes.step);
     let mut stats = HotPixelStats::default();
 
-    // Detection reads the frame; the replacements are applied afterwards, so a
-    // corrected sample can never feed the test for one of its neighbours and
-    // the result does not depend on how rayon split the rows.
-    let mut corrections: Vec<(usize, f32)> = Vec::new();
-    {
-        let data = cfa.frame().data();
-        for (site, (x0, y0)) in sites.iter().zip(planes.origins()) {
-            let Some((background, sigma)) = *site else {
-                stats.sites_skipped += 1;
-                continue;
-            };
+    // Per-site thresholds in `CfaPlanes::origins` order, which is `y0 * step + x0`.
+    // Resolved up front so the row sweep below is a lookup rather than a branch on
+    // `Option` plus a NaN test per sample.
+    let thresholds: Vec<Option<(f32, f32)>> = sites
+        .iter()
+        .map(|site| {
+            let (background, sigma) = (*site)?;
             let tau = config.sigma * sigma;
-            if tau.is_nan() || tau <= 0.0 {
-                stats.sites_skipped += 1;
-                continue;
-            }
+            (!tau.is_nan() && tau > 0.0).then_some((background, tau))
+        })
+        .collect();
+    stats.sites_skipped = thresholds.iter().filter(|t| t.is_none()).count();
 
-            let rows: Vec<usize> = (y0 + step..height.saturating_sub(step))
-                .step_by(step)
-                .collect();
-            let mut hits: Vec<(usize, f32)> = rows
-                .into_par_iter()
-                .flat_map_iter(|y| {
-                    scan_row(data, width, x0, step, y, tau, background, config.isolation)
-                })
-                .collect();
-            corrections.append(&mut hits);
-        }
-    }
+    // # One sweep per row parity, not one per colour site
+    //
+    // The four Bayer sites are two pairs that share a row parity: `(0, 0)` and `(1, 0)`
+    // read exactly the same three rows, as do `(0, 1)` and `(1, 1)`. Sweeping them
+    // separately — which is what a loop over `origins()` does — walks the whole 36 MB
+    // mosaic four times per frame instead of twice, and each of those passes reads every
+    // cache line to use half of it, because the samples of one site sit `step` apart.
+    //
+    // Grouping by row parity makes each row triple one DRAM fetch serving both x
+    // parities, taking the stage from four passes over the mosaic to two.
+    //
+    // **On x86 this is worth nothing, and that is expected.** `cfa_hot_pixels` measures
+    // 112.8 ms against 112.3 ms at 3008x3008 — inside the noise. With 20 cores the stage
+    // is compute-bound (eight `max` operations and three compares per sample), not
+    // bandwidth-bound, so removing DRAM traffic removes nothing that was on the critical
+    // path. The 34 ms this stage reported in production traces is largely rayon
+    // contention with the render thread; uncontended it is ~7 ms.
+    //
+    // It is kept for the same reason `render::simd` keeps its NEON kernels on x86
+    // evidence it does not trust: a Pi 5 has a fifth of the cores and a fifth of the
+    // bandwidth, which moves this stage to the other side of that balance. The
+    // benchmark is the case that would settle it there. The change is also not free of
+    // benefit here — see the accumulator note below.
+    //
+    // Detection still reads the frame and the replacements are still applied afterwards,
+    // so a corrected sample can never feed the test for one of its neighbours and the
+    // result does not depend on how rayon split the rows.
+    let corrections: Vec<(usize, f32)> = {
+        let data = cfa.frame().data();
+        let scan_rows: Vec<(usize, usize)> = (0..step)
+            .flat_map(|y0| {
+                (y0 + step..height.saturating_sub(step))
+                    .step_by(step)
+                    .map(move |y| (y, y0))
+            })
+            .collect();
+
+        // `fold`/`reduce` rather than `flat_map_iter`: one accumulator per rayon task
+        // instead of one `Vec` per row. At 3008x3008 that is thousands of allocations a
+        // frame to hold a few hundred hits. Every index belongs to exactly one site and
+        // is visited once, so the order tasks finish in cannot change the result.
+        scan_rows
+            .into_par_iter()
+            .fold(Vec::new, |mut hits, (y, y0)| {
+                scan_row_into(
+                    &mut hits,
+                    data,
+                    width,
+                    step,
+                    y,
+                    y0,
+                    &thresholds,
+                    config.isolation,
+                );
+                hits
+            })
+            .reduce(Vec::new, |mut a, mut b| {
+                a.append(&mut b);
+                a
+            })
+    };
 
     stats.corrected = corrections.len();
     let data = cfa.frame_mut().data_mut();
@@ -271,42 +316,51 @@ pub fn reject_hot_pixels_with(
     Ok(stats)
 }
 
-/// One row of the detection sweep: three rows `step` apart, stride-`step` reads.
+/// One row of the detection sweep, for every colour site that shares this row parity.
+///
+/// The three row slices are taken once and walked once per x parity. Both walks hit the
+/// same cache lines, so the second is served from L1/L2 rather than from DRAM — which is
+/// the whole point of grouping the sites this way. `thresholds` is indexed in
+/// [`CfaPlanes::origins`] order, so this row's site `x0` is at `y0 * step + x0`.
 #[allow(clippy::too_many_arguments)]
-fn scan_row(
+fn scan_row_into(
+    hits: &mut Vec<(usize, f32)>,
     data: &[f32],
     width: usize,
-    x0: usize,
     step: usize,
     y: usize,
-    tau: f32,
-    background: f32,
+    y0: usize,
+    thresholds: &[Option<(f32, f32)>],
     isolation: f32,
-) -> Vec<(usize, f32)> {
+) {
     let up = &data[(y - step) * width..][..width];
     let mid = &data[y * width..][..width];
     let down = &data[(y + step) * width..][..width];
 
-    let mut hits = Vec::new();
-    let mut x = x0 + step;
-    while x + step < width {
-        let centre = mid[x];
-        let (nw, n, ne) = (up[x - step], up[x], up[x + step]);
-        let (w, e) = (mid[x - step], mid[x + step]);
-        let (sw, s, se) = (down[x - step], down[x], down[x + step]);
+    for x0 in 0..step {
+        let Some((background, tau)) = thresholds[y0 * step + x0] else {
+            continue;
+        };
 
-        let brightest = nw.max(n).max(ne).max(w).max(e).max(sw).max(s).max(se);
-        let above_background = centre - background;
-        if centre - brightest > tau
-            && above_background > 0.0
-            && brightest - background < isolation * above_background
-        {
-            let mean = (nw + n + ne + w + e + sw + s + se) * 0.125;
-            hits.push((y * width + x, mean));
+        let mut x = x0 + step;
+        while x + step < width {
+            let centre = mid[x];
+            let (nw, n, ne) = (up[x - step], up[x], up[x + step]);
+            let (w, e) = (mid[x - step], mid[x + step]);
+            let (sw, s, se) = (down[x - step], down[x], down[x + step]);
+
+            let brightest = nw.max(n).max(ne).max(w).max(e).max(sw).max(s).max(se);
+            let above_background = centre - background;
+            if centre - brightest > tau
+                && above_background > 0.0
+                && brightest - background < isolation * above_background
+            {
+                let mean = (nw + n + ne + w + e + sw + s + se) * 0.125;
+                hits.push((y * width + x, mean));
+            }
+            x += step;
         }
-        x += step;
     }
-    hits
 }
 
 /// Robust background and noise level of one colour site, from a centre crop.

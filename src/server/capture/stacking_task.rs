@@ -9,7 +9,7 @@ use crate::server::state::{AppState, SensorCorrectionSettings, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
-use super::channel::{CapturedFrame, StackedFrame};
+use super::channel::{CapturedFrame, RenderQueueDepth, StackedFrame};
 use super::frame_gate::RejectionReason;
 use super::context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 use super::{pipeline, solving, storage};
@@ -27,6 +27,7 @@ pub fn run_stacking_task(
     state: Arc<AppState>,
     stacking_rx: mpsc::Receiver<CapturedFrame>,
     render_tx: mpsc::SyncSender<StackedFrame>,
+    render_depth: RenderQueueDepth,
     rt: tokio::runtime::Handle,
     carryover: Option<StackingCarryover>,
 ) {
@@ -138,12 +139,19 @@ pub fn run_stacking_task(
         let mut showing_stack;
         let stack_reset;
         let mut rejected_because;
+        let mut stack_depth;
         let mut display_frame = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,
                 stacking_type = ?settings.stacking_type,
                 "Processing frame through stacking pipeline"
             );
+
+            // Build the display copy only when the render task has nothing queued.
+            // Checked here rather than inside the pipeline functions so all three modes
+            // answer it the same way, and read once per iteration so the decision cannot
+            // change under the pipeline mid-frame.
+            let want_display = render_depth.pending() == 0;
 
             // The pipeline functions expect &Frame — Arc<Frame> derefs transparently
             let outcome = match settings.stacking_type {
@@ -152,6 +160,7 @@ pub fn run_stacking_task(
                     &settings,
                     &mut comet_ctx,
                     &mut stacking_failed,
+                    want_display,
                 )),
                 StackingType::Planetary => {
                     rt.block_on(pipeline::process_frame_with_planetary_stacking(
@@ -159,6 +168,7 @@ pub fn run_stacking_task(
                         &settings,
                         &mut planetary_ctx,
                         &mut stacking_failed,
+                        want_display,
                     ))
                 }
                 _ => rt.block_on(pipeline::process_frame_with_stacking(
@@ -166,13 +176,15 @@ pub fn run_stacking_task(
                     &settings,
                     &mut stacking_ctx,
                     &mut stacking_failed,
+                    want_display,
                 )),
             };
             registration_succeeded = outcome.frame_added;
             showing_stack = outcome.showing_stack;
             stack_reset = outcome.stack_reset;
             rejected_because = outcome.rejected_because;
-            Arc::new(outcome.display_frame)
+            stack_depth = outcome.stack_depth;
+            outcome.display_frame.map(Arc::new)
         } else {
             debug!(
                 stacking = settings.stacking,
@@ -184,7 +196,8 @@ pub fn run_stacking_task(
             showing_stack = false;
             stack_reset = false;
             rejected_because = None;
-            Arc::clone(&frame)
+            stack_depth = 0;
+            Some(Arc::clone(&frame))
         };
 
         // The stack restarted on a sharper reference, so the integration the
@@ -211,8 +224,12 @@ pub fn run_stacking_task(
             comet_ctx = None;
             planetary_ctx = None;
             rt.block_on(state.reset_counters());
-            display_frame = Arc::clone(&frame);
+            // Always displayed, even when the compute above was skipped: the stack this
+            // frame was measured against no longer exists, so the view must stop showing
+            // it. The raw sub is a handle clone, not a copy.
+            display_frame = Some(Arc::clone(&frame));
             showing_stack = false;
+            stack_depth = 0;
             // The stack this frame failed against no longer exists, so the
             // verdict against it describes nothing the user can act on. Wanderer
             // treats a failed registration as the *signal*, not as a fault.
@@ -228,10 +245,16 @@ pub fn run_stacking_task(
         // Push-To plugin the solve is a no-op, and spawning it would keep a
         // second handle on the frame alive long enough to make the render
         // task's `Arc::try_unwrap` fail and copy instead.
-        if solving::plate_solve_available(&state) {
+        //
+        // Skipped along with the display copy on an iteration that made none: the solve
+        // wants the stack, not a single sub, and `try_plate_solve` is rate-limited by
+        // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
+        if let (true, Some(frame_to_solve)) =
+            (solving::plate_solve_available(&state), display_frame.as_ref())
+        {
             rt.spawn({
                 let state = Arc::clone(&state);
-                let solve_frame = Arc::clone(&display_frame);
+                let solve_frame = Arc::clone(frame_to_solve);
                 async move {
                     solving::try_plate_solve(&state, solve_frame).await;
                 }
@@ -261,17 +284,30 @@ pub fn run_stacking_task(
         // copy the very frame this indirection exists to avoid.
         drop(frame);
 
-        // Send to render channel (non-blocking — skip if render is busy)
+        // Send to render channel (non-blocking — skip if render is busy). No frame at
+        // all means this iteration deliberately made no display copy; the render task
+        // still has the previous one.
+        let Some(display_frame) = display_frame else {
+            continue;
+        };
         let render_msg = StackedFrame {
             display_frame,
             showing_stack,
             was_stacked,
             frame_number,
             settings,
+            stack_depth,
         };
-        if let Err(mpsc::TrySendError::Disconnected(_)) = render_tx.try_send(render_msg) {
-            debug!("Render channel disconnected, stopping stacking task");
-            break;
+        match render_tx.try_send(render_msg) {
+            Ok(()) => render_depth.sent(),
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                debug!("Render channel disconnected, stopping stacking task");
+                break;
+            }
+            // Full: the frame is dropped, and the depth already reflects that the
+            // render task has work. Counting a send that did not happen would pin the
+            // stacking task into never computing a display frame again.
+            Err(mpsc::TrySendError::Full(_)) => {}
         }
     }
 

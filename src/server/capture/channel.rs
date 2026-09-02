@@ -9,11 +9,60 @@
 //! `Arc<Frame>` is used to share frame data between the stacking and storage
 //! channels without memory duplication.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::camera::RawFrame;
 use crate::frame::Frame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
+
+/// How many frames the stacking task has handed the render task that it has not
+/// picked up yet.
+///
+/// # Why this exists
+///
+/// `MasterStack::compute()` copies the running mean out of the accumulator into a fresh
+/// frame — 434 MB read and 108 MB allocated and written, on a 3008x3008 colour stack.
+/// The stacking task ran it every iteration, and the render task then called
+/// `drain_to_latest` and threw about half of them away unread. The waste landed on the
+/// one thread that is dropping camera frames, and a dropped camera frame is lost sky.
+///
+/// `std::sync::mpsc::SyncSender` exposes no length, so the sender cannot ask the channel
+/// whether the last frame was consumed. This is that length: incremented on a successful
+/// send, decremented for every message taken out — including the ones `drain_to_latest`
+/// discards, which is why the render task decrements per message rather than once per
+/// iteration.
+///
+/// Reading it is advisory. A frame can be taken between the check and the send, in which
+/// case the stacking task merely does work it could have skipped; nothing downstream
+/// depends on the count being exact, and the render task's own drain still handles a
+/// queue that grew anyway.
+#[derive(Clone, Debug, Default)]
+pub struct RenderQueueDepth(Arc<AtomicUsize>);
+
+impl RenderQueueDepth {
+    /// Frames queued for the render task and not yet picked up.
+    pub fn pending(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Record a frame handed to the render channel.
+    pub fn sent(&self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a frame taken off the render channel.
+    ///
+    /// Saturating, because the count is advisory and a decrement racing a reset must not
+    /// wrap into billions and pin the stacking task into never computing again.
+    pub fn taken(&self) {
+        let _ = self
+            .0
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                Some(n.saturating_sub(1))
+            });
+    }
+}
 
 /// Maximum memory budget for in-flight frame queues (2 GB).
 ///
@@ -71,11 +120,57 @@ pub struct StackedFrame {
     pub frame_number: u64,
     /// Snapshot of capture settings (for render pipeline configuration).
     pub settings: CaptureSettings,
+    /// Frames in the accumulated stack, or `0` when this is a single sub.
+    ///
+    /// The render task's analysis cache refreshes on proportional growth in this, not on
+    /// elapsed frames, because the statistics it holds fall as `1/sqrt(N)`.
+    pub stack_depth: u32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn depth_counts_sends_and_takes() {
+        let depth = RenderQueueDepth::default();
+        assert_eq!(depth.pending(), 0);
+        depth.sent();
+        depth.sent();
+        assert_eq!(depth.pending(), 2);
+        depth.taken();
+        assert_eq!(depth.pending(), 1);
+        depth.taken();
+        assert_eq!(depth.pending(), 0);
+    }
+
+    /// The failure mode this guards is not a wrong number, it is a **frozen live view**.
+    ///
+    /// The stacking task only builds a display frame when `pending()` is zero. If a
+    /// decrement ever wrapped below zero it would land on `usize::MAX`, the check would
+    /// never pass again, and the preview would stop updating for the rest of the session
+    /// with every other part of the pipeline still running normally.
+    #[test]
+    fn a_take_without_a_send_cannot_wrap_the_depth() {
+        let depth = RenderQueueDepth::default();
+        depth.taken();
+        depth.taken();
+        assert_eq!(depth.pending(), 0, "depth must saturate at zero, not wrap");
+
+        depth.sent();
+        assert_eq!(depth.pending(), 1, "and must still count normally after");
+    }
+
+    /// Both ends hold clones; they have to see one count.
+    #[test]
+    fn clones_share_one_count() {
+        let sender = RenderQueueDepth::default();
+        let receiver = sender.clone();
+        sender.sent();
+        assert_eq!(receiver.pending(), 1);
+        receiver.taken();
+        assert_eq!(sender.pending(), 0);
+    }
 
     #[test]
     fn test_max_queue_capacity_typical_frame() {
