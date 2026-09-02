@@ -524,6 +524,17 @@ Rules:
   size, which gets expensive to compute or, worse, silently collapses to a single chunk
   (no parallelism) when it doesn't divide evenly. Dispatch per plane instead; see
   `render::black_point::subtract_black_point`.
+- **The chunk length is a function of the core count, so nothing may depend on its exact
+  value.** `balanced_chunk_len` targets twelve chunks per worker, sized for asymmetric
+  cores rather than for x86: RK3588 pairs 4xA76 at 2.4 GHz with 4xA55 at 1.8 GHz, and at
+  four chunks per worker the split leaves work stealing almost nothing to rebalance, so
+  the critical path ends on an A55. Twelve makes the tail small enough to migrate and
+  costs a symmetric machine only the extra bookkeeping, which the 8192-element floor
+  bounds. Callers that recover an absolute index as `block * chunk` are correct for any
+  value and must stay that way — the divisor has already moved once. Three tests pin it
+  from different angles: `render::denoise` (two chunk strides that have to stay in step),
+  `detection::luminance::parallel_matches_the_sequential_projection`, and Pro's
+  `test_planar_kernel_is_invariant_to_chunking`.
 - **`get_pixel` in a whole-frame loop is a review flag too, not just a correctness one.**
   It's fine for fixtures and spot checks, but wrong for a traversal that visits every
   sample — planar layout already hands you the contiguous run that makes the loop a slice
@@ -854,6 +865,25 @@ asymmetry is why two of these three live on the stacking side.
   frame count, and `skipping_the_display_copy_still_stacks_the_frame` pins that. Getting
   it wrong would silently discard integration time exactly when the render thread is
   behind, which is the condition the flag exists to detect.
+
+- **The queue budget, derived from the board rather than hardcoded.**
+  `channel::frame_queue_budget_bytes` is `min(MemTotal / 5, 1 GiB)`, floored at 64 MiB,
+  or 512 MiB where `/proc/meminfo` cannot be read. It replaced a flat 2 GB, which is a
+  quarter of an 8 GB Pi 5 and half of a 4 GB one — and the queues are never the only
+  claim: a 3008x3008 colour stack also holds a 434 MB accumulator and allocates a 108 MB
+  frame per `compute()`. `MemTotal` rather than `MemAvailable` on purpose, so two
+  sessions started minutes apart size their channels the same way and a queue-depth
+  report from the field is reproducible.
+
+  Two things about it are not obvious. **The `[2, 256]` clamp overrides the budget** and
+  has to: `task.rs` sends the probe frame into the stacking and storage channels before
+  their consumer threads exist, so a capacity that could reach zero would deadlock the
+  start of every session. And **each channel is sized from the payload it carries** —
+  `pipeline_capacities` takes the raw and display sizes separately, because the two
+  capture channels move `Arc<RawFrame>` (18 MB on a 9 MP sensor) while only the render
+  channel moves the debayered f32 `Frame` (108 MB). Sizing all three from the display
+  frame, as this used to, made the capture channels six times shallower than intended,
+  and a full capture channel is a dropped frame, which is lost sky.
 
 - **The preview pipeline at sensor resolution.** `render_task::preview_bin_factor` bins
   the frame to the largest integer factor that still covers every connected client's

@@ -243,6 +243,45 @@ mod tests {
         }
     }
 
+    /// `merge_ycbcr` chunks the interleaved buffer by `chunk * 3` and indexes the
+    /// planes by `block * chunk`, so two different strides have to stay in step — and
+    /// `balanced_chunk_len` derives both from `rayon::current_num_threads()`. Any
+    /// change to that divisor moves where every chunk boundary falls, on every caller
+    /// that recovers an absolute index this way; this is the cheapest place to notice
+    /// if one of them stops being invariant to it.
+    ///
+    /// Sized past the 8192-element floor on purpose: below it both pools get a single
+    /// chunk and the test proves nothing.
+    #[test]
+    fn the_ycbcr_round_trip_is_invariant_to_thread_count() {
+        let (w, h) = (641, 409);
+        let original = ramp_rgb(w, h);
+
+        let run = |threads: usize| {
+            let mut buf = original.clone();
+            let mut luma = vec![0.0; w * h];
+            let mut cb = vec![0.0; w * h];
+            let mut cr = vec![0.0; w * h];
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    split_ycbcr(&buf, &mut luma, &mut cb, &mut cr);
+                    merge_ycbcr(&mut buf, &luma, &cb, &cr);
+                });
+            (buf, luma, cb, cr)
+        };
+
+        let (narrow_buf, narrow_luma, narrow_cb, narrow_cr) = run(1);
+        let (wide_buf, wide_luma, wide_cb, wide_cr) = run(16);
+
+        assert_eq!(narrow_buf, wide_buf, "the merged image depends on core count");
+        assert_eq!(narrow_luma, wide_luma, "the luma plane depends on core count");
+        assert_eq!(narrow_cb, wide_cb, "the Cb plane depends on core count");
+        assert_eq!(narrow_cr, wide_cr, "the Cr plane depends on core count");
+    }
+
     /// A grey frame has zero chroma, so neither filter may invent any — this is
     /// what keeps a mono sensor (replicated across RGB by the encoders) from
     /// picking up a colour cast.
