@@ -234,7 +234,12 @@ SER is the standard format for planetary imaging - uncompressed with per-frame t
 | 100| RGB | RGB color (3 channels) |
 | 101| BGR | BGR color (3 channels) |
 
-Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS/frame_NNNNNN.fits` and `captures/stacked/DD-MM-YYYY_HH-MM-SS.fits`.
+Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser` for
+Planetary) and `captures/stacked/DD-MM-YYYY_HH-MM-SS-stacking.fits` (named after its raw session).
+
+`<mode>` is `live`/`wanderer`/`stacking`, from `CaptureMode::session_dir_suffix`. A collision inside
+one second inserts a counter before the suffix, which is why `from_session_dir_name` matches on the
+end of the name.
 
 ## Streaming Protocols
 

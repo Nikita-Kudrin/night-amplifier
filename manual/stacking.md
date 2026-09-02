@@ -54,3 +54,31 @@ Wanderer mode restarts the stack when you swing the telescope to a new object, w
 the incoming field no longer matching the reference. Frames that the checks above drop for
 *quality* — soft stars, a loose fit — do not count: the field is still the same field, so the stack
 keeps building and rides out the cloud rather than starting over.
+
+## Saving raw frames
+
+Raw sub-exposures are saved under **Settings → Storage → Save Raw Frames**, which lists the three
+capture modes separately. Live view, Wanderer and Stacking are chosen independently, so you can
+keep the subs from a Wanderer sweep without also filling the card during every focusing run. All
+three start off.
+
+Deep Sky and Comet write one FITS file per exposure. Planetary writes a single SER container per
+session instead, in every mode — a planetary Live view run records the same way a planetary
+stacking run does.
+
+Each session writes to its own folder under `captures/raw/`, named for the time it started and the
+mode that filled it — `21-14-08-live`, `21-31-52-wanderer`, `22-03-17-stacking`. Switching mode
+without stopping the capture opens a new folder, so a folder only ever holds frames captured in the
+mode it names. Two sessions starting inside the same second get a counter before the suffix
+(`21-14-08_2-stacking`) rather than sharing a folder.
+
+Frame numbers run for the whole capture, not per folder, so a folder opened by a mode switch starts
+partway through the sequence — `frame_000517.fits` rather than `frame_000001.fits`.
+
+Saving in Live view is worth knowing about before you turn it on: it writes one file per exposure,
+and at the short exposures used for focusing that is a great many files very quickly. If the disk
+cannot keep up, frames are dropped rather than made to wait — the capture never stalls, but the set
+on disk will have gaps.
+
+**Save Stacked Image** stays Stacking-only. Live view builds no stack, and Wanderer discards its
+stack every time the telescope moves, so there is no single result to write.

@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref} from 'vue'
 import SettingsPanel from './SettingsPanel.vue'
+import {DEFAULT_SETTINGS} from '../constants/index.js'
 
 // Mock the API module
 vi.mock('../composables/api.js', () => ({
@@ -38,17 +39,20 @@ describe('SettingsPanel', () => {
             auto_stretch_intensity: 0.3,
             stacking: true,
             background_subtraction: true,
-            save_raw_frames: false,
+            raw_frame_saving: {live_view: false, wanderer: false, stacking: false},
             save_stacked_image: false,
         }
     }
 
     function createMockProvides(overrides = {}) {
         return {
-            settings: ref({
-                ...createDefaultSettings(),
-                ...overrides.settings,
-            }),
+            // `settings: null` mounts the panel as it exists before the first payload
+            // arrives, which is a state the panel really renders in.
+            settings: ref(
+                overrides.settings === null
+                    ? null
+                    : {...createDefaultSettings(), ...overrides.settings}
+            ),
             refreshSettings: vi.fn().mockResolvedValue(undefined),
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
             capabilities: ref({
@@ -392,38 +396,88 @@ describe('SettingsPanel', () => {
         })
     })
 
-    describe('Storage Section Visibility', () => {
-        it('hides storage section in live view mode (stacking disabled)', () => {
-            const wrapper = mountSettingsPanel({
-                settings: {stacking: false, wanderer_mode: false},
-            })
+    describe('Storage Section', () => {
+        // Raw frames can now be saved in any mode, so the section is no longer gated on
+        // being in Stacking - only the stacked-image switch still is.
+        const modes = [
+            ['live view', {stacking: false, wanderer_mode: false}],
+            ['wanderer', {stacking: true, wanderer_mode: true}],
+            ['stacking', {stacking: true, wanderer_mode: false}],
+        ]
 
-            const storageTitle = wrapper
-                .findAll('.section-title')
-                .find((s) => s.text() === 'Storage')
-            expect(storageTitle).toBeFalsy()
-        })
-
-        it('hides storage section in wanderer mode', () => {
-            const wrapper = mountSettingsPanel({
-                settings: {stacking: true, wanderer_mode: true},
-            })
-
-            const storageTitle = wrapper
-                .findAll('.section-title')
-                .find((s) => s.text() === 'Storage')
-            expect(storageTitle).toBeFalsy()
-        })
-
-        it('shows storage section in stacking mode', () => {
-            const wrapper = mountSettingsPanel({
-                settings: {stacking: true, wanderer_mode: false},
-            })
+        it.each(modes)('shows the storage section in %s mode', (_name, settings) => {
+            const wrapper = mountSettingsPanel({settings})
 
             const storageTitle = wrapper
                 .findAll('.section-title')
                 .find((s) => s.text() === 'Storage')
             expect(storageTitle).toBeTruthy()
+        })
+
+        it.each(modes)('offers all three raw-frame switches in %s mode', (_name, settings) => {
+            const wrapper = mountSettingsPanel({settings})
+
+            expect(findToggleByLabel(wrapper, 'Live view')).toBeTruthy()
+            expect(findToggleByLabel(wrapper, 'Wanderer')).toBeTruthy()
+            expect(findToggleByLabel(wrapper, 'Stacking')).toBeTruthy()
+        })
+
+        it('hides the stacked-image switch outside stacking mode', () => {
+            const wrapper = mountSettingsPanel({
+                settings: {stacking: true, wanderer_mode: true},
+            })
+
+            expect(() => findToggleByLabel(wrapper, 'Save Stacked Image')).toThrow()
+        })
+
+        // The server takes the group whole, so a partial object would clear the modes
+        // the user did not touch.
+        it('sends the whole selection when one mode is toggled', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {
+                    raw_frame_saving: {live_view: false, wanderer: false, stacking: true},
+                },
+            })
+
+            const wandererToggle = findToggleByLabel(wrapper, 'Wanderer')
+            await wandererToggle.setValue(true)
+            await wandererToggle.trigger('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                raw_frame_saving: {live_view: false, wanderer: true, stacking: true},
+            })
+        })
+
+        // A shallow spread of DEFAULT_SETTINGS hands the panel a reference into the
+        // shared constant, and the section renders before the first settings payload
+        // arrives - so a click in that window used to edit the defaults every later
+        // fallback reads.
+        it('does not write through to the shared defaults before settings arrive', async () => {
+            const wrapper = mountSettingsPanel({settings: null})
+
+            const liveToggle = findToggleByLabel(wrapper, 'Live view')
+            await liveToggle.setValue(true)
+            await liveToggle.trigger('change')
+            await flushPromises()
+
+            expect(DEFAULT_SETTINGS.raw_frame_saving).toEqual({
+                live_view: false,
+                wanderer: false,
+                stacking: false,
+            })
+        })
+
+        it('reflects the saved selection in the switches', () => {
+            const wrapper = mountSettingsPanel({
+                settings: {
+                    raw_frame_saving: {live_view: true, wanderer: false, stacking: true},
+                },
+            })
+
+            expect(findToggleByLabel(wrapper, 'Live view').element.checked).toBe(true)
+            expect(findToggleByLabel(wrapper, 'Wanderer').element.checked).toBe(false)
+            expect(findToggleByLabel(wrapper, 'Stacking').element.checked).toBe(true)
         })
     })
 

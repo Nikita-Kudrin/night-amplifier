@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use super::state::{
     CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
-    SensorCorrectionSettings, TelescopeSettings,
+    RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
@@ -35,7 +35,17 @@ pub struct PersistedSettings {
     pub background_subtraction: bool,
     #[serde(default)]
     pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
-    pub save_raw_frames: bool,
+    /// Which capture modes write their raw frames to disk.
+    ///
+    /// `None` marks a settings file written before the per-mode switches existed, which
+    /// is what [`PersistedSettings::resolved_raw_frame_saving`] migrates from
+    /// `save_raw_frames`. A file this version wrote always carries the group.
+    #[serde(default)]
+    pub raw_frame_saving: Option<RawFrameSaving>,
+    /// The single pre-per-mode switch, read only to migrate a settings file written by
+    /// an older build. Never written back — dropping it is what completes the migration.
+    #[serde(default, skip_serializing)]
+    pub save_raw_frames: Option<bool>,
     pub save_stacked_image: bool,
     pub stacking_type: StackingType,
     #[serde(default)]
@@ -196,7 +206,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             rejection_method: settings.rejection_method,
             background_subtraction: settings.background_subtraction,
             background_extraction_algorithm: settings.background_extraction_algorithm,
-            save_raw_frames: settings.save_raw_frames,
+            raw_frame_saving: Some(settings.raw_frame_saving),
+            save_raw_frames: None,
             save_stacked_image: settings.save_stacked_image,
             stacking_type: settings.stacking_type,
             weighting_preset: settings.weighting_preset,
@@ -237,8 +248,27 @@ impl From<&CaptureSettings> for PersistedSettings {
     }
 }
 
+impl PersistedSettings {
+    /// The per-mode selection this file describes, migrating an older file on the way.
+    ///
+    /// A pre-per-mode build only ever saved raw frames in Stacking — the gate was
+    /// `stacking && !wanderer_mode` — so that is the one switch a legacy `true` may
+    /// turn on. Without this an upgrade reads the old key as an unknown field and
+    /// silently drops it, and the first save writes the loss back out for good.
+    fn resolved_raw_frame_saving(&self) -> RawFrameSaving {
+        if let Some(raw_frame_saving) = self.raw_frame_saving {
+            return raw_frame_saving;
+        }
+        RawFrameSaving {
+            stacking: self.save_raw_frames.unwrap_or(false),
+            ..RawFrameSaving::default()
+        }
+    }
+}
+
 impl From<PersistedSettings> for CaptureSettings {
     fn from(persisted: PersistedSettings) -> Self {
+        let raw_frame_saving = persisted.resolved_raw_frame_saving();
         Self {
             exposure_us: persisted.exposure_us,
             gain: persisted.gain,
@@ -250,7 +280,7 @@ impl From<PersistedSettings> for CaptureSettings {
             rejection_method: persisted.rejection_method,
             background_subtraction: persisted.background_subtraction,
             background_extraction_algorithm: persisted.background_extraction_algorithm,
-            save_raw_frames: persisted.save_raw_frames,
+            raw_frame_saving,
             save_stacked_image: persisted.save_stacked_image,
             stacking_type: persisted.stacking_type,
             weighting_preset: persisted.weighting_preset,

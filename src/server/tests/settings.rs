@@ -208,30 +208,49 @@ async fn test_settings_persist_across_requests() {
 }
 
 #[tokio::test]
-async fn test_update_settings_save_raw_frames() {
+async fn test_update_settings_raw_frame_saving() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Initially save_raw_frames should be false (default)
+    let per_mode = |json: &serde_json::Value, mode: &str| {
+        json["data"]["raw_frame_saving"][mode].as_bool().unwrap()
+    };
+
+    // Every mode starts off
     let (status, json) = get_json(&app, "/api/settings").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!json["data"]["save_raw_frames"].as_bool().unwrap());
+    assert!(!per_mode(&json, "live_view"));
+    assert!(!per_mode(&json, "wanderer"));
+    assert!(!per_mode(&json, "stacking"));
 
-    // Enable save_raw_frames
-    let (status, json) = post_json(&app, "/api/settings", json!({ "save_raw_frames": true })).await;
+    // The whole group is sent at once, so one mode can be enabled without the others
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "raw_frame_saving": {"live_view": true, "wanderer": false, "stacking": true} }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(json["data"]["save_raw_frames"].as_bool().unwrap());
+    assert!(per_mode(&json, "live_view"));
+    assert!(!per_mode(&json, "wanderer"));
+    assert!(per_mode(&json, "stacking"));
 
-    // Verify setting persists
+    // Verify the selection persists
     let (status, json) = get_json(&app, "/api/settings").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(json["data"]["save_raw_frames"].as_bool().unwrap());
+    assert!(per_mode(&json, "live_view"));
+    assert!(per_mode(&json, "stacking"));
 
-    // Disable save_raw_frames
-    let (status, json) =
-        post_json(&app, "/api/settings", json!({ "save_raw_frames": false })).await;
+    // And that it can be cleared
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": false} }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!json["data"]["save_raw_frames"].as_bool().unwrap());
+    assert!(!per_mode(&json, "live_view"));
+    assert!(!per_mode(&json, "stacking"));
 }
 
 #[tokio::test]
@@ -283,7 +302,7 @@ fn test_capture_settings_default_values() {
 #[test]
 fn test_capture_settings_default_save_frames() {
     let settings = CaptureSettings::default();
-    assert!(!settings.save_raw_frames); // Should be disabled by default
+    assert_eq!(settings.raw_frame_saving, RawFrameSaving::default()); // Off in every mode
     assert!(!settings.save_stacked_image); // Should be disabled by default
 }
 
@@ -318,7 +337,7 @@ fn test_settings_response_from_settings() {
         stacking: false,
         rejection_sigma: 3.0,
         background_subtraction: false,
-        save_raw_frames: false,
+        raw_frame_saving: RawFrameSaving::default(),
         save_stacked_image: true,
         stacking_type: StackingType::DeepSky,
         ..Default::default()
@@ -334,7 +353,7 @@ fn test_settings_response_from_settings() {
     assert!(!response.stacking);
     assert_eq!(response.rejection_sigma, 3.0);
     assert!(!response.background_subtraction);
-    assert!(!response.save_raw_frames);
+    assert_eq!(response.raw_frame_saving, RawFrameSaving::default());
     assert!(response.save_stacked_image);
 }
 
@@ -342,27 +361,59 @@ fn test_settings_response_from_settings() {
 fn test_settings_response_includes_save_options() {
     use crate::server::SettingsResponse;
 
+    let raw_frame_saving = RawFrameSaving {
+        live_view: true,
+        wanderer: false,
+        stacking: true,
+    };
     let settings = CaptureSettings {
-        save_raw_frames: true,
+        raw_frame_saving,
         save_stacked_image: false,
         ..Default::default()
     };
 
     let response = SettingsResponse::from(&settings);
-    assert!(response.save_raw_frames);
+    assert_eq!(response.raw_frame_saving, raw_frame_saving);
     assert!(!response.save_stacked_image);
 }
 
+/// Live view saves raw frames when Live view is one of the modes selected — the whole
+/// point of the per-mode switches. This used to be unconditionally off.
 #[tokio::test]
-async fn test_disk_writer_disabled_in_live_view_mode() {
+async fn test_disk_writer_enabled_in_live_view_when_live_view_is_selected() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Set live view mode (stacking=false) and enable save_raw_frames
     let (status, _) = post_json(
         &app,
         "/api/settings",
-        json!({ "stacking": false, "wanderer_mode": false, "save_raw_frames": true }),
+        json!({
+            "stacking": false,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": true, "wanderer": false, "stacking": false}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(state.disk_writer.is_enabled());
+}
+
+/// Selecting a mode enables saving in that mode only. Stacking-only selection must
+/// leave a Live view session writing nothing, or the switches mean nothing.
+#[tokio::test]
+async fn test_disk_writer_disabled_in_live_view_when_only_stacking_is_selected() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "stacking": false,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": true}
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -371,15 +422,36 @@ async fn test_disk_writer_disabled_in_live_view_mode() {
 }
 
 #[tokio::test]
-async fn test_disk_writer_disabled_in_wanderer_mode() {
+async fn test_disk_writer_enabled_in_wanderer_when_wanderer_is_selected() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Set wanderer mode (stacking=true, wanderer_mode=true) and enable both save options
     let (status, _) = post_json(
         &app,
         "/api/settings",
-        json!({ "stacking": true, "wanderer_mode": true, "save_raw_frames": true, "save_stacked_image": true }),
+        json!({
+            "stacking": true,
+            "wanderer_mode": true,
+            "raw_frame_saving": {"live_view": false, "wanderer": true, "stacking": false}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(state.disk_writer.is_enabled());
+}
+
+/// Wanderer has a stack but throws it away on every move, so the stacked-image switch
+/// must not bring the writer up there on its own.
+#[tokio::test]
+async fn test_stacked_image_alone_does_not_enable_the_writer_in_wanderer() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "stacking": true, "wanderer_mode": true, "save_stacked_image": true }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -392,11 +464,14 @@ async fn test_disk_writer_enabled_in_stacking_mode() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Set stacking mode (stacking=true, wanderer_mode=false) and enable save_raw_frames
     let (status, _) = post_json(
         &app,
         "/api/settings",
-        json!({ "stacking": true, "wanderer_mode": false, "save_raw_frames": true }),
+        json!({
+            "stacking": true,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": true}
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -404,42 +479,153 @@ async fn test_disk_writer_enabled_in_stacking_mode() {
     assert!(state.disk_writer.is_enabled());
 }
 
+/// Switching into a mode that saves nothing has to take the writer back down, or it
+/// keeps a session directory open for frames that will never be queued.
 #[tokio::test]
-async fn test_disk_writer_disabled_when_switching_from_stacking_to_live_view() {
+async fn test_disk_writer_disabled_when_switching_to_a_mode_that_saves_nothing() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Enable stacking mode + save_raw_frames
     post_json(
         &app,
         "/api/settings",
-        json!({ "stacking": true, "wanderer_mode": false, "save_raw_frames": true }),
+        json!({
+            "stacking": true,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": true}
+        }),
     )
     .await;
     assert!(state.disk_writer.is_enabled());
 
-    // Switch to live view
     post_json(&app, "/api/settings", json!({ "stacking": false })).await;
     assert!(!state.disk_writer.is_enabled());
 }
 
+/// Flipping a switch between sessions must not open a directory: capture start opens the
+/// right one, and doing it here left an empty dated folder behind on every toggle.
 #[tokio::test]
-async fn test_disk_writer_disabled_when_switching_from_stacking_to_wanderer() {
+async fn test_no_session_directory_is_opened_while_idle() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
 
-    // Enable stacking mode + save_stacked_image
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "stacking": false,
+            "raw_frame_saving": {"live_view": true, "wanderer": false, "stacking": false}
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    assert!(state.disk_writer.is_enabled());
+    assert!(
+        state.disk_writer.session_dir().is_none(),
+        "an idle settings change opened a capture directory"
+    );
+}
+
+/// The session directory records the mode that filled it. A mode change mid-capture has
+/// to roll it, or stacked subs keep landing in a folder named `-live`.
+#[tokio::test]
+async fn test_session_directory_rolls_when_the_capture_mode_changes() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+    state.set_capture_state(CaptureState::Capturing).await;
+
     post_json(
         &app,
         "/api/settings",
-        json!({ "stacking": true, "wanderer_mode": false, "save_stacked_image": true }),
+        json!({
+            "stacking": false,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": true, "wanderer": true, "stacking": true}
+        }),
     )
     .await;
-    assert!(state.disk_writer.is_enabled());
 
-    // Switch to wanderer mode
-    post_json(&app, "/api/settings", json!({ "wanderer_mode": true })).await;
-    assert!(!state.disk_writer.is_enabled());
+    let live_dir = state.disk_writer.session_dir().expect("a live session");
+    assert_eq!(
+        CaptureMode::from_session_dir_name(&state.disk_writer.session_name().unwrap()),
+        Some(CaptureMode::LiveView)
+    );
+
+    post_json(&app, "/api/settings", json!({ "stacking": true })).await;
+
+    let stacking_dir = state.disk_writer.session_dir().expect("a stacking session");
+    assert_ne!(
+        stacking_dir, live_dir,
+        "the live-view folder was reused for a stacking capture"
+    );
+    assert_eq!(
+        CaptureMode::from_session_dir_name(&state.disk_writer.session_name().unwrap()),
+        Some(CaptureMode::Stacking)
+    );
+}
+
+/// Rolling back into a mode already used this session, inside the same wall-clock
+/// second, must still open a fresh folder. The timestamp alone does not distinguish
+/// them, and `create_dir_all` succeeds silently on an existing directory — so the two
+/// segments used to merge, and a Planetary `capture.ser` was truncated by the second.
+#[tokio::test]
+async fn rolling_back_within_a_second_opens_a_separate_directory() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+    state.set_capture_state(CaptureState::Capturing).await;
+
+    post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "stacking": true,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": true, "wanderer": true, "stacking": true}
+        }),
+    )
+    .await;
+    let first_stacking = state.disk_writer.session_dir().expect("a stacking session");
+
+    post_json(&app, "/api/settings", json!({ "stacking": false })).await;
+    let live = state.disk_writer.session_dir().expect("a live session");
+    assert_ne!(first_stacking, live);
+
+    post_json(&app, "/api/settings", json!({ "stacking": true })).await;
+    let second_stacking = state.disk_writer.session_dir().expect("a stacking session");
+
+    assert_ne!(
+        second_stacking, first_stacking,
+        "the second Stacking segment reopened the first segment's directory: FITS \
+         frames merge into one folder and a Planetary capture.ser is truncated"
+    );
+}
+
+/// Rolling must happen only on a real mode change. An unrelated settings update while
+/// saving is on has to leave the open folder alone, or a session ends up scattered
+/// across a folder per slider move.
+#[tokio::test]
+async fn test_unrelated_settings_updates_keep_the_same_session_directory() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+    state.set_capture_state(CaptureState::Capturing).await;
+
+    post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "stacking": true,
+            "wanderer_mode": false,
+            "raw_frame_saving": {"live_view": false, "wanderer": false, "stacking": true}
+        }),
+    )
+    .await;
+    let first = state.disk_writer.session_dir();
+    assert!(first.is_some());
+
+    post_json(&app, "/api/settings", json!({ "gain": 120 })).await;
+
+    assert_eq!(state.disk_writer.session_dir(), first);
 }
 
 #[tokio::test]

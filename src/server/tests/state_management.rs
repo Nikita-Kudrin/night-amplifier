@@ -437,7 +437,11 @@ async fn test_send_error_broadcasts_event() {
 
 #[tokio::test]
 async fn test_app_state_has_disk_writer() {
-    let (state, _disk_writer) = AppState::new();
+    // Not `AppState::new()`: it builds the writer from the default config, whose base
+    // directory is `./captures` relative to wherever the suite was run from.
+    let temp_dir = std::env::temp_dir().join("night_amplifier_test_state_disk_writer");
+    let (state, _disk_writer) =
+        AppState::with_disk_writer_config(DiskWriterConfig::new(&temp_dir));
 
     // Disk writer handle should be accessible
     assert!(state.disk_writer.is_enabled()); // Default enabled
@@ -445,6 +449,8 @@ async fn test_app_state_has_disk_writer() {
     // Should be able to toggle
     state.disk_writer.set_enabled(false);
     assert!(!state.disk_writer.is_enabled());
+
+    std::fs::remove_dir_all(&temp_dir).ok();
 }
 
 #[tokio::test]

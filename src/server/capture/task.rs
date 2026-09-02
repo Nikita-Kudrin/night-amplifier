@@ -1,5 +1,6 @@
 use super::channel;
 use super::config_overrides::*;
+use super::drop_log::DropLog;
 use super::watchdog::*;
 use crate::frame::Frame;
 use crate::server::capture::channel::{pipeline_capacities, QueueDepth};
@@ -29,9 +30,6 @@ pub async fn run_capture_loop(
 ) {
     use crate::server::camera_session::lifecycle;
 
-    // Transition to capturing state
-    state.set_capture_state(CaptureState::Capturing).await;
-
     debug!(camera_id = %camera_id, resumed = resume.is_some(), "Capture pipeline starting");
 
     // Capture the tokio runtime handle — this will be passed to all spawned
@@ -58,17 +56,28 @@ pub async fn run_capture_loop(
         return;
     }
 
+    // Only now, with the session directory in place. `sync_disk_session` opens no
+    // directory unless a capture is active, so flipping this earlier let a settings
+    // update land on a capture whose directory did not exist yet.
+    state.set_capture_state(CaptureState::Capturing).await;
+
     // Snapshot what a resume would need, now that the disk session exists and
     // the settings for this run are fixed. Recorded for every capture, because
     // a dropout can happen in any of them.
-    {
+    let settings = {
         let settings = state.settings.read().await.clone();
         *state.session_resume_plan.write().await = Some(SessionResumePlan {
             camera_id: camera_id.clone(),
-            settings,
+            settings: settings.clone(),
             disk_session_dir: state.disk_writer.session_dir(),
         });
-    }
+        settings
+    };
+
+    // Startup is not instantaneous, and a settings update that arrived during it saw an
+    // inactive capture and left the writer alone. Reconcile once against the settings
+    // this run is actually starting with.
+    storage::sync_disk_session(&state, &settings, true).await;
 
     // Take the handle from AppState (held by camera_session since connect).
     // This cancels any in-progress warmup and flips the phase to Capturing.
@@ -346,8 +355,14 @@ pub async fn run_capture_loop(
     .await
     .unwrap_or(None);
 
-    // End capture session
-    state.disk_writer.end_session();
+    // End capture session. Off the runtime: `end_session` waits for the writer to be
+    // told, because a SER container it never hears about is left without the frame count
+    // in its header and is unreadable. The producing threads are joined by now, so the
+    // queue is only draining and the wait is bounded.
+    {
+        let disk_writer = state.disk_writer.clone();
+        let _ = tokio::task::spawn_blocking(move || disk_writer.end_session()).await;
+    }
 
     // A plate solve runs on a detached task and can outlive the frame it was given
     // by minutes. Left alone it keeps the solve latch raised, so the *next* capture
@@ -408,6 +423,7 @@ pub(crate) fn run_capture_task(
         .checked_sub(STATUS_POLL_INTERVAL)
         .unwrap_or_else(Instant::now);
     let mut camera_ok = true;
+    let mut storage_drops = DropLog::default();
 
     loop {
         if state.is_cancelled() {
@@ -534,8 +550,7 @@ pub(crate) fn run_capture_task(
         );
 
         // Send to storage channel (non-blocking — independent dropping)
-        let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
-        if settings.save_raw_frames && is_stacking_mode && state.disk_writer.is_enabled() {
+        if settings.saves_raw_frames() && state.disk_writer.is_enabled() {
             let storage_msg = CapturedFrame {
                 frame: arc_frame,
                 frame_number,
@@ -545,7 +560,9 @@ pub(crate) fn run_capture_task(
             storage_depth.sent();
             if storage_tx.try_send(storage_msg).is_err() {
                 storage_depth.taken();
-                warn!(frame_number, "Raw frame dropped: storage pipeline busy");
+                if let Some(dropped) = storage_drops.record() {
+                    warn!(frame_number, dropped, "Raw frames dropped: storage pipeline busy");
+                }
             }
             telemetry_metrics::record_pipeline_queue_depth(
                 "capture_to_storage",
@@ -553,6 +570,13 @@ pub(crate) fn run_capture_task(
                 capacities.storage as u64,
             );
         }
+    }
+
+    if let Some(dropped) = storage_drops.flush() {
+        warn!(
+            dropped,
+            "Raw frames dropped since the last report: storage pipeline busy"
+        );
     }
 
     debug!("Capture task ended");

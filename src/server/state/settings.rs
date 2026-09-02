@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use super::capture_mode::{CaptureMode, RawFrameSaving};
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
@@ -29,8 +30,8 @@ pub struct CaptureSettings {
     pub background_subtraction: bool,
     /// Algorithm for background extraction (GridBilinear or RBF)
     pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
-    /// Enable saving raw frames to disk (FITS format)
-    pub save_raw_frames: bool,
+    /// Which capture modes write their raw frames to disk (FITS format)
+    pub raw_frame_saving: RawFrameSaving,
     /// Enable saving stacked image to disk (FITS + PNG)
     pub save_stacked_image: bool,
     /// Stacking type (Deep Sky or Planetary)
@@ -509,7 +510,7 @@ impl Default for CaptureSettings {
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
             preview_resolution: PreviewResolution::default(),
-            save_raw_frames: false,
+            raw_frame_saving: RawFrameSaving::default(),
             save_stacked_image: false,
             stacking_type: StackingType::default(),
             weighting_preset: WeightingPreset::default(),
@@ -549,6 +550,35 @@ impl Default for CaptureSettings {
 }
 
 impl CaptureSettings {
+    /// Which of the three capture modes this session is running in.
+    pub fn capture_mode(&self) -> CaptureMode {
+        if !self.stacking {
+            return CaptureMode::LiveView;
+        }
+        if self.wanderer_mode {
+            return CaptureMode::Wanderer;
+        }
+        CaptureMode::Stacking
+    }
+
+    /// Whether raw frames captured under these settings go to disk.
+    pub fn saves_raw_frames(&self) -> bool {
+        self.raw_frame_saving.saves(self.capture_mode())
+    }
+
+    /// Whether the finished stack goes to disk.
+    ///
+    /// Stacking mode only: Live view never builds one, and Wanderer throws its stack
+    /// away every time the telescope moves, so there is no single result to write.
+    pub fn saves_stacked_image(&self) -> bool {
+        self.save_stacked_image && self.capture_mode() == CaptureMode::Stacking
+    }
+
+    /// Whether the disk writer has anything at all to do.
+    pub fn disk_writing_enabled(&self) -> bool {
+        self.saves_raw_frames() || self.saves_stacked_image()
+    }
+
     /// Get the saturation boost config based on current settings
     pub fn saturation_boost_config(&self) -> SaturationBoostConfig {
         if self.saturation_boost {
@@ -678,6 +708,116 @@ mod tests {
         };
         let config = settings.to_capture_config();
         assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    /// `stacking: false` is Live view whatever `wanderer_mode` says. The frontend never
+    /// sends that pair, but the field is settable over the API on its own, and every
+    /// storage gate now resolves through this — so it has to land somewhere definite
+    /// rather than fall through to Stacking.
+    #[test]
+    fn capture_mode_reads_the_stacking_pair() {
+        let mode = |stacking, wanderer_mode| {
+            CaptureSettings {
+                stacking,
+                wanderer_mode,
+                ..CaptureSettings::default()
+            }
+            .capture_mode()
+        };
+
+        assert_eq!(mode(false, false), CaptureMode::LiveView);
+        assert_eq!(mode(false, true), CaptureMode::LiveView);
+        assert_eq!(mode(true, true), CaptureMode::Wanderer);
+        assert_eq!(mode(true, false), CaptureMode::Stacking);
+    }
+
+    /// The whole point of the feature: each mode reads its own switch and no other.
+    #[test]
+    fn saves_raw_frames_pairs_each_mode_with_its_own_switch() {
+        let cases = [
+            (false, false, CaptureMode::LiveView),
+            (true, true, CaptureMode::Wanderer),
+            (true, false, CaptureMode::Stacking),
+        ];
+
+        for (stacking, wanderer_mode, mode) in cases {
+            for enabled_mode in [
+                CaptureMode::LiveView,
+                CaptureMode::Wanderer,
+                CaptureMode::Stacking,
+            ] {
+                let raw_frame_saving = RawFrameSaving {
+                    live_view: enabled_mode == CaptureMode::LiveView,
+                    wanderer: enabled_mode == CaptureMode::Wanderer,
+                    stacking: enabled_mode == CaptureMode::Stacking,
+                };
+                let settings = CaptureSettings {
+                    stacking,
+                    wanderer_mode,
+                    raw_frame_saving,
+                    ..CaptureSettings::default()
+                };
+                assert_eq!(
+                    settings.saves_raw_frames(),
+                    enabled_mode == mode,
+                    "capturing in {mode:?} with only {enabled_mode:?} enabled"
+                );
+            }
+        }
+    }
+
+    /// A Live or Wanderer session has no finished stack, so the stacked-image switch
+    /// must stay inert there even now that raw saving is not gated on the mode.
+    #[test]
+    fn saves_stacked_image_stays_stacking_only() {
+        let saves = |stacking, wanderer_mode| {
+            CaptureSettings {
+                stacking,
+                wanderer_mode,
+                save_stacked_image: true,
+                ..CaptureSettings::default()
+            }
+            .saves_stacked_image()
+        };
+
+        assert!(!saves(false, false));
+        assert!(!saves(true, true));
+        assert!(saves(true, false));
+    }
+
+    /// Raw saving in a mode that writes no stacked image still has to bring the disk
+    /// writer up — this is the condition that used to read `stacking && !wanderer_mode`.
+    #[test]
+    fn disk_writing_is_enabled_by_raw_saving_alone_in_live_view() {
+        let settings = CaptureSettings {
+            stacking: false,
+            save_stacked_image: true,
+            raw_frame_saving: RawFrameSaving {
+                live_view: true,
+                ..Default::default()
+            },
+            ..CaptureSettings::default()
+        };
+
+        assert!(settings.disk_writing_enabled());
+        assert!(
+            !settings.saves_stacked_image(),
+            "the stacked image must not follow raw saving into Live view"
+        );
+    }
+
+    #[test]
+    fn disk_writing_is_disabled_when_the_current_mode_saves_nothing() {
+        let settings = CaptureSettings {
+            stacking: false,
+            raw_frame_saving: RawFrameSaving {
+                stacking: true,
+                ..Default::default()
+            },
+            ..CaptureSettings::default()
+        };
+
+        assert!(!settings.disk_writing_enabled());
     }
 
     #[test]

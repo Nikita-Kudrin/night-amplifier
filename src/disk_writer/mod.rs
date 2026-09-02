@@ -20,7 +20,7 @@ pub use config::{
     QUEUE_WARNING_THRESHOLD,
 };
 pub use error::DiskWriterError;
-pub use handle::DiskWriterHandle;
+pub use handle::{DiskWriterHandle, OpenSession};
 pub use worker::DiskWriter;
 
 #[cfg(test)]
@@ -36,7 +36,6 @@ impl DiskWriter {
         let (sender, receiver) = mpsc::sync_channel(config.max_queue_size);
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let queue_warning = Arc::new(AtomicBool::new(false));
-        let session_dir = Arc::new(RwLock::new(None));
         let enabled = Arc::new(AtomicBool::new(config.enabled));
 
         // Create directories
@@ -50,18 +49,13 @@ impl DiskWriter {
             error!(error = %e, path = ?stacked_dir, "Failed to create stacked captures directory");
         }
 
-        let writer = Self::new_internal(
-            receiver,
-            Arc::clone(&queue_depth),
-            Arc::clone(&session_dir),
-            stacked_dir.clone(),
-        );
+        let writer = Self::new_internal(receiver, Arc::clone(&queue_depth), stacked_dir.clone());
 
         let handle = DiskWriterHandle {
             sender,
             queue_depth,
             queue_warning,
-            session_dir,
+            session: Arc::new(RwLock::new(None)),
             enabled,
             stacked_dir,
         };
@@ -102,12 +96,17 @@ mod tests {
 
     #[test]
     fn test_disk_writer_handle_enabled() {
-        let config = DiskWriterConfig::default();
-        let (_writer, handle) = DiskWriter::new(config);
+        // Not `DiskWriterConfig::default()`: `DiskWriter::new` creates the capture
+        // directories, and the default points at `./captures` relative to wherever the
+        // suite was run from.
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_enabled");
+        let (_writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
 
         assert!(handle.is_enabled());
         handle.set_enabled(false);
         assert!(!handle.is_enabled());
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]
@@ -117,7 +116,7 @@ mod tests {
         let (_writer, handle) = DiskWriter::new(config);
 
         let session_path = handle
-            .start_session(WritingSessionType::IndividualFrames)
+            .start_session(WritingSessionType::IndividualFrames, "")
             .unwrap();
         assert!(session_path.exists());
 
@@ -135,6 +134,84 @@ mod tests {
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
+    /// The suffix is what tells a night's raw folders apart, and it has to be part of
+    /// the directory name rather than a file inside it — nothing else about a finished
+    /// session survives to say which mode produced it.
+    #[test]
+    fn start_session_suffixes_the_directory_name() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_suffix");
+        let config = DiskWriterConfig::new(&temp_dir);
+        let (_writer, handle) = DiskWriter::new(config);
+
+        let path = handle
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            name.ends_with("-live"),
+            "session directory {name} carries no mode suffix"
+        );
+        assert!(path.exists());
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// Two sessions inside one wall-clock second must not land on the same folder. The
+    /// timestamp has one-second resolution but a session can be rolled far faster, and
+    /// `create_dir_all` succeeds silently on an existing directory — so the second
+    /// session used to merge into the first, truncating its `capture.ser` on the way.
+    #[test]
+    fn two_sessions_in_the_same_second_get_separate_directories() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_same_second");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir);
+        let (_writer, handle) = DiskWriter::new(config);
+
+        let first = handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+        handle.end_session();
+        let second = handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.exists() && second.exists());
+        // The mode is still readable off the name: the counter goes before the suffix.
+        for path in [&first, &second] {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            assert!(
+                name.ends_with("-stacking"),
+                "{name} no longer names the mode that filled it"
+            );
+        }
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// An empty suffix has to leave the bare timestamp untouched — a stray separator
+    /// would show up in every stacked filename, which is derived from this name.
+    #[test]
+    fn an_empty_suffix_leaves_the_timestamp_alone() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_nosuffix");
+        let config = DiskWriterConfig::new(&temp_dir);
+        let (_writer, handle) = DiskWriter::new(config);
+
+        let path = handle
+            .start_session(WritingSessionType::IndividualFrames, "")
+            .unwrap();
+
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(
+            name.len(),
+            "DD-MM-YYYY_HH-MM-SS".len(),
+            "expected a bare timestamp, got {name}"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
     #[test]
     fn test_queue_depth_tracking() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_queue");
@@ -142,7 +219,7 @@ mod tests {
         let (writer, handle) = DiskWriter::new(config);
 
         handle
-            .start_session(WritingSessionType::IndividualFrames)
+            .start_session(WritingSessionType::IndividualFrames, "")
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
@@ -180,7 +257,7 @@ mod tests {
         let (_writer, handle) = DiskWriter::new(config);
 
         handle
-            .start_session(WritingSessionType::IndividualFrames)
+            .start_session(WritingSessionType::IndividualFrames, "")
             .unwrap();
         assert!(!handle.has_queue_warning());
 
@@ -216,7 +293,7 @@ mod tests {
         let (writer, handle) = DiskWriter::new(config);
 
         handle
-            .start_session(WritingSessionType::VideoContainer)
+            .start_session(WritingSessionType::VideoContainer, "")
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
@@ -267,6 +344,240 @@ mod tests {
         std::fs::remove_dir_all(&temp_dir).ok();
     }
 
+    /// A frame is filed under the session that was open when it was *queued*, not the
+    /// one open when the worker gets to it. Resolving the destination at write time put
+    /// the whole in-flight backlog — everything a slow disk is still holding — into the
+    /// folder of the mode the capture had just switched to.
+    #[test]
+    fn backlogged_frames_stay_in_the_session_they_were_captured_in() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_roll_backlog");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
+        let (writer, handle) = DiskWriter::new(config);
+
+        let stacking_dir = handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(32 * 32 * 2);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        // Queued while Stacking is the open session; the worker has not started, so it
+        // is still in the queue when the mode changes — exactly the backlog a slow disk
+        // keeps.
+        handle
+            .queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                1,
+                FitsMetadata::new(),
+                crate::camera::SensorType::Mono,
+                None,
+            )
+            .unwrap();
+
+        handle.abandon_session();
+        let live_dir = handle
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+        assert_ne!(stacking_dir, live_dir);
+
+        let writer_task = std::thread::spawn(move || writer.run());
+        drop(handle);
+        writer_task.join().unwrap();
+
+        assert!(
+            stacking_dir.join("frame_000001.fits").exists(),
+            "a frame captured in Stacking was filed under {live_dir:?} instead"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// A full write queue must not decide which container a frame lands in. The
+    /// container type used to reach the worker in a `StartSession` message sharing the
+    /// queue with the frames, sent with `try_send` — so a disk that had fallen behind
+    /// swallowed it, and the session that followed inherited the previous one's format.
+    /// It travels with each frame now, which is why there is no such message any more.
+    #[test]
+    fn a_full_queue_does_not_change_the_container_a_session_writes() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_full_queue_roll");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(2);
+        let (writer, handle) = DiskWriter::new(config);
+
+        // Planetary session: StartSession{VideoContainer} occupies one queue slot.
+        handle
+            .start_session(WritingSessionType::VideoContainer, "-stacking")
+            .unwrap();
+
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(32 * 32 * 2);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        // Fills the queue, as a disk that cannot keep up would.
+        handle
+            .queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                1,
+                FitsMetadata::new(),
+                crate::camera::SensorType::Mono,
+                None,
+            )
+            .unwrap();
+
+        // A roll to Deep Sky / individual FITS, with no room left in the queue to
+        // announce it.
+        handle.abandon_session();
+        let live_dir = handle
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+        handle
+            .queue_raw_frame(
+                std::sync::Arc::clone(&frame),
+                2,
+                FitsMetadata::new(),
+                crate::camera::SensorType::Mono,
+                None,
+            )
+            .ok();
+
+        let writer_task = std::thread::spawn(move || writer.run());
+        drop(handle);
+        writer_task.join().unwrap();
+
+        assert!(
+            !live_dir.join("capture.ser").exists(),
+            "the rolled Deep Sky session wrote a SER container: the format followed the \
+             worker's last-heard session instead of the frame's own"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// Rolling a planetary session mid-capture has to close the old container and open
+    /// one in the new folder. Nothing announces the roll to the worker any more, so it
+    /// has to notice from the frames themselves — otherwise every frame after the switch
+    /// keeps appending to the previous mode's `capture.ser` and the new folder stays
+    /// empty while claiming to hold the session.
+    #[test]
+    fn a_planetary_roll_moves_the_container_to_the_new_session() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_ser_roll");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(10);
+        let (writer, handle) = DiskWriter::new(config);
+
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(32 * 32 * 2);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        let queue = |suffix: &str, n: u64| {
+            let dir = handle
+                .start_session(WritingSessionType::VideoContainer, suffix)
+                .unwrap();
+            handle
+                .queue_raw_frame(
+                    std::sync::Arc::clone(&frame),
+                    n,
+                    FitsMetadata::new(),
+                    crate::camera::SensorType::Mono,
+                    None,
+                )
+                .unwrap();
+            dir
+        };
+
+        let stacking_dir = queue("-stacking", 1);
+        handle.abandon_session();
+        let live_dir = queue("-live", 2);
+
+        let writer_task = std::thread::spawn(move || writer.run());
+        drop(handle);
+        writer_task.join().unwrap();
+
+        assert!(stacking_dir.join("capture.ser").exists());
+        assert!(
+            live_dir.join("capture.ser").exists(),
+            "frames captured after the roll kept appending to the previous session's \
+             container, leaving {live_dir:?} empty"
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    /// The frame count only reaches a SER header when the container is finalized, so a
+    /// session that ends without that leaves an unreadable file. `end_session` waits for
+    /// the writer precisely so a busy queue cannot swallow the news.
+    #[test]
+    fn ending_a_session_finalizes_its_container() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_ser_finalize");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let config = DiskWriterConfig::new(&temp_dir).with_max_queue_size(2);
+        let (writer, handle) = DiskWriter::new(config);
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        let session_dir = handle
+            .start_session(WritingSessionType::VideoContainer, "-stacking")
+            .unwrap();
+
+        let pool = crate::camera::BufferPool::new();
+        let buf = pool.get(32 * 32 * 2);
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: buf,
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        for i in 0..3 {
+            handle
+                .queue_raw_frame(
+                    std::sync::Arc::clone(&frame),
+                    i,
+                    FitsMetadata::new(),
+                    crate::camera::SensorType::Mono,
+                    None,
+                )
+                .ok();
+        }
+
+        handle.end_session();
+
+        // `end_session` waits for the message to be accepted, not for the worker to work
+        // through the frames queued ahead of it. The handle stays alive throughout, so
+        // nothing but that message can be finalizing the container.
+        let ser_path = session_dir.join("capture.ser");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let frame_count = loop {
+            let count = crate::ser::SerReader::open(&ser_path)
+                .map(|r| r.frame_count())
+                .unwrap_or(0);
+            if count > 0 || std::time::Instant::now() >= deadline {
+                break count;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(
+            frame_count > 0,
+            "the container reports {frame_count} frames: its header was never finalized"
+        );
+
+        drop(handle);
+        writer_task.join().unwrap();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
     #[test]
     fn test_disk_writer_error_display() {
         let err = DiskWriterError::QueueFull;
@@ -288,7 +599,7 @@ mod tests {
         let (writer, handle) = DiskWriter::new(config);
 
         handle
-            .start_session(WritingSessionType::IndividualFrames)
+            .start_session(WritingSessionType::IndividualFrames, "")
             .unwrap();
         let writer_task = std::thread::spawn(move || writer.run());
 
