@@ -2,7 +2,7 @@ use super::channel;
 use super::config_overrides::*;
 use super::watchdog::*;
 use crate::frame::Frame;
-use crate::server::capture::channel::{max_queue_capacity, RenderQueueDepth};
+use crate::server::capture::channel::{pipeline_capacities, RenderQueueDepth};
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CaptureState, SessionResumePlan, StackingType};
@@ -175,11 +175,19 @@ pub async fn run_capture_loop(
         }
     };
 
+    // Each channel is sized from the payload it carries, not from one frame size for
+    // all three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a
+    // quarter to a sixth of the debayered frame — while only the render channel moves
+    // the f32 `Frame`.
+    let raw_memory = probe_raw.data_slice().len();
     let frame_memory = probe_frame.memory_size();
-    let channel_capacity = max_queue_capacity(frame_memory);
+    let capacities = pipeline_capacities(raw_memory, frame_memory);
     info!(
+        raw_memory_bytes = raw_memory,
         frame_memory_bytes = frame_memory,
-        channel_capacity = channel_capacity,
+        raw_channel_capacity = capacities.raw,
+        render_channel_capacity = capacities.render,
+        queue_budget_bytes = crate::server::capture::channel::frame_queue_budget_bytes(),
         width = probe_frame.width(),
         height = probe_frame.height(),
         channels = probe_frame.channels(),
@@ -187,9 +195,9 @@ pub async fn run_capture_loop(
     );
 
     // Create bounded channels
-    let (stacking_tx, stacking_rx) = mpsc::sync_channel::<CapturedFrame>(channel_capacity);
-    let (storage_tx, storage_rx) = mpsc::sync_channel::<CapturedFrame>(channel_capacity);
-    let (render_tx, render_rx) = mpsc::sync_channel::<StackedFrame>(channel_capacity);
+    let (stacking_tx, stacking_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.raw);
+    let (storage_tx, storage_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.raw);
+    let (render_tx, render_rx) = mpsc::sync_channel::<StackedFrame>(capacities.render);
     // Shared between the two tasks that own the ends of the render channel, so the
     // stacking task can tell whether the copy it is about to build has anywhere to go.
     let render_depth = RenderQueueDepth::default();
