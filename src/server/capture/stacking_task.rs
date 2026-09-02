@@ -9,10 +9,30 @@ use crate::server::state::{AppState, SensorCorrectionSettings, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
-use super::channel::{CapturedFrame, RenderQueueDepth, StackedFrame};
+use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
 use super::frame_gate::RejectionReason;
 use super::context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 use super::{pipeline, solving, storage};
+
+/// The channel ends the stacking task owns, with the depth counters that shadow them.
+///
+/// Grouped rather than passed one by one: a channel and its counter are only correct
+/// together — incremented before the send, given back when the send did not happen — so
+/// keeping them apart invites exactly the desync [`QueueDepth`] documents. `CaptureTask`
+/// takes its pair the same way.
+pub struct StackingChannels {
+    /// Incoming captured frames.
+    pub stacking_rx: mpsc::Receiver<CapturedFrame>,
+    /// Depth of the channel behind `stacking_rx`, decremented per message taken.
+    pub stacking_depth: QueueDepth,
+    /// Outgoing display frames.
+    pub render_tx: mpsc::SyncSender<StackedFrame>,
+    /// Depth of the channel in front of `render_tx`. Read as well as written: it is
+    /// what `want_display` gates on.
+    pub render_depth: QueueDepth,
+    /// Slots in that channel, so its depth can be reported as a fraction.
+    pub render_capacity: usize,
+}
 
 /// Stacking pipeline running on a dedicated OS thread.
 ///
@@ -25,12 +45,18 @@ use super::{pipeline, solving, storage};
 /// built rather than starting from one frame.
 pub fn run_stacking_task(
     state: Arc<AppState>,
-    stacking_rx: mpsc::Receiver<CapturedFrame>,
-    render_tx: mpsc::SyncSender<StackedFrame>,
-    render_depth: RenderQueueDepth,
+    channels: StackingChannels,
     rt: tokio::runtime::Handle,
     carryover: Option<StackingCarryover>,
 ) {
+    let StackingChannels {
+        stacking_rx,
+        stacking_depth,
+        render_tx,
+        render_depth,
+        render_capacity,
+    } = channels;
+
     debug!(resumed = carryover.is_some(), "Stacking task started");
 
     let carryover = carryover.unwrap_or(StackingCarryover {
@@ -55,6 +81,10 @@ pub fn run_stacking_task(
     let mut debayer = DebayerAlgorithm::Bilinear;
 
     while let Ok(msg) = stacking_rx.recv() {
+        // One per message taken, before any work on it: the reported depth is what the
+        // capture thread is waiting behind, not what it was when this frame arrived.
+        stacking_depth.taken();
+
         let CapturedFrame {
             frame: raw_frame,
             frame_number,
@@ -298,17 +328,35 @@ pub fn run_stacking_task(
             settings,
             stack_depth,
         };
+        // Publish the count *before* the message, and undo it on the arms that did not
+        // send. `try_send` makes the frame visible to the render task the instant it
+        // returns, so counting afterwards leaves a window in which the receiver wakes,
+        // runs `taken()` against a zero counter, saturates there, and the sender's
+        // `sent()` then lands on an already-empty channel. The count would be one above
+        // the truth for good: `want_display` is `pending() == 0`, so the stacking task
+        // would stop building display frames, the render task would never receive
+        // another one and never decrement again, and the live view would stay frozen
+        // for the rest of the session while everything else kept running.
+        //
+        // Over-counting for the few instructions this ordering opens costs at most one
+        // skipped display copy; under-counting costs the session.
+        render_depth.sent();
         match render_tx.try_send(render_msg) {
-            Ok(()) => render_depth.sent(),
+            Ok(()) => {}
             Err(mpsc::TrySendError::Disconnected(_)) => {
+                render_depth.taken();
                 debug!("Render channel disconnected, stopping stacking task");
                 break;
             }
-            // Full: the frame is dropped, and the depth already reflects that the
-            // render task has work. Counting a send that did not happen would pin the
-            // stacking task into never computing a display frame again.
-            Err(mpsc::TrySendError::Full(_)) => {}
+            // Full: the frame is dropped, so give back the slot we just claimed. The
+            // depth still reflects the messages the render task really has.
+            Err(mpsc::TrySendError::Full(_)) => render_depth.taken(),
         }
+        telemetry_metrics::record_pipeline_queue_depth(
+            "stacking_to_render",
+            render_depth.pending() as u64,
+            render_capacity as u64,
+        );
     }
 
     // Save stacked result before exiting

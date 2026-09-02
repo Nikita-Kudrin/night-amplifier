@@ -13,18 +13,20 @@
  * The parent stays the single owner of the settings object and of persistence.
  */
 import {reactive, watch} from 'vue'
-import {BaseToggle, BaseSlider} from './ui'
+import {BaseToggle, BaseSlider, BaseInfoIcon} from './ui'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
   DENOISE_LUMA_STRENGTH_LIMITS,
   STAR_PROTECTION_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
+  PREVIEW_RESOLUTION_OPTIONS,
   HELP_TEXTS,
 } from '../constants'
 
 const props = defineProps({
   sensorCorrection: {type: Object, required: true},
   denoise: {type: Object, required: true},
+  previewResolution: {type: String, required: true},
   formatPercent: {type: Function, required: true},
   formatSigma: {type: Function, required: true},
 })
@@ -36,19 +38,27 @@ const HELP = HELP_TEXTS
 const local = reactive({
   sensor_correction: {...props.sensorCorrection},
   denoise: {...props.denoise},
+  preview_resolution: props.previewResolution,
 })
 
 watch(
-    () => [props.sensorCorrection, props.denoise],
-    ([sensorCorrection, denoise]) => {
+    () => [props.sensorCorrection, props.denoise, props.previewResolution],
+    ([sensorCorrection, denoise, previewResolution]) => {
       Object.assign(local.sensor_correction, sensorCorrection)
       Object.assign(local.denoise, denoise)
+      local.preview_resolution = previewResolution
     },
     {deep: true}
 )
 
 function apply(key) {
   emit('apply', key, {...local[key]})
+}
+
+/** For the settings that are a bare value rather than a group. */
+function applyValue(key, value) {
+  local[key] = value
+  emit('apply', key, value)
 }
 </script>
 
@@ -100,6 +110,31 @@ function apply(key) {
           :help="HELP.superpixel_debayer"
           @update:model-value="apply('sensor_correction')"
       />
+    </div>
+  </div>
+
+  <!-- Preview resolution: fixed for the session, deliberately not client-driven -->
+  <div class="settings-section">
+    <h3 class="section-title">Preview</h3>
+
+    <div class="control-group" style="margin-top: 0.5rem">
+      <div class="control-row">
+        <label class="control-label" style="margin-bottom: 0; flex: 1">
+          Processing Resolution
+          <BaseInfoIcon :message="HELP.preview_resolution"/>
+        </label>
+        <select
+            id="preview-resolution-select"
+            v-model="local.preview_resolution"
+            class="select"
+            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            @change="applyValue('preview_resolution', $event.target.value)"
+        >
+          <option v-for="opt in PREVIEW_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
+        </select>
+      </div>
     </div>
   </div>
 

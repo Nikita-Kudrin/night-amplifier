@@ -79,6 +79,33 @@ anything else — the difference is much easier to judge by switching it on and
 off than by nudging the strength.
 :::
 
+## Processing Resolution
+
+Under **Settings → Preview**, and a different lever from the two filters above:
+it decides the size everything upstream of them runs at — background extraction,
+colour balance, the auto-stretch solve — rather than how much smoothing happens.
+
+**Native** is the default and uses every sensor pixel. The lower settings box-
+average the frame down first, which is a large speed-up on a small board and
+removes noise on the way, at the cost of detail.
+
+Two things worth knowing before you move it:
+
+- **It re-grades the picture.** The auto-stretch is solved from the frame's own
+  noise level, and averaging pixels together lowers that. Changing this setting
+  visibly lifts or drops the shadows — around a 25 % change in shadow gain at 2×.
+  That is not a bug to work around; it is why the setting is fixed for the whole
+  session rather than following whoever happens to be connected.
+- **It is all-or-nothing.** The reduction is by a whole factor of two, so a
+  camera that does not have twice the pixels your chosen size needs will not bin
+  at all and the setting will do nothing.
+
+::: tip Which to pick
+Leave it on **Native** unless the live view is not keeping up. If it is — a
+Raspberry Pi with a large sensor is the usual case — drop it to the size you
+actually view at and check the shadows still look right.
+:::
+
 ## Not applied to planetary targets
 
 Both filters are skipped automatically for **Planetary** stacking. Lucky imaging

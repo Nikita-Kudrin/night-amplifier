@@ -296,6 +296,26 @@ describe('SettingsPanel', () => {
         })
     })
 
+    describe('Preview Section', () => {
+        it('sends the chosen processing resolution as a bare value', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const select = wrapper.find('#preview-resolution-select')
+            await select.setValue('qhd1440')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({preview_resolution: 'qhd1440'})
+        })
+
+        it('shows what the server reports rather than the default', async () => {
+            const wrapper = mountSettingsPanel({settings: {preview_resolution: 'hd1080'}})
+            await flushPromises()
+
+            expect(wrapper.find('#preview-resolution-select').element.value).toBe('hd1080')
+        })
+    })
+
     describe('Noise Reduction Section', () => {
         it('sends the whole denoise object when a filter is toggled', async () => {
             const wrapper = mountSettingsPanel()

@@ -321,5 +321,23 @@ describe('StatusBar', () => {
             expect(dropped.exists()).toBe(true)
             expect(dropped.text()).toContain('Dropped: 5')
         })
+
+        it('shows the share of delivered frames, not just the count', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {droppedCount: ref(35), deliveredCount: ref(100)},
+            })
+
+            expect(wrapper.find('.dropped').text()).toContain('35%')
+        })
+
+        it('shows the bare count while the server has reported no denominator', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {droppedCount: ref(5), deliveredCount: ref(0)},
+            })
+
+            const text = wrapper.find('.dropped').text()
+            expect(text).toContain('Dropped: 5')
+            expect(text).not.toContain('%')
+        })
     })
 })

@@ -2,7 +2,7 @@ use super::channel;
 use super::config_overrides::*;
 use super::watchdog::*;
 use crate::frame::Frame;
-use crate::server::capture::channel::{pipeline_capacities, RenderQueueDepth};
+use crate::server::capture::channel::{pipeline_capacities, QueueDepth};
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CaptureState, SessionResumePlan, StackingType};
@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use super::pipeline;
 use super::render_task::run_render_task;
-use super::stacking_task::run_stacking_task;
+use super::stacking_task::{run_stacking_task, StackingChannels};
 use super::storage;
 /// Run one capture session to completion.
 ///
@@ -178,14 +178,22 @@ pub async fn run_capture_loop(
     // Each channel is sized from the payload it carries, not from one frame size for
     // all three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a
     // quarter to a sixth of the debayered frame — while only the render channel moves
-    // the f32 `Frame`.
+    // the f32 `Frame`. The stacking channel is bounded by the lag it would introduce as
+    // well, which is why the exposure comes into it.
+    //
+    // Resolved once, from the settings this session started with. A `SyncSender` cannot
+    // be resized anyway, and the probe frame the depth is derived from is equally a
+    // snapshot — so an exposure changed mid-session leaves the channels as they are, and
+    // the figure actually used is logged below rather than left to be inferred.
     let raw_memory = probe_raw.data_slice().len();
     let frame_memory = probe_frame.memory_size();
-    let capacities = pipeline_capacities(raw_memory, frame_memory);
+    let capacities = pipeline_capacities(raw_memory, frame_memory, settings.exposure_us);
     info!(
         raw_memory_bytes = raw_memory,
         frame_memory_bytes = frame_memory,
-        raw_channel_capacity = capacities.raw,
+        exposure_us = settings.exposure_us,
+        stacking_channel_capacity = capacities.stacking,
+        storage_channel_capacity = capacities.storage,
         render_channel_capacity = capacities.render,
         queue_budget_bytes = crate::server::capture::channel::frame_queue_budget_bytes(),
         width = probe_frame.width(),
@@ -195,12 +203,17 @@ pub async fn run_capture_loop(
     );
 
     // Create bounded channels
-    let (stacking_tx, stacking_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.raw);
-    let (storage_tx, storage_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.raw);
+    let (stacking_tx, stacking_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.stacking);
+    let (storage_tx, storage_rx) = mpsc::sync_channel::<CapturedFrame>(capacities.storage);
     let (render_tx, render_rx) = mpsc::sync_channel::<StackedFrame>(capacities.render);
     // Shared between the two tasks that own the ends of the render channel, so the
     // stacking task can tell whether the copy it is about to build has anywhere to go.
-    let render_depth = RenderQueueDepth::default();
+    let render_depth = QueueDepth::default();
+    // The other two are reported, not read: a depth that sits at the ceiling says the
+    // stage behind it is slow, while one that spikes and drains says it stalled once.
+    // `SyncSender` exposes no length, so this is the only way to tell those apart.
+    let stacking_queue_depth = QueueDepth::default();
+    let storage_queue_depth = QueueDepth::default();
 
     // Send the probe frame as the first frame through the pipeline
     let first_raw = Arc::new(probe_raw);
@@ -216,8 +229,16 @@ pub async fn run_capture_loop(
         settings: settings.clone(),
         camera_info: camera_info.clone(),
     };
-    let _ = stacking_tx.send(first_msg);
-    let _ = storage_tx.send(first_msg_storage);
+    // The probe frame counts toward the drop-rate denominator like any other.
+    state.frame_delivered();
+    stacking_queue_depth.sent();
+    if stacking_tx.send(first_msg).is_err() {
+        stacking_queue_depth.taken();
+    }
+    storage_queue_depth.sent();
+    if storage_tx.send(first_msg_storage).is_err() {
+        storage_queue_depth.taken();
+    }
 
     // Spawn worker threads — each gets a clone of the tokio Handle
     let state_capture = Arc::clone(&state);
@@ -228,6 +249,9 @@ pub async fn run_capture_loop(
     let depth_stacking = render_depth.clone();
     let depth_render = render_depth;
 
+    let stacking_depth_capture = stacking_queue_depth.clone();
+    let storage_depth_capture = storage_queue_depth.clone();
+
     let rt_capture = rt_handle.clone();
     let rt_stacking = rt_handle.clone();
     let rt_render = rt_handle.clone();
@@ -235,7 +259,20 @@ pub async fn run_capture_loop(
 
     let capture_handle = std::thread::Builder::new()
         .name("capture-task".into())
-        .spawn(move || run_capture_task(state_capture, camera, stacking_tx, storage_tx, rt_capture))
+        .spawn(move || {
+            run_capture_task(
+                state_capture,
+                camera,
+                CaptureChannels {
+                    stacking_tx,
+                    storage_tx,
+                    stacking_depth: stacking_depth_capture,
+                    storage_depth: storage_depth_capture,
+                    capacities,
+                },
+                rt_capture,
+            )
+        })
         .expect("Failed to spawn capture thread");
 
     // On a resume, hand the parked accumulators to the new stacking task; on a
@@ -255,9 +292,13 @@ pub async fn run_capture_loop(
         .spawn(move || {
             run_stacking_task(
                 state_stacking,
-                stacking_rx,
-                render_tx,
-                depth_stacking,
+                StackingChannels {
+                    stacking_rx,
+                    stacking_depth: stacking_queue_depth,
+                    render_tx,
+                    render_depth: depth_stacking,
+                    render_capacity: capacities.render,
+                },
                 rt_stacking,
                 carryover,
             );
@@ -274,7 +315,7 @@ pub async fn run_capture_loop(
     let storage_handle = std::thread::Builder::new()
         .name("storage-task".into())
         .spawn(move || {
-            storage::run_storage_task(state_storage, storage_rx, rt_storage);
+            storage::run_storage_task(state_storage, storage_rx, storage_queue_depth, rt_storage);
         })
         .expect("Failed to spawn storage thread");
 
@@ -325,6 +366,21 @@ pub async fn run_capture_loop(
 // CaptureTask
 // =============================================================================
 
+/// The sending ends of the two capture channels, with the depth counters that shadow
+/// them.
+///
+/// Grouped rather than passed as four more arguments: a sender and its counter are only
+/// correct together — the counter has to be incremented before the send and given back
+/// when the send did not happen — so keeping them apart invites exactly the desync
+/// `QueueDepth` documents.
+pub(crate) struct CaptureChannels {
+    pub stacking_tx: mpsc::SyncSender<CapturedFrame>,
+    pub storage_tx: mpsc::SyncSender<CapturedFrame>,
+    pub stacking_depth: QueueDepth,
+    pub storage_depth: QueueDepth,
+    pub capacities: channel::PipelineCapacities,
+}
+
 /// Camera capture loop running on a dedicated OS thread.
 ///
 /// Acquires frames from the camera and sends them (as `Arc<Frame>`) to the
@@ -334,10 +390,16 @@ pub async fn run_capture_loop(
 pub(crate) fn run_capture_task(
     state: Arc<AppState>,
     mut camera: Box<dyn crate::camera::Camera>,
-    stacking_tx: mpsc::SyncSender<CapturedFrame>,
-    storage_tx: mpsc::SyncSender<CapturedFrame>,
+    channels: CaptureChannels,
     rt: tokio::runtime::Handle,
 ) -> Option<Box<dyn crate::camera::Camera>> {
+    let CaptureChannels {
+        stacking_tx,
+        storage_tx,
+        stacking_depth,
+        storage_depth,
+        capacities,
+    } = channels;
     debug!("Capture task started");
 
     // Frame numbering continues from 1 (probe frame was #1)
@@ -446,6 +508,9 @@ pub(crate) fn run_capture_task(
         }
 
         frame_number += 1;
+        // Counted before either send: the denominator of the drop rate is what the
+        // camera produced, not what the pipeline managed to accept.
+        state.frame_delivered();
         let arc_frame = Arc::new(raw_frame);
 
         // Send to stacking channel (non-blocking — drop frame if full)
@@ -455,10 +520,18 @@ pub(crate) fn run_capture_task(
             settings: settings.clone(),
             camera_info: camera_info.clone(),
         };
+        // Counted before the send and given back on failure — see `QueueDepth`.
+        stacking_depth.sent();
         if stacking_tx.try_send(stacking_msg).is_err() {
+            stacking_depth.taken();
             state.frame_dropped();
             debug!(frame_number, "Frame dropped: stacking pipeline busy");
         }
+        telemetry_metrics::record_pipeline_queue_depth(
+            "capture_to_stacking",
+            stacking_depth.pending() as u64,
+            capacities.stacking as u64,
+        );
 
         // Send to storage channel (non-blocking — independent dropping)
         let is_stacking_mode = settings.stacking && !settings.wanderer_mode;
@@ -469,9 +542,16 @@ pub(crate) fn run_capture_task(
                 settings,
                 camera_info,
             };
+            storage_depth.sent();
             if storage_tx.try_send(storage_msg).is_err() {
+                storage_depth.taken();
                 warn!(frame_number, "Raw frame dropped: storage pipeline busy");
             }
+            telemetry_metrics::record_pipeline_queue_depth(
+                "capture_to_storage",
+                storage_depth.pending() as u64,
+                capacities.storage as u64,
+            );
         }
     }
 

@@ -16,42 +16,56 @@ use crate::camera::RawFrame;
 use crate::frame::Frame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
 
-/// How many frames the stacking task has handed the render task that it has not
-/// picked up yet.
+/// How many messages one pipeline channel holds that its consumer has not taken yet.
 ///
 /// # Why this exists
 ///
-/// `MasterStack::compute()` copies the running mean out of the accumulator into a fresh
-/// frame — 434 MB read and 108 MB allocated and written, on a 3008x3008 colour stack.
-/// The stacking task ran it every iteration, and the render task then called
-/// `drain_to_latest` and threw about half of them away unread. The waste landed on the
-/// one thread that is dropping camera frames, and a dropped camera frame is lost sky.
+/// `std::sync::mpsc::SyncSender` exposes no length, so neither end can ask the channel
+/// how deep it is. This is that length, kept alongside it: incremented *before* a send
+/// is attempted and given back when the send did not happen, decremented for every
+/// message taken out — including the ones a drain discards, which is why the render task
+/// decrements per message rather than once per iteration.
 ///
-/// `std::sync::mpsc::SyncSender` exposes no length, so the sender cannot ask the channel
-/// whether the last frame was consumed. This is that length: incremented on a successful
-/// send, decremented for every message taken out — including the ones `drain_to_latest`
-/// discards, which is why the render task decrements per message rather than once per
-/// iteration.
+/// Two callers need it, for different reasons. The stacking→render channel reads it to
+/// decide whether to build a display copy at all: `MasterStack::compute()` copies the
+/// running mean out of the accumulator into a fresh frame — 434 MB read and 108 MB
+/// allocated and written on a 3008x3008 colour stack — and the render task used to
+/// `drain_to_latest` and throw about half of them away unread. The waste landed on the
+/// one thread that is dropping camera frames, and a dropped camera frame is lost sky.
+/// The two capture channels only *report* their depth, which is what distinguishes "the
+/// stacking thread is slow" from "the stacking thread stalled once".
+///
+/// # Why the increment leads the send
+///
+/// The count must never sit *below* the true queue depth, because for the render channel
+/// the error is unrecoverable in that direction: `want_display` is `pending() == 0`, so a
+/// count stuck one above zero on an empty channel stops the stacking task from ever
+/// building another display frame, which stops the render task from ever decrementing
+/// again. Counting after `try_send` leaves exactly that window — the message is visible
+/// to the receiver the instant `try_send` returns, and a `taken()` that lands there
+/// saturates at zero. Counting first can only overshoot, and an overshoot costs one
+/// skipped display copy that the next iteration corrects. See `run_stacking_task`.
 ///
 /// Reading it is advisory. A frame can be taken between the check and the send, in which
 /// case the stacking task merely does work it could have skipped; nothing downstream
 /// depends on the count being exact, and the render task's own drain still handles a
 /// queue that grew anyway.
 #[derive(Clone, Debug, Default)]
-pub struct RenderQueueDepth(Arc<AtomicUsize>);
+pub struct QueueDepth(Arc<AtomicUsize>);
 
-impl RenderQueueDepth {
-    /// Frames queued for the render task and not yet picked up.
+impl QueueDepth {
+    /// Messages queued on this channel and not yet picked up.
     pub fn pending(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 
-    /// Record a frame handed to the render channel.
+    /// Claim a slot, before attempting the send that fills it.
     pub fn sent(&self) {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a frame taken off the render channel.
+    /// Give a slot back: one message taken off the channel, or one send that did not
+    /// happen.
     ///
     /// Saturating, because the count is advisory and a decrement racing a reset must not
     /// wrap into billions and pin the stacking task into never computing again.
@@ -162,16 +176,42 @@ fn capacity_within(budget: usize, frame_memory_bytes: usize) -> usize {
     capacity.clamp(2, 256)
 }
 
-/// Channel depths for one capture session, one per payload the pipeline moves.
+/// Longest the capture→stacking channel may hold buffered sky, in microseconds.
+///
+/// The memory budget alone answers "how many frames fit", which is not the question an
+/// observer cares about. A deeper queue does not fix a throughput deficit — if the
+/// stacking thread is slower than capture, the queue fills and drops at exactly the same
+/// rate as before, with the stack now running however long this is behind the shutter.
+/// On a 20-core, 62.5 GiB host the memory budget alone puts 19 frames in that channel,
+/// which at a 152 ms exposure is 2.9 s of lag for no gain in throughput.
+///
+/// Two seconds is what a live view can absorb without the preview visibly trailing the
+/// mount.
+const MAX_STACKING_QUEUE_LATENCY_US: u64 = 2_000_000;
+
+/// Channel depths for one capture session, one per channel the pipeline runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PipelineCapacities {
-    /// Depth of the two `CapturedFrame` channels (capture→stacking, capture→storage).
-    pub raw: usize,
-    /// Depth of the `StackedFrame` channel (stacking→render).
+    /// Depth of the capture→stacking `CapturedFrame` channel.
+    ///
+    /// Bounded by [`MAX_STACKING_QUEUE_LATENCY_US`] as well as by memory: every frame
+    /// queued here is a frame of lag between the shutter and the live view.
+    pub stacking: usize,
+    /// Depth of the capture→storage `CapturedFrame` channel.
+    ///
+    /// Memory only. Depth here is disk backlog, not lag — nobody is watching the FITS
+    /// files land, and a frame dropped for want of a slot is lost sky that no amount of
+    /// promptness recovers.
+    pub storage: usize,
+    /// Depth of the stacking→render `StackedFrame` channel.
+    ///
+    /// Memory only, and largely academic: `QueueDepth` gates the stacking task to one
+    /// in-flight display frame, so this is a ceiling rather than an operating point.
     pub render: usize,
 }
 
-/// Size each channel from the payload it actually carries.
+/// Size each channel from the payload it actually carries, and the stacking channel from
+/// the latency it would introduce as well.
 ///
 /// The two capture channels move `Arc<RawFrame>` — sensor bytes, 18 MB for a 9 MP
 /// 16-bit frame. The render channel moves a debayered f32 `Frame`, 108 MB for the same
@@ -181,17 +221,48 @@ pub struct PipelineCapacities {
 ///
 /// Both capture channels are charged the full raw size even though they share one
 /// `Arc` per frame, so the real footprint is at most what this budgets for.
-pub fn pipeline_capacities(raw_bytes: usize, display_bytes: usize) -> PipelineCapacities {
-    capacities_within(frame_queue_budget_bytes(), raw_bytes, display_bytes)
+pub fn pipeline_capacities(
+    raw_bytes: usize,
+    display_bytes: usize,
+    exposure_us: u64,
+) -> PipelineCapacities {
+    capacities_within(
+        frame_queue_budget_bytes(),
+        raw_bytes,
+        display_bytes,
+        exposure_us,
+    )
 }
 
 /// [`pipeline_capacities`] against an explicit budget, for tests that must not depend
 /// on the RAM of the machine they run on.
-fn capacities_within(budget: usize, raw_bytes: usize, display_bytes: usize) -> PipelineCapacities {
+fn capacities_within(
+    budget: usize,
+    raw_bytes: usize,
+    display_bytes: usize,
+    exposure_us: u64,
+) -> PipelineCapacities {
+    let storage = capacity_within(budget, raw_bytes);
     PipelineCapacities {
-        raw: capacity_within(budget, raw_bytes),
+        stacking: storage.min(frames_within_latency(exposure_us)).max(2),
+        storage,
         render: capacity_within(budget, display_bytes),
     }
+}
+
+/// Frames that fit inside [`MAX_STACKING_QUEUE_LATENCY_US`] at this exposure.
+///
+/// A zero or missing exposure yields `usize::MAX` rather than zero: an unknown cadence
+/// must fall back to the memory budget, not collapse the channel. The `[2, ..]` floor is
+/// applied by the caller for the same reason [`capacity_within`] applies it — the probe
+/// frame is sent before the consumer threads exist.
+fn frames_within_latency(exposure_us: u64) -> usize {
+    if exposure_us == 0 {
+        return usize::MAX;
+    }
+    (MAX_STACKING_QUEUE_LATENCY_US / exposure_us)
+        .try_into()
+        .unwrap_or(usize::MAX)
 }
 
 /// A frame captured from the camera, sent through channels to downstream tasks.
@@ -244,7 +315,7 @@ mod tests {
 
     #[test]
     fn depth_counts_sends_and_takes() {
-        let depth = RenderQueueDepth::default();
+        let depth = QueueDepth::default();
         assert_eq!(depth.pending(), 0);
         depth.sent();
         depth.sent();
@@ -263,7 +334,7 @@ mod tests {
     /// with every other part of the pipeline still running normally.
     #[test]
     fn a_take_without_a_send_cannot_wrap_the_depth() {
-        let depth = RenderQueueDepth::default();
+        let depth = QueueDepth::default();
         depth.taken();
         depth.taken();
         assert_eq!(depth.pending(), 0, "depth must saturate at zero, not wrap");
@@ -272,10 +343,104 @@ mod tests {
         assert_eq!(depth.pending(), 1, "and must still count normally after");
     }
 
+    /// The gate must not latch shut when a take lands between the send and the count.
+    ///
+    /// This is the ordering `run_stacking_task` used to have: `try_send(msg)` first,
+    /// `render_depth.sent()` second. The message is visible to the render task the
+    /// instant `try_send` returns, so a receiver waking inside that window ran `taken()`
+    /// against a zero counter, saturated there, and the sender's `sent()` then landed on
+    /// an already-empty channel.
+    ///
+    /// The damage was permanent: `want_display` is `pending() == 0`, so the stacking task
+    /// stopped building display frames, the render task never received another one and
+    /// never decremented again, and the live view froze for the rest of the session with
+    /// every other part of the pipeline still running normally.
+    ///
+    /// Counting first makes the interleaving harmless — the worst case is a transient
+    /// overshoot that the failed-send arm gives back.
+    #[test]
+    fn a_take_that_lands_between_the_send_and_the_count_does_not_latch_the_gate() {
+        let depth = QueueDepth::default();
+
+        // stacking: claim the slot, then hand over the message.
+        depth.sent();
+        // render:   recv() wakes, drain_to_latest finds nothing more, taken().
+        depth.taken();
+
+        assert_eq!(
+            depth.pending(),
+            0,
+            "the channel is empty and the depth must say so; want_display gates on it"
+        );
+    }
+
+    /// The same property driven through a real `sync_channel` with the exact send and
+    /// receive sequences both tasks use.
+    ///
+    /// `yield_now` stands in for the preemption that opened the window in production; it
+    /// makes the interleaving reachable without changing either side's logic. Against the
+    /// old ordering this stalled after a handful of frames; it must now run to completion
+    /// every time.
+    #[test]
+    fn the_display_gate_does_not_latch_shut() {
+        use std::sync::mpsc::{sync_channel, TrySendError};
+
+        let depth = QueueDepth::default();
+        let (tx, rx) = sync_channel::<u64>(4);
+
+        let rx_depth = depth.clone();
+        let receiver = std::thread::spawn(move || {
+            // `run_render_task`: recv, drain_to_latest, one `taken()` per message.
+            while rx.recv().is_ok() {
+                let mut skipped = 0;
+                while rx.try_recv().is_ok() {
+                    skipped += 1;
+                }
+                for _ in 0..=skipped {
+                    rx_depth.taken();
+                }
+            }
+        });
+
+        // The stacking task only produces a frame when the camera hands it one, so the
+        // sender waits for the gate rather than spinning past it. Without that pacing
+        // the loop finishes before the receiver thread is ever scheduled and the test
+        // measures nothing.
+        const ITERATIONS: u64 = 200;
+        let mut built = 0u64;
+        for n in 0..ITERATIONS {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+            while depth.pending() != 0 && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            if depth.pending() != 0 {
+                break;
+            }
+            depth.sent();
+            // Stands in for the preemption that opened the window in production.
+            std::thread::yield_now();
+            match tx.try_send(n) {
+                Ok(()) => built += 1,
+                Err(TrySendError::Full(_)) => depth.taken(),
+                Err(TrySendError::Disconnected(_)) => {
+                    depth.taken();
+                    break;
+                }
+            }
+        }
+        drop(tx);
+        receiver.join().unwrap();
+
+        assert_eq!(
+            built, ITERATIONS,
+            "the gate latched shut after {built} of {ITERATIONS} frames"
+        );
+    }
+
     /// Both ends hold clones; they have to see one count.
     #[test]
     fn clones_share_one_count() {
-        let sender = RenderQueueDepth::default();
+        let sender = QueueDepth::default();
         let receiver = sender.clone();
         sender.sent();
         assert_eq!(receiver.pending(), 1);
@@ -290,6 +455,9 @@ mod tests {
     /// wire, the same frame debayered to three f32 planes.
     const RAW_9MP: usize = 3008 * 3008 * 2;
     const DISPLAY_9MP: usize = 3008 * 3008 * 3 * 4;
+    /// Short enough that the latency bound never binds, so a test about the memory
+    /// budget stays a test about the memory budget.
+    const SHORT_EXPOSURE_US: u64 = 1_000;
 
     fn meminfo(mem_total_line: &str) -> String {
         format!(
@@ -421,14 +589,15 @@ mod tests {
     /// capture channel that fills is a dropped frame, which is lost sky.
     #[test]
     fn the_raw_channels_are_deeper_than_the_render_channel() {
-        let caps = capacities_within(GIB, RAW_9MP, DISPLAY_9MP);
+        let caps = capacities_within(GIB, RAW_9MP, DISPLAY_9MP, SHORT_EXPOSURE_US);
         assert!(
-            caps.raw > caps.render,
+            caps.storage > caps.render,
             "raw {} vs render {}: the raw channels are still sized off the display frame",
-            caps.raw,
+            caps.storage,
             caps.render
         );
-        assert_eq!(caps.raw, capacity_within(GIB, RAW_9MP));
+        assert_eq!(caps.storage, capacity_within(GIB, RAW_9MP));
+        assert_eq!(caps.stacking, caps.storage);
         assert_eq!(caps.render, capacity_within(GIB, DISPLAY_9MP));
     }
 
@@ -437,9 +606,10 @@ mod tests {
     /// wire and the capture channels must not move with it.
     #[test]
     fn a_smaller_display_frame_does_not_resize_the_raw_channels() {
-        let full = capacities_within(GIB, RAW_9MP, DISPLAY_9MP);
-        let superpixel = capacities_within(GIB, RAW_9MP, DISPLAY_9MP / 4);
-        assert_eq!(full.raw, superpixel.raw);
+        let full = capacities_within(GIB, RAW_9MP, DISPLAY_9MP, SHORT_EXPOSURE_US);
+        let superpixel = capacities_within(GIB, RAW_9MP, DISPLAY_9MP / 4, SHORT_EXPOSURE_US);
+        assert_eq!(full.storage, superpixel.storage);
+        assert_eq!(full.stacking, superpixel.stacking);
         assert!(superpixel.render > full.render);
     }
 
@@ -475,10 +645,11 @@ mod tests {
     fn the_worst_case_queue_footprint_fits_a_4gb_board() {
         let ram = 4 * GIB;
         let budget = budget_for(Some(ram));
-        let caps = capacities_within(budget, RAW_9MP, DISPLAY_9MP);
+        let caps = capacities_within(budget, RAW_9MP, DISPLAY_9MP, SHORT_EXPOSURE_US);
 
-        // Both capture channels charged in full, though they share one `Arc` per frame.
-        let queues = 2 * caps.raw * RAW_9MP + caps.render * DISPLAY_9MP;
+        // Both capture channels charged in full, though they share one `Arc` per frame,
+        // and at the exposure that lets the stacking channel reach its memory ceiling.
+        let queues = (caps.stacking + caps.storage) * RAW_9MP + caps.render * DISPLAY_9MP;
         assert!(
             queues <= budget,
             "{queues} bytes of queue against a {budget} byte budget"
@@ -489,6 +660,62 @@ mod tests {
         assert!(
             peak < ram / 2,
             "{peak} bytes at peak on a 4 GB board leaves too little headroom"
+        );
+    }
+
+    /// The trade the capacity split does not make on its own.
+    ///
+    /// Sizing the capture channels from memory alone put 19 frames in front of the
+    /// stacking thread on this host — 2.9 s of buffered sky at the 152 ms exposure the
+    /// production traces were taken at. A deeper queue does not raise throughput; it
+    /// delays the drop and pays for the delay in preview lag.
+    #[test]
+    fn the_stacking_channel_is_bounded_by_lag_as_well_as_by_memory() {
+        let memory_bound = capacity_within(GIB, RAW_9MP);
+        assert!(
+            memory_bound > 2,
+            "fixture must have memory headroom for the latency bound to bite"
+        );
+
+        // 152 ms — the exposure the traces this bound came from were taken at.
+        let caps = capacities_within(GIB, RAW_9MP, DISPLAY_9MP, 152_000);
+        assert!(
+            caps.stacking < memory_bound,
+            "{} frames of stacking queue at 152 ms is {} ms of lag",
+            caps.stacking,
+            caps.stacking * 152
+        );
+        assert!(
+            caps.stacking as u64 * 152_000 <= MAX_STACKING_QUEUE_LATENCY_US,
+            "{} frames at 152 ms exceeds the latency bound",
+            caps.stacking
+        );
+
+        // Disk backlog is not lag: the storage channel keeps its memory-sized depth,
+        // because a frame dropped there is sky that never reaches the FITS files.
+        assert_eq!(caps.storage, memory_bound);
+    }
+
+    /// A long exposure must not be starved by the latency bound, and a short one must
+    /// not be uncapped by it.
+    #[test]
+    fn the_latency_bound_never_takes_the_stacking_channel_below_two() {
+        for exposure_us in [0, 1, 1_000, 152_000, 2_000_000, 300_000_000, u64::MAX] {
+            let caps = capacities_within(GIB, RAW_9MP, DISPLAY_9MP, exposure_us);
+            assert!(
+                caps.stacking >= 2,
+                "exposure {exposure_us} us gave {} slots",
+                caps.stacking
+            );
+            assert!(
+                caps.stacking <= capacity_within(GIB, RAW_9MP),
+                "exposure {exposure_us} us exceeded the memory budget"
+            );
+        }
+        // An unknown cadence falls back to the memory budget rather than collapsing.
+        assert_eq!(
+            capacities_within(GIB, RAW_9MP, DISPLAY_9MP, 0).stacking,
+            capacity_within(GIB, RAW_9MP)
         );
     }
 

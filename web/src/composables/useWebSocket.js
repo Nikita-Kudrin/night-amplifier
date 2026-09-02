@@ -175,6 +175,9 @@ export function useEventStream() {
     const stackedCount = ref(0)
     const rejectedCount = ref(0)
     const droppedCount = ref(0)
+    // The denominator the count needs: 40 drops is a ruined evening at 30 s subs and a
+    // rounding error at 100 ms.
+    const deliveredCount = ref(0)
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
     const unresponsiveWarning = ref(null)
@@ -248,6 +251,7 @@ export function useEventStream() {
                 stackedCount.value = 0
                 rejectedCount.value = 0
                 droppedCount.value = 0
+                deliveredCount.value = 0
                 lastRejectionReason.value = null
             }
         },
@@ -285,6 +289,7 @@ export function useEventStream() {
         },
         frame_dropped(data) {
             droppedCount.value = data.dropped_count
+            deliveredCount.value = data.delivered_count ?? 0
         },
         plate_solving_started(data) {
             plateSolving.value = {
@@ -488,6 +493,7 @@ export function useEventStream() {
         rejectedCount,
         lastRejectionReason,
         droppedCount,
+        deliveredCount,
         lastError,
         diskWriterWarning,
         unresponsiveWarning,

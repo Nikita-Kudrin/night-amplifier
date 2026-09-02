@@ -609,6 +609,142 @@ mod tests {
         assert!(reject_hot_pixels(&mut cfa, &HotPixelConfig::default()).is_err());
     }
 
+    /// A sky whose four Bayer sites sit at deliberately different levels with
+    /// deliberately different noise, so a threshold resolved for the wrong site gives a
+    /// different answer. `sites` is indexed in [`CfaPlanes::origins`] order.
+    fn sky_per_site(width: usize, height: usize, sites: [(f32, f32); 4]) -> Frame {
+        let mut frame = Frame::zeros(width, height, 1).unwrap();
+        let mut seed = 0x9E3779B9u32;
+        for y in 0..height {
+            for x in 0..width {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let unit = (seed >> 8) as f32 / (1u32 << 24) as f32 - 0.5;
+                let (level, noise) = sites[(y % 2) * 2 + (x % 2)];
+                frame.set_pixel(x, y, 0, level + unit * noise);
+            }
+        }
+        frame
+    }
+
+    /// A plain four-sweep reference for the detector: one independent pass per colour
+    /// site, with that site's own statistics resolved *inside* the loop.
+    ///
+    /// The oracle deliberately contains no index arithmetic. The production sweep groups
+    /// the four sites into two passes by row parity and reads each site's threshold out
+    /// of a flat table at `y0 * step + x0`; that index is the load-bearing part of the
+    /// two-sweep rewrite, and nothing else in the suite pins it.
+    fn reference_corrections(
+        data: &[f32],
+        width: usize,
+        height: usize,
+        step: usize,
+        config: &HotPixelConfig,
+    ) -> Vec<(usize, f32)> {
+        let mut hits = Vec::new();
+        for y0 in 0..step {
+            for x0 in 0..step {
+                let Some((background, sigma)) =
+                    site_background(data, width, height, x0, y0, step)
+                else {
+                    continue;
+                };
+                let tau = config.sigma * sigma;
+                if tau.is_nan() || tau <= 0.0 {
+                    continue;
+                }
+
+                let mut y = y0 + step;
+                while y + step < height {
+                    let mut x = x0 + step;
+                    while x + step < width {
+                        let at = |xx: usize, yy: usize| data[yy * width + xx];
+                        let centre = at(x, y);
+                        let (nw, n, ne) = (at(x - step, y - step), at(x, y - step), at(x + step, y - step));
+                        let (w, e) = (at(x - step, y), at(x + step, y));
+                        let (sw, s, se) = (at(x - step, y + step), at(x, y + step), at(x + step, y + step));
+                        let brightest = nw.max(n).max(ne).max(w).max(e).max(sw).max(s).max(se);
+                        let above_background = centre - background;
+                        if centre - brightest > tau
+                            && above_background > 0.0
+                            && brightest - background < config.isolation * above_background
+                        {
+                            hits.push((y * width + x, (nw + n + ne + w + e + sw + s + se) * 0.125));
+                        }
+                        x += step;
+                    }
+                    y += step;
+                }
+            }
+        }
+        hits
+    }
+
+    /// Every colour site must be swept against **its own** threshold.
+    ///
+    /// The two-sweep rewrite replaced a per-site loop with a flat table indexed
+    /// `thresholds[y0 * step + x0]`. Transposing that to `thresholds[x0 * step + y0]`
+    /// swaps the two green sites on any Bayer pattern, and on a normal frame the two
+    /// greens have near-identical statistics — so the whole suite passed against the
+    /// transposition. This fixture gives the four sites deliberately unequal backgrounds
+    /// and sigmas and plants one sample on each, sized so the quiet green's clears its
+    /// own threshold while the noisy green's does not.
+    ///
+    /// Asserting against the four-sweep reference pins the site ordering, the row-parity
+    /// grouping and the sweep's index ranges at once.
+    #[test]
+    fn every_site_is_swept_against_its_own_threshold() {
+        const W: usize = 128;
+        const H: usize = 128;
+        let config = HotPixelConfig::default();
+
+        // (background, noise) per site, in `origins` order: R, G1, G2, B on RGGB.
+        // G1 is quiet and G2 is noisy — that asymmetry is the only thing that can tell
+        // the two apart, and it is exactly what the transposition destroys.
+        let mut frame = sky_per_site(W, H, [(0.10, 0.010), (0.20, 0.002), (0.30, 0.020), (0.40, 0.006)]);
+        let plants = [
+            ((40usize, 40usize), 0.30f32), // R  — hot by a wide margin
+            ((41, 40), 0.015),             // G1 — hot against 5 sigma of 0.002
+            ((40, 41), 0.015),             // G2 — *not* hot against 5 sigma of 0.020
+            ((41, 41), 0.30),              // B  — hot by a wide margin
+        ];
+        for ((x, y), excess) in plants {
+            frame.set_pixel(x, y, 0, frame.get_pixel(x, y, 0) + excess);
+        }
+
+        let mut expected = frame.data().to_vec();
+        let reference = reference_corrections(&expected.clone(), W, H, 2, &config);
+        for (idx, value) in &reference {
+            expected[*idx] = *value;
+        }
+        assert_eq!(
+            reference.len(),
+            3,
+            "fixture must exercise a hit on three sites and a miss on the fourth"
+        );
+
+        let mut cfa = mosaic(frame);
+        let stats = reject_hot_pixels(&mut cfa, &config).unwrap();
+
+        assert_eq!(stats.corrected, reference.len());
+        assert_eq!(
+            cfa.frame().data(),
+            expected.as_slice(),
+            "the two-sweep detector disagreed with a plain four-sweep reference"
+        );
+
+        // Spelled out, because the whole-frame comparison would also pass if both sides
+        // were wrong in the same direction: the sites the transposition swaps are the
+        // two greens, and they must land on opposite answers here.
+        assert!(
+            cfa.frame().get_pixel(41, 40, 0) < 0.21,
+            "the quiet green's planted sample should have been corrected"
+        );
+        assert!(
+            cfa.frame().get_pixel(40, 41, 0) > 0.31,
+            "the noisy green's planted sample is inside its own noise and must survive"
+        );
+    }
+
     #[test]
     fn the_frame_border_is_left_uncorrected_rather_than_read_out_of_bounds() {
         let mut frame = sky(64, 64, 0.10, 0.004);

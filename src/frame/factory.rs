@@ -248,3 +248,128 @@ impl Frame {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plain interleaved-to-planar projection: `data[c * pixels + i]` from
+    /// `raw[i * channels + c]`, with no chunking and no parallelism.
+    ///
+    /// This is the shape [`scatter_to_planes`] replaced. It exists so the rewrite is
+    /// pinned against something other than itself — the RGB arm recovers the absolute
+    /// sample index from the chunk index (`block * chunk`), and that arithmetic is
+    /// correct for every full chunk whether or not it is right for the trailing one.
+    /// The decode itself is mirrored rather than rewritten — `* inv_max` and `/ max`
+    /// differ by an ULP, and the traversal is what is under test here, not the scaling.
+    fn sequential_planes(raw: &[u8], pixels: usize, channels: usize, max: f32) -> Vec<f32> {
+        let inv_max = 1.0 / max;
+        let mut out = vec![0.0f32; pixels * channels];
+        for i in 0..pixels {
+            for c in 0..channels {
+                out[c * pixels + i] = raw[i * channels + c] as f32 * inv_max;
+            }
+        }
+        out
+    }
+
+    fn interleaved_bytes(pixels: usize, channels: usize) -> Vec<u8> {
+        let mut seed = 0x9E37_79B9u32;
+        (0..pixels * channels)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 24) as u8
+            })
+            .collect()
+    }
+
+    /// Every sample, not a spot check.
+    ///
+    /// A constant or single-pixel assertion passes against a fully scrambled buffer —
+    /// an interleaved write lands sample `c * pixels + i` exactly where the planar read
+    /// expects it whenever `i % channels == 0` — so the whole projection is swept.
+    #[test]
+    fn scatter_matches_the_sequential_projection_across_chunk_boundaries() {
+        // `balanced_chunk_len` has an 8192 floor, so these straddle it deliberately:
+        // 181x137 = 24 797 samples is three full chunks plus a short trailing 221, and
+        // 37x23 stays under the floor as the single-chunk case. Channel counts hit all
+        // three arms — the sequential mono arm, the fused RGB arm, and the general
+        // ladder.
+        for (w, h) in [(37usize, 23usize), (181, 137), (409, 271)] {
+            for channels in [1usize, 3, 4] {
+                let pixels = w * h;
+                let raw = interleaved_bytes(pixels, channels);
+
+                let frame =
+                    Frame::from_raw(&raw, w, h, channels, PixelFormat::Rgb8).unwrap();
+                let want = sequential_planes(&raw, pixels, channels, 255.0);
+
+                assert_eq!(frame.data().len(), want.len(), "{w}x{h}x{channels}");
+                for (i, (got, expected)) in frame.data().iter().zip(want.iter()).enumerate() {
+                    assert_eq!(
+                        got, expected,
+                        "{w}x{h}x{channels} sample {i} (plane {}, pixel {})",
+                        i / pixels,
+                        i % pixels
+                    );
+                }
+            }
+        }
+    }
+
+    /// The 16-bit arms decode through the same traversal, so the chunk arithmetic has to
+    /// hold for a source whose stride is two bytes per sample as well.
+    #[test]
+    fn the_16_bit_arms_scatter_the_same_way() {
+        let (w, h, channels) = (181usize, 137usize, 3usize);
+        let pixels = w * h;
+        let mut seed = 0x5A5A_1234u32;
+        let samples: Vec<u16> = (0..pixels * channels)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 16) as u16
+            })
+            .collect();
+
+        for (format, to_bytes) in [
+            (PixelFormat::Rgb16, u16::to_le_bytes as fn(u16) -> [u8; 2]),
+            (PixelFormat::Rgb16Be, u16::to_be_bytes as fn(u16) -> [u8; 2]),
+        ] {
+            let raw: Vec<u8> = samples.iter().flat_map(|&s| to_bytes(s)).collect();
+            let frame = Frame::from_raw(&raw, w, h, channels, format).unwrap();
+
+            let inv_max = 1.0 / format.max_value();
+            for i in 0..pixels {
+                for c in 0..channels {
+                    let expected = samples[i * channels + c] as f32 * inv_max;
+                    assert_eq!(
+                        frame.data()[c * pixels + i],
+                        expected,
+                        "{format:?} plane {c} pixel {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// How rayon splits the scatter must not change where a sample lands.
+    #[test]
+    fn scatter_is_invariant_to_thread_count() {
+        let (w, h, channels) = (181usize, 137usize, 3usize);
+        let raw = interleaved_bytes(w * h, channels);
+        let run = |threads: usize| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    Frame::from_raw(&raw, w, h, channels, PixelFormat::Rgb8)
+                        .unwrap()
+                        .data()
+                        .to_vec()
+                })
+        };
+        assert_eq!(run(1), run(8));
+        assert_eq!(run(1), run(3));
+    }
+}

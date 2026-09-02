@@ -88,6 +88,8 @@ pub struct CaptureSettings {
     pub sensor_correction: SensorCorrectionSettings,
     /// Spatial denoising, applied at stream resolution inside the encoders
     pub denoise: DenoiseSettings,
+    /// How much sensor resolution the preview pipeline may bin away before it runs
+    pub preview_resolution: PreviewResolution,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -270,6 +272,65 @@ impl Default for SensorCorrectionSettings {
     }
 }
 
+/// How much sensor resolution the preview pipeline is allowed to bin away.
+///
+/// The preview stages — background neutralisation, background subtraction, SCNR, the
+/// black-point pass — all walk every sample of the frame, and the encoder then throws
+/// away whatever the client's tier does not need. Binning first makes the whole pipeline
+/// run on a quarter of the samples, and `Frame::downsample`'s box average is an exact
+/// integer bin, so the pixels that survive are the ones the encoder would have produced
+/// anyway.
+///
+/// # Why this is a setting and not the connected client set
+///
+/// It was the client set. `preview_bin_factor` was resolved fresh every iteration
+/// against the largest bounding box any connected client had asked for, so a phone
+/// joining or leaving flipped the factor between 1 and 2 mid-session — and the tone
+/// curve is solved from the frame's median and MAD, which 2x2 binning moves. Measured on
+/// a 1200x1200 sky with 400 stars, the solved `scale_lut` gained **25.7 % at the 1 %
+/// input point and 16.1 % at 10 %**: a visible shadow lift, applied to *every* connected
+/// viewer, triggered by somebody else's browser tab.
+///
+/// The resolution the preview is analysed at is a property of the session, so it is
+/// chosen once and held. It also makes the guarantee `JpegTier::Original` documents —
+/// native sensor resolution, no downsampling — structurally true at the default rather
+/// than something the client-set arithmetic has to be careful about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewResolution {
+    /// Never bin: every stage sees every sensor sample.
+    ///
+    /// The default, because the alternative silently costs resolution that no part of
+    /// the UI asks for. An observer on a small board who would rather have the frame
+    /// rate picks one of the others.
+    #[default]
+    Native,
+    /// Bin toward a 4K preview. Only reaches sensors above ~8000 px on an edge.
+    Uhd2160,
+    /// Bin toward a 1440p preview. A 3008x3008 sensor bins by 2 here.
+    Qhd1440,
+    /// Bin toward a 1080p preview — the cheapest, and the floor of what any client
+    /// asks for.
+    Hd1080,
+}
+
+impl PreviewResolution {
+    /// The bounding box the preview may be binned down toward, or `None` for
+    /// [`Self::Native`].
+    ///
+    /// Deliberately the same boxes as [`crate::server::state::JpegTier`], because the
+    /// binned frame is what every payload is encoded from: choosing a box no tier uses
+    /// would throw away pixels for a size nothing serves.
+    pub fn target_box(self) -> Option<(u32, u32)> {
+        match self {
+            Self::Native => None,
+            Self::Uhd2160 => Some((3840, 2160)),
+            Self::Qhd1440 => Some((2560, 1440)),
+            Self::Hd1080 => Some((1920, 1080)),
+        }
+    }
+}
+
 /// Spatial denoising of the streamed image.
 ///
 /// Runs in the encoders at the resolution the client asked for, not at sensor
@@ -447,6 +508,7 @@ impl Default for CaptureSettings {
             rejection_method: RejectionMethod::default(),
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
+            preview_resolution: PreviewResolution::default(),
             save_raw_frames: false,
             save_stacked_image: false,
             stacking_type: StackingType::default(),

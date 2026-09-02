@@ -107,8 +107,14 @@ pub enum ServerEvent {
     /// Disk writer queue warning cleared
     DiskWriterWarningCleared,
 
-    /// Frame was dropped because the pipeline couldn't keep up
-    FrameDropped { dropped_count: u64 },
+    /// Frame was dropped because the pipeline couldn't keep up.
+    ///
+    /// `delivered_count` travels with it so the client can show a *rate*. The count
+    /// alone grows all night and means nothing without the cadence it grew against.
+    FrameDropped {
+        dropped_count: u64,
+        delivered_count: u64,
+    },
 
     /// Warning message (e.g., client too slow)
     Warning { message: String },
@@ -426,8 +432,11 @@ impl ServerEvent {
         }
     }
 
-    pub fn frame_dropped(dropped_count: u64) -> Self {
-        ServerEvent::FrameDropped { dropped_count }
+    pub fn frame_dropped(dropped_count: u64, delivered_count: u64) -> Self {
+        ServerEvent::FrameDropped {
+            dropped_count,
+            delivered_count,
+        }
     }
 
     pub fn plate_solving_started(target_name: Option<String>) -> Self {
