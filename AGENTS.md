@@ -203,6 +203,35 @@ fault still escalates; it ages out (`FAULT_STREAK_TTL`) instead of resetting on 
 liveness probe). `finalize_disconnect` takes a `DisconnectCause`, not a bool — a warmup
 teardown must never reconnect.
 
+Connect and `finalize_disconnect` both call `PushToService::set_active_camera`. The
+solver remembers a field of view per optical configuration, and that key cannot tell two
+cameras sharing a sensor format apart; a stale FOV *fails* a hinted solve rather than
+merely slowing it. Only a *named, different* camera discards the remembered value —
+boot and disconnect both look it up with no camera, and treating that as a mismatch
+deleted the entry before the session could use it. See the Pro AGENTS.md.
+
+## Push-To gating (`capture::solving`)
+
+A frame is offered on one of two slots. `try_begin_solve` may block for a whole ASTAP
+ladder; `try_begin_watch` runs *during* one, so a slew can be noticed and the doomed
+search abandoned — that path used to be closed, and the movement detector saw nothing
+for the minutes a full-sky search took. Separate cadence floors (1 s / 1.5 s): the solve
+timestamp is stamped once per ladder, so sharing it would let the watch free-run.
+
+`plate_solve_available` declines when no target is set *or* the applicable floor has not
+elapsed. It is advisory — the `try_begin_*` compare-and-swap still decides — and exists
+so the stacking thread does not clone a frame handle for an offer about to be dropped: a
+live second handle makes the render task's `Arc::try_unwrap` fail and copy a full frame.
+
+`PushToBlocker` is the vocabulary for "why nothing is happening", including the ordinary
+states of a pushed scope (moving, settling, trailing). All of it flows through
+`FrameOutcome::blocker` into `announce_blocker`, which emits one event per transition —
+including the shutdown clear, which used to update the de-duplication record without
+sending anything and so left the last blocker on screen. The plugin must not broadcast
+its own — one that did bypassed the de-duplication. The UI ranks a live blocker above
+the last solve verdict, so `StatusBar.vue`'s branches must keep the same order as
+`solvingMessage`, or a blocker inherits the previous solve's tick and `success` class.
+
 ## Storage Formats
 
 | Output           | Format | Bit Depth       |

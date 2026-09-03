@@ -9,4 +9,4 @@ mod push_to_service;
 
 pub use camera_service::CameraService;
 pub use capture_service::CaptureService;
-pub use push_to_service::{PushToService, PushToState};
+pub use push_to_service::{PushToService, PushToState, SolveLatch, WatchLatch};

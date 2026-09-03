@@ -25,6 +25,8 @@ describe('StatusBar', () => {
                 clearDiskWriterWarning: vi.fn(),
                 plateSolving: ref({inProgress: false, targetName: null, lastResult: null}),
                 clearPlateSolving: vi.fn(),
+                solvingMessage: ref(null),
+                pushToBlocked: ref(null),
                 ...overrides.eventStream,
             },
             selectedCamera: ref(overrides.selectedCamera ?? null),
@@ -300,6 +302,30 @@ describe('StatusBar', () => {
             await wrapper.find('.error').trigger('click')
 
             expect(clearUnresponsiveWarning).toHaveBeenCalled()
+        })
+    })
+
+    describe('Push-To status', () => {
+        it('does not dress a blocker up as the last solve result', () => {
+            // `solvingMessage` now returns the live blocker ahead of the last verdict,
+            // but the element that renders it is still keyed on `lastResult` — so a
+            // scope being pushed away from M31 was announced with the green tick and
+            // the `success` class of the solve it has just invalidated.
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    plateSolving: ref({
+                        inProgress: false,
+                        targetName: 'M31',
+                        lastResult: 'success',
+                    }),
+                    solvingMessage: ref('Telescope is moving'),
+                    pushToBlocked: ref('Telescope is moving'),
+                },
+            })
+
+            const result = wrapper.find('.solve-result')
+            expect(result.exists() && result.classes().includes('success')).toBe(false)
+            expect(wrapper.text()).toContain('Telescope is moving')
         })
     })
 

@@ -17,8 +17,11 @@ pub struct PushToPositionResponse {
     pub rotation_deg: f64,
     /// Estimated FOV in degrees
     pub fov_deg: f64,
-    /// Number of stars matched
-    pub stars_matched: usize,
+    /// Stars ASTAP found in the image, as it reported them in its own log.
+    ///
+    /// Not a *matched* count — neither the WCS nor the INI carries one. `None` means
+    /// ASTAP never said, which is not the same claim as an empty field.
+    pub stars_detected: Option<usize>,
     /// Solve confidence (0-1)
     pub confidence: f64,
     /// Time taken to solve (ms)

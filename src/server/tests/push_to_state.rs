@@ -23,6 +23,127 @@ fn telescope(focal_length_mm: f32) -> TelescopeSettings {
 
 // ── Solve latch ──────────────────────────────────────────────────────────────
 
+// ── Watch latch ──────────────────────────────────────────────────────────────
+
+#[test]
+fn the_watch_slot_is_open_while_a_solve_holds_the_solve_slot() {
+    // The whole point: a solve can run for minutes, and for all of that time frames
+    // still have to reach the movement detector — otherwise a slew cannot arm the
+    // gate, cannot abandon a search working on sky we have left, and cannot update
+    // the status. The field log has a full-sky rung grinding for 223 s with every
+    // frame in between skipped unread.
+    let state = PushToState::default();
+    let now = Instant::now();
+
+    let solving = state.try_begin_solve(now, NO_THROTTLE).expect("solve claim");
+    assert!(state.is_solving());
+    assert!(
+        state.try_begin_watch(now, NO_THROTTLE).is_some(),
+        "the watch must be able to run while a solve does"
+    );
+    drop(solving);
+}
+
+#[test]
+fn the_watch_latch_admits_one_frame_at_a_time() {
+    let state = PushToState::default();
+    let now = Instant::now();
+
+    let first = state.try_begin_watch(now, NO_THROTTLE).expect("first claim");
+    assert!(
+        state.try_begin_watch(now, NO_THROTTLE).is_none(),
+        "two frames must not both run the detector"
+    );
+
+    drop(first);
+    assert!(state.try_begin_watch(now, NO_THROTTLE).is_some());
+}
+
+#[test]
+fn the_watch_keeps_its_own_cadence_floor() {
+    // Sharing `last_attempt` with the solve path would let the watch run flat out for
+    // the minutes a full-sky search takes: that timestamp is stamped once per ladder,
+    // so it stops moving the moment a solve begins. Each watch run costs a full
+    // sensitive detection over the whole sensor, competing with the ASTAP it may be
+    // about to abandon.
+    let state = PushToState::default();
+    let start = Instant::now();
+    let floor = Duration::from_millis(1500);
+
+    // A solve is claimed and stays claimed, exactly as during a long ladder.
+    let _solving = state.try_begin_solve(start, floor).expect("solve claim");
+
+    drop(state.try_begin_watch(start, floor).expect("first watch"));
+    assert!(
+        state.try_begin_watch(start + Duration::from_millis(500), floor).is_none(),
+        "the watch must throttle itself, not ride the solve's timestamp"
+    );
+    assert!(
+        state.try_begin_watch(start + floor, floor).is_some(),
+        "and open again once its own floor has passed"
+    );
+}
+
+#[test]
+fn an_offer_the_cadence_floor_would_drop_is_declined_before_the_frame_is_cloned() {
+    // `plate_solve_available` runs on the stacking thread and its job is to avoid
+    // paying for an offer that cannot do anything. Keeping a second handle on the
+    // frame alive makes the render task's `Arc::try_unwrap` fail and copy a
+    // full-resolution frame, so declining early is worth a duplicated read of the
+    // clock — the claim itself is still the compare-and-swap.
+    let state = PushToState::default();
+    let start = Instant::now();
+    let solve_floor = Duration::from_millis(1000);
+    let watch_floor = Duration::from_millis(1500);
+
+    assert!(
+        state.offer_is_due(start, solve_floor, watch_floor),
+        "a session that has never offered a frame must be due"
+    );
+
+    drop(state.try_begin_solve(start, solve_floor).expect("first offer"));
+    assert!(!state.offer_is_due(start, solve_floor, watch_floor));
+    assert!(state.offer_is_due(start + solve_floor, solve_floor, watch_floor));
+}
+
+#[test]
+fn the_offer_check_follows_the_watch_cadence_while_a_solve_runs() {
+    // The two floors differ on purpose — the watch is the slower of the two — so the
+    // pre-check has to consult whichever one actually applies.
+    let state = PushToState::default();
+    let start = Instant::now();
+    let solve_floor = Duration::from_millis(1000);
+    let watch_floor = Duration::from_millis(1500);
+
+    let _solving = state.try_begin_solve(start, solve_floor).expect("solve claim");
+    drop(state.try_begin_watch(start, watch_floor).expect("first watch"));
+
+    assert!(
+        !state.offer_is_due(start + solve_floor, solve_floor, watch_floor),
+        "the solve floor must not release an offer the watch floor still holds"
+    );
+    assert!(state.offer_is_due(start + watch_floor, solve_floor, watch_floor));
+}
+
+#[test]
+fn the_two_latches_do_not_release_each_other() {
+    let state = PushToState::default();
+    let now = Instant::now();
+
+    let watching = state.try_begin_watch(now, NO_THROTTLE).expect("watch claim");
+    let solving = state.try_begin_solve(now, NO_THROTTLE).expect("solve claim");
+
+    drop(watching);
+    assert!(
+        state.is_solving(),
+        "releasing the watch must not clear the solve latch"
+    );
+    drop(solving);
+    assert!(!state.is_solving());
+    assert!(state.try_begin_watch(now, NO_THROTTLE).is_some());
+}
+
+
 #[test]
 fn the_latch_admits_one_solve_at_a_time() {
     let state = PushToState::default();
