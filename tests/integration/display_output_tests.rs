@@ -159,6 +159,11 @@ fn prepare_fixture_with(
     fixture: &Fixture,
     configure: impl FnOnce(&mut night_amplifier::server::state::CaptureSettings),
 ) -> Option<night_amplifier::server::state::RenderReadyFrame> {
+    // Ensure fixtures are downloaded from Google Drive. Under nextest
+    // partitioning this file may run in a shard with no other test that
+    // downloads fixtures first, so it has to do it itself.
+    crate::integration::common::ensure_fixtures_sync();
+
     let dir = Path::new(FIXTURES_DIR).join(fixture.dir);
     let mut frame = load_first_frame(&dir)?;
     if frame.channels() == 1 {

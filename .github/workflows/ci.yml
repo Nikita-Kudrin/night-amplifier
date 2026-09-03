@@ -77,6 +77,10 @@ jobs:
     needs: rust-build-all
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
@@ -93,7 +97,7 @@ jobs:
         with:
           name: tests-archive
       - name: Run integration tests
-        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1
+        run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1 --partition hash:${{ matrix.partition }}/4
   
   rust-benchmarks:
     needs: rust-build-all
