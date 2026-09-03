@@ -131,6 +131,11 @@ const BASELINE_NETWORK_MBPS: f64 = 60.0;
 const ENCODE_TIMING_ITERATIONS: u32 = 5;
 
 fn baseline_fixture_dirs() -> Vec<PathBuf> {
+    // Ensure fixtures are downloaded from Google Drive. Under nextest
+    // partitioning this file may run in a shard with no other test that
+    // downloads fixtures first, so it has to do it itself.
+    crate::integration::common::ensure_fixtures_sync();
+
     let fixtures = Path::new(FIXTURES_DIR);
     let mut dirs: Vec<PathBuf> = fs::read_dir(fixtures)
         .ok()

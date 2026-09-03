@@ -27,6 +27,11 @@ const ADU: f64 = 65535.0;
 
 /// Load the fixture's first frame as the sensor produced it — still mosaiced.
 fn fixture_mosaic() -> Option<Frame> {
+    // Ensure fixtures are downloaded from Google Drive. Under nextest
+    // partitioning this file may run in a shard with no other test that
+    // downloads fixtures first, so it has to do it itself.
+    crate::integration::common::ensure_fixtures_sync();
+
     let dir = Path::new(FIXTURES_DIR).join(FIXTURE);
     let first = find_image_files_in_dir(&dir).into_iter().next()?;
     let loaded = load_image(&first).ok()?;

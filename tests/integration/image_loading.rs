@@ -215,6 +215,12 @@ pub fn load_images_from_paths(paths: &[PathBuf]) -> Vec<LoadedImage> {
 
 /// Loads all images from all fixture subdirectories
 pub fn load_all_fixture_images() -> Vec<LoadedImage> {
+    // Ensure fixtures are downloaded from Google Drive. Callers of this
+    // helper don't otherwise share a process with a test that populates
+    // `tests/fixtures/` first — under nextest partitioning each shard is its
+    // own process, so nothing upstream can be relied on to have done it.
+    crate::integration::common::ensure_fixtures_sync();
+
     let fixture_sets = find_fixture_sets();
     let all_files: Vec<PathBuf> = fixture_sets.into_iter().flat_map(|set| set.files).collect();
     load_images_from_paths(&all_files)
