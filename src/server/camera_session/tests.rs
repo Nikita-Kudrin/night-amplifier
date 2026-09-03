@@ -1112,14 +1112,16 @@ async fn target_change_mid_precool_restarts_ramp() {
     assert_eq!(state.camera_phase(&name).await, CameraPhase::Precooling);
 
     // Monitor should install a new ramp that will push the hardware setpoint
-    // to -5 on the next tick.
-    let cooler_handle = {
-        let guard = state.active_camera.lock().unwrap();
-        // Snapshot for later assertion — mock camera status reads current
-        // state, and we don't downcast.
-        assert!(guard.is_some());
-    };
-    let _ = cooler_handle;
+    // to -5 on the next tick. The monitor legitimately checks the handle out
+    // of active_camera for the duration of each poll (see
+    // with_camera_bounded's doc comment), so "is it still here" has to wait
+    // for hand-back via with_active_camera instead of locking active_camera
+    // directly at one instant — a bare lock races the poll that's in flight
+    // right around this point and was the source of this test's flakiness.
+    assert!(
+        lifecycle::with_active_camera(&state, |_| ()).await.is_some(),
+        "camera handle not back in the session after mid-precool target change"
+    );
 
     let deadline = std::time::Instant::now() + PHASE_POLL_INTERVAL + Duration::from_secs(2);
     loop {
