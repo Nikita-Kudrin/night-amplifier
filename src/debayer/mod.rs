@@ -1,31 +1,12 @@
-//! Debayering (demosaicing) module for converting CFA raw data to RGB
+//! Debayering (demosaicing): converts single-channel Bayer CFA data from colour
+//! astronomy cameras into full RGB, since each sensor pixel has only one colour
+//! filter. The four 2x2 patterns (named by top-left arrangement): RGGB (most common
+//! in astro cameras), BGGR, GRBG, GBRG.
 //!
-//! This module handles conversion of single-channel Bayer pattern data from
-//! color astronomy cameras into full RGB images. Most modern astronomy cameras
-//! use a Color Filter Array (CFA) where each pixel has only one color filter,
-//! requiring interpolation to reconstruct the full color information.
-//!
-//! # Bayer Patterns
-//!
-//! The four standard 2x2 Bayer patterns are named by their top-left 2x2 arrangement:
-//! - RGGB: Red-Green / Green-Blue (most common in astronomy cameras)
-//! - BGGR: Blue-Green / Green-Red
-//! - GRBG: Green-Red / Blue-Green
-//! - GBRG: Green-Blue / Red-Green
-//!
-//! # Algorithms
-//!
-//! - **Bilinear**: Fast, simple averaging of neighbors. Good for live stacking.
-//! - **VNG** (Variable Number of Gradients): Higher quality, uses edge detection
-//!   to avoid interpolating across sharp boundaries. Better for final output.
-//! - **Superpixel**: One RGB pixel per 2x2 quad. Interpolates nothing, so it
-//!   invents no chroma noise, at half the width and height.
-//!
-//! # Module Structure
-//!
-//! - `pattern` - CFA pattern definitions
-//! - `detection` - Automatic pattern detection
-//! - `algorithms` - Debayering algorithm implementations
+//! Algorithms: **Bilinear** (fast neighbour averaging, for live stacking), **VNG**
+//! (edge-aware, better for final output), **Superpixel** (one RGB pixel per 2x2 quad,
+//! no interpolation, half resolution). Submodules: `pattern`, `detection` (auto
+//! pattern detection), `algorithms`.
 
 mod algorithms;
 mod detection;
@@ -166,15 +147,13 @@ pub fn debayer_with_config(frame: &Frame, config: DebayerConfig) -> Result<Frame
 /// skipping the intermediate f32 `Frame`.
 ///
 /// # Errors
-/// Returns `StackError::ChannelMismatch` unless the frame is single-channel CFA data.
-/// The check is not redundant with [`Debayerer::debayer`]'s: this function bypasses
-/// `Debayerer` entirely, and without it a 3-channel frame would be silently demosaiced
-/// out of its red plane — `frame.data()` starts at plane 0, and a Bayer walk over
-/// `width * height` samples stays in bounds, so nothing would fault.
-///
-/// No in-tree production caller as of 2026-08: the streaming encoder debayers at capture
-/// instead. Kept because it is public API and because `layout_tests` uses it to cover the
-/// interleaved-write half of the debayer kernels, which its f32 sibling cannot.
+/// `ChannelMismatch` unless the frame is single-channel — not redundant with
+/// [`Debayerer::debayer`]'s check, since this bypasses `Debayerer` entirely and a
+/// 3-channel frame would otherwise be silently demosaiced out of its red plane with
+/// nothing faulting (`frame.data()` starts at plane 0, a Bayer walk over `width *
+/// height` stays in bounds). No in-tree production caller as of 2026-08 (the
+/// streaming encoder debayers at capture instead); kept as public API and because
+/// `layout_tests` uses it for interleaved-write coverage its f32 sibling lacks.
 pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
     if frame.channels() != 1 {
         return Err(StackError::ChannelMismatch {
@@ -185,18 +164,9 @@ pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Resu
     debayer_bilinear_to_rgb8(frame, pattern)
 }
 
-/// Debayer a frame with automatic CFA pattern detection
+/// Debayer a frame with automatic CFA pattern detection: analyzes the raw Bayer data
+/// to detect the pattern, then debayers with it. Returns (RGB frame, detection result).
 ///
-/// This function first analyzes the raw Bayer data to detect the CFA pattern,
-/// then applies debayering with the detected pattern.
-///
-/// # Arguments
-/// * `frame` - Single-channel frame containing raw Bayer data
-///
-/// # Returns
-/// A tuple of (RGB frame, detection result with pattern and confidence)
-///
-/// # Example
 /// ```
 /// use night_amplifier::{Frame, PixelFormat};
 /// use night_amplifier::debayer::debayer_auto;
@@ -204,8 +174,7 @@ pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Resu
 /// let raw_data = vec![0u8; 100 * 100 * 2];
 /// let frame = Frame::from_raw(&raw_data, 100, 100, 1, PixelFormat::Bayer16).unwrap();
 /// let (rgb_frame, detection) = debayer_auto(&frame).unwrap();
-/// println!("Used pattern {:?} with {:.0}% confidence",
-///          detection.pattern, detection.confidence * 100.0);
+/// println!("Used pattern {:?} with {:.0}% confidence", detection.pattern, detection.confidence * 100.0);
 /// ```
 pub fn debayer_auto(frame: &Frame) -> Result<(Frame, PatternDetectionResult)> {
     let detection = detect_cfa_pattern(frame)?;

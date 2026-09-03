@@ -1,30 +1,15 @@
-//! SIMD-optimised operations for the render pipeline.
+//! SIMD-optimised operations for the render pipeline, using the `wide` crate for
+//! portable SIMD across x86_64 and ARM. `Frame` is planar but the streaming encoder's
+//! rows are interleaved, so luminance kernels exist in both shapes — [`interleaved`]
+//! and [`planar`] — each pair pinned together by an equivalence test.
 //!
-//! Uses the `wide` crate for portable SIMD across x86_64 and ARM.
-//!
-//! # Two layouts, two sets of kernels
-//!
-//! `Frame` is planar and the streaming encoder's rows are interleaved, so the luminance
-//! kernels exist in both shapes. They live in [`interleaved`] and [`planar`] rather than
-//! one flat file, and every pair is pinned to the other by an equivalence test in this
-//! module's `tests`: two kernels for two layouts is fine, two kernels that disagree is
-//! not.
-//!
-//! # Does the interleaved SIMD variant earn its keep?
-//!
-//! Measured on x86-64 (20 cores) with `benches/render_benchmark.rs`, `scale_lut` group,
-//! identical input. Over repeated runs the SIMD and scalar variants swap places inside
-//! each other's confidence intervals — around 20-21 ms whole-buffer, and 13.3 vs 13.5 us
-//! at the 2712-pixel row the encoder actually calls it with. In other words: no
-//! measurable difference. The `f32x4` wrapper cannot pay for itself while the per-lane
-//! LUT lookup remains a scalar gather.
-//!
-//! It is kept regardless, because the deployment target is a Raspberry Pi 5 and that
-//! measurement comes from the wrong architecture: under NEON the stride-3
-//! gather/scatter may trade differently. The bench cases exist to settle it there.
-//! Deleting the kernel on x86 evidence alone would be a guess. The planar SIMD kernels
-//! are not in question — `apply_fused_stretch_frame` puts the same 12.5 M samples
-//! through in 2.4 ms.
+//! Does the interleaved variant earn its keep? On x86-64, SIMD and scalar swap places
+//! inside each other's confidence intervals (`render_benchmark`'s `scale_lut` group)
+//! — no measurable difference, since the per-lane LUT lookup stays a scalar gather.
+//! Kept anyway: the deployment target is a Pi 5, and NEON's stride-3 gather/scatter
+//! may trade differently — deleting on x86 evidence alone would be a guess. The
+//! planar kernels aren't in question: `apply_fused_stretch_frame` runs the same
+//! 12.5M samples in 2.4ms.
 
 use wide::f32x4;
 

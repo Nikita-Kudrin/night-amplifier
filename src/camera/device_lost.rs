@@ -1,23 +1,15 @@
-//! One canonical signal for "the vendor SDK says this device is gone".
+//! One canonical signal for "the vendor SDK says this device is gone". The decision
+//! has to be made inside the shim, where the vendor's error is still an enum/`i32` —
+//! by the time it reaches [`CameraError`](crate::camera::CameraError) it's a rendered
+//! string, and providers don't render alike (PlayerOne prints its enum symbolically,
+//! ZWO/SVBony/QHY/ToupTek print a bare number), so matching substrings after the fact
+//! worked for exactly one provider.
 //!
-//! The decision has to be made inside the shim, where the vendor's error is
-//! still an enum or an `i32`. By the time an error reaches
-//! [`CameraError`](crate::camera::CameraError) it is a rendered string, and the
-//! providers do not render alike: PlayerOne prints its enum symbolically
-//! (`POA_ERROR_NOT_OPENED`) while ZWO, SVBony, QHY and ToupTek print a bare
-//! number. Matching vendor substrings after the fact therefore worked for
-//! exactly one provider and silently failed for the rest.
-//!
-//! So each shim classifies its own code against its own table and, for a
-//! device-loss code, prepends [`MARKER`] — a token this codebase writes and
-//! this codebase reads, with no vendor vocabulary in it.
-//! [`CameraError::is_sdk_disconnected`](crate::camera::CameraError::is_sdk_disconnected)
-//! looks for that one token plus the typed variants, and knows nothing about
-//! any SDK.
-//!
-//! A provider whose SDK has no distinct device-loss code (QHY reports one
-//! generic `QHYCCD_ERROR`) simply never marks. Those faults are still caught,
-//! one layer up, by the capture and status watchdog timeouts.
+//! Each shim instead classifies its own code and, for device-loss, prepends [`MARKER`]
+//! — a token this codebase writes and reads, with no vendor vocabulary.
+//! `is_sdk_disconnected` looks for that token plus the typed variants. A provider with
+//! no distinct device-loss code (QHY's generic `QHYCCD_ERROR`) never marks; those
+//! faults are still caught one layer up by the watchdog timeouts.
 
 use std::fmt::Display;
 
@@ -40,18 +32,13 @@ pub fn is_marked(message: &str) -> bool {
     message.contains(MARKER)
 }
 
-/// Fold a `status()` field read whose failure is usually benign.
-///
-/// Most fields a `CameraStatus` carries are optional in practice — a camera
-/// without a cooler has no cooler power, some models refuse to report offset —
-/// so every provider wrote these reads as `.unwrap_or(default)`. That also
-/// swallowed the one failure that is never benign: on a handle whose device
-/// has gone, *every* read fails, and `status()` still returned `Ok` with a
-/// temperature of 0.0. The monitor polled a dead camera indefinitely and its
-/// disconnect detector never saw a single error.
-///
-/// This keeps the tolerance and removes the blind spot: an unsupported
-/// parameter still falls back, a lost device propagates.
+/// Fold a `status()` field read whose failure is usually benign — most `CameraStatus`
+/// fields are optional in practice (no cooler means no cooler power, some models
+/// refuse to report offset), so every provider wrote these as `.unwrap_or(default)`.
+/// That also swallowed the one failure that's never benign: on a gone device *every*
+/// read fails, yet `status()` returned `Ok` at 0.0°, so the monitor polled a dead
+/// camera indefinitely and never saw a disconnect. This keeps the tolerance and
+/// removes the blind spot: unsupported still falls back, a lost device propagates.
 pub fn tolerate_unsupported<T>(reading: Result<T, String>, fallback: T) -> CameraResult<T> {
     match reading {
         Ok(value) => Ok(value),

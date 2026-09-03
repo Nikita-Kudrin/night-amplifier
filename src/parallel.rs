@@ -1,33 +1,22 @@
 //! Rayon work partitioning shared by the render kernels and the Pro plugins.
 
-/// Elements per rayon task for a flat pass over a contiguous run.
+/// Elements per rayon task for a flat pass over a contiguous run. Targets many chunks
+/// per worker so work stealing still balances, floored so a short run doesn't fan out
+/// past what the work is worth.
 ///
-/// Targets many chunks per worker so work stealing still balances, with a floor so a
-/// short run does not fan out into more tasks than the work is worth.
+/// Twelve chunks/worker, not four: sized for asymmetric cores (RK3588's 4xA76@2.4GHz +
+/// 4xA55@1.8GHz is a ~3x per-core spread) — four leaves the scheduler nothing to steal,
+/// so the critical path ends on a slow A55 core; at twelve the tail is small enough to
+/// migrate. Costs only bookkeeping on symmetric machines, bounded by the 8192 floor.
 ///
-/// # Why twelve chunks per worker and not four
+/// **No divisibility constraint** on `len` — the version this replaced searched
+/// upward for a divisor so callers could recover a channel index from a flat chunk
+/// index, costing 0.115-4.9ms per call and sometimes giving up entirely (`len`, no
+/// parallelism), making `subtract_black_point` 4.8x more expensive on odd shapes.
+/// Callers needing per-channel behaviour dispatch per plane instead.
 ///
-/// The divisor is sized for asymmetric cores, not for x86. RK3588 pairs 4xA76 at
-/// 2.4 GHz with 4xA55 at 1.8 GHz — roughly a 3x per-core spread once IPC is counted —
-/// and the Pi 5's A76 cluster is uniform only by comparison. Four chunks per worker
-/// hands each core a near-equal share and leaves the scheduler almost nothing to steal,
-/// so the critical path ends on an A55 finishing a chunk the A76s could have taken. At
-/// twelve the tail is small enough to migrate. On a symmetric machine the extra chunks
-/// buy nothing but cost only their own bookkeeping, which the 8192 floor bounds.
-///
-/// Deliberately imposes **no divisibility constraint** on `len`. The version this
-/// replaced searched upward one integer at a time for a divisor of the length, so that
-/// callers could recover a channel index from a flat chunk index. That cost 0.115 ms per
-/// call on a 2712x1538 plane and 4.9 ms on a 1999x1999 one — and in the awkward cases it
-/// gave up and returned `len`, i.e. one chunk and no parallelism at all, which made
-/// `subtract_black_point` 4.8x more expensive per pixel there than on a sensor-shaped
-/// frame. Callers that need per-channel behaviour dispatch per plane instead, which is
-/// both cheaper and simpler.
-///
-/// Callers that recover an absolute index as `block * chunk` are therefore correct for
-/// any value this returns, and must stay that way: the result is a function of
-/// `rayon::current_num_threads()`, so anything that depends on the exact chunk length
-/// depends on the machine's core count. See
+/// The result is a function of `rayon::current_num_threads()`, so anything depending
+/// on the exact chunk length depends on core count — see
 /// `render::denoise::tests::the_ycbcr_round_trip_is_invariant_to_thread_count`.
 pub fn balanced_chunk_len(len: usize) -> usize {
     if len == 0 {

@@ -1,57 +1,21 @@
-//! Core Frame data structure for astronomy image processing
+//! Core Frame data structure: holds image data as a contiguous `Vec<f32>` for
+//! high-precision stacking arithmetic, stored **plane-major**
+//! (`idx = channel*(width*height) + y*width + x`) so SIMD and spatial filters read a
+//! channel as a contiguous run, not a stride-3 gather.
 //!
-//! The Frame struct holds image data as a contiguous Vec<f32> for high-precision
-//! arithmetic operations required in image stacking.
+//! **`Frame` is planar; every 8-bit output format is interleaved** (JPEG/LZ4/PNG/SER
+//! `Rgb`/`Bgr`; FITS NAXIS3=3 is the one exception, staying planar). Crossing that
+//! boundary wrongly compiles cleanly and collapses colour toward grey — it has
+//! already happened once, across eight output paths at once.
 //!
-//! # Memory layout: planar, and load-bearing
-//!
-//! Samples are stored **plane-major**:
-//!
-//! ```text
-//! idx = channel * (width * height) + y * width + x
-//! ```
-//!
-//! so an RGB frame is `RRRR...GGGG...BBBB`, not `RGBRGBRGB...`. This exists so SIMD
-//! and spatial filters read one channel as a contiguous run instead of a stride-3
-//! gather.
-//!
-//! **`Frame` is planar; every 8-bit output format is interleaved.** That boundary is
-//! the single most dangerous thing about this type, because crossing it wrongly
-//! compiles cleanly and produces a plausible-looking image with the channels
-//! scrambled — three adjacent samples of one channel become one output pixel, so
-//! colour collapses toward grey. It has already happened once, across eight output
-//! paths at the same time. The interleaved side of the boundary is:
-//!
-//! | Consumer | Layout |
-//! |---|---|
-//! | JPEG (SA10), LZ4 (SA08/SA09), PNG | interleaved |
-//! | SER `Rgb` / `Bgr` payloads | interleaved |
-//! | FITS (NAXIS3 = 3) | **planar** — passes through unchanged |
-//!
-//! Practical rules:
-//!
-//! - Reach for [`Frame::planes`], [`Frame::planes_mut`], [`Frame::channel_data`] or
-//!   [`Frame::get_pixel`]. Treat any new `frame.data()` combined with `* 3` or
-//!   `* channels` as a review flag.
-//! - Build test fixtures with [`Frame::set_pixel`], never hand-computed offsets. A
-//!   fixture that encodes the layout cannot detect a layout bug, and several tests
-//!   passed for exactly that reason: fixture and consumer were wrong in the same way.
-//! - `src/frame/layout_tests.rs` pushes a frame with distinct constant channels
-//!   through every output path listed above — including JPEG (SA10) and the chunked
-//!   LZ4 (SA09) framing. Add a row when you add a format. A format with two
-//!   traversals needs a row for each: the SER rows run at both 8 and 16 bits because
-//!   `encode_8bit` and `encode_16bit` carry separate plane gathers, and only the
-//!   16-bit one used to be covered.
-//! - Every 8-bit consumer converts through [`sample_to_u8`], which rounds. The 16-bit
-//!   writers (SER, FITS) truncate, and agree with each other. SER's 8-bit arm had its
-//!   own truncating conversion, so one frame produced different bytes in SER than in
-//!   the PNG beside it; `ser_8bit_samples_match_the_canonical_8bit_conversion` pins
-//!   the two together.
-//! - Sweep such a fixture over the whole interior, never one pixel: an interleaved
-//!   write lands sample `c * area + p` exactly where the planar read expects it
-//!   whenever `p % 3 == 0`, so a spot check passes against a scrambled buffer.
-//! - Callers holding a pooled buffer should use [`Frame::write_rgb8_into`] rather than
-//!   re-deriving the gather; that duplication is how the PNG and SER writers drifted.
+//! Rules: use [`Frame::planes`]/[`planes_mut`]/[`channel_data`]/[`get_pixel`], never
+//! `frame.data()` with `* channels` math (review flag); build fixtures with
+//! [`Frame::set_pixel`], never hand-computed offsets (an offset-encoded fixture can't
+//! catch a layout bug); `src/frame/layout_tests.rs` covers every output path — add a
+//! row per format, per traversal, and sweep the whole interior, not one pixel
+//! (`c * area + p` coincides with the planar read at `p % 3 == 0`). 8-bit conversion
+//! always rounds via [`sample_to_u8`]; 16-bit writers truncate. Reuse
+//! [`Frame::write_rgb8_into`] rather than re-deriving the gather.
 
 mod factory;
 mod format;
@@ -220,20 +184,15 @@ impl Frame {
     }
 
     /// Area-average downsample by an integer factor, preserving f32 precision.
+    /// **No call sites in this crate — used by the Pro plate-solve plugin** to bin a
+    /// frame before ASTAP. Once deleted as "dead code", which broke the Pro build; a
+    /// dead-code claim about a `pub` item isn't verifiable from this repo alone. Keep
+    /// it, or update `night-amplifier-pro` in the same change.
     ///
-    /// **This has no call sites in this crate — it is used by the Pro plate-solve
-    /// plugin**, which bins a frame before handing it to ASTAP. It was once
-    /// deleted here as "dead code, no call sites anywhere", which broke the Pro
-    /// build; a dead-code claim about a `pub` item is not verifiable from this
-    /// repository alone. Keep it, or update `night-amplifier-pro` in the same
-    /// change.
-    ///
-    /// Distinct from the streaming encoder's box filter in `server::encoding`,
-    /// which takes an arbitrary target size and emits `u8`. This one takes an
-    /// integer factor and stays in f32 because the solver needs the precision.
-    ///
-    /// Trailing pixels are dropped: output is `width / factor` by
-    /// `height / factor`.
+    /// Distinct from the streaming encoder's box filter (`server::encoding`), which
+    /// takes an arbitrary target size and emits `u8` — this takes an integer factor
+    /// and stays f32 for solver precision. Trailing pixels are dropped: output is
+    /// `width / factor` by `height / factor`.
     pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {
         use rayon::prelude::*;
 

@@ -519,11 +519,8 @@ export function useEventStream() {
 }
 
 /**
- * WebSocket composable for high-quality RGB16 image streaming
- *
- * Receives RGB16+LZ4 compressed frames and provides:
- * - rgb16Data: Raw 16-bit RGB pixel data for WebGL rendering
- * - dimensions: { width, height } of the current frame
+ * WebSocket composable for high-quality RGB16 image streaming: receives RGB16+LZ4
+ * frames, exposing `rgb16Data` (raw 16-bit RGB for WebGL) and `dimensions`.
  *
  * @param {object} options - Stream options
  * @param {string} options.endpoint - WebSocket endpoint (default: '/ws/stream')
@@ -659,17 +656,13 @@ export function useImageStream(options = {}) {
     })
 
     /**
-     * Report the viewport this client will actually display, so the server can
-     * resample to it instead of shipping a larger frame for the GPU to minify.
+     * Report the viewport this client will actually display, so the server resamples
+     * to it instead of shipping a larger frame for the GPU to minify — matters most on
+     * the lossless endpoint, where the browser's four-tap bilinear filter would
+     * otherwise discard most of the averaging a server-side box downsample delivers.
      *
-     * Both stream families accept this. It matters most on the lossless
-     * endpoint, where the browser would otherwise minify a near-native frame
-     * with a four-tap bilinear filter that discards most of the averaging a
-     * server-side box downsample would have delivered.
-     *
-     * Callers may report on every layout change: the report is remembered and
-     * de-duplicated here, so a repeated size costs nothing and a reconnect
-     * replays the last one without the caller having to notice.
+     * Callers may report on every layout change: remembered and de-duplicated here, so
+     * a repeated size costs nothing and a reconnect replays the last one unprompted.
      */
     function sendResolution(w, h) {
         const next = normalizeViewport(w, h)

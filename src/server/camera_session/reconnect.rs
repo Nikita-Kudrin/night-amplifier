@@ -1,29 +1,18 @@
-//! Recovery after a camera drops out mid-session.
+//! Recovery after a camera drops out mid-session. A USB stall or bus reset leaves
+//! the session dead though the hardware is usually fine seconds later — the
+//! observing log this was built from shows three dropouts costing three app
+//! restarts and an hour of integration each time. Safe to automate only because of
+//! two guards: a stale handle can no longer close a device a reconnect just opened
+//! (`camera::DeviceLease`), and a reopened handle isn't assumed to work just because
+//! `open()` returned (`lifecycle::connect` probes it) — without both, the first
+//! reconnect attempt lands inside the abandoned handle's still-alive window and
+//! loops forever.
 //!
-//! A USB stall or a bus reset leaves the session dead even though the hardware
-//! is usually fine seconds later. The observing log this was built from shows
-//! the cost of doing it by hand: three dropouts, three restarts of the whole
-//! application, and an hour of integration lost each time.
-//!
-//! What makes this safe to automate is the two guards underneath it. A stale
-//! handle can no longer close the device a reconnect has just opened
-//! (`camera::DeviceLease`), and a reopened handle is no longer assumed to work
-//! just because `open()` returned (`lifecycle::connect` probes it). Without
-//! both, an automatic reconnect is strictly worse than none: the first
-//! reconnect attempt lands inside the window where the abandoned handle is
-//! still alive, and the loop repeats every few seconds forever.
-//!
-//! The policy here is therefore deliberately reluctant:
-//!
-//! - **Bounded.** `MAX_ATTEMPTS` tries inside `TOTAL_BUDGET`, then it stops and
-//!   says so. An unbounded retry against a camera that is genuinely gone is
-//!   just a slower way to fail, with a toast every cycle.
-//! - **Backed off.** The first wait is longer than the stall it is recovering
-//!   from, because a handle abandoned inside the SDK may still be running.
-//! - **Re-enumerated.** A device index that is no longer present is not
-//!   reopened; that is a camera someone unplugged, not one that hiccuped.
-//! - **Single-flight.** One supervisor at a time, and none at all while the
-//!   user is disconnecting on purpose.
+//! Deliberately reluctant: **bounded** (`MAX_ATTEMPTS` inside `TOTAL_BUDGET`, then
+//! stops and says so), **backed off** (first wait longer than the stall, since an
+//! abandoned SDK handle may still be running), **re-enumerated** (a missing device
+//! index means unplugged, not hiccuped, so it's not reopened), **single-flight**
+//! (one supervisor at a time, none while the user disconnects on purpose).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

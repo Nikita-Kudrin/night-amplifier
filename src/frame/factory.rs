@@ -5,21 +5,16 @@ use crate::error::{Result, StackError};
 use rayon::prelude::*;
 use tracing::instrument;
 
-/// Writes `sample(i, c)` into plane-major `data`, one contiguous run per channel.
+/// Writes `sample(i, c)` into plane-major `data`, one contiguous run per channel. The
+/// three `PixelFormat` arms differ only in how a sample decodes, so they share this
+/// traversal instead of repeating the channel ladder three times.
 ///
-/// The three `PixelFormat` arms differ only in how a sample is decoded, so they share
-/// this traversal rather than repeating the channel ladder three times.
-///
-/// # One pass over the source, not one per plane
-///
-/// The obvious shape — walk each output plane in turn, reading `raw[i * channels + c]` —
-/// reads the *whole* source buffer once per channel. For a 2712x1538 RGB frame that is
-/// three passes over 12.5 MB, each touching every cache line, where the interleaved
-/// predecessor did one. This is the camera ingest path, so it runs per frame.
-///
-/// Instead the source is walked once and each sample is scattered to its plane. The
-/// planes are split apart up front so the write is a sequential store stream per channel
-/// rather than a bounds-checked `data[c * area + i]` per sample.
+/// One pass over the source, not one per plane: walking each output plane in turn
+/// (`raw[i * channels + c]`) reads the whole source once per channel — three passes
+/// over 12.5MB for a 2712x1538 RGB frame, on the per-frame camera ingest path, where
+/// interleaved did one. Instead the source is walked once and each sample scattered to
+/// its plane, with planes split apart up front so the write is a sequential store
+/// stream per channel, not a bounds-checked `data[c * area + i]` per sample.
 #[inline]
 fn scatter_to_planes(
     data: &mut [f32],
@@ -27,26 +22,16 @@ fn scatter_to_planes(
     channels: usize,
     sample: impl Fn(usize, usize) -> f32 + Sync,
 ) {
-    // # Why only the multi-channel arm is parallel
+    // Why only the multi-channel arm is parallel: `frame_ingest_benchmark` shows these
+    // are different kinds of work. Mono is one streaming read + write with a multiply,
+    // and a single core already saturates it (4.2M samples in ~1.1ms at 2712x1538,
+    // ~22GB/s) — rayon measured **18-21% slower** there, dispatch overhead against no
+    // spare bandwidth. Interleaved scatters each pixel to three planes, genuinely
+    // compute-bound: parallelising took `from_raw_rgb8` from 14.2ms to 4.8ms (-66%).
     //
-    // The two arms are not the same kind of work, and `frame_ingest_benchmark` says so.
-    //
-    // The mono arm is one streaming read and one streaming write with a multiply
-    // between them, and a single core already saturates it: at 2712x1538 it runs 4.2 M
-    // samples in ~1.1 ms, which is ~22 GB/s of traffic. Splitting it across rayon
-    // measured **18-21 % slower** — dispatch overhead against no spare bandwidth to
-    // claim. It stays sequential.
-    //
-    // The interleaved arm scatters each source pixel to three separate destination
-    // planes, so it is three write streams per read and genuinely compute-bound.
-    // Parallelising it took `from_raw_rgb8` from 14.2 ms to 4.8 ms per call, **-66 %**.
-    //
-    // Unresolved, and deliberately left that way: on a Pi 5 or an RK3588 a single core
-    // does *not* saturate memory bandwidth, so the mono arm may well split profitably
-    // there. That is an ARM measurement, and `from_raw_bayer16_mono` is the case that
-    // would settle it — the same reasoning `render::simd` records for its NEON kernels.
-    // Shipping the split on an untested theory would be trading a measured regression
-    // for a guess.
+    // Left unresolved on purpose: a Pi 5/RK3588 core doesn't saturate memory
+    // bandwidth, so mono may split profitably there — an ARM measurement
+    // (`from_raw_bayer16_mono`) would settle it, not a guess shipped untested.
     if channels == 1 {
         for (i, slot) in data[..pixels].iter_mut().enumerate() {
             *slot = sample(i, 0);

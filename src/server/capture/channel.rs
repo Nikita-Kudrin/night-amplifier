@@ -17,39 +17,24 @@ use crate::frame::Frame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
 
 /// How many messages one pipeline channel holds that its consumer has not taken yet.
+/// `SyncSender` exposes no length, so this tracks it alongside: incremented *before*
+/// a send is attempted (given back if it fails), decremented for every message taken
+/// out — including ones a drain discards.
 ///
-/// # Why this exists
+/// Two callers, different reasons: stacking→render reads it to decide whether to
+/// build a display copy at all (`MasterStack::compute()`'s copy is 434MB read + 108MB
+/// written on a 3008² colour stack, and the render task used to `drain_to_latest` and
+/// throw half away unread — waste landing on the thread dropping camera frames, i.e.
+/// lost sky). The two capture channels only *report* depth, distinguishing "slow"
+/// from "stalled once".
 ///
-/// `std::sync::mpsc::SyncSender` exposes no length, so neither end can ask the channel
-/// how deep it is. This is that length, kept alongside it: incremented *before* a send
-/// is attempted and given back when the send did not happen, decremented for every
-/// message taken out — including the ones a drain discards, which is why the render task
-/// decrements per message rather than once per iteration.
-///
-/// Two callers need it, for different reasons. The stacking→render channel reads it to
-/// decide whether to build a display copy at all: `MasterStack::compute()` copies the
-/// running mean out of the accumulator into a fresh frame — 434 MB read and 108 MB
-/// allocated and written on a 3008x3008 colour stack — and the render task used to
-/// `drain_to_latest` and throw about half of them away unread. The waste landed on the
-/// one thread that is dropping camera frames, and a dropped camera frame is lost sky.
-/// The two capture channels only *report* their depth, which is what distinguishes "the
-/// stacking thread is slow" from "the stacking thread stalled once".
-///
-/// # Why the increment leads the send
-///
-/// The count must never sit *below* the true queue depth, because for the render channel
-/// the error is unrecoverable in that direction: `want_display` is `pending() == 0`, so a
-/// count stuck one above zero on an empty channel stops the stacking task from ever
-/// building another display frame, which stops the render task from ever decrementing
-/// again. Counting after `try_send` leaves exactly that window — the message is visible
-/// to the receiver the instant `try_send` returns, and a `taken()` that lands there
-/// saturates at zero. Counting first can only overshoot, and an overshoot costs one
-/// skipped display copy that the next iteration corrects. See `run_stacking_task`.
-///
-/// Reading it is advisory. A frame can be taken between the check and the send, in which
-/// case the stacking task merely does work it could have skipped; nothing downstream
-/// depends on the count being exact, and the render task's own drain still handles a
-/// queue that grew anyway.
+/// Increment leads the send because the count must never sit *below* the true depth:
+/// for the render channel that's unrecoverable — `want_display` is `pending() == 0`,
+/// so a count stuck at one on an empty channel stops the stacking task from ever
+/// building another display frame, which stops the render task from ever
+/// decrementing again. Counting after `try_send` leaves exactly that window; counting
+/// first can only overshoot, costing one skipped display copy the next iteration
+/// corrects. Reading it is advisory — nothing downstream depends on it being exact.
 #[derive(Clone, Debug, Default)]
 pub struct QueueDepth(Arc<AtomicUsize>);
 
@@ -176,17 +161,12 @@ fn capacity_within(budget: usize, frame_memory_bytes: usize) -> usize {
     capacity.clamp(2, 256)
 }
 
-/// Longest the capture→stacking channel may hold buffered sky, in microseconds.
-///
-/// The memory budget alone answers "how many frames fit", which is not the question an
-/// observer cares about. A deeper queue does not fix a throughput deficit — if the
-/// stacking thread is slower than capture, the queue fills and drops at exactly the same
-/// rate as before, with the stack now running however long this is behind the shutter.
-/// On a 20-core, 62.5 GiB host the memory budget alone puts 19 frames in that channel,
-/// which at a 152 ms exposure is 2.9 s of lag for no gain in throughput.
-///
-/// Two seconds is what a live view can absorb without the preview visibly trailing the
-/// mount.
+/// Longest the capture→stacking channel may hold buffered sky, in microseconds. Memory
+/// budget alone answers "how many frames fit", not what an observer cares about: a
+/// deeper queue doesn't fix a throughput deficit, it just runs the stack further behind
+/// the shutter for the same drop rate (memory alone puts 19 frames / 2.9s of lag on a
+/// 20-core, 62.5GiB host at 152ms exposures). Two seconds is what a live view can
+/// absorb without visibly trailing the mount.
 const MAX_STACKING_QUEUE_LATENCY_US: u64 = 2_000_000;
 
 /// Channel depths for one capture session, one per channel the pipeline runs.
@@ -210,17 +190,13 @@ pub struct PipelineCapacities {
     pub render: usize,
 }
 
-/// Size each channel from the payload it actually carries, and the stacking channel from
-/// the latency it would introduce as well.
-///
-/// The two capture channels move `Arc<RawFrame>` — sensor bytes, 18 MB for a 9 MP
-/// 16-bit frame. The render channel moves a debayered f32 `Frame`, 108 MB for the same
-/// sensor in colour. Sizing all three from the display frame, as this used to, made the
-/// two raw channels six times shallower than the budget intended; sizing all three from
-/// the raw frame would overcommit the render channel by as much in the other direction.
-///
-/// Both capture channels are charged the full raw size even though they share one
-/// `Arc` per frame, so the real footprint is at most what this budgets for.
+/// Size each channel from the payload it actually carries, and the stacking channel
+/// from the latency it would introduce too. Capture channels move `Arc<RawFrame>`
+/// (18MB for 9MP 16-bit); the render channel moves a debayered f32 `Frame` (108MB
+/// colour). Sizing all three from the display frame (the old approach) made the raw
+/// channels 6x shallower than intended; sizing from the raw frame would overcommit
+/// render by as much the other way. Both capture channels are charged the full raw
+/// size despite sharing one `Arc`, so real footprint is at most what this budgets.
 pub fn pipeline_capacities(
     raw_bytes: usize,
     display_bytes: usize,
@@ -344,20 +320,13 @@ mod tests {
     }
 
     /// The gate must not latch shut when a take lands between the send and the count.
-    ///
-    /// This is the ordering `run_stacking_task` used to have: `try_send(msg)` first,
-    /// `render_depth.sent()` second. The message is visible to the render task the
-    /// instant `try_send` returns, so a receiver waking inside that window ran `taken()`
-    /// against a zero counter, saturated there, and the sender's `sent()` then landed on
-    /// an already-empty channel.
-    ///
-    /// The damage was permanent: `want_display` is `pending() == 0`, so the stacking task
-    /// stopped building display frames, the render task never received another one and
-    /// never decremented again, and the live view froze for the rest of the session with
-    /// every other part of the pipeline still running normally.
-    ///
-    /// Counting first makes the interleaving harmless — the worst case is a transient
-    /// overshoot that the failed-send arm gives back.
+    /// This is the ordering `run_stacking_task` used to have — `try_send(msg)` then
+    /// `render_depth.sent()` — where a receiver waking in that window ran `taken()`
+    /// against a zero counter, saturated there, and the sender's `sent()` landed on an
+    /// already-empty channel. Damage was permanent: `want_display` is `pending() == 0`,
+    /// so the stacking task stopped building display frames and the live view froze for
+    /// the rest of the session. Counting first makes the interleaving harmless — worst
+    /// case is a transient overshoot the failed-send arm gives back.
     #[test]
     fn a_take_that_lands_between_the_send_and_the_count_does_not_latch_the_gate() {
         let depth = QueueDepth::default();

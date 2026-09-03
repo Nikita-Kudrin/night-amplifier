@@ -10,24 +10,17 @@ use super::config::{FrameQuality, WeightingConfig};
 /// is too small to say what typical looks like, so every frame weighs the same.
 const WARMUP_FRAMES: usize = 5;
 
-/// The session's yardstick for frame quality: the median FWHM and SNR of the
-/// frames already blended in.
+/// The session's yardstick for frame quality: median FWHM and SNR of frames already
+/// blended in. Medians, not extremes — normalising against a running min/max (the
+/// original approach) makes a frame's weight depend on arrival order, since whichever
+/// frame is the current extreme scores 0.0 or 1.0 however marginally, and that early
+/// weight is permanent once blended. Ratios against a median are scale-free and
+/// converge, so equal quality earns equal weight regardless of arrival time.
 ///
-/// Medians, not extremes. Normalising against a running min/max — as this did
-/// originally — makes a frame's weight depend on its arrival order rather than
-/// its quality: whichever frame happens to be the current extreme scores 0.0 or
-/// 1.0 however marginally it differs from the rest, and because incremental
-/// stacking freezes a frame's weight the moment it is blended, those arbitrary
-/// early weights are permanent. Ratios against a median are scale-free and
-/// converge, so a frame of a given quality earns the same weight whenever it
-/// happens to arrive.
-///
-/// The median is taken over the whole session, not a rolling window — unlike the
-/// frame gate in `server::capture::frame_gate`, which wants to track conditions
-/// as they drift. Here a moving yardstick would be the wrong thing: a frame's
-/// weight is frozen when it is blended, so weights are only comparable to each
-/// other if they were all measured against the same scale. Two frames of equal
-/// quality an hour apart must contribute equally.
+/// Median over the whole session, not a rolling window (unlike `frame_gate`, which
+/// wants to track drifting conditions) — a frame's weight freezes when blended, so
+/// weights are only comparable if measured against the same scale: two frames of
+/// equal quality an hour apart must contribute equally.
 #[derive(Default)]
 pub struct QualityBaseline {
     /// Kept sorted so the median is a lookup and insertion needs no allocation

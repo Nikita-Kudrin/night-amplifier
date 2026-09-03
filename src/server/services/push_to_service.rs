@@ -203,16 +203,13 @@ impl PushToService {
 
 /// Server-side mirror of the Push-To plugin, so the stacking thread can decide
 /// whether a plate solve is worth preparing a frame for without awaiting the
-/// plugin's own locks.
-///
-/// The first two fields are caches, not the source of truth — the plugin is. They
-/// exist only to keep `capture::solving::plate_solve_available` synchronous and
-/// cheap; every consequential check is repeated against the plugin inside
-/// `try_plate_solve`. Write `has_target` through
-/// [`AppState::set_push_to_has_target`].
-///
-/// The last two are event de-duplication state, owned here because they are about
-/// what this server has already told its clients, which the plugin has no view of.
+/// plugin's own locks. The first two fields are caches, not the source of truth
+/// (the plugin is) — they exist only to keep `capture::solving::plate_solve_available`
+/// synchronous and cheap; every consequential check repeats against the plugin
+/// inside `try_plate_solve`. Write `has_target` through
+/// [`AppState::set_push_to_has_target`]. The last two are event de-duplication
+/// state, owned here since they're about what this server already told clients,
+/// which the plugin has no view of.
 #[derive(Default)]
 pub struct PushToState {
     /// Latch owned by `try_plate_solve`: raised before a solve is spawned, cleared
@@ -252,16 +249,12 @@ impl PushToState {
     }
 
     /// Claim the solve slot, or `None` if one is already running or the previous
-    /// offer was too recent.
-    ///
-    /// The compare-and-swap is what makes this a claim rather than a check followed
-    /// by a set: two frames arriving together would both pass a bare read.
-    ///
-    /// `min_interval` bounds the cost of the movement check. Every offered frame runs
-    /// a full sensitive star detection over the whole sensor — 3008x3008x3 in the
-    /// field log — purely to decide whether the view has changed, and the answer is
-    /// almost always "no". At the ~1 fps of a deep-sky session this changes nothing;
-    /// it stops a short-exposure run from paying that per frame.
+    /// offer was too recent. The compare-and-swap makes this a claim, not a
+    /// check-then-set — two frames arriving together would both pass a bare read.
+    /// `min_interval` bounds the movement check's cost: every offered frame runs a
+    /// full sensitive star detection over the whole sensor (3008x3008x3 in the field
+    /// log) just to decide the view hasn't changed (almost always true) — a no-op at
+    /// ~1fps deep-sky, but stops a short-exposure run from paying it per frame.
     pub fn try_begin_solve(&self, now: Instant, min_interval: Duration) -> Option<SolveLatch> {
         if let Some(previous) = *self.last_attempt.lock().unwrap() {
             if now.saturating_duration_since(previous) < min_interval {

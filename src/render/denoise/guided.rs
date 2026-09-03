@@ -1,28 +1,18 @@
 //! Fast guided filtering of the two chroma planes, with luminance as the guide.
+//! Colour mottle is chroma noise surviving debayer interpolation — the one defect
+//! smoothable hard without visible loss, since the eye resolves far less chroma
+//! detail than luminance.
 //!
-//! Colour mottle is chroma noise that survived the debayer's interpolation. It
-//! is the one defect that can be smoothed hard without visible loss: the eye
-//! resolves far less chroma detail than luminance, so a filter that keeps
-//! colour *edges* where the luminance has them can flatten everything in
-//! between.
+//! Guided, not a plain blur: a blur wide enough to remove mottle bleeds a star's
+//! colour into the sky beside it, while the guided filter's local linear model
+//! (`q = a*I + b` against the luminance guide) collapses smoothing exactly where the
+//! guide has structure and runs full-width elsewhere.
 //!
-//! # Why guided and not a plain blur
-//!
-//! A blur wide enough to remove the mottle bleeds a star's colour across the
-//! sky beside it. The guided filter solves a local linear model
-//! `q = a * I + b` against the luminance guide, so the smoothing collapses
-//! exactly where the guide has structure and runs at full width where it does
-//! not.
-//!
-//! # Why the fast variant
-//!
-//! Both the coefficient solve and the box means run on an `s`-times
-//! subsampled copy, and only the final `a`/`b` maps are upsampled back — the
-//! standard fast guided filter. It costs `1/s²` of the full solve and is
-//! visually indistinguishable here, because `a` and `b` are smooth by
-//! construction. Separable sliding-window box filters rather than a summed-area
-//! table: two running-sum passes stay in cache on ARM, where a full-resolution
-//! f64 integral image does not.
+//! Fast variant: coefficient solve and box means run on an `s`-times subsampled
+//! copy, only `a`/`b` upsampled back — costs `1/s²` of the full solve, visually
+//! indistinguishable since `a`/`b` are smooth by construction. Separable
+//! sliding-window box filters, not a summed-area table: two running-sum passes stay
+//! in cache on ARM, where a full-res f64 integral image doesn't.
 
 use rayon::prelude::*;
 

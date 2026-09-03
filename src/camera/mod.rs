@@ -1,37 +1,14 @@
-//! Camera support for astronomical imaging
-//!
-//! This module provides a unified interface for capturing images from various
-//! astronomy camera manufacturers including Player One, ZWO, SVBony, Touptek,
-//! QHYCCD, and others.
-//!
-//! # Architecture
-//!
-//! The camera system uses a trait-based abstraction:
-//!
-//! - [`Camera`] - Core trait for image capture operations
-//! - [`CameraProvider`] - Factory trait for discovering and opening cameras
-//! - [`CameraRegistry`] - Manages multiple camera providers
-//!
-//! # Example
+//! Camera support for astronomical imaging: a unified interface over Player One, ZWO,
+//! SVBony, Touptek, QHYCCD, and others, via a trait-based abstraction — [`Camera`]
+//! (capture operations), [`CameraProvider`] (discovery/opening), [`CameraRegistry`]
+//! (manages multiple providers).
 //!
 //! ```no_run
 //! use night_amplifier::camera::{CameraRegistry, CaptureConfig};
 //!
-//! // Create registry and register available providers
 //! let mut registry = CameraRegistry::new();
 //! registry.register_defaults();
-//!
-//! // List all cameras from all providers
-//! let cameras = registry.list_all_cameras()?;
-//! for cam in &cameras {
-//!     println!("{}: {} ({}x{})", cam.provider, cam.info.name,
-//!              cam.info.max_width, cam.info.max_height);
-//! }
-//!
-//! // Open a specific camera
 //! let mut camera = registry.open_camera("PlayerOne", 0)?;
-//!
-//! // Capture an image
 //! let config = CaptureConfig::default().with_exposure_us(1_000_000);
 //! let frame = camera.capture(&config)?;
 //! # Ok::<(), night_amplifier::camera::CameraError>(())

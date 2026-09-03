@@ -34,18 +34,13 @@ pub async fn eyepiece_quality_handler(
     ws.on_upgrade(move |socket| handle_eyepiece_quality(socket, state))
 }
 
-/// Handle the lossless image stream WebSocket connection
-///
-/// Like the JPEG handler, the client's viewport selects a resolution tier — the
-/// render task box-averages down to it rather than shipping a near-native frame
-/// for the browser to minify. That resampling is not cosmetic: an area average
-/// down to display size removes noise the GPU's four-tap bilinear minification
-/// discards as aliasing instead, measured at 1.22x fewer output levels of sky
-/// sigma for a 1440p view of an IMX533 frame.
-///
-/// How much it is worth depends on how much spare resolution the sensor has: the
-/// same measurement on an IMX464, which the 1440 tier barely shrinks, comes out
-/// at 1.03x. `display_output_tests` reports both.
+/// Handle the lossless image stream WebSocket connection. Like the JPEG handler,
+/// the client's viewport selects a resolution tier — the render task box-averages
+/// down to it rather than shipping a near-native frame for the browser to minify.
+/// Not cosmetic: an area average to display size removes noise the GPU's four-tap
+/// bilinear minification treats as aliasing instead, measured at 1.22x fewer output
+/// levels of sky sigma for a 1440p view of an IMX533 frame (1.03x on IMX464, which
+/// the 1440 tier barely shrinks — `display_output_tests` reports both).
 async fn handle_eyepiece_quality(mut socket: WebSocket, state: Arc<AppState>) {
     // The only registration this connection makes: the render task reads both
     // "is anyone watching" and "what box" off the tier counters, so one guard

@@ -1,33 +1,17 @@
-//! Raw-CFA stage: corrections that must run on the sensor mosaic
+//! Raw-CFA stage: corrections that must run on the sensor mosaic, before demosaic
+//! turns it into RGB. Once debayered, a correction meaningful only on the mosaic has
+//! nowhere to go: **hot pixels** ([`hot_pixels`]) get smeared into a coloured 3x3
+//! cross; **row/column FPN** ([`fpn`]) stops being a pattern once rows mix; **dark and
+//! flat calibration** ([`crate::calibration`]) is defined on raw samples.
 //!
-//! Every colour camera in this codebase used to debayer inside its capture
-//! shim, so the first thing any pipeline code saw was already RGB. That leaves
-//! nowhere to put a correction that is only meaningful on the mosaic — and
-//! several are:
+//! [`RawFrame::to_cfa_frame`](crate::camera::RawFrame::to_cfa_frame) hands back a
+//! still-mosaiced [`CfaFrame`]; the stacking task debayers after running
+//! [`CfaPipeline`] over it (empty pipeline = bit-identical to debayering direct).
 //!
-//! - **Hot pixels** ([`hot_pixels`]) — filtered after demosaic, one hot site has
-//!   already been smeared into a coloured 3x3 cross by the interpolation.
-//! - **Row / column fixed-pattern noise** ([`fpn`]) — a readout artefact of the
-//!   sensor's own rows and columns. Debayering mixes neighbouring rows, so the
-//!   pattern stops being a pattern.
-//! - **Dark and flat calibration** ([`crate::calibration`]) — `(raw - dark) / flat`
-//!   is defined on raw sensor samples, which is why that module has no call
-//!   sites in the server yet.
-//!
-//! [`RawFrame::to_cfa_frame`](crate::camera::RawFrame::to_cfa_frame) now hands
-//! back a [`CfaFrame`] — still mosaiced for a colour sensor — and the stacking
-//! task debayers after running [`CfaPipeline`] over it. A pipeline with no
-//! stages is bit-identical to debayering straight out of the shim.
-//!
-//! # Planes
-//!
-//! Both corrections work on one *colour site* at a time: the sub-lattice of
-//! samples that share a filter. A Bayer mosaic has four ([`CfaFrame::step`] of
-//! 2), a mono sensor has one (step of 1), and both are described by
-//! [`CfaPlanes`] so the filters need no separate mono path. Mixing sites is the
-//! bug this exists to prevent: an R sample and its neighbouring B sample sit at
-//! entirely different levels, so a filter that treats them as neighbours reads
-//! the mosaic itself as signal.
+//! Both corrections work one *colour site* at a time (the sub-lattice sharing a
+//! filter — 4 for Bayer, 1 for mono, described by [`CfaPlanes`]): mixing sites reads
+//! the mosaic pattern itself as signal, since neighbouring R/B samples sit at
+//! different levels.
 
 pub mod fpn;
 pub mod hot_pixels;

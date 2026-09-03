@@ -13,17 +13,13 @@ pub use planetary::PlanetaryStackingContext;
 
 use crate::stacking::CometContext;
 
-/// The stacking state a capture leaves behind when it ends unexpectedly.
-///
-/// A dropout in the middle of a two-hour session must not cost the two hours.
-/// The stacking task normally owns these contexts for the life of one capture
-/// and drops them on exit; when a reconnect is going to resume the session,
-/// they are parked in `AppState.stacking_carryover` instead and handed to the
-/// next stacking task.
-///
-/// Only valid for a resume at the same frame geometry — the stacking task's
-/// existing dimension-mismatch check discards them otherwise, exactly as it
-/// does for a binning change mid-session.
+/// The stacking state a capture leaves behind when it ends unexpectedly — a dropout
+/// mid-session must not cost the whole two hours. Normally owned by the stacking task
+/// for the life of one capture and dropped on exit; when a reconnect will resume the
+/// session, parked in `AppState.stacking_carryover` and handed to the next stacking
+/// task instead. Only valid for a resume at the same frame geometry — discarded by
+/// the stacking task's existing dimension-mismatch check otherwise, same as a
+/// mid-session binning change.
 pub struct StackingCarryover {
     pub stacking: Option<StackingContext>,
     pub comet: Option<Box<dyn CometContext>>,

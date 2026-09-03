@@ -245,25 +245,15 @@ impl BackgroundModel {
         }
     }
 
-    /// Fast delta-stepping subtraction using boundary-hugging node coordinates.
+    /// Fast delta-stepping subtraction using boundary-hugging node coordinates:
+    /// iterates grid bands, computing edge values per scanline and advancing via a
+    /// constant delta — no per-pixel divisions or weight lookups.
     ///
-    /// Iterates over grid bands, computing left/right edge values per scanline
-    /// and advancing via a constant delta — no per-pixel divisions or weight lookups.
-    ///
-    /// # Why this is parallel per row rather than per band
-    ///
-    /// The predecessor split the work across `grid_rows - 1` bands — eleven tasks for
-    /// the default 12x12 grid, on a machine with twenty cores — and reached the pixels
-    /// through `(data as *const [f32] as *mut f32)`: a `*mut` derived from a shared
-    /// reference, written from inside a `for_each`. The bands genuinely did not overlap,
-    /// but that is not what makes it sound; writing through a pointer derived from a
-    /// shared borrow is undefined behaviour under Stacked Borrows regardless.
-    ///
-    /// Planar layout makes the safe version the simpler one. Each plane is a contiguous
-    /// run, so `par_chunks_mut(width)` hands out one owned row per task, and the band a
-    /// row belongs to is a property of its `y` alone — precomputed once below rather
-    /// than rediscovered per band per channel. No `unsafe`, and `height * channels`
-    /// tasks instead of eleven.
+    /// Parallel **per row**, not per band: the predecessor split work across 11 bands
+    /// (default 12x12 grid) via `(data as *const [f32] as *mut f32)` — UB under Stacked
+    /// Borrows regardless of the bands not overlapping. Planar layout makes the safe
+    /// version simpler: each plane is contiguous, so `par_chunks_mut(width)` hands out
+    /// one owned row per task, with a row's band precomputed from its `y` alone.
     fn subtract_delta_stepping(
         &self,
         frame: &mut Frame,

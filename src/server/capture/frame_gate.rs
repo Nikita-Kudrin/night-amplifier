@@ -1,18 +1,13 @@
-//! Deciding whether a frame is worth stacking.
+//! Deciding whether a frame is worth stacking. `AdaptiveRegistration` returns the
+//! first transform any preset can fit (`robust`'s `max_residual` is 10px), so
+//! "registration succeeded" alone admits transforms built from a handful of
+//! coincidental correspondences — averaging those in smears the stack, so the
+//! diagnostics registration already computes are judged here first.
 //!
-//! `AdaptiveRegistration` returns the first transform any of its presets can
-//! fit, and `robust`'s `max_residual` is 10 px — so "registration succeeded" on
-//! its own admits transforms built from a handful of coincidental
-//! correspondences. Averaging those into the stack is what smears it, so the
-//! diagnostics registration already computes are judged here before a frame is
-//! allowed in.
-//!
-//! Every limit is derived from the session's own frames rather than fixed.
-//! Mount, seeing and focal length move the numbers by more than any constant
-//! could absorb: the bundled 250 mm dob fixture registers at a ~0.5 px median
-//! residual while the 250 mm Orion set sits near 5.5 px throughout, and both are
-//! working normally. A frame is an outlier relative to its neighbours or it is
-//! not an outlier at all.
+//! Every limit derives from the session's own frames, not a fixed constant: mount,
+//! seeing and focal length move the numbers too much (the 250mm dob fixture
+//! registers at ~0.5px median residual, the 250mm Orion set at ~5.5px, both normal).
+//! A frame is an outlier relative to its neighbours, or not an outlier at all.
 
 use std::collections::VecDeque;
 
@@ -28,27 +23,16 @@ const RESIDUAL_FLOOR_PX: f32 = 1.5;
 /// transform is treated as a bad fit rather than ordinary scatter.
 const RESIDUAL_K: f32 = 3.0;
 
-/// Second floor for the residual gate, as a fraction of the session's median
-/// star size.
-///
-/// `RESIDUAL_K * median_residual` alone is scale-multiplicative, which gets the
-/// answer backwards: the better a rig tracks, the tighter its own gate becomes.
-/// On the 250 mm dumbbell fixture — 0.6 px median residual, 5.4 px stars — that
-/// rule set a 1.8 px limit and threw away 9 of 34 frames whose residuals were
-/// 1.9–3.3 px, well inside a single star's width. On the Orion fixture, which
-/// tracks four times worse, it rejected nothing.
-///
-/// Misalignment only matters relative to the PSF it is smearing, so the floor
-/// follows the stars. Measured on the dumbbell fixture:
-///
-/// | residual floor        | frames kept | stacked FWHM |
-/// |-----------------------|-------------|--------------|
-/// | none (ungated)        | 35          | 6.180 px     |
-/// | median-only (K = 3)   | 26          | 5.863 px     |
-/// | + 0.5 × median FWHM   | 31          | 6.077 px     |
-/// | + 1.0 × median FWHM   | 34          | 6.180 px     |
-///
-/// Half a star width keeps most of the sharpening while returning most of the
+/// Second floor for the residual gate, as a fraction of the session's median star
+/// size. `RESIDUAL_K * median_residual` alone is scale-multiplicative and gets it
+/// backwards: the better a rig tracks, the tighter its own gate becomes — on the
+/// 250mm dumbbell fixture (0.6px median residual, 5.4px stars) that rule set a
+/// 1.8px limit and threw away 9 of 34 frames whose residuals (1.9-3.3px) were well
+/// inside a single star's width, while the 4x-worse-tracking Orion fixture rejected
+/// nothing. Misalignment only matters relative to the PSF it smears, so the floor
+/// follows the stars: measured on the dumbbell fixture, adding half a star width
+/// recovers 31 of 35 frames at 6.077px stacked FWHM (vs 26 frames/5.863px with no
+/// floor, 34/6.180px ungated) — keeping most of the sharpening and most of the
 /// integration.
 const RESIDUAL_FWHM_K: f32 = 0.5;
 
@@ -57,17 +41,14 @@ const RESIDUAL_FWHM_K: f32 = 0.5;
 /// coincidence, not an alignment.
 const MATCH_FRACTION: f32 = 0.25;
 
-/// How far above the session's median star size a frame may sit before it is
-/// treated as defocused, clouded, or shaken rather than merely soft.
-///
-/// Bounded below by how well star size can actually be measured. `compute_fwhm`
-/// derives a star's width from an integer count of pixels above half maximum
-/// (`2·√(area/π)`), so single-star values are quantised in ~10 % steps at the
-/// sharp end, and the median over a star field that changes frame to frame moves
-/// further still: the 250 mm dumbbell fixture spans 1.60–7.57 px around a 5.4 px
-/// median while its residuals hold at 0.6 px throughout. At 1.35 this gate
-/// rejected that set's frame 17 (7.57 px) while admitting its neighbours at 6.82
-/// and 6.48 px — a verdict on the estimator, not on the sky.
+/// How far above the session's median star size a frame may sit before it's treated
+/// as defocused, clouded, or shaken rather than merely soft. Bounded below by how
+/// well star size can be measured: `compute_fwhm` derives width from an integer
+/// pixel count above half maximum, quantised in ~10% steps at the sharp end, and the
+/// median over a changing star field moves further still (the 250mm dumbbell fixture
+/// spans 1.60-7.57px around a 5.4px median while residuals hold at 0.6px). At 1.35
+/// this gate rejected frame 17 (7.57px) while admitting neighbours at 6.82/6.48px —
+/// a verdict on the estimator, not the sky.
 const FWHM_K: f32 = 1.8;
 
 /// Measured frames needed before the running medians mean anything. Until then
@@ -137,37 +118,27 @@ impl RejectionReason {
         matches!(self, Self::ResidualTooHigh | Self::TooFewCorrespondences)
     }
 
-    /// Whether a frame carrying this verdict still measured the sky well enough
-    /// to belong in the running medians.
-    ///
-    /// [`RejectionReason::ResidualTooHigh`] and [`RejectionReason::StarsTooLarge`]
-    /// do: their numbers come from a fit over most of the star field, and
-    /// dropping them would make the baseline self-referential — see
-    /// [`QualityHistory`].
-    ///
-    /// [`RejectionReason::TooFewCorrespondences`] does not. Its residual is a
-    /// mean over the handful of pairs the fit selected for itself, on a scale
-    /// unrelated to a residual taken over a hundred and fifty. One observed
-    /// instance: 6 of 200 stars at 8.46 px, in a set whose other frames sit at
-    /// 1.3–2.0 px. With a 50-frame window and the median at `sorted[25]`, 26 such
-    /// frames drag the median all the way to whatever they happen to say — low
-    /// enough and the gate latches shut against every good frame that follows.
+    /// Whether a frame carrying this verdict still measured the sky well enough to
+    /// belong in the running medians. [`RejectionReason::ResidualTooHigh`] and
+    /// [`RejectionReason::StarsTooLarge`] do — their numbers come from a fit over
+    /// most of the star field, and dropping them would make the baseline
+    /// self-referential (see [`QualityHistory`]). [`TooFewCorrespondences`] doesn't:
+    /// its residual is a mean over the handful of pairs the fit selected for itself,
+    /// on an unrelated scale (observed: 6 of 200 stars at 8.46px against neighbours'
+    /// 1.3-2.0px) — with a 50-frame window, 26 such frames would drag the median low
+    /// enough to latch the gate shut against every good frame after.
     fn measures_the_sky(&self) -> bool {
         matches!(self, Self::ResidualTooHigh | Self::StarsTooLarge)
     }
 
-    /// Whether this verdict means the frame could not be placed against the
-    /// reference at all, as opposed to being placed badly.
-    ///
-    /// This is what Wanderer mode watches: the user swinging a dobsonian to a
-    /// new object makes the incoming field stop matching the reference, and the
-    /// stack has to start again. A frame that *did* align and was merely soft or
-    /// loose is a passing cloud or a gust — throwing away the integration for
-    /// one of those is the opposite of what Wanderer is for.
-    ///
-    /// [`RejectionReason::TooFewCorrespondences`] counts as "could not align":
-    /// a transform agreeing with a handful of two hundred stars means the two
-    /// fields do not overlap, whatever the fitter managed to produce.
+    /// Whether this verdict means the frame couldn't be placed against the
+    /// reference at all, vs. being placed badly. What Wanderer mode watches: a user
+    /// swinging a dobsonian to a new object makes the field stop matching, and the
+    /// stack must restart — but a frame that *did* align, merely soft or loose from
+    /// a passing cloud or gust, shouldn't throw away the integration.
+    /// [`TooFewCorrespondences`] counts as "could not align": agreement on a
+    /// handful of two hundred stars means the fields don't overlap, whatever the
+    /// fitter produced.
     pub fn means_the_sky_moved(&self) -> bool {
         match self {
             Self::NoStars

@@ -328,18 +328,14 @@ pub fn run_stacking_task(
             settings,
             stack_depth,
         };
-        // Publish the count *before* the message, and undo it on the arms that did not
-        // send. `try_send` makes the frame visible to the render task the instant it
-        // returns, so counting afterwards leaves a window in which the receiver wakes,
-        // runs `taken()` against a zero counter, saturates there, and the sender's
-        // `sent()` then lands on an already-empty channel. The count would be one above
-        // the truth for good: `want_display` is `pending() == 0`, so the stacking task
-        // would stop building display frames, the render task would never receive
-        // another one and never decrement again, and the live view would stay frozen
-        // for the rest of the session while everything else kept running.
-        //
-        // Over-counting for the few instructions this ordering opens costs at most one
-        // skipped display copy; under-counting costs the session.
+        // Publish the count *before* the message, undone on arms that didn't send.
+        // `try_send` makes the frame visible instantly, so counting after leaves a
+        // window where the receiver wakes, runs `taken()` against zero, saturates,
+        // and the sender's `sent()` lands on an already-empty channel — permanently
+        // one above truth: `want_display` is `pending() == 0`, so the stacking task
+        // would stop building display frames and the live view would freeze for the
+        // rest of the session. Over-counting here costs at most one skipped display
+        // copy; under-counting costs the session.
         render_depth.sent();
         match render_tx.try_send(render_msg) {
             Ok(()) => {}
@@ -378,16 +374,12 @@ pub fn run_stacking_task(
 }
 
 /// Whether Wanderer mode should treat this frame as the user having moved the
-/// telescope, and start the stack again.
-///
-/// Only a frame that could not be placed against the reference counts. Before
-/// the frame gate existed every rejection meant exactly that, so the condition
-/// was simply "did not stack"; the gate also rejects frames that aligned
-/// perfectly well but were soft or loose, and resetting on those hands the user
-/// a stack that restarts every time a cloud crosses.
-///
-/// A mode that reports no reason (comet, planetary) keeps the original
-/// behaviour: not stacking is the only signal available.
+/// telescope and restart the stack. Only a frame that couldn't be placed against
+/// the reference counts — before the frame gate existed, every rejection meant
+/// that, but the gate also rejects frames that aligned fine yet were soft or loose,
+/// and resetting on those would restart the stack every time a cloud crosses. A mode
+/// reporting no reason (comet, planetary) keeps the original behaviour: not
+/// stacking is the only signal available.
 fn wanderer_detected_movement(
     wanderer_mode: bool,
     stacking_enabled: bool,

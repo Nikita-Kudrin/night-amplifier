@@ -1,36 +1,19 @@
-//! The darkening half of the black floor: how the sky gets to black.
+//! The darkening half of the black floor: how the sky gets to black. Not the
+//! pedestal with the sign flipped — [`super::DisplayOutput::pedestal`] is a property
+//! of the *panel* (absolute fraction of full scale), while this floor is a property
+//! of the *sky* (fraction of wherever the sky actually landed).
 //!
-//! # Why this is not the pedestal
+//! Fraction of the sky, not of full scale: a fixed absolute floor tracks reasonably
+//! (5.5% of full scale measured 79%/71% darker on two fixtures) but the two figures
+//! differ because the skies landed at 14 and 17 output levels — anchoring to the
+//! measured level instead makes one slider position mean one thing across targets.
 //!
-//! [`super::DisplayOutput::pedestal`] lifts the output into `[pedestal, 1]` so
-//! no pixel reaches an OLED's off state. This does the opposite, and it is a
-//! different transform rather than the same one with the sign flipped: the
-//! pedestal is a property of the panel, so it is an absolute fraction of full
-//! scale, while the floor is a property of the *sky*, so it is a fraction of
-//! wherever the sky actually landed.
-//!
-//! # Why a fraction of the sky rather than of full scale
-//!
-//! The autostretch pins the sky at `target_background` before anything here
-//! runs, so a fixed absolute floor tracks reasonably well across targets — 5.5 %
-//! of full scale measured 79 % and 71 % darker on the two fixtures. It only
-//! tracks reasonably, though: the two figures differ because the two skies
-//! landed at 14 and 17 output levels. Anchoring to the measured level instead
-//! makes one slider position mean one thing, which is what lets the setting
-//! survive a change of target or of sky brightness.
-//!
-//! # Why a knee
-//!
-//! Sky noise is as wide as the sky level itself — sigma is 5.2 and 10.2 output
-//! levels against medians of 14 and 17 — so a hard black point puts 38-40 % of
-//! all samples on exactly zero, which at eyepiece magnification is the same
-//! black speckle the pedestal exists to remove. The softplus knee is linear
-//! above the floor and compresses exponentially below it, so the sub-floor half
-//! of the sky lands in a narrow dark band instead of on zero: measured 0.00 %
-//! of samples at zero, against 38 % for the hard form, at the same sky level.
-//!
-//! The hard form is still reachable — it buys the deepest sky and slightly more
-//! target-to-sky separation — which is what the "Darker sky" setting selects.
+//! A knee, not a hard cutoff: sky noise is as wide as the sky level (sigma 5.2/10.2
+//! vs medians 14/17), so a hard floor puts 38-40% of samples on exactly zero — the
+//! same speckle the pedestal removes. The softplus knee compresses the sub-floor
+//! half into a narrow dark band instead (0.00% at zero vs 38% hard, same sky level).
+//! The hard form stays reachable via the "Darker sky" setting, for deeper sky and
+//! more target-to-sky separation.
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
@@ -95,20 +78,16 @@ impl ShadowFloor {
         self.depth <= 0.0
     }
 
-    /// Map one output-referred value through the floor.
+    /// Map one output-referred value through the floor. `apply(0.0) == 0.0` and
+    /// `apply(1.0) == 1.0` always: white staying white keeps star cores at 255 while
+    /// the sky moves; black staying black lets this compose into a *scale* table
+    /// (`curve(L) / L`), which can't represent a curve missing the origin — the ratio
+    /// diverges and the limit-holding entry would scale the faintest bin toward white.
     ///
-    /// `apply(0.0) == 0.0` and `apply(1.0) == 1.0` for every configuration.
-    /// White staying white is what keeps star cores at 255 while the sky moves;
-    /// black staying black is what lets this be composed into a *scale* table,
-    /// which stores `curve(L) / L` and cannot represent a curve that misses the
-    /// origin — the ratio diverges, and the entry meant to hold its limit ends
-    /// up scaling the faintest bin toward white instead.
-    ///
-    /// The softplus does not pass through the origin on its own, so its value at
-    /// zero is subtracted before normalizing. That costs nothing visible: the
-    /// only input it moves to exactly zero is exactly zero, which is where the
-    /// autostretch black point already put those pixels, and the pedestal lifts
-    /// them off the panel's off state afterwards regardless.
+    /// The softplus doesn't pass through the origin on its own, so its zero value is
+    /// subtracted before normalizing — costs nothing visible, since the only input
+    /// that moves to exactly zero is already where the autostretch black point put
+    /// it, and the pedestal lifts it off the panel's off state regardless.
     #[inline]
     pub fn apply(&self, y: f32) -> f32 {
         if self.is_none() {
@@ -154,18 +133,15 @@ impl ShadowFloor {
     }
 }
 
-/// [`ShadowFloor::apply`] resampled onto a table, for the per-pixel path.
+/// [`ShadowFloor::apply`] resampled onto a table, for the per-pixel path. The curve
+/// costs a `ln` and an `exp` — fused into the scale LUT (paid 8192 times per slider
+/// position, never again) the common path is free; run directly over a 1440² frame
+/// it would be six million of each, per frame. Used by the encoder's row tail when
+/// saturation boost has pushed the floor out of that LUT.
 ///
-/// The curve costs a `ln` and an `exp`. Fused into the scale LUT that is paid
-/// 8192 times per slider position and never again, which is why the common path
-/// carries no cost at all; run directly over a 1440-square frame it would be six
-/// million of each, per frame. This is the form the encoder's row tail uses when
-/// saturation boost has kept the floor out of that LUT.
-///
-/// 4096 entries with linear interpolation, matching the scale LUT's own sizing
-/// rationale: the curve's whole shape lives below `depth`, which is around 0.05,
-/// so a table an order of magnitude coarser would resolve the knee with a
-/// handful of samples.
+/// 4096 entries, linear interpolation — matching the scale LUT's sizing rationale:
+/// the curve's shape lives below `depth` (~0.05), so a coarser table would still
+/// resolve the knee with a handful of samples.
 pub struct ShadowFloorTable {
     entries: Vec<f32>,
 }
@@ -201,17 +177,13 @@ pub fn apply_shadow_floor_slice(row: &mut [f32], table: &ShadowFloorTable) {
     crate::render::simd::apply_luminance_preserving_simd(row, 1.0, |l| table.lookup(l));
 }
 
-/// Apply a shadow floor to a whole planar frame in place.
-///
-/// The unfused counterpart to folding the curve into the scale LUT, for the
-/// arms of [`crate::render::auto_stretch_frame`] that cannot fuse it: MTF
-/// stretches each channel through its own midtone, so there is no single scale
-/// table to carry the floor, and a mono frame never reaches that kernel at all.
-///
-/// Accepts 1 or 3 channels, matching `auto_stretch_frame` itself. Three channels
-/// go through the same luminance-preserving scale as
-/// [`apply_shadow_floor_slice`]; one channel *is* its own luminance, so the
-/// curve applies directly.
+/// Apply a shadow floor to a whole planar frame in place — the unfused counterpart
+/// to folding the curve into the scale LUT, for [`crate::render::auto_stretch_frame`]
+/// arms that can't fuse it: MTF stretches each channel through its own midtone (no
+/// single scale table), and mono never reaches that kernel at all. Accepts 1 or 3
+/// channels; three go through the same luminance-preserving scale as
+/// [`apply_shadow_floor_slice`], one channel applies the curve directly (it *is* its
+/// own luminance).
 pub fn apply_shadow_floor_frame(frame: &mut Frame, floor: ShadowFloor) -> Result<()> {
     let channels = frame.channels();
     if channels != 1 && channels != 3 {
@@ -285,18 +257,14 @@ impl ShadowFloorRequest {
     }
 }
 
-/// Where the sky sits by the time the floor sees it.
-///
-/// The autostretch maps the sky to `target_background`, and the contrast S-curve
-/// then moves it — at the shipped settings, 0.08 becomes 0.052. Anchoring to the
-/// value *after* contrast is what makes the slider mean the same thing whether
-/// or not contrast is on.
-///
-/// `target_background` must be the solver's own
-/// [`AutoStretchResult::target_background`](crate::render::AutoStretchResult),
-/// not the configured one: a frame that is mostly signal has its target raised
-/// by up to 30 %, and anchoring to the configured value would leave the floor
-/// that much too shallow on exactly the frames with the most to protect.
+/// Where the sky sits by the time the floor sees it. The autostretch maps the sky to
+/// `target_background`, then the contrast S-curve moves it (0.08 -> 0.052 at shipped
+/// settings) — anchoring *after* contrast is what makes the slider mean the same
+/// thing whether contrast is on or not. Must be the solver's own
+/// [`AutoStretchResult::target_background`](crate::render::AutoStretchResult), not the
+/// configured one: a mostly-signal frame has its target raised up to 30%, and the
+/// configured value would leave the floor too shallow on exactly the frames with the
+/// most to protect.
 pub fn sky_level_after_contrast(
     target_background: f32,
     contrast: Option<&super::ContrastConfig>,

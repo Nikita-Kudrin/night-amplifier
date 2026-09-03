@@ -20,22 +20,12 @@ pub trait SaturationPlugin: Send + Sync {
 /// Global registry for the saturation plugin
 pub static SATURATION_PLUGIN: OnceLock<Box<dyn SaturationPlugin>> = OnceLock::new();
 
-/// Configuration for shadow saturation boost
-///
-/// This feature enhances color saturation in shadow regions where color is
-/// perceptually lost during non-linear stretching. The boost is applied
-/// selectively based on luminance, with a smooth rolloff to preserve
-/// natural midtone colors and avoid amplifying noise in the darkest areas.
-///
-/// # How It Works
-///
-/// The saturation multiplier follows a bell-shaped curve:
-/// - Pure black (L=0): No boost (avoids amplifying noise floor)
-/// - Low shadows (L=peak): Maximum boost (faint nebula signal)
-/// - Midtones and highlights: No boost (natural colors preserved)
-///
-/// The curve shape is: `M = strength × L/peak × (1 - L/upper)²`
-/// This creates smooth transitions without harsh color banding.
+/// Configuration for shadow saturation boost: enhances colour saturation in shadow
+/// regions where colour is perceptually lost during non-linear stretching, applied
+/// selectively by luminance with a smooth rolloff. Bell-shaped multiplier: no boost
+/// at pure black (L=0, avoids amplifying noise floor), maximum at low shadows
+/// (L=peak, faint nebula signal), no boost at midtones/highlights (natural colours
+/// preserved). Curve: `M = strength × L/peak × (1 - L/upper)²`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SaturationBoostConfig {
     /// Whether saturation boost is enabled

@@ -623,18 +623,13 @@ impl CaptureConfig {
         Ok(())
     }
 
-    /// Whether this config differs from the last one applied to hardware and
-    /// must be re-sent via the vendor SDK/protocol. Backends call this at the
-    /// top of `capture()` to skip redundant blocking FFI/network round trips
-    /// when nothing changed since the previous frame (the common case in a
-    /// live-stacking session, where settings stay fixed across many frames).
-    ///
-    /// Compares the whole struct by value rather than per-field: which fields
-    /// actually reach hardware differs per backend, and coupling this shared
-    /// comparison to that matrix would tie `camera/types.rs` to every
-    /// backend's internals. The cost of the simpler approach is one extra
-    /// reapply on the frame right after a field changes that a given backend
-    /// happens to ignore — not a recurring cost.
+    /// Whether this config differs from the last one applied to hardware and must be
+    /// re-sent. Backends call this at the top of `capture()` to skip redundant
+    /// blocking FFI/network round trips when nothing changed (the common case in a
+    /// live-stacking session). Compares the whole struct by value, not per-field —
+    /// per-field would tie `camera/types.rs` to which fields each backend actually
+    /// uses; the cost is one extra reapply after a field changes that a backend
+    /// happens to ignore, not a recurring one.
     pub fn should_reapply(&self, cached: Option<&CaptureConfig>) -> bool {
         cached != Some(self)
     }

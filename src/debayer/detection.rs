@@ -16,30 +16,12 @@ pub struct PatternDetectionResult {
     pub grid_averages: [f32; 4],
 }
 
-/// Detects the CFA pattern from a single-channel Bayer frame
+/// Detects the CFA pattern from a single-channel Bayer frame. Green pixels always
+/// occupy one diagonal of the 2x2 grid; the algorithm computes the variance of each
+/// diagonal pair to find which one is green (lower variance, since both samples are
+/// the same channel), then distinguishes red from blue by intensity and edge
+/// gradients (red is typically brighter in astro images from H-alpha emission).
 ///
-/// The detection algorithm works by:
-/// 1. Computing average pixel intensities for each position in the 2x2 Bayer grid
-/// 2. Identifying green pixels (appear on the diagonal, have similar mid-range values)
-/// 3. Distinguishing red from blue based on typical astronomical image characteristics
-///
-/// # Algorithm Details
-///
-/// In a Bayer pattern, green pixels always occupy diagonal positions (either
-/// top-left/bottom-right or top-right/bottom-left). The algorithm:
-///
-/// 1. Computes variance of diagonal pairs to find which diagonal has green
-/// 2. Green pixels have lower variance between them (both are green)
-/// 3. Red vs Blue is determined by intensity (red typically brighter in astro images
-///    due to H-alpha emission, but we also check edge gradients)
-///
-/// # Arguments
-/// * `frame` - Single-channel frame containing raw Bayer data
-///
-/// # Returns
-/// * `PatternDetectionResult` with detected pattern and confidence score
-///
-/// # Example
 /// ```
 /// use night_amplifier::{Frame, PixelFormat};
 /// use night_amplifier::debayer::{detect_cfa_pattern, CfaPattern};

@@ -1,16 +1,12 @@
-//! One fault detector for the whole server.
+//! One fault detector for the whole server. Three places can discover a camera has
+//! stopped answering — the capture loop's frame and status-poll watchdogs, and the
+//! camera-session monitor's cooler poll — seeing the same hardware through
+//! different code paths, so a fault alternating between them is still one fault.
 //!
-//! Three places can discover that a camera has stopped answering: the capture
-//! loop's frame watchdog, its status-poll watchdog, and the camera-session
-//! monitor's cooler poll. They see the same hardware through different code
-//! paths, so a fault that alternates between them is still one fault.
-//!
-//! Everything that decides "this camera is persistently unresponsive" lives
-//! here: the threshold, the per-camera streak in
-//! `AppState.consecutive_watchdog_timeouts`, and the escalation event. The
-//! alternative — a counter per call site — needs each site to independently
-//! reach the threshold before any of them escalates, which is how a camera
-//! failing every other poll can stay "healthy" indefinitely.
+//! Everything deciding "persistently unresponsive" lives here: the threshold, the
+//! per-camera streak (`AppState.consecutive_watchdog_timeouts`), and the escalation
+//! event. A counter per call site instead would need each site to independently
+//! reach the threshold, letting a camera failing every other poll stay "healthy".
 
 use std::sync::Arc;
 use std::time::Duration;

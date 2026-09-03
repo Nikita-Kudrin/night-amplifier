@@ -1,34 +1,14 @@
-//! Planetary Stacking Module
+//! Planetary Stacking Module. Differs from DSO imaging throughout: correlation-based
+//! registration (surface features, not star triangles), quality-based frame selection
+//! (best 10-30%, not all frames), percentile stacking (not sigma-clipped mean),
+//! translation-only alignment, and much higher frame rates (30-300fps vs seconds).
 //!
-//! Planetary imaging differs significantly from Deep Sky Object (DSO) imaging:
-//!
-//! | Aspect | DSO | Planetary |
-//! |--------|-----|-----------|
-//! | Registration | Star triangle matching | Correlation-based (surface features) |
-//! | Frame selection | Use all frames | Quality-based (best 10-30%) |
-//! | Combination | Mean with sigma clipping | Percentile stacking |
-//! | Frame rate | Slow (seconds) | Fast (30-300 fps) |
-//! | Alignment | Rotation + translation | Translation only |
-//!
-//! # Algorithm Overview
-//!
-//! 1. **Quality Estimation**: Score each frame based on sharpness/contrast
-//! 2. **Frame Selection**: Select best N% of frames
-//! 3. **Alignment**: Cross-correlation to find translation offset
-//! 4. **Stacking**: Combine aligned frames using percentile method
-//!
-//! # Usage
+//! Pipeline: score each frame by sharpness/contrast -> select best N% -> align via
+//! cross-correlation -> combine via percentile stacking.
 //!
 //! ```ignore
-//! let config = PlanetaryConfig::default();
-//! let mut stacker = PlanetaryStacker::new(config)?;
-//!
-//! // Add frames (automatically scored and selected)
-//! for frame in frames {
-//!     stacker.add_frame(&frame)?;
-//! }
-//!
-//! // Stack best frames
+//! let mut stacker = PlanetaryStacker::new(PlanetaryConfig::default())?;
+//! for frame in frames { stacker.add_frame(&frame)?; }
 //! let result = stacker.stack()?;
 //! ```
 

@@ -21,21 +21,12 @@ pub struct MasterFlat {
 }
 
 impl MasterFlat {
-    /// Creates a new MasterFlat from a Frame
-    ///
-    /// The flat field is automatically normalized so its mean equals 1.0.
-    /// This ensures that applying the flat maintains overall image brightness.
-    ///
-    /// # Normalization Math
-    /// For each pixel: `normalized[i] = original[i] / mean(original)`
-    ///
-    /// After normalization:
-    /// - Pixels with average illumination ≈ 1.0
-    /// - Darker areas (vignetting) < 1.0 → division brightens them
-    /// - Brighter areas > 1.0 → division dims them
-    ///
-    /// # Performance
-    /// Uses SIMD for sum computation and normalization multiplication.
+    /// Creates a new MasterFlat from a Frame, normalized so its mean equals 1.0 (keeps
+    /// overall image brightness after applying the flat): `normalized[i] = original[i]
+    /// / mean(original)`. After normalization, average-illumination pixels are ≈1.0;
+    /// vignetted (darker) areas are <1.0 so division brightens them; bright-centre
+    /// areas are >1.0 so division dims them. Uses SIMD for the sum and the
+    /// multiplication.
     pub fn new(mut frame: Frame) -> Result<Self> {
         let data = frame.data();
         let len = data.len();

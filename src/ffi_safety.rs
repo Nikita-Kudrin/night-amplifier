@@ -49,25 +49,14 @@ impl std::error::Error for FfiError {}
 /// Result type for FFI operations
 pub type FfiResult<T> = Result<T, FfiError>;
 
-/// Execute an FFI-calling closure with panic catching
-///
-/// This wraps the closure in `catch_unwind` to prevent panics from unwinding
-/// across the FFI boundary, which would be undefined behavior.
-///
-/// # Safety
-///
-/// The closure should not hold any non-unwind-safe references. This function
-/// uses `AssertUnwindSafe` to bypass the check, so the caller must ensure
-/// the closure is actually safe to unwind.
-///
-/// # Example
+/// Execute an FFI-calling closure with panic catching: wraps it in `catch_unwind` so a
+/// panic can't unwind across the FFI boundary (UB). Uses `AssertUnwindSafe` to bypass
+/// the non-unwind-safe check, so the caller must ensure the closure is actually safe
+/// to unwind.
 ///
 /// ```ignore
 /// use night_amplifier::ffi_safety::catch_ffi_panic;
-///
-/// let result = catch_ffi_panic("camera_open", || {
-///     unsafe_sdk_call()
-/// });
+/// let result = catch_ffi_panic("camera_open", || unsafe_sdk_call());
 /// ```
 pub fn catch_ffi_panic<T, F>(context: &str, f: F) -> FfiResult<T>
 where

@@ -17,32 +17,16 @@ pub struct CameraEntry {
     pub info: CameraInfo,
 }
 
-/// Registry for managing multiple camera providers
-///
-/// The registry allows registering multiple camera providers (Player One, ZWO,
-/// SVBony, etc.) and provides a unified interface for discovering and opening
-/// cameras from any provider.
-///
-/// # Example
+/// Registry for managing multiple camera providers (Player One, ZWO, SVBony, etc.),
+/// giving a unified interface for discovering and opening cameras from any of them.
 ///
 /// ```no_run
 /// use night_amplifier::camera::{CameraRegistry, CaptureConfig};
 ///
 /// let mut registry = CameraRegistry::new();
 /// registry.register_defaults();
-///
-/// // List all cameras from all providers
-/// for entry in registry.list_all_cameras()? {
-///     println!("{}: {} ({}x{})",
-///              entry.provider, entry.info.name,
-///              entry.info.max_width, entry.info.max_height);
-/// }
-///
-/// // Open first camera from a specific provider
 /// let mut camera = registry.open_camera("PlayerOne", 0)?;
-///
-/// // Or open by unique identifier
-/// let mut camera = registry.open_by_id("PlayerOne:0")?;
+/// // Or open by unique identifier: registry.open_by_id("PlayerOne:0")?;
 /// # Ok::<(), night_amplifier::camera::CameraError>(())
 /// ```
 pub struct CameraRegistry {

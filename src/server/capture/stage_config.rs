@@ -185,21 +185,14 @@ fn sanitized_black_floor(settings: &CaptureSettings) -> f32 {
     value.clamp(MIN_BLACK_FLOOR, MAX_BLACK_FLOOR)
 }
 
-/// The slider's darkening half, or `None` when it is off or cannot be honoured.
-///
-/// Two conditions beyond the sign, because the floor is anchored to a sky level
-/// that something else has to measure first:
-///
-/// - **Auto-stretch must be on.** The anchor is the solver's own
-///   `target_background`, and `process_preview_frame` produces no
-///   `StretchResult` without a solve — so the curve would have nothing to travel
-///   on. Letting the request through anyway leaves only the guard pedestal,
-///   which *raises* the sky: measured 2 to 3 output levels on the IMX533
-///   fixture, a control labelled "darker" making the background brighter.
-/// - **Not Planetary.** The anchor is the frame's own median, which on a lunar
-///   or planetary frame is the disc rather than the sky, so the floor lands on
-///   the subject. This is the same asymmetry `cfa::fpn`, superpixel debayering
-///   and both denoisers each state at their own site.
+/// The slider's darkening half, or `None` when it's off or can't be honoured. Two
+/// conditions beyond the sign, since the floor anchors to a sky level something else
+/// must measure first: **auto-stretch must be on** (anchor is the solver's own
+/// `target_background`; without a solve, letting the request through leaves only the
+/// guard pedestal, which *raises* the sky — measured 2-3 output levels brighter on
+/// IMX533, a "darker" control making things brighter), and **not Planetary** (anchor
+/// is the frame's median, which on a lunar/planetary frame is the disc, not the sky
+/// — the same asymmetry `cfa::fpn`, superpixel debayering and both denoisers state).
 fn darkening_request(settings: &CaptureSettings) -> Option<crate::render::ShadowFloorRequest> {
     let black_floor = sanitized_black_floor(settings);
     if black_floor >= 0.0 {

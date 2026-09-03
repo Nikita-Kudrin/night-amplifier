@@ -10,21 +10,14 @@ use crate::Frame;
 use super::error::CameraResult;
 use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 
-/// Core trait for camera operations
-///
-/// This trait defines the common interface for all astronomy cameras,
-/// regardless of manufacturer. Implementations handle the specifics
-/// of each SDK.
-///
-/// # Example
+/// Core trait for camera operations — the common interface for all astronomy cameras
+/// regardless of manufacturer; implementations handle each SDK's specifics.
 ///
 /// ```no_run
 /// use night_amplifier::camera::{Camera, CaptureConfig};
 ///
 /// fn capture_image(camera: &mut dyn Camera) -> night_amplifier::camera::CameraResult<night_amplifier::camera::RawFrame> {
-///     let config = CaptureConfig::default()
-///         .with_exposure_us(2_000_000)
-///         .with_gain(100);
+///     let config = CaptureConfig::default().with_exposure_us(2_000_000).with_gain(100);
 ///     camera.capture(&config)
 /// }
 /// ```
@@ -72,21 +65,12 @@ pub trait Camera: Send {
     /// Returns `CameraError::ParameterNotSupported` if camera has no heater
     fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()>;
 
-    /// Capture an image with the given configuration
-    ///
-    /// This method blocks until the exposure is complete or times out.
-    /// Use `cancel()` from another thread to abort a long exposure.
-    ///
-    /// # Arguments
-    /// * `config` - Capture configuration (exposure, gain, binning, etc.)
-    ///
-    /// # Returns
-    /// The captured image as a `RawFrame`
+    /// Capture an image with the given configuration (exposure, gain, binning, etc).
+    /// Blocks until the exposure completes or times out; call `cancel()` from another
+    /// thread to abort. Returns the captured image as a `RawFrame`.
     ///
     /// # Errors
-    /// - `CameraError::ExposureTimeout` - Exposure exceeded timeout
-    /// - `CameraError::Cancelled` - Exposure was cancelled
-    /// - `CameraError::Disconnected` - Camera was disconnected
+    /// `ExposureTimeout`, `Cancelled`, or `Disconnected`.
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame>;
 
     /// Reset any cached "last applied to hardware" state.
@@ -122,12 +106,8 @@ pub trait Camera: Send {
     fn provider_name(&self) -> &'static str;
 }
 
-/// Factory trait for discovering and opening cameras
-///
-/// Each camera manufacturer implements this trait to provide
-/// camera discovery and instantiation.
-///
-/// # Example
+/// Factory trait for discovering and opening cameras — each manufacturer implements
+/// this for its own discovery and instantiation.
 ///
 /// ```no_run
 /// use night_amplifier::camera::{CameraProvider, PlayerOneProvider};
@@ -135,8 +115,7 @@ pub trait Camera: Send {
 /// let provider = PlayerOneProvider::new();
 /// let cameras = provider.list_cameras()?;
 /// if !cameras.is_empty() {
-///     let mut camera = provider.open(0)?;
-///     // Use camera...
+///     let _camera = provider.open(0)?;
 /// }
 /// # Ok::<(), night_amplifier::camera::CameraError>(())
 /// ```

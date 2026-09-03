@@ -18,18 +18,13 @@ pub use super::stage_config::{
     get_render_pipeline_config,
 };
 
-/// What one pass through a stacking pipeline produced.
-///
-/// `showing_stack` and `frame_added` answer different questions and must not be
-/// collapsed into one flag: a frame that fails registration leaves the
-/// accumulated stack untouched but perfectly displayable, so the live view keeps
-/// showing it (`showing_stack: true`) while the counters record a rejection
-/// (`frame_added: false`).
-///
-/// Substituting the raw sub on a registration failure — as the stacking task
-/// used to — is what made the preview alternate between a deep stack and a
-/// single noisy frame: the auto-stretch re-solves against a completely
-/// different histogram each time the display swaps.
+/// What one pass through a stacking pipeline produced. `showing_stack` and
+/// `frame_added` must not collapse into one flag: a frame that fails registration
+/// leaves the accumulated stack untouched but displayable (`showing_stack: true`)
+/// while the counters record a rejection (`frame_added: false`). Substituting the
+/// raw sub on failure — the old behaviour — made the preview alternate between a
+/// deep stack and a single noisy frame, re-solving auto-stretch against a
+/// completely different histogram each swap.
 pub struct StackingOutcome {
     /// The frame to display: the accumulated stack, or a single sub when there
     /// is no stack to show yet.

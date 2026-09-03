@@ -3,16 +3,12 @@ import {updateSettings} from './api.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 
 /**
- * Composable for telescope setup and FOV calculation.
- *
- * Manages focal length, camera sensor selection (pixel size + resolution),
- * and barlow/reducer coefficient. Computes field of view for display and
- * persists the parameters; the backend derives the solver's FOV hint from them.
- *
- * When a camera is connected, automatically resolves telescope settings:
- * 1. Restore stored per-camera profile if this camera was seen before
- * 2. For new cameras: inherit focal_length/barlow from previous camera,
- *    fill pixel size from driver, fallback to CAMERA_DATABASE
+ * Composable for telescope setup and FOV calculation: manages focal length, camera
+ * sensor selection (pixel size + resolution), and barlow/reducer coefficient,
+ * computing FOV for display and persisting params (the backend derives the
+ * solver's FOV hint from them). On camera connect, auto-resolves settings: restores
+ * a stored per-camera profile if seen before, else inherits focal_length/barlow
+ * from the previous camera and fills pixel size from the driver or CAMERA_DATABASE.
  *
  * @param {Object} options
  * @param {Function} options.withErrorHandling - Error handling wrapper

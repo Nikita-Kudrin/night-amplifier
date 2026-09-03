@@ -1,22 +1,11 @@
-//! Logging configuration module
-//!
-//! Provides a flexible logging system with configurable log levels,
-//! file rotation (5MB max), console output options, and optional
-//! OpenTelemetry integration.
-//!
-//! # Example
+//! Logging configuration: configurable log levels, file rotation (5MB max), console
+//! output, optional OpenTelemetry integration.
 //!
 //! ```no_run
 //! use night_amplifier::logging::{init_logging, LogConfig};
 //!
-//! // Default: INFO level, logs to ./logs directory
 //! init_logging(LogConfig::default()).expect("Failed to initialize logging");
-//!
-//! // Or with custom configuration
-//! let config = LogConfig::new()
-//!     .with_level(tracing::Level::DEBUG)
-//!     .with_log_dir("/var/log/night-amplifier")
-//!     .with_console(true);
+//! let config = LogConfig::new().with_level(tracing::Level::DEBUG).with_console(true);
 //! init_logging(config).expect("Failed to initialize logging");
 //! ```
 
@@ -208,21 +197,14 @@ impl Drop for LogGuard {
     }
 }
 
-/// Initialize the logging system with the given configuration.
-///
-/// Returns a guard that must be kept alive for the duration of the program.
-/// When the guard is dropped, any pending log messages will be flushed.
-///
-/// # Example
+/// Initialize the logging system. Returns a guard that must be kept alive for the
+/// program's duration; dropping it flushes any pending log messages.
 ///
 /// ```no_run
 /// use night_amplifier::logging::{init_logging, LogConfig};
 ///
-/// fn main() {
-///     let _guard = init_logging(LogConfig::default()).expect("logging init failed");
-///     tracing::info!("Application started");
-///     // ... rest of application
-/// }
+/// let _guard = init_logging(LogConfig::default()).expect("logging init failed");
+/// tracing::info!("Application started");
 /// ```
 pub fn init_logging(config: LogConfig) -> Result<LogGuard, LoggingError> {
     let mut guards = Vec::new();

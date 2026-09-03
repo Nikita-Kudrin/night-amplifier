@@ -1,25 +1,18 @@
-//! Background camera status monitor — runs on a dedicated OS thread.
+//! Background camera status monitor, on a dedicated OS thread (not a tokio task, so
+//! a blocking FFI call like a USB stall inside `camera.status()` can't poison a
+//! runtime worker). Polls `camera.status()` every `PHASE_POLL_INTERVAL` while the
+//! handle is in the pool, broadcasts `CameraStatusUpdated`, drives
+//! `Precooling -> Idle` once the sensor settles for `STABILITY_SAMPLE_COUNT`
+//! samples, and drives warmup: on `StartWarmup`, ramps the setpoint to
+//! `WARMUP_RAMP_TARGET_C` at `RAMP_RATE_C_PER_MIN`, then once the sensor hits
+//! `WARMUP_THRESHOLD_C` at ≤5% duty, disables the cooler, closes the handle, and
+//! broadcasts `CameraDisconnected`.
 //!
-//! Responsibilities:
-//! - Poll `camera.status()` every `PHASE_POLL_INTERVAL` while the handle
-//!   is in the pool (not taken by the capture thread).
-//! - Broadcast `CameraStatusUpdated` so the UI has a live temperature feed.
-//! - Drive `Precooling → Idle` transition when the sensor settles near
-//!   the target for `STABILITY_SAMPLE_COUNT` consecutive samples.
-//! - Drive the warmup sequence: on `StartWarmup`, keep the cooler ON and
-//!   ramp the setpoint up to `WARMUP_RAMP_TARGET_C` at `RAMP_RATE_C_PER_MIN`.
-//!   Once the sensor reaches `WARMUP_THRESHOLD_C` and duty is ≤ 5 %, disable
-//!   the cooler, close the handle, and broadcast `CameraDisconnected`.
-//!
-//! Both cooldown and warmup are rate-limited to `RAMP_RATE_C_PER_MIN`
-//! (5 °C/min in production). The commanded setpoint is nudged toward its
-//! final value every tick; the SDK call is only issued when the rounded
-//! integer value changes (PlayerOne takes `i64`), which at 5 °C/min means
-//! one SDK call per ~12 s. Starting capture mid-ramp aborts the ramp: the
-//! capture thread's per-frame `apply_cooler_config` pushes the final target.
-//!
-//! Uses an OS thread (not a tokio task) so a blocking FFI call — e.g., a
-//! USB stall inside `camera.status()` — cannot poison a runtime worker.
+//! Both ramps are rate-limited to `RAMP_RATE_C_PER_MIN` (5°C/min in production): the
+//! commanded setpoint nudges toward its final value each tick, but the SDK call
+//! only fires when the rounded integer changes — one call per ~12s at that rate.
+//! Starting capture mid-ramp aborts it; the capture thread's per-frame
+//! `apply_cooler_config` pushes the final target instead.
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -590,19 +583,14 @@ fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
     });
 }
 
-/// A reusable thread for the monitor's camera FFI calls.
-///
-/// The monitor must not block indefinitely inside a vendor call: while it is
-/// stuck, the phase machine stops, a warmup can never finalize, and
-/// `take_for_capture` cannot get the handle. But it polls every
-/// `PHASE_POLL_INTERVAL`, so spawning a thread per call meant ~1,800 thread
-/// creations an hour for the whole time a camera was connected — real cost on
-/// a Raspberry Pi 5 for a call that is near-instant in almost every case.
-///
-/// One thread serves every call instead. A call that overruns its budget is
-/// abandoned along with the thread running it — there is no way to cancel a
-/// stuck synchronous FFI call — and the next call spawns a replacement. So the
-/// cost is one thread for the monitor's lifetime, plus one per actual stall.
+/// A reusable thread for the monitor's camera FFI calls. Must not block
+/// indefinitely inside a vendor call — the phase machine would stop, a warmup could
+/// never finalize, and `take_for_capture` couldn't get the handle — but it polls
+/// every `PHASE_POLL_INTERVAL`, so a thread per call meant ~1,800 spawns/hour while
+/// connected (real cost on a Pi 5 for a near-instant call). One thread serves every
+/// call instead: a call overrunning its budget is abandoned with its thread (no way
+/// to cancel a stuck synchronous FFI call), and the next call spawns a replacement —
+/// one thread for the monitor's lifetime, plus one per actual stall.
 struct FfiWorker {
     /// `None` until the first call, and again after a stall abandons a worker.
     jobs: Option<mpsc::Sender<Job>>,

@@ -1,24 +1,13 @@
-//! Superpixel debayering: one RGB pixel per 2x2 CFA quad
+//! Superpixel debayering: one RGB pixel per 2x2 CFA quad, no interpolation — red/blue
+//! samples are their own channel, the two greens are averaged. Output is half width
+//! and height. Three properties matter for an eyepiece view: **no interpolated
+//! chroma** (bilinear/VNG synthesise 2 of 3 colour samples from neighbours,
+//! correlating noise into colour mottle — nothing to correlate here), **a defect
+//! stays one pixel** (vs. spread into a coloured 3x3 cross), and **the green average
+//! is a free 1.4x SNR** on the channel carrying most luminance.
 //!
-//! No interpolation at all — the red sample *is* the red channel, the blue
-//! sample *is* the blue channel, and the two greens are averaged. Output is half
-//! the sensor's width and height.
-//!
-//! Three properties matter for an eyepiece view:
-//!
-//! - **No interpolated chroma.** Bilinear and VNG both synthesise two of every
-//!   three colour samples from neighbours, which correlates the noise between
-//!   channels and turns luminance noise into colour mottle. There is nothing to
-//!   correlate here.
-//! - **A defect stays one pixel.** Any hot sample that survives
-//!   [`crate::cfa::hot_pixels`] lands in exactly one output pixel instead of
-//!   being spread into a coloured 3x3 cross.
-//! - **The green average is a free 1.4x on the green channel**, which carries
-//!   most of the luminance.
-//!
-//! It costs resolution, which is why it is an option rather than the default: an
-//! IMX533's 3008² becomes 1504², still above a 1440² eyepiece screen, but an
-//! IMX464's 2712x1538 becomes 1356x769, which is below it.
+//! Costs resolution, hence opt-in: IMX533's 3008² -> 1504² stays above a 1440²
+//! eyepiece, but IMX464's 2712x1538 -> 1356x769 falls below it.
 
 use rayon::prelude::*;
 

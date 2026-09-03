@@ -12,17 +12,9 @@ use crate::render::simd::multiply_scalar_clamp_simd;
 use crate::statistics::{compute_image_stats, fast_median, ImageStats};
 use rayon::prelude::*;
 
-/// Compute white balance multipliers from image statistics
-///
-/// This function calculates scaling multipliers that align the per-channel medians
-/// to the average median, effectively neutralizing color casts from light pollution
-/// or sensor bias.
-///
-/// # Arguments
-/// * `stats` - Pre-computed image statistics with per-channel medians
-///
-/// # Returns
-/// Array of [R, G, B] multipliers.
+/// Compute white balance multipliers from image statistics: scales each channel's
+/// median toward the average median, neutralizing colour casts from light pollution
+/// or sensor bias. Returns [R, G, B] multipliers.
 pub fn compute_neutralization_multipliers(stats: &ImageStats) -> Result<[f32; 3]> {
     if stats.channels.len() != 3 {
         return Err(StackError::ChannelMismatch {
@@ -95,29 +87,18 @@ pub fn neutralize_background_auto(frame: &mut Frame) -> Result<[f32; 3]> {
     Ok(multipliers)
 }
 
-/// How much of each grid block [`compute_white_balance_grid_with_config`] reads.
+/// How much of each grid block [`compute_white_balance_grid_with_config`] reads. A
+/// block median is a *background estimate*, so reading all ~65,000 pixels for one
+/// number over-samples the same way [`crate::statistics::StatsConfig`] already caps
+/// for whole-frame stats. Measured at grid 16, 20 cores: [`Self::exact`] 28ms,
+/// `sampled(4096)` 1.7ms (vs the old `get_pixel`-per-sample predecessor's 120ms) —
+/// exact alone is a 4.4x win, sampling a further 16x.
 ///
-/// A block median is a *background estimate*, and reading all ~65 000 pixels of a block
-/// to produce one number is the same over-sampling [`crate::statistics::StatsConfig`]
-/// already caps for whole-frame statistics (100 000 samples per channel by default,
-/// against 4.2 M pixels).
-///
-/// Measured on a 2712x1538x3 frame at grid 16, 20 cores, release: [`Self::exact`]
-/// 28 ms, `sampled(4096)` — a stride of 2 over the 169x96 block — 1.7 ms. For reference
-/// the `get_pixel`-per-sample, single-threaded predecessor took 120 ms, so `exact` is
-/// already the 4.4x win and sampling is a further 16x on top of it.
-///
-/// The budget is per block, not per frame, so it adapts: a small frame or a fine grid
-/// makes the blocks smaller than the budget and takes the exact path on its own. Pick
-/// the value against the block size the call site will actually see —
-/// `sampled(16_384)` looks aggressive but is a no-op at the resolution above, because
-/// the block is only 16 224 pixels.
-///
-/// The default is [`Self::exact`] deliberately: sampling moves the coefficients (~1e-3
-/// on a noise field, more on a structured one) and this runs on the live preview path,
-/// so a call site opts into that trade rather than inheriting it. The live preview does
-/// opt in, via [`Self::preview`]; the offline FITS export in
-/// `server::capture::storage` does not, because it runs once per session.
+/// Budget is per block, so it adapts: a small frame or fine grid takes the exact
+/// path on its own. Default is [`Self::exact`] deliberately — sampling moves the
+/// coefficients (~1e-3 on noise, more on structure), so a call site opts in via
+/// [`Self::preview`] (live preview) rather than inheriting the trade; offline FITS
+/// export (`server::capture::storage`) stays exact since it runs once per session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhiteBalanceConfig {
     /// Upper bound on samples read per block, per channel.
@@ -149,23 +130,18 @@ impl WhiteBalanceConfig {
         }
     }
 
-    /// What the live preview path uses.
+    /// What the live preview path uses. Reading every pixel was the single most
+    /// expensive thing in the preview pipeline: 97ms of a 300ms render iteration on a
+    /// 3008x3008 frame (production traces), against 41ms for the whole RBF background
+    /// model and 27ms for the JPEG encode — `render_benchmark` puts the gap at 28.5ms
+    /// vs 2.1ms per call (13.9x) on an IMX464-shaped frame.
     ///
-    /// This stage is the single most expensive thing in the preview pipeline when it
-    /// reads every pixel: 97 ms of a 300 ms render iteration on a 3008x3008 frame,
-    /// measured in production OTLP traces, against 41 ms for the whole RBF background
-    /// model and 27 ms for the JPEG encode. `white_balance_grid/exact_x4` and
-    /// `sampled_4k_x50` in `render_benchmark` put the gap at 28.5 ms against 2.1 ms
-    /// per call on an IMX464-shaped frame — 13.9x.
-    ///
-    /// 4096 is the first power of two that actually forces a stride at the resolutions
-    /// this pipeline sees (see `sampled_4k` in `render_benchmark`): stride 2 on a
-    /// 2712x1538 frame, stride 3 on a 3008x3008 one. What it buys is bounded and
-    /// measured — `sampling_moves_the_coefficients_by_under_one_percent` pins the
-    /// drift, and the coefficients are clamped to [0.5, 2.0] downstream regardless.
-    ///
-    /// A block median is a *background* estimate. Reading all 35 000 pixels of a block
-    /// to produce one number was never buying accuracy proportional to its cost.
+    /// 4096 is the first power of two that forces a stride at these resolutions (stride
+    /// 2 at 2712x1538, stride 3 at 3008x3008). Drift is bounded and measured
+    /// (`sampling_moves_the_coefficients_by_under_one_percent` pins it under ~1e-3), and
+    /// coefficients are clamped to [0.5, 2.0] downstream regardless — a block median is
+    /// a *background* estimate, so reading all 35,000 pixels was never buying accuracy
+    /// proportional to its cost.
     pub const fn preview() -> Self {
         Self::sampled(4096)
     }
@@ -185,21 +161,12 @@ impl WhiteBalanceConfig {
     }
 }
 
-/// Compute white balance coefficients based on background sky color using grid-based sampling
-///
-/// This is more robust than simple medians as it samples local background blocks
-/// and uses a percentile-based approach to ignore bright objects like nebulae.
-///
-/// Reads every pixel of every block; see [`compute_white_balance_grid_with_config`] to
-/// trade exactness for speed.
-///
-/// # Arguments
-/// * `frame` - The input RGB frame
-/// * `grid_size` - Number of blocks per axis (e.g. 16 results in 256 samples)
-/// * `percentile` - Background percentile to use (typ. 10.0-25.0)
-///
-/// # Returns
-/// [R, G, B] multipliers
+/// Compute white balance coefficients from background sky colour via grid-based
+/// sampling: more robust than simple medians, using a percentile-based approach to
+/// ignore bright objects like nebulae. Reads every pixel of every block; see
+/// [`compute_white_balance_grid_with_config`] to trade exactness for speed.
+/// `grid_size` is blocks per axis, `percentile` the background percentile (typ.
+/// 10.0-25.0). Returns [R, G, B] multipliers.
 pub fn compute_white_balance_grid(
     frame: &Frame,
     grid_size: usize,
@@ -214,19 +181,15 @@ pub fn compute_white_balance_grid(
 }
 
 /// [`compute_white_balance_grid`] with control over how much of each block is read.
+/// Parallel per block, not a nested scan: the predecessor walked `grid_size^2`
+/// blocks in sequence via `Frame::get_pixel`, allocating three `Vec`s per block —
+/// 768 allocations and 12.5M bounds-checked index computations for a sensor-shaped
+/// frame, measured at 120ms against 15ms for the rest of the preview pipeline
+/// combined.
 ///
-/// # Why this is parallel per block rather than a nested scan
-///
-/// The predecessor walked `grid_size^2` blocks in sequence, reaching every sample
-/// through `Frame::get_pixel` and allocating three `Vec`s per block — 768 allocations
-/// and 12.5 M bounds-checked index computations for a sensor-shaped frame, on one
-/// thread, once per preview frame. It measured 120 ms against 15 ms for the whole rest
-/// of the preview pipeline put together.
-///
-/// Planar layout is what makes the fix free. A block's row is a contiguous run inside
-/// its plane (`plane[y * width + x0 .. y * width + x1]`), so the gather is an
-/// `extend_from_slice` rather than a per-sample gather, and the blocks are independent,
-/// so they are one rayon dispatch. `map_init` keeps one scratch buffer per worker
+/// Planar layout makes the fix free: a block's row is a contiguous run inside its
+/// plane, so the gather is `extend_from_slice`, not per-sample, and independent
+/// blocks become one rayon dispatch. `map_init` keeps one scratch buffer per worker
 /// instead of one allocation per block.
 pub fn compute_white_balance_grid_with_config(
     frame: &Frame,

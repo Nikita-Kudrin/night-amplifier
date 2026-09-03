@@ -1,32 +1,13 @@
-//! Ownership guard that stops a stale camera handle from closing a device a
-//! newer handle has since opened.
+//! Ownership guard against a stale camera handle closing a device a newer handle has
+//! since opened. Vendor SDKs close by device *index*, not an opaque handle, so a close
+//! from an abandoned handle lands on whoever holds that index *now* — and handles get
+//! abandoned routinely, since a stuck FFI call can't be cancelled and is handed to a
+//! detached thread whose `Drop` may fire minutes later. Observed 2026-08-22: exactly
+//! this closed device 0 from under a handle the user had already reconnected onto.
 //!
-//! Vendor SDKs address cameras by a device *index* — `POACloseCamera(0)`,
-//! `ASICloseCamera(0)`, `SVBCloseCamera(0)` — not by an opaque per-open handle.
-//! A close issued by an abandoned handle therefore lands on whoever holds that
-//! index *now*, not on the object that issued it.
-//!
-//! Handles get abandoned as a matter of routine. There is no way to cancel a
-//! stuck synchronous FFI call in Rust, so `capture_frame_bounded` and
-//! `poll_camera_status_bounded` hand the call to a detached thread and stop
-//! waiting for it. That thread's `Drop` runs whenever the SDK finally returns,
-//! which can be minutes later — long after a reconnect has reopened the same
-//! index. Observed in the field on 2026-08-22: a `capture()` that stalled for
-//! 30 s was abandoned, the user reconnected 9 s later onto a working handle,
-//! and ~80 s after that every call started returning `POA_ERROR_NOT_OPENED`
-//! because the abandoned handle's destructor had closed device 0 underneath
-//! the live one.
-//!
-//! Every open takes a [`DeviceLease`], which stamps the current generation of
-//! its `(provider, index)` slot. Opening the same slot again bumps the
-//! generation, which retroactively invalidates every older lease.
-//! [`DeviceLease::begin_close`] is the single gate every vendor close call must
-//! pass through: it authorizes exactly one close, and only for the lease that
-//! still owns the slot.
-//!
-//! Providers whose SDK closes by opaque pointer rather than index (QHY,
-//! ToupTek) cannot hit the id-reuse case, but they take a lease anyway so the
-//! double-close half of the guard applies uniformly.
+//! Every open takes a [`DeviceLease`], stamping its slot's generation; reopening bumps
+//! it, invalidating older leases. [`DeviceLease::begin_close`] is the single gate every
+//! vendor close must pass, authorizing exactly one close for the current lease.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
