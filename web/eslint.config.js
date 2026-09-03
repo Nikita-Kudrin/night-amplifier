@@ -36,6 +36,7 @@ export default [
                 ImageData: 'readonly',
                 requestAnimationFrame: 'readonly',
                 cancelAnimationFrame: 'readonly',
+                structuredClone: 'readonly',
                 // Vitest globals
                 vi: 'readonly',
                 describe: 'readonly',
