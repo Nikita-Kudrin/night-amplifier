@@ -1,16 +1,12 @@
 use std::path::Path;
 
-/// Write an already-rendered interleaved 8-bit RGB buffer to a PNG file.
-///
-/// Takes finished bytes rather than a `Frame` on purpose: the stretched
-/// stacked-frame export hands this the exact pixels
-/// [`crate::server::encoding::frame_to_rgb8_downsampled`] produced for it, which
-/// is the same conversion the live view streams through — background, stretch,
-/// saturation, contrast, spatial denoise and display quantization all included.
-/// Re-deriving those bytes from a `Frame` here would mean reimplementing that
-/// pipeline a second time, which is exactly how the PNG export used to drift
-/// from what the pixel viewer actually showed (it skipped denoising entirely).
-/// See `server::capture::storage::render_stacked_png`.
+/// Write an already-rendered interleaved 8-bit RGB buffer to a PNG file. Takes
+/// finished bytes rather than a `Frame` on purpose: the stacked-frame export hands
+/// this the exact pixels [`crate::server::encoding::frame_to_rgb8_downsampled`]
+/// produced — the same conversion live view streams through (background, stretch,
+/// saturation, contrast, denoise, quantization). Re-deriving from a `Frame` here
+/// would reimplement that pipeline — exactly how PNG export used to drift and skip
+/// denoising entirely. See `server::capture::storage::render_stacked_png`.
 pub(crate) fn write_rgb8_png(
     rgb8: &[u8],
     width: u32,

@@ -1,16 +1,7 @@
-//! Stacking engine that combines warping and stacking steps.
-//!
-//! Provides a higher-level interface for the complete stacking workflow:
-//! 1. Accept a new frame
-//! 2. Warp it using the provided transform
-//! 3. Add it to the master stack
-//!
-//! # Weighted Stacking
-//!
-//! Supports quality-based frame weighting via `add_frame_with_quality` and
-//! `add_reference_with_quality`. When `WeightingConfig` is enabled in the
-//! stacking configuration, frames with better FWHM (sharpness) or SNR
-//! will contribute more to the final result.
+//! Stacking engine combining warping and stacking: accept a frame, warp it via the
+//! given transform, add to the master stack. Supports quality-based weighting via
+//! `add_frame_with_quality`/`add_reference_with_quality` — when `WeightingConfig` is
+//! enabled, frames with better FWHM (sharpness) or SNR contribute more.
 
 use crate::error::Result;
 use crate::frame::Frame;

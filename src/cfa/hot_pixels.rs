@@ -1,41 +1,22 @@
-//! Hot-pixel rejection on the raw mosaic
+//! Hot-pixel rejection on the raw mosaic. The IMX533 fixture carries 5,189 pixels
+//! persistently above 20 sigma, 2,191 above 50 — stacking can't touch them (same spot
+//! every sub) and debayering spreads each into a coloured 3x3 cross, so this must run
+//! pre-demosaic.
 //!
-//! The IMX533 fixture carries 5 189 pixels persistently above 20 sigma and
-//! 2 191 above 50. Stacking cannot touch them — they are in the same place in
-//! every sub — and debayering spreads each one into a coloured 3x3 cross, which
-//! is what makes them read as red and blue dots rather than as white specks. So
-//! the filter has to run here, on the mosaic, before demosaic.
+//! The obvious test, `|centre - median(3x3)| > tau`, fires on every star core (a tight
+//! star legitimately sits >5 sigma above its neighbours). Fixed two ways: **one-sided**
+//! (only a *brighter* sample is a candidate — a dark defect needs a master dark
+//! instead), and **isolation-gated multiplicatively** (`centre - max(neighbours) > tau`
+//! alone still clips a bright star's core, since 38% of a 200-sigma peak is 76 sigma —
+//! testing the *fraction* above background makes the gate independent of brightness).
 //!
-//! # Why the obvious test eats stars
-//!
-//! `|centre - median(3x3)| > tau` fires on every star core: at 0.62 arcsec per
-//! pixel a tight star legitimately sits far more than 5 sigma above its own
-//! neighbours, and on one colour site the sampling is halved again. Two
-//! corrections make the test safe:
-//!
-//! - **One-sided.** Only a sample *brighter* than its neighbours is a candidate.
-//!   A dark defect is a different problem with a different fix (a master dark).
-//! - **Isolation-gated, multiplicatively.** A hot pixel is a single-sample
-//!   defect: its same-colour neighbours are undisturbed sky. A star is a PSF
-//!   several samples wide, so its brightest neighbour carries a large *fraction*
-//!   of its own amplitude above the background. Testing that fraction rather
-//!   than an absolute difference is what makes the gate independent of how
-//!   bright the star is — `centre - max(neighbours) > tau` alone still clips the
-//!   core of a bright star, because 38 % of a 200-sigma peak is 76 sigma.
-//!
-//! # Why max-of-eight rather than a median
-//!
-//! A branchless median-of-9 is a 19-comparator sorting network. Eight
-//! [`f32::max`] operations answer the same question here — the brightest
-//! neighbour *is* the second-brightest sample of the 3x3 whenever the centre is
-//! the brightest, which is the only case this filter acts on — and vectorize at
-//! least as well on NEON for roughly a third of the work.
-//!
-//! The de-interleave into four planar buffers that usually accompanies CFA work
-//! is skipped for the same reason: two full 36 MB copies per frame is real DRAM
-//! traffic on a Pi 5, against a pipeline already measured at ~833 MB per frame.
-//! Walking row triples `step` apart with stride-`step` reads inside each row
-//! touches the same cache lines without the copies.
+//! Uses eight [`f32::max`] rather than a median-of-9 (a 19-comparator network): the
+//! brightest neighbour *is* the second-brightest of the 3x3 whenever the centre is
+//! brightest, the only case this filter acts on, and vectorizes better on NEON for
+//! ~1/3 the work. Skips the usual de-interleave into planar buffers too — two 36MB
+//! copies/frame is real DRAM traffic on a Pi 5 against a pipeline already at
+//! ~833MB/frame; strided reads across row triples touch the same cache lines without
+//! the copies.
 
 use std::sync::Mutex;
 
@@ -49,18 +30,12 @@ use super::{CfaFrame, CfaPlanes, CfaStage};
 /// Samples drawn from the centre crop to estimate one site's noise level.
 const MAX_SIGMA_SAMPLES: usize = 32_768;
 
-/// How many frames one set of per-site background and noise estimates is reused
-/// for.
-///
-/// The estimate is two median passes over ~34 000 samples for each of the four
-/// colour sites, and on a 9 MP frame it is a large share of what this filter
-/// costs. What it measures — the sky level and its MAD — moves on the timescale
-/// of the sky itself: twilight, a passing cloud, a gain change. Recomputing it
-/// per sub buys nothing a 32-frame refresh does not, and a stale estimate shifts
-/// the threshold only by however much the sky actually drifted underneath it.
-///
-/// The estimate is also dropped outright whenever the frame's shape changes, so
-/// binning or an ROI change cannot be served from a stale one.
+/// How many frames one set of per-site background/noise estimates is reused for. The
+/// estimate is two median passes over ~34,000 samples per colour site — a large share
+/// of this filter's cost on a 9MP frame — and what it measures (sky level, MAD) moves
+/// on the sky's own timescale (twilight, cloud, gain change), so a 32-frame refresh
+/// costs nothing a per-sub recompute would buy. Dropped outright whenever the frame's
+/// shape changes, so binning or an ROI change can't be served from a stale estimate.
 const SITE_STATS_TTL_FRAMES: u32 = 32;
 
 /// Scales a MAD into a Gaussian sigma.
@@ -246,33 +221,19 @@ pub fn reject_hot_pixels_with(
         .collect();
     stats.sites_skipped = thresholds.iter().filter(|t| t.is_none()).count();
 
-    // # One sweep per row parity, not one per colour site
+    // One sweep per row parity, not per colour site: the four Bayer sites are two
+    // pairs sharing a row parity — `(0,0)`/`(1,0)` and `(0,1)`/`(1,1)` read the same
+    // three rows — so a loop over `origins()` walks the 36MB mosaic four times instead
+    // of two, each pass using only half of every cache line it reads. Grouping by row
+    // parity makes each row triple one DRAM fetch serving both x parities.
     //
-    // The four Bayer sites are two pairs that share a row parity: `(0, 0)` and `(1, 0)`
-    // read exactly the same three rows, as do `(0, 1)` and `(1, 1)`. Sweeping them
-    // separately — which is what a loop over `origins()` does — walks the whole 36 MB
-    // mosaic four times per frame instead of twice, and each of those passes reads every
-    // cache line to use half of it, because the samples of one site sit `step` apart.
-    //
-    // Grouping by row parity makes each row triple one DRAM fetch serving both x
-    // parities, taking the stage from four passes over the mosaic to two.
-    //
-    // **On x86 this is worth nothing, and that is expected.** `cfa_hot_pixels` measures
-    // 112.8 ms against 112.3 ms at 3008x3008 — inside the noise. With 20 cores the stage
-    // is compute-bound (eight `max` operations and three compares per sample), not
-    // bandwidth-bound, so removing DRAM traffic removes nothing that was on the critical
-    // path. The 34 ms this stage reported in production traces is largely rayon
-    // contention with the render thread; uncontended it is ~7 ms.
-    //
-    // It is kept for the same reason `render::simd` keeps its NEON kernels on x86
-    // evidence it does not trust: a Pi 5 has a fifth of the cores and a fifth of the
-    // bandwidth, which moves this stage to the other side of that balance. The
-    // benchmark is the case that would settle it there. The change is also not free of
-    // benefit here — see the accumulator note below.
-    //
-    // Detection still reads the frame and the replacements are still applied afterwards,
-    // so a corrected sample can never feed the test for one of its neighbours and the
-    // result does not depend on how rayon split the rows.
+    // **Worth nothing on x86, as expected**: 112.8ms vs 112.3ms at 3008x3008, inside
+    // the noise — with 20 cores the stage is compute-bound (8 `max` + 3 compares per
+    // sample), not bandwidth-bound. Kept for the same reason `render::simd` keeps NEON
+    // kernels on x86 evidence it doesn't trust: a Pi 5 has a fifth of the cores and
+    // bandwidth, which flips that balance. Detection still reads the frame before
+    // replacements apply, so a corrected sample never feeds its neighbours' test,
+    // regardless of how rayon split the rows.
     let corrections: Vec<(usize, f32)> = {
         let data = cfa.frame().data();
         let scan_rows: Vec<(usize, usize)> = (0..step)
@@ -679,18 +640,13 @@ mod tests {
         hits
     }
 
-    /// Every colour site must be swept against **its own** threshold.
-    ///
-    /// The two-sweep rewrite replaced a per-site loop with a flat table indexed
-    /// `thresholds[y0 * step + x0]`. Transposing that to `thresholds[x0 * step + y0]`
-    /// swaps the two green sites on any Bayer pattern, and on a normal frame the two
-    /// greens have near-identical statistics — so the whole suite passed against the
-    /// transposition. This fixture gives the four sites deliberately unequal backgrounds
-    /// and sigmas and plants one sample on each, sized so the quiet green's clears its
-    /// own threshold while the noisy green's does not.
-    ///
-    /// Asserting against the four-sweep reference pins the site ordering, the row-parity
-    /// grouping and the sweep's index ranges at once.
+    /// Every colour site must be swept against **its own** threshold. The two-sweep
+    /// rewrite indexes a flat table as `thresholds[y0 * step + x0]`; transposed to
+    /// `[x0 * step + y0]` it silently swaps the two green sites, which the whole suite
+    /// missed because normal-frame greens have near-identical statistics. This fixture
+    /// gives all four sites deliberately unequal backgrounds/sigmas so the quiet
+    /// green's planted sample clears its threshold while the noisy green's doesn't —
+    /// pinning site ordering, row-parity grouping, and index ranges at once.
     #[test]
     fn every_site_is_swept_against_its_own_threshold() {
         const W: usize = 128;

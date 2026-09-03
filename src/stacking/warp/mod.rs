@@ -59,22 +59,16 @@ pub fn warp_frame_into(
     warp_planes(frame, transform, output, border_value)
 }
 
-/// The plane dispatch both public entry points share.
+/// The plane dispatch both public entry points share — one place, so the dimension
+/// guard below can't end up missing from one copy. `warp_frame` and `warp_frame_into`
+/// differ only in where the destination comes from.
 ///
-/// It lives in one place because both of them need the dimension guard below, and
-/// carrying two copies of it is how one of them would end up without it. `warp_frame`
-/// and `warp_frame_into` differ only in where the destination comes from.
-///
-/// # Why sub-2px frames are rejected rather than clamped
-///
-/// The row kernels derive their upper bound as `width - 2`, since bilinear interpolation
-/// reads `(x0, y0)` through `(x0 + 1, y0 + 1)`. On a `usize` that underflows for
-/// `width < 2`: a debug build panics with "attempt to subtract with overflow", and a
-/// release build wraps to ~1.8e19, which passes the bounds test and sends
-/// `bilinear_interpolate_direct_1ch` past the end of the plane. Saturating the bound to
-/// zero instead would return an all-border frame, which is a silently wrong answer
-/// rather than a loud one — there is no meaningful bilinear result on a frame with no
-/// interior, so the caller should hear about it.
+/// Sub-2px frames are rejected, not clamped: row kernels derive their upper bound as
+/// `width - 2` (bilinear reads `(x0,y0)` through `(x0+1,y0+1)`), which underflows on
+/// `usize` for `width < 2` — a debug build panics, a release build wraps to ~1.8e19
+/// and sends `bilinear_interpolate_direct_1ch` past the plane's end. Saturating to
+/// zero instead would silently return an all-border frame; there's no meaningful
+/// bilinear result on a frame with no interior, so the caller should hear about it.
 fn warp_planes(
     frame: &Frame,
     transform: &AffineTransform,

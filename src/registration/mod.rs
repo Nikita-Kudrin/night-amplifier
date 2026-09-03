@@ -1,54 +1,15 @@
-//! Image Registration using Triangle Matching
+//! Image Registration using Triangle Matching: aligns frames by finding corresponding
+//! stars between a reference and each new frame. Pipeline: form "asterisms" from star
+//! triplets -> compute scale-invariant side-length ratios `(a/c, b/c)` as a descriptor
+//! (sorted `a ≤ b ≤ c`) -> match triangles with similar descriptors across frames ->
+//! RANSAC-like voting for consistent correspondences -> solve the affine transform.
 //!
-//! # Algorithm Overview
+//! [`adaptive`] handles field rotation, cloud cover, satellite trails, brightness
+//! variation, and FOV-scale differences. The 2D affine transform solves for θ
+//! (rotation), tx/ty (translation) — no scaling for astronomical field rotation.
 //!
-//! Image registration aligns frames by finding corresponding stars between a reference
-//! frame and each new frame. This module uses the **Triangle Matching** algorithm:
-//!
-//! 1. **Triangle Formation**: Create "asterisms" from triplets of nearby stars
-//! 2. **Triangle Descriptor**: Compute scale-invariant ratios of side lengths
-//! 3. **Matching**: Find triangles with similar descriptors between frames
-//! 4. **Voting**: Use RANSAC-like voting to find consistent star correspondences
-//! 5. **Transform Estimation**: Calculate the affine transformation matrix
-//!
-//! # Adaptive Registration
-//!
-//! The adaptive registration system handles various challenging conditions:
-//! - **Field rotation**: Automatic detection and compensation
-//! - **Cloud cover**: RANSAC-based outlier rejection
-//! - **Satellite trails**: Robust statistics ignore outliers
-//! - **Brightness variations**: Normalized matching independent of flux
-//! - **Different FOV scales**: Adaptive triangle size selection
-//!
-//! # Triangle Descriptor
-//!
-//! For each triangle formed by 3 stars (A, B, C), we compute:
-//! - Sort sides by length: `a ≤ b ≤ c`
-//! - Descriptor: `(a/c, b/c)` - ratios are scale-invariant
-//!
-//! Two triangles match if their descriptors are within a tolerance.
-//!
-//! # Affine Transformation
-//!
-//! The 2D affine transform handles rotation, translation, and scale:
-//!
-//! ```text
-//! | x' |   | cos(θ)·s  -sin(θ)·s  tx | | x |
-//! | y' | = | sin(θ)·s   cos(θ)·s  ty | | y |
-//! | 1  |   |    0          0       1 | | 1 |
-//! ```
-//!
-//! For astronomical field rotation (no scaling), we solve for θ, tx, ty.
-//!
-//! # Module Structure
-//!
-//! - [`triangle`]: Triangle types and geometry
-//! - [`transform`]: Affine transformation
-//! - [`config`]: Registration configuration and presets
-//! - [`matcher`]: Triangle-based star matching
-//! - [`ransac`]: RANSAC transform estimation
-//! - [`adaptive`]: Adaptive registration strategies
-//! - [`engine`]: Core registration pipeline
+//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`],
+//! [`adaptive`], [`engine`].
 
 mod adaptive;
 mod config;

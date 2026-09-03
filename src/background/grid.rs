@@ -1,19 +1,13 @@
-//! Grid-node sampling shared by the bilinear and RBF background extractors.
+//! Grid-node sampling shared by the bilinear and RBF background extractors: lay a grid
+//! over the frame, take a star-rejected median in a box around each node, then prune
+//! nodes that landed on nebulosity. Extracted after Community and Pro each carried a
+//! byte-identical copy of `GridNode` and friends, both reaching pixels through
+//! `frame.data()` plus a hand-computed `channel * area` offset — the pattern
+//! `AGENTS.md` asks reviewers to flag.
 //!
-//! Both extractors do the same first two phases — lay a grid over the frame, take a
-//! star-rejected median in a box around each node, then prune the nodes that landed on
-//! nebulosity — and differ only afterwards, in how they interpolate between the
-//! survivors. Until this module existed, Community's `background::extractor` and Pro's
-//! `plugins::rbf` each carried their own byte-identical copy of `GridNode`,
-//! [`compute_box_size`], [`extract_node_value`], [`median`], [`mad`] and
-//! [`prune_nebulosity`], and both reached the pixels through `frame.data()` plus a
-//! hand-computed `channel * area` offset — the pattern `AGENTS.md` asks reviewers to
-//! flag. A fix to one would have had to be found and repeated in the other repository.
-//!
-//! What is *not* shared is grid placement. Community hugs the frame boundaries so its
-//! delta-stepping subtraction can march between nodes branchlessly; Pro centres a node
-//! in each cell because the TPS solve wants interior samples. Each keeps its own
-//! `initialize_grid`.
+//! Grid *placement* stays unshared: Community hugs the frame boundary so delta-stepping
+//! can march between nodes branchlessly; Pro centres nodes in each cell because its TPS
+//! solve wants interior samples. Each keeps its own `initialize_grid`.
 
 use crate::frame::Frame;
 

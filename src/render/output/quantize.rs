@@ -1,28 +1,19 @@
-//! Final f32 → 8-bit conversion for display: black floor, ordered dither, quantize.
+//! Final f32 -> 8-bit conversion for display: black floor, ordered dither, quantize.
+//! Every displayed byte crosses this boundary exactly once, in the tail of the two
+//! fused streaming kernels (`server::encoding::fused`) and [`super::frame_to_rgb8`] —
+//! kept as one helper because parallel 8-bit conversions have drifted by an LSB here
+//! before.
 //!
-//! Every byte that reaches a screen crosses this boundary exactly once, in the
-//! tail of the two fused streaming kernels in `server::encoding::fused` and in
-//! [`super::frame_to_rgb8`]. Keeping the three of them on one helper is what
-//! stops them drifting — `AGENTS.md` records several bugs that came from
-//! parallel 8-bit conversions disagreeing by an LSB.
+//! **Pedestal**: the autostretch black point (`mode - black_point_sigma * sigma`,
+//! clamped at zero) puts a few percent of sky pixels at exactly 0, which an OLED
+//! shows as black speckle at the eyepiece. Maps `[0,1]` to `[pedestal,1]` so nothing
+//! reaches off while white stays white.
 //!
-//! # Why a pedestal
-//!
-//! The autostretch black point is `mode - black_point_sigma * sigma` with a hard
-//! clamp at zero, so a few per cent of sky pixels land on exactly 0. An OLED
-//! switches those pixels fully off, and at the eyepiece — where one pixel
-//! subtends more than the eye's resolving limit — they read as black speckle
-//! scattered through a grey sky. The pedestal maps `[0, 1]` onto
-//! `[pedestal, 1]`, so nothing reaches the off state while white stays white.
-//!
-//! # Why the dither runs before rounding, not after
-//!
-//! Ordered dithering works by biasing the *rounding decision* with a sub-LSB
-//! offset, which makes the expected output value equal the true value and turns
-//! quantization error into a fixed high-frequency pattern the eye integrates
-//! away. Adding a pattern to an already-rounded byte — which this module used to
-//! do, at ±8 LSB rather than ±0.5 — recovers no sub-LSB information and is
-//! simply visible noise.
+//! **Dither before rounding, not after**: ordered dithering biases the *rounding
+//! decision* with a sub-LSB offset, turning quantization error into a
+//! high-frequency pattern the eye integrates away. Adding a pattern to an
+//! already-rounded byte (the old ±8 LSB version) recovers no sub-LSB information —
+//! just visible noise.
 
 use crate::frame::sample_to_u8;
 

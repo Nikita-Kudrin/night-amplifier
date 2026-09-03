@@ -154,21 +154,12 @@ pub fn apply_luminance_scale_lut_scalar(
     }
 }
 
-/// SIMD-optimized luminance-preserving transform for RGB pixel data.
-///
-/// Applies a scalar transform function to the luminance of each pixel,
-/// then scales all RGB channels by the same factor to preserve color ratios.
-///
-/// The surrounding math (luminance dot product, division, multiplication, clamping)
-/// is vectorized even though the transform function itself runs scalar.
-///
-/// Equivalent to:
-/// ```text
-/// L = 0.2126*R + 0.7152*G + 0.0722*B
-/// L' = transform_fn(L)
-/// scale = L' / L
-/// R' = (R * scale).clamp(0, 1)
-/// ```
+/// SIMD-optimized luminance-preserving transform for RGB pixel data: applies a
+/// scalar transform to each pixel's luminance, then scales all RGB channels by the
+/// same factor to preserve colour ratios. The surrounding math (dot product,
+/// division, multiplication, clamping) is vectorized even though the transform
+/// itself runs scalar. Equivalent to `L = 0.2126R + 0.7152G + 0.0722B; L' =
+/// transform_fn(L); scale = L'/L; R' = (R*scale).clamp(0,1)` (and same for G, B).
 #[inline]
 pub fn apply_luminance_preserving_simd(
     data: &mut [f32],

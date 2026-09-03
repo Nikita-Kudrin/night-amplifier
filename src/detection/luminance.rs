@@ -12,30 +12,20 @@ use crate::error::Result;
 use crate::frame::Frame;
 use rayon::prelude::*;
 
-/// Mean of all channels per pixel.
+/// Mean of all channels per pixel. Planar layout makes this one pass (`channels`
+/// streaming reads, one write) vs. interleaved's strided gather or the first planar
+/// version's `channels` read-modify-write passes.
 ///
-/// Planar layout makes this one pass: `channels` streaming reads and one write. The
-/// interleaved version had to gather with a stride, and the first planar version
-/// accumulated `+=` once per channel over the whole output — `channels` read-modify-
-/// write passes for a job that needs none.
+/// Parallel because every `StarDetector::detect` starts here, once per captured frame:
+/// a plain `(0..pixel_count).map().collect()` measured **24.9ms** of a 137ms
+/// `stacking_iteration` on a 3008x3008 colour frame — one core streaming 108MB while
+/// nineteen idled, the largest serial section in the stacking thread. Destination is
+/// allocated once and written via `par_chunks_mut`, not `collect`ed, for one
+/// allocation instead of rayon's per-task intermediates.
 ///
-/// # Why it is parallel
-///
-/// Every `StarDetector::detect` starts here, so it runs once per captured frame on the
-/// registration path. Written as a plain `(0..pixel_count).map().collect()` it measured
-/// **24.9 ms** of a 137 ms `stacking_iteration` on a 3008x3008 colour frame in
-/// production traces — a single core streaming 108 MB while nineteen others idled, and
-/// the largest serial section anywhere in the stacking thread.
-///
-/// The destination is allocated once and written through `par_chunks_mut` rather than
-/// `collect`ed, so there is one allocation instead of rayon's per-task intermediates.
-/// `parallel_matches_the_sequential_projection` pins the result against the form this
-/// replaced, over channel counts that hit all three arms.
-///
-/// `pub` because the Pro plate solver projects a colour frame down to this before
-/// handing it to ASTAP, and it must use the same projection star detection used to
-/// decide the frame was solvable in the first place — a Rec. 709 combine would
-/// down-weight exactly the red-heavy fields the flat average exists to protect.
+/// `pub` because the Pro plate solver projects colour frames down to this before
+/// ASTAP — it must match the projection detection used to decide the frame was
+/// solvable, since Rec. 709 would down-weight the red-heavy fields this protects.
 pub fn mean_luminance(frame: &Frame) -> Vec<f32> {
     let pixel_count = frame.pixel_count();
     let channels = frame.channels();

@@ -33,18 +33,12 @@ pub enum ToneMappingAlgorithm {
     Mtf,
 }
 
-/// Apply tone mapping to a frame using the specified algorithm
-///
-/// # Arguments
-/// * `frame` - Mutable reference to an RGB frame
-/// * `algorithm` - Which tone mapping algorithm to use
-/// * `strength` - Algorithm-specific strength parameter:
-///   - For Asinh: stretch factor (typical: 1.0-20.0)
-///   - For MTF: midtone parameter (typical: 0.1-0.4 for boost)
-/// * `color_intensity` - How far channels may diverge from the luminance scaling.
-///   **Asinh only.** MTF applies its curve per channel by design, so it has no
-///   luminance ratio to blend against and ignores this; see [`mtf_stretch_frame`],
-///   which no longer accepts the parameter at all.
+/// Apply tone mapping to a frame using the specified algorithm. `strength` is
+/// algorithm-specific: stretch factor for Asinh (typical 1.0-20.0), midtone
+/// parameter for MTF (typical 0.1-0.4). `color_intensity` (how far channels may
+/// diverge from luminance scaling) is **Asinh only** — MTF applies its curve per
+/// channel by design and ignores it entirely; see [`mtf_stretch_frame`], which no
+/// longer even accepts the parameter.
 pub fn apply_tone_mapping(
     frame: &mut Frame,
     algorithm: ToneMappingAlgorithm,
@@ -135,17 +129,16 @@ thread_local! {
     static LUT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Limit of `curve(L) / L` as `L → 0`, used to seed `scale_lut[0]`.
+/// Limit of `curve(L) / L` as `L → 0`, used to seed `scale_lut[0]`. Both tone curves
+/// pass linearly through the origin, so the ratio converges — but derived
+/// analytically, not by evaluating near zero: `asinh(x) = ln(x + sqrt(x² + 1))`, and
+/// in f32 the `1.0 +` swallows most of the significand for tiny `x`, giving a limit
+/// several percent wrong.
 ///
-/// Both tone curves pass linearly through the origin, so the ratio converges. It has to be
-/// derived analytically rather than by evaluating the curve just off zero: `asinh(x)` is
-/// `ln(x + sqrt(x² + 1))` and in f32 the `1.0 +` swallows most of the significand for tiny
-/// `x`, giving a limit several percent wrong.
-///
-/// Note this only fixes the *value* at entry 0. When the solver bottoms out at its clamp
-/// floor (`m ≈ 1e-4`, a near-black frame) the first bin spans more than half the output
-/// range and no table of this size can represent it — the 65536-entry table this replaced
-/// had the same limitation.
+/// Only fixes the *value* at entry 0 — when the solver bottoms out at its clamp
+/// floor (`m ≈ 1e-4`, near-black frame) the first bin spans over half the output
+/// range and no table this size can represent it (the 65536-entry table this
+/// replaced had the same limitation).
 fn scale_limit_at_zero(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
@@ -265,18 +258,14 @@ pub fn apply_fused_stretch_frame(
     apply_scale_lut_frame(frame, black_point, &scale_lut, color_intensity)
 }
 
-/// Applies an already-built scale LUT to a planar frame, in place.
+/// Applies an already-built scale LUT to a planar frame, in place. Split out of
+/// [`apply_fused_stretch_frame`]'s tail so callers already holding a
+/// `StretchResult::scale_lut` don't re-derive this loop — one that did drove the
+/// *interleaved* kernel over `frame.data_mut().par_chunks_mut(width * 3)`, so every
+/// "pixel" it saw was three horizontally-adjacent red-plane samples.
 ///
-/// The tail of [`apply_fused_stretch_frame`], split out because callers that already
-/// hold a `StretchResult::scale_lut` — the streaming encoder's equivalent, and the
-/// integration tests that reproduce it — must not re-derive this loop. The one that
-/// did drove `render::simd::apply_luminance_scale_lut_simd`, the *interleaved* kernel,
-/// over `frame.data_mut().par_chunks_mut(width * 3)`, so every "pixel" it saw was three
-/// horizontally-adjacent samples of the red plane.
-///
-/// Rows rather than whole planes: `with_min_len(32)` lets rayon coalesce them, and
-/// per-plane dispatch would need three passes to keep the three channels of a pixel in
-/// the same task.
+/// Rows, not whole planes: `with_min_len(32)` lets rayon coalesce them, and
+/// per-plane dispatch would need three passes to keep a pixel's channels together.
 pub fn apply_scale_lut_frame(
     frame: &mut Frame,
     black_point: f32,

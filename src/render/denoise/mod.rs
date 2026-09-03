@@ -1,36 +1,17 @@
-//! Spatial denoising, run at **stream resolution** inside the encoders.
+//! Spatial denoising, run at **stream resolution** inside the encoders, not the
+//! render pipeline: the pipeline's frame is sensor resolution (9MP on IMX533) vs a
+//! 1440² eyepiece — denoising then discarding 3/4 of it is 4.5x the DRAM traffic for
+//! nothing (576MB/frame vs ~128MB at display size), and the encoder's box downsample
+//! is itself a 2x noise reduction, easing the filters' job. Sits between downsample
+//! and tone curve (staged by `server::encoding::fused`); neither filter fuses into
+//! the encoders' per-row closure since both need cross-row neighbourhood access.
 //!
-//! # Why here and not in the render pipeline
-//!
-//! The pipeline's frame is at sensor resolution — 9 MP on an IMX533. The
-//! eyepiece screen is 1440². Denoising nine megapixels and then discarding
-//! three quarters of the result is 4.5x the DRAM traffic for no benefit: a
-//! four-level à trous transform on a 9 MP luma plane moves roughly 576 MB per
-//! frame against ~128 MB at display size. The encoders' box downsample is
-//! itself an area average — a 2x noise reduction — so running after it also
-//! hands the filters an easier problem than they would get at full resolution.
-//!
-//! That puts this stage between the downsample and the tone curve, which is
-//! where `server::encoding::fused` stages a full-resolution interleaved RGB
-//! buffer for it. Neither filter can fuse into the encoders' per-row closure:
-//! both need neighbourhood access across rows.
-//!
-//! # Why linear light
-//!
-//! The stretch has not run yet, so sky noise is still roughly stationary across
-//! the frame and a single MAD-derived threshold describes it. After the tone
-//! curve the same physical noise spans wildly different amplitudes at different
-//! brightnesses, and one threshold would either miss the shadows or eat the
-//! highlights.
-//!
-//! # Why YCbCr and not RGB
-//!
-//! The two defects are different and want different filters. Colour mottle is
-//! chroma-only and survives aggressive smoothing because the eye barely
-//! resolves chroma detail; luminance grain sits on top of the structure the
-//! observer came to see, so it gets a scale-selective filter that leaves stars
-//! and coarse nebulosity alone. Filtering RGB directly would apply one
-//! compromise to both.
+//! Linear light because the stretch hasn't run yet, so sky noise is still roughly
+//! stationary and one MAD-derived threshold describes it (post-tone-curve, the same
+//! noise spans wildly different amplitudes by brightness). YCbCr, not RGB: colour
+//! mottle (chroma-only, smoothable hard) and luminance grain (needs a scale-selective
+//! filter that leaves stars/nebulosity alone) are different defects needing
+//! different filters — RGB would apply one compromise to both.
 
 mod guided;
 mod wavelet;
@@ -77,20 +58,15 @@ impl DenoiseConfig {
     }
 }
 
-/// Reusable working buffers for one denoise pass.
+/// Reusable working buffers for one denoise pass. At 1440² a pass allocates ~75MB
+/// (staged interleaved RGB, three planar channels, the wavelet's three), freshly
+/// zero-initialised and dropped per payload per frame — measured 13ms of the 20ms
+/// denoising adds to an encode (page faults, not arithmetic).
 ///
-/// At 1440² a pass allocates about 75 MB — a staged interleaved RGB buffer,
-/// three planar channels and the wavelet's three — all freshly zero-initialised
-/// and dropped again, once per payload, once per frame. Measured on a 20-core
-/// x86 box that is 13 ms of the 20 ms denoising adds to an encode: page faults,
-/// not arithmetic.
-///
-/// Owned by the render task for the life of its thread and passed down, rather
-/// than kept in a thread-local: the inline encode that primes a newly-connected
-/// client runs on a pooled tokio blocking thread, and a thread-local there would
-/// strand 75 MB on every thread that pool ever grows to. A caller with no
-/// scratch to lend — a test, a benchmark, that same inline encode — uses
-/// [`denoise_rgb_interleaved`] and pays the allocation once.
+/// Owned by the render task's thread and passed down, not thread-local: the inline
+/// encode priming a newly-connected client runs on a pooled tokio blocking thread,
+/// where a thread-local would strand 75MB per thread the pool ever grows to. Callers
+/// with no scratch to lend use [`denoise_rgb_interleaved`] and pay the allocation once.
 #[derive(Default)]
 pub struct DenoiseScratch {
     /// Interleaved RGB at output resolution, between the resample and the tone

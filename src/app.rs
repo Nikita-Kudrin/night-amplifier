@@ -189,18 +189,12 @@ fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// Run the Night Amplifier server.
+/// Run the Night Amplifier server. Call `register_plugins` before logging is
+/// initialized, to register Pro plugin implementations into the global OnceLock
+/// registries — pass a no-op closure (or nothing) for the Community edition.
 ///
-/// Call `register_plugins` before logging is initialized to register Pro plugin
-/// implementations into the global OnceLock registries. Pass a no-op closure
-/// (or nothing) for the Community edition.
-///
-/// # Example (Pro)
 /// ```ignore
-/// night_amplifier::app::run(|| {
-///     BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok();
-///     // ...
-/// }).await;
+/// night_amplifier::app::run(|| { BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok(); }).await;
 /// ```
 pub async fn run(register_plugins: impl FnOnce()) {
     let args = Args::parse();

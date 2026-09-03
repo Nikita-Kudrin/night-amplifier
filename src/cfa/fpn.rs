@@ -1,37 +1,15 @@
-//! Row and column fixed-pattern noise removal on the raw mosaic
+//! Row and column fixed-pattern noise removal on the raw mosaic: sensor readout gives
+//! every row and column a small offset (5.9/6.7 ADU per row/column on IMX533, 39/31 on
+//! IMX464) that does **not** average down with stacking — after 35 subs random noise
+//! is 14 ADU, the pattern still 6, ~40% of what's left. Nothing downstream removes it:
+//! background extraction models a smooth gradient, a wavelet denoiser only smears it.
 //!
-//! Sensor readout gives every row and every column a small offset of its own.
-//! It is measurable on both fixtures — 5.9 ADU of excess per row and 6.7 per
-//! column on the IMX533, 39 and 31 on the IMX464 — and unlike photon noise it
-//! does **not** average down with frame count: after 35 subs the random noise is
-//! at 14 ADU while the pattern still sits at 6, so it becomes roughly 40 % of
-//! what is left. Drift on an undriven mount smears it, which is why it reads as
-//! soft banding rather than as sharp lines.
-//!
-//! Nothing downstream removes it. Background extraction models a smooth
-//! gradient, and a wavelet denoiser *smooths* a one-pixel-wide line into a soft
-//! streak — worse than leaving it alone.
-//!
-//! # The correction
-//!
-//! On each colour site, take the median of every row, high-pass that sequence,
-//! and subtract; then do the same by column on the row-corrected data. Two O(N)
-//! passes per axis, medians throughout so a star field or a bright nebula
-//! crossing a row cannot drag its offset.
-//!
-//! **The high-pass is the load-bearing part.** Subtracting each line's raw level
-//! against a whole-site reference — which is what this did first — removes the
-//! entire low-frequency component of the axis, not just the readout offsets, and
-//! a target spanning hundreds of lines *is* low-frequency. Measured on the
-//! IMX533 fixture that drained 5.2 % of the Dumbbell's integrated flux: an order
-//! of magnitude more than the denoisers downstream are allowed to move it, and
-//! invisible to a test that only asks whether the lines got flatter. Flattening
-//! the lines was never the goal; removing what is *not* explainable by smooth
-//! structure was. With the high-pass the same measurement moves 0.008 %, and the
-//! line-to-line excess still falls to the noise floor on every colour site.
-//!
-//! Sites are corrected independently — the four Bayer sites sit at different
-//! levels, and a row median taken across them would measure the mosaic.
+//! Correction: per colour site, high-pass each row's median and subtract, then the
+//! same by column on the row-corrected data. **The high-pass is load-bearing** —
+//! subtracting against a whole-site reference (the first version) removed real
+//! low-frequency structure too, draining 5.2% of the Dumbbell's flux; high-passed, the
+//! same measurement moves 0.008%. Sites are corrected independently — the four Bayer
+//! sites sit at different levels.
 
 use rayon::prelude::*;
 
@@ -51,20 +29,13 @@ const COLUMN_BLOCK: usize = 32;
 /// The largest CFA period this module handles — 2x2 Bayer, or 1x1 for mono.
 const MAX_STEP: usize = 2;
 
-/// Half-width, in lines of the same colour site, of the window each site's line
-/// levels are high-passed against. Eight lines of one site is sixteen sensor
-/// lines either side.
-///
-/// Narrow on purpose. Widening it does *not* remove more readout offset — on the
-/// IMX533 fixture the line-to-line excess already reaches the noise floor at
-/// every width from 8 to 192 — but it does subtract more real structure, because
-/// a wider average tracks the frame less closely and the difference is what gets
-/// taken out. At 48 the correction measurably *added* spread to one site of the
-/// fixture, which is a correction inventing the defect it exists to remove.
-///
-/// The floor is the other end: the window has to span enough lines for the mean
-/// to be a stable estimate of the local level, which sixteen samples either side
-/// is and two would not be.
+/// Half-width, in lines of the same colour site, of the window each site's line levels
+/// are high-passed against (sixteen sensor lines either side). Narrow on purpose:
+/// widening does *not* remove more readout offset (line-to-line excess already reaches
+/// the noise floor from width 8 to 192 on the IMX533 fixture) but does subtract more
+/// real structure — at 48 it measurably *added* spread to one site, inventing the
+/// defect it exists to remove. The floor is the other end: the window needs enough
+/// lines for the mean to be a stable local estimate, which sixteen is and two isn't.
 const OFFSET_SMOOTHING_RADIUS: usize = 8;
 
 /// What [`remove_fpn`] took out, in normalized units.
@@ -198,17 +169,13 @@ fn column_medians_for_parity(
 }
 
 /// Turn per-line medians into the *line-to-line* part of each site's offset.
-///
-/// `medians[i][p]` is the median of line `i` on the site whose *other* parity is
-/// `p`; the site a line belongs to is `(p, i % step)`, so each site's own
-/// sequence is every `step`-th entry. That sequence is high-passed against a
-/// centred moving average of radius [`OFFSET_SMOOTHING_RADIUS`], and the residual
-/// is what gets subtracted.
-///
-/// Being a residual around a local mean, it is centred by construction — which
-/// is what the whole-site reference this replaced was there to guarantee, and
-/// the correction still cannot shift the frame's overall level or change what
-/// the autostretch solves for.
+/// `medians[i][p]` is the median of line `i` on the site whose *other* parity is `p`,
+/// so each site's own sequence is every `step`-th entry; it's high-passed against a
+/// centred moving average of radius [`OFFSET_SMOOTHING_RADIUS`], and the residual is
+/// what gets subtracted. Being a residual around a local mean, it's centred by
+/// construction — same guarantee the whole-site reference this replaced gave — so the
+/// correction still can't shift the frame's overall level or change what autostretch
+/// solves for.
 fn axis_offsets(medians: &[[f32; MAX_STEP]], step: usize) -> Vec<[f32; MAX_STEP]> {
     let mut offsets = vec![[0.0f32; MAX_STEP]; medians.len()];
     let mut sequence: Vec<f32> = Vec::new();
@@ -228,21 +195,16 @@ fn axis_offsets(medians: &[[f32; MAX_STEP]], step: usize) -> Vec<[f32; MAX_STEP]
     offsets
 }
 
-/// How far line `k` sits above its own neighbourhood: `x[k]` minus a centred
-/// moving average of even order `2 * radius`, shrinking symmetrically at the
-/// borders.
+/// How far line `k` sits above its own neighbourhood: `x[k]` minus a centred moving
+/// average of even order `2 * radius`, shrinking symmetrically at the borders.
 ///
-/// The even order is the whole point and not an implementation detail. A centred
-/// average of even order annihilates a period-2 component exactly, and odd/even
-/// line readout — the classic form of this defect on a CMOS sensor — is period 2.
-/// A median filter is worse than useless here: an odd-width median has a strict
-/// alternation as a *root*, so it reproduces the pattern perfectly and the
-/// residual comes out zero. An odd-width mean leaves about half of it behind.
-///
-/// Summed as differences from `x[k]` rather than as `x[k] - mean(window)`, so a
-/// line already level with its neighbours yields exactly zero rather than an ULP
-/// of it — which is what keeps the correction a genuine no-op on a frame that
-/// has no line pattern to remove.
+/// The even order is the point, not an implementation detail — it annihilates a
+/// period-2 component exactly, and odd/even line readout (the classic CMOS defect) is
+/// period 2. A median filter is worse than useless: an odd-width median has a strict
+/// alternation as a *root*, reproducing the pattern with zero residual; an odd-width
+/// mean leaves about half of it behind. Summed as differences from `x[k]`, not as
+/// `x[k] - mean(window)`, so an already-level line yields exactly zero rather than an
+/// ULP of it — keeping the correction a genuine no-op where there's no pattern.
 fn line_excess(sequence: &[f32], k: usize, radius: usize) -> f32 {
     let radius = radius.min(k).min(sequence.len() - 1 - k);
     if radius == 0 {
@@ -340,21 +302,16 @@ mod tests {
     }
 
     /// Spread of the *differences between adjacent lines of one colour site* —
-    /// fixed-pattern noise proper, and the quantity this filter exists to remove.
+    /// fixed-pattern noise proper, what this filter exists to remove. Two things are
+    /// load-bearing: it's per **site** (a whole-row median mixes the two x-parities,
+    /// whose differing offsets would read as residual no per-site correction could
+    /// remove), and it's the line-to-line half, not the total (the correction is a
+    /// high-pass, so asserting on the total means asserting real gradients get
+    /// flattened too — the behaviour that drained 5% of the Dumbbell's flux).
     ///
-    /// Two things about this measure are load-bearing. It is per **site**,
-    /// because the correction is: a whole-row median mixes the two x-parities,
-    /// which receive different offsets, and the difference between them then
-    /// reads as residual that no per-site correction could ever remove. And it is
-    /// the line-to-line half, not the total: the correction is a high-pass, so it
-    /// leaves whatever smooth structure could explain, and asserting on the total
-    /// is asserting that real gradients get flattened too — the behaviour that
-    /// drained 5 % of the Dumbbell's flux on the fixture.
-    ///
-    /// It does not go to zero, and the thresholds below allow for that: the
-    /// column pass runs on the row-corrected frame and perturbs the row medians
-    /// in turn, and each line median carries its own sampling error. Roughly
-    /// seven-fold is what the two passes together actually reach here.
+    /// Doesn't go to zero: the column pass runs on the row-corrected frame and
+    /// perturbs the row medians in turn, so roughly seven-fold is what both passes
+    /// together actually reach.
     fn line_to_line_spread(
         frame: &Frame,
         horizontal: bool,

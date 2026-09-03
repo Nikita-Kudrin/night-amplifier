@@ -113,32 +113,15 @@ impl PipelineConfig {
     }
 }
 
-/// High-level stacking pipeline for streaming frame processing.
-///
-/// This pipeline handles the complete workflow for live stacking:
-/// 1. Receives frames one at a time (as they arrive from camera)
-/// 2. Detects stars in each frame
-/// 3. Registers against the reference frame
-/// 4. Adds to the stack if registration succeeds
-///
-/// # Example
+/// High-level stacking pipeline for streaming frame processing: receives frames one
+/// at a time, detects stars, registers against the reference frame, adds to the
+/// stack if registration succeeds.
 ///
 /// ```ignore
-/// use night_amplifier::{StackingPipeline, PipelineConfig, Frame};
-///
-/// // Create pipeline with first frame as reference
-/// let config = PipelineConfig::fast();
-/// let mut pipeline = StackingPipeline::new(reference_frame, config)?;
-///
-/// // Process incoming frames
+/// let mut pipeline = StackingPipeline::new(reference_frame, PipelineConfig::fast())?;
 /// for frame in camera_frames {
 ///     let result = pipeline.process_frame(&frame);
-///     if result.stacked {
-///         println!("Frame stacked successfully");
-///     }
 /// }
-///
-/// // Get final result
 /// let stacked = pipeline.compute()?;
 /// ```
 pub struct StackingPipeline {

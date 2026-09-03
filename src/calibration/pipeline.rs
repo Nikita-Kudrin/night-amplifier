@@ -56,16 +56,10 @@ impl Calibration {
         }
     }
 
-    /// Applies calibration to a frame in-place
-    ///
-    /// # Calibration Sequence
-    /// 1. **Dark Subtraction**: `frame = max(0, frame - dark)`
-    ///    - Removes thermal noise and bias
-    ///    - Uses max(0, ...) to prevent negative values
-    ///
-    /// 2. **Flat Division**: `frame = frame / flat`
-    ///    - Corrects vignetting and dust spots
-    ///    - Flat is pre-normalized (mean = 1.0) to preserve brightness
+    /// Applies calibration to a frame in-place: dark subtraction
+    /// (`frame = max(0, frame - dark)`, removing thermal noise/bias, clamped against
+    /// negatives) then flat division (`frame = frame / flat`, correcting vignetting and
+    /// dust spots — flat is pre-normalized to mean 1.0 to preserve brightness).
     ///
     /// # Errors
     /// Returns an error if the calibration frame dimensions don't match.

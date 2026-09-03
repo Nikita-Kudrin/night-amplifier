@@ -9,18 +9,12 @@ use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::channel::{QueueDepth, StackedFrame};
 use super::pipeline;
 
-/// Preview rendering and encoding, running on a dedicated OS thread.
-///
-/// Drains the channel to the latest frame to keep the UI responsive, runs
-/// `process_preview_frame()`, then encodes every payload the connected clients
-/// need — the LZ4 blob for the lossless stream and one JPEG per active
-/// resolution tier. Encoding all of it here (rather than per client) means N
-/// clients on the same tier cost one encode, and WebSocket handlers only copy a
-/// pointer to the socket.
-///
-/// LZ4 chunk count is dynamic:
-/// - Live view (not stacking): max parallelism for responsive UI
-/// - Stacking active: single chunk to yield CPU cores to the stacking pipeline
+/// Preview rendering and encoding, on a dedicated OS thread. Drains the channel to
+/// the latest frame for UI responsiveness, runs `process_preview_frame()`, then
+/// encodes every payload connected clients need (the lossless LZ4 blob, one JPEG per
+/// active tier) here rather than per client, so N clients on one tier cost one
+/// encode and WebSocket handlers just copy a pointer. LZ4 chunk count is dynamic:
+/// max parallelism in live view, single chunk while stacking (to yield cores to it).
 pub fn run_render_task(
     state: Arc<AppState>,
     render_rx: mpsc::Receiver<StackedFrame>,
@@ -74,18 +68,15 @@ pub fn run_render_task(
             tracing::info_span!("render_iteration", frame_number, showing_stack, was_stacked,)
                 .entered();
 
-        // The preview pipeline mutates in place. `make_mut` hands back the
-        // buffer untouched when we hold the only handle — the usual case, since
-        // the capture thread has moved on and plate solving is only spawned when
-        // it can actually run. A live second holder (raw-frame disk saving, an
-        // in-flight solve) forces the copy we would otherwise have paid
-        // unconditionally. Staying inside the `Arc` also means the rendered
-        // frame reaches `latest_raw_frame` without being re-wrapped.
+        // The preview pipeline mutates in place. `make_mut` hands back the buffer
+        // untouched when we hold the only handle (the usual case); a live second
+        // holder (disk saving, an in-flight solve) forces the copy instead of paying
+        // it unconditionally. Staying inside the `Arc` also lets the rendered frame
+        // reach `latest_raw_frame` without re-wrapping.
         //
-        // The log predicts `make_mut`'s decision rather than observing it, so a
-        // holder that drops in between turns it into a false positive. That is
-        // the harmless direction: no handle can be *acquired* once the frame is
-        // here, so silence still proves the frame was not copied.
+        // This log predicts `make_mut`'s decision rather than observing it, so a
+        // holder dropping in between is a false positive — harmless, since no handle
+        // can be *acquired* once the frame is here, so silence still proves no copy.
         if Arc::get_mut(&mut display_frame).is_none() {
             debug!("Preview frame still shared, copying before render");
         }
@@ -193,30 +184,19 @@ pub fn run_render_task(
     debug!("Render task ended");
 }
 
-/// The preview bin factor for one capture session, resolved once and held.
+/// The preview bin factor for one capture session, resolved once and held — not
+/// recomputed per frame. It used to be: called every iteration against the largest
+/// connected client's bounding box, flipping between 1 and 2 whenever the client set
+/// crossed a 2x boundary. Binning isn't neutral: the tone curve solves from median
+/// and MAD, and a 2x2 box average halves MAD, moving the black point and curve with
+/// it (measured: solved `scale_lut` gained 25.7% at the 1% input point) — every
+/// viewer saw the jump, not just the arriving client.
 ///
-/// # Why this is not recomputed per frame
-///
-/// It used to be: `preview_bin_factor` was called every iteration against the largest
-/// bounding box any *connected client* had asked for, so the factor flipped between 1
-/// and 2 whenever the client set crossed a 2x boundary — a phone opening the page, a tab
-/// closing. Binning is not neutral to the analysis that follows it: the tone curve is
-/// solved from the frame's median and MAD, and a 2x2 box average cuts MAD by about half,
-/// which moves the black point and the whole curve with it. Measured on a 1200x1200 sky
-/// with 400 stars, the solved `scale_lut` gained 25.7 % at the 1 % input point and 16.1 %
-/// at 10 %. Every connected viewer saw that jump, not just the client that arrived.
-///
-/// So the factor is a property of the session: it comes from the sensor shape and
-/// [`PreviewResolution`], both of which the observer controls, and it is held until one
-/// of them actually changes.
-///
-/// # Why the shape is still part of the key
-///
-/// Hardware binning, an ROI change or a mono/colour swap all reshape the frame mid
-/// session, and a factor solved for the old shape would be meaningless against the new
-/// one. Those are deliberate acts by the observer, not other people's browser tabs, and
-/// they already reset the stack — so re-solving there is the same class of event as
-/// starting a session. It is logged for that reason.
+/// So the factor is a session property (sensor shape + [`PreviewResolution`], both
+/// observer-controlled), held until one changes. Shape stays part of the key because
+/// hardware binning/ROI/mono-colour swaps reshape the frame mid-session and already
+/// reset the stack — a deliberate observer act, the same class of event as starting
+/// a session, logged for that reason.
 #[derive(Default)]
 struct SessionBinFactor {
     resolved: Option<((usize, usize), PreviewResolution)>,
@@ -256,46 +236,30 @@ impl SessionBinFactor {
 }
 
 /// Largest integer bin that still leaves the preview the pixels [`PreviewResolution`]
-/// asks for.
+/// asks for. Background neutralisation, subtraction, SCNR and black-point all walk
+/// every sample before `frame_to_rgb8_downsampled` throws away what the tier doesn't
+/// need (76% of a 3008² frame for a 1440-tier client) — the same argument AGENTS.md
+/// makes for running denoisers at stream resolution applies to every stage above them.
 ///
-/// # Why the preview pipeline should not run at sensor resolution
+/// Integer, not the exact tier: `Frame::downsample` stays an exact box average with
+/// no resampling phase to get wrong, leaving the encoder's fractional resample to
+/// land the final size — conservative, never smaller than the largest requested box,
+/// 1 whenever halving would undershoot it. `target` comes from
+/// [`PreviewResolution::target_box`], never the connected clients (see
+/// [`SessionBinFactor`]); `Native` has no box and never reaches here, making
+/// "no downsampling" the default rather than something to protect.
 ///
-/// Background neutralisation, background subtraction, SCNR and the black-point pass all
-/// walk every sample of the frame, and `frame_to_rgb8_downsampled` then throws away
-/// whatever the client's tier does not need — 76 % of a 3008x3008 frame for a client on
-/// the 1440 tier. This is the same argument `AGENTS.md` already makes for running the
-/// denoisers at stream resolution rather than sensor resolution; every stage above them
-/// has the property too.
+/// All-or-nothing at the **2x boundary**: a 3008² sensor on the 2160 tier bins by 1
+/// (saves nothing); on the 1440/1080 tier it bins by 2 and the whole pipeline runs on
+/// a quarter of the samples (phones, tablets, eyepiece view). Capped at 4 — past that
+/// the background grid is estimated from too few samples to mean anything, and
+/// nothing served is under 1080 anyway.
 ///
-/// # Why an integer factor and not the exact tier
-///
-/// `Frame::downsample` bins by an integer, which keeps it an exact box average with no
-/// resampling phase to get wrong, and leaves the encoder's existing fractional resample
-/// to land the final size. So this is deliberately conservative: it never produces a
-/// frame smaller than the largest box a client asked for, and returns 1 whenever
-/// halving would go under it.
-///
-/// `target` comes from [`PreviewResolution::target_box`], never from the connected
-/// clients — see [`SessionBinFactor`]. [`PreviewResolution::Native`] has no box at all
-/// and never reaches here, which is what makes "no downsampling" the default rather than
-/// a property the client-set arithmetic has to be careful not to break.
-///
-/// The consequence is that the win is **all or nothing at the 2x boundary**. A
-/// 3008x3008 sensor with a client on the 2160 tier bins by 1 and saves nothing; the same
-/// sensor with a client on the 1440 or 1080 tier bins by 2 and the whole preview
-/// pipeline runs on a quarter of the samples. Phones, tablets and the eyepiece view are
-/// the second case.
-///
-/// Capped at 4: past that the analysis stages are estimating a background from so few
-/// samples that the grid is no longer meaningful, and nothing the pipeline serves is
-/// under 1080 anyway.
-///
-/// The bound is the **output size** the encoder will produce, not the bounding box
-/// itself: a 3008x3008 frame fitted into the 2560x1440 box comes out 1440x1440, because
-/// the short edge binds and the aspect ratio is preserved. Comparing against the raw box
-/// would refuse to bin a square sensor for any tier. `encoding::output_dimensions` is
-/// the one copy of that arithmetic — the same reason `ConversionCache` keys on it — so
-/// asking it here is what keeps this decision and the encoder's from disagreeing.
+/// Bounds against the **output size**, not the bounding box: a 3008² frame in a
+/// 2560x1440 box comes out 1440x1440 (short edge binds, aspect preserved), so
+/// comparing against the raw box would refuse to bin a square sensor for any tier.
+/// `encoding::output_dimensions` is the one copy of that arithmetic, kept here to
+/// agree with the encoder.
 fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize {
     const MAX_BIN: usize = 4;
     if target.0 == 0 || target.1 == 0 {
@@ -311,17 +275,12 @@ fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize 
         .unwrap_or(1)
 }
 
-/// The RGB8 conversions one frame needs, at most one per distinct output size.
-///
-/// Two payloads whose clients asked for different bounding boxes are the same
-/// conversion whenever those boxes resolve to the same output size — a 2712x1538
-/// sensor fitted into the 4K box and into no box at all are both 2712x1538. This
-/// generalises the "share the native buffer between LZ4 and the tiers that do not
-/// downsample" special case it replaces; native size is simply the case where
-/// every box resolves to the frame's own dimensions.
-///
-/// A `Vec` rather than a map: there are at most five payloads per frame, and a
-/// linear scan over five pairs beats hashing them.
+/// The RGB8 conversions one frame needs, at most one per distinct output size. Two
+/// payloads whose clients asked for different bounding boxes are the same
+/// conversion whenever the boxes resolve to the same output size (a 2712x1538
+/// sensor fitted into the 4K box or no box are both 2712x1538) — generalising the
+/// "share the native buffer" special case it replaces. A `Vec`, not a map: at most
+/// five payloads per frame, and a linear scan over five beats hashing them.
 #[derive(Default)]
 struct ConversionCache {
     entries: Vec<((usize, usize), Arc<(Vec<u8>, u32, u32)>)>,
@@ -471,15 +430,12 @@ mod tests {
     }
 
     /// The default must bin nothing, whatever the sensor and whoever is connected.
-    ///
-    /// [`JpegTier::Original`] is documented as "native sensor resolution, no
-    /// downsampling", and the frame this produces is also what `set_latest_raw_frame`
-    /// stores — `ws::payload_for_new_client` encodes the first payload of every arriving
-    /// client straight out of it, and `encode_rgb8_jpeg_bounded` does not upscale.
-    ///
-    /// The predecessor chose the factor from the connected client set against a box
-    /// clamped to `JPEG_MAX_BOUNDING_BOX`, which downsampled both cases: an ASI294MM Pro
-    /// unbinned is 8288x5644, fits the 4K box at 3172x2160, and so had room for a
+    /// [`JpegTier::Original`] is "native sensor resolution, no downsampling", and this
+    /// frame is also what `set_latest_raw_frame` stores — `ws::payload_for_new_client`
+    /// encodes every arriving client's first payload straight out of it, and
+    /// `encode_rgb8_jpeg_bounded` doesn't upscale. The predecessor chose the factor
+    /// from the connected client set against `JPEG_MAX_BOUNDING_BOX`, downsampling
+    /// both cases: an unbinned ASI294MM Pro (8288x5644) fit the 4K box with room for a
     /// halving; an IMX411-class sensor lost a factor of four.
     #[test]
     fn the_default_preview_resolution_bins_nothing() {
@@ -539,17 +495,13 @@ mod tests {
     }
 
     /// How far binning moves the tone curve, as a number rather than an assumption.
-    ///
-    /// Binning is not neutral to the analysis that follows it. The stretch is solved from
-    /// the frame's median and MAD, and a 2x2 box average cuts MAD by roughly half, so the
-    /// black point and the whole curve land somewhere else. This is why
-    /// [`SessionBinFactor`] holds the factor for the session instead of tracking the
-    /// connected client set: at the measured size, a phone opening a tab would have
-    /// re-graded the picture for everyone watching.
-    ///
-    /// The bound is deliberately loose — it exists to keep the number in the repository
-    /// and to catch the shift *growing*, not to claim it is small. A change that makes
-    /// the solve less sensitive to resolution should tighten it.
+    /// Binning isn't neutral: the stretch solves from median/MAD, and a 2x2 box average
+    /// roughly halves MAD, moving the black point and curve — why [`SessionBinFactor`]
+    /// holds the factor for the session rather than tracking connected clients (a phone
+    /// opening a tab would re-grade the picture for everyone). The bound is
+    /// deliberately loose: it exists to keep the number tracked and catch the shift
+    /// *growing*, not to claim it's small — tighten it if a change makes the solve less
+    /// resolution-sensitive.
     #[test]
     fn binning_moves_the_tone_curve_by_a_bounded_amount() {
         use crate::frame::Frame;

@@ -5,17 +5,12 @@ use std::time::{Duration, Instant};
 /// How often a stream of drops may put a line in the log.
 const REPORT_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Rate limiter for a warning that would otherwise fire once per dropped frame.
-///
-/// One line per drop is proportionate at 30-second subs, where a drop is a rare event
-/// worth a log entry of its own. Raw saving in Live view makes 100 ms subs reachable,
-/// and a disk that cannot keep up there drops most of them — ten lines a second for the
-/// length of the session, which buries everything else in the log and costs the
-/// capturing thread the formatting.
-///
-/// Reports the first drop immediately (that one is news), then at most one line per
-/// interval carrying the number suppressed since. The caller writes its own message:
-/// the counts are what needs limiting, not what to say about them.
+/// Rate limiter for a warning that would otherwise fire once per dropped frame. One
+/// line per drop is proportionate at 30-second subs (a drop is rare, worth logging),
+/// but Live view's 100ms subs can drop most of them — ten lines/second burying the
+/// log and costing the capture thread the formatting. Reports the first drop
+/// immediately, then at most one line per interval carrying the suppressed count; the
+/// caller writes its own message since only the counts need limiting.
 #[derive(Debug, Default)]
 pub struct DropLog {
     dropped_since_report: u64,

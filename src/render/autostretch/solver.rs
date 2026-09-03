@@ -1,30 +1,12 @@
 use super::{AutoStretchConfig, AutoStretchResult};
 use crate::render::stretch::asinh_stretch;
 
-/// Solve for the optimal stretch factor using the asinh stretch formula
-///
-/// # The Math
-///
-/// Given the asinh stretch formula:
-/// ```text
-/// output = asinh(stretch × input) / asinh(stretch)
-/// ```
-///
-/// We want to find `stretch` such that when `input = adjusted_median`,
-/// the `output = target_background`.
-///
-/// This equation cannot be solved algebraically in closed form, so we use
-/// a hybrid approach:
-/// 1. Initial estimate using a linearization for small values
-/// 2. Bisection refinement for guaranteed convergence
-///
-/// # Arguments
-/// * `adjusted_median` - The background median after black point subtraction (0.0 to 1.0)
-/// * `target_output` - Desired output brightness for the median (0.0 to 1.0)
-/// * `config` - Solver configuration
-///
-/// # Returns
-/// The optimal stretch factor, or None if the solver fails to converge
+/// Solve for the optimal stretch factor in `output = asinh(stretch × input) /
+/// asinh(stretch)`, such that `input = adjusted_median` maps to
+/// `output = target_background`. No closed-form solution, so uses a hybrid approach:
+/// linearized initial estimate for small values, then bisection refinement for
+/// guaranteed convergence. `adjusted_median`/`target_output` are both in [0.0, 1.0];
+/// returns `None` if the solver fails to converge.
 #[tracing::instrument(skip(config))]
 pub fn solve_stretch_factor(
     adjusted_median: f32,

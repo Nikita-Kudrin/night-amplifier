@@ -1,36 +1,11 @@
-//! Star Detection Module with Sub-Pixel Centroiding
+//! Star Detection Module with Sub-Pixel Centroiding. Stages: background estimation
+//! (median, noise level) -> threshold detection -> local maxima -> hot-pixel rejection
+//! -> centroiding (Center of Mass). Hot pixels are 1-pixel defects with no surrounding
+//! gradient, unlike a star's PSF spread — rejected when the peak pixel holds >90% of
+//! the aperture's total flux.
 //!
-//! # Algorithm Overview
-//!
-//! Star detection proceeds in several stages:
-//!
-//! 1. **Background Estimation**: Calculate image statistics (median, noise level)
-//! 2. **Threshold Detection**: Find pixels significantly above background
-//! 3. **Local Maxima**: Identify brightness peaks in a neighborhood
-//! 4. **Hot Pixel Rejection**: Filter out single-pixel noise spikes
-//! 5. **Centroiding**: Calculate sub-pixel position via Center of Mass
-//!
-//! # Hot Pixel Rejection
-//!
-//! Hot pixels are defective sensor pixels that appear bright regardless of signal.
-//! They are distinguished from real stars by:
-//! - **Size**: Hot pixels affect only 1 pixel; stars spread across multiple pixels
-//! - **Shape**: Hot pixels have no surrounding brightness gradient
-//!
-//! We reject candidates where the peak pixel contains >90% of the total flux
-//! in the measurement aperture (real stars have PSF spreading).
-//!
-//! # Sub-Pixel Centroiding
-//!
-//! The Center of Mass (centroid) gives sub-pixel star positions:
-//!
-//! ```text
-//! x_centroid = Σ(x * I(x,y)) / Σ(I(x,y))
-//! y_centroid = Σ(y * I(x,y)) / Σ(I(x,y))
-//! ```
-//!
-//! Where I(x,y) is the background-subtracted intensity at each pixel.
-//! This typically achieves ~0.1 pixel accuracy for well-exposed stars.
+//! Centroid: `x = Σ(x·I(x,y)) / Σ(I(x,y))`, same for y, with I the background-
+//! subtracted intensity — typically ~0.1px accuracy for well-exposed stars.
 
 mod adaptive;
 mod background;

@@ -33,40 +33,12 @@ pub fn asinh_stretch(value: f32, stretch: f32) -> f32 {
     asinh(stretch * value) * norm
 }
 
-/// Apply color-preserving Asinh stretch to an RGB pixel
-///
-/// This function implements the core non-linear stretch for astrophotography.
-/// It boosts faint signals (shadow detail) while preventing bright stars from
-/// blowing out, and critically **preserves the RGB channel ratios** to maintain
-/// natural star colors.
-///
-/// # Formula
-///
-/// The stretch is applied to the luminance channel only:
-///
-/// ```text
-/// L_out = asinh(L_in × stretch_factor) / asinh(stretch_factor)
-/// ```
-///
-/// Then all RGB channels are scaled by the same factor to preserve color:
-///
-/// ```text
-/// scale = L_out / L_in
-/// R_out = R_in × scale
-/// G_out = G_in × scale
-/// B_out = B_in × scale
-/// ```
-///
-/// # Arguments
-///
-/// * `r` - Red channel value (0.0 to 1.0)
-/// * `g` - Green channel value (0.0 to 1.0)
-/// * `b` - Blue channel value (0.0 to 1.0)
-/// * `stretch_factor` - Stretch intensity (typical range: 0.1 to 50.0)
-///
-/// # Returns
-///
-/// Tuple of (r_out, g_out, b_out) with stretched values, clamped to [0.0, 1.0]
+/// Apply colour-preserving Asinh stretch to an RGB pixel: boosts faint signal
+/// (shadow detail) while preventing bright stars from blowing out, and critically
+/// **preserves RGB channel ratios** for natural star colours. Stretches luminance
+/// only (`L_out = asinh(L_in × stretch_factor) / asinh(stretch_factor)`), then
+/// scales all channels by `L_out / L_in`. `r`/`g`/`b` and `stretch_factor` (typical
+/// 0.1-50.0) in, `(r_out, g_out, b_out)` clamped to [0.0, 1.0] out.
 #[inline]
 pub fn asinh_stretch_color_preserving(
     r: f32,
@@ -100,28 +72,14 @@ pub fn asinh_stretch_color_preserving(
     (r_out, g_out, b_out)
 }
 
-/// Apply color-preserving Asinh stretch to an entire frame in-place
-///
-/// This is the recommended way to stretch astronomical images. It applies the
-/// Asinh non-linear stretch while preserving the RGB channel ratios for each
-/// pixel, maintaining natural star colors throughout the image.
-///
-/// # Algorithm
-///
-/// For each pixel:
-/// 1. Compute luminance: `L = 0.2126×R + 0.7152×G + 0.0722×B`
-/// 2. Stretch luminance: `L' = asinh(L × stretch) / asinh(stretch)`
-/// 3. Compute scale: `s = L' / L`
-/// 4. Apply to all channels: `R' = R×s, G' = G×s, B' = B×s`
-///
-/// # Arguments
-///
-/// * `frame` - Mutable reference to an RGB frame (will be modified in-place)
-/// * `stretch_factor` - Stretch intensity (typical range: 1.0 to 20.0)
+/// Apply colour-preserving Asinh stretch to an entire frame in-place — the
+/// recommended way to stretch astronomical images, preserving RGB ratios per pixel
+/// for natural star colours. Per pixel: `L = 0.2126R + 0.7152G + 0.0722B`, `L' =
+/// asinh(L × stretch) / asinh(stretch)`, `s = L'/L`, then `R' = R×s` etc.
+/// `stretch_factor` typical range 1.0-20.0.
 ///
 /// # Errors
-///
-/// Returns `StackError::InvalidConfiguration` if the frame is not 1 or 3 channels.
+/// `InvalidConfiguration` if the frame is not 1 or 3 channels.
 pub fn asinh_stretch_frame(
     frame: &mut Frame,
     stretch_factor: f32,

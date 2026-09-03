@@ -1,22 +1,16 @@
-//! À trous (starlet) wavelet denoising of the luminance plane.
+//! À trous (starlet) wavelet denoising of the luminance plane: repeated separable
+//! convolution with the B3 spline kernel, holes doubling each level so level `l`
+//! isolates ~`2^l`-pixel structure. Detail planes are soft-thresholded against the
+//! finest level's noise; the image rebuilds from what survives plus the coarsest
+//! residual.
 //!
-//! The transform is the standard one for astronomical images: repeated
-//! separable convolution with the B3 spline kernel, the holes doubling each
-//! level, so level `l` isolates structure around `2^l` pixels across. Detail
-//! planes are soft-thresholded against the noise level implied by the finest
-//! one and the image is rebuilt from what survives plus the coarsest residual.
-//!
-//! # Why the thresholds get *weaker* with scale
-//!
-//! The obvious tuning — denoise hardest at the coarse scales, where the eye
-//! notices mottle most — erases the target. On a 0.62"/px image the Dumbbell's
-//! outer lobes are level-3 and level-4 structure; a `k` of 3 there removes
-//! them along with the noise. Sky noise is overwhelmingly fine-scale, so the
-//! defaults run hardest just above the stars and back off as scale grows.
-//!
-//! Level 1 is left alone entirely (`k = 0`). It carries the star cores at this
-//! sampling, and a star clipped at level 1 loses its peak without losing its
-//! wings, which reads as a bloated blob rather than as a cleaner frame.
+//! Thresholds get *weaker* with scale on purpose: denoising hardest at coarse scales
+//! (where the eye notices mottle most) erases the target — on a 0.62"/px image the
+//! Dumbbell's outer lobes are level-3/4 structure, and `k=3` there removes them with
+//! the noise. Sky noise is overwhelmingly fine-scale, so defaults run hardest just
+//! above the stars. Level 1 is untouched (`k=0`): it carries star cores at this
+//! sampling, and clipping it loses a star's peak but not its wings — a bloated blob,
+//! not a cleaner frame.
 
 use rayon::prelude::*;
 
@@ -77,17 +71,13 @@ impl Default for LumaDenoiseConfig {
 /// here is full protection, i.e. level 1 untouched.
 pub const DEFAULT_K: [f32; MAX_LEVELS] = [0.0, 3.0, 2.0, 1.0];
 
-/// Level-1 threshold at zero star protection.
-///
-/// A B3 spline à trous transform puts ~94 % of a white signal's variance in
-/// level 1, so this is the only threshold that can move sky grain much. On the
-/// IMX533 fixture it takes sky sigma from 4.71 output levels to 1.47 — 4.6x
-/// against the 1.44x the rest of the tuning manages — while integrated target
-/// flux moves 0.43 % and the brightest star core does not move at all. On the
-/// IMX464 fixture, which the 1440 tier barely resamples, the gap is starker
-/// still: 1.10x against 7.43x. That is what sets the far end at 1.0 rather than
-/// higher: past it, star cores start losing their peak while keeping their
-/// wings, which reads as a bloated blob rather than a cleaner frame.
+/// Level-1 threshold at zero star protection. A B3 spline à trous transform puts
+/// ~94% of a white signal's variance in level 1, the only threshold that can move
+/// sky grain much: on IMX533 it takes sky sigma from 4.71 to 1.47 output levels
+/// (4.6x, vs 1.44x from the rest of the tuning) while integrated flux moves 0.43%
+/// and the brightest star core doesn't move at all. Caps at 1.0 because past it,
+/// star cores lose their peak while keeping their wings — a bloated blob, not a
+/// cleaner frame.
 pub const MAX_LEVEL1_K: f32 = 1.0;
 
 impl LumaDenoiseConfig {
@@ -457,22 +447,16 @@ mod tests {
         );
     }
 
-    /// The cost of the level-1 exemption, pinned so it is a decision rather
-    /// than a surprise.
+    /// The cost of the level-1 exemption, pinned so it's a decision, not a surprise. A B3
+    /// spline à trous transform puts ~94% of a *white* signal's variance in level 1
+    /// (0.8907² vs 0.2007², 0.0856², 0.0413²); leaving it alone caps what default `k` can
+    /// do to pure white noise at a few percent, which this measures.
     ///
-    /// A B3 spline à trous transform puts roughly 94 % of a *white* signal's
-    /// variance in the level-1 detail plane (0.8907² against 0.2007², 0.0856²
-    /// and 0.0413²). Leaving that plane alone to protect star cores therefore caps
-    /// what the default `k` can do to pure white noise at a few per cent, which
-    /// is what this measures.
-    ///
-    /// Real sky noise is not white by the time it reaches here: the encoder's
-    /// box downsample correlates neighbouring samples first, which moves
-    /// variance into levels 2-4 where the default thresholds do bite. On the
-    /// IMX533 fixture the same configuration takes sky sigma from 6.76 to 4.71
-    /// output levels — see `display_output_tests`. Lowering star protection to
-    /// zero takes it to 1.47, and is the lever that trades star cores for
-    /// grain.
+    /// Real sky noise isn't white here: the encoder's box downsample correlates
+    /// neighbouring samples first, moving variance into levels 2-4 where defaults bite.
+    /// On IMX533 the same config takes sky sigma from 6.76 to 4.71 output levels (see
+    /// `display_output_tests`); zero star protection takes it to 1.47 — the lever
+    /// trading star cores for grain.
     #[test]
     fn the_default_thresholds_barely_touch_white_noise() {
         let (w, h) = (128, 128);

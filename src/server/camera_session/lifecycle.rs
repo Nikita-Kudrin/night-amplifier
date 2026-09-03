@@ -337,20 +337,14 @@ pub fn camera_profile_key(provider: &str, camera_name: &str) -> String {
     format!("{}/{}", provider, camera_name)
 }
 
-/// Swap the per-camera profile for `key` into the flat fields of `settings`.
-///
-/// * If a profile exists for `key`, its seven fields overwrite the flat
-///   fields.
-/// * Otherwise, a fresh profile is seeded from the current flat fields,
-///   clamping hardware-unsupported settings to safe defaults before the
-///   seed (cooler fields when the camera has no cooler, `sensor_mode_override`
-///   when the camera advertises no sensor modes). The flat fields are
-///   clamped to match.
-///
-/// The clamp prevents stale settings from a previous camera's session from
-/// bleeding into a freshly-seeded profile that could never legitimately use
-/// them — and, crucially, keeps `CaptureConfig::validate` from rejecting the
-/// first frame on the new camera.
+/// Swap the per-camera profile for `key` into the flat fields of `settings`. If a
+/// profile exists for `key`, its seven fields overwrite the flat ones; otherwise a
+/// fresh profile is seeded from the current flat fields, clamping
+/// hardware-unsupported settings to safe defaults first (cooler fields with no
+/// cooler, `sensor_mode_override` with no sensor modes) — the flat fields are
+/// clamped to match. The clamp stops stale settings from a previous camera bleeding
+/// into a profile that could never use them, and keeps `CaptureConfig::validate`
+/// from rejecting the first frame on the new camera.
 pub fn apply_camera_profile_on_connect(
     settings: &mut CaptureSettings,
     key: String,
@@ -624,19 +618,13 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, cause
     super::reconnect::spawn(state, &camera_id, camera_name);
 }
 
-/// Push the current `cooler_enabled` / `target_temp_c` settings to the active
-/// camera handle. Called by the settings API when those fields change while
-/// the camera is connected but not capturing — otherwise the slider moves are
-/// only persisted and never reach the TEC.
-///
-/// Skips if:
-/// - no camera is connected,
-/// - the camera does not support cooling,
-/// - the handle is currently held by the capture thread (the per-frame
-///   `apply_cooler_config` inside `Camera::capture()` will pick up the new
-///   settings on the next frame),
-/// - the camera is in the `WarmingUp` phase (the monitor intentionally
-///   disabled the cooler and is waiting for the sensor to thaw).
+/// Push the current `cooler_enabled`/`target_temp_c` settings to the active camera
+/// handle. Called by the settings API when those fields change while connected but
+/// not capturing — otherwise slider moves are only persisted, never reaching the
+/// TEC. Skips if: no camera connected; camera has no cooling; the handle is held by
+/// the capture thread (its per-frame `apply_cooler_config` will pick up the change
+/// next frame); or the camera is `WarmingUp` (the monitor intentionally disabled the
+/// cooler, waiting for the sensor to thaw).
 pub async fn apply_cooler_settings(state: &Arc<AppState>) {
     let (camera_name, has_cooler) = {
         let cameras = state.cameras.read().await;

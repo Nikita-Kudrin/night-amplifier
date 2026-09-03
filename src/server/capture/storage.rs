@@ -196,25 +196,19 @@ pub fn session_type_for(settings: &CaptureSettings) -> WritingSessionType {
     }
 }
 
-/// Bring the disk writer in line with settings that just changed.
-///
-/// `POST /api/settings` can turn saving on, or change which mode is being captured,
-/// long after `initialize_capture_session` ran. The writer's enabled flag, whether a
-/// session directory is open, and whether that directory's name still matches the mode
-/// being captured are one decision, so they are made in one place.
-///
-/// Rolling the directory on a mode change is what stops a folder from lying about its
-/// contents. Focusing in Live view and then switching to Stacking without stopping is an
-/// ordinary workflow, and `ensure_session` alone would leave every stacked sub in a
-/// folder named `-live`.
+/// Bring the disk writer in line with settings that just changed. `POST
+/// /api/settings` can turn saving on or change capture mode long after
+/// `initialize_capture_session` ran — the writer's enabled flag, whether a session
+/// directory is open, and whether its name still matches the mode are one decision,
+/// made in one place. Rolling the directory on a mode change stops a folder from
+/// lying about its contents: Live view then Stacking without stopping is ordinary,
+/// and `ensure_session` alone would leave stacked subs in a folder named `-live`.
 ///
 /// # Locking
-///
-/// Both arguments are passed in rather than read here. `AppState::frame_processed` takes
-/// `session` *then* `settings`, so reading either lock from under a settings guard would
-/// invert an order the rest of the server relies on; the caller resolves both before
-/// taking that guard and calls this once it has dropped it. This call takes
-/// `session_resume_plan` itself.
+/// Both arguments are passed in, not read here: `AppState::frame_processed` takes
+/// `session` *then* `settings`, so reading either lock under a settings guard would
+/// invert that order — the caller resolves both before taking the guard and calls
+/// this after dropping it.
 pub async fn sync_disk_session(
     state: &AppState,
     settings: &CaptureSettings,
@@ -513,24 +507,16 @@ mod tests {
     }
 }
 
-/// Fully render a stacked frame for PNG export, producing the exact interleaved RGB8
-/// bytes a live viewer at the "Original" resolution tier would see: background,
-/// stretch, saturation, contrast, spatial denoise and 8-bit display quantization.
-///
-/// Routes through `process_preview_frame` and
-/// `crate::server::encoding::frame_to_rgb8_downsampled` — the same two calls the render
-/// task makes per frame for a connected client — with the bounding box left unbounded so
-/// nothing downsamples. This used to call `RenderPipeline::process` directly instead,
-/// which only knows the four *pipeline* stages (background, stretch, saturation,
-/// contrast). Spatial denoise and the display pedestal/dither live only in the streaming
-/// encoders (see AGENTS.md's *Spatial denoising* and *The f32 -> 8-bit boundary* — both
-/// are deliberately not pipeline stages), so that path silently produced a PNG missing
-/// whatever noise reduction the operator had been looking at live. Going through the
-/// encoder is what picks those up instead of reimplementing them a second time here.
-///
-/// This runs once per stacking session, not per frame, so paying for the plain
-/// (non-scratch-reusing) conversion is the right trade — see
-/// `frame_to_rgb8_downsampled`'s own doc comment.
+/// Fully render a stacked frame for PNG export: the exact interleaved RGB8 bytes a
+/// live viewer at the "Original" tier would see (background, stretch, saturation,
+/// contrast, spatial denoise, 8-bit quantization). Routes through
+/// `process_preview_frame` and `frame_to_rgb8_downsampled` — the render task's own
+/// per-frame calls, bounding box left unbounded — rather than calling
+/// `RenderPipeline::process` directly, which only knows the four *pipeline* stages;
+/// denoise and pedestal/dither live only in the streaming encoders (see AGENTS.md's
+/// *Spatial denoising*), so the direct path silently produced a PNG missing whatever
+/// noise reduction was visible live. Runs once per session, not per frame, so the
+/// plain (non-scratch-reusing) conversion is the right trade.
 fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,

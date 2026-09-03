@@ -1,20 +1,10 @@
-//! Decoupled asynchronous capture pipeline
-//!
-//! The capture loop is decomposed into four independent tasks connected by
-//! bounded MPSC channels:
-//!
-//! - **CaptureTask** (dedicated thread) — acquires frames from the camera
-//! - **StorageTask** (dedicated thread) — saves raw frames to disk
-//! - **StackingTask** (dedicated thread) — registration + accumulation
-//! - **RenderTask** (dedicated thread) — preview rendering + encoding
-//!
-//! `Arc<Frame>` provides zero-copy frame sharing between channels.
-//! Channel capacities are calculated from a 2 GB memory budget divided by
-//! the actual frame size.
-//!
-//! Each spawned OS thread receives a `tokio::runtime::Handle` captured from
-//! the async orchestrator, so it can call `handle.block_on()` for async
-//! state access and `handle.spawn()` for fire-and-forget async work.
+//! Decoupled asynchronous capture pipeline: four independent dedicated-thread tasks
+//! connected by bounded MPSC channels — **CaptureTask** (acquires frames),
+//! **StorageTask** (saves raw to disk), **StackingTask** (registration +
+//! accumulation), **RenderTask** (preview render + encode). `Arc<Frame>` gives
+//! zero-copy sharing between channels; capacities derive from a memory budget over
+//! actual frame size. Each thread carries a `tokio::runtime::Handle` from the async
+//! orchestrator, for `handle.block_on()`/`handle.spawn()`.
 
 pub mod analysis;
 pub mod channel;

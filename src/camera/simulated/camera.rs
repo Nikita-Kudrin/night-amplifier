@@ -241,18 +241,14 @@ impl SimulatedCamera {
         Ok(())
     }
 
-    /// Hand out the current frame and advance to the next.
-    ///
-    /// `fill_cache` leaves the window starting at `current_index`, so the frame
-    /// we want is always at the front. It is moved out rather than cloned: the
-    /// sliding window would evict this entry on the next call anyway, and a
-    /// full-resolution frame is tens of megabytes — enough that cloning it once
-    /// per capture measurably cuts into live-view throughput.
-    ///
-    /// The single-file directory is the one exception. There the window can only
-    /// ever hold that one image, so moving it out empties the cache and forces a
-    /// decode (file read + debayer) on the next capture — strictly worse than the
-    /// copy it saves. Clone the cached entry instead and leave the window intact.
+    /// Hand out the current frame and advance to the next. `fill_cache` leaves the
+    /// window starting at `current_index`, so the wanted frame is always at the front
+    /// — moved out, not cloned, since the sliding window would evict it next call
+    /// anyway and a full-res frame is tens of MB (cloning measurably cuts live-view
+    /// throughput). Exception: a single-file directory's window can only ever hold
+    /// that one image, so moving it out would force a decode (file read + debayer)
+    /// next capture — worse than the copy it saves. Clone instead there, leaving the
+    /// window intact.
     fn load_current_frame(&mut self, lookahead: usize) -> CameraResult<Frame> {
         if self.files.is_empty() {
             return Err(CameraError::ImageReadFailed(

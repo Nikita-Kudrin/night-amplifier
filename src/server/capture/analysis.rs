@@ -1,48 +1,20 @@
-//! Cross-frame reuse of the preview pipeline's estimates.
+//! Cross-frame reuse of the preview pipeline's estimates. `process_preview_frame`
+//! computes three *statistical descriptions of the stack*, not the frame itself:
+//! white-balance multipliers, the background model, and the per-channel median/MAD
+//! the stretch solves against. The frame they describe moves by only 1/N between
+//! renders (a running mean over N subs), so recomputing all three every frame is
+//! most of the render thread's linear cost — 6.4ms of `process_preview_frame`'s
+//! 11.2ms on an IMX464-shaped frame with Community's bilinear background (Pro's RBF
+//! costs several times more). Everything touching pixels stays uncached —
+//! neutralisation, model subtraction, black point all still run every frame.
 //!
-//! # What this is for
-//!
-//! `process_preview_frame` computes three things that are *statistical descriptions of
-//! the stack* rather than properties of the frame in front of it:
-//!
-//! - the white-balance multipliers — three numbers, clamped to `[0.5, 2.0]`;
-//! - the background model — a 12x12 or 16x16 node grid and its interpolant;
-//! - the per-channel median and MAD that the stretch is solved against.
-//!
-//! The frame they describe is a running mean over N subs, so between two consecutive
-//! renders it moves by 1/N. Recomputing all three every frame is most of what the linear
-//! half of the render thread costs: `preview_pipeline_benchmark` puts the whole of
-//! `process_preview_frame` at 11.2 ms on an IMX464-shaped frame and these three at
-//! **6.4 ms of it**, and that is with Community's bilinear background — Pro's RBF
-//! estimate is several times more expensive again.
-//!
-//! What is *not* cached is everything that touches pixels: neutralisation still
-//! multiplies, the model is still subtracted, the black point is still removed. Only the
-//! estimates are reused, so every frame is still fully corrected.
-//!
-//! # When a cached analysis is wrong
-//!
-//! Four conditions, and the depth rule is the one that is easy to get wrong.
-//!
-//! - **Live view.** With `showing_stack` false every frame is a different image, not a
-//!   refinement of the same one, and there is nothing to reuse.
-//! - **A settings change.** [`AnalysisKey`] fingerprints every setting the three
-//!   estimates read. Floats go in as bit patterns rather than through `PartialEq`, so a
-//!   NaN that arrived over JSON compares equal to itself and cannot pin the cache open.
-//! - **A shape change.** Binning, an ROI change or a superpixel toggle all land here.
-//!   `BackgroundModel::subtract_from` would refuse a mismatched frame anyway, but
-//!   failing at the key is a decision rather than an error path.
-//! - **Stack growth.** This is the subtle one. MAD falls as `1/sqrt(N)`, so what moves
-//!   the statistics is not how many frames have passed but the *relative* change in N.
-//!   Going from 1 sub to 2 halves the noise; going from 140 to 141 does not move it at
-//!   all. A fixed frame-count TTL would therefore be far too slow exactly where the
-//!   stretch is changing fastest — the first few seconds of a stack, which is also when
-//!   the user is watching it most closely. [`DEPTH_GROWTH`] refreshes on proportional
-//!   growth instead, which recomputes every frame at the start and settles to roughly
-//!   every N/4 once the stack is deep.
-//!
-//! [`MAX_AGE_FRAMES`] caps the reuse regardless, so a stack that stops growing — every
-//! frame rejected by the gate, say — still refreshes against a sky that is still moving.
+//! Invalidated by: **live view** (`showing_stack` false, nothing to reuse), **a
+//! settings change** ([`AnalysisKey`] fingerprints every setting read, as bit
+//! patterns so NaN can't pin the cache open), **a shape change** (binning/ROI/
+//! superpixel), and **stack growth** — MAD falls as `1/sqrt(N)`, so what matters is
+//! *relative* change in N (1->2 subs halves noise, 140->141 moves nothing).
+//! [`DEPTH_GROWTH`] refreshes on proportional growth; [`MAX_AGE_FRAMES`] caps reuse
+//! regardless, so a stalled stack still refreshes against a moving sky.
 
 use crate::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel};
 use crate::error::Result;

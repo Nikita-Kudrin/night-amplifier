@@ -1,25 +1,14 @@
-//! Web server module for remote camera control and image streaming
-//!
-//! This module provides a REST API and WebSocket server for controlling
-//! camera capture sessions and streaming live stacked images.
-//!
-//! # Capabilities
-//!
-//! - REST API for camera control (start/stop capture, settings)
-//! - WebSocket streaming for live image preview
-//! - WebSocket events for status updates
-//!
-//! # Example
+//! Web server module for remote camera control and image streaming: REST API
+//! (start/stop capture, settings), WebSocket streaming for live preview, WebSocket
+//! events for status updates.
 //!
 //! ```no_run
 //! use night_amplifier::server::{Server, ServerConfig};
 //!
-//! #[tokio::main]
-//! async fn main() {
-//!     let config = ServerConfig::default();
-//!     let server = Server::new(config);
-//!     server.run().await.unwrap();
-//! }
+//! # async fn example() {
+//! let server = Server::new(ServerConfig::default());
+//! server.run().await.unwrap();
+//! # }
 //! ```
 
 mod api;

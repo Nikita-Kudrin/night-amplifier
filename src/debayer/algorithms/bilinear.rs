@@ -406,17 +406,12 @@ mod tests {
         output
     }
 
-    /// The correctness test: interpolating a frame of three constant colour planes must give those
-    /// constants back, exactly, at every interior pixel.
-    ///
-    /// At a red or blue site the cardinal-4 and diagonal-4 averages each sample a single colour
-    /// class, so both are exact. At a green site the two-tap averages sample a single class **only
-    /// if the red/blue orientation is right** — reading the wrong axis returns the other class and
-    /// misses by 0.5. Every level here is a dyadic rational, so the averages are exact in f32 and
-    /// the assertion needs no tolerance.
-    ///
-    /// This is what catches an orientation bug. It answers "is the image right?", not "does it
-    /// match what the code used to do", so it cannot be satisfied by preserving an old mistake.
+    /// The correctness test: interpolating three constant colour planes must give those constants
+    /// back exactly at every interior pixel. At red/blue sites the cardinal-4 and diagonal-4
+    /// averages each sample one colour class, so both are exact; at a green site the two-tap
+    /// average samples one class **only if red/blue orientation is right** — the wrong axis misses
+    /// by 0.5. Every level is a dyadic rational, so f32 needs no tolerance. Catches orientation
+    /// bugs specifically: it asks "is the image right?", not "does it match the old code?".
     #[test]
     fn test_debayer_reproduces_constant_colour_planes() {
         for pattern in CfaPattern::all() {

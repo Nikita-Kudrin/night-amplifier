@@ -273,29 +273,20 @@ impl Default for SensorCorrectionSettings {
     }
 }
 
-/// How much sensor resolution the preview pipeline is allowed to bin away.
-///
-/// The preview stages — background neutralisation, background subtraction, SCNR, the
-/// black-point pass — all walk every sample of the frame, and the encoder then throws
-/// away whatever the client's tier does not need. Binning first makes the whole pipeline
-/// run on a quarter of the samples, and `Frame::downsample`'s box average is an exact
-/// integer bin, so the pixels that survive are the ones the encoder would have produced
+/// How much sensor resolution the preview pipeline is allowed to bin away. Preview
+/// stages (neutralisation, background subtraction, SCNR, black-point) walk every
+/// sample before the encoder throws away what the tier doesn't need; binning first
+/// runs the whole pipeline on a quarter of the samples, and `Frame::downsample`'s
+/// exact integer box average produces the same surviving pixels the encoder would
 /// anyway.
 ///
-/// # Why this is a setting and not the connected client set
-///
-/// It was the client set. `preview_bin_factor` was resolved fresh every iteration
-/// against the largest bounding box any connected client had asked for, so a phone
-/// joining or leaving flipped the factor between 1 and 2 mid-session — and the tone
-/// curve is solved from the frame's median and MAD, which 2x2 binning moves. Measured on
-/// a 1200x1200 sky with 400 stars, the solved `scale_lut` gained **25.7 % at the 1 %
-/// input point and 16.1 % at 10 %**: a visible shadow lift, applied to *every* connected
-/// viewer, triggered by somebody else's browser tab.
-///
-/// The resolution the preview is analysed at is a property of the session, so it is
-/// chosen once and held. It also makes the guarantee `JpegTier::Original` documents —
-/// native sensor resolution, no downsampling — structurally true at the default rather
-/// than something the client-set arithmetic has to be careful about.
+/// A setting, not the connected client set — it used to be: `preview_bin_factor`
+/// resolved fresh each iteration against the largest client's box, so a phone
+/// joining/leaving flipped the factor mid-session, moving the tone curve (solved
+/// from median/MAD, which 2x2 binning shifts): measured **25.7% shadow lift at the
+/// 1% input point**, applied to every viewer, triggered by someone else's tab. So
+/// the resolution is a session property, chosen once and held — which also makes
+/// `JpegTier::Original`'s "no downsampling" guarantee structurally true by default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewResolution {
@@ -429,20 +420,14 @@ pub struct EyepieceSettings {
     #[serde(default = "default_intensity")]
     pub intensity: f32,
     /// Where black sits, as a signed fraction of full scale, in `[-0.09, 0.5]`.
-    ///
-    /// **Positive** lifts the output floor by this fraction of full scale. An
-    /// OLED switches a zero pixel fully off, and the autostretch black point
-    /// clamps a few per cent of sky pixels to zero, which at eyepiece
-    /// magnification reads as black speckle rather than as sky.
-    ///
-    /// **Negative** pushes the sky toward black instead. The number still reads
-    /// as a fraction of full scale, but what it *does* is anchored to the sky:
-    /// `-0.052` puts the floor at the sky level under a nominal sky and still
-    /// puts it at the sky level under a brighter one, so one setting behaves the
-    /// same on every target. The sky otherwise lands at 14-17 output levels,
-    /// which is a clearly visible grey at the eyepiece, and lowering it through
-    /// the stretch instead dims the target along with it — see
-    /// [`intensity`](Self::intensity).
+    /// **Positive** lifts the output floor by this fraction — an OLED shows a zero
+    /// pixel fully off, and the autostretch black point clamps a few percent of sky
+    /// pixels to zero, reading as black speckle at the eyepiece. **Negative** pushes
+    /// the sky toward black instead, anchored to the sky rather than full scale:
+    /// `-0.052` puts the floor at sky level whether the sky is nominal or bright, so
+    /// one setting behaves the same on every target (the sky otherwise sits at
+    /// 14-17 output levels, a visible grey — dimming it via the stretch would dim
+    /// the target too, see [`intensity`](Self::intensity)).
     #[serde(default = "default_black_floor")]
     pub black_floor: f32,
 

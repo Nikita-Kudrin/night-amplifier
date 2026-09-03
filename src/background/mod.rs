@@ -501,17 +501,13 @@ mod tests {
         }
     }
 
-    /// The delta-stepping path interpolates between *node coordinates*, and nothing
-    /// pinned that geometry.
-    ///
-    /// `get_background` cannot serve as the reference the way it does for
-    /// `subtract_weight_based`: it maps pixels to grid *cell centres*, while
-    /// delta-stepping interpolates between boundary-hugging nodes, so the two disagree
-    /// by construction. The pin has to be analytic — at a node the background is that
-    /// node's value exactly, and halfway between two nodes it is their mean.
-    ///
-    /// This is what the band-parallel version's correctness rested on by inspection,
-    /// including its `*mut`-derived-from-`&` write.
+    /// The delta-stepping path interpolates between *node coordinates*; nothing pinned
+    /// that geometry. `get_background` can't serve as reference here the way it does for
+    /// `subtract_weight_based` — it maps pixels to grid *cell centres*, which disagrees
+    /// with node interpolation by construction. So the pin is analytic: at a node the
+    /// background is that node's value exactly, halfway between two it's their mean.
+    /// This is what the band-parallel version's correctness rested on by inspection
+    /// alone, including its `*mut`-derived-from-`&` write.
     #[test]
     fn delta_stepping_reproduces_the_node_grid() {
         let (w, h) = (65usize, 33usize);

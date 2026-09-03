@@ -43,27 +43,12 @@ impl BlackPointConfig {
     }
 }
 
-/// Calculate the black point for a single channel using robust statistics
-///
-/// The black point establishes a safe lower limit for the image data, creating
-/// a dark sky background without clipping into the noise floor.
-///
-/// # Formula
-/// `BlackPoint = Mode - (c × Sigma)`
-///
-/// Where:
-/// - `Mode` is the robust peak estimate of the sky background
-/// - `Sigma` is the MAD-derived noise estimate (σ = 1.4826 × MAD)
-/// - `c` is an adjustable constant (typically 1.5 to 2.5)
-///
-/// # Arguments
-/// * `frame` - The image frame to analyze
-/// * `channel_index` - The channel to compute the mode for
-/// * `stats` - Channel statistics containing sigma
-/// * `sigma_factor` - The constant c (1.5 = conservative, 2.5 = aggressive)
-///
-/// # Returns
-/// The calculated black point, clamped to be non-negative
+/// Calculate the black point for a single channel using robust statistics: a safe
+/// lower limit for the image data, giving a dark sky background without clipping
+/// into the noise floor. `BlackPoint = Mode - (c × Sigma)`, where `Mode` is the
+/// robust sky-background peak estimate, `Sigma = 1.4826 × MAD`, and `c` is
+/// `sigma_factor` (1.5 conservative .. 2.5 aggressive). Result is clamped to
+/// non-negative.
 #[inline]
 pub fn calculate_black_point(
     frame: &Frame,
@@ -212,18 +197,8 @@ pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
     }
 }
 
-/// Calculate per-channel black points from image statistics
-///
-/// Returns an array of [R, G, B] black points calculated using the formula:
-/// `BP[c] = Mode[c] - (sigma_factor × Sigma[c])`
-///
-/// # Arguments
-/// * `frame` - The image frame to analyze
-/// * `stats` - Pre-computed image statistics
-/// * `config` - Black point configuration with sigma factor
-///
-/// # Returns
-/// Array of per-channel black points
+/// Calculate per-channel black points from image statistics: returns [R, G, B],
+/// each `BP[c] = Mode[c] - (sigma_factor × Sigma[c])`.
 pub fn calculate_black_points(
     frame: &Frame,
     stats: &ImageStats,
@@ -244,19 +219,9 @@ pub fn calculate_black_points(
     Ok(bps)
 }
 
-/// Calculate a single (luminance-based) black point for all channels
-///
-/// Uses the average statistics across channels to compute a single black point.
-/// This is useful when you want consistent black level across all channels
-/// to avoid color shifts in the shadows.
-///
-/// # Arguments
-/// * `frame` - The image frame to analyze
-/// * `stats` - Pre-computed image statistics
-/// * `config` - Black point configuration with sigma factor
-///
-/// # Returns
-/// A single black point value to apply to all channels
+/// Calculate a single (luminance-based) black point for all channels, from the
+/// average statistics across channels — gives a consistent black level and avoids
+/// colour shifts in the shadows.
 pub fn calculate_luminance_black_point(
     frame: &Frame,
     stats: &ImageStats,
@@ -267,20 +232,10 @@ pub fn calculate_luminance_black_point(
     (mode - config.sigma_factor * mean_sigma).max(0.0)
 }
 
-/// Subtract black point from the entire image buffer in-place
-///
-/// This function subtracts the per-channel black points from every pixel,
-/// clamping any negative values to 0.0. After this operation:
-/// - Sky background will be near zero (dark)
-/// - All pixel values remain in the valid [0.0, 1.0] range
-/// - Signal above the black point is preserved
-///
-/// **Important**: Apply this BEFORE stretching. The stretch function expects
-/// data where 0.0 represents the intended black level.
-///
-/// # Arguments
-/// * `frame` - Mutable reference to an RGB frame (will be modified in-place)
-/// * `black_points` - Per-channel black points from `calculate_black_points`
+/// Subtract black point from the entire image buffer in-place: per-channel black
+/// points subtracted from every pixel, clamped to [0.0, 1.0] — sky background goes
+/// near zero, signal above it is preserved. **Apply BEFORE stretching**: the stretch
+/// function expects data where 0.0 is the intended black level.
 pub fn subtract_black_point(frame: &mut Frame, black_points: &[f32; 3]) -> Result<()> {
     if frame.channels() != 3 {
         return Err(StackError::ChannelMismatch {
@@ -338,17 +293,9 @@ pub fn subtract_black_point_uniform(frame: &mut Frame, black_point: f32) -> Resu
     Ok(())
 }
 
-/// Convenience function: calculate and subtract black point automatically
-///
-/// This is a one-shot function that computes statistics, calculates the black
-/// point, and applies it in a single call.
-///
-/// # Arguments
-/// * `frame` - Mutable reference to an RGB frame (will be modified in-place)
-/// * `config` - Black point configuration (use `BlackPointConfig::default()` for typical use)
-///
-/// # Returns
-/// The calculated per-channel black points (useful for logging/debugging)
+/// Convenience one-shot: computes statistics, calculates the black point, and
+/// applies it in a single call. Returns the per-channel black points (for
+/// logging/debugging).
 pub fn subtract_black_point_auto(frame: &mut Frame, config: BlackPointConfig) -> Result<[f32; 3]> {
     let stats = compute_image_stats(frame)?;
     let black_points = calculate_black_points(frame, &stats, config)?;

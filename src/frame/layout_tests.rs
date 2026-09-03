@@ -1,19 +1,14 @@
-//! Cross-encoder colour-identity tests for the planar [`Frame`] layout.
+//! Cross-encoder colour-identity tests for the planar [`Frame`] layout. `Frame` is
+//! planar; every 8-bit output format is interleaved. Each test pushes a frame with
+//! three constant, *distinct* channels through one output path and asserts the order
+//! — a path reading planar as interleaved produces three adjacent samples of one
+//! channel per output pixel, which every assertion here rejects.
 //!
-//! `Frame` is planar (`channel * width * height + y * width + x`); every 8-bit
-//! output format is interleaved. Each test below pushes a frame whose three
-//! channels are constant and *distinct* through one output path and asserts the
-//! channels come out in the right order. A path that reads the planar buffer as
-//! interleaved produces three adjacent samples of one channel per output pixel,
-//! which every assertion here rejects.
-//!
-//! Kept as one table of paths on purpose: the failure these catch is systemic, so
-//! adding a new output format should mean adding a row here. Rows currently cover
-//! `to_rgb8`/`to_rgb8_fast`/`write_rgb8_into`, `render::frame_to_rgb8`,
-//! `render_to_rgb8`, the fused encoder expansion *and* its downsampling sibling,
-//! JPEG (SA10), chunked LZ4 (SA09), PNG, SER `Rgb`/`Bgr`/`Mono`, FITS f32/u16 (both
-//! directions), `Frame::downsample`, `warp_frame_into` and both debayer traversals
-//! (bilinear-to-RGB8 and the superpixel quad walk).
+//! Kept as one table of paths on purpose: the failure is systemic, so a new output
+//! format means a new row here. Covers `to_rgb8`/`to_rgb8_fast`/`write_rgb8_into`,
+//! `render::frame_to_rgb8`, `render_to_rgb8`, the fused encoder (and its downsampling
+//! sibling), JPEG/LZ4/PNG, SER `Rgb`/`Bgr`/`Mono`, FITS (both directions),
+//! `Frame::downsample`, `warp_frame_into`, and both debayer traversals.
 
 use super::Frame;
 use crate::frame::PixelFormat;
@@ -322,18 +317,14 @@ fn png_preview_is_interleaved() {
 /// SER frame data starts after a fixed 178-byte header.
 const SER_HEADER_SIZE: usize = 178;
 
-/// Writes one tricolour frame at `bit_depth` and returns the frame payload's samples,
-/// widened to `u32` so the 8-bit and 16-bit cases share one set of assertions.
-///
-/// Asserting on the bytes rather than on a read-back round trip is deliberate: the
-/// writer and reader can be wrong in mutually inverse ways, which a round trip
-/// cannot see. SER is consumed by third-party tools (AutoStakkert, PIPP, Registax),
-/// so the on-disk layout *is* the contract.
-///
-/// Parameterised over bit depth because `encode_8bit` and `encode_16bit` are two
-/// separate traversals, each with its own `Rgb`/`Bgr`/`Mono` plane gather. Only the
-/// 16-bit one used to be covered here, and 8-bit is reachable: `disk_writer::worker`
-/// picks it when a session's first frame is `Raw8`/`Rgb24`.
+/// Writes one tricolour frame at `bit_depth` and returns the payload's samples,
+/// widened to `u32` so 8-bit and 16-bit share one set of assertions. Asserts on bytes,
+/// not a read-back round trip — writer and reader can be wrong in mutually inverse
+/// ways a round trip can't see, and SER's on-disk layout *is* the contract (consumed
+/// by AutoStakkert, PIPP, Registax). Parameterised over bit depth because
+/// `encode_8bit`/`encode_16bit` are separate traversals with their own plane gathers;
+/// only 16-bit used to be covered, though 8-bit is reachable (`disk_writer::worker`
+/// picks it for a session's first `Raw8`/`Rgb24` frame).
 fn write_ser_and_read_samples(
     color_id: crate::ser::SerColorId,
     bit_depth: u32,
@@ -797,18 +788,14 @@ fn display_transform_preserves_channel_order_in_both_fused_kernels() {
     );
 }
 
-/// The staged traversal that Tier 2's denoisers introduced.
-///
-/// With denoising on, both kernels stop transforming a thread-local scratch row
-/// and instead resample the whole frame into one interleaved f32 buffer, filter
-/// it, and only then run the tone curve and the 8-bit write. That is a third
-/// path across the planar/interleaved boundary — the gather is shared with the
-/// fused drivers, but the row the tail and the writer see is a different buffer
-/// reached a different way, and the denoisers themselves split it into YCbCr and
-/// back. A channel swap anywhere in there is invisible to the filters' own unit
-/// tests, which use grey inputs.
-///
-/// Both sources get a row, per the rule at the top of this file.
+/// The staged traversal Tier 2's denoisers introduced: with denoising on, both
+/// kernels stop transforming a thread-local scratch row and instead resample the
+/// whole frame into one interleaved f32 buffer, filter it, then run the tone curve
+/// and 8-bit write. A third path across the planar/interleaved boundary — the gather
+/// is shared with the fused drivers, but the row the tail/writer see is reached
+/// differently, and the denoisers split it into YCbCr and back. A channel swap there
+/// is invisible to the filters' own unit tests, which use grey inputs. Both sources
+/// get a row, per the rule at the top of this file.
 #[test]
 fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
     let denoise = crate::render::DenoiseConfig {

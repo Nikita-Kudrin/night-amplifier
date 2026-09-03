@@ -40,17 +40,12 @@ pub struct RenderPipelineConfig {
     /// dither needs actually exists.
     pub display: DisplayOutput,
 
-    /// How far below the sky black sits, as the observer asked for it.
-    ///
-    /// Not a pipeline stage either, and unlike the others it is not yet a
-    /// transform: it only becomes one once the solver reports where the sky
-    /// landed, which happens after this config is built. The resolved curve
-    /// travels on `StretchResult`.
-    ///
-    /// It is applied immediately after contrast, in whichever of the two places
-    /// contrast runs: fused into the scale LUT when the LUT carries the S-curve,
-    /// and in the encoder's row tail when saturation boost has pushed contrast
-    /// out of it.
+    /// How far below the sky black sits, as the observer asked for it. Not yet a
+    /// transform — it becomes one once the solver reports where the sky landed
+    /// (after this config is built); the resolved curve travels on `StretchResult`.
+    /// Applied immediately after contrast, wherever that runs: fused into the scale
+    /// LUT when it carries the S-curve, or the encoder's row tail when saturation
+    /// boost pushed contrast out of it.
     pub shadow_floor: ShadowFloorRequest,
 
     /// Spatial denoising, applied at **stream** resolution.

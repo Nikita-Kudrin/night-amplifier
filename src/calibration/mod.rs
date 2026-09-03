@@ -1,47 +1,12 @@
-//! Image Calibration Module for Dark and Flat Field Correction
+//! Image Calibration Module: dark and flat field correction removes sensor thermal
+//! noise and uneven illumination before the rest of the pipeline sees a frame.
 //!
-//! # Calibration Theory
+//! **Dark**: `calibrated = max(0, raw - dark)`, clamped to avoid negatives. **Flat**:
+//! `calibrated = raw / normalized_flat`, pre-normalized by its own mean (average areas
+//! ≈1.0, vignetted corners <1.0 brightened, bright centre >1.0 dimmed). Combined:
+//! `(raw - dark) / normalized_flat`; SIMD-friendly and Rayon-parallel.
 //!
-//! Raw astronomical images contain systematic errors that must be removed:
-//!
-//! ## Dark Frame Subtraction
-//! Camera sensors produce thermal noise ("dark current") even with no light.
-//! A **Master Dark** is created by averaging many dark frames taken at the
-//! same temperature and exposure time as the light frames.
-//!
-//! **Math**: `calibrated = raw - dark`
-//!
-//! To prevent negative values (which would be invalid), we use:
-//! `calibrated = max(0, raw - dark)`
-//!
-//! ## Flat Field Division
-//! Optical systems have uneven illumination (vignetting) and dust spots.
-//! A **Master Flat** captures this by imaging a uniformly lit surface.
-//!
-//! **Math**: `calibrated = raw / normalized_flat`
-//!
-//! The flat is normalized by dividing by its mean value, so:
-//! - Areas with average illumination have flat ≈ 1.0 (no change)
-//! - Dark corners have flat < 1.0 (brightened after division)
-//! - Bright center has flat > 1.0 (dimmed after division)
-//!
-//! ## Combined Calibration
-//! The full calibration sequence is:
-//! `calibrated = (raw - dark) / normalized_flat`
-//!
-//! # Implementation Notes
-//!
-//! - All operations use SIMD-friendly loops for performance
-//! - Rayon is used for parallel processing on multi-core systems
-//! - A minimum flat threshold prevents division by near-zero values
-//!
-//! # Module Organization
-//!
-//! - `dark` - Master dark frame type
-//! - `flat` - Master flat frame type with normalization
-//! - `pipeline` - Calibration pipeline combining dark and flat
-//! - `builders` - Functions to create master frames from multiple inputs
-//! - `simd` - SIMD-optimized helper functions
+//! Submodules: `dark`, `flat`, `pipeline`, `builders` (construct masters), `simd`.
 
 mod builders;
 mod dark;

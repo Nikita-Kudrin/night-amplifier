@@ -74,39 +74,24 @@ pub(crate) enum StatusPollOutcome {
 }
 
 /// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated`
-/// event — bounded by `STATUS_POLL_TIMEOUT`.
-///
-/// The camera handle is owned by exactly one thread at a time — never touched
-/// concurrently, which is what avoids contention with vendor SDKs that require
-/// a single handle per device. Historically that one thread was always the
-/// capture thread itself; now it's temporarily a detached watchdog thread
-/// instead, for exactly the duration of this one call, so a stuck read can't
-/// block frame delivery. No vendor SDK call other than the image-data read
-/// exposes a timeout of its own, so without this bound a USB-level hiccup
-/// inside `camera.status()` could block the entire live view silently, for as
-/// long as the underlying call took to return (observed: several seconds to
+/// event — bounded by `STATUS_POLL_TIMEOUT`. The camera handle is owned by exactly
+/// one thread at a time (avoiding contention with vendor SDKs that require a single
+/// handle per device); that thread is temporarily a detached watchdog thread for the
+/// duration of this call, so a stuck read can't block frame delivery — no vendor SDK
+/// call but the image-data read has its own timeout, so an unbounded USB hiccup in
+/// `camera.status()` could otherwise block live view silently (observed: seconds to
 /// indefinitely).
 ///
-/// The call runs on that detached helper thread while this function waits up
-/// to `STATUS_POLL_TIMEOUT` on a channel. If it returns in time, the handle
-/// comes back and capture continues normally. If not, the handle is abandoned
-/// for good — there is no way to forcibly cancel a stuck synchronous FFI call
-/// in Rust, so "abandon and disconnect" is the safe alternative to "wait
-/// forever." The caller must treat `TimedOut` the same as a real disconnect.
+/// Waits up to `STATUS_POLL_TIMEOUT` on a channel; if it returns in time the handle
+/// comes back normally, otherwise it's abandoned for good — no way to forcibly
+/// cancel a stuck synchronous FFI call in Rust, so callers must treat `TimedOut` as
+/// a real disconnect. Abandoning is only safe because of `camera::DeviceLease`: SDKs
+/// close by device *index*, so a `Drop` running minutes later closes whichever
+/// handle owns that index by then (killed a camera 80s after a successful reconnect
+/// on 2026-08-22) — the lease makes a superseded handle's close a no-op.
 ///
-/// Abandoning is only safe because of `camera::DeviceLease`. This comment used
-/// to argue the opposite — that it was safe *because* every backend implements
-/// `Drop`, so the SDK resource is released whenever the stuck thread unwinds.
-/// That has it backwards. Vendor SDKs close by device *index*, so a `Drop` that
-/// runs minutes later closes whichever handle owns that index by then. On
-/// 2026-08-22 that killed a camera 80 s after a successful reconnect and cost
-/// the rest of the session. The lease makes a superseded handle's close a
-/// no-op; without it, this function is a liability.
-///
-/// Also tracks consecutive timeouts per camera (`AppState.consecutive_watchdog_timeouts`)
-/// to distinguish an isolated USB hiccup from a persistent hardware fault — see
-/// `camera_health::PERSISTENT_FAULT_THRESHOLD` and
-/// `ServerEvent::CameraPersistentlyUnresponsive`.
+/// Also tracks consecutive timeouts per camera to distinguish a USB hiccup from a
+/// persistent fault — see `camera_health::PERSISTENT_FAULT_THRESHOLD`.
 pub(crate) fn poll_camera_status_bounded(
     camera: Box<dyn crate::camera::Camera>,
     state: &Arc<AppState>,
@@ -194,31 +179,21 @@ pub(crate) enum CaptureOutcome {
 }
 
 /// Run `camera.capture(&config)` bounded by `watchdog_timeout`, the same way
-/// `poll_camera_status_bounded` bounds `camera.status()`.
+/// `poll_camera_status_bounded` bounds `camera.status()`. Every backend's internal
+/// capture loop already self-enforces a "total budget"
+/// (`config.timeout + exposure duration`) *between* its blocking SDK calls
+/// (confirmed identical across all five vendors), but can't fire if one of those
+/// calls itself hangs — observed: a ~3-minute freeze inside PlayerOne's
+/// `is_image_ready()` poll, unresponsive to Stop, before the SDK finally errored.
+/// `watchdog_timeout` is set slightly above that internal budget for long exposures
+/// (so the backend's own cleanup runs first, this is the last resort), and scaled
+/// down via `capture_watchdog_margin` for short ones (live view, planetary), where
+/// the full budget would be far too tolerant.
 ///
-/// Every backend's own internal capture loop already computes a "total
-/// budget" of `config.timeout + exposure duration` and self-enforces it
-/// *between* the individual blocking SDK calls that make up one capture
-/// attempt (confirmed identical across PlayerOne/ZWO/SVBony/QHY/ToupTek). That
-/// self-check cannot fire if one of those individual calls itself hangs — a
-/// USB-level stall inside, say, PlayerOne's `is_image_ready()` poll blocks the
-/// whole loop indefinitely, exactly as observed in the field: a ~3 minute
-/// freeze, unresponsive to a Stop click partway through, before the SDK
-/// finally reported `POA_ERROR_INVALID_ID`. For a long exposure,
-/// `watchdog_timeout` is set to slightly more than that same internal budget,
-/// so the backend's own graceful timeout-and-cleanup gets the first chance to
-/// run and this watchdog only acts as the last resort when even that gets
-/// bypassed. For a short exposure (live view, planetary) that full budget is
-/// far too tolerant — a multi-second stall is already abnormal long before
-/// ~130s — so the caller scales `watchdog_timeout` down via
-/// `capture_watchdog_margin` instead of always using the full budget.
-///
-/// Caveat: if cancellation is requested while `capture()` is already stuck,
-/// and this watchdog fires before the backend's own cancel-flag check would
-/// have noticed, the session ends as a disconnect rather than a clean stop.
-/// There is no way to do better without the vendor SDK supporting real
-/// cancellation of an in-flight call — still strictly better than hanging
-/// indefinitely.
+/// Caveat: if cancellation lands while `capture()` is already stuck and this
+/// watchdog fires first, the session ends as a disconnect, not a clean stop — no way
+/// to do better without real vendor-SDK cancellation, but still strictly better than
+/// hanging indefinitely.
 pub(crate) fn capture_frame_bounded(
     camera: Box<dyn crate::camera::Camera>,
     config: crate::camera::CaptureConfig,
@@ -249,31 +224,23 @@ pub(crate) fn capture_frame_bounded(
             let started = std::time::Instant::now();
             let result = camera.capture(&config);
 
-            // How long the vendor call actually blocked, and how that compares to the
-            // exposure it was asked for.
+            // How long the vendor call blocked, vs. the exposure it was asked for.
+            // Fields, not a child span: `Camera::capture` is one blocking vendor call
+            // (on the continuous path, `get_video_data` handing back an
+            // already-completed frame), so exposure and transfer aren't separable
+            // from out here without instrumenting inside all five shims for a
+            // boundary that doesn't exist in the mode live stacking uses.
             //
-            // These are fields rather than a child span because there is no seam to put
-            // one in. `Camera::capture` is a single blocking vendor call, and on the
-            // continuous path it is `get_video_data` handing back an already-completed
-            // frame: the exposure and the transfer are not separable events from out
-            // here. Splitting the span would mean instrumenting inside all five shims to
-            // expose a boundary that, in the mode live stacking actually uses, does not
-            // exist.
+            // Purpose: `camera_capture` reported 131ms against a 100ms exposure in
+            // production traces, with nothing saying whether the extra 31ms was a
+            // slow link or a long exposure — matters on a Pi 5, where shared USB3
+            // degrades first.
             //
-            // What the numbers are for: `camera_capture` reported 131 ms against a
-            // 100 ms exposure in production traces, and nothing said whether the extra
-            // 31 ms was a slow link or a long exposure. On a Pi 5, where USB3 is shared
-            // and this is the first thing to degrade, that is the difference between the
-            // setting and the hardware.
-            //
-            // `overhead_us` is **signed**, and has to be. It was a saturating unsigned
-            // subtraction, which reported `0` on exactly the path the field was added
-            // for: in continuous mode `get_video_data` returns an already-completed
-            // frame in less than one exposure, so every sample saturated and the field
-            // answered nothing. Negative now means the frame was already waiting when we
-            // asked, and the magnitude is how far into the stream's frame period we
-            // arrived. `call_us` carries the raw measurement so a reader can do the
-            // arithmetic any other way they need to.
+            // `overhead_us` is **signed**: a saturating unsigned version reported `0`
+            // on exactly the path it was added for (continuous mode's already-waiting
+            // frame), so every sample saturated and the field answered nothing.
+            // Negative now means the frame was already waiting; `call_us` carries the
+            // raw measurement for any other arithmetic needed.
             let call_us = started.elapsed().as_micros().min(i64::MAX as u128) as i64;
             span.record("call_us", call_us);
             span.record(

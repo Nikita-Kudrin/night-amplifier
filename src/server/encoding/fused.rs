@@ -1,26 +1,18 @@
-//! The two fused f32 → RGB8 kernels every streamed frame goes through.
+//! The two fused f32 -> RGB8 kernels every streamed frame goes through. Both share
+//! one shape: a **row source** producing one interleaved RGB f32 row at output
+//! resolution, and a **tail** applying the tone curve, saturation, contrast and the
+//! 8-bit write. The sources differ (one expands a frame already fitting the
+//! bounding box, the other box-averages a larger one down) as separate traversals
+//! with separate planar indexing — why `frame/layout_tests.rs` carries a row for each.
 //!
-//! Both share one shape: a **row source** that produces one interleaved RGB f32
-//! row at output resolution, a **tail** that applies the tone curve, saturation
-//! and contrast to that row, and the 8-bit write. The two sources are the only
-//! part that differs — one expands a frame that already fits the bounding box,
-//! the other box-averages a larger one down to it — and they are separate
-//! traversals with separate planar indexing, which is why `frame/layout_tests.rs`
-//! carries a row for each.
-//!
-//! # Two drivers, because the denoisers cannot fuse
-//!
-//! With denoising off, each row is gathered, transformed and written inside one
-//! closure against a thread-local scratch row — no full-resolution intermediate
-//! exists. Both spatial denoisers need neighbourhood access across rows, so with
-//! either of them on the driver instead stages the whole resampled image as f32,
-//! denoises it, and only then runs the per-row tail. The staged buffer is at
-//! *output* resolution: for a 1440² eyepiece that is 24 MB, against the 108 MB
-//! the same buffer would cost at an IMX533's native 3008².
-//!
-//! Keeping the fused path for the off case is not just an optimization — it is
-//! what makes `DenoiseConfig::OFF` byte-identical to the pre-denoise output
-//! rather than merely equivalent.
+//! Two drivers because the denoisers can't fuse: with denoising off, each row is
+//! gathered, transformed and written inside one closure against a thread-local
+//! scratch row, no full-resolution intermediate. Either denoiser needs cross-row
+//! neighbourhood access, so on, the driver stages the whole resampled image as f32
+//! at *output* resolution (24MB for a 1440² eyepiece, vs 108MB at native 3008²),
+//! denoises it, then runs the per-row tail. Keeping the fused path for the off case
+//! isn't just an optimization — it's what makes `DenoiseConfig::OFF` byte-identical
+//! to the pre-denoise output, not merely equivalent.
 
 use std::cell::RefCell;
 
@@ -39,20 +31,15 @@ thread_local! {
     static ROW_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Convert a Frame to RGB8 data, box-averaging down to a bounding box if needed.
-///
-/// # Why there is no debayering here
-///
-/// A 1-channel frame reaching this function is genuine monochrome, never a raw
-/// CFA mosaic: the stacking task demosaics colour sensors before anything in the
-/// render path sees a frame, while mono sensors stay at `channels = 1`. Nothing
-/// between there and here changes the channel count.
-///
-/// So mono channels are replicated across RGB. The previous code instead ran
-/// `detect_cfa_pattern` (which never errors for a 1-channel frame ≥ 4x4, and
-/// whose confidence was discarded) and debayered unconditionally, which cost a
-/// full-resolution f32 RGB frame — 3x the mono source, ~196 MB on an
-/// ASI1600MM — per tier per frame, and put colour fringing on grey data.
+/// Convert a Frame to RGB8 data, box-averaging down to a bounding box if needed. No
+/// debayering here: a 1-channel frame reaching this function is genuine monochrome,
+/// never raw CFA — the stacking task demosaics colour sensors before the render path
+/// sees a frame, and nothing between there and here changes channel count. So mono
+/// channels are simply replicated across RGB. The old code instead ran
+/// `detect_cfa_pattern` (never errors on a 1-channel frame, confidence discarded)
+/// and debayered unconditionally — a full-resolution f32 RGB frame (3x the mono
+/// source, ~196MB on an ASI1600MM) per tier per frame, with colour fringing on grey
+/// data.
 pub fn frame_to_rgb8_downsampled(
     ready_frame: &RenderReadyFrame,
     max_width: u32,
@@ -165,22 +152,17 @@ pub(crate) fn expand_to_rgb8_fused(
     render_rgb8(&source, ready_frame, scratch)
 }
 
-/// Box-average `frame` to `target_width` x `target_height` in **linear light**, then apply
-/// the tone-curve stretch (+ saturation/contrast) to the averaged result.
+/// Box-average `frame` to `target_width` x `target_height` in **linear light**, then
+/// apply the tone-curve stretch (+ saturation/contrast) to the averaged result.
+/// Stretch happens after downsampling, not before (the pre-fusion order): the
+/// stretch curves here (asinh, MTF) are concave, so Jensen's inequality guarantees
+/// `curve(average(pixels)) >= average(curve(pixels))` for any source box — this
+/// order can only preserve or brighten faint detail in a downsampled tier, never dim
+/// it (see `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample`).
 ///
-/// # Why stretch happens after downsampling, not before
-///
-/// This resamples before applying the non-linear, shadow-boosting tone curve, rather than
-/// the reverse (which is what the pre-fusion pipeline did: stretch once at full resolution,
-/// then downsample the already-stretched result). Because the stretch curves used here
-/// (asinh, MTF) are concave, Jensen's inequality guarantees `curve(average(pixels)) >=
-/// average(curve(pixels))` for any box of source pixels — so this order can only preserve
-/// or brighten faint detail in a downsampled tier relative to the old order, never dim it.
-/// See `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample` for a
-/// pinned numerical example.
-///
-/// `pub(crate)` for the same reason as [`expand_to_rgb8_fused`]: its `else` arm indexes
-/// `plane_size * 2` unconditionally, and [`frame_to_rgb8_downsampled`] is the guard.
+/// `pub(crate)` for the same reason as [`expand_to_rgb8_fused`]: its `else` arm
+/// indexes `plane_size * 2` unconditionally, and [`frame_to_rgb8_downsampled`] is
+/// the guard.
 pub(crate) fn box_downsample_to_rgb8_fused(
     ready_frame: &RenderReadyFrame,
     target_width: usize,
@@ -453,17 +435,14 @@ fn stage_and_denoise<S: RowSource>(
     let mut owned = std::mem::take(&mut scratch.staged);
     let staged = crate::render::denoise::take(&mut owned, staged_len);
 
-    // `resample` and `row_tail` are separated because they scale with different things
-    // and only the staged path can tell them apart: the gather's cost follows the
-    // *input* pixel count (a box average reads every source pixel), the tail's follows
-    // the *output* one. `frame_to_rgb8` reported 75 ms as one number, of which `denoise`
-    // explained 39 — leaving 36 ms that could have been either, and therefore no way to
-    // predict what serving a smaller tier would save.
-    //
-    // The fused path above deliberately has no equivalent: it gathers, transforms and
-    // writes one row inside a single closure against a thread-local scratch row, which
-    // is the whole reason it is cheaper. Splitting it would mean instrumenting per row,
-    // which AGENTS.md rules out — per-row spans distort what they measure.
+    // `resample` and `row_tail` are split because only the staged path can tell them
+    // apart: the gather scales with *input* pixel count, the tail with *output*.
+    // `frame_to_rgb8` reported 75ms as one number (39 from `denoise`, 36 unexplained
+    // between the two) — no way to predict what a smaller tier would save. The fused
+    // path above has no equivalent split: it gathers, transforms and writes one row
+    // in a single closure against a thread-local scratch row, which is why it's
+    // cheaper — splitting would mean per-row spans, which AGENTS.md rules out as
+    // distorting what they measure.
     {
         let _span = tracing::info_span!(
             "resample",

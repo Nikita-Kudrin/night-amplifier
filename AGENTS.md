@@ -24,38 +24,36 @@ SOLID Principles:
 - KISS (Keep It Simple, Stupid): Avoid over-engineering. Choose the simplest solution that effectively solves the
   problem.
 
-When the file is too big (over 500 lines) consider refactoring and extracting functionality.
-Follow standard Rust code conventions for backend and JavaScript for frontend.
-Write tests for new functionality or for changed code.
-Don't write useless obvious comments. Code should be self-describing. Use comments only to describe non-obvious
-behavior.
-Think how expensive operations should be for backend and frontend. Expensive operations should be avoided. Extremely
-heavy operations should not be performed on the fly.
-Remember to optimize imports and remove unused code you have created.
-Try to avoid deep nesting. Use if+return to simplify the code.
-ALWAYS prefer editing an existing file to creating a new one.
-Proactively update documentation files (\\*.md, especially the VitePress user manual in `manual/`) or README files after changes in the code but keep the docs concise and focused.  
-After making big changes, run backend and frontend tests.
+- Files over 500 lines: consider refactoring/extracting.
+- Follow standard Rust conventions for backend, JavaScript for frontend.
+- Write tests for new or changed functionality.
+- Don't write obvious comments — code should be self-describing; comment only non-obvious behavior.
+- Keep comments, doc comments, and prose summaries (module docs, AGENTS.md sections) to 5-10 lines per point: state
+  the non-obvious "why" and any load-bearing numbers, cut restated context and hedging. If an explanation is still
+  ballooning past that, split it or link out rather than let it sprawl. Exempt: runnable doctest/example code,
+  wire-format/byte-layout tables, and other structured reference data (tables, one-fact-per-line lists) — tighten
+  wording there without breaking the structure that makes them scannable.
+- Avoid expensive operations; never run extremely heavy ones on the fly.
+- Optimize imports and remove unused code you created.
+- Avoid deep nesting — use if+return to simplify.
+- ALWAYS prefer editing an existing file over creating a new one.
+- Update docs (*.md, especially the VitePress manual in `manual/`) after code changes, concisely.
+- After big changes, run backend and frontend tests.
 
 ## Architecture
 
 When designing new features or refactoring, adhere to the following architectural principles:
 
-- Clean Architecture / Hexagonal Architecture: Keep the core business logic (domain) isolated from external concerns (
-  UI, databases, third-party APIs). Use interfaces/ports to decouple components.
-- Domain-Driven Design (DDD): Group code by feature or domain (e.g., user, billing, inventory) rather than technical
-  role (e.g., controllers, models, services).
-- Separation of Concerns (SoC): Ensure each module, class, and function has a single, well-defined responsibility.
-- Asynchronous Communication: Favor event-driven architectures (Pub/Sub, message queues) for long-running processes or
-  cross-service communication to reduce tight coupling.
-- Design for Failure (Resilience)
-- Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`, `PUSH_TO_PLUGIN`,
-  `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`) so Community works standalone.
-- f32 normalization - All pixel math uses [0.0, 1.0] range to prevent overflow
-- Rayon for multi-core processing
-- No allocations in hot paths - Pre-allocated buffers where possible
-- ARM friendly - Optimized for Raspberry Pi 5
-- FFI safety - All C/C++ library calls wrapped with `catch_ffi_panic` to handle panics from vendor SDKs
+- Clean/Hexagonal Architecture: isolate core domain logic from UI, DB, and third-party APIs via interfaces/ports.
+- Domain-Driven Design: group code by feature/domain, not technical role (controllers/models/services).
+- Separation of Concerns: each module/class/function has one well-defined responsibility.
+- Asynchronous Communication: favor event-driven (Pub/Sub, queues) for long-running or cross-service work.
+- Design for Failure (Resilience).
+- Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`,
+  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`) so Community works standalone.
+- f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
+- Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
+- ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.
 
 # Test Guidelines
 
@@ -161,16 +159,15 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
 ## Camera Notes
 
 - **Cooler lifecycle**: handle lives in `AppState.active_camera`. `CameraPhase`:
-  `Precooling → Idle → Capturing → WarmingUp`. Ramp limited to 5°C/min; warm-up ramps to 20°C,
-  closes the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
+  `Precooling → Idle → Capturing → WarmingUp`; ramp limited to 5°C/min; warm-up ramps to 20°C,
+  closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
 - **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing` → owned by the per-frame
   path; `WarmingUp` → monitor holds cooler off intentionally.
 - **`cooler_fast_mode`**: bypasses the ramp; UI shows a persistent warning while on.
-- **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()`
-  (DeepSky/Comet → `LowReadoutNoise`, Planetary → `Normal`), overridable via
-  `sensor_mode_override`.
-- **Monitor thread**: dedicated `std::thread`, not tokio, so USB stalls can't poison the
-  runtime; uses one reusable `monitor::FfiWorker` rather than a thread per poll.
+- **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()` (DeepSky/Comet
+  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`.
+- **Monitor thread**: dedicated `std::thread`, not tokio, so USB stalls can't poison the runtime;
+  uses one reusable `monitor::FfiWorker` rather than a thread per poll.
 
 ### Handle ownership — non-obvious and load-bearing
 
@@ -512,27 +509,19 @@ From one production trace: both workers at 97% utilisation, 34.7% of captured fr
 for want of a stacking thread. A dropped *capture* frame loses signal permanently — most of
 these favor the stacking side for that reason.
 
-- **Display copy skipped when unneeded.** `MasterStack::compute()`'s copy (434MB read/108MB
+- **Display copy skipped when unneeded**: `MasterStack::compute()`'s copy (434MB read/108MB
   written) is gated by `want_display`; the frame still stacks regardless.
-- **Queue budget sized from the board**: `min(MemTotal/5, 1GiB)`, floored at 64MiB. Each
-  channel is sized from its own payload (raw vs. debayered), not one shared figure. The
-  capture→stacking channel is additionally **bounded by latency** (2s of exposures): a
-  deeper queue does not raise throughput, it delays the drop and pays in preview lag —
-  memory alone put 19 frames / 2.9s in front of the stacking thread. The storage channel
-  keeps its memory depth; backlog there is not lag. All three report
-  `pipeline.queue_depth`/`_capacity` under `--features telemetry`, which is what separates
-  "the stage is slow" from "it stalled once".
-- **Preview may run binned**, by the largest integer factor `PreviewResolution` allows.
-  All-or-nothing at the 2x boundary, and **fixed for the capture session** — resolved from
-  the sensor shape plus that setting, never from the connected client set. Binning is not
-  neutral to what follows it: the tone curve is solved from median and MAD, and 2x2 binning
-  moved the solved `scale_lut` by +25.7% at the 1% input point, so a client-driven factor
-  re-graded the picture for every viewer whenever somebody opened a tab. Default is
-  `Native` (no binning), which is also what makes `JpegTier::Original`'s "no downsampling"
-  structurally true.
+- **Queue budget sized from the board**: `min(MemTotal/5, 1GiB)`, floored at 64MiB, sized per
+  channel from its own payload — capture→stacking is also **bounded by latency** (2s of
+  exposures, since a deeper queue only delays the drop and adds preview lag; memory alone put
+  19 frames/2.9s ahead of the stacking thread). All three report `pipeline.queue_depth`/
+  `_capacity` under `--features telemetry`, separating "slow" from "stalled once".
+- **Preview may run binned**, by the largest integer factor `PreviewResolution` allows —
+  all-or-nothing at the 2x boundary, fixed for the session (never from the connected client
+  set, since 2x2 binning moved the solved `scale_lut` by +25.7% and would re-grade the
+  picture for every viewer whenever somebody opened a tab). Default `Native` (no binning).
 - **Per-stack estimates (white balance, background, stats) are reused across frames**,
-  refreshed by *proportional* stack-depth growth (MAD ~ 1/√N), not frame count. Live view
-  never reuses — every sub there is a different image.
+  refreshed by *proportional* stack-depth growth (MAD ~ 1/√N); live view never reuses.
 
 ### The accumulator layout
 

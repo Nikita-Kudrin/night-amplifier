@@ -1,19 +1,15 @@
-//! Demand-driven resolution tiers for the live image streams.
+//! Demand-driven resolution tiers for the live image streams. Every client maps
+//! onto one of a small, fixed set of bounding boxes; the render task encodes one
+//! payload per tier with at least one client and caches it, so WebSocket handlers
+//! just copy a pointer and write it to the socket — never encoding themselves.
 //!
-//! Every streaming client is mapped onto one of a small, fixed set of bounding
-//! boxes. The render task encodes a payload once per tier that has at least one
-//! client and caches it, so WebSocket handlers never encode on their own — they
-//! copy a pointer and write it to the socket.
-//!
-//! Both stream families use the same tiers, for the same reason: resampling to
-//! the size a client will actually display is where most of a noisy frame's
-//! grain goes away, and letting the browser minify instead throws that
-//! averaging out. The GPU minifies with a four-tap bilinear filter and no
-//! mipmaps, which is capped around 1.45x of noise reduction however far it is
-//! shrinking, where an area average delivers the full factor.
-//!
-//! `JpegTier` keeps its name because that is where it started; `StreamKind`
-//! selects which stream's client counters a tier registration lands in.
+//! Both stream families share tiers for the same reason: resampling to display
+//! size is where most of a noisy frame's grain goes away, and letting the browser
+//! minify instead throws that averaging out — the GPU's four-tap bilinear
+//! minification caps around 1.45x noise reduction regardless of shrink factor,
+//! where an area average delivers the full factor. `JpegTier` keeps its name from
+//! where it started; `StreamKind` selects which stream's counters a tier
+//! registration lands in.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

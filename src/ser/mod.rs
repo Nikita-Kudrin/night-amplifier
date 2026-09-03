@@ -1,16 +1,7 @@
-//! SER Video File Format Support
-//!
-//! SER (Simple Extensible Recording) is the standard format for planetary imaging.
-//! It stores uncompressed video frames with per-frame timestamps, making it ideal
-//! for high-frame-rate planetary captures.
-//!
-//! # Format Specification
-//!
-//! - **Header**: 178 bytes (fixed)
-//! - **Frames**: Raw pixel data (no compression)
-//! - **Timestamps**: Optional 8-byte UTC timestamps per frame (at end of file)
-//!
-//! # Supported Color Modes
+//! SER Video File Format Support: the standard uncompressed, per-frame-timestamped
+//! format for high-frame-rate planetary imaging. 178-byte fixed header, raw pixel
+//! frames, optional 8-byte UTC timestamps at end of file, 8-bit or 16-bit
+//! (little-endian) samples.
 //!
 //! | ID | Format | Description |
 //! |----|--------|-------------|
@@ -22,13 +13,7 @@
 //! | 100| RGB    | RGB color (3 channels) |
 //! | 101| BGR    | BGR color (3 channels) |
 //!
-//! # Bit Depth
-//!
-//! Supports 8-bit and 16-bit (little-endian) pixel data.
-//!
-//! # References
-//!
-//! - SER Format Specification: <http://www.grischa-hahn.homepage.t-online.de/astro/ser/>
+//! Spec: <http://www.grischa-hahn.homepage.t-online.de/astro/ser/>
 
 mod color_id;
 mod header;

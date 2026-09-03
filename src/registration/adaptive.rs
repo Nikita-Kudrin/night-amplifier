@@ -38,39 +38,26 @@ impl Default for AdaptiveRegistration {
     }
 }
 
-/// Star cap for the live ladder's first rung.
-///
-/// Triangle generation is O(n³) in the stars it is handed, so this constant sets
-/// the per-frame cost far more than anything else in registration. Median
-/// registration time over 8 frame pairs per bundled fixture set, release build:
-///
-/// | first rung          | orion   | ring    | dumbell | dumbbell-fits | failures |
-/// |---------------------|---------|---------|---------|---------------|----------|
-/// | `default` (50)      | 79.3 ms | 1.72 ms | 1.09 ms | 0.16 ms       | 2        |
-/// | `default(30)`       |  5.2 ms | 0.23 ms | 0.18 ms | 0.09 ms       | 2        |
-/// | `default(25)`       |  2.1 ms | 0.16 ms | 0.13 ms | 0.09 ms       | 4        |
-///
-/// 30 is the smallest cap that fails no more often than the uncapped preset. The
-/// dense-field case is what makes this matter: 50 stars generate ~20,800
-/// triangles against 30's ~4,000, and the target platform is a Raspberry Pi 5.
+/// Star cap for the live ladder's first rung. Triangle generation is O(n³) in star
+/// count, so this sets the per-frame cost more than anything else in registration:
+/// median time on the dense Orion fixture drops from 79.3ms (uncapped, 50 stars,
+/// ~20,800 triangles) to 5.2ms at 30 stars (~4,000 triangles) to 2.1ms at 25 — but 25
+/// fails twice as often as 30 or the uncapped preset. 30 is the smallest cap that
+/// fails no more often than uncapped, sized for the Raspberry Pi 5 target.
 const LIVE_FIRST_RUNG_MAX_STARS: usize = 30;
 
 impl AdaptiveRegistration {
-    /// Creates a new adaptive registration: two configs, tried in order.
+    /// Creates a new adaptive registration: two configs, tried in order. `fast` used
+    /// to lead, but measured across fixtures it failed almost every frame (34/34 on
+    /// the 250mm dumbbell set, 15/19 on the 130mm one) — nearly every frame paid for a
+    /// doomed attempt before `robust` did the real work. `default` succeeds where
+    /// `fast` fails, at equal or better fit quality, making the common case one
+    /// attempt instead of two.
     ///
-    /// `fast` used to lead. Measured across the bundled fixtures it failed on
-    /// almost every frame — all 34 of the 250 mm dumbbell set, 15 of 19 on the
-    /// 130 mm one — so nearly every frame paid for a doomed attempt before
-    /// `robust` did the real work. `default` succeeds where `fast` fails, at
-    /// equal or better fit quality, which makes the common case one attempt
-    /// instead of two.
-    ///
-    /// The first rung is capped at [`LIVE_FIRST_RUNG_MAX_STARS`]. Reordering the
-    /// ladder on attempt *count* alone was a regression: the discarded `fast`
-    /// attempt cost 0.01–0.07 ms, while uncapped `default` costs up to 80 ms on a
-    /// dense field. Fit quality is unchanged by the cap — registration accuracy
-    /// comes from RANSAC over the correspondences, not from feeding more stars
-    /// into the triangle matcher.
+    /// First rung capped at [`LIVE_FIRST_RUNG_MAX_STARS`] — reordering on attempt
+    /// *count* alone was a regression, since discarded `fast` costs 0.01-0.07ms while
+    /// uncapped `default` costs up to 80ms on a dense field. Fit quality is unchanged:
+    /// accuracy comes from RANSAC over correspondences, not star count.
     pub fn new() -> Self {
         Self {
             configs: vec![
