@@ -429,6 +429,70 @@ describe('useEventStream', () => {
             expect(pushToBlocked.value).toBe(null)
         })
 
+        it('says the scope is moving instead of leaving the last fix on screen', async () => {
+            // The report: push the scope and the status bar went on reading
+            // "Found : M31" the whole way, because a solve ending was the only thing
+            // that ever wrote to it. The movement states are now reported, and being
+            // newer than the last verdict they have to win.
+            const {solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'position_solved'})
+            expect(solvingMessage.value).toBe('Found : M31')
+
+            await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
+            expect(solvingMessage.value).toBe('Telescope is moving')
+
+            await sendEvent({type: 'push_to_blocked', reason: 'Waiting for the view to settle'})
+            expect(solvingMessage.value).toBe('Waiting for the view to settle')
+        })
+
+        it('shows the retry countdown instead of hiding it behind the failure', async () => {
+            // `position_solve_failed` arrives after `push_to_blocked`, and the failure
+            // branch used to come first in the message, so the backoff notice the
+            // server had just sent was never displayed at all.
+            const {solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'position_solve_failed', reason: 'no match'})
+            expect(solvingMessage.value).toBe('Failed to find : M31')
+
+            await sendEvent({
+                type: 'push_to_blocked',
+                reason: 'Waiting before the next solve attempt',
+            })
+            expect(solvingMessage.value).toBe('Waiting before the next solve attempt')
+        })
+
+        it('falls back to the last verdict once nothing is blocking any more', async () => {
+            // The blocker outranks the verdict only while it is live. When the server
+            // says nothing is blocking, the last thing that actually happened is again
+            // the most useful thing to show.
+            const {solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'position_solved'})
+            await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
+            await sendEvent({type: 'push_to_blocked', reason: null})
+
+            expect(solvingMessage.value).toBe('Found : M31')
+        })
+
+        it('keeps showing the search while a solve is running', async () => {
+            // A blocker left over from before the solve started must not displace the
+            // one thing the user most wants to see.
+            const {solvingMessage} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+
+            expect(solvingMessage.value).toBe('Searching : M31')
+        })
+
         it('shows solving again after an equipment change restarts it', async () => {
             // Issue 3: an equipment change aborts the solve in flight. The UI must not
             // be left showing a stale result for a solve that no longer applies.

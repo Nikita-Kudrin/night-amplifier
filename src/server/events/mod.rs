@@ -143,7 +143,8 @@ pub enum ServerEvent {
         dec_degrees: f64,
         ra_string: String,
         dec_string: String,
-        stars_matched: usize,
+        /// Stars ASTAP reported finding, or `None` when it never said.
+        stars_detected: Option<usize>,
         confidence: f64,
         rotation_deg: f64,
     },
@@ -456,7 +457,7 @@ impl ServerEvent {
         dec_degrees: f64,
         ra_string: impl Into<String>,
         dec_string: impl Into<String>,
-        stars_matched: usize,
+        stars_detected: Option<usize>,
         confidence: f64,
         rotation_deg: f64,
     ) -> Self {
@@ -465,7 +466,7 @@ impl ServerEvent {
             dec_degrees,
             ra_string: ra_string.into(),
             dec_string: dec_string.into(),
-            stars_matched,
+            stars_detected,
             confidence,
             rotation_deg,
         }

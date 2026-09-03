@@ -33,6 +33,15 @@ pub enum PushToError {
     #[error("Frame quality too poor for plate solving: {0}")]
     PoorFrameQuality(String),
 
+    /// The view has not stopped moving yet, so the frame is smeared.
+    ///
+    /// Kept apart from [`PushToError::PoorFrameQuality`] because it is expected and
+    /// self-correcting — it is what every frame looks like for the second or two
+    /// after a Dobsonian is nudged — and the UI should say "waiting" rather than
+    /// reporting a fault.
+    #[error("Waiting for the view to settle: {0}")]
+    NotSettled(String),
+
     #[error("Target '{0}' not found in catalog")]
     TargetNotFound(String),
 
@@ -50,6 +59,24 @@ pub enum PushToError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+}
+
+impl PushToError {
+    /// Whether this says the *frame* was unusable rather than the *sky* unmatchable.
+    ///
+    /// The two demand opposite responses and were handled identically. A solve that
+    /// ASTAP ran and lost means the cached position is stale — we settled somewhere
+    /// new and could not place it. A frame rejected before ASTAP ever saw it means
+    /// only that this picture was poor; the scope has not moved, the cached position
+    /// is still the best thing known, and the next frame routinely fixes it by
+    /// itself. Conflating them discarded a good fix over one blurred frame and then
+    /// refused to look again for the length of an exponential backoff.
+    pub fn is_frame_quality(&self) -> bool {
+        matches!(
+            self,
+            Self::NotEnoughStars { .. } | Self::PoorFrameQuality(_) | Self::NotSettled(_)
+        )
+    }
 }
 
 /// Result type for Push-To operations

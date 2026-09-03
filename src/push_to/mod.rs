@@ -108,6 +108,10 @@ pub struct FrameOutcome {
     pub position: Option<PushToPositionResponse>,
     /// Direction to the current target, if both are known.
     pub direction: Option<PushToDirectionResponse>,
+    /// Why no solve ran, when there is something worth saying. Reported through the
+    /// caller's existing de-duplication rather than broadcast by the plugin, so a
+    /// state that persists for a hundred frames still costs one event.
+    pub blocker: Option<PushToBlocker>,
 }
 
 impl FrameOutcome {
@@ -117,6 +121,7 @@ impl FrameOutcome {
             outcome: SolveOutcome::Idle,
             position: None,
             direction: None,
+            blocker: None,
         }
     }
 
@@ -133,6 +138,7 @@ impl FrameOutcome {
             },
             position,
             direction,
+            blocker: None,
         }
     }
 
@@ -145,7 +151,14 @@ impl FrameOutcome {
             outcome: SolveOutcome::Solved,
             position: Some(position),
             direction,
+            blocker: None,
         }
+    }
+
+    /// Say why nothing happened on this frame.
+    pub fn blocked_by(mut self, blocker: Option<PushToBlocker>) -> Self {
+        self.blocker = blocker;
+        self
     }
 }
 
@@ -162,15 +175,33 @@ pub enum PushToBlocker {
     SolverNotReady,
     /// A solve failed recently; the next attempt is being held off.
     BackingOff,
+    /// The view is changing: the scope is being pushed.
+    TelescopeMoving,
+    /// The view has stopped changing but has not been still long enough yet.
+    Settling,
+    /// The frame is too bare to say anything about — smeared past recognition by a
+    /// fast slew, or clouded.
+    NotEnoughStars,
+    /// Stars are still soft or trailed, so a solve would fail on picture quality.
+    StarsTrailing,
 }
 
 impl PushToBlocker {
     /// Human-readable explanation for the UI.
+    ///
+    /// These are the *ordinary* states of a manually pushed scope as much as they are
+    /// faults — before them the UI went on showing "Found : M31" for the whole time the
+    /// user was pushing away from M31, because nothing was emitted between one solve
+    /// ending and the next beginning.
     pub fn reason(&self) -> &'static str {
         match self {
             Self::NoTarget => "No target selected",
             Self::SolverNotReady => "ASTAP or its star database is not installed",
             Self::BackingOff => "Waiting before the next solve attempt",
+            Self::TelescopeMoving => "Telescope is moving",
+            Self::Settling => "Waiting for the view to settle",
+            Self::NotEnoughStars => "Not enough stars in view",
+            Self::StarsTrailing => "Waiting for the stars to sharpen",
         }
     }
 }
@@ -186,6 +217,39 @@ pub trait PushToSolverPlugin: Send + Sync {
     /// The returned [`FrameOutcome`] says whether a solve actually ran, so callers can
     /// tell a fresh position from a cached one.
     async fn process_new_frame(
+        &self,
+        frame: &Frame,
+        detector: &StarDetector,
+        wanderer_mode: bool,
+    ) -> PushToResult<FrameOutcome>;
+
+    /// Name the camera now producing frames, or `None` when none is connected.
+    ///
+    /// The solver remembers a field of view per optical configuration to make the next
+    /// cold start fast, and that memory is keyed on optics — focal length, pixel size,
+    /// sensor height, Barlow — which cannot tell two cameras sharing a sensor format
+    /// apart, nor notice a swap the user has not re-profiled. A stale FOV is not a
+    /// small error: it *fails* an otherwise good hinted attempt outright, which is
+    /// exactly what forces the slow full-sky fallback. So the camera is named here and
+    /// a remembered FOV that came from a different one is discarded when it would
+    /// otherwise be used.
+    ///
+    /// Default no-op: only the solver has any use for this.
+    async fn set_active_camera(&self, _camera: Option<String>) {}
+
+    /// Offer a frame while a solve is already running.
+    ///
+    /// Separate from [`PushToSolverPlugin::process_new_frame`] because the two answer
+    /// different questions and must have different costs: that one may block for the
+    /// length of an ASTAP ladder, this one may not. Without it the movement detector
+    /// went blind for exactly as long as a solve took — the 2026-09-01 log has a
+    /// full-sky search grinding for 223 s on a frame whose sky the user had already
+    /// pushed away from, with every frame in between skipped unread, which is what
+    /// "it doesn't search when I move the scope" looks like from the outside.
+    ///
+    /// Returning [`FrameOutcome::cached`] with a blocker is the normal case; the real
+    /// work is noticing a slew and abandoning a solve that can no longer be right.
+    async fn observe_frame(
         &self,
         frame: &Frame,
         detector: &StarDetector,

@@ -317,6 +317,10 @@ pub async fn connect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Connec
         .events
         .send(ServerEvent::camera_connected(&camera_name));
 
+    // Name the camera for the plate solver before any frame can reach it, so the
+    // first solve of the session is already judged against the right rig.
+    crate::server::services::PushToService::set_active_camera(Some(camera_name.clone())).await;
+
     // Persist the (possibly new / clamped) camera profile to disk.
     state.save_settings().await;
 
@@ -600,6 +604,7 @@ pub async fn finalize_disconnect(state: &Arc<AppState>, camera_name: &str, cause
     }
 
     state.notify_active_camera_returned();
+    crate::server::services::PushToService::set_active_camera(None).await;
     state
         .set_camera_phase(camera_name, CameraPhase::Disconnected)
         .await;

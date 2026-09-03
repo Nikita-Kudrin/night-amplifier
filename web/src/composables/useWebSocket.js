@@ -206,6 +206,17 @@ export function useEventStream() {
             return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
 
+        // A live blocker outranks the last verdict, because it is *newer*. The server
+        // sends one only on a transition, so its presence means the situation has
+        // moved on since that verdict -- the scope is being pushed, the view has not
+        // settled, a retry is being held off. Ordering these the other way round is
+        // what left "Found : M31" on screen for the whole time the user was pushing
+        // away from M31, and hid the retry countdown behind "Failed to find M31"
+        // forever, since nothing ever cleared `lastResult`.
+        if (pushToBlocked.value) {
+            return pushToBlocked.value
+        }
+
         if (lastResult === 'success') {
             return targetName ? `Found${targetSuffix}` : 'Position updated'
         }
@@ -218,9 +229,7 @@ export function useEventStream() {
             return 'Solving cancelled'
         }
 
-        // Nothing happened and nothing is wrong with the last attempt -- but
-        // something may still be preventing the next one.
-        return pushToBlocked.value
+        return null
     })
 
     // ASTAP installation state
