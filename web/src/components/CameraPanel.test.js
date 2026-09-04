@@ -16,6 +16,9 @@ import {connectCamera, disconnectCamera, getSimulatorConfig} from '../composable
 describe('CameraPanel', () => {
     beforeEach(() => {
         vi.clearAllMocks()
+        // The Connect menu teleports to <body>; without this, one test's open menu is
+        // still there for the next one's `document.querySelector` to find first.
+        document.body.innerHTML = ''
         connectCamera.mockResolvedValue({message: 'Connected'})
         disconnectCamera.mockResolvedValue({message: 'Disconnected'})
         // Default: simulator is configured so the extra section doesn't show
@@ -314,7 +317,7 @@ describe('CameraPanel', () => {
             await wrapper.find('.btn-primary').trigger('click')
             await flushPromises()
 
-            expect(connectCamera).toHaveBeenCalledWith('cam1')
+            expect(connectCamera).toHaveBeenCalledWith('cam1', 'main')
         })
 
         it('calls disconnectCamera when Disconnect button clicked', async () => {
@@ -391,6 +394,80 @@ describe('CameraPanel', () => {
             await flushPromises()
 
             expect(wrapper.find('.alert-error').text()).toContain('Connection failed')
+        })
+    })
+
+    describe('Camera roles', () => {
+        const availableCamera = {
+            id: 'cam1',
+            name: 'Mars-M',
+            connected: false,
+            info: {max_width: 1920, max_height: 1080},
+        }
+
+        it('offers the guide slot behind the Connect chevron', async () => {
+            const wrapper = mountCameraPanel({cameras: [availableCamera]})
+
+            expect(wrapper.find('.split-button-menu').exists()).toBe(false)
+
+            await wrapper.find('.split-button-toggle').trigger('click')
+
+            const items = document.querySelectorAll('.split-button-item')
+            expect(items.length).toBe(1)
+            expect(items[0].textContent.trim()).toBe('As guide')
+        })
+
+        it('connects as a guide camera when that option is chosen', async () => {
+            const wrapper = mountCameraPanel({cameras: [availableCamera]})
+
+            await wrapper.find('.split-button-toggle').trigger('click')
+            document.querySelector('.split-button-item').click()
+            await flushPromises()
+
+            expect(connectCamera).toHaveBeenCalledWith('cam1', 'guide')
+        })
+
+        it('disables the guide option once a guide camera is connected', async () => {
+            const wrapper = mountCameraPanel({
+                cameras: [
+                    availableCamera,
+                    {
+                        id: 'cam2',
+                        name: 'Guider',
+                        connected: true,
+                        role: 'guide',
+                        info: {max_width: 640, max_height: 480},
+                    },
+                ],
+            })
+
+            await wrapper.find('.split-button-toggle').trigger('click')
+
+            expect(document.querySelector('.split-button-item').disabled).toBe(true)
+        })
+
+        it('labels each connected camera with the position it holds', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [
+                    {
+                        id: 'cam1',
+                        name: 'Imaging',
+                        connected: true,
+                        role: 'main',
+                        info: {max_width: 1920, max_height: 1080},
+                    },
+                    {
+                        id: 'cam2',
+                        name: 'Guider',
+                        connected: true,
+                        role: 'guide',
+                        info: {max_width: 640, max_height: 480},
+                    },
+                ],
+            })
+
+            const pills = wrapper.findAll('.role-pill').map((p) => p.text())
+            expect(pills).toEqual(['Main', 'Guide'])
         })
     })
 

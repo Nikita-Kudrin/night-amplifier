@@ -11,8 +11,15 @@ const refreshSettings = inject('refreshSettings', async () => {
 const cameras = inject('cameras', ref([]))
 const selectedCameraId = inject('selectedCamera', ref(null))
 const cameraStatus = inject('cameraStatus', ref({}))
+// Same reason as the cooler: each camera carries its own dew-heater state.
+const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 
 const {error, withErrorHandling} = useError()
+
+const cameraSettings = computed(() => {
+  if (!settings.value) return null
+  return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
+})
 
 const currentCamera = computed(() =>
     (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
@@ -24,12 +31,12 @@ const localHeaterEnabled = ref(true)
 const localHeaterPower = ref(10)
 
 watch(
-    settings,
-    (newSettings) => {
-      if (!newSettings) return
-      localHeaterEnabled.value = newSettings.dew_heater_enabled ?? true
-      if (typeof newSettings.dew_heater_power === 'number') {
-        localHeaterPower.value = newSettings.dew_heater_power
+    cameraSettings,
+    (hardware) => {
+      if (!hardware) return
+      localHeaterEnabled.value = hardware.dew_heater_enabled ?? true
+      if (typeof hardware.dew_heater_power === 'number') {
+        localHeaterPower.value = hardware.dew_heater_power
       }
     },
     {immediate: true}
@@ -44,7 +51,7 @@ let debounceTimer = null
 
 async function applySetting(payload) {
   await withErrorHandling(async () => {
-    await updateSettings(payload)
+    await updateSettings({camera_role: settingsRole.value, ...payload})
     await refreshSettings()
   })
 }

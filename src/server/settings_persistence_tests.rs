@@ -18,6 +18,7 @@ mod tests {
     #[test]
     fn test_persisted_settings_roundtrip() {
         let settings = CaptureSettings {
+            guide_camera: Default::default(),
             auto_reconnect: true,
             auto_resume_capture: true,
             exposure_us: 2_000_000,
@@ -34,6 +35,7 @@ mod tests {
                 live_view: true,
                 wanderer: false,
                 stacking: true,
+                guide: false,
             },
             save_stacked_image: true,
             stacking_type: StackingType::Planetary,
@@ -259,6 +261,7 @@ mod tests {
         let persistence = SettingsPersistence::new(temp_file.path());
 
         let settings = CaptureSettings {
+            guide_camera: Default::default(),
             auto_reconnect: true,
             auto_resume_capture: true,
             exposure_us: 3_000_000,

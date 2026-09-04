@@ -23,7 +23,7 @@ use tracing::{info, warn};
 use super::lifecycle;
 use crate::camera::CameraRegistry;
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CaptureState, SessionResumePlan};
+use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
 
 /// How many times to try before giving up.
 const MAX_ATTEMPTS: u32 = 5;
@@ -44,17 +44,27 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// own and something physical needs attention.
 const TOTAL_BUDGET: Duration = Duration::from_secs(300);
 
-/// Start recovering `camera_id` in the background, unless a supervisor is
-/// already running or the user has turned auto-reconnect off.
-pub(super) fn spawn(state: &Arc<AppState>, camera_id: &str, camera_name: &str) {
-    if state
-        .reconnect_in_flight
+/// Start recovering `role`'s camera in the background, unless a supervisor is
+/// already running for that slot or the user has turned auto-reconnect off.
+///
+/// The single-flight guard is per slot, not global: a guide camera dropping out while
+/// the main camera is being recovered has its own device to reopen, and refusing it —
+/// which one shared flag did — left the guide camera down for the rest of the night.
+pub(super) fn spawn(
+    state: &Arc<AppState>,
+    role: CameraRole,
+    camera_id: &str,
+    camera_name: &str,
+) {
+    let in_flight = Arc::clone(&state.slot(role).reconnect_in_flight);
+    if in_flight
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         warn!(
             camera_id,
-            "Reconnect already in progress; not starting another"
+            role = role.label(),
+            "Reconnect already in progress for this slot; not starting another"
         );
         return;
     }
@@ -64,11 +74,11 @@ pub(super) fn spawn(state: &Arc<AppState>, camera_id: &str, camera_name: &str) {
     let camera_name = camera_name.to_string();
 
     tokio::spawn(async move {
-        let outcome = supervise(&state, &camera_id, &camera_name).await;
-        state.reconnect_in_flight.store(false, Ordering::SeqCst);
+        let outcome = supervise(&state, role, &camera_id, &camera_name).await;
+        in_flight.store(false, Ordering::SeqCst);
 
         match outcome {
-            Ok(()) => info!(camera_id = %camera_id, "Camera recovered"),
+            Ok(()) => info!(camera_id = %camera_id, role = role.label(), "Camera recovered"),
             Err(reason) => {
                 warn!(camera_id = %camera_id, %reason, "Giving up on reconnecting the camera");
                 let _ = state.events.send(ServerEvent::camera_reconnect_failed(
@@ -88,6 +98,7 @@ pub(super) fn spawn(state: &Arc<AppState>, camera_id: &str, camera_name: &str) {
 /// Run the attempt sequence. `Err` carries the reason to show the user.
 async fn supervise(
     state: &Arc<AppState>,
+    role: CameraRole,
     camera_id: &str,
     camera_name: &str,
 ) -> Result<(), String> {
@@ -132,10 +143,15 @@ async fn supervise(
 
         // `connect` probes the handle before reporting success, so reaching
         // here means the camera answered, not merely that `open()` returned.
-        match lifecycle::connect(state, camera_id).await {
+        match lifecycle::connect(state, camera_id, role).await {
             Ok(_) => {
-                info!(camera_id, attempt, "Reconnected");
-                resume_capture_if_planned(state, camera_id, camera_name).await;
+                info!(camera_id, role = role.label(), attempt, "Reconnected");
+                // Only the imaging camera has a capture to resume. For the guide camera
+                // `connect` has already restarted its loop and reapplied its profile, so
+                // reconnecting *is* resuming — there is nothing further to restore.
+                if role == CameraRole::Main {
+                    resume_capture_if_planned(state, camera_id, camera_name).await;
+                }
                 return Ok(());
             }
             Err(e) => {

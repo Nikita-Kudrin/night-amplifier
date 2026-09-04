@@ -140,10 +140,10 @@ pub fn run_render_task(
         // both without also covering the work between them.
         let counter = {
             let _span = tracing::info_span!("publish_state").entered();
-            rt.block_on(state.set_latest_raw_frame(Arc::clone(&raw_frame)));
+            rt.block_on(state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame)));
             // Claim the counter before encoding so every payload below is filed
             // under the same frame, then wake clients once they are all in place.
-            state.begin_frame()
+            state.main_stream.begin_frame()
         };
 
         // One RGB8 conversion per distinct output size, shared by every payload
@@ -152,8 +152,8 @@ pub fn run_render_task(
         // where the frame's time goes if two clients are watching.
         conversions.begin_frame();
 
-        if state.lossless_client_count() > 0 {
-            let (max_w, max_h) = state.lossless_target_box();
+        if state.main_stream.lossless_client_count() > 0 {
+            let (max_w, max_h) = state.main_stream.lossless_target_box();
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
             match conversions.get(&raw_frame, max_w, max_h) {
                 Some(rgb) => {
@@ -164,7 +164,9 @@ pub fn run_render_task(
                         rgb.2,
                         chunk_count,
                     ) {
-                        Ok(encoded_data) => rt.block_on(state.set_latest_frame(encoded_data)),
+                        Ok(encoded_data) => {
+                            rt.block_on(state.main_stream.set_latest_frame(encoded_data))
+                        }
                         Err(e) => rt.block_on(
                             state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)),
                         ),
@@ -176,9 +178,9 @@ pub fn run_render_task(
             }
         }
 
-        encode_jpeg_tiers(&state, &raw_frame, counter, &mut conversions);
+        encode_jpeg_tiers(&state.main_stream, &raw_frame, counter, &mut conversions);
 
-        state.publish_frame();
+        state.main_stream.publish_frame();
     }
 
     debug!("Render task ended");
@@ -282,7 +284,7 @@ fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize 
 /// "share the native buffer" special case it replaces. A `Vec`, not a map: at most
 /// five payloads per frame, and a linear scan over five beats hashing them.
 #[derive(Default)]
-struct ConversionCache {
+pub(super) struct ConversionCache {
     entries: Vec<((usize, usize), Arc<(Vec<u8>, u32, u32)>)>,
     /// The denoisers' working buffers, reused for the life of the render thread.
     /// Kept here rather than in a thread-local so nothing else in the process
@@ -293,13 +295,13 @@ struct ConversionCache {
 impl ConversionCache {
     /// Drop the previous frame's conversions, keeping the buffers that produced
     /// them.
-    fn begin_frame(&mut self) {
+    pub(super) fn begin_frame(&mut self) {
         self.entries.clear();
     }
 
     /// The RGB8 buffer for a bounding box, converting only if nothing already
     /// built has the same output size.
-    fn get(
+    pub(super) fn get(
         &mut self,
         frame: &crate::server::state::RenderReadyFrame,
         max_w: u32,
@@ -351,8 +353,8 @@ impl ConversionCache {
 /// first one encodes and the rest are handed the same `Bytes`. For a sub-4K
 /// sensor that collapses `Uhd2160` and `Original` into one encode *and* one
 /// conversion.
-fn encode_jpeg_tiers(
-    state: &AppState,
+pub(super) fn encode_jpeg_tiers(
+    stream: &crate::server::state::FrameStream,
     frame: &crate::server::state::RenderReadyFrame,
     counter: u64,
     conversions: &mut ConversionCache,
@@ -361,7 +363,7 @@ fn encode_jpeg_tiers(
     let mut encoded: Vec<((usize, usize), bytes::Bytes)> = Vec::new();
 
     for tier in JpegTier::all() {
-        if state.jpeg_tier_client_count(tier) == 0 {
+        if stream.jpeg_tier_client_count(tier) == 0 {
             continue;
         }
 
@@ -374,7 +376,7 @@ fn encode_jpeg_tiers(
         );
 
         if let Some((_, payload)) = encoded.iter().find(|(k, _)| *k == key) {
-            state.set_tier_jpeg(tier, counter, payload.clone());
+            stream.set_tier_jpeg(tier, counter, payload.clone());
             continue;
         }
 
@@ -390,7 +392,7 @@ fn encode_jpeg_tiers(
         );
         match result {
             Ok(payload) => {
-                let stored = state.set_tier_jpeg(tier, counter, payload);
+                let stored = stream.set_tier_jpeg(tier, counter, payload);
                 encoded.push((key, stored));
             }
             Err(e) => warn!(?tier, error = %e, "JPEG encoding failed for tier"),
@@ -468,10 +470,10 @@ mod tests {
 
         // A phone arrives, then a 4K browser, then both leave.
         {
-            let _phone = TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Hd1080);
+            let _phone = TierClientGuard::new(Arc::clone(&state.main_stream), StreamKind::Jpeg, JpegTier::Hd1080);
             assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
             let _desktop =
-                TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Original);
+                TierClientGuard::new(Arc::clone(&state.main_stream), StreamKind::Jpeg, JpegTier::Original);
             assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
         }
         assert_eq!(session.resolve(3008, 3008, PreviewResolution::Qhd1440), first);
@@ -710,7 +712,7 @@ mod tests {
         drop(tx);
     }
 
-    use crate::server::state::{AppState, CaptureSettings, JpegTier};
+    use crate::server::state::{AppState, CaptureSettings, JpegTier, StreamKind};
     use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
@@ -784,6 +786,7 @@ mod tests {
         drop(extra_handle);
 
         let addr_out = state
+            .main_stream
             .get_latest_raw_frame()
             .await
             .expect("render task published a frame")
@@ -825,9 +828,9 @@ mod tests {
         let state = Arc::new(state);
 
         // Ensure no LZ4 clients are connected (this is the default, but let's be explicit)
-        assert_eq!(state.lossless_client_count(), 0);
+        assert_eq!(state.main_stream.lossless_client_count(), 0);
 
-        let initial_counter = state.frame_counter.load(Ordering::SeqCst);
+        let initial_counter = state.main_stream.frame_counter();
         render_one_frame(
             Arc::clone(&state),
             crate::frame::Frame::zeros(10, 10, 3).unwrap(),
@@ -835,7 +838,7 @@ mod tests {
         .await;
 
         // The frame_counter MUST have increased so JPEG clients wake up
-        let new_counter = state.frame_counter.load(Ordering::SeqCst);
+        let new_counter = state.main_stream.frame_counter();
         assert_eq!(
             new_counter,
             initial_counter + 1,
@@ -859,7 +862,7 @@ mod tests {
 
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let _guard = TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, tier);
+        let _guard = TierClientGuard::new(Arc::clone(&state.main_stream), StreamKind::Lossless, tier);
 
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(super::StackedFrame {
@@ -882,6 +885,7 @@ mod tests {
             .unwrap();
 
         let payload = state
+            .main_stream
             .get_latest_frame()
             .await
             .expect("render task published no lossless payload");
@@ -922,7 +926,7 @@ mod tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
         let _guard = TierClientGuard::new(
-            Arc::clone(&state),
+            Arc::clone(&state.main_stream),
             StreamKind::Lossless,
             JpegTier::LOSSLESS_DEFAULT,
         );
@@ -947,7 +951,7 @@ mod tests {
             .await
             .unwrap();
 
-        let payload = state.get_latest_frame().await.expect("no payload");
+        let payload = state.main_stream.get_latest_frame().await.expect("no payload");
         assert_eq!(lz4_payload_dimensions(&payload), (2160, 2160));
     }
 
@@ -964,9 +968,9 @@ mod tests {
         let state = Arc::new(state);
         // A JPEG client on a non-downsampling tier puts a native-size buffer in
         // the cache, so the lossless path has something to wrongly reuse.
-        state.jpeg_tier_clients[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
         let _guard =
-            TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Hd1080);
+            TierClientGuard::new(Arc::clone(&state.main_stream), StreamKind::Lossless, JpegTier::Hd1080);
 
         let (tx, rx) = std::sync::mpsc::channel();
         // Below 4K, so `fits_in_4k` holds and the shared buffer is native-size.
@@ -989,7 +993,7 @@ mod tests {
             .await
             .unwrap();
 
-        let payload = state.get_latest_frame().await.expect("no payload");
+        let payload = state.main_stream.get_latest_frame().await.expect("no payload");
         let (w, h) = lz4_payload_dimensions(&payload);
         assert!(
             w < IMX464.0 as u32 && h < IMX464.1 as u32,
@@ -998,8 +1002,9 @@ mod tests {
         );
 
         // The JPEG tier that did want native size must still have got it.
-        let counter = state.frame_counter.load(Ordering::SeqCst);
+        let counter = state.main_stream.frame_counter();
         let jpeg = state
+            .main_stream
             .get_tier_jpeg(JpegTier::Uhd2160, counter)
             .expect("Uhd2160 payload missing");
         assert_eq!(
@@ -1049,10 +1054,10 @@ mod tests {
         )
         .await;
 
-        let counter = state.frame_counter.load(Ordering::SeqCst);
+        let counter = state.main_stream.frame_counter();
         for tier in JpegTier::all() {
             assert!(
-                state.get_tier_jpeg(tier, counter).is_none(),
+                state.main_stream.get_tier_jpeg(tier, counter).is_none(),
                 "{tier:?} was encoded with no clients watching it"
             );
         }
@@ -1062,7 +1067,7 @@ mod tests {
     async fn test_render_task_encodes_jpeg_for_active_tier() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.jpeg_tier_clients[JpegTier::Hd1080 as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Hd1080 as usize].store(1, Ordering::SeqCst);
 
         render_one_frame(
             Arc::clone(&state),
@@ -1070,21 +1075,22 @@ mod tests {
         )
         .await;
 
-        let counter = state.frame_counter.load(Ordering::SeqCst);
+        let counter = state.main_stream.frame_counter();
         let payload = state
+            .main_stream
             .get_tier_jpeg(JpegTier::Hd1080, counter)
             .expect("Hd1080 payload missing");
         let magic = u32::from_le_bytes(payload[0..4].try_into().unwrap());
         assert_eq!(magic, crate::server::encoding::JPEG_MAGIC);
-        assert!(state.get_tier_jpeg(JpegTier::Qhd1440, counter).is_none());
+        assert!(state.main_stream.get_tier_jpeg(JpegTier::Qhd1440, counter).is_none());
     }
 
     #[tokio::test]
     async fn test_render_task_deduplicates_equivalent_tiers() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.jpeg_tier_clients[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
-        state.jpeg_tier_clients[JpegTier::Original as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Uhd2160 as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Original as usize].store(1, Ordering::SeqCst);
 
         // Encode directly: the preview pipeline is irrelevant here and costly at
         // sensor resolution.
@@ -1093,7 +1099,7 @@ mod tests {
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
             super::encode_jpeg_tiers(
-                &state_clone,
+                &state_clone.main_stream,
                 &to_ready_frame(&frame),
                 1,
                 &mut super::ConversionCache::default(),
@@ -1102,8 +1108,8 @@ mod tests {
         .await
         .unwrap();
 
-        let uhd = state.get_tier_jpeg(JpegTier::Uhd2160, 1).unwrap();
-        let original = state.get_tier_jpeg(JpegTier::Original, 1).unwrap();
+        let uhd = state.main_stream.get_tier_jpeg(JpegTier::Uhd2160, 1).unwrap();
+        let original = state.main_stream.get_tier_jpeg(JpegTier::Original, 1).unwrap();
         assert_eq!(
             uhd.as_ptr(),
             original.as_ptr(),
@@ -1119,7 +1125,7 @@ mod tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
         for tier in [JpegTier::Hd1080, JpegTier::Qhd1440, JpegTier::Uhd2160] {
-            state.jpeg_tier_clients[tier as usize].store(1, Ordering::SeqCst);
+            state.main_stream.tier_clients(StreamKind::Jpeg)[tier as usize].store(1, Ordering::SeqCst);
         }
 
         let (width, height) = (IMX464.0 / 2, IMX464.1 / 2);
@@ -1127,7 +1133,7 @@ mod tests {
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
             super::encode_jpeg_tiers(
-                &state_clone,
+                &state_clone.main_stream,
                 &to_ready_frame(&frame),
                 1,
                 &mut super::ConversionCache::default(),
@@ -1136,9 +1142,9 @@ mod tests {
         .await
         .unwrap();
 
-        let hd = state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
+        let hd = state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
         for tier in [JpegTier::Qhd1440, JpegTier::Uhd2160] {
-            let other = state.get_tier_jpeg(tier, 1).unwrap();
+            let other = state.main_stream.get_tier_jpeg(tier, 1).unwrap();
             assert_eq!(
                 hd.as_ptr(),
                 other.as_ptr(),
@@ -1150,15 +1156,15 @@ mod tests {
             width as u32
         );
         // Nobody selected Original, so it must not have been encoded at all.
-        assert!(state.get_tier_jpeg(JpegTier::Original, 1).is_none());
+        assert!(state.main_stream.get_tier_jpeg(JpegTier::Original, 1).is_none());
     }
 
     #[tokio::test]
     async fn test_render_task_encodes_downsampled_tier_separately() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.jpeg_tier_clients[JpegTier::Hd1080 as usize].store(1, Ordering::SeqCst);
-        state.jpeg_tier_clients[JpegTier::Original as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Hd1080 as usize].store(1, Ordering::SeqCst);
+        state.main_stream.tier_clients(StreamKind::Jpeg)[JpegTier::Original as usize].store(1, Ordering::SeqCst);
 
         // 2000x1200 is wider than the 1080p box, so Hd1080 must not reuse the
         // native-resolution payload.
@@ -1166,7 +1172,7 @@ mod tests {
         let state_clone = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
             super::encode_jpeg_tiers(
-                &state_clone,
+                &state_clone.main_stream,
                 &to_ready_frame(&frame),
                 1,
                 &mut super::ConversionCache::default(),
@@ -1175,8 +1181,8 @@ mod tests {
         .await
         .unwrap();
 
-        let hd = state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
-        let original = state.get_tier_jpeg(JpegTier::Original, 1).unwrap();
+        let hd = state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap();
+        let original = state.main_stream.get_tier_jpeg(JpegTier::Original, 1).unwrap();
         assert_ne!(hd.as_ptr(), original.as_ptr());
 
         let hd_width = u32::from_le_bytes(hd[4..8].try_into().unwrap());

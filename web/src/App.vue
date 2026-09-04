@@ -37,6 +37,10 @@ const {
   _cameraStatusRef,
   _cameraPhaseRef,
   capabilities,
+  mainCamera,
+  guideCamera,
+  hasGuideCamera,
+  selectedCameraRole,
 } = useAppState()
 
 const showSettings = ref(false)
@@ -59,6 +63,10 @@ provide('refreshCameras', refreshCameras)
 provide('capabilities', capabilities)
 provide('cameraStatus', _cameraStatusRef)
 provide('cameraPhase', _cameraPhaseRef)
+provide('mainCamera', mainCamera)
+provide('guideCamera', guideCamera)
+provide('hasGuideCamera', hasGuideCamera)
+provide('selectedCameraRole', selectedCameraRole)
 
 // Handle Push-To button click - check ASTAP and catalog status first
 async function handlePushToClick() {

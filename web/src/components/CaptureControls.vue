@@ -28,6 +28,25 @@ const capabilities = inject('capabilities', {
 
 const {error, loading, clearError, withErrorHandling} = useError()
 
+/**
+ * Which camera the exposure and gain controls are editing.
+ *
+ * Clicking a camera in the list picks it; the guide camera keeps its own exposure and
+ * gain, so the same two controls address a different set of values depending on the
+ * selection. The *capture* target is unaffected — that is always the imaging camera,
+ * which the server resolves for itself.
+ */
+const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
+const mainCamera = inject('mainCamera', computed(() => null))
+
+const isEditingGuide = computed(() => settingsRole.value === 'guide')
+
+/** The hardware block belonging to the camera currently selected. */
+const cameraSettings = computed(() => {
+  if (!settings?.value) return null
+  return isEditingGuide.value ? settings.value.guide_camera : settings.value
+})
+
 const exposure = ref(100)
 const exposureUnit = ref('ms')
 const gain = ref(GAIN_LIMITS.default)
@@ -45,12 +64,15 @@ const stackingMode = computed(() => {
   return 'off'
 })
 
-// Sync from settings
+// Sync from settings. Keyed on the selected camera too, so switching cameras in the
+// list re-reads the controls against that camera's own values.
 watch(
-    settings,
-    (newSettings) => {
-      if (newSettings) {
-        const us = newSettings.exposure_us
+    [settings, settingsRole],
+    ([allSettings]) => {
+      const newSettings = allSettings
+      const hardware = isEditingGuide.value ? allSettings?.guide_camera : allSettings
+      if (newSettings && hardware) {
+        const us = hardware.exposure_us
         if (us >= 1000000) {
           exposure.value = us / 1000000
           exposureUnit.value = 's'
@@ -61,7 +83,7 @@ watch(
           exposure.value = us
           exposureUnit.value = 'us'
         }
-        gain.value = newSettings.gain
+        gain.value = hardware.gain
         if (newSettings.stacking_type) {
           selectedStackingType.value = newSettings.stacking_type
         }
@@ -133,8 +155,19 @@ const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || E
 
 async function handleStart() {
   await withErrorHandling(async () => {
-    await updateSettings({exposure_us: exposureUs.value, gain: gain.value})
-    await startCapture(selectedCamera.value)
+    // Always the imaging camera's exposure, and always the imaging camera: the guide
+    // camera can be the one selected for editing without being the capture target.
+    await updateSettings({
+      camera_role: 'main',
+      exposure_us: exposureUs.value,
+      gain: gain.value,
+    })
+    // No fallback to `selectedCamera`: with only a guide camera connected that
+    // fallback sent the *guide* camera's id, and the server answered with a
+    // role-mismatch message about connecting — which is not what the user did.
+    // Sending nothing lets the server resolve the imaging camera itself, and say
+    // plainly that there isn't one.
+    await startCapture(mainCamera.value?.id ?? null)
   })
 }
 
@@ -151,9 +184,12 @@ async function applySetting(settings) {
   })
 }
 
-const applyExposure = () => applySetting({exposure_us: exposureUs.value})
-const applyGain = () => applySetting({gain: gain.value})
-const setExposurePreset = (us) => applySetting({exposure_us: us})
+/** Hardware edits carry the role, so they land on the camera the user selected. */
+const applyHardware = (patch) => applySetting({camera_role: settingsRole.value, ...patch})
+
+const applyExposure = () => applyHardware({exposure_us: exposureUs.value})
+const applyGain = () => applyHardware({gain: gain.value})
+const setExposurePreset = (us) => applyHardware({exposure_us: us})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
 const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
@@ -286,7 +322,7 @@ const HELP = HELP_TEXTS
             v-for="preset in exposurePresets"
             :key="preset.us"
             class="btn btn-preset"
-            :class="{ active: settings?.exposure_us === preset.us }"
+            :class="{ active: cameraSettings?.exposure_us === preset.us }"
             :disabled="showCometLock"
             @click="setExposurePreset(preset.us)"
         >

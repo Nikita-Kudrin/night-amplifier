@@ -102,6 +102,13 @@ pub struct CaptureSettings {
     /// doesn't leak stale values (e.g. cooler=true from a cooled camera into
     /// an uncooled one).
     pub camera_profiles: HashMap<String, CameraCaptureProfile>,
+    /// The guide camera's live hardware values.
+    ///
+    /// The flat fields above are the *main* camera's; the guide camera cannot share them
+    /// because both are connected at once and a guide sub is typically seconds where an
+    /// imaging sub is minutes. Same shape as a stored profile, so `camera_profiles`
+    /// remembers it across reconnects exactly as it does the main camera's.
+    pub guide_camera: CameraCaptureProfile,
     /// Name of the last active camera (for profile inheritance)
     pub last_camera_name: Option<String>,
     /// Whether the user has accepted the End User License Agreement
@@ -118,7 +125,7 @@ pub struct CaptureSettings {
 /// These are swapped into the flat `CaptureSettings` fields on connect so the
 /// rest of the pipeline (capture loop, cooler monitor, UI DTO) stays unaware
 /// of the per-camera indirection.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CameraCaptureProfile {
     pub exposure_us: u64,
     pub gain: i32,
@@ -133,6 +140,28 @@ pub struct CameraCaptureProfile {
     pub dew_heater_enabled: bool,
     #[serde(default = "default_dew_heater_power")]
     pub dew_heater_power: i32,
+}
+
+/// Written out rather than derived: a derived `Default` is all zeros, and `bin: 0` with
+/// `exposure_us: 0` is a config every SDK rejects in `CaptureConfig::validate` — which
+/// is what a guide camera got before it had ever been configured. The `serde(default)`
+/// attributes above cover a different case (a field missing from a settings file) and
+/// never run for `Default::default()`.
+impl Default for CameraCaptureProfile {
+    fn default() -> Self {
+        Self {
+            exposure_us: 1_000_000,
+            gain: 0,
+            offset: 10,
+            bin: 1,
+            cooler_enabled: false,
+            target_temp_c: None,
+            sensor_mode_override: None,
+            cooler_fast_mode: false,
+            dew_heater_enabled: default_dew_heater_enabled(),
+            dew_heater_power: default_dew_heater_power(),
+        }
+    }
 }
 
 fn default_dew_heater_enabled() -> bool {
@@ -483,11 +512,14 @@ impl Default for EyepieceSettings {
 
 impl Default for CaptureSettings {
     fn default() -> Self {
+        // The flat fields *are* the main camera's profile, so they take their defaults
+        // from the same place the guide camera's do — two literal lists would drift.
+        let hw = CameraCaptureProfile::default();
         Self {
-            exposure_us: 1_000_000,
-            gain: 0,
-            offset: 10,
-            bin: 1,
+            exposure_us: hw.exposure_us,
+            gain: hw.gain,
+            offset: hw.offset,
+            bin: hw.bin,
             auto_stretch: true,
             stacking: true,
             rejection_sigma: 2.5,
@@ -507,16 +539,16 @@ impl Default for CaptureSettings {
             simulated_preload_images: 5,
             show_focus_image: true,
             force_focus_image_now: false,
-            cooler_enabled: false,
-            target_temp_c: None,
-            cooler_fast_mode: false,
-            sensor_mode_override: None,
+            cooler_enabled: hw.cooler_enabled,
+            target_temp_c: hw.target_temp_c,
+            cooler_fast_mode: hw.cooler_fast_mode,
+            sensor_mode_override: hw.sensor_mode_override,
             comet_roi: None,
             planetary_roi: None,
             planetary_auto_tracking: true,
             planetary_multi_point_alignment: false,
-            dew_heater_enabled: true,
-            dew_heater_power: 10,
+            dew_heater_enabled: hw.dew_heater_enabled,
+            dew_heater_power: hw.dew_heater_power,
             wanderer_mode: false,
             auto_reconnect: true,
             auto_resume_capture: true,
@@ -526,6 +558,7 @@ impl Default for CaptureSettings {
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
             camera_profiles: HashMap::new(),
+            guide_camera: hw,
             last_camera_name: None,
             eula_accepted: false,
             indi_server_host: "127.0.0.1".to_string(),
@@ -559,9 +592,19 @@ impl CaptureSettings {
         self.save_stacked_image && self.capture_mode() == CaptureMode::Stacking
     }
 
+    /// Whether the guide camera's raw frames go to disk.
+    pub fn saves_guide_raw_frames(&self) -> bool {
+        self.raw_frame_saving.saves(CaptureMode::Guide)
+    }
+
     /// Whether the disk writer has anything at all to do.
+    ///
+    /// The guide switch counts even though `initialize_capture_session` — the only place
+    /// that used to set the writer's master flag — runs at *main* capture start. A guide
+    /// camera saving subs with no main capture running is an ordinary case, and without
+    /// this the writer would silently refuse every one of its frames.
     pub fn disk_writing_enabled(&self) -> bool {
-        self.saves_raw_frames() || self.saves_stacked_image()
+        self.saves_raw_frames() || self.saves_stacked_image() || self.saves_guide_raw_frames()
     }
 
     /// Get the saturation boost config based on current settings
@@ -578,8 +621,51 @@ impl CaptureSettings {
         }
     }
 
-    /// Convert to camera capture config
+    /// Convert the main camera's settings to a capture config.
     pub fn to_capture_config(&self) -> CaptureConfig {
+        self.to_capture_config_for(super::CameraRole::Main)
+    }
+
+    /// Build the capture config for one camera role.
+    pub fn to_capture_config_for(&self, role: super::CameraRole) -> CaptureConfig {
+        self.to_capture_config_with(&self.profile_for(role), role)
+    }
+
+    /// The main camera's hardware fields, read out of the flat settings.
+    ///
+    /// The flat fields *are* the main camera's live values; this just views them through
+    /// the same shape the guide camera stores its own in, so one config builder serves
+    /// both.
+    pub fn main_camera_profile(&self) -> CameraCaptureProfile {
+        CameraCaptureProfile {
+            exposure_us: self.exposure_us,
+            gain: self.gain,
+            offset: self.offset,
+            bin: self.bin,
+            cooler_enabled: self.cooler_enabled,
+            target_temp_c: self.target_temp_c,
+            sensor_mode_override: self.sensor_mode_override,
+            cooler_fast_mode: self.cooler_fast_mode,
+            dew_heater_enabled: self.dew_heater_enabled,
+            dew_heater_power: self.dew_heater_power,
+        }
+    }
+
+    /// The hardware profile for one camera role.
+    pub fn profile_for(&self, role: super::CameraRole) -> CameraCaptureProfile {
+        match role {
+            super::CameraRole::Main => self.main_camera_profile(),
+            super::CameraRole::Guide => self.guide_camera.clone(),
+        }
+    }
+
+    /// Build a capture config from one camera's hardware profile plus the
+    /// session-wide fields (simulator preload) both cameras share.
+    pub fn to_capture_config_with(
+        &self,
+        profile: &CameraCaptureProfile,
+        role: super::CameraRole,
+    ) -> CaptureConfig {
         // "Low Noise" dual-sampling trades frame rate for read noise, so it's
         // only worth selecting while frames are actually being integrated —
         // not during a raw live-view feed under a stacking-capable target
@@ -590,8 +676,15 @@ impl CaptureSettings {
         // — and OR-ing `wanderer_mode` in directly would be wrong for the
         // orthogonal-misuse case of `stacking: false, wanderer_mode: true`
         // (no frames integrated there either).
-        let is_actively_stacking = self.stacking && self.stacking_type.supports_stacking();
-        let sensor_mode = self.sensor_mode_override.unwrap_or_else(|| {
+        //
+        // The stacking flags describe the *imaging* session, so they say nothing about a
+        // guide camera: nothing it produces is ever integrated, and starting a Deep Sky
+        // stack used to flip the guide camera to `LowReadoutNoise` — buying read noise
+        // it does not need with the frame rate it does.
+        let is_actively_stacking = role == super::CameraRole::Main
+            && self.stacking
+            && self.stacking_type.supports_stacking();
+        let sensor_mode = profile.sensor_mode_override.unwrap_or_else(|| {
             if is_actively_stacking {
                 self.stacking_type.desired_sensor_mode()
             } else {
@@ -599,17 +692,31 @@ impl CaptureSettings {
             }
         });
         let mut config = CaptureConfig::new()
-            .with_exposure_us(self.exposure_us)
-            .with_gain(self.gain)
-            .with_offset(self.offset)
-            .with_bin(self.bin)
+            .with_exposure_us(profile.exposure_us)
+            .with_gain(profile.gain)
+            .with_offset(profile.offset)
+            .with_bin(profile.bin)
             .with_simulated_preload_images(self.simulated_preload_images)
-            .with_cooler(self.cooler_enabled)
+            .with_cooler(profile.cooler_enabled)
             .with_sensor_mode(sensor_mode);
-        if let Some(temp) = self.target_temp_c {
+        if let Some(temp) = profile.target_temp_c {
             config.target_temp_c = Some(temp);
         }
         config
+    }
+
+    /// Telescope parameters to plan a plate solve against, for the camera that is
+    /// producing the solve frames.
+    ///
+    /// The guide camera sits on a different scope, so handing ASTAP the main scope's
+    /// FOV for guide-scope frames sends it hunting at the wrong scale. The per-camera
+    /// map is what the equipment UI already writes; this is the first thing that reads
+    /// it, falling back to the flat block for a camera with no profile of its own.
+    pub fn solver_telescope(&self, camera_name: Option<&str>) -> TelescopeSettings {
+        camera_name
+            .and_then(|name| self.camera_telescope_profiles.get(name))
+            .cloned()
+            .unwrap_or_else(|| self.telescope.clone())
     }
 }
 
@@ -735,6 +842,7 @@ mod tests {
                     live_view: enabled_mode == CaptureMode::LiveView,
                     wanderer: enabled_mode == CaptureMode::Wanderer,
                     stacking: enabled_mode == CaptureMode::Stacking,
+                    guide: false,
                 };
                 let settings = CaptureSettings {
                     stacking,

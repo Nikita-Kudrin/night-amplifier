@@ -14,7 +14,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use super::AppState;
+use super::FrameStream;
 use crate::server::encoding::{JPEG_MAX_BOUNDING_BOX, JPEG_MIN_BOUNDING_BOX};
 
 /// Smallest and largest display-resolution class a client can ask for, i.e. the
@@ -179,23 +179,34 @@ impl JpegTierCache {
         self.entries[tier as usize] = Some(data.clone());
         data
     }
+
+    /// Forget every payload. Used when a stream's producer stops, so a client that
+    /// reconnects is not handed a frame from a camera that is no longer there.
+    pub fn clear(&mut self) {
+        self.entries = Default::default();
+    }
 }
 
-/// Registers a client against a resolution tier for as long as it is alive.
+/// Registers a client against a resolution tier of one stream for as long as it is
+/// alive.
 ///
-/// The render task only encodes tiers with a non-zero count, so the decrement
-/// has to happen even when a handler exits early or panics — hence a `Drop`
-/// guard rather than manual bookkeeping.
+/// The producer only encodes tiers with a non-zero count — and the guide stream only
+/// renders at all when some tier has one — so the decrement has to happen even when a
+/// handler exits early or panics, hence a `Drop` guard rather than manual bookkeeping.
 pub struct TierClientGuard {
-    state: Arc<AppState>,
+    stream: Arc<FrameStream>,
     kind: StreamKind,
     tier: JpegTier,
 }
 
 impl TierClientGuard {
-    pub fn new(state: Arc<AppState>, kind: StreamKind, tier: JpegTier) -> Self {
-        state.tier_clients(kind)[tier as usize].fetch_add(1, Ordering::SeqCst);
-        Self { state, kind, tier }
+    pub fn new(stream: Arc<FrameStream>, kind: StreamKind, tier: JpegTier) -> Self {
+        stream.tier_clients(kind)[tier as usize].fetch_add(1, Ordering::SeqCst);
+        Self {
+            stream,
+            kind,
+            tier,
+        }
     }
 
     pub fn tier(&self) -> JpegTier {
@@ -208,7 +219,7 @@ impl TierClientGuard {
         if tier == self.tier {
             return;
         }
-        let counters = self.state.tier_clients(self.kind);
+        let counters = self.stream.tier_clients(self.kind);
         counters[tier as usize].fetch_add(1, Ordering::SeqCst);
         counters[self.tier as usize].fetch_sub(1, Ordering::SeqCst);
         self.tier = tier;
@@ -217,7 +228,7 @@ impl TierClientGuard {
 
 impl Drop for TierClientGuard {
     fn drop(&mut self) {
-        self.state.tier_clients(self.kind)[self.tier as usize].fetch_sub(1, Ordering::SeqCst);
+        self.stream.tier_clients(self.kind)[self.tier as usize].fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -388,8 +399,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_jpeg_tier_client_increment_decrement() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let guard = TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Qhd1440);
         assert_eq!(state.jpeg_tier_client_count(JpegTier::Qhd1440), 1);
@@ -401,8 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_jpeg_tier_client_guard_drop() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let handle = {
             let state = Arc::clone(&state);
@@ -421,14 +430,13 @@ mod tests {
     /// so a client that never reports a viewport is served exactly as before.
     #[tokio::test]
     async fn lossless_target_falls_back_to_the_4k_cap() {
-        let (state, _disk_writer) = AppState::new_for_testing();
+        let state = FrameStream::default();
         assert_eq!(state.lossless_target_box(), JPEG_MAX_BOUNDING_BOX);
     }
 
     #[tokio::test]
     async fn lossless_target_follows_the_connected_client() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let guard =
             TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Qhd1440);
@@ -448,8 +456,7 @@ mod tests {
     /// got before tiers reached this path.
     #[tokio::test]
     async fn lossless_target_serves_the_largest_connected_tier() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let _small =
             TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Hd1080);
@@ -468,8 +475,7 @@ mod tests {
     /// another's.
     #[tokio::test]
     async fn stream_kinds_do_not_share_tier_counters() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let _jpeg = TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Uhd2160);
         assert_eq!(
@@ -492,8 +498,7 @@ mod tests {
     /// than trying to ship a native frame of any size.
     #[tokio::test]
     async fn lossless_target_caps_an_unbounded_tier() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let _guard =
             TierClientGuard::new(Arc::clone(&state), StreamKind::Lossless, JpegTier::Original);
@@ -502,8 +507,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_jpeg_tier_client_guard_set_tier_moves_count() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
+        let state = Arc::new(FrameStream::default());
 
         let mut guard = TierClientGuard::new(Arc::clone(&state), StreamKind::Jpeg, JpegTier::Hd1080);
         guard.set_tier(JpegTier::Uhd2160);

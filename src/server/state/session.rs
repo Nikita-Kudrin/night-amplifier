@@ -159,6 +159,9 @@ pub struct ConnectedCameraInfo {
     pub provider: String,
     /// Provider index
     pub index: usize,
+    /// Which position this camera occupies. At most one camera holds each role, and
+    /// the role decides which slot owns its handle and which stream it feeds.
+    pub role: super::CameraRole,
     /// Camera info
     pub info: CameraInfo,
 }

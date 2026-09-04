@@ -7,18 +7,16 @@ use super::super::camera_session::lifecycle::camera_profile_key;
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
-use super::super::state::{AppState, CaptureSettings, CaptureState, StackingType};
+use super::super::state::{AppState, CameraRole, CaptureSettings, CaptureState, StackingType};
 
-/// Returns the profile key (`"{provider}/{model}"`) for the currently
-/// connected camera, if any. `None` when no camera is attached — callers
-/// should treat that as "skip per-camera work" rather than creating a
-/// phantom profile.
-async fn active_camera_profile_key(state: &Arc<AppState>) -> Option<String> {
-    let cameras = state.cameras.read().await;
-    cameras
-        .values()
-        .next()
-        .map(|info| camera_profile_key(&info.provider, &info.info.name))
+/// Returns the profile key (`"{provider}/{model}"`) for the camera in `role`, if any.
+/// `None` when that position is empty — callers should treat it as "skip per-camera
+/// work" rather than creating a phantom profile.
+async fn camera_profile_key_for(state: &Arc<AppState>, role: CameraRole) -> Option<String> {
+    state
+        .camera_in_role(role)
+        .await
+        .map(|info| camera_profile_key(&info.provider, &info.info.name, role))
 }
 
 /// GET /api/settings
@@ -62,18 +60,35 @@ impl OpticsChange {
 }
 
 /// Compare a settings request against the settings currently in force.
-pub fn optics_change(request: &UpdateSettingsRequest, current: &CaptureSettings) -> OpticsChange {
-    let bin_changed = request.bin.is_some_and(|b| b != current.bin);
+///
+/// `role` is the camera the request's hardware fields are for: binning and sensor mode
+/// live in that camera's own profile, so comparing them against the flat fields would
+/// report a guide-camera change as a change to the imaging camera's framing.
+pub fn optics_change(
+    request: &UpdateSettingsRequest,
+    current: &CaptureSettings,
+    role: CameraRole,
+) -> OpticsChange {
+    let profile = current.profile_for(role);
+    let bin_changed = request.bin.is_some_and(|b| b != profile.bin);
     let sensor_mode_changed = request
         .sensor_mode_override
         .as_ref()
-        .is_some_and(|m| Some(m) != current.sensor_mode_override.as_ref());
+        .is_some_and(|m| Some(m) != profile.sensor_mode_override.as_ref());
+
+    // A per-camera optics profile is what the solver actually reads, so a request that
+    // only rewrites the map still moves the FOV hint. The flat block alone would miss it.
+    let profiles_changed = request
+        .camera_telescope_profiles
+        .as_ref()
+        .is_some_and(|p| *p != current.camera_telescope_profiles);
 
     OpticsChange {
-        telescope: request
-            .telescope
-            .as_ref()
-            .is_some_and(|t| *t != current.telescope),
+        telescope: profiles_changed
+            || request
+                .telescope
+                .as_ref()
+                .is_some_and(|t| *t != current.telescope),
         framing: bin_changed || sensor_mode_changed,
     }
 }
@@ -96,7 +111,11 @@ pub async fn update_settings(
         }
     }
 
-    let optics = optics_change(&request, &*state.settings.read().await);
+    // Which camera the hardware fields in this request are for. Absent means the
+    // imaging camera, so every existing client keeps working untouched.
+    let role = request.camera_role.unwrap_or(CameraRole::Main);
+
+    let optics = optics_change(&request, &*state.settings.read().await, role);
     let cooler_fields_changed = request.cooler_enabled.is_some()
         || request.target_temp_c.is_some()
         || request.cooler_fast_mode.is_some();
@@ -107,7 +126,7 @@ pub async fn update_settings(
     // so we never hold `settings.write()` while awaiting `cameras.read()` —
     // elsewhere the lock order is cameras-first (e.g. disconnect), and the
     // reversed order here could deadlock under contention.
-    let active_key = active_camera_profile_key(&state).await;
+    let active_key = camera_profile_key_for(&state, role).await;
 
     // Same reason as `active_key`: `sync_disk_session` needs this but must not read the
     // session lock while `settings.write()` is held — `frame_processed` takes those two
@@ -118,18 +137,6 @@ pub async fn update_settings(
     {
         let mut settings = state.settings.write().await;
 
-        if let Some(exposure_us) = request.exposure_us {
-            settings.exposure_us = exposure_us;
-        }
-        if let Some(gain) = request.gain {
-            settings.gain = gain;
-        }
-        if let Some(offset) = request.offset {
-            settings.offset = offset;
-        }
-        if let Some(bin) = request.bin {
-            settings.bin = bin;
-        }
         if let Some(auto_stretch) = request.auto_stretch {
             settings.auto_stretch = auto_stretch;
         }
@@ -249,24 +256,6 @@ pub async fn update_settings(
         if let Some(name) = request.last_camera_name {
             settings.last_camera_name = Some(name);
         }
-        if let Some(cooler_enabled) = request.cooler_enabled {
-            settings.cooler_enabled = cooler_enabled;
-        }
-        if let Some(target_temp_c) = request.target_temp_c {
-            settings.target_temp_c = Some(target_temp_c.clamp(-60.0, 30.0));
-        }
-        if let Some(fast_mode) = request.cooler_fast_mode {
-            settings.cooler_fast_mode = fast_mode;
-        }
-        if let Some(sensor_mode) = request.sensor_mode_override {
-            settings.sensor_mode_override = Some(sensor_mode);
-        }
-        if let Some(dew_heater_enabled) = request.dew_heater_enabled {
-            settings.dew_heater_enabled = dew_heater_enabled;
-        }
-        if let Some(dew_heater_power) = request.dew_heater_power {
-            settings.dew_heater_power = dew_heater_power.clamp(0, 100);
-        }
         if let Some(eula_accepted) = request.eula_accepted {
             settings.eula_accepted = eula_accepted;
         }
@@ -277,23 +266,54 @@ pub async fn update_settings(
             settings.indi_server_port = port;
         }
 
-        // Mirror the seven hardware-specific fields into the currently-
-        // connected camera's profile. Skip when no camera is connected so we
-        // don't create phantom entries.
-        if let Some(key) = active_key.clone() {
-            let snapshot = super::super::state::CameraCaptureProfile {
-                exposure_us: settings.exposure_us,
-                gain: settings.gain,
-                offset: settings.offset,
-                bin: settings.bin,
-                cooler_enabled: settings.cooler_enabled,
-                target_temp_c: settings.target_temp_c,
-                sensor_mode_override: settings.sensor_mode_override,
-                cooler_fast_mode: settings.cooler_fast_mode,
-                dew_heater_enabled: settings.dew_heater_enabled,
-                dew_heater_power: settings.dew_heater_power,
-            };
-            settings.camera_profiles.insert(key, snapshot);
+        // The ten hardware fields belong to one camera, not to the session: with a
+        // guide camera connected there are two live sets, and `role` says which one this
+        // request is editing. Applied as a unit so a request can never leave a camera
+        // half-updated.
+        {
+            let mut profile = settings.profile_for(role);
+            if let Some(exposure_us) = request.exposure_us {
+                profile.exposure_us = exposure_us;
+            }
+            if let Some(gain) = request.gain {
+                profile.gain = gain;
+            }
+            if let Some(offset) = request.offset {
+                profile.offset = offset;
+            }
+            if let Some(bin) = request.bin {
+                profile.bin = bin;
+            }
+            if let Some(cooler_enabled) = request.cooler_enabled {
+                profile.cooler_enabled = cooler_enabled;
+            }
+            if let Some(target_temp_c) = request.target_temp_c {
+                profile.target_temp_c = Some(target_temp_c.clamp(-60.0, 30.0));
+            }
+            if let Some(fast_mode) = request.cooler_fast_mode {
+                profile.cooler_fast_mode = fast_mode;
+            }
+            if let Some(sensor_mode) = request.sensor_mode_override {
+                profile.sensor_mode_override = Some(sensor_mode);
+            }
+            if let Some(dew_heater_enabled) = request.dew_heater_enabled {
+                profile.dew_heater_enabled = dew_heater_enabled;
+            }
+            if let Some(dew_heater_power) = request.dew_heater_power {
+                profile.dew_heater_power = dew_heater_power.clamp(0, 100);
+            }
+
+            match role {
+                CameraRole::Main => profile.apply_to(&mut settings),
+                CameraRole::Guide => settings.guide_camera = profile.clone(),
+            }
+
+            // Remember it against the camera itself, so reconnecting restores what the
+            // user set. Skipped when the role is empty, so we don't create phantom
+            // entries for a camera that is not there.
+            if let Some(key) = active_key.clone() {
+                settings.camera_profiles.insert(key, profile);
+            }
         }
 
         // Snapshot for `sync_disk_session`, which runs once the write guard is gone.
@@ -301,19 +321,27 @@ pub async fn update_settings(
         // part of the decision, so every mode field has to be applied first.
         applied_settings = settings.clone();
 
-        // If exposure-impacting settings changed while capturing, cancel current exposure
-        // so changes take effect immediately.
-        let capture_state = state.capture_state().await;
-        if capture_state == CaptureState::Capturing {
-            let exposure_changed = request.exposure_us.is_some();
-            let gain_changed = request.gain.is_some();
-            let offset_changed = request.offset.is_some();
-            let bin_changed = request.bin.is_some();
-
-            if exposure_changed || gain_changed || offset_changed || bin_changed {
-                tracing::info!("Exposure-impacting settings updated while capturing, cancelling current exposure to apply changes");
-                state.cancel_active_exposure().await;
-            }
+        // If exposure-impacting settings changed, cut short the exposure in flight so the
+        // change takes effect now rather than at the end of the current sub.
+        //
+        // Scoped to `role`: the guide camera free-runs whether or not a capture is going,
+        // and cancelling every slot would discard a running imaging sub because somebody
+        // nudged the guide camera's gain.
+        let exposure_impacting = request.exposure_us.is_some()
+            || request.gain.is_some()
+            || request.offset.is_some()
+            || request.bin.is_some();
+        let camera_is_exposing = match role {
+            CameraRole::Main => state.capture_state().await == CaptureState::Capturing,
+            // Always: its loop is running for as long as it is connected.
+            CameraRole::Guide => state.guide_loop_running(),
+        };
+        if exposure_impacting && camera_is_exposing {
+            tracing::info!(
+                role = role.label(),
+                "Exposure-impacting settings updated, cancelling the current exposure to apply them"
+            );
+            state.cancel_active_exposure(role).await;
         }
     }
 
@@ -330,17 +358,19 @@ pub async fn update_settings(
     // the per-frame apply_cooler_config inside capture() only runs while
     // capturing.
     if cooler_fields_changed {
-        crate::server::camera_session::lifecycle::apply_cooler_settings(&state).await;
+        crate::server::camera_session::lifecycle::apply_cooler_settings(&state, role).await;
     }
 
     if dew_heater_fields_changed {
-        crate::server::camera_session::lifecycle::apply_dew_heater_settings(&state).await;
+        crate::server::camera_session::lifecycle::apply_dew_heater_settings(&state, role).await;
     }
 
-    // Propagate telescope settings to plate solver for FOV calculation
+    // Propagate telescope settings to plate solver for FOV calculation. Resolved
+    // through `sync_solver_rig` rather than read flat, because with a guide camera
+    // connected the solve runs on the *guide* scope and its focal length is what the
+    // ASTAP hint has to describe.
     if optics.telescope {
-        let telescope = state.settings.read().await.telescope.clone();
-        let _ = PushToService::set_telescope_settings(&state, telescope).await;
+        crate::server::camera_session::lifecycle::sync_solver_rig(&state).await;
     }
 
     // Anything that changes the field of view invalidates a solve in flight — it was

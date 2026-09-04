@@ -162,6 +162,9 @@ export const RAW_FRAME_SAVING_MODES = [
     {key: 'live_view', label: 'Live view'},
     {key: 'wanderer', label: 'Wanderer'},
     {key: 'stacking', label: 'Stacking'},
+    // Runs alongside the other three rather than instead of them, and only makes sense
+    // with a guide camera attached — hence `requiresGuideCamera`.
+    {key: 'guide', label: 'Guide camera', requiresGuideCamera: true},
 ]
 
 // How much sensor resolution the preview pipeline may bin away before it runs.
@@ -235,7 +238,7 @@ export const DEFAULT_SETTINGS = {
     stacking: true,
     background_subtraction: true,
     background_extraction_algorithm: 'grid_bilinear',
-    raw_frame_saving: {live_view: false, wanderer: false, stacking: false},
+    raw_frame_saving: {live_view: false, wanderer: false, stacking: false, guide: false},
     save_stacked_image: false,
     weighting_preset: 'balanced',
     rejection_method: 'None',
@@ -320,7 +323,7 @@ export const HELP_TEXTS = {
     saturation_boost_strength:
         'Adjusts the intensity of the Shadow Saturation Boost. Higher values create more vibrant colors in faint areas.',
     raw_frame_saving:
-        "Saves captured frames to 'captures/raw/', chosen per capture mode. Deep Sky and Comet write one FITS file per exposure; Planetary writes a single SER container per session. Each session gets its own folder, tagged with the mode that filled it: '-live', '-wanderer' or '-stacking'.\nLive view writes a frame per exposure, so at short focusing exposures it can fill a card quickly and outrun a slow disk - frames are dropped rather than delaying capture.",
+        "Saves captured frames to 'captures/raw/', chosen per capture mode. Deep Sky and Comet write one FITS file per exposure; Planetary writes a single SER container per session. Each session gets its own folder, tagged with the mode that filled it: '-live', '-wanderer', '-stacking' or '-guide'. The guide camera saves alongside the imaging one, into a folder of its own.\nLive view writes a frame per exposure, so at short focusing exposures it can fill a card quickly and outrun a slow disk - frames are dropped rather than delaying capture.",
     save_stacked_image:
         "Saves the final stack as a FITS and a stretched PNG to 'captures/stacked/'. Stacking mode only - Live view builds no stack, and Wanderer discards its stack whenever the telescope moves.",
     weighting_preset:

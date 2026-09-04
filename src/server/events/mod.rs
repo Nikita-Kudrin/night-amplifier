@@ -287,6 +287,7 @@ pub enum CameraPhaseDto {
     Idle,
     Precooling,
     Capturing,
+    Guiding,
     WarmingUp,
 }
 
@@ -297,6 +298,7 @@ impl From<CameraPhase> for CameraPhaseDto {
             CameraPhase::Idle => CameraPhaseDto::Idle,
             CameraPhase::Precooling => CameraPhaseDto::Precooling,
             CameraPhase::Capturing => CameraPhaseDto::Capturing,
+            CameraPhase::Guiding => CameraPhaseDto::Guiding,
             CameraPhase::WarmingUp => CameraPhaseDto::WarmingUp,
         }
     }

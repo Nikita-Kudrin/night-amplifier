@@ -62,6 +62,7 @@ async fn test_multiple_cameras_connected() {
                 id: "camera_1".to_string(),
                 provider: "Mock".to_string(),
                 index: 1,
+                role: CameraRole::Main,
                 info: CameraInfo {
                     name: "Second Camera".to_string(),
                     sensor_type: SensorType::Mono,
@@ -284,6 +285,7 @@ fn test_connected_camera_info_clone() {
         id: "test_0".to_string(),
         provider: "Test".to_string(),
         index: 0,
+        role: CameraRole::Main,
         info: CameraInfo {
             name: "Test Camera".to_string(),
             sensor_type: SensorType::Color,

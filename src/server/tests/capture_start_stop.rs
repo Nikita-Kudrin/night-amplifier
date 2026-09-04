@@ -20,10 +20,13 @@ async fn test_capture_start_no_camera_selected() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(json["success"], false);
+    // Names what is missing rather than the internal notion of "selected": the settings
+    // panel's selection can be the guide camera, so "no camera selected" described a
+    // state the user could be looking straight at a connected camera in.
     assert!(json["error"]
         .as_str()
         .unwrap()
-        .contains("No camera selected"));
+        .contains("No imaging camera is connected"));
 }
 
 #[tokio::test]

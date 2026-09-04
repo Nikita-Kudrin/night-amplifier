@@ -22,7 +22,8 @@ const capabilities = ref({
 })
 // Latest live camera status keyed by camera name (cooled cameras)
 const cameraStatus = ref({})
-// Camera lifecycle phase keyed by camera name: 'idle' | 'precooling' | 'capturing' | 'warming_up' | 'disconnected'
+// Camera lifecycle phase keyed by camera name: 'idle' | 'precooling' | 'capturing' |
+// 'guiding' | 'warming_up' | 'disconnected'
 const cameraPhase = ref({})
 
 // Retry state
@@ -37,6 +38,22 @@ const selectedCamera = computed(
 const connectedCameras = computed(() => cameras.value.filter((c) => c.connected))
 
 const availableCameras = computed(() => cameras.value.filter((c) => !c.connected))
+
+const mainCamera = computed(() => cameras.value.find((c) => c.connected && c.role === 'main') || null)
+
+const guideCamera = computed(
+    () => cameras.value.find((c) => c.connected && c.role === 'guide') || null
+)
+
+const hasGuideCamera = computed(() => guideCamera.value !== null)
+
+/**
+ * Which camera the settings panel is editing.
+ *
+ * `selectedCameraId` means "the camera being configured", not "the capture target" —
+ * a capture always runs on the imaging camera, which the backend resolves for itself.
+ */
+const selectedCameraRole = computed(() => selectedCamera.value?.role || 'main')
 
 const isSimulatorCamera = computed(() => selectedCamera.value?.provider === 'Simulator')
 
@@ -63,11 +80,19 @@ async function refreshSettings() {
 async function refreshCameras() {
     try {
         cameras.value = await listCameras()
-        // Auto-select first connected camera if none selected
+        // Drop a selection whose camera has gone, so the settings panel never edits a
+        // camera that is no longer there.
+        if (selectedCameraId.value && !cameras.value.some((c) => c.id === selectedCameraId.value && c.connected)) {
+            selectedCameraId.value = null
+        }
+        // Auto-select the imaging camera when nothing is selected; a guide camera is a
+        // deliberate choice, never the default one.
         if (!selectedCameraId.value) {
-            const connected = cameras.value.find((c) => c.connected)
-            if (connected) {
-                selectedCameraId.value = connected.id
+            const preferred =
+                cameras.value.find((c) => c.connected && c.role === 'main') ||
+                cameras.value.find((c) => c.connected)
+            if (preferred) {
+                selectedCameraId.value = preferred.id
             }
         }
         return cameras.value
@@ -213,8 +238,12 @@ export function useAppState() {
 
         // Computed
         selectedCamera,
+        selectedCameraRole,
         connectedCameras,
         availableCameras,
+        mainCamera,
+        guideCamera,
+        hasGuideCamera,
         isSimulatorCamera,
 
         // Actions

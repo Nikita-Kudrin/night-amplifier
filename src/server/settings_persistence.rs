@@ -112,6 +112,10 @@ pub struct PersistedSettings {
     /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
     #[serde(default)]
     pub camera_profiles: HashMap<String, CameraCaptureProfile>,
+    /// The guide camera's live hardware values. Its own block, not one of the flat
+    /// fields, because both cameras are connected at once.
+    #[serde(default)]
+    pub guide_camera: CameraCaptureProfile,
     /// Name of the last active camera
     #[serde(default)]
     pub last_camera_name: Option<String>,
@@ -232,6 +236,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
+            guide_camera: settings.guide_camera.clone(),
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
@@ -269,7 +274,9 @@ impl PersistedSettings {
 impl From<PersistedSettings> for CaptureSettings {
     fn from(persisted: PersistedSettings) -> Self {
         let raw_frame_saving = persisted.resolved_raw_frame_saving();
+        let guide_camera = persisted.guide_camera.clone();
         Self {
+            guide_camera,
             exposure_us: persisted.exposure_us,
             gain: persisted.gain,
             offset: persisted.offset,

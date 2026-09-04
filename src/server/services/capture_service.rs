@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::server::capture::run_capture_loop;
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::state::{AppState, CaptureState, SessionResumePlan};
+use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
 
 /// Service for managing capture operations
 pub struct CaptureService;
@@ -25,23 +25,37 @@ impl CaptureService {
             return Err(ApiError::CaptureInProgress);
         }
 
-        // Determine which camera to use
+        // A capture always runs on the imaging camera. `selected_camera` is what the
+        // settings panel is editing, which since roles exist can be the guide camera —
+        // resolving through it would start a stacking session on the guide scope.
         let camera_id = match camera_id {
             Some(id) => id,
             None => state
-                .selected_camera
-                .read()
+                .camera_in_role(CameraRole::Main)
                 .await
-                .clone()
+                .map(|info| info.id)
                 .ok_or(ApiError::NoCameraSelected)?,
         };
 
-        // Verify camera is connected
-        {
-            let cameras = state.cameras.read().await;
-            if !cameras.contains_key(&camera_id) {
-                return Err(ApiError::CameraNotConnected(camera_id));
+        // Verify the named camera is connected, and is the imaging one.
+        //
+        // Both arms name the camera rather than its id: the id is what the client sent,
+        // not something the reader recognises. A camera that is not connected has no
+        // name to look up, so that arm falls back to the id — which is the honest
+        // answer there, since nothing in the rig claims it.
+        match state.role_of(&camera_id).await {
+            Some(CameraRole::Main) => {}
+            Some(role) => {
+                let camera = state
+                    .connected_camera_name(&camera_id)
+                    .await
+                    .unwrap_or(camera_id);
+                return Err(ApiError::CaptureCameraIsNotMain {
+                    camera,
+                    held: role.label(),
+                });
             }
+            None => return Err(ApiError::CameraNotConnected(camera_id)),
         }
 
         // Reset state and start capture. A fresh start discards any stack a

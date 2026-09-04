@@ -285,6 +285,26 @@ pub trait PushToSolverPlugin: Send + Sync {
     /// Update telescope settings for FOV calculation.
     /// The solver will compute the precise image-height FOV from these parameters.
     async fn set_telescope_settings(&self, settings: TelescopeSettings) -> Result<(), String>;
+
+    /// Name the camera *and* the optics it is looking through, as one change.
+    ///
+    /// The pair is the solver's rig identity, and applying half of it is a state that
+    /// never physically existed: a new camera behind the previous camera's focal
+    /// length. That is not merely transient. Resolving the remembered FOV is a
+    /// *mutating* read — an entry whose recorded camera contradicts the one asked
+    /// about is discarded, not skipped — so resolving against a mismatched pair can
+    /// permanently delete a hard-won measurement belonging to the rig that is being
+    /// replaced.
+    ///
+    /// The default body applies them in the order that is at least harmless: optics
+    /// first, so the only resolve that sees an inconsistent pair sees the *old* camera
+    /// against the *new* optics, whose rig key has no entry yet and so has nothing to
+    /// discard. Implementations that can apply both before resolving should override
+    /// this and do exactly that.
+    async fn set_rig(&self, camera: Option<String>, telescope: TelescopeSettings) {
+        let _ = self.set_telescope_settings(telescope).await;
+        self.set_active_camera(camera).await;
+    }
 }
 
 /// Catalog search, target selection, and database operations.
@@ -351,3 +371,103 @@ impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushTo
 
 /// Global registry for the Push-To plugin
 pub static PUSH_TO_PLUGIN: OnceLock<Box<dyn PushToSystemPlugin>> = OnceLock::new();
+
+
+#[cfg(test)]
+mod set_rig_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Records the order in which the rig's two halves arrive.
+    #[derive(Default)]
+    struct RecordingPlugin {
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl PushToSolverPlugin for RecordingPlugin {
+        async fn process_new_frame(
+            &self,
+            _frame: &Frame,
+            _detector: &StarDetector,
+            _wanderer_mode: bool,
+        ) -> PushToResult<FrameOutcome> {
+            unreachable!("not exercised by these tests")
+        }
+
+        async fn observe_frame(
+            &self,
+            _frame: &Frame,
+            _detector: &StarDetector,
+            _wanderer_mode: bool,
+        ) -> PushToResult<FrameOutcome> {
+            unreachable!("not exercised by these tests")
+        }
+
+        async fn get_status(&self) -> PushToStatusResponse {
+            PushToStatusResponse {
+                solver_ready: false,
+                is_solving: false,
+                current_target: None,
+                last_position: None,
+                direction: None,
+            }
+        }
+
+        async fn cancel_solve(&self) -> PushToResult<bool> {
+            Ok(false)
+        }
+
+        async fn restart_solve(&self) -> PushToResult<()> {
+            Ok(())
+        }
+
+        async fn get_direction(&self) -> Option<PushToDirectionResponse> {
+            None
+        }
+
+        async fn set_fov(&self, _fov: f32) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn set_telescope_settings(
+            &self,
+            _settings: TelescopeSettings,
+        ) -> Result<(), String> {
+            self.calls.lock().unwrap().push("telescope");
+            Ok(())
+        }
+
+        async fn set_active_camera(&self, _camera: Option<String>) {
+            self.calls.lock().unwrap().push("camera");
+        }
+    }
+
+    /// The default body has to apply the optics first. Resolving the remembered FOV is
+    /// a mutating read that discards an entry whose recorded camera disagrees, so the
+    /// only inconsistent pair it may ever see is the *outgoing* camera against the
+    /// *incoming* optics — a rig key with no entry, and so nothing to destroy. The
+    /// other order asks about the incoming camera against the outgoing optics, which is
+    /// a live entry belonging to the rig being replaced.
+    #[tokio::test]
+    async fn the_default_set_rig_applies_the_optics_before_the_camera() {
+        let plugin = RecordingPlugin::default();
+        plugin
+            .set_rig(Some("Ares-C Pro".into()), TelescopeSettings::default())
+            .await;
+        assert_eq!(
+            *plugin.calls.lock().unwrap(),
+            vec!["telescope", "camera"],
+            "naming the camera first exposes the FOV cache to a pair that never existed"
+        );
+    }
+
+    /// Both halves are always applied, including the "no camera connected" case that a
+    /// disconnect produces.
+    #[tokio::test]
+    async fn the_default_set_rig_applies_both_halves_even_with_no_camera() {
+        let plugin = RecordingPlugin::default();
+        plugin.set_rig(None, TelescopeSettings::default()).await;
+        assert_eq!(*plugin.calls.lock().unwrap(), vec!["telescope", "camera"]);
+    }
+}

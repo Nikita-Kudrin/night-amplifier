@@ -13,6 +13,7 @@ use std::time::Duration;
 
 pub mod lifecycle;
 pub mod monitor;
+pub(crate) mod ramp;
 mod reconnect;
 
 #[cfg(test)]

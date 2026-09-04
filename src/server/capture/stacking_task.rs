@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use crate::cfa::CfaPipeline;
 use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
-use crate::server::state::{AppState, SensorCorrectionSettings, StackingType};
+use crate::server::state::{AppState, CameraRole, SensorCorrectionSettings, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -279,14 +279,17 @@ pub fn run_stacking_task(
         // Skipped along with the display copy on an iteration that made none: the solve
         // wants the stack, not a single sub, and `try_plate_solve` is rate-limited by
         // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
-        if let (true, Some(frame_to_solve)) =
-            (solving::plate_solve_available(&state), display_frame.as_ref())
-        {
+        // Declines outright while a guide camera is connected: that camera is the solve
+        // source then, and it offers frames far more often than an imaging sub arrives.
+        if let (true, Some(frame_to_solve)) = (
+            solving::plate_solve_available(&state, solving::SolveSource::Main),
+            display_frame.as_ref(),
+        ) {
             rt.spawn({
                 let state = Arc::clone(&state);
                 let solve_frame = Arc::clone(frame_to_solve);
                 async move {
-                    solving::try_plate_solve(&state, solve_frame).await;
+                    solving::try_plate_solve(&state, solve_frame, solving::SolveSource::Main).await;
                 }
             });
         }
@@ -432,10 +435,10 @@ fn save_stacked_result(
         .or_else(|| planetary_ctx.as_ref().and_then(|ctx| ctx.compute().ok()));
 
     if let Some(frame) = stacked_frame {
-        let camera_info = rt.block_on(async {
-            let cameras = state.cameras.read().await;
-            cameras.values().next().cloned()
-        });
+        // The imaging camera specifically: it is the one whose frames are in this
+        // stack, and with a guide camera connected an arbitrary map entry could name
+        // the wrong instrument in the FITS header.
+        let camera_info = rt.block_on(state.camera_in_role(CameraRole::Main));
         if let Some(info) = camera_info {
             rt.block_on(storage::save_stacked_result(state, Some(frame), &info));
         }

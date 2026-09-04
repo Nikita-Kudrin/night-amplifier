@@ -31,96 +31,31 @@ use super::{
 const FFI_CALL_TIMEOUT: Duration = Duration::from_secs(3);
 use crate::camera::CameraStatus;
 use crate::server::camera_health::{self, FaultKind};
-use crate::server::state::{AppState, CameraPhase, MonitorCmd};
-
-/// Direction of a ramp — determines the sign of the per-step delta and the
-/// `is_at_final_target` clamp.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RampDirection {
-    /// Cooldown: setpoint decreases toward `final_target_c`.
-    Cooling,
-    /// Warmup: setpoint increases toward `final_target_c`.
-    Warming,
-}
-
-/// Rate-limited TEC setpoint ramp. Used for both cooldown and warmup.
-///
-/// The logical setpoint is stored as `f64` and advanced by wall-clock delta
-/// each tick. SDK calls (which take integer °C on some providers) are gated
-/// on the rounded value changing — avoiding the case where sub-degree per-tick
-/// steps would otherwise truncate to 0 and stall the ramp.
-#[derive(Debug, Clone)]
-pub(super) struct RampState {
-    final_target_c: f64,
-    current_setpoint_c: f64,
-    last_commanded_i64: Option<i64>,
-    last_tick_at: Instant,
-    direction: RampDirection,
-}
-
-impl RampState {
-    fn new_from_current(start_c: f64, final_target_c: f64, now: Instant) -> Self {
-        let direction = if final_target_c < start_c {
-            RampDirection::Cooling
-        } else {
-            RampDirection::Warming
-        };
-        Self {
-            final_target_c,
-            current_setpoint_c: start_c,
-            last_commanded_i64: None,
-            last_tick_at: now,
-            direction,
-        }
-    }
-
-    /// Advance the commanded setpoint by `dt_sec * RAMP_RATE_C_PER_MIN / 60`,
-    /// clamped to not overshoot `final_target_c`. Returns the new setpoint.
-    fn step(&mut self, now: Instant) -> f64 {
-        let dt_sec = now
-            .saturating_duration_since(self.last_tick_at)
-            .as_secs_f64();
-        self.last_tick_at = now;
-        if dt_sec <= 0.0 {
-            return self.current_setpoint_c;
-        }
-        let step_c = dt_sec * RAMP_RATE_C_PER_MIN / 60.0;
-        self.current_setpoint_c = match self.direction {
-            RampDirection::Cooling => (self.current_setpoint_c - step_c).max(self.final_target_c),
-            RampDirection::Warming => (self.current_setpoint_c + step_c).min(self.final_target_c),
-        };
-        self.current_setpoint_c
-    }
-
-    fn is_at_final_target(&self) -> bool {
-        (self.current_setpoint_c - self.final_target_c).abs() < 1e-6
-    }
-
-    /// The value we'd pass to `set_target_temperature` given the current
-    /// logical setpoint — integer, rounded. SDK call should only be issued
-    /// when this differs from `last_commanded_i64`.
-    fn commanded_i64(&self) -> i64 {
-        self.current_setpoint_c.round() as i64
-    }
-}
+use super::ramp::RampState;
+use crate::server::state::{AppState, CameraPhase, CameraRole, MonitorCmd};
 
 /// Spawn the monitor thread. Returns a sender the caller (lifecycle) uses
 /// to issue commands.
 pub fn spawn(
     state: Arc<AppState>,
+    role: CameraRole,
     camera_name: String,
     rt: tokio::runtime::Handle,
 ) -> mpsc::Sender<MonitorCmd> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name(format!("camera-monitor-{}", camera_name))
-        .spawn(move || run(state, camera_name, rt, rx))
+        .spawn(move || run(state, role, camera_name, rt, rx))
         .expect("failed to spawn camera monitor thread");
     tx
 }
 
 struct MonitorCtx {
     state: Arc<AppState>,
+    /// The slot this monitor polls. Bound at spawn, never looked up: the handle it
+    /// checks out must be the one belonging to the camera it reports about, and with
+    /// two slots live "whatever is connected" is no longer an answer.
+    role: CameraRole,
     camera_name: String,
     rt: tokio::runtime::Handle,
     /// True while the capture thread owns the handle.
@@ -147,14 +82,16 @@ struct MonitorCtx {
 
 fn run(
     state: Arc<AppState>,
+    role: CameraRole,
     camera_name: String,
     rt: tokio::runtime::Handle,
     rx: mpsc::Receiver<MonitorCmd>,
 ) {
-    debug!(camera_name, "Camera monitor thread started");
+    debug!(camera_name, role = role.label(), "Camera monitor thread started");
 
     let mut ctx = MonitorCtx {
         state,
+        role,
         camera_name,
         rt,
         paused_for_capture: false,
@@ -353,7 +290,11 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
     };
 
     // Broadcast the sample for the UI.
-    let target = ctx.rt.block_on(ctx.state.settings.read()).target_temp_c;
+    let target = ctx
+        .rt
+        .block_on(ctx.state.settings.read())
+        .profile_for(ctx.role)
+        .target_temp_c;
     ctx.rt.block_on(
         ctx.state
             .update_camera_status(&ctx.camera_name, status.clone(), target),
@@ -473,16 +414,21 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                 ctx.warmup_ramp = None;
 
                 // Finalize disconnect from the monitor thread. `finalize_disconnect`
-                // will clear `camera_monitor_tx` (our sender) and close the handle.
+                // will clear this slot's monitor sender (ours) and close the handle.
                 let state = Arc::clone(&ctx.state);
                 let name = ctx.camera_name.clone();
+                let role = ctx.role;
                 ctx.rt.block_on(async move {
-                    lifecycle::finalize_disconnect(&state, &name, DisconnectCause::Requested).await;
+                    lifecycle::finalize_disconnect(&state, role, &name, DisconnectCause::Requested)
+                        .await;
                 });
                 return false;
             }
         }
-        CameraPhase::Idle | CameraPhase::Capturing | CameraPhase::Disconnected => {
+        CameraPhase::Idle
+        | CameraPhase::Capturing
+        | CameraPhase::Guiding
+        | CameraPhase::Disconnected => {
             // Nothing to do — status was broadcast above.
             ctx.settle_samples = 0;
             ctx.warm_samples = 0;
@@ -575,11 +521,12 @@ fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
         DisconnectCause::DeviceFault
     };
 
-    warn!(camera_name = %name, ?kind, ?phase, "Giving up on camera handle");
+    warn!(camera_name = %name, role = ctx.role.label(), ?kind, ?phase, "Giving up on camera handle");
 
+    let role = ctx.role;
     ctx.rt.block_on(async move {
         state.send_error(camera_health::incident_message(&name, kind));
-        lifecycle::finalize_disconnect(&state, &name, cause).await;
+        lifecycle::finalize_disconnect(&state, role, &name, cause).await;
     });
 }
 
@@ -673,14 +620,14 @@ impl FfiWorker {
     }
 }
 
-/// Run one camera operation with the handle checked out of `AppState`.
+/// Run one camera operation with the handle checked out of this monitor's slot.
 ///
 /// The handle has to leave the mutex for the call's duration: a `Box<dyn
 /// Camera>` can only be used by one caller at a time, and holding the
 /// `std::sync::Mutex` across a vendor call that might hang would block async
-/// readers on a runtime worker. While it is out, `AppState.active_camera` reads
-/// as `None` — every other reader waits on `active_camera_returned` rather than
-/// treating that as "no camera" (see `lifecycle::with_active_camera`).
+/// readers on a runtime worker. While it is out, the slot's handle reads
+/// as `None` — every other reader waits on `handle_returned` rather than
+/// treating that as "no camera" (see `lifecycle::with_camera`).
 fn with_camera_bounded<T, F>(
     ctx: &mut MonitorCtx,
     timeout: Duration,
@@ -692,12 +639,9 @@ where
         + 'static,
     T: Send + 'static,
 {
+    let slot = ctx.state.slot(ctx.role);
     let camera_opt = {
-        let mut guard = ctx
-            .state
-            .active_camera
-            .lock()
-            .expect("active_camera mutex poisoned");
+        let mut guard = slot.handle.lock().expect("camera handle mutex poisoned");
         guard.take()
     };
     let camera = camera_opt.ok_or(crate::camera::CameraError::Disconnected)?;
@@ -715,7 +659,7 @@ where
             "Camera call did not return in time — abandoning handle (suspected USB stall)"
         );
         ctx.record(FaultKind::Timeout);
-        ctx.state.notify_active_camera_returned();
+        ctx.state.slot(ctx.role).notify_handle_returned();
         return Err(crate::camera::CameraError::Disconnected);
     };
 
@@ -725,9 +669,10 @@ where
     } else {
         let mut guard = ctx
             .state
-            .active_camera
+            .slot(ctx.role)
+            .handle
             .lock()
-            .expect("active_camera mutex poisoned");
+            .expect("camera handle mutex poisoned");
         match guard.as_ref() {
             // A reconnect installed a new handle while ours was out. Ours is
             // the stale one; `DeviceLease` makes closing it a no-op against the
@@ -739,7 +684,7 @@ where
             None => *guard = Some(camera),
         }
     }
-    ctx.state.notify_active_camera_returned();
+    ctx.state.slot(ctx.role).notify_handle_returned();
 
     match &result {
         Err(e) if e.is_sdk_disconnected() => ctx.record(FaultKind::DeviceLost),
@@ -757,79 +702,4 @@ mod ramp_tests {
     use super::*;
     use std::time::Duration;
 
-    #[test]
-    fn step_respects_rate_cooling() {
-        let now = Instant::now();
-        let mut ramp = RampState::new_from_current(20.0, -15.0, now);
-        let later = now + Duration::from_secs(12);
-        let sp = ramp.step(later);
-        // At 1200 °C/min (test rate) over 12 s, a huge delta — clamped to target.
-        // So instead use a direct rate calc in the assertion:
-        let expected_step = 12.0 * RAMP_RATE_C_PER_MIN / 60.0;
-        let expected = (20.0 - expected_step).max(-15.0);
-        assert!(
-            (sp - expected).abs() < 1e-6,
-            "expected {}, got {}",
-            expected,
-            sp
-        );
-    }
-
-    #[test]
-    fn step_clamps_to_target_cooling() {
-        let now = Instant::now();
-        let mut ramp = RampState::new_from_current(-14.9, -15.0, now);
-        let later = now + Duration::from_secs(600); // very long dt
-        let sp = ramp.step(later);
-        assert!((sp - -15.0).abs() < 1e-6);
-        assert!(ramp.is_at_final_target());
-    }
-
-    #[test]
-    fn step_clamps_to_target_warming() {
-        let now = Instant::now();
-        let mut ramp = RampState::new_from_current(19.9, 20.0, now);
-        let later = now + Duration::from_secs(600);
-        let sp = ramp.step(later);
-        assert!((sp - 20.0).abs() < 1e-6);
-        assert!(ramp.is_at_final_target());
-    }
-
-    #[test]
-    fn step_wall_clock_catches_up() {
-        // Missed ticks: a 3-second gap should produce a 3-second worth step
-        // (not one tick worth). Target chosen far away so the clamp doesn't
-        // fire — the point is to verify wall-clock accounting, not clamping.
-        let now = Instant::now();
-        let mut ramp = RampState::new_from_current(20.0, -1000.0, now);
-        let later = now + Duration::from_secs(3);
-        let sp = ramp.step(later);
-        let expected = 20.0 - (3.0 * RAMP_RATE_C_PER_MIN / 60.0);
-        assert!(
-            (sp - expected).abs() < 1e-6,
-            "expected {}, got {}",
-            expected,
-            sp
-        );
-    }
-
-    #[test]
-    fn direction_inferred_from_endpoints() {
-        let now = Instant::now();
-        let cooling = RampState::new_from_current(20.0, -15.0, now);
-        assert_eq!(cooling.direction, RampDirection::Cooling);
-        let warming = RampState::new_from_current(-15.0, 20.0, now);
-        assert_eq!(warming.direction, RampDirection::Warming);
-    }
-
-    #[test]
-    fn commanded_i64_rounds_to_nearest() {
-        let now = Instant::now();
-        let mut ramp = RampState::new_from_current(0.4, -10.0, now);
-        assert_eq!(ramp.commanded_i64(), 0);
-        ramp.current_setpoint_c = -0.6;
-        assert_eq!(ramp.commanded_i64(), -1);
-        ramp.current_setpoint_c = -0.4;
-        assert_eq!(ramp.commanded_i64(), 0);
-    }
 }

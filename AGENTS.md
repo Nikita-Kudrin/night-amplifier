@@ -147,9 +147,10 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 
 ### Server (src/server/)
 
-Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG),
-`/ws/eyepiece_quality` (lossless LZ4), and `/ws/events` (JSON). Shared state via
-`Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and event variants.
+Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG,
+`?source=guide` for the guide camera), `/ws/eyepiece_quality` (lossless LZ4), and `/ws/events`
+(JSON). Shared state via `Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and
+event variants.
 
 ### Web Frontend (web/)
 
@@ -158,16 +159,61 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
 
 ## Camera Notes
 
-- **Cooler lifecycle**: handle lives in `AppState.active_camera`. `CameraPhase`:
-  `Precooling → Idle → Capturing → WarmingUp`; ramp limited to 5°C/min; warm-up ramps to 20°C,
-  closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
-- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing` → owned by the per-frame
-  path; `WarmingUp` → monitor holds cooler off intentionally.
+- **Camera roles**: the rig holds at most one `CameraRole::Main` and one `Guide`. Every handle,
+  monitor, cancel token and reconnect guard lives in `AppState.camera_slots[role]` — there is no
+  "the camera" any more, and each lifecycle entry point names a role. `connect` resolves a taken
+  role through `vacate_role`: swap while idle or `Guiding`, refuse (`CameraRoleBusy`) while
+  `Capturing` or `WarmingUp`.
+- **Cooler lifecycle**: handle lives in `AppState.slot(role).handle`. `CameraPhase`:
+  `Precooling → Idle → Capturing | Guiding → WarmingUp`; ramp limited to 5°C/min (`camera_session::ramp`,
+  driven by the monitor for a parked handle and by `guide_task` for one it holds); warm-up ramps to
+  20°C, closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
+- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing`/`Guiding` → owned by the
+  per-frame path; `WarmingUp` → monitor holds cooler off intentionally. The dew heater has no
+  `CaptureConfig` field, so under `Guiding` it is queued as a `CameraOp` for the loop instead.
+- **Per-camera profiles** are keyed `"{provider}/{model}"`, plus `#guide` for the guide role so two
+  bodies of one model cannot overwrite each other. `apply_camera_profile_on_connect` clamps exposure,
+  gain and binning to what the camera advertises on *both* paths — an out-of-range one is what
+  `CaptureConfig::validate` rejects, and a rejected config stops the camera capturing at all.
 - **`cooler_fast_mode`**: bypasses the ramp; UI shows a persistent warning while on.
 - **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()` (DeepSky/Comet
-  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`.
+  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`. Main role
+  only — nothing the guide camera produces is integrated, so it stays `Normal`.
 - **Monitor thread**: dedicated `std::thread`, not tokio, so USB stalls can't poison the runtime;
-  uses one reusable `monitor::FfiWorker` rather than a thread per poll.
+  uses one reusable `monitor::FfiWorker` rather than a thread per poll. One per slot, bound to its
+  role at spawn — it must never look up "whatever is connected".
+
+### Guide camera — non-obvious and load-bearing
+
+- **One thread, not the four-stage pipeline** (`capture::guide_task`). Nothing it produces is
+  stacked or queued. Started by `connect`, not by Start Capture: solving and the guide preview are
+  wanted *while* framing.
+- **The render gate is the whole point.** Post-processing and encoding run only while
+  `guide_stream.has_viewers()`. Solving and raw saving sit **above** both early exits — they are why
+  the loop runs. Covered by `guide_task::tests`; if you move the gate, keep those honest (they
+  assert the camera really exposed the frames it did not render).
+- **Two `FrameStream`s, two counters.** `JpegTierCache` serves a tier only while its counter
+  matches, so one shared counter would make each camera invalidate the other's payloads every
+  exposure. `/ws/stream?source=guide` selects the stream at upgrade time.
+- **Hardware settings are per role.** Flat `CaptureSettings` fields are the main camera's;
+  `CaptureSettings::guide_camera` is the guide's. Read them through `profile_for(role)`, never
+  flat. `POST /api/settings` carries `camera_role` (absent ⇒ main).
+- **One solve source at a time.** `solving::plate_solve_available(state, SolveSource)` decides, on
+  `guide_loop_running` — the loop *exposing*, not a camera being connected. The two diverge: a
+  cooled guide camera stays registered through minutes of warm-up with its loop already stopped,
+  and `connect` returns before a loop that may fail to start. Keying on presence stood the imaging
+  camera down for a solve source that was not there. `lifecycle::sync_solver_rig` names the solving
+  camera *and* its optics together — `camera_telescope_profiles` is finally read here, and naming
+  one without the other is worse than naming neither.
+- **The loop is the only path to its device.** It owns the handle for the whole connection, so the
+  monitor can never check it out: the loop drains `slot.drain_ops()`, samples `status()` itself
+  every 2s, and steps its own `RampState` into `config.target_temp_c`. Without that the guide camera
+  reported no temperature and its setpoint bypassed the 5°C/min limit.
+- **A raw session carries its frame number.** `slot.raw_session` parks `RawSessionResume { dir,
+  next_frame }`: rejoining the directory a dropout left while restarting at 1 wrote straight over
+  the frames already in it (`frame_{:06}.fits`).
+- **`selected_camera` means "the camera being configured", not the capture target.** Captures
+  resolve to `camera_in_role(Main)`; a guide camera id is refused.
 
 ### Handle ownership — non-obvious and load-bearing
 

@@ -23,15 +23,7 @@ pub async fn start_capture(
                 camera_id: Some(camera_id),
             }),
         ),
-        Err(e) => {
-            let status = match &e {
-                ApiError::CaptureInProgress => StatusCode::CONFLICT,
-                ApiError::NoCameraSelected => StatusCode::BAD_REQUEST,
-                ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, ApiResponse::err(e.to_string()))
-        }
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }
 

@@ -263,6 +263,51 @@ pub async fn sync_disk_session(
     }
 }
 
+/// Build the FITS header for one raw frame.
+///
+/// Takes the camera's own hardware profile rather than the flat settings: with a guide
+/// camera connected the two cameras have different exposures and gains, and a guide sub
+/// stamped with the imaging camera's `EXPTIME` is a file that lies about itself.
+pub(crate) async fn raw_frame_metadata(
+    state: &AppState,
+    profile: &crate::server::state::CameraCaptureProfile,
+    camera_info: &ConnectedCameraInfo,
+    frame_number: u64,
+) -> crate::fits::FitsMetadata {
+    use crate::fits::FitsMetadata;
+    use chrono::Utc;
+
+    let mut metadata = FitsMetadata::new()
+        .with_exposure_us(profile.exposure_us)
+        .with_gain(profile.gain)
+        .with_offset(profile.offset)
+        .with_camera(&camera_info.info.name)
+        .with_frame_number(frame_number)
+        .with_binning(profile.bin)
+        .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+
+    if camera_info.info.has_cooler {
+        if let Some(set_temp) = profile.target_temp_c {
+            metadata = metadata.with_set_temp(set_temp);
+        }
+        if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
+            metadata = metadata.with_temperature(status.temperature_c);
+        }
+    }
+
+    metadata
+}
+
+/// The FITS header for a guide-camera sub.
+pub(crate) async fn guide_frame_metadata(
+    state: &AppState,
+    settings: &CaptureSettings,
+    camera_info: &ConnectedCameraInfo,
+    frame_number: u64,
+) -> crate::fits::FitsMetadata {
+    raw_frame_metadata(state, &settings.guide_camera, camera_info, frame_number).await
+}
+
 /// Save a frame to disk and handle queue warnings
 async fn save_frame_to_disk(
     state: &AppState,
@@ -272,27 +317,14 @@ async fn save_frame_to_disk(
     camera_info: &ConnectedCameraInfo,
     warnings: &mut StorageWarnings,
 ) {
-    use crate::fits::FitsMetadata;
-    use chrono::Utc;
-
     let raw_frame = Arc::clone(frame);
-    let mut metadata = FitsMetadata::new()
-        .with_exposure_us(settings.exposure_us)
-        .with_gain(settings.gain)
-        .with_offset(settings.offset)
-        .with_camera(&camera_info.info.name)
-        .with_frame_number(frame_number)
-        .with_binning(settings.bin)
-        .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
-
-    if camera_info.info.has_cooler {
-        if let Some(set_temp) = settings.target_temp_c {
-            metadata = metadata.with_set_temp(set_temp);
-        }
-        if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
-            metadata = metadata.with_temperature(status.temperature_c);
-        }
-    }
+    let metadata = raw_frame_metadata(
+        state,
+        &settings.main_camera_profile(),
+        camera_info,
+        frame_number,
+    )
+    .await;
 
     if let Err(e) = state.disk_writer.queue_raw_frame(
         raw_frame,

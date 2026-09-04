@@ -365,6 +365,7 @@ fn test_settings_response_includes_save_options() {
         live_view: true,
         wanderer: false,
         stacking: true,
+        guide: false,
     };
     let settings = CaptureSettings {
         raw_frame_saving,

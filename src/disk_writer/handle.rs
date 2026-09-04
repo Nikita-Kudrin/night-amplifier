@@ -78,6 +78,27 @@ impl DiskWriterHandle {
         session_type: WritingSessionType,
         name_suffix: &str,
     ) -> std::io::Result<PathBuf> {
+        let session = self.create_session(session_type, name_suffix)?;
+        let path = session.dir.clone();
+        self.open(session.dir, session.session_type);
+
+        info!(session_dir = ?path, ?session_type, "Started new capture session");
+        Ok(path)
+    }
+
+    /// Create a session directory and hand back the session **without** publishing it
+    /// as the handle's current one.
+    ///
+    /// For a producer that owns its own session for its whole life rather than sharing
+    /// the handle's slot — the guide loop, which runs alongside a main capture that has
+    /// its own directory open. Every `WriteRequest` already carries the session it
+    /// belongs to (see [`super::config::WriteRequest::session`]), so the worker files
+    /// both correctly; the shared slot is the only thing that assumed one at a time.
+    pub fn create_session(
+        &self,
+        session_type: WritingSessionType,
+        name_suffix: &str,
+    ) -> std::io::Result<OpenSession> {
         let raw_dir = self
             .stacked_dir
             .parent()
@@ -87,10 +108,21 @@ impl DiskWriterHandle {
         let session_path = unused_session_path(&raw_dir, &timestamp, name_suffix);
 
         std::fs::create_dir_all(&session_path)?;
-        self.open(session_path.clone(), session_type);
+        Ok(OpenSession {
+            dir: session_path,
+            session_type,
+        })
+    }
 
-        info!(session_dir = ?session_path, ?session_type, "Started new capture session");
-        Ok(session_path)
+    /// Reopen an existing directory as an unpublished session, for a producer resuming
+    /// after a dropout. Counterpart to [`Self::create_session`].
+    pub fn reopen_session(
+        &self,
+        dir: PathBuf,
+        session_type: WritingSessionType,
+    ) -> std::io::Result<OpenSession> {
+        std::fs::create_dir_all(&dir)?;
+        Ok(OpenSession { dir, session_type })
     }
 
     /// Publish the session that frames queued from now on belong to.
@@ -191,16 +223,31 @@ impl DiskWriterHandle {
     /// accordingly whenever it gets to it, so a session rolled in between — a mid-capture
     /// mode change — cannot pull a queued frame into the folder of a mode it was not
     /// captured in, nor write it in a format that session never used.
-    pub fn queue_frame(&self, mut request: WriteRequest) -> Result<bool, DiskWriterError> {
-        if !self.is_enabled() {
-            return Ok(false);
-        }
-
-        request.session = self
+    pub fn queue_frame(&self, request: WriteRequest) -> Result<bool, DiskWriterError> {
+        let session = self
             .session
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        self.queue_frame_in(session, request)
+    }
+
+    /// Queue a frame against a session the caller owns, rather than the handle's shared
+    /// one.
+    ///
+    /// The guide loop holds its own session for the life of the connection while a main
+    /// capture holds the shared one; both write through here and the worker keeps them in
+    /// separate directories, because the session travels on the request.
+    pub fn queue_frame_in(
+        &self,
+        session: Option<OpenSession>,
+        mut request: WriteRequest,
+    ) -> Result<bool, DiskWriterError> {
+        if !self.is_enabled() {
+            return Ok(false);
+        }
+
+        request.session = session;
 
         let depth = self.queue_depth.fetch_add(1, Ordering::SeqCst) + 1;
         telemetry_metrics::record_disk_writer_queue_depth(depth as u64);
@@ -241,7 +288,7 @@ impl DiskWriterHandle {
         }
     }
 
-    /// Queue a raw frame for writing
+    /// Queue a raw frame for writing into the handle's current session.
     pub fn queue_raw_frame(
         &self,
         frame: std::sync::Arc<RawFrame>,
@@ -250,14 +297,35 @@ impl DiskWriterHandle {
         sensor_type: crate::camera::SensorType,
         bayer_pattern: Option<crate::CfaPattern>,
     ) -> Result<bool, DiskWriterError> {
-        self.queue_frame(WriteRequest {
-            frame_type: FrameType::Raw(frame),
-            session: None,
-            frame_number,
-            metadata,
-            sensor_type,
-            bayer_pattern,
-        })
+        let session = self
+            .session
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        self.queue_raw_frame_in(session, frame, frame_number, metadata, sensor_type, bayer_pattern)
+    }
+
+    /// Queue a raw frame into a session the caller owns. See [`Self::queue_frame_in`].
+    pub fn queue_raw_frame_in(
+        &self,
+        session: Option<OpenSession>,
+        frame: std::sync::Arc<RawFrame>,
+        frame_number: u64,
+        metadata: FitsMetadata,
+        sensor_type: crate::camera::SensorType,
+        bayer_pattern: Option<crate::CfaPattern>,
+    ) -> Result<bool, DiskWriterError> {
+        self.queue_frame_in(
+            session,
+            WriteRequest {
+                frame_type: FrameType::Raw(frame),
+                session: None,
+                frame_number,
+                metadata,
+                sensor_type,
+                bayer_pattern,
+            },
+        )
     }
 
     pub fn queue_stacked_frame(

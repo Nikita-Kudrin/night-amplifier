@@ -465,6 +465,7 @@ describe('SettingsPanel', () => {
                 live_view: false,
                 wanderer: false,
                 stacking: false,
+                guide: false,
             })
         })
 

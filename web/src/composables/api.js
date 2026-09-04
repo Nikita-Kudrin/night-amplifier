@@ -152,10 +152,12 @@ export async function getCameraInfo(cameraId) {
 /**
  * Connect to a camera
  * @param {string} cameraId - Camera ID
+ * @param {'main'|'guide'} [role] - Which position it takes. Omitted means the imaging camera.
  */
-export async function connectCamera(cameraId) {
+export async function connectCamera(cameraId, role = 'main') {
     return request(`/cameras/${encodeURIComponent(cameraId)}/connect`, {
         method: 'POST',
+        body: {role},
     })
 }
 

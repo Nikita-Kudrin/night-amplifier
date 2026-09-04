@@ -27,6 +27,17 @@ import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../../../composables/usePanZoom.js'
 import LiveView from '../../LiveView.vue'
 
+/**
+ * Options LiveView handed `useImageStream` on its most recent mount.
+ *
+ * A function rather than a re-export: the endpoint is a getter now, and reading it
+ * through the live mock is the only way to observe which source the view is on.
+ */
+export function lastImageStreamOptions() {
+    const calls = useImageStream.mock.calls
+    return calls.length ? calls[calls.length - 1][0] : null
+}
+
 export function createMockWebGLContext(isWebGL2 = true) {
     const ctx = {
         // WebGL constants
@@ -227,6 +238,9 @@ export function createMockProvides(overrides = {}) {
             comet_roi: null,
             ...overrides.settings,
         }),
+        hasGuideCamera: ref(overrides.hasGuideCamera ?? false),
+        guideCamera: ref(overrides.guideCamera ?? null),
+        mainCamera: ref(overrides.mainCamera ?? null),
     }
 }
 
