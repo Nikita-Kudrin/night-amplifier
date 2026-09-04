@@ -207,8 +207,20 @@ describe('API Client', () => {
                 method: 'POST',
                 cache: 'no-store',
                 headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({role: 'main'}),
             })
             expect(result).toEqual(response)
+        })
+
+        it('connectCamera carries the requested role', async () => {
+            fetchMock.mockReturnValue(mockSuccess({message: 'Camera connected'}))
+
+            await connectCamera('playerone_1', 'guide')
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/api/cameras/playerone_1/connect',
+                expect.objectContaining({body: JSON.stringify({role: 'guide'})})
+            )
         })
 
         it('disconnectCamera sends POST to /api/cameras/:id/disconnect', async () => {

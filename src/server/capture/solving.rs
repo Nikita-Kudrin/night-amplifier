@@ -41,13 +41,48 @@ fn solve_detector() -> &'static StarDetector {
     DETECTOR.get_or_init(|| StarDetector::new(DetectionConfig::sensitive().with_max_stars(200)))
 }
 
-/// Whether a plate solve could possibly run right now.
+/// Which camera is offering the frame.
+///
+/// Exactly one of them may solve at a time, and a connected guide camera wins: it is on
+/// its own scope with its own exposure, free-running while the imaging camera is
+/// mid-sub, so it can offer the solver a fresh star field far more often. Letting both
+/// offer would not double the solve rate — the latches admit one — it would just make
+/// which camera got there first, and therefore which optics the solve was planned
+/// against, a race.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SolveSource {
+    /// The imaging pipeline's stacking task.
+    Main,
+    /// The guide camera's free-running loop.
+    Guide,
+}
+
+impl SolveSource {
+    /// Whether this source is the one currently allowed to solve.
+    ///
+    /// Keyed on the guide loop *running*, not on a guide camera being connected: a
+    /// camera that is registered but not exposing — mid warm-up, or with a loop that
+    /// failed to start — must hand solving back rather than leave the session with no
+    /// source at all.
+    fn is_active(self, guide_loop_running: bool) -> bool {
+        match self {
+            Self::Main => !guide_loop_running,
+            Self::Guide => guide_loop_running,
+        }
+    }
+}
+
+/// Whether a plate solve could possibly run right now, from `source`.
 ///
 /// Callers check this *before* preparing a frame, so the common case — Community
 /// edition, or Pro with no target set — costs an atomic load instead of a
 /// full-frame copy. Only covers the checks that are cheap and synchronous; the
 /// rest still happen inside [`try_plate_solve`].
-pub fn plate_solve_available(state: &Arc<AppState>) -> bool {
+pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool {
+    if !source.is_active(state.guide_loop_running()) {
+        return false;
+    }
+
     if crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_none() {
         return false;
     }
@@ -86,7 +121,25 @@ pub fn plate_solve_available(state: &Arc<AppState>) -> bool {
 /// (i.e. running Night Amplifier Pro). Takes an `Arc<Frame>` because the solve
 /// runs on a detached task: sharing the handle avoids copying a full-resolution
 /// frame on the stacking thread for a solve that usually will not happen.
-pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
+///
+/// `source` is the camera `frame` was captured on — the caller already checked it was
+/// the active source via `plate_solve_available`, but that check and every dispatch
+/// below cross an `.await` or a `tokio::spawn`, and a guide camera connecting or
+/// disconnecting in one of those gaps flips which source is active. Neither
+/// `PushToSolverPlugin::observe_frame` nor `process_new_frame` are told which camera
+/// produced their frame — `ProPushToPlugin::look()` scales and mutates the one shared
+/// `MovementDetector` for whatever arrives — so a frame that goes stale in one of these
+/// gaps has to be caught here, before it ever reaches the plugin: fed to `look()` after
+/// the *other* camera has already reset and reseeded that detector, it reads as the
+/// new rig's telescope having moved and can abort a solve that just started. Checked
+/// again immediately before each dispatch rather than once at the top, since the solve
+/// path crosses further `.await` points of its own after the first check.
+pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
+    if !source.is_active(state.guide_loop_running()) {
+        debug!(?source, "Plate solve skipped: no longer the active solve source");
+        return;
+    }
+
     let plugin = match crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) {
         Some(p) => p,
         None => return,
@@ -130,6 +183,10 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
     // that is competing with ASTAP for the machine.
     if let Claim::Watch(watch) = claim {
         let _watch = watch;
+        if !source.is_active(state.guide_loop_running()) {
+            debug!(?source, "Plate solve watch skipped: no longer the active solve source");
+            return;
+        }
         match plugin
             .observe_frame(&frame, solve_detector(), wanderer_mode)
             .await
@@ -187,6 +244,13 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>) {
         let _timer = crate::telemetry::metrics::time_stage(
             crate::telemetry::metrics::FrameStage::PlateSolving,
         );
+
+        // The rig may have changed while this task waited on `get_status` above or to
+        // be scheduled here — see the note on `source` above `try_plate_solve`.
+        if !source.is_active(state_clone.guide_loop_running()) {
+            debug!(?source, "Plate solve dispatch skipped: no longer the active solve source");
+            return;
+        }
 
         // Let the plugin do all the heavy lifting and math
         let plugin = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).unwrap();
@@ -382,5 +446,32 @@ mod tests {
             events.try_recv().is_err(),
             "a state that holds for a hundred frames must cost one event"
         );
+    }
+
+    // ---- SolveSource::is_active: the predicate every staleness re-check rests on --
+
+    #[test]
+    fn main_is_active_only_while_no_guide_loop_is_running() {
+        assert!(SolveSource::Main.is_active(false));
+        assert!(!SolveSource::Main.is_active(true));
+    }
+
+    #[test]
+    fn guide_is_active_only_while_its_loop_is_running() {
+        assert!(!SolveSource::Guide.is_active(false));
+        assert!(SolveSource::Guide.is_active(true));
+    }
+
+    #[test]
+    fn the_two_sources_are_never_both_active_at_once() {
+        // The invariant `try_plate_solve`'s re-checks lean on: whichever way
+        // `guide_loop_running` reads, at most one source may proceed to dispatch.
+        for guide_loop_running in [false, true] {
+            assert!(
+                !(SolveSource::Main.is_active(guide_loop_running)
+                    && SolveSource::Guide.is_active(guide_loop_running)),
+                "guide_loop_running={guide_loop_running}"
+            );
+        }
     }
 }

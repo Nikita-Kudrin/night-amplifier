@@ -39,6 +39,12 @@ describe('CaptureControls', () => {
                 ...overrides.settings,
             }),
             selectedCamera: ref('selectedCamera' in overrides ? overrides.selectedCamera : 'cam1'),
+            // The capture target, which is always the imaging camera and is *not*
+            // whatever the settings panel happens to be editing — that can be the
+            // guide camera.
+            mainCamera: ref(
+                'mainCamera' in overrides ? overrides.mainCamera : {id: 'cam1', role: 'main'},
+            ),
             eventStream: {
                 captureState: ref(overrides.captureState ?? 'Idle'),
                 ...overrides.eventStream,
@@ -115,6 +121,35 @@ describe('CaptureControls', () => {
             expect(startCapture).toHaveBeenCalledWith('cam1')
         })
 
+        it('sends no camera at all when there is no imaging camera to capture with', async () => {
+            // The settings panel can be editing the guide camera while nothing holds
+            // the imaging slot. Falling back to the selected camera sent the *guide*
+            // camera's id, and the server answered with a role-mismatch message about
+            // connecting — a remedy for a request the user had not made. Sending
+            // nothing lets the server say plainly that an imaging camera is missing.
+            const wrapper = mountCaptureControls({
+                mainCamera: null,
+                selectedCamera: 'guide-cam',
+            })
+
+            await wrapper.find('.btn-start').trigger('click')
+            await flushPromises()
+
+            expect(startCapture).toHaveBeenCalledWith(null)
+        })
+
+        it('captures on the imaging camera even while the guide camera is selected', async () => {
+            const wrapper = mountCaptureControls({
+                mainCamera: {id: 'imaging-cam', role: 'main'},
+                selectedCamera: 'guide-cam',
+            })
+
+            await wrapper.find('.btn-start').trigger('click')
+            await flushPromises()
+
+            expect(startCapture).toHaveBeenCalledWith('imaging-cam')
+        })
+
         it('calls stopCapture when clicking Stop', async () => {
             const wrapper = mountCaptureControls({
                 captureState: 'Capturing',
@@ -183,7 +218,7 @@ describe('CaptureControls', () => {
             await preset2.trigger('click')
             await flushPromises()
 
-            expect(updateSettings).toHaveBeenCalledWith({exposure_us: 2000000})
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', exposure_us: 2000000})
         })
     })
 
@@ -206,7 +241,7 @@ describe('CaptureControls', () => {
             await gainSlider.trigger('change')
             await flushPromises()
 
-            expect(updateSettings).toHaveBeenCalledWith({gain: 200})
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', gain: 200})
         })
     })
 

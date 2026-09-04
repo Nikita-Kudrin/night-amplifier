@@ -1,4 +1,4 @@
-import {ref, onUnmounted, shallowRef, computed} from 'vue'
+import {ref, onUnmounted, shallowRef, computed, toValue, watch} from 'vue'
 import {WS_RECONNECT} from '../constants'
 import {decodeFrame} from '../utils/frameDecoder.js'
 import {getPushToStatus} from './api.js'
@@ -35,7 +35,9 @@ export function useWebSocket(path, options = {}) {
     function getUrl() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         const host = window.location.host
-        return `${protocol}//${host}${path}`
+        // Resolved per connect, not captured once: the live view swaps between the
+        // imaging and guide sources on one socket by changing this.
+        return `${protocol}//${host}${toValue(path)}`
     }
 
     /**
@@ -538,11 +540,14 @@ export function useEventStream() {
  * @returns {object} Image stream state and methods
  */
 export function useImageStream(options = {}) {
-    const endpoint = options.endpoint || '/ws/stream'
+    // May be a plain string, a ref or a getter — the live view passes a getter so the
+    // Guide camera toggle can move this socket to the other source.
+    const endpointSource = options.endpoint ?? '/ws/stream'
+    const resolveEndpoint = () => toValue(endpointSource) || '/ws/stream'
 
     // Selects the decoder, not whether resolution can be negotiated: both the
     // JPEG and the lossless endpoints size their output from the client's report.
-    const isDynamicJpeg = endpoint !== '/ws/eyepiece_quality'
+    const isDynamicJpeg = !resolveEndpoint().startsWith('/ws/eyepiece_quality')
 
     // Use shallowRef for large binary data to avoid deep reactivity overhead
     const frameData = shallowRef(null)
@@ -616,7 +621,7 @@ export function useImageStream(options = {}) {
         }
     }
 
-    const {connected, error, connect, disconnect, send} = useWebSocket(endpoint, {
+    const {connected, error, connect, disconnect, send} = useWebSocket(resolveEndpoint, {
         onOpen: () => {
             startFpsTimer()
             // A new socket knows nothing about the viewport, whichever stream
@@ -659,6 +664,18 @@ export function useImageStream(options = {}) {
             }
         },
     })
+
+    // Moving to the other source means a new socket: the server picks the stream from
+    // the URL at upgrade time. The old frame is dropped rather than left on screen,
+    // since it belongs to the camera we just stopped watching.
+    watch(
+        () => resolveEndpoint(),
+        () => {
+            disconnect()
+            clearFrameData()
+            connect()
+        }
+    )
 
     onUnmounted(() => {
         stopFpsTimer()

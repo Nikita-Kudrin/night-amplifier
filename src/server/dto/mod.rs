@@ -13,8 +13,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::state::{
-    CameraCaptureProfile, CaptureSession, CaptureSettings, DenoiseSettings, EyepieceSettings,
-    PreviewResolution, RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
+    CameraCaptureProfile, CameraRole, CaptureSession, CaptureSettings, DenoiseSettings,
+    EyepieceSettings, PreviewResolution, RawFrameSaving, SensorCorrectionSettings,
+    TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
@@ -249,6 +250,11 @@ pub struct SettingsResponse {
     /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub camera_profiles: HashMap<String, CameraCaptureProfile>,
+    /// The guide camera's live hardware values. The flat fields above are the imaging
+    /// camera's; both are live at once, so the UI reads whichever the selected camera
+    /// holds.
+    #[serde(default)]
+    pub guide_camera: CameraCaptureProfile,
     /// Name of the last active camera
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_camera_name: Option<String>,
@@ -315,6 +321,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
+            guide_camera: settings.guide_camera.clone(),
             last_camera_name: settings.last_camera_name.clone(),
             cooler_enabled: settings.cooler_enabled,
             target_temp_c: settings.target_temp_c,
@@ -339,7 +346,20 @@ pub struct CameraListEntry {
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
+    /// Which position this camera occupies, or `None` if it is not connected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<CameraRole>,
     pub info: CameraInfoResponse,
+}
+
+/// Body of `POST /api/cameras/{id}/connect`.
+///
+/// Absent (or an empty body) means the imaging camera, so a client that has never heard
+/// of roles keeps working.
+#[derive(Debug, Default, Deserialize)]
+pub struct ConnectCameraRequest {
+    #[serde(default)]
+    pub role: Option<CameraRole>,
 }
 
 /// Simple message response
@@ -380,6 +400,10 @@ pub struct StartCaptureRequest {
 /// Update settings request
 #[derive(Debug, Deserialize, Default)]
 pub struct UpdateSettingsRequest {
+    /// Which camera the hardware fields below (exposure, gain, offset, bin, cooler and
+    /// dew heater) apply to. Absent means the imaging camera.
+    #[serde(default)]
+    pub camera_role: Option<CameraRole>,
     #[serde(default)]
     pub exposure_us: Option<u64>,
     #[serde(default)]

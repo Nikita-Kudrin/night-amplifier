@@ -123,6 +123,7 @@ pub async fn add_mock_camera(state: &Arc<AppState>, camera_id: &str) {
             id: camera_id.to_string(),
             provider: "Mock".to_string(),
             index: 0,
+            role: CameraRole::Main,
             info,
         },
     );

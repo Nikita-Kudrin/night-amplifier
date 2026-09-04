@@ -33,12 +33,12 @@ async fn test_app_state_frame_counter() {
     let state = create_test_state();
 
     let initial = state
-        .frame_counter
-        .load(std::sync::atomic::Ordering::SeqCst);
-    let claimed = state.begin_frame();
+        .main_stream
+        .frame_counter();
+    let claimed = state.main_stream.begin_frame();
     let after = state
-        .frame_counter
-        .load(std::sync::atomic::Ordering::SeqCst);
+        .main_stream
+        .frame_counter();
 
     assert_eq!(claimed, initial + 1);
     assert_eq!(after, initial + 1);
@@ -288,14 +288,14 @@ async fn test_latest_frame_storage() {
     let state = create_test_state();
 
     // Initially no frame
-    assert!(state.get_latest_frame().await.is_none());
+    assert!(state.main_stream.get_latest_frame().await.is_none());
 
     // Store a frame
     let frame_data = vec![1, 2, 3, 4, 5];
-    state.set_latest_frame(frame_data.clone()).await;
+    state.main_stream.set_latest_frame(frame_data.clone()).await;
 
     // Retrieve frame
-    let retrieved = state.get_latest_frame().await.unwrap();
+    let retrieved = state.main_stream.get_latest_frame().await.unwrap();
     assert_eq!(retrieved.as_ref(), &frame_data);
 }
 
@@ -303,10 +303,10 @@ async fn test_latest_frame_storage() {
 async fn test_latest_frame_overwrites_previous() {
     let state = create_test_state();
 
-    state.set_latest_frame(vec![1, 2, 3]).await;
-    state.set_latest_frame(vec![4, 5, 6]).await;
+    state.main_stream.set_latest_frame(vec![1, 2, 3]).await;
+    state.main_stream.set_latest_frame(vec![4, 5, 6]).await;
 
-    let retrieved = state.get_latest_frame().await.unwrap();
+    let retrieved = state.main_stream.get_latest_frame().await.unwrap();
     assert_eq!(retrieved.as_ref(), &[4, 5, 6]);
 }
 
@@ -315,23 +315,23 @@ async fn test_frame_counter_increments() {
     let state = create_test_state();
 
     let initial = state
-        .frame_counter
-        .load(std::sync::atomic::Ordering::SeqCst);
+        .main_stream
+        .frame_counter();
 
-    state.begin_frame();
-    state.set_latest_frame(vec![1]).await;
-    state.publish_frame();
+    state.main_stream.begin_frame();
+    state.main_stream.set_latest_frame(vec![1]).await;
+    state.main_stream.publish_frame();
     let after_first = state
-        .frame_counter
-        .load(std::sync::atomic::Ordering::SeqCst);
+        .main_stream
+        .frame_counter();
     assert_eq!(after_first, initial + 1);
 
-    state.begin_frame();
-    state.set_latest_frame(vec![2]).await;
-    state.publish_frame();
+    state.main_stream.begin_frame();
+    state.main_stream.set_latest_frame(vec![2]).await;
+    state.main_stream.publish_frame();
     let after_second = state
-        .frame_counter
-        .load(std::sync::atomic::Ordering::SeqCst);
+        .main_stream
+        .frame_counter();
     assert_eq!(after_second, initial + 2);
 }
 

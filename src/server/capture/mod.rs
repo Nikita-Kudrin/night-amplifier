@@ -5,15 +5,19 @@
 //! zero-copy sharing between channels; capacities derive from a memory budget over
 //! actual frame size. Each thread carries a `tokio::runtime::Handle` from the async
 //! orchestrator, for `handle.block_on()`/`handle.spawn()`.
+//!
+//! The guide camera bypasses all of that: **GuideTask** is one thread with no channels,
+//! because nothing it produces is stacked or queued. See `guide_task`.
 
 pub mod analysis;
 pub mod channel;
 mod context;
 mod drop_log;
 mod frame_gate;
+pub mod guide_task;
 pub mod pipeline;
 mod render_task;
-mod solving;
+pub mod solving;
 mod stacking_task;
 mod stage_config;
 pub mod storage;

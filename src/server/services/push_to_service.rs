@@ -92,6 +92,20 @@ impl PushToService {
         }
     }
 
+    /// Tell the solver the whole rig at once — which camera, through which optics.
+    ///
+    /// Preferred over calling [`PushToService::set_active_camera`] and
+    /// [`PushToService::set_telescope_settings`] in sequence: the two together are one
+    /// fact, and the solver resolves its remembered field of view from both. See
+    /// [`PushToSolverPlugin::set_rig`].
+    ///
+    /// No-op without the Pro plugin.
+    pub async fn set_rig(camera: Option<String>, telescope: TelescopeSettings) {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+            plugin.set_rig(camera, telescope).await;
+        }
+    }
+
     /// Search the catalog
     pub async fn search_catalog(
         _state: &AppState,

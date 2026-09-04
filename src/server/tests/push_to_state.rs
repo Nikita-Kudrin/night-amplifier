@@ -4,7 +4,7 @@
 use crate::server::api::settings::{optics_change, OpticsChange};
 use crate::server::dto::UpdateSettingsRequest;
 use crate::server::services::PushToState;
-use crate::server::state::{CaptureSettings, TelescopeSettings};
+use crate::server::state::{CameraRole, CaptureSettings, TelescopeSettings};
 use std::time::{Duration, Instant};
 
 /// No cadence floor, so the latch tests exercise the latch alone.
@@ -336,7 +336,7 @@ fn a_telescope_block_that_changes_nothing_is_not_a_change() {
         ..Default::default()
     };
 
-    assert_eq!(optics_change(&request, &current), OpticsChange::default());
+    assert_eq!(optics_change(&request, &current, CameraRole::Main), OpticsChange::default());
 }
 
 #[test]
@@ -350,7 +350,7 @@ fn a_different_focal_length_is_a_change() {
         ..Default::default()
     };
 
-    let change = optics_change(&request, &current);
+    let change = optics_change(&request, &current, CameraRole::Main);
     assert!(change.telescope);
     assert!(change.any());
 }
@@ -362,7 +362,7 @@ fn a_request_without_a_telescope_block_changes_nothing() {
         ..Default::default()
     };
     assert_eq!(
-        optics_change(&UpdateSettingsRequest::default(), &current),
+        optics_change(&UpdateSettingsRequest::default(), &current, CameraRole::Main),
         OpticsChange::default()
     );
 }
@@ -377,7 +377,7 @@ fn resending_the_current_binning_is_not_a_change() {
         bin: Some(2),
         ..Default::default()
     };
-    assert!(!optics_change(&request, &current).any());
+    assert!(!optics_change(&request, &current, CameraRole::Main).any());
 }
 
 #[test]
@@ -393,7 +393,7 @@ fn a_different_binning_is_a_framing_change() {
         ..Default::default()
     };
 
-    let change = optics_change(&request, &current);
+    let change = optics_change(&request, &current, CameraRole::Main);
     assert!(!change.telescope);
     assert!(change.framing);
     assert!(change.any());
@@ -410,5 +410,5 @@ fn an_unrelated_setting_is_never_an_optics_change() {
         ..Default::default()
     };
 
-    assert_eq!(optics_change(&request, &current), OpticsChange::default());
+    assert_eq!(optics_change(&request, &current, CameraRole::Main), OpticsChange::default());
 }
