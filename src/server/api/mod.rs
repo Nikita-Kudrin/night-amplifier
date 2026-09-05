@@ -7,6 +7,7 @@ pub mod about;
 pub mod cameras;
 pub mod capabilities;
 pub mod capture;
+pub mod eyepiece;
 pub mod indi;
 pub mod install;
 pub mod push_to;
@@ -18,6 +19,7 @@ pub use about::*;
 pub use cameras::*;
 pub use capabilities::*;
 pub use capture::*;
+pub use eyepiece::*;
 pub use indi::*;
 pub use install::*;
 pub use push_to::*;
@@ -48,6 +50,8 @@ pub fn create_router() -> Router<Arc<AppState>> {
         .route("/capture/start", post(capture::start_capture))
         .route("/capture/stop", post(capture::stop_capture))
         .route("/capture/status", get(capture::get_capture_status))
+        // Eyepiece
+        .route("/eyepiece/snapshot", get(eyepiece::get_snapshot))
         // Settings
         .route(
             "/settings",

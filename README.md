@@ -45,7 +45,9 @@ Enable features for specific manufacturers when compiling:
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
 - **Guide camera** - Attach a second camera on a guide scope; it free-runs, drives plate solving from its own optics, and can be previewed in place of the main image.
-- **Eyepiece view** - Simulation of the eyepiece view (binocular/monocular)
+- **Eyepiece view** - Simulation of the eyepiece view. `/eyepiece` is always monocular, with
+  fullscreen, pinch zoom, auto-hiding controls and PNG download (round or uncropped);
+  `/eyepiece_quality` streams losslessly and follows the binocular/monocular setting.
 - **Sensor corrections** - Hot-pixel rejection and row/column pattern removal on the raw mosaic, before demosaic.
 - **Noise reduction** - Guided-filter colour smoothing and scale-selective grain removal, run at the resolution you
   actually view.
