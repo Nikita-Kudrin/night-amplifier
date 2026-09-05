@@ -152,6 +152,25 @@ Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiec
 (JSON). Shared state via `Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and
 event variants.
 
+`GET /api/eyepiece/snapshot?circular=` is the one REST route returning image bytes: it PNG-encodes
+`latest_raw_frame` at the frame's *own* size (no tier), on `spawn_blocking`. RGB8 either way.
+`circular=true` returns the **centre square** with the field stop **opaque black** — square because
+the view's canvas is `100cqmin` + `object-fit: cover`, so masking the full rectangle gave the right
+circle in a shape nobody saw (55 % padding on an IMX464); black rather than transparent because a
+viewer composites alpha onto its own background, which is white in every default light theme.
+
+Native resolution is deliberate and expensive: 26 MP with the denoisers on transiently holds ~933 MB
+of denoise scratch plus two RGB8 buffers of up to 77 MB each, ~0.5 s on a desktop. `SNAPSHOT_SLOT`
+(`Semaphore(1)`) therefore admits one render process-wide and *refuses* rather than queues — 503 +
+`Retry-After: 2`, which the frontend retries on that cadence for 15 s. 404 is the other refusal (no
+frame rendered yet) and is terminal.
+
+The server names the file in `Content-Disposition`, but the browser never sees that header: the
+frontend has to `fetch` the PNG for the retry loop, and the `blob:` URL it ends up saving carries no
+headers. So `fetchEyepieceSnapshot` returns `{blob, filename}` and `utils/saveBlob.js` puts the name
+on `<a download>`. That attribute is load-bearing — without it the browser navigates to the blob and
+renders the PNG in the tab, taking the page's streams down with it.
+
 ### Web Frontend (web/)
 
 Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, components in `src/components/`. Vite proxies

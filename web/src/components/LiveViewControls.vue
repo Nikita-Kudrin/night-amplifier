@@ -58,7 +58,9 @@ defineEmits([
 </script>
 
 <template>
-  <div class="controls-overlay">
+  <!-- `data-overlay-control` marks the whole cluster as controls rather than image,
+       so a press on the FPS readout refreshes the auto-hide instead of toggling it. -->
+  <div class="controls-overlay" data-overlay-control>
     <div v-if="hasFrame" class="frame-info">
       <span class="frame-info-line">
         <span class="fps-container">

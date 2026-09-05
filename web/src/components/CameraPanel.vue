@@ -377,6 +377,7 @@ const HELP = {
             <div class="camera-actions">
               <BaseSplitButton
                   :label="connecting === cam.id ? '...' : 'Connect'"
+                  menu-label="More connect options"
                   :options="connectOptions"
                   :disabled="connecting === cam.id"
                   @click="handleConnect(cam.id, 'main')"

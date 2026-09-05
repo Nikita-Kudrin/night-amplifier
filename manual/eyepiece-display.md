@@ -7,6 +7,30 @@ pixel.
 
 Find them under **Settings → Processing**.
 
+## The eyepiece view
+
+Open `/eyepiece` for the view itself. It is always a single image, whatever
+**Binoview** is set to — the split-screen layout lives on `/eyepiece_quality`,
+which still follows the setting.
+
+Its controls sit in the bottom-right corner and **fade out after ten seconds**,
+so nothing stands between you and the sky. Tap or click the image to bring them
+back, and tap again to dismiss them early. Push-To chevrons are exempt: they stay
+on screen while you are navigating to a target.
+
+| Control | What it does |
+|---|---|
+| Fullscreen | Fills the screen, and fits the image to it — leaving fullscreen fits it again to the smaller viewport. Rotating the device or resizing the window re-fits while fullscreen; windowed, your own zoom is left alone. Hidden on iPhone, which has no fullscreen for web pages. |
+| Fit all | Appears once you have pinched or scrolled in. Returns to the whole frame. |
+| Download | Saves the round eyepiece image: a square PNG, black outside the field stop — the view as you were looking at it. |
+| Download original | On the button's dropdown. The same picture uncropped — the full rectangular frame. |
+
+Both downloads come from the server at the frame's own resolution, not at
+whatever size your screen is streaming, so they are worth keeping. That render is
+big enough that only one runs at a time: if somebody on another device is already
+saving one, the button keeps spinning and retries for up to fifteen seconds before
+telling you the server is busy.
+
 ## Black level
 
 How dark the background sky is pushed. Raising it darkens the sky and lifts the

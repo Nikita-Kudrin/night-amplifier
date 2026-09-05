@@ -1,11 +1,20 @@
 <script setup>
-import {ref, onMounted, onUnmounted, nextTick} from 'vue'
+import {ref, computed, watch, onMounted, onUnmounted, nextTick, useSlots} from 'vue'
 
 const props = defineProps({
-  /** Label of the primary action. */
+  /**
+   * Label of the primary action. Rendered as the button's text unless the default
+   * slot replaces it, and used as the accessible name either way — an icon-only
+   * button still has to say what it does.
+   */
   label: {
     type: String,
     required: true,
+  },
+  /** Accessible name for the menu trigger. */
+  menuLabel: {
+    type: String,
+    default: 'More options',
   },
   /** Secondary actions, as `{value, label, disabled?}`. */
   options: {
@@ -24,12 +33,26 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['click', 'select'])
+/** `menuToggle` carries the menu's open state, for callers that must react to it. */
+const emit = defineEmits(['click', 'select', 'menuToggle'])
+
+const slots = useSlots()
+
+/**
+ * A button whose slot replaced the label shows an icon and nothing else, so the
+ * label has to come back as a hover tooltip. One rendering its own text does not
+ * need a tooltip repeating it.
+ */
+const mainTitle = computed(() => (slots.default ? props.label : undefined))
 
 const open = ref(false)
 const rootRef = ref(null)
 const menuRef = ref(null)
 const menuStyle = ref({})
+
+// A watcher rather than an emit at each site: three paths close the menu, and one
+// of them silently not reporting is how a listener ends up stuck open.
+watch(open, (isOpen) => emit('menuToggle', isOpen))
 
 async function toggleMenu(e) {
   e.stopPropagation()
@@ -95,9 +118,11 @@ onUnmounted(() => {
       class="btn btn-sm split-button-main"
       :class="`btn-${props.variant}`"
       :disabled="props.disabled"
+      :aria-label="props.label"
+      :title="mainTitle"
       @click.stop="emit('click')"
     >
-      {{ props.label }}
+      <slot>{{ props.label }}</slot>
     </button>
     <button
       v-if="props.options.length"
@@ -106,7 +131,7 @@ onUnmounted(() => {
       type="button"
       aria-haspopup="menu"
       :aria-expanded="open ? 'true' : 'false'"
-      aria-label="More connect options"
+      :aria-label="props.menuLabel"
       @click="toggleMenu"
     >
       <svg
