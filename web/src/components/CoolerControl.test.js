@@ -160,7 +160,7 @@ describe('CoolerControl', () => {
         await toggle.setValue(true)
         await nextTick()
 
-        expect(updateSettings).toHaveBeenCalledWith({cooler_enabled: true})
+        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', cooler_enabled: true})
     })
 
     it('renders the Fast toggle when the camera has a cooler', async () => {
@@ -228,6 +228,6 @@ describe('CoolerControl', () => {
         await fastToggle.setValue(true)
         await nextTick()
 
-        expect(updateSettings).toHaveBeenCalledWith({cooler_fast_mode: true})
+        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', cooler_fast_mode: true})
     })
 })

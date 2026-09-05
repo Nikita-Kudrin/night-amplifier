@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::camera::{CameraEntry, CameraRegistry};
 use crate::server::camera_session::lifecycle;
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::state::{AppState, ConnectedCameraInfo};
+use crate::server::state::{AppState, CameraRole, ConnectedCameraInfo};
 
 /// Service for managing camera operations
 pub struct CameraService;
@@ -30,6 +30,7 @@ impl CameraService {
                     connected: true,
                     provider: Some(cam_info.provider.clone()),
                     index: Some(cam_info.index),
+                    role: Some(cam_info.role),
                     info: cam_info.info.clone(),
                 });
             }
@@ -57,6 +58,7 @@ impl CameraService {
                     connected: false,
                     provider: Some(entry.provider),
                     index: Some(entry.index),
+                    role: None,
                     info: entry.info,
                 });
             }
@@ -93,6 +95,7 @@ impl CameraService {
                             connected: false,
                             provider: Some(provider_name.to_string()),
                             index: Some(cam.id as usize),
+                            role: None,
                             info: crate::server::dto::CameraInfoResponse::from_info(&cam, &id),
                         };
                         let _ = event_sender
@@ -141,13 +144,14 @@ impl CameraService {
             .ok_or_else(|| ApiError::CameraNotFound(camera_id.to_string()))
     }
 
-    /// Connect to a camera (delegates to lifecycle — opens the handle and
+    /// Connect to a camera in `role` (delegates to lifecycle — opens the handle and
     /// begins pre-cool when applicable).
     pub async fn connect_camera(
         state: &Arc<AppState>,
         camera_id: &str,
+        role: CameraRole,
     ) -> ApiResult<ConnectedCameraInfo> {
-        lifecycle::connect(state, camera_id).await
+        lifecycle::connect(state, camera_id, role).await
     }
 
     /// Disconnect from a camera (delegates to lifecycle — triggers warmup
@@ -165,5 +169,7 @@ pub struct CameraListItem {
     pub connected: bool,
     pub provider: Option<String>,
     pub index: Option<usize>,
+    /// The position this camera occupies, or `None` while it is merely discovered.
+    pub role: Option<CameraRole>,
     pub info: crate::camera::CameraInfo,
 }

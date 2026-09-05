@@ -143,7 +143,8 @@ pub enum ServerEvent {
         dec_degrees: f64,
         ra_string: String,
         dec_string: String,
-        stars_matched: usize,
+        /// Stars ASTAP reported finding, or `None` when it never said.
+        stars_detected: Option<usize>,
         confidence: f64,
         rotation_deg: f64,
     },
@@ -286,6 +287,7 @@ pub enum CameraPhaseDto {
     Idle,
     Precooling,
     Capturing,
+    Guiding,
     WarmingUp,
 }
 
@@ -296,6 +298,7 @@ impl From<CameraPhase> for CameraPhaseDto {
             CameraPhase::Idle => CameraPhaseDto::Idle,
             CameraPhase::Precooling => CameraPhaseDto::Precooling,
             CameraPhase::Capturing => CameraPhaseDto::Capturing,
+            CameraPhase::Guiding => CameraPhaseDto::Guiding,
             CameraPhase::WarmingUp => CameraPhaseDto::WarmingUp,
         }
     }
@@ -456,7 +459,7 @@ impl ServerEvent {
         dec_degrees: f64,
         ra_string: impl Into<String>,
         dec_string: impl Into<String>,
-        stars_matched: usize,
+        stars_detected: Option<usize>,
         confidence: f64,
         rotation_deg: f64,
     ) -> Self {
@@ -465,7 +468,7 @@ impl ServerEvent {
             dec_degrees,
             ra_string: ra_string.into(),
             dec_string: dec_string.into(),
-            stars_matched,
+            stars_detected,
             confidence,
             rotation_deg,
         }

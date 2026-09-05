@@ -8,10 +8,12 @@ use axum::{
 };
 use std::sync::Arc;
 
-use super::super::dto::{ApiResponse, CameraInfoResponse, CameraListEntry, MessageResponse};
+use super::super::dto::{
+    ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, MessageResponse,
+};
 use super::super::error::ApiError;
 use super::super::services::CameraService;
-use super::super::state::AppState;
+use super::super::state::{AppState, CameraRole};
 
 /// GET /api/cameras
 ///
@@ -27,6 +29,7 @@ pub async fn list_cameras(State(state): State<Arc<AppState>>) -> impl IntoRespon
             connected: cam.connected,
             provider: cam.provider,
             index: cam.index,
+            role: cam.role,
             info: CameraInfoResponse::from_info(&cam.info, &cam.id),
         })
         .collect();
@@ -52,23 +55,31 @@ pub async fn get_camera_info(
 
 /// POST /api/cameras/:camera_id/connect
 ///
-/// Connect to a camera
+/// Connect to a camera. The optional body `{"role": "main" | "guide"}` says which
+/// position it takes; no body means the imaging camera.
 pub async fn connect_camera(
     State(state): State<Arc<AppState>>,
     Path(camera_id): Path<String>,
+    body: Option<Json<ConnectCameraRequest>>,
 ) -> impl IntoResponse {
-    match CameraService::connect_camera(&state, &camera_id).await {
-        Ok(cam_info) => {
-            // Check if this was already connected (service returns existing info)
-            let cameras = state.cameras.read().await;
-            let was_already_connected = !cameras.is_empty()
-                && cameras.get(&camera_id).map(|c| &c.info.name) == Some(&cam_info.info.name);
-            drop(cameras);
+    let role = body
+        .and_then(|Json(req)| req.role)
+        .unwrap_or(CameraRole::Main);
 
+    // Read before connecting: `connect` is idempotent and returns the existing info, so
+    // asking afterwards cannot tell the two apart.
+    let was_already_connected = state.cameras.read().await.contains_key(&camera_id);
+
+    match CameraService::connect_camera(&state, &camera_id, role).await {
+        Ok(cam_info) => {
             let message = if was_already_connected {
                 "Camera already connected".to_string()
             } else {
-                format!("Camera '{}' connected", cam_info.info.name)
+                format!(
+                    "Camera '{}' connected as the {} camera",
+                    cam_info.info.name,
+                    role.label()
+                )
             };
 
             (
@@ -79,18 +90,7 @@ pub async fn connect_camera(
                 }),
             )
         }
-        Err(e) => {
-            let status = match &e {
-                ApiError::InvalidCameraIdFormat | ApiError::InvalidCameraIndex => {
-                    StatusCode::BAD_REQUEST
-                }
-                ApiError::CameraOpenFailed(_) | ApiError::Internal(_) => {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, ApiResponse::err(e.to_string()))
-        }
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }
 
@@ -109,13 +109,6 @@ pub async fn disconnect_camera(
                 camera_id: Some(camera_id),
             }),
         ),
-        Err(e) => {
-            let status = match &e {
-                ApiError::CameraInUse => StatusCode::CONFLICT,
-                ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, ApiResponse::err(e.to_string()))
-        }
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }

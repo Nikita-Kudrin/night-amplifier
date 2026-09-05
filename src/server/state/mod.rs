@@ -3,27 +3,31 @@
 //! This module contains the shared state that is accessed by all request handlers.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex, Notify, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::warn;
 
 use super::events::ServerEvent;
 use super::services::PushToState;
 use super::settings_persistence::SettingsPersistence;
-use crate::camera::{Camera, CameraStatus};
+use crate::camera::CameraStatus;
 use crate::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use crate::telemetry::metrics as telemetry_metrics;
 
+mod camera_slot;
 mod capture_mode;
+mod frame_stream;
 mod jpeg_tiers;
 mod session;
 mod settings;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
+pub use camera_slot::{CameraOp, CameraSlot, RawSessionResume};
 pub use capture_mode::{CaptureMode, RawFrameSaving};
+pub use frame_stream::FrameStream;
 pub use jpeg_tiers::{JpegTier, JpegTierCache, StreamKind, TierClientGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
@@ -33,7 +37,7 @@ pub use settings::{
     CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
     SensorCorrectionSettings, TelescopeSettings,
 };
-pub use types::{CameraPhase, CaptureState, RenderReadyFrame, StretchResult};
+pub use types::{CameraPhase, CameraRole, CaptureState, RenderReadyFrame, StretchResult};
 
 /// The main application state shared across all handlers
 pub struct AppState {
@@ -45,28 +49,35 @@ pub struct AppState {
     pub session: RwLock<CaptureSession>,
     /// Capture settings
     pub settings: RwLock<CaptureSettings>,
-    /// Latest rendered frame (LZ4 compressed for streaming)
-    pub latest_frame: RwLock<Option<bytes::Bytes>>,
-    /// Latest raw frame (uncompressed, for dynamic JPEG encoding)
-    pub latest_raw_frame: RwLock<Option<Arc<RenderReadyFrame>>>,
-    /// Frame counter (for change detection)
-    pub frame_counter: AtomicU64,
+    /// The main camera's rendered image stream — what `/ws/stream` serves by default.
+    pub main_stream: Arc<FrameStream>,
+    /// The guide camera's rendered image stream — `/ws/stream?source=guide`.
+    ///
+    /// Separate from `main_stream` down to the frame counter: sharing one would make
+    /// each camera's frames invalidate the other's cached tiers. Its client census is
+    /// also the guide loop's render gate — see [`FrameStream::has_viewers`].
+    pub guide_stream: Arc<FrameStream>,
     /// Cancellation flag for capture loop
     pub cancel_flag: AtomicBool,
     /// Event broadcast channel
     pub events: broadcast::Sender<ServerEvent>,
-    /// Mutex for capture operations (ensures only one capture at a time)
-    pub capture_lock: Mutex<()>,
-    /// Notification for new frame ready
-    pub frame_ready: Arc<tokio::sync::Notify>,
     /// Disk writer handle for saving frames
     pub disk_writer: DiskWriterHandle,
     /// Push-To navigation state
     pub push_to: RwLock<Option<PushToState>>,
+    /// True while the guide loop is actually exposing, so the plate-solve source can be
+    /// decided with an atomic load on the stacking thread rather than a lock — see
+    /// `capture::solving::SolveSource`.
+    ///
+    /// Deliberately not "a guide camera is connected". The two diverge in both
+    /// directions: a cooled guide camera stays registered for the whole of its warm-up
+    /// with its loop already stopped, and `connect` can return before a loop that then
+    /// fails to start. Either way presence answered "the guide camera is solving" when
+    /// nothing was, and the imaging camera stood down for nothing. `guide_task` owns
+    /// this flag: it is set when the loop starts running and cleared when it stops.
+    pub guide_loop_running: AtomicBool,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
-    /// Cancel token for currently active camera
-    pub active_camera_cancel_token: RwLock<Option<Arc<AtomicBool>>>,
     /// Counter for frames dropped due to pipeline back-pressure
     pub dropped_frames: AtomicU64,
     /// Frames the camera actually handed the pipeline this session.
@@ -78,15 +89,9 @@ pub struct AppState {
     pub delivered_frames: AtomicU64,
     /// Latest reported camera status keyed by camera name (for cooled cameras)
     pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
-    /// Long-lived camera handle. `Some` while connected and not capturing.
-    /// Taken out during a capture session and returned on exit.
-    pub active_camera: StdMutex<Option<Box<dyn Camera>>>,
-    /// Woken every time a handle is put back into `active_camera` — or fails
-    /// to be, after a stall. The monitor checks the handle out for the
-    /// duration of each bounded call, so `active_camera == None` means "busy",
-    /// not "no camera"; readers wait on this instead of polling. See
-    /// `camera_session::lifecycle::with_active_camera`.
-    pub active_camera_returned: Arc<Notify>,
+    /// One slot per [`CameraRole`], each owning that position's handle, monitor,
+    /// cancel token and reconnect guard. Address it through [`AppState::slot`].
+    pub camera_slots: [CameraSlot; CameraRole::COUNT],
     /// Serializes `camera_session::lifecycle::connect`. Its idempotency check
     /// reads `cameras`, which `finalize_disconnect` clears first, so two
     /// concurrent connects for one id would both pass it, both open the
@@ -94,21 +99,25 @@ pub struct AppState {
     pub camera_connect_lock: Mutex<()>,
     /// What an interrupted capture needs in order to pick up where it left
     /// off. Recorded when a capture starts, consumed by the reconnect
-    /// supervisor, cleared on a clean stop.
+    /// supervisor, cleared on a clean stop. Main camera only — for the guide
+    /// camera, reconnecting *is* resuming, since its loop is started by `connect`.
     pub session_resume_plan: RwLock<Option<SessionResumePlan>>,
-    /// True while the reconnect supervisor is running, so a second dropout
-    /// cannot start a second supervisor racing the first.
-    pub reconnect_in_flight: Arc<AtomicBool>,
     /// Stacking state parked by a capture that ended unexpectedly, so a
     /// resumed capture continues the same integration instead of restarting
     /// it. Cleared whenever a capture starts fresh or stops cleanly — holding
     /// full-resolution accumulators between sessions would be pure waste.
     pub stacking_carryover: StdMutex<Option<crate::server::capture::StackingCarryover>>,
+    /// Stop switch for the guide camera's free-running loop. Separate from
+    /// `cancel_flag`, which belongs to the imaging capture — stopping a capture must not
+    /// stop plate solving, and disconnecting the guide camera must not stop the capture.
+    ///
+    /// A `std` mutex, not a tokio one, so `guide_task::start` can publish the token
+    /// *before* spawning: a disconnect landing in the gap would otherwise find no token,
+    /// return immediately, and close the handle underneath a loop that was still
+    /// starting up.
+    pub guide_cancel: StdMutex<Option<Arc<AtomicBool>>>,
     /// Current lifecycle phase per connected camera (keyed by camera name).
     pub camera_phase: RwLock<HashMap<String, CameraPhase>>,
-    /// Sender used by `lifecycle` to issue commands to the running monitor
-    /// thread. `None` when no monitor is running.
-    pub camera_monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
     /// Consecutive camera faults keyed by camera name, with the instant the
     /// streak was last extended. Every fault detector — the capture watchdog,
     /// the status-poll watchdog and the monitor's cooler poll — feeds this one
@@ -117,17 +126,6 @@ pub struct AppState {
     /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
     /// behind the occasional success. See `camera_health`.
     pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, (u32, Instant)>>,
-    /// Number of active JPEG clients per resolution tier. The render task only
-    /// encodes tiers somebody is watching.
-    pub jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
-    /// JPEG payloads pre-encoded by the render task, one slot per tier.
-    pub jpeg_tier_cache: StdRwLock<JpegTierCache>,
-    /// Per-tier client counts for the lossless stream.
-    ///
-    /// The only record of who is watching it: `lossless_client_count` sums these
-    /// rather than a second counter, because two counters for one connection are
-    /// two things that can disagree.
-    pub lz4_tier_clients: [AtomicUsize; JpegTier::COUNT],
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -197,35 +195,93 @@ impl AppState {
             selected_camera: RwLock::new(None),
             session: RwLock::new(CaptureSession::default()),
             settings: RwLock::new(settings),
-            latest_frame: RwLock::new(None),
-            latest_raw_frame: RwLock::new(None),
-            frame_counter: AtomicU64::new(0),
+            main_stream: Arc::new(FrameStream::default()),
+            guide_stream: Arc::new(FrameStream::default()),
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
-            capture_lock: Mutex::new(()),
-            frame_ready: Arc::new(tokio::sync::Notify::new()),
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to),
+            guide_loop_running: AtomicBool::new(false),
             settings_persistence,
-            active_camera_cancel_token: RwLock::new(None),
             dropped_frames: AtomicU64::new(0),
             delivered_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
-            active_camera: StdMutex::new(None),
+            camera_slots: std::array::from_fn(|_| CameraSlot::default()),
+            guide_cancel: StdMutex::new(None),
             camera_phase: RwLock::new(HashMap::new()),
-            camera_monitor_tx: StdMutex::new(None),
-            active_camera_returned: Arc::new(Notify::new()),
             camera_connect_lock: Mutex::new(()),
             session_resume_plan: RwLock::new(None),
-            reconnect_in_flight: Arc::new(AtomicBool::new(false)),
             stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
-            jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
-            jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
-            lz4_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
         };
 
         (state, disk_writer)
+    }
+
+    /// The slot owning `role`'s handle, monitor and reconnect guard.
+    pub fn slot(&self, role: CameraRole) -> &CameraSlot {
+        &self.camera_slots[role as usize]
+    }
+
+    /// The rendered image stream `role`'s camera produces.
+    pub fn stream(&self, role: CameraRole) -> &Arc<FrameStream> {
+        match role {
+            CameraRole::Main => &self.main_stream,
+            CameraRole::Guide => &self.guide_stream,
+        }
+    }
+
+    /// The camera currently occupying `role`, if any.
+    pub async fn camera_in_role(&self, role: CameraRole) -> Option<ConnectedCameraInfo> {
+        self.cameras
+            .read()
+            .await
+            .values()
+            .find(|info| info.role == role)
+            .cloned()
+    }
+
+    /// Which role a connected camera holds, by id.
+    pub async fn role_of(&self, camera_id: &str) -> Option<CameraRole> {
+        self.cameras.read().await.get(camera_id).map(|info| info.role)
+    }
+
+    /// The display name of a connected camera, by id.
+    ///
+    /// Exists so error messages can name the camera the way the user does — "Ares-C
+    /// Pro", or the fixture directory a simulator was pointed at — rather than the
+    /// wire id. `simulator_0` is not something anyone chose or can recognise, and an
+    /// id in a message is a message the reader has to translate before it helps.
+    pub async fn connected_camera_name(&self, camera_id: &str) -> Option<String> {
+        self.cameras
+            .read()
+            .await
+            .get(camera_id)
+            .map(|info| info.info.name.clone())
+    }
+
+    /// Whether the guide loop is running. An atomic load, so the stacking thread can
+    /// ask it per frame.
+    pub fn guide_loop_running(&self) -> bool {
+        self.guide_loop_running.load(Ordering::SeqCst)
+    }
+
+    pub fn set_guide_loop_running(&self, running: bool) {
+        self.guide_loop_running.store(running, Ordering::SeqCst);
+    }
+
+    /// Take the guide loop's stop switch, leaving the slot empty. `None` means no loop
+    /// is running, which is what makes `guide_task::stop` idempotent.
+    pub fn take_guide_cancel(&self) -> Option<Arc<AtomicBool>> {
+        self.guide_cancel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+    }
+
+    /// Drop the stop switch without signalling it — for a loop that never started.
+    pub fn clear_guide_cancel(&self) {
+        *self.guide_cancel.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Save current settings to disk
@@ -347,127 +403,6 @@ impl AppState {
         ));
     }
 
-    /// Claim the frame counter for the frame currently being rendered.
-    ///
-    /// The render task stores every payload for a frame (LZ4 blob, per-tier
-    /// JPEGs) against the returned counter and then calls
-    /// [`AppState::publish_frame`]. Splitting the two means a woken client never
-    /// observes a counter whose payloads are still missing.
-    pub fn begin_frame(&self) -> u64 {
-        self.frame_counter.fetch_add(1, Ordering::SeqCst) + 1
-    }
-
-    /// Wake every stream client waiting on a new frame.
-    pub fn publish_frame(&self) {
-        telemetry_metrics::record_frame_published();
-        self.frame_ready.notify_waiters();
-    }
-
-    /// Store the LZ4-encoded payload for the lossless stream.
-    ///
-    /// Storing does not advance the frame counter — see [`AppState::begin_frame`].
-    pub async fn set_latest_frame(&self, frame_data: Vec<u8>) {
-        let frame_size = frame_data.len() as u64;
-        *self.latest_frame.write().await = Some(bytes::Bytes::from(frame_data));
-        telemetry_metrics::record_latest_frame_size(frame_size);
-    }
-
-    /// Set the latest raw frame for dynamic encoding
-    pub async fn set_latest_raw_frame(&self, frame: Arc<RenderReadyFrame>) {
-        *self.latest_raw_frame.write().await = Some(frame);
-    }
-
-    /// Get the latest frame if available
-    pub async fn get_latest_frame(&self) -> Option<bytes::Bytes> {
-        self.latest_frame.read().await.clone()
-    }
-
-    /// Retrieve the most recently rendered raw frame, if any.
-    ///
-    /// This is not the stacked FITS (which is linear 32-bit), but the
-    /// snapshot of the live preview pipeline immediately before compression.
-    /// Used by newly-connected WebSocket clients to encode an initial payload
-    /// for their specific tier without waiting for the next camera exposure.
-    pub async fn get_latest_raw_frame(&self) -> Option<Arc<RenderReadyFrame>> {
-        self.latest_raw_frame.read().await.clone()
-    }
-
-    /// Number of clients currently watching a resolution tier.
-    pub fn jpeg_tier_client_count(&self, tier: JpegTier) -> usize {
-        self.tier_client_count(StreamKind::Jpeg, tier)
-    }
-
-    /// Per-tier client counters for one stream family.
-    pub fn tier_clients(&self, kind: StreamKind) -> &[AtomicUsize; JpegTier::COUNT] {
-        match kind {
-            StreamKind::Jpeg => &self.jpeg_tier_clients,
-            StreamKind::Lossless => &self.lz4_tier_clients,
-        }
-    }
-
-    pub fn tier_client_count(&self, kind: StreamKind, tier: JpegTier) -> usize {
-        self.tier_clients(kind)[tier as usize].load(Ordering::SeqCst)
-    }
-
-    /// How many clients the lossless stream currently has, across every tier.
-    ///
-    /// The render task encodes the LZ4 payload only when this is non-zero. Every
-    /// lossless connection holds a `TierClientGuard` for its whole life — a
-    /// client that has not reported a viewport holds one at
-    /// [`JpegTier::LOSSLESS_DEFAULT`] — so this is a complete count and needs no
-    /// counter of its own.
-    pub fn lossless_client_count(&self) -> usize {
-        self.lz4_tier_clients
-            .iter()
-            .map(|c| c.load(Ordering::SeqCst))
-            .sum()
-    }
-
-    /// Bounding box the lossless stream should encode into.
-    ///
-    /// The stream keeps a single payload rather than one per tier, so it is
-    /// served at the largest tier any connected client asked for: a client on a
-    /// smaller tier then receives more pixels than it needs, which is what every
-    /// client got before tiers reached this path.
-    ///
-    /// Falls back to the 4K cap when no client has reported a viewport, so a
-    /// client that never sends one is served exactly as it was before.
-    pub fn lossless_target_box(&self) -> (u32, u32) {
-        let (cap_w, cap_h) = crate::server::encoding::JPEG_MAX_BOUNDING_BOX;
-        let largest = JpegTier::all()
-            .into_iter()
-            .rfind(|&tier| self.tier_client_count(StreamKind::Lossless, tier) > 0);
-        match largest {
-            Some(tier) => {
-                let (w, h) = tier.bounding_box();
-                (w.min(cap_w), h.min(cap_h))
-            }
-            None => (cap_w, cap_h),
-        }
-    }
-
-    /// Look up the pre-encoded JPEG for a tier at the given frame.
-    pub fn get_tier_jpeg(&self, tier: JpegTier, counter: u64) -> Option<bytes::Bytes> {
-        self.jpeg_tier_cache
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(tier, counter)
-    }
-
-    /// Publish a pre-encoded JPEG for a tier and return a shareable handle,
-    /// which the render task reuses for tiers that produce the same output.
-    pub fn set_tier_jpeg(
-        &self,
-        tier: JpegTier,
-        counter: u64,
-        data: impl Into<bytes::Bytes>,
-    ) -> bytes::Bytes {
-        self.jpeg_tier_cache
-            .write()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(tier, counter, data)
-    }
-
     /// Subscribe to events
     pub fn subscribe_events(&self) -> broadcast::Receiver<ServerEvent> {
         let receiver = self.events.subscribe();
@@ -481,13 +416,6 @@ impl AppState {
             .stacking_carryover
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = None;
-    }
-
-    /// Announce that `active_camera` is readable again. Safe to call when
-    /// nobody is waiting; `notify_waiters` stores no permit, and every waiter
-    /// re-checks the handle after registering.
-    pub fn notify_active_camera_returned(&self) {
-        self.active_camera_returned.notify_waiters();
     }
 
     /// Extend a camera's fault streak and return its new length. A streak
@@ -558,21 +486,24 @@ impl AppState {
         self.delivered_frames.store(0, Ordering::SeqCst);
     }
 
-    /// Set active camera cancel token
-    pub async fn set_active_camera_token(&self, token: Arc<AtomicBool>) {
-        *self.active_camera_cancel_token.write().await = Some(token);
+    /// Set a slot's camera cancel token
+    pub async fn set_camera_token(&self, role: CameraRole, token: Arc<AtomicBool>) {
+        *self.slot(role).cancel_token.write().await = Some(token);
     }
 
-    /// Clear active camera cancel token
-    pub async fn clear_active_camera_token(&self) {
-        *self.active_camera_cancel_token.write().await = None;
+    /// Clear a slot's camera cancel token
+    pub async fn clear_camera_token(&self, role: CameraRole) {
+        *self.slot(role).cancel_token.write().await = None;
     }
 
-    /// Cancel currently active camera exposure
-    pub async fn cancel_active_exposure(&self) {
-        if let Some(token) = self.active_camera_cancel_token.read().await.as_ref() {
-            token.store(true, Ordering::SeqCst);
-        }
+    /// Cut short the exposure in flight on `role`'s camera.
+    ///
+    /// Used when that camera's settings change: the running exposure was configured
+    /// with the old values, and finishing it only delays the new ones. Scoped to the
+    /// one slot — cancelling both would throw away a 5-minute imaging sub because
+    /// somebody nudged the guide camera's gain. A slot with no camera is a no-op.
+    pub async fn cancel_active_exposure(&self, role: CameraRole) {
+        self.slot(role).cancel_exposure().await;
     }
 
     /// Cache the latest camera status sample and broadcast a status event.
@@ -805,10 +736,10 @@ mod tests {
     async fn test_app_state_frame_storage() {
         let (state, _disk_writer) = AppState::new_for_testing();
 
-        assert!(state.get_latest_frame().await.is_none());
+        assert!(state.main_stream.get_latest_frame().await.is_none());
 
-        state.set_latest_frame(vec![1, 2, 3, 4]).await;
-        let frame = state.get_latest_frame().await.unwrap();
+        state.main_stream.set_latest_frame(vec![1, 2, 3, 4]).await;
+        let frame = state.main_stream.get_latest_frame().await.unwrap();
         assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
     }
 
@@ -818,26 +749,88 @@ mod tests {
     async fn test_begin_frame_owns_the_counter() {
         let (state, _disk_writer) = AppState::new_for_testing();
 
-        state.set_latest_frame(vec![1]).await;
-        assert_eq!(state.frame_counter.load(Ordering::SeqCst), 0);
+        state.main_stream.set_latest_frame(vec![1]).await;
+        assert_eq!(state.main_stream.frame_counter(), 0);
 
-        assert_eq!(state.begin_frame(), 1);
-        assert_eq!(state.begin_frame(), 2);
-        assert_eq!(state.frame_counter.load(Ordering::SeqCst), 2);
+        assert_eq!(state.main_stream.begin_frame(), 1);
+        assert_eq!(state.main_stream.begin_frame(), 2);
+        assert_eq!(state.main_stream.frame_counter(), 2);
     }
 
     #[tokio::test]
     async fn test_tier_jpeg_publish_and_lookup() {
         let (state, _disk_writer) = AppState::new_for_testing();
 
-        assert!(state.get_tier_jpeg(JpegTier::Hd1080, 1).is_none());
+        assert!(state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 1).is_none());
 
-        state.set_tier_jpeg(JpegTier::Hd1080, 1, vec![7, 8, 9]);
+        state
+            .main_stream
+            .set_tier_jpeg(JpegTier::Hd1080, 1, vec![7, 8, 9]);
         assert_eq!(
-            state.get_tier_jpeg(JpegTier::Hd1080, 1).unwrap().as_ref(),
+            state
+                .main_stream
+                .get_tier_jpeg(JpegTier::Hd1080, 1)
+                .unwrap()
+                .as_ref(),
             &[7, 8, 9]
         );
-        assert!(state.get_tier_jpeg(JpegTier::Hd1080, 2).is_none());
+        assert!(state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 2).is_none());
+    }
+
+    /// The two streams are independent down to the counter. Sharing one would make each
+    /// camera's frames invalidate the other's cached tiers on every exposure.
+    #[tokio::test]
+    async fn guide_and_main_streams_do_not_share_a_counter_or_cache() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+
+        let main_counter = state.main_stream.begin_frame();
+        state
+            .main_stream
+            .set_tier_jpeg(JpegTier::Hd1080, main_counter, vec![1]);
+
+        // Three guide frames must leave the main stream's cached payload readable.
+        for _ in 0..3 {
+            let guide_counter = state.guide_stream.begin_frame();
+            state
+                .guide_stream
+                .set_tier_jpeg(JpegTier::Hd1080, guide_counter, vec![2]);
+        }
+
+        assert_eq!(state.main_stream.frame_counter(), 1);
+        assert_eq!(state.guide_stream.frame_counter(), 3);
+        assert_eq!(
+            state
+                .main_stream
+                .get_tier_jpeg(JpegTier::Hd1080, main_counter)
+                .unwrap()
+                .as_ref(),
+            &[1]
+        );
+    }
+
+    /// The guide loop's render gate. With nobody watching it must report no viewers, or
+    /// it would post-process and encode a stream no one can see.
+    #[tokio::test]
+    async fn has_viewers_tracks_tier_client_guards() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let stream = Arc::clone(&state.guide_stream);
+
+        assert!(!stream.has_viewers());
+
+        let guard = TierClientGuard::new(Arc::clone(&stream), StreamKind::Jpeg, JpegTier::Hd1080);
+        assert!(stream.has_viewers());
+
+        drop(guard);
+        assert!(!stream.has_viewers());
+
+        let lossless = TierClientGuard::new(
+            Arc::clone(&stream),
+            StreamKind::Lossless,
+            JpegTier::LOSSLESS_DEFAULT,
+        );
+        assert!(stream.has_viewers());
+        drop(lossless);
+        assert!(!stream.has_viewers());
     }
 
     #[tokio::test]
@@ -924,14 +917,45 @@ mod tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         let token = Arc::new(AtomicBool::new(false));
 
-        state.set_active_camera_token(Arc::clone(&token)).await;
+        state
+            .set_camera_token(CameraRole::Main, Arc::clone(&token))
+            .await;
         assert!(!token.load(Ordering::SeqCst));
 
-        state.cancel_active_exposure().await;
+        state.cancel_active_exposure(CameraRole::Main).await;
         assert!(token.load(Ordering::SeqCst));
 
-        state.clear_active_camera_token().await;
-        // The token itself remains true, but AppState no longer holds it
-        assert!(state.active_camera_cancel_token.read().await.is_none());
+        state.clear_camera_token(CameraRole::Main).await;
+        // The token itself remains true, but the slot no longer holds it
+        assert!(state
+            .slot(CameraRole::Main)
+            .cancel_token
+            .read()
+            .await
+            .is_none());
+    }
+
+    /// An edit aimed at one camera must not cut short the other's exposure. Cancelling
+    /// both would throw away a running imaging sub because the guide camera's gain moved.
+    #[tokio::test]
+    async fn cancelling_one_slots_exposure_leaves_the_other_running() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let main_token = Arc::new(AtomicBool::new(false));
+        let guide_token = Arc::new(AtomicBool::new(false));
+
+        state
+            .set_camera_token(CameraRole::Main, Arc::clone(&main_token))
+            .await;
+        state
+            .set_camera_token(CameraRole::Guide, Arc::clone(&guide_token))
+            .await;
+
+        state.cancel_active_exposure(CameraRole::Guide).await;
+
+        assert!(guide_token.load(Ordering::SeqCst));
+        assert!(
+            !main_token.load(Ordering::SeqCst),
+            "a guide-camera edit cancelled the imaging camera's exposure"
+        );
     }
 }

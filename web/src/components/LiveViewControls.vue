@@ -34,13 +34,33 @@ defineProps({
     type: Boolean,
     default: false
   },
+  /** A guide camera is connected, so the source toggle has something to switch to. */
+  hasGuideCamera: {
+    type: Boolean,
+    default: false
+  },
+  /** True while the view is showing the guide camera rather than the imaging one. */
+  showGuide: {
+    type: Boolean,
+    default: false
+  },
 })
 
-defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 'startCometRoiSelection'])
+defineEmits([
+  'zoomIn',
+  'zoomOut',
+  'fitToView',
+  'resetView',
+  'toggleFullscreen',
+  'startCometRoiSelection',
+  'update:showGuide',
+])
 </script>
 
 <template>
-  <div class="controls-overlay">
+  <!-- `data-overlay-control` marks the whole cluster as controls rather than image,
+       so a press on the FPS readout refreshes the auto-hide instead of toggling it. -->
+  <div class="controls-overlay" data-overlay-control>
     <div v-if="hasFrame" class="frame-info">
       <span class="frame-info-line">
         <span class="fps-container">
@@ -50,6 +70,20 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
       </span>
       <span v-if="debugLogging" class="render-backend" :title="'Rendering: ' + backendLabel">{{ backendLabel }}</span>
     </div>
+
+    <!-- Outside `.zoom-controls` on purpose: that group is the zoom cluster, and the
+         source switch is not one of its buttons. -->
+    <button
+        v-if="hasGuideCamera"
+        class="btn btn-sm guide-toggle"
+        :class="{ active: showGuide }"
+        type="button"
+        :aria-pressed="showGuide ? 'true' : 'false'"
+        title="Show the guide camera's view instead of the imaging camera's"
+        @click="$emit('update:showGuide', !showGuide)"
+    >
+      Guide camera
+    </button>
 
     <div class="zoom-controls">
       <button class="btn btn-icon btn-overlay" title="Fit to view" @click="$emit('fitToView')">
@@ -152,6 +186,24 @@ defineEmits(['zoomIn', 'zoomOut', 'fitToView', 'resetView', 'toggleFullscreen', 
 .btn-overlay.active {
   background: var(--primary);
   color: white;
+}
+
+.guide-toggle {
+  display: flex;
+  align-items: center;
+  padding: 0 0.6rem;
+  background: var(--surface-elevated);
+  border: none;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  color: var(--text-secondary, #9ca3af);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.guide-toggle.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .frame-info {

@@ -44,7 +44,10 @@ Enable features for specific manufacturers when compiling:
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
-- **Eyepiece view** - Simulation of the eyepiece view (binocular/monocular)
+- **Guide camera** - Attach a second camera on a guide scope; it free-runs, drives plate solving from its own optics, and can be previewed in place of the main image.
+- **Eyepiece view** - Simulation of the eyepiece view. `/eyepiece` is always monocular, with
+  fullscreen, pinch zoom, auto-hiding controls and PNG download (round or uncropped);
+  `/eyepiece_quality` streams losslessly and follows the binocular/monocular setting.
 - **Sensor corrections** - Hot-pixel rejection and row/column pattern removal on the raw mosaic, before demosaic.
 - **Noise reduction** - Guided-filter colour smoothing and scale-selective grain removal, run at the resolution you
   actually view.
@@ -62,8 +65,9 @@ Enable features for specific manufacturers when compiling:
 ## Frame Storage
 
 Raw frames are saved to FITS files in the capture modes selected under **Settings → Storage → Save Raw Frames**.
-Live view, Wanderer and Stacking are chosen independently; all three are off by default. The finished stack is
-saved separately, in Stacking mode only.
+Live view, Wanderer, Stacking and Guide camera are chosen independently; all four are off by default. The finished
+stack is saved separately, in Stacking mode only. The guide camera writes alongside the imaging one, into a folder
+of its own.
 
 **Image Storage Formats:**
 
@@ -83,6 +87,7 @@ captures/
 ├── raw/
 │   ├── DD-MM-YYYY_HH-MM-SS-live/        # Live view session
 │   ├── DD-MM-YYYY_HH-MM-SS-wanderer/    # Wanderer session
+│   ├── DD-MM-YYYY_HH-MM-SS-guide/       # Guide camera, runs alongside the others
 │   └── DD-MM-YYYY_HH-MM-SS-stacking/    # Stacking session
 │       ├── frame_000001.fits            # Individual raw frames (Deep Sky, Comet)
 │       ├── frame_000002.fits            # Planetary writes one capture.ser instead

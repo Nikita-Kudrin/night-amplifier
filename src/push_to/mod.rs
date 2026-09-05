@@ -108,6 +108,10 @@ pub struct FrameOutcome {
     pub position: Option<PushToPositionResponse>,
     /// Direction to the current target, if both are known.
     pub direction: Option<PushToDirectionResponse>,
+    /// Why no solve ran, when there is something worth saying. Reported through the
+    /// caller's existing de-duplication rather than broadcast by the plugin, so a
+    /// state that persists for a hundred frames still costs one event.
+    pub blocker: Option<PushToBlocker>,
 }
 
 impl FrameOutcome {
@@ -117,6 +121,7 @@ impl FrameOutcome {
             outcome: SolveOutcome::Idle,
             position: None,
             direction: None,
+            blocker: None,
         }
     }
 
@@ -133,6 +138,7 @@ impl FrameOutcome {
             },
             position,
             direction,
+            blocker: None,
         }
     }
 
@@ -145,7 +151,14 @@ impl FrameOutcome {
             outcome: SolveOutcome::Solved,
             position: Some(position),
             direction,
+            blocker: None,
         }
+    }
+
+    /// Say why nothing happened on this frame.
+    pub fn blocked_by(mut self, blocker: Option<PushToBlocker>) -> Self {
+        self.blocker = blocker;
+        self
     }
 }
 
@@ -162,15 +175,33 @@ pub enum PushToBlocker {
     SolverNotReady,
     /// A solve failed recently; the next attempt is being held off.
     BackingOff,
+    /// The view is changing: the scope is being pushed.
+    TelescopeMoving,
+    /// The view has stopped changing but has not been still long enough yet.
+    Settling,
+    /// The frame is too bare to say anything about — smeared past recognition by a
+    /// fast slew, or clouded.
+    NotEnoughStars,
+    /// Stars are still soft or trailed, so a solve would fail on picture quality.
+    StarsTrailing,
 }
 
 impl PushToBlocker {
     /// Human-readable explanation for the UI.
+    ///
+    /// These are the *ordinary* states of a manually pushed scope as much as they are
+    /// faults — before them the UI went on showing "Found : M31" for the whole time the
+    /// user was pushing away from M31, because nothing was emitted between one solve
+    /// ending and the next beginning.
     pub fn reason(&self) -> &'static str {
         match self {
             Self::NoTarget => "No target selected",
             Self::SolverNotReady => "ASTAP or its star database is not installed",
             Self::BackingOff => "Waiting before the next solve attempt",
+            Self::TelescopeMoving => "Telescope is moving",
+            Self::Settling => "Waiting for the view to settle",
+            Self::NotEnoughStars => "Not enough stars in view",
+            Self::StarsTrailing => "Waiting for the stars to sharpen",
         }
     }
 }
@@ -186,6 +217,39 @@ pub trait PushToSolverPlugin: Send + Sync {
     /// The returned [`FrameOutcome`] says whether a solve actually ran, so callers can
     /// tell a fresh position from a cached one.
     async fn process_new_frame(
+        &self,
+        frame: &Frame,
+        detector: &StarDetector,
+        wanderer_mode: bool,
+    ) -> PushToResult<FrameOutcome>;
+
+    /// Name the camera now producing frames, or `None` when none is connected.
+    ///
+    /// The solver remembers a field of view per optical configuration to make the next
+    /// cold start fast, and that memory is keyed on optics — focal length, pixel size,
+    /// sensor height, Barlow — which cannot tell two cameras sharing a sensor format
+    /// apart, nor notice a swap the user has not re-profiled. A stale FOV is not a
+    /// small error: it *fails* an otherwise good hinted attempt outright, which is
+    /// exactly what forces the slow full-sky fallback. So the camera is named here and
+    /// a remembered FOV that came from a different one is discarded when it would
+    /// otherwise be used.
+    ///
+    /// Default no-op: only the solver has any use for this.
+    async fn set_active_camera(&self, _camera: Option<String>) {}
+
+    /// Offer a frame while a solve is already running.
+    ///
+    /// Separate from [`PushToSolverPlugin::process_new_frame`] because the two answer
+    /// different questions and must have different costs: that one may block for the
+    /// length of an ASTAP ladder, this one may not. Without it the movement detector
+    /// went blind for exactly as long as a solve took — the 2026-09-01 log has a
+    /// full-sky search grinding for 223 s on a frame whose sky the user had already
+    /// pushed away from, with every frame in between skipped unread, which is what
+    /// "it doesn't search when I move the scope" looks like from the outside.
+    ///
+    /// Returning [`FrameOutcome::cached`] with a blocker is the normal case; the real
+    /// work is noticing a slew and abandoning a solve that can no longer be right.
+    async fn observe_frame(
         &self,
         frame: &Frame,
         detector: &StarDetector,
@@ -221,6 +285,26 @@ pub trait PushToSolverPlugin: Send + Sync {
     /// Update telescope settings for FOV calculation.
     /// The solver will compute the precise image-height FOV from these parameters.
     async fn set_telescope_settings(&self, settings: TelescopeSettings) -> Result<(), String>;
+
+    /// Name the camera *and* the optics it is looking through, as one change.
+    ///
+    /// The pair is the solver's rig identity, and applying half of it is a state that
+    /// never physically existed: a new camera behind the previous camera's focal
+    /// length. That is not merely transient. Resolving the remembered FOV is a
+    /// *mutating* read — an entry whose recorded camera contradicts the one asked
+    /// about is discarded, not skipped — so resolving against a mismatched pair can
+    /// permanently delete a hard-won measurement belonging to the rig that is being
+    /// replaced.
+    ///
+    /// The default body applies them in the order that is at least harmless: optics
+    /// first, so the only resolve that sees an inconsistent pair sees the *old* camera
+    /// against the *new* optics, whose rig key has no entry yet and so has nothing to
+    /// discard. Implementations that can apply both before resolving should override
+    /// this and do exactly that.
+    async fn set_rig(&self, camera: Option<String>, telescope: TelescopeSettings) {
+        let _ = self.set_telescope_settings(telescope).await;
+        self.set_active_camera(camera).await;
+    }
 }
 
 /// Catalog search, target selection, and database operations.
@@ -287,3 +371,103 @@ impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushTo
 
 /// Global registry for the Push-To plugin
 pub static PUSH_TO_PLUGIN: OnceLock<Box<dyn PushToSystemPlugin>> = OnceLock::new();
+
+
+#[cfg(test)]
+mod set_rig_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Records the order in which the rig's two halves arrive.
+    #[derive(Default)]
+    struct RecordingPlugin {
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl PushToSolverPlugin for RecordingPlugin {
+        async fn process_new_frame(
+            &self,
+            _frame: &Frame,
+            _detector: &StarDetector,
+            _wanderer_mode: bool,
+        ) -> PushToResult<FrameOutcome> {
+            unreachable!("not exercised by these tests")
+        }
+
+        async fn observe_frame(
+            &self,
+            _frame: &Frame,
+            _detector: &StarDetector,
+            _wanderer_mode: bool,
+        ) -> PushToResult<FrameOutcome> {
+            unreachable!("not exercised by these tests")
+        }
+
+        async fn get_status(&self) -> PushToStatusResponse {
+            PushToStatusResponse {
+                solver_ready: false,
+                is_solving: false,
+                current_target: None,
+                last_position: None,
+                direction: None,
+            }
+        }
+
+        async fn cancel_solve(&self) -> PushToResult<bool> {
+            Ok(false)
+        }
+
+        async fn restart_solve(&self) -> PushToResult<()> {
+            Ok(())
+        }
+
+        async fn get_direction(&self) -> Option<PushToDirectionResponse> {
+            None
+        }
+
+        async fn set_fov(&self, _fov: f32) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn set_telescope_settings(
+            &self,
+            _settings: TelescopeSettings,
+        ) -> Result<(), String> {
+            self.calls.lock().unwrap().push("telescope");
+            Ok(())
+        }
+
+        async fn set_active_camera(&self, _camera: Option<String>) {
+            self.calls.lock().unwrap().push("camera");
+        }
+    }
+
+    /// The default body has to apply the optics first. Resolving the remembered FOV is
+    /// a mutating read that discards an entry whose recorded camera disagrees, so the
+    /// only inconsistent pair it may ever see is the *outgoing* camera against the
+    /// *incoming* optics — a rig key with no entry, and so nothing to destroy. The
+    /// other order asks about the incoming camera against the outgoing optics, which is
+    /// a live entry belonging to the rig being replaced.
+    #[tokio::test]
+    async fn the_default_set_rig_applies_the_optics_before_the_camera() {
+        let plugin = RecordingPlugin::default();
+        plugin
+            .set_rig(Some("Ares-C Pro".into()), TelescopeSettings::default())
+            .await;
+        assert_eq!(
+            *plugin.calls.lock().unwrap(),
+            vec!["telescope", "camera"],
+            "naming the camera first exposes the FOV cache to a pair that never existed"
+        );
+    }
+
+    /// Both halves are always applied, including the "no camera connected" case that a
+    /// disconnect produces.
+    #[tokio::test]
+    async fn the_default_set_rig_applies_both_halves_even_with_no_camera() {
+        let plugin = RecordingPlugin::default();
+        plugin.set_rig(None, TelescopeSettings::default()).await;
+        assert_eq!(*plugin.calls.lock().unwrap(), vec!["telescope", "camera"]);
+    }
+}

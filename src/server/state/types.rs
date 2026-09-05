@@ -1,5 +1,41 @@
 use crate::stacking::{StackingType, WeightingPreset};
 
+/// What a connected camera is for.
+///
+/// The rig holds at most one of each: the imaging camera on the main scope, and an
+/// optional guide camera on a guide scope. The role — not the camera id — is what
+/// every consumer addresses, because "which handle drives the stack" and "which
+/// handle feeds the plate solver" are questions about the *position* a camera
+/// occupies, not about the device that happens to be in it tonight.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraRole {
+    /// Imaging camera: drives the capture pipeline, the stack and the disk session.
+    #[default]
+    Main,
+    /// Guide camera on a separate scope. Free-running, never stacked, and the sole
+    /// plate-solving source while it is connected.
+    Guide,
+}
+
+impl CameraRole {
+    pub const COUNT: usize = 2;
+
+    pub fn all() -> [Self; Self::COUNT] {
+        [Self::Main, Self::Guide]
+    }
+
+    /// Human-readable label used in log lines and user-facing messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Guide => "guide",
+        }
+    }
+}
+
 /// Capture session state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaptureState {
@@ -30,8 +66,17 @@ pub enum CameraPhase {
     Idle,
     /// Handle open, cooler driving toward `target_temp_c`.
     Precooling,
-    /// Handle currently owned by the capture thread.
+    /// Handle currently owned by the capture thread, for the length of one session.
     Capturing,
+    /// Handle owned by the guide camera's free-running loop, for the length of the
+    /// connection.
+    ///
+    /// Distinct from [`Self::Capturing`] because the two answer different questions.
+    /// A capture is bounded and ends on its own, so gates could treat it as "wait";
+    /// a guide loop only ends when the camera goes, so the same treatment means
+    /// "never" — which is how a guide camera became unswappable, its dew heater
+    /// unreachable and its temperature unreported.
+    Guiding,
     /// Handle open, cooler ramping off before release.
     WarmingUp,
 }

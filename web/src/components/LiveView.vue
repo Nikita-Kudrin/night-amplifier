@@ -4,6 +4,7 @@ import {useImageStream} from '../composables/useWebSocket.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../composables/usePanZoom.js'
+import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
 import {CAPTURE_STATES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
@@ -11,14 +12,65 @@ import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {getAppState} from '../composables/useAppState.js'
 
+/**
+ * How long to wait before measuring the container after something reshapes it.
+ * Fullscreen, a rotation and a new frame's dimensions all land before the browser
+ * has laid the element out, so fitting on the event itself fits to the old size.
+ */
+const FIT_AFTER_LAYOUT_MS = 10
+
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 const appState = getAppState()
 const capabilities = appState.capabilities
+const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
+const guideCamera = inject('guideCamera', computed(() => null))
+const mainCamera = inject('mainCamera', computed(() => null))
+
+/** Off by default: the imaging camera is what an observer is here to look at. */
+const showGuide = ref(false)
+
+// Falls back the moment the guide camera goes away, so the view is never left showing a
+// stream nothing is producing.
+watch(hasGuideCamera, (present) => {
+  if (!present) showGuide.value = false
+})
+
+const streamEndpoint = computed(() =>
+    showGuide.value ? '/ws/stream?source=guide' : '/ws/stream'
+)
 
 const {connected, frameData, isJpeg, dimensions, fps, clearFrameData, sendResolution} = useImageStream({
+  endpoint: streamEndpoint,
   width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
   height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
+})
+
+/** The camera whose image is on screen right now. */
+const displayedCamera = computed(() =>
+    showGuide.value ? guideCamera.value : mainCamera.value
+)
+
+/**
+ * Field of view of the camera being *displayed*, in degrees of image height.
+ *
+ * The solve reports the field it was planned against, which with a guide camera
+ * connected is the guide scope's — a different focal length from the imaging scope. The
+ * chevron uses this only to place an off-target arrow against the frame edge, so it has
+ * to describe the picture the arrow is drawn over, not the one that solved.
+ */
+const displayedFovDeg = computed(() => {
+  const profiles = settings?.value?.camera_telescope_profiles
+  const name = displayedCamera.value?.name
+  const optics = (name && profiles?.[name]) || settings?.value?.telescope
+  const fl = optics?.focal_length_mm
+  const py = optics?.pixel_size_y_um
+  const h = optics?.sensor_height_px
+  if (!fl || !py || !h) return pushDirection.value?.fovDeg || 0
+
+  const effectiveFl = fl * (optics.barlow_coeff || 1)
+  const sensorHeightMm = (h * py) / 1000
+  return (2 * Math.atan(sensorHeightMm / (2 * effectiveFl)) * 180) / Math.PI
 })
 
 const pushDirection = computed(() => eventStream.pushDirection.value)
@@ -35,25 +87,35 @@ const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
 const webglRenderer = useWebGLRenderer()
 const canvas2dRenderer = useCanvas2DRenderer()
 
-// Pan/zoom controls
+// Pan/zoom controls. Entering fullscreen fits the image to the new viewport —
+// deferred, because the browser has not resized it yet when the event fires.
 const {
   scale,
+  isDragging,
   isFullscreen,
   canvasStyle,
-  handleWheel,
+  handleWheel: handleWheelBase,
   handleMouseDown: handlePanMouseDown,
   handleMouseMove: handlePanMouseMove,
   handleMouseUp: handlePanMouseUp,
-  handleTouchStart,
-  handleTouchMove,
-  handleTouchEnd,
+  handleTouchStart: handleTouchStartBase,
+  handleTouchMove: handleTouchMoveBase,
+  handleTouchEnd: handleTouchEndBase,
   zoomIn,
   zoomOut,
   resetView,
   fitToView: fitToViewBase,
   toggleFullscreen: toggleFullscreenBase,
   handleFullscreenChange,
-} = usePanZoom()
+} = usePanZoom({onChange: () => setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)})
+
+const {
+  visible: overlayVisible,
+  show: showOverlay,
+  cancelPress,
+  handlePressStart,
+  handlePressEnd,
+} = useOverlayVisibility()
 
 // Comet ROI selection logic
 const {
@@ -138,6 +200,63 @@ function toggleFullscreen() {
   toggleFullscreenBase(containerRef.value)
 }
 
+// Gestures keep the overlay up for as long as they last: a pan or a pinch is the
+// user working with the image, and the controls must not vanish mid-drag.
+function handleWheel(e) {
+  showOverlay()
+  handleWheelBase(e)
+}
+
+function handleTouchStart(e) {
+  handlePressStart(e)
+  handleTouchStartBase(e)
+}
+
+function handleTouchMove(e) {
+  showOverlay()
+  handleTouchMoveBase(e)
+}
+
+function handleTouchEnd(e) {
+  handlePressEnd(e)
+  handleTouchEndBase(e)
+}
+
+// The system taking the gesture away — a notification swipe, palm rejection — is
+// not the observer asking for anything, so it must not read as a tap.
+function handleTouchCancel(e) {
+  cancelPress(e)
+  handleTouchEndBase(e)
+}
+
+function handleMouseDown(e) {
+  handlePressStart(e)
+  if (isSelectingCometRoi.value) {
+    handleRoiMouseDown(e)
+    return
+  }
+  handlePanMouseDown(e)
+}
+
+function handleMouseMove(e) {
+  if (isSelectingCometRoi.value) {
+    showOverlay()
+    handleRoiMouseMove(e)
+    return
+  }
+  if (isDragging.value) showOverlay()
+  handlePanMouseMove(e)
+}
+
+function handleMouseUp(e) {
+  handlePressEnd(e)
+  if (isSelectingCometRoi.value) {
+    handleRoiMouseUp()
+    return
+  }
+  handlePanMouseUp()
+}
+
 // Watch for new frame data and render
 watch(frameData, () => {
   if (frameData.value) {
@@ -148,14 +267,14 @@ watch(frameData, () => {
 // Fit the view on the very first frame
 watch(hasFrame, (newHasFrame, oldHasFrame) => {
   if (newHasFrame && !oldHasFrame) {
-    setTimeout(fitToView, 10)
+    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
   }
 })
 
 // Watch for dimension changes to fit the view
 watch(dimensions, (newDims, oldDims) => {
   if (newDims.width !== oldDims?.width || newDims.height !== oldDims?.height) {
-    setTimeout(fitToView, 10)
+    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
   }
 })
 
@@ -180,6 +299,9 @@ function handleWindowResize() {
     const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
     const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
     sendResolution(newWidth, newHeight)
+    // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
+    // (dragging the sidebar, say), and re-fitting would throw their framing away.
+    if (isFullscreen.value) fitToView()
   }, 200)
 }
 
@@ -210,6 +332,8 @@ function updateContainerSize() {
 onMounted(() => {
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   window.addEventListener('resize', handleWindowResize)
+  // Not redundant with `resize`: mobile Safari rotates without always firing one.
+  window.addEventListener('orientationchange', handleWindowResize)
   initRenderer()
   updateContainerSize()
   resizeObserver = new ResizeObserver(updateContainerSize)
@@ -221,6 +345,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
   window.removeEventListener('resize', handleWindowResize)
+  window.removeEventListener('orientationchange', handleWindowResize)
   if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   cleanupRenderer()
   if (resizeObserver) {
@@ -255,13 +380,15 @@ const backendLabel = computed(() => {
       class="live-view"
       :class="{ capturing: isCapturing, fullscreen: isFullscreen, 'selecting-roi': isSelectingCometRoi }"
       @wheel="handleWheel"
-      @mousedown="isSelectingCometRoi ? handleRoiMouseDown($event) : handlePanMouseDown($event)"
-      @mousemove="isSelectingCometRoi ? handleRoiMouseMove($event) : handlePanMouseMove($event)"
-      @mouseup="isSelectingCometRoi ? handleRoiMouseUp() : handlePanMouseUp()"
+      @mousedown="handleMouseDown"
+      @mousemove="handleMouseMove"
+      @mouseup="handleMouseUp"
       @mouseleave="isSelectingCometRoi ? null : handlePanMouseUp()"
       @touchstart.passive="handleTouchStart"
       @touchmove.passive="handleTouchMove"
       @touchend="handleTouchEnd"
+      @touchcancel="handleTouchCancel"
+      @focusin="showOverlay"
   >
     <!-- Placeholder when no frame -->
     <div v-if="!hasFrame" class="placeholder">
@@ -299,11 +426,13 @@ const backendLabel = computed(() => {
         :image-top="canvasBounds.top"
         :image-width="canvasBounds.width"
         :image-height="canvasBounds.height"
-        :fov-deg="pushDirection.fovDeg || 0"
+        :fov-deg="displayedFovDeg"
     />
 
     <!-- Comet ROI Overlay -->
     <LiveViewCometOverlay
+        class="overlay-fade"
+        :class="{ 'overlay-hidden': !overlayVisible && !isSelectingCometRoi }"
         :is-comet-mode="isCometMode"
         :has-frame="hasFrame"
         :roi-display-rect="roiDisplayRect"
@@ -312,8 +441,11 @@ const backendLabel = computed(() => {
         @cancel="cancelCometRoiSelection"
     />
 
-    <!-- Controls (Zoom, Frame Info) -->
+    <!-- Controls (Zoom, Frame Info). Fades out with the rest of the overlay; the
+         Push-To chevron above deliberately does not. -->
     <LiveViewControls
+        class="overlay-fade"
+        :class="{ 'overlay-hidden': !overlayVisible }"
         :scale="scale"
         :fps="fps"
         :backend-label="backendLabel"
@@ -322,6 +454,9 @@ const backendLabel = computed(() => {
         :has-frame="hasFrame"
         :is-comet-mode="isCometMode"
         :is-selecting-comet-roi="isSelectingCometRoi"
+        :has-guide-camera="hasGuideCamera"
+        :show-guide="showGuide"
+        @update:show-guide="showGuide = $event"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
         @fit-to-view="fitToView"
@@ -332,7 +467,11 @@ const backendLabel = computed(() => {
 
 
     <!-- Connection status -->
-    <div v-if="!connected" class="connection-status disconnected">
+    <div
+        v-if="!connected"
+        class="connection-status disconnected overlay-fade"
+        :class="{ 'overlay-hidden': !overlayVisible }"
+    >
       <span class="status-dot"></span>
       Disconnected
     </div>
@@ -401,6 +540,17 @@ const backendLabel = computed(() => {
   height: 8px;
   background: var(--error);
   animation: pulse 2s infinite;
+}
+
+/* Applied to `LiveViewControls`' own root as well: a child component's root node
+   carries the parent's scope id, so it matches without reaching into the child. */
+.overlay-fade {
+  transition: opacity 0.35s ease;
+}
+
+.overlay-hidden {
+  opacity: 0;
+  pointer-events: none;
 }
 
 </style>

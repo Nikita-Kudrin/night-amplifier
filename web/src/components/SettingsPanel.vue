@@ -33,6 +33,7 @@ import {
 const settings = inject('settings')
 const refreshSettings = inject('refreshSettings')
 const simulatorEnabledRef = inject('simulatorEnabled')
+const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const capabilities = inject('capabilities', {
   has_pro: false,
   deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false},
@@ -116,6 +117,11 @@ function applyGroup(key, value) {
  * Flip one mode's raw-frame switch, sending the whole group so the server never sees a
  * partial selection.
  */
+/** The guide switch is only meaningful with a guide camera attached. */
+const rawFrameSavingModes = computed(() =>
+    RAW_FRAME_SAVING_MODES.filter((mode) => !mode.requiresGuideCamera || hasGuideCamera.value)
+)
+
 function applyRawFrameSaving(mode, enabled) {
   return applyGroup('raw_frame_saving', {...localSettings.value.raw_frame_saving, [mode]: enabled})
 }
@@ -313,7 +319,7 @@ const HELP = HELP_TEXTS
         </span>
 
         <BaseToggle
-            v-for="mode in RAW_FRAME_SAVING_MODES"
+            v-for="mode in rawFrameSavingModes"
             :key="mode.key"
             v-model="localSettings.raw_frame_saving[mode.key]"
             :label="mode.label"

@@ -77,6 +77,35 @@ impl PushToService {
         Ok(())
     }
 
+    /// Tell the solver which camera is producing frames now.
+    ///
+    /// Called on connect and on disconnect rather than only on a settings change: the
+    /// telescope profile is what the *user* believes the optics are, and two cameras
+    /// sharing a sensor format leave it identical. The camera name is the one fact
+    /// that always changes, and it is what lets the solver notice that a remembered
+    /// field of view was measured through something else.
+    ///
+    /// No-op without the Pro plugin.
+    pub async fn set_active_camera(camera: Option<String>) {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+            plugin.set_active_camera(camera).await;
+        }
+    }
+
+    /// Tell the solver the whole rig at once — which camera, through which optics.
+    ///
+    /// Preferred over calling [`PushToService::set_active_camera`] and
+    /// [`PushToService::set_telescope_settings`] in sequence: the two together are one
+    /// fact, and the solver resolves its remembered field of view from both. See
+    /// [`PushToSolverPlugin::set_rig`].
+    ///
+    /// No-op without the Pro plugin.
+    pub async fn set_rig(camera: Option<String>, telescope: TelescopeSettings) {
+        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+            plugin.set_rig(camera, telescope).await;
+        }
+    }
+
     /// Search the catalog
     pub async fn search_catalog(
         _state: &AppState,
@@ -220,9 +249,16 @@ pub struct PushToState {
     /// `.await`, and any panic in between left it raised for the life of the
     /// process — with plate solving silently dead from that point on.
     solving: Arc<AtomicBool>,
+    /// The same, for the cheap movement watch that runs *while* a solve does — see
+    /// [`PushToState::try_begin_watch`]. A second latch rather than a second use of
+    /// `solving`, because their whole point is that one of them is raised for minutes
+    /// and the other for milliseconds.
+    watching: Arc<AtomicBool>,
     /// When a frame was last offered to the solver — see
     /// [`PushToState::try_begin_solve`].
     last_attempt: std::sync::Mutex<Option<Instant>>,
+    /// When a frame was last offered to the movement watch.
+    last_watch: std::sync::Mutex<Option<Instant>>,
     /// Whether the plugin currently holds a target. Written by the target
     /// mutations in [`PushToService`] and re-synced from `try_plate_solve`.
     pub has_target: bool,
@@ -272,6 +308,51 @@ impl PushToState {
         Some(latch)
     }
 
+    /// Whether offering a frame right now could possibly do anything, given how
+    /// recently the last one was.
+    ///
+    /// Advisory, not a claim: the compare-and-swap in the `try_begin_*` pair is still
+    /// what decides. This exists so `plate_solve_available` can decline *before* the
+    /// caller clones a frame handle and spawns a task for an offer that the cadence
+    /// floor is about to drop — a live handle at the wrong moment makes the render
+    /// task's `Arc::try_unwrap` fail and copy a full-resolution frame instead.
+    pub fn offer_is_due(&self, now: Instant, solve_floor: Duration, watch_floor: Duration) -> bool {
+        let (last, floor) = if self.is_solving() {
+            (self.last_watch.lock().unwrap(), watch_floor)
+        } else {
+            (self.last_attempt.lock().unwrap(), solve_floor)
+        };
+        match *last {
+            Some(previous) => now.saturating_duration_since(previous) >= floor,
+            None => true,
+        }
+    }
+
+    /// Claim the *watch* slot: permission to run the movement check on this frame
+    /// while a solve is in flight, or `None` if one is already running or the last
+    /// was too recent.
+    ///
+    /// Rate-limited on its own clock. `last_attempt` belongs to the solve path and is
+    /// stamped once per ladder, so sharing it would let the watch run flat out for the
+    /// minutes a full-sky search takes — each run costing a full sensitive detection
+    /// over the whole sensor.
+    pub fn try_begin_watch(&self, now: Instant, min_interval: Duration) -> Option<WatchLatch> {
+        if let Some(previous) = *self.last_watch.lock().unwrap() {
+            if now.saturating_duration_since(previous) < min_interval {
+                return None;
+            }
+        }
+
+        let latch = self
+            .watching
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| WatchLatch(Arc::clone(&self.watching)))?;
+
+        *self.last_watch.lock().unwrap() = Some(now);
+        Some(latch)
+    }
+
     /// Whether this direction differs from the last one announced, updating the
     /// record if it does.
     ///
@@ -314,6 +395,15 @@ impl PushToState {
 pub struct SolveLatch(Arc<AtomicBool>);
 
 impl Drop for SolveLatch {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Holds the watch latch raised for as long as it lives.
+pub struct WatchLatch(Arc<AtomicBool>);
+
+impl Drop for WatchLatch {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }

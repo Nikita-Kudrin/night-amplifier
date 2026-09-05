@@ -1,4 +1,4 @@
-//! The three capture modes, and which of them write raw frames to disk.
+//! The capture modes, and which of them write raw frames to disk.
 
 use serde::{Deserialize, Serialize};
 
@@ -6,15 +6,21 @@ use serde::{Deserialize, Serialize};
 const LIVE_VIEW_SUFFIX: &str = "-live";
 const WANDERER_SUFFIX: &str = "-wanderer";
 const STACKING_SUFFIX: &str = "-stacking";
+const GUIDE_SUFFIX: &str = "-guide";
 
-/// Which of the three capture modes a session is running in.
+/// Which capture mode a session is running in.
 ///
-/// Derived from `stacking` + `wanderer_mode` rather than stored: that pair is what the
-/// frontend sends (see `applyStackingMode` in `CaptureControls.vue`), and this is the
-/// only place that reads it as a mode. `stacking: false` is Live view whatever
-/// `wanderer_mode` says — the same reading [`crate::server::state::CaptureSettings::to_capture_config`]
-/// already takes of that orthogonal-misuse combination, since no frames are integrated
-/// there either.
+/// The first three are derived from `stacking` + `wanderer_mode` rather than stored:
+/// that pair is what the frontend sends (see `applyStackingMode` in
+/// `CaptureControls.vue`), and this is the only place that reads it as a mode.
+/// `stacking: false` is Live view whatever `wanderer_mode` says — the same reading
+/// [`crate::server::state::CaptureSettings::to_capture_config`] already takes of that
+/// orthogonal-misuse combination, since no frames are integrated there either.
+///
+/// `Guide` is the exception: it is not derivable from those flags and
+/// `CaptureSettings::capture_mode` never returns it. The guide loop names its own mode,
+/// because a guide camera is a *position* on the rig rather than something the imaging
+/// settings can describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
     /// Raw feed, no stacking.
@@ -23,6 +29,8 @@ pub enum CaptureMode {
     Wanderer,
     /// Continuous accumulation into one stack.
     Stacking,
+    /// The guide camera's free-running loop. Never stacked, never a SER container.
+    Guide,
 }
 
 impl CaptureMode {
@@ -33,6 +41,7 @@ impl CaptureMode {
             Self::LiveView => LIVE_VIEW_SUFFIX,
             Self::Wanderer => WANDERER_SUFFIX,
             Self::Stacking => STACKING_SUFFIX,
+            Self::Guide => GUIDE_SUFFIX,
         }
     }
 
@@ -52,16 +61,21 @@ impl CaptureMode {
         if name.ends_with(STACKING_SUFFIX) {
             return Some(Self::Stacking);
         }
+        if name.ends_with(GUIDE_SUFFIX) {
+            return Some(Self::Guide);
+        }
         None
     }
 }
 
 /// Which capture modes write their raw frames to disk.
 ///
-/// Three independent switches rather than one boolean plus a mode gate: the modes are
-/// not alternatives to each other, they are three separate occasions on which the same
-/// decision applies, and an observer who wants raw subs from a Wanderer sweep does not
-/// thereby want them from every focusing run.
+/// Independent switches rather than one boolean plus a mode gate: the modes are not
+/// alternatives to each other, they are separate occasions on which the same decision
+/// applies, and an observer who wants raw subs from a Wanderer sweep does not thereby
+/// want them from every focusing run. `guide` is the same idea one step further out —
+/// it is an occasion that runs *alongside* the other three rather than instead of them,
+/// so a night can be saving imaging subs and guide subs at once, into separate folders.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawFrameSaving {
     #[serde(default)]
@@ -70,6 +84,8 @@ pub struct RawFrameSaving {
     pub wanderer: bool,
     #[serde(default)]
     pub stacking: bool,
+    #[serde(default)]
+    pub guide: bool,
 }
 
 impl RawFrameSaving {
@@ -79,6 +95,7 @@ impl RawFrameSaving {
             CaptureMode::LiveView => self.live_view,
             CaptureMode::Wanderer => self.wanderer,
             CaptureMode::Stacking => self.stacking,
+            CaptureMode::Guide => self.guide,
         }
     }
 }
@@ -96,6 +113,7 @@ mod tests {
             CaptureMode::LiveView,
             CaptureMode::Wanderer,
             CaptureMode::Stacking,
+            CaptureMode::Guide,
         ] {
             let name = format!("02-09-2026_21-14-08{}", mode.session_dir_suffix());
             assert_eq!(
@@ -136,6 +154,27 @@ mod tests {
         assert!(only_wanderer.saves(CaptureMode::Wanderer));
         assert!(!only_wanderer.saves(CaptureMode::LiveView));
         assert!(!only_wanderer.saves(CaptureMode::Stacking));
+        assert!(!only_wanderer.saves(CaptureMode::Guide));
+    }
+
+    /// The guide switch is orthogonal to the imaging ones: a night saving guide subs
+    /// must not thereby start saving imaging subs, and vice versa.
+    #[test]
+    fn the_guide_switch_is_independent_of_the_imaging_switches() {
+        let only_guide = RawFrameSaving {
+            guide: true,
+            ..Default::default()
+        };
+        assert!(only_guide.saves(CaptureMode::Guide));
+        assert!(!only_guide.saves(CaptureMode::LiveView));
+        assert!(!only_guide.saves(CaptureMode::Wanderer));
+        assert!(!only_guide.saves(CaptureMode::Stacking));
+
+        let only_stacking = RawFrameSaving {
+            stacking: true,
+            ..Default::default()
+        };
+        assert!(!only_stacking.saves(CaptureMode::Guide));
     }
 
     #[test]
@@ -144,6 +183,7 @@ mod tests {
             CaptureMode::LiveView,
             CaptureMode::Wanderer,
             CaptureMode::Stacking,
+            CaptureMode::Guide,
         ] {
             assert!(!RawFrameSaving::default().saves(mode));
         }

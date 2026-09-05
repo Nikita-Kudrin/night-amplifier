@@ -8,7 +8,7 @@ import {
   removeSimulatedCamera,
 } from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
+import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
 import {CAPTURE_STATES} from '../constants'
 
 const cameras = inject('cameras')
@@ -50,17 +50,36 @@ const filteredCameras = computed(() => {
 
 const connectedCameras = computed(() => filteredCameras.value.filter((c) => c.connected))
 
+const hasGuideCamera = computed(() => connectedCameras.value.some((c) => c.role === 'guide'))
+
+/**
+ * Only one camera can hold each position, so the menu offers the guide slot only while
+ * it is free. The main action stays enabled even with an imaging camera connected: an
+ * idle one is swapped, and the server refuses only while it is busy.
+ */
+const connectOptions = computed(() => [
+  {value: 'guide', label: 'As guide', disabled: hasGuideCamera.value},
+])
+
+function roleLabel(cam) {
+  if (cam.role === 'guide') return 'Guide'
+  if (cam.role === 'main') return 'Main'
+  return null
+}
+
 const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.connected))
 
 const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
 
 const isCapturing = computed(() => eventStream.captureState.value === CAPTURE_STATES.CAPTURING)
 
-async function handleConnect(cameraId) {
+async function handleConnect(cameraId, role = 'main') {
   connecting.value = cameraId
   await withErrorHandling(async () => {
-    await connectCamera(cameraId)
+    await connectCamera(cameraId, role)
     await refreshCameras()
+    // Focus the newly connected camera for editing, whichever position it took: it is
+    // the one the user is about to set an exposure on.
     selectedCamera.value = cameraId
   })
   connecting.value = null
@@ -105,15 +124,20 @@ function phaseLabel(cam) {
   const phase = phaseOf(cam)
   if (phase === 'precooling') return 'Precooling'
   if (phase === 'warming_up') return 'Warming up'
+  // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
+  // and the green role badge next to it already says so.
   return null
 }
 
 function sensorModePill(cam) {
   const modes = cam?.info?.sensor_modes
   if (!modes || modes.length === 0) return null
-  const override = settings.value?.sensor_mode_override
+  const isGuide = cam?.role === 'guide'
+  const override = isGuide
+      ? settings.value?.guide_camera?.sensor_mode_override
+      : settings.value?.sensor_mode_override
   // Mirrors the backend's `is_actively_stacking` gate in
-  // `to_capture_config()` (server/state/settings.rs): Low Noise is only
+  // `to_capture_config_with()` (server/state/settings.rs): Low Noise is only
   // worth its frame-rate cost while frames are actually being integrated.
   // `stacking_type !== 'planetary'` stands in for "DeepSky or Comet" —
   // `StackingType::supports_stacking()` is `true` for every variant today,
@@ -121,9 +145,9 @@ function sensorModePill(cam) {
   // need to appear here either: the UI always sets `stacking: true`
   // alongside `wanderer_mode: true` (see `applyStackingMode` in
   // CaptureControls.vue), so `stacking` alone already covers "Stacking or
-  // Wanderer".
+  // Wanderer". Never true for the guide camera: nothing it produces is stacked.
   const isActivelyStacking =
-      settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
+      !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
   const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
   const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
   const match = modes.find((m) => needle.test(m.name))
@@ -173,7 +197,8 @@ async function handleRemoveSimulatedCamera(cam) {
 }
 
 const HELP = {
-  cameras: 'Choose the active camera for capture. Only one camera can be connected at a time.',
+  cameras:
+      'Choose the camera to configure. One imaging camera and one guide camera can be connected at once — use the arrow next to Connect to attach a guide camera.',
   simulator_dir: 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).',
 }
 </script>
@@ -287,6 +312,9 @@ const HELP = {
               <span class="camera-name">{{ cam.name }}</span>
               <span class="camera-details">
                 {{ formatResolution(cam) }}
+                <span v-if="roleLabel(cam)" class="role-pill" :class="`role-${cam.role}`">{{
+                    roleLabel(cam)
+                  }}</span>
                 <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
                 <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
                     sensorModePill(cam)
@@ -347,13 +375,14 @@ const HELP = {
               <span class="camera-details">{{ formatResolution(cam) }}</span>
             </div>
             <div class="camera-actions">
-              <button
-                  class="btn btn-sm btn-primary"
+              <BaseSplitButton
+                  :label="connecting === cam.id ? '...' : 'Connect'"
+                  menu-label="More connect options"
+                  :options="connectOptions"
                   :disabled="connecting === cam.id"
-                  @click="handleConnect(cam.id)"
-              >
-                {{ connecting === cam.id ? '...' : 'Connect' }}
-              </button>
+                  @click="handleConnect(cam.id, 'main')"
+                  @select="(role) => handleConnect(cam.id, role)"
+              />
             </div>
           </div>
         </div>
@@ -500,6 +529,22 @@ const HELP = {
   padding: 0.05rem 0.375rem;
   border-radius: 999px;
   font-weight: 500;
+}
+
+.role-pill {
+  padding: 0.05rem 0.375rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.role-pill.role-main {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+}
+
+.role-pill.role-guide {
+  background: rgba(34, 197, 94, 0.18);
+  color: #4ade80;
 }
 
 .camera-actions {

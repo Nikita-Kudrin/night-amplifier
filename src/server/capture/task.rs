@@ -6,7 +6,7 @@ use crate::frame::Frame;
 use crate::server::capture::channel::{pipeline_capacities, QueueDepth};
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CaptureState, SessionResumePlan, StackingType};
+use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 use std::sync::mpsc;
@@ -82,7 +82,7 @@ pub async fn run_capture_loop(
     // Take the handle from AppState (held by camera_session since connect).
     // This cancels any in-progress warmup and flips the phase to Capturing.
     let camera_name = camera_info.info.name.clone();
-    let mut camera = match lifecycle::take_for_capture(&state, &camera_name).await {
+    let mut camera = match lifecycle::take_for_capture(&state, CameraRole::Main, &camera_name).await {
         Ok(cam) => {
             debug!(
                 camera_id = %camera_id,
@@ -100,7 +100,9 @@ pub async fn run_capture_loop(
     };
 
     // Register active camera cancel token in state
-    state.set_active_camera_token(camera.cancel_token()).await;
+    state
+        .set_camera_token(CameraRole::Main, camera.cancel_token())
+        .await;
 
     // New session: force a full CaptureConfig reapply on the very next
     // capture() regardless of any out-of-band mutation (cooler/target-temp)
@@ -143,7 +145,7 @@ pub async fn run_capture_loop(
             };
             error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
             state.send_error(format!("Failed to capture initial frame: {}", reason));
-            state.clear_active_camera_token().await;
+            state.clear_camera_token(CameraRole::Main).await;
 
             // A lost device invalidates the handle; a timeout already abandoned
             // it. Either way the session ends as a fault, so the reconnect
@@ -152,13 +154,13 @@ pub async fn run_capture_loop(
                 matches!(&probe_result, Some(Err(e)) if !e.is_sdk_disconnected());
             match (camera, handle_is_usable) {
                 (Some(cam), true) => {
-                    lifecycle::return_from_capture(&state, &camera_name, Some(cam)).await
+                    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(cam)).await
                 }
                 (Some(mut cam), false) => {
                     let _ = cam.close();
-                    lifecycle::return_from_capture(&state, &camera_name, None).await;
+                    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
                 }
-                (None, _) => lifecycle::return_from_capture(&state, &camera_name, None).await,
+                (None, _) => lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await,
             }
             state.set_capture_state(CaptureState::Idle).await;
             return;
@@ -177,8 +179,8 @@ pub async fn run_capture_loop(
         Err(e) => {
             error!(error = %e, "Failed to decode probe frame");
             state.send_error(format!("Failed to decode initial frame: {}", e));
-            state.clear_active_camera_token().await;
-            lifecycle::return_from_capture(&state, &camera_name, Some(camera)).await;
+            state.clear_camera_token(CameraRole::Main).await;
+            lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
             state.set_capture_state(CaptureState::Idle).await;
             return;
         }
@@ -372,8 +374,8 @@ pub async fn run_capture_loop(
     info!(camera_id = %camera_id, "Capture pipeline ended");
 
     // Return the camera handle to the session (or finalize disconnect if lost).
-    state.clear_active_camera_token().await;
-    lifecycle::return_from_capture(&state, &camera_name, returned_camera).await;
+    state.clear_camera_token(CameraRole::Main).await;
+    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
     state.set_capture_state(CaptureState::Idle).await;
 }
 

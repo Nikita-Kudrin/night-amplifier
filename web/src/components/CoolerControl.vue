@@ -11,8 +11,16 @@ const refreshSettings = inject('refreshSettings', async () => {
 const cameras = inject('cameras', ref([]))
 const selectedCameraId = inject('selectedCamera', ref(null))
 const cameraStatus = inject('cameraStatus', ref({}))
+// The guide camera keeps its own cooler settings; the selection says which set these
+// controls are showing and editing.
+const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 
 const {error, withErrorHandling} = useError()
+
+const cameraSettings = computed(() => {
+  if (!settings.value) return null
+  return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
+})
 
 const currentCamera = computed(() =>
     (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
@@ -28,14 +36,14 @@ const localTargetTemp = ref(COOLER_TEMP_LIMITS.default)
 const localCoolerFastMode = ref(false)
 
 watch(
-    settings,
-    (newSettings) => {
-      if (!newSettings) return
-      localCoolerEnabled.value = newSettings.cooler_enabled ?? false
-      if (typeof newSettings.target_temp_c === 'number') {
-        localTargetTemp.value = newSettings.target_temp_c
+    cameraSettings,
+    (hardware) => {
+      if (!hardware) return
+      localCoolerEnabled.value = hardware.cooler_enabled ?? false
+      if (typeof hardware.target_temp_c === 'number') {
+        localTargetTemp.value = hardware.target_temp_c
       }
-      localCoolerFastMode.value = newSettings.cooler_fast_mode ?? false
+      localCoolerFastMode.value = hardware.cooler_fast_mode ?? false
     },
     {immediate: true}
 )
@@ -63,7 +71,7 @@ let debounceTimer = null
 
 async function applySetting(payload) {
   await withErrorHandling(async () => {
-    await updateSettings(payload)
+    await updateSettings({camera_role: settingsRole.value, ...payload})
     await refreshSettings()
   })
 }

@@ -65,6 +65,79 @@ export async function getCapabilities() {
 }
 
 // ============================================================================
+// Eyepiece
+// ============================================================================
+
+/** How long to wait before asking a busy server again. Matches its `Retry-After`. */
+export const SNAPSHOT_RETRY_MS = 2000
+
+/** How long to keep retrying a busy server before giving up. */
+export const SNAPSHOT_RETRY_WINDOW_MS = 15000
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Used when the server sends no `Content-Disposition` name of its own. */
+const SNAPSHOT_FALLBACK_FILENAME = 'eyepiece.png'
+
+/**
+ * Read the download's name out of a `Content-Disposition` header.
+ *
+ * The name has to be lifted off the response and carried with the bytes: once
+ * `fetch` has read the body, the blob built from it has no headers left, so the
+ * `<a download>` that saves it cannot get the server's timestamped name any other
+ * way — and every save would land on one filename instead.
+ */
+function snapshotFilename(header) {
+    return /filename="([^"]+)"/i.exec(header ?? '')?.[1] ?? SNAPSHOT_FALLBACK_FILENAME
+}
+
+/**
+ * Fetch the current eyepiece frame as a PNG, with the name the server gave it.
+ *
+ * Deliberately not routed through `request()`: that helper parses every response
+ * as JSON, which is exactly what a PNG body is not.
+ *
+ * The server renders one snapshot at a time — a native-resolution render costs
+ * hundreds of megabytes, so a second caller is turned away rather than queued.
+ * That is what 503 means here, and it is worth waiting out: retry on the server's
+ * own cadence until the window closes. A 404 is the other kind of "not now" —
+ * nothing has been rendered yet — and no amount of retrying fixes it.
+ *
+ * @param {boolean} circular - Round eyepiece image, or the uncropped frame.
+ * @returns {Promise<{blob: Blob, filename: string}>}
+ */
+export async function fetchEyepieceSnapshot(circular) {
+    const giveUpAt = Date.now() + SNAPSHOT_RETRY_WINDOW_MS
+
+    for (;;) {
+        let response
+        try {
+            response = await fetch(`${BASE_URL}/eyepiece/snapshot?circular=${circular}`, {
+                cache: 'no-store',
+            })
+        } catch {
+            throw new Error('Server unavailable. Please ensure the server is running.')
+        }
+
+        if (response.ok) {
+            return {
+                blob: await response.blob(),
+                filename: snapshotFilename(response.headers.get('content-disposition')),
+            }
+        }
+        if (response.status === 404) throw new Error('No frame to download yet.')
+        if (response.status !== 503) throw new Error(`Download failed (${response.status}).`)
+
+        // Busy. Only wait if the whole wait still fits inside the window, so the
+        // last attempt is made before it closes rather than after.
+        if (Date.now() + SNAPSHOT_RETRY_MS > giveUpAt) {
+            throw new Error('Server busy rendering another download. Try again shortly.')
+        }
+        await sleep(SNAPSHOT_RETRY_MS)
+    }
+}
+
+// ============================================================================
 // Capture Control
 // ============================================================================
 
@@ -152,10 +225,12 @@ export async function getCameraInfo(cameraId) {
 /**
  * Connect to a camera
  * @param {string} cameraId - Camera ID
+ * @param {'main'|'guide'} [role] - Which position it takes. Omitted means the imaging camera.
  */
-export async function connectCamera(cameraId) {
+export async function connectCamera(cameraId, role = 'main') {
     return request(`/cameras/${encodeURIComponent(cameraId)}/connect`, {
         method: 'POST',
+        body: {role},
     })
 }
 

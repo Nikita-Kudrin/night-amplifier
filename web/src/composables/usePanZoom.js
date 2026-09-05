@@ -1,15 +1,19 @@
 import {ref, computed} from 'vue'
 import {ZOOM_LIMITS} from '../constants'
+import {useFullscreen} from './useFullscreen.js'
 
 /**
- * Pan and zoom interaction composable for canvas-based views
+ * Pan and zoom interaction composable for canvas-based views.
+ *
+ * `options` are forwarded to [`useFullscreen`], which owns the fullscreen half —
+ * the eyepiece view needs that half without any of the pan/zoom state.
  */
-export function usePanZoom() {
+export function usePanZoom(options = {}) {
     const scale = ref(1)
     const position = ref({x: 0, y: 0})
     const isDragging = ref(false)
     const dragStart = ref({x: 0, y: 0})
-    const isFullscreen = ref(false)
+    const {isFullscreen, toggleFullscreen, handleFullscreenChange} = useFullscreen(options)
 
     // Touch pinch zoom state
     let initialPinchDistance = 0
@@ -104,20 +108,6 @@ export function usePanZoom() {
         const scaleY = containerRect.height / canvasHeight
         scale.value = Math.min(scaleX, scaleY, 1) * 0.95
         position.value = {x: 0, y: 0}
-    }
-
-    function toggleFullscreen(containerElement) {
-        if (!document.fullscreenElement) {
-            containerElement?.requestFullscreen()
-            isFullscreen.value = true
-        } else {
-            document.exitFullscreen()
-            isFullscreen.value = false
-        }
-    }
-
-    function handleFullscreenChange() {
-        isFullscreen.value = !!document.fullscreenElement
     }
 
     return {

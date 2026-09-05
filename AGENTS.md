@@ -147,9 +147,29 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 
 ### Server (src/server/)
 
-Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG),
-`/ws/eyepiece_quality` (lossless LZ4), and `/ws/events` (JSON). Shared state via
-`Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and event variants.
+Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG,
+`?source=guide` for the guide camera), `/ws/eyepiece_quality` (lossless LZ4), and `/ws/events`
+(JSON). Shared state via `Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and
+event variants.
+
+`GET /api/eyepiece/snapshot?circular=` is the one REST route returning image bytes: it PNG-encodes
+`latest_raw_frame` at the frame's *own* size (no tier), on `spawn_blocking`. RGB8 either way.
+`circular=true` returns the **centre square** with the field stop **opaque black** — square because
+the view's canvas is `100cqmin` + `object-fit: cover`, so masking the full rectangle gave the right
+circle in a shape nobody saw (55 % padding on an IMX464); black rather than transparent because a
+viewer composites alpha onto its own background, which is white in every default light theme.
+
+Native resolution is deliberate and expensive: 26 MP with the denoisers on transiently holds ~933 MB
+of denoise scratch plus two RGB8 buffers of up to 77 MB each, ~0.5 s on a desktop. `SNAPSHOT_SLOT`
+(`Semaphore(1)`) therefore admits one render process-wide and *refuses* rather than queues — 503 +
+`Retry-After: 2`, which the frontend retries on that cadence for 15 s. 404 is the other refusal (no
+frame rendered yet) and is terminal.
+
+The server names the file in `Content-Disposition`, but the browser never sees that header: the
+frontend has to `fetch` the PNG for the retry loop, and the `blob:` URL it ends up saving carries no
+headers. So `fetchEyepieceSnapshot` returns `{blob, filename}` and `utils/saveBlob.js` puts the name
+on `<a download>`. That attribute is load-bearing — without it the browser navigates to the blob and
+renders the PNG in the tab, taking the page's streams down with it.
 
 ### Web Frontend (web/)
 
@@ -158,16 +178,61 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
 
 ## Camera Notes
 
-- **Cooler lifecycle**: handle lives in `AppState.active_camera`. `CameraPhase`:
-  `Precooling → Idle → Capturing → WarmingUp`; ramp limited to 5°C/min; warm-up ramps to 20°C,
-  closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
-- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing` → owned by the per-frame
-  path; `WarmingUp` → monitor holds cooler off intentionally.
+- **Camera roles**: the rig holds at most one `CameraRole::Main` and one `Guide`. Every handle,
+  monitor, cancel token and reconnect guard lives in `AppState.camera_slots[role]` — there is no
+  "the camera" any more, and each lifecycle entry point names a role. `connect` resolves a taken
+  role through `vacate_role`: swap while idle or `Guiding`, refuse (`CameraRoleBusy`) while
+  `Capturing` or `WarmingUp`.
+- **Cooler lifecycle**: handle lives in `AppState.slot(role).handle`. `CameraPhase`:
+  `Precooling → Idle → Capturing | Guiding → WarmingUp`; ramp limited to 5°C/min (`camera_session::ramp`,
+  driven by the monitor for a parked handle and by `guide_task` for one it holds); warm-up ramps to
+  20°C, closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
+- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing`/`Guiding` → owned by the
+  per-frame path; `WarmingUp` → monitor holds cooler off intentionally. The dew heater has no
+  `CaptureConfig` field, so under `Guiding` it is queued as a `CameraOp` for the loop instead.
+- **Per-camera profiles** are keyed `"{provider}/{model}"`, plus `#guide` for the guide role so two
+  bodies of one model cannot overwrite each other. `apply_camera_profile_on_connect` clamps exposure,
+  gain and binning to what the camera advertises on *both* paths — an out-of-range one is what
+  `CaptureConfig::validate` rejects, and a rejected config stops the camera capturing at all.
 - **`cooler_fast_mode`**: bypasses the ramp; UI shows a persistent warning while on.
 - **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()` (DeepSky/Comet
-  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`.
+  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`. Main role
+  only — nothing the guide camera produces is integrated, so it stays `Normal`.
 - **Monitor thread**: dedicated `std::thread`, not tokio, so USB stalls can't poison the runtime;
-  uses one reusable `monitor::FfiWorker` rather than a thread per poll.
+  uses one reusable `monitor::FfiWorker` rather than a thread per poll. One per slot, bound to its
+  role at spawn — it must never look up "whatever is connected".
+
+### Guide camera — non-obvious and load-bearing
+
+- **One thread, not the four-stage pipeline** (`capture::guide_task`). Nothing it produces is
+  stacked or queued. Started by `connect`, not by Start Capture: solving and the guide preview are
+  wanted *while* framing.
+- **The render gate is the whole point.** Post-processing and encoding run only while
+  `guide_stream.has_viewers()`. Solving and raw saving sit **above** both early exits — they are why
+  the loop runs. Covered by `guide_task::tests`; if you move the gate, keep those honest (they
+  assert the camera really exposed the frames it did not render).
+- **Two `FrameStream`s, two counters.** `JpegTierCache` serves a tier only while its counter
+  matches, so one shared counter would make each camera invalidate the other's payloads every
+  exposure. `/ws/stream?source=guide` selects the stream at upgrade time.
+- **Hardware settings are per role.** Flat `CaptureSettings` fields are the main camera's;
+  `CaptureSettings::guide_camera` is the guide's. Read them through `profile_for(role)`, never
+  flat. `POST /api/settings` carries `camera_role` (absent ⇒ main).
+- **One solve source at a time.** `solving::plate_solve_available(state, SolveSource)` decides, on
+  `guide_loop_running` — the loop *exposing*, not a camera being connected. The two diverge: a
+  cooled guide camera stays registered through minutes of warm-up with its loop already stopped,
+  and `connect` returns before a loop that may fail to start. Keying on presence stood the imaging
+  camera down for a solve source that was not there. `lifecycle::sync_solver_rig` names the solving
+  camera *and* its optics together — `camera_telescope_profiles` is finally read here, and naming
+  one without the other is worse than naming neither.
+- **The loop is the only path to its device.** It owns the handle for the whole connection, so the
+  monitor can never check it out: the loop drains `slot.drain_ops()`, samples `status()` itself
+  every 2s, and steps its own `RampState` into `config.target_temp_c`. Without that the guide camera
+  reported no temperature and its setpoint bypassed the 5°C/min limit.
+- **A raw session carries its frame number.** `slot.raw_session` parks `RawSessionResume { dir,
+  next_frame }`: rejoining the directory a dropout left while restarting at 1 wrote straight over
+  the frames already in it (`frame_{:06}.fits`).
+- **`selected_camera` means "the camera being configured", not the capture target.** Captures
+  resolve to `camera_in_role(Main)`; a guide camera id is refused.
 
 ### Handle ownership — non-obvious and load-bearing
 
@@ -202,6 +267,35 @@ fault still escalates; it ages out (`FAULT_STREAK_TTL`) instead of resetting on 
 `camera_session::reconnect` owns recovery (bounded attempts, backoff, re-enumeration,
 liveness probe). `finalize_disconnect` takes a `DisconnectCause`, not a bool — a warmup
 teardown must never reconnect.
+
+Connect and `finalize_disconnect` both call `PushToService::set_active_camera`. The
+solver remembers a field of view per optical configuration, and that key cannot tell two
+cameras sharing a sensor format apart; a stale FOV *fails* a hinted solve rather than
+merely slowing it. Only a *named, different* camera discards the remembered value —
+boot and disconnect both look it up with no camera, and treating that as a mismatch
+deleted the entry before the session could use it. See the Pro AGENTS.md.
+
+## Push-To gating (`capture::solving`)
+
+A frame is offered on one of two slots. `try_begin_solve` may block for a whole ASTAP
+ladder; `try_begin_watch` runs *during* one, so a slew can be noticed and the doomed
+search abandoned — that path used to be closed, and the movement detector saw nothing
+for the minutes a full-sky search took. Separate cadence floors (1 s / 1.5 s): the solve
+timestamp is stamped once per ladder, so sharing it would let the watch free-run.
+
+`plate_solve_available` declines when no target is set *or* the applicable floor has not
+elapsed. It is advisory — the `try_begin_*` compare-and-swap still decides — and exists
+so the stacking thread does not clone a frame handle for an offer about to be dropped: a
+live second handle makes the render task's `Arc::try_unwrap` fail and copy a full frame.
+
+`PushToBlocker` is the vocabulary for "why nothing is happening", including the ordinary
+states of a pushed scope (moving, settling, trailing). All of it flows through
+`FrameOutcome::blocker` into `announce_blocker`, which emits one event per transition —
+including the shutdown clear, which used to update the de-duplication record without
+sending anything and so left the last blocker on screen. The plugin must not broadcast
+its own — one that did bypassed the de-duplication. The UI ranks a live blocker above
+the last solve verdict, so `StatusBar.vue`'s branches must keep the same order as
+`solvingMessage`, or a blocker inherits the previous solve's tick and `success` class.
 
 ## Storage Formats
 

@@ -114,6 +114,29 @@ const framesTooltip = computed(() => {
       <span>{{ eventStream.solvingMessage.value }}</span>
     </div>
 
+    <!-- Why Push-To is idle: no target, ASTAP missing, waiting out a backoff, or
+         the ordinary states of a scope being pushed. Ordered ahead of the last
+         result because it is *newer* — the same precedence `solvingMessage` uses.
+         Behind it, a blocker was announced with the previous solve's green tick and
+         its `success` class, so pushing away from M31 read as a fresh success. -->
+    <div
+        v-else-if="eventStream.pushToBlocked?.value"
+        class="status-item push-to-blocked"
+    >
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 8v5M12 16h.01"/>
+      </svg>
+      <span>{{ eventStream.pushToBlocked?.value }}</span>
+    </div>
+
     <!-- Plate solve result -->
     <div
         v-else-if="eventStream.plateSolving.value?.lastResult"
@@ -157,27 +180,6 @@ const framesTooltip = computed(() => {
         <path d="M15 9l-6 6M9 9l6 6"/>
       </svg>
       <span>{{ eventStream.solvingMessage.value }}</span>
-    </div>
-
-    <!-- Why Push-To is idle: no target, ASTAP missing, waiting out a backoff.
-         Previously every one of these was a debug log and the UI simply showed
-         nothing, which is what "I installed ASTAP and nothing happens" looked like. -->
-    <div
-        v-else-if="eventStream.pushToBlocked?.value"
-        class="status-item push-to-blocked"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 8v5M12 16h.01"/>
-      </svg>
-      <span>{{ eventStream.pushToBlocked?.value }}</span>
     </div>
 
     <!-- Disk writer warning -->
