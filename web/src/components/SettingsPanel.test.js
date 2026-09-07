@@ -541,4 +541,66 @@ describe('SettingsPanel', () => {
             })
         })
     })
+
+    describe('Focus/Finder mode', () => {
+        // The seven the mode manages, by their label in this panel. Focus mode owns the
+        // snapshot that restores them, so an edit here while it is on would either be
+        // reverted on the next toggle or overwrite what the observer chose.
+        const MANAGED = [
+            'Hot Pixel Rejection',
+            'Row/Column Pattern Removal',
+            'Colour Mottle',
+            'Background Grain',
+            'Dithering',
+            'Background Subtraction',
+            'Shadow Saturation Boost',
+        ]
+
+        it.each(MANAGED)('holds "%s" read-only while the mode is on', (label) => {
+            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+
+            expect(findToggleByLabel(wrapper, label).attributes('disabled')).toBeDefined()
+        })
+
+        it.each(MANAGED)('leaves "%s" editable while the mode is off', (label) => {
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: false},
+                capabilities: {
+                    deep_sky: {
+                        advanced_rejection: false,
+                        rbf_background: false,
+                        saturation_boost: true,
+                    },
+                },
+            })
+
+            expect(findToggleByLabel(wrapper, label).attributes('disabled')).toBeUndefined()
+        })
+
+        // Not in the managed set: it is the *cheap* demosaic, so forcing it either way
+        // would trade against the frame rate the mode exists to buy.
+        it('leaves Superpixel Debayer editable while the mode is on', () => {
+            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+
+            expect(
+                findToggleByLabel(wrapper, 'Superpixel Debayer').attributes('disabled')
+            ).toBeUndefined()
+        })
+
+        it('explains why the settings are greyed out', () => {
+            const on = mountSettingsPanel({settings: {focus_mode: true}})
+            const off = mountSettingsPanel({settings: {focus_mode: false}})
+
+            expect(on.text()).toContain('held off by Focus/Finder mode')
+            expect(off.text()).not.toContain('held off by Focus/Finder mode')
+        })
+
+        it('treats a server payload without the field as mode off', () => {
+            const wrapper = mountSettingsPanel()
+
+            expect(
+                findToggleByLabel(wrapper, 'Background Subtraction').attributes('disabled')
+            ).toBeUndefined()
+        })
+    })
 })

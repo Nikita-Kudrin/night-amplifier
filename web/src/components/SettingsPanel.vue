@@ -43,6 +43,12 @@ const capabilities = inject('capabilities', {
 
 const {error, clearError, withErrorHandling} = useError()
 
+/**
+ * Read straight from the server settings rather than the local mirror: the mode is
+ * toggled from the capture panel, and the mirror only refreshes on a save from here.
+ */
+const focusMode = computed(() => settings?.value?.focus_mode ?? false)
+
 const simulatorEnabled = computed({
   get: () => simulatorEnabledRef?.value ?? false,
   set: (val) => {
@@ -164,6 +170,7 @@ const HELP = HELP_TEXTS
         :sensor-correction="localSettings.sensor_correction"
         :denoise="localSettings.denoise"
         :preview-resolution="localSettings.preview_resolution"
+        :focus-mode="focusMode"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
         @apply="applyGroup"
@@ -225,11 +232,14 @@ const HELP = HELP_TEXTS
         />
       </div>
 
+      <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+
       <div class="control-group" style="margin-bottom: 1.5rem">
         <BaseToggle
             v-model="localSettings.eyepiece.dither"
             label="Dithering"
             :help="HELP.eyepiece_dither"
+            :disabled="focusMode"
             @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
         />
       </div>
@@ -239,6 +249,7 @@ const HELP = HELP_TEXTS
             v-model="localSettings.background_subtraction"
             label="Background Subtraction"
             :help="HELP.background_subtraction"
+            :disabled="focusMode"
             @update:model-value="applySetting('background_subtraction', $event)"
         />
       </div>
@@ -274,7 +285,7 @@ const HELP = HELP_TEXTS
             v-model="localSettings.saturation_boost"
             label="Shadow Saturation Boost"
             :help="HELP.saturation_boost"
-            :disabled="!capabilities.deep_sky.saturation_boost"
+            :disabled="!capabilities.deep_sky.saturation_boost || focusMode"
             @update:model-value="applySetting('saturation_boost', $event)"
         >
           <template #label-extra>

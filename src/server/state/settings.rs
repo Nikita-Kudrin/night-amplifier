@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::capture_mode::{CaptureMode, RawFrameSaving};
+use super::focus_mode::FocusModeSnapshot;
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
@@ -117,6 +118,14 @@ pub struct CaptureSettings {
     pub indi_server_host: String,
     /// INDI server port
     pub indi_server_port: u16,
+    /// Hold the cosmetic pipeline stages off while framing and focusing.
+    ///
+    /// Invariant: true exactly when [`Self::focus_mode_snapshot`] is `Some`. Drive it
+    /// through [`super::focus_mode::set`], never by assignment — a bare write leaves the
+    /// snapshot behind and the next toggle restores the wrong values.
+    pub focus_mode: bool,
+    /// What the managed settings were before Focus/Finder mode overwrote them.
+    pub focus_mode_snapshot: Option<FocusModeSnapshot>,
 }
 
 /// Hardware-specific capture settings scoped to a single camera
@@ -563,6 +572,8 @@ impl Default for CaptureSettings {
             eula_accepted: false,
             indi_server_host: "127.0.0.1".to_string(),
             indi_server_port: 7624,
+            focus_mode: false,
+            focus_mode_snapshot: None,
         }
     }
 }

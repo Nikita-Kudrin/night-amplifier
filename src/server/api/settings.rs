@@ -7,7 +7,9 @@ use super::super::camera_session::lifecycle::camera_profile_key;
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
-use super::super::state::{AppState, CameraRole, CaptureSettings, CaptureState, StackingType};
+use super::super::state::{
+    focus_mode, AppState, CameraRole, CaptureSettings, CaptureState, StackingType,
+};
 
 /// Returns the profile key (`"{provider}/{model}"`) for the camera in `role`, if any.
 /// `None` when that position is empty — callers should treat it as "skip per-camera
@@ -109,6 +111,26 @@ pub async fn update_settings(
                 ApiResponse::err("Cannot change stacking type while capturing"),
             );
         }
+    }
+
+    // Entering Focus/Finder mode drops the two raw-mosaic corrections, and the frame
+    // they produce is the frame the accumulator integrates — so switching it on mid-stack
+    // mixes hot pixels and banding into a master that can never be cleaned again.
+    // Refused rather than warned. Leaving the mode is always allowed: never trap the
+    // observer in it.
+    if request.focus_mode == Some(true)
+        && focus_mode::conflicts_with_capture(
+            &*state.settings.read().await,
+            state.capture_state().await,
+        )
+    {
+        return (
+            StatusCode::CONFLICT,
+            ApiResponse::err(
+                "Cannot enter Focus/Finder mode while stacking - it would mix \
+                 hot pixels and banding into the stack. Stop the capture first.",
+            ),
+        );
     }
 
     // Which camera the hardware fields in this request are for. Absent means the
@@ -314,6 +336,15 @@ pub async fn update_settings(
             if let Some(key) = active_key.clone() {
                 settings.camera_profiles.insert(key, profile);
             }
+        }
+
+        // Last, so it wins over any managed setting in the same request — the mode is a
+        // statement about the whole group, not one more field to merge. With no toggle in
+        // the request, `reconcile` absorbs anything a stale client wrote behind its back
+        // rather than letting the next toggle silently revert it.
+        match request.focus_mode {
+            Some(on) => focus_mode::set(&mut settings, on),
+            None => focus_mode::reconcile(&mut settings),
         }
 
         // Snapshot for `sync_disk_session`, which runs once the write guard is gone.

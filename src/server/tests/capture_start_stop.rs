@@ -191,3 +191,77 @@ async fn a_stop_with_a_json_content_type_and_no_body_stops_the_capture() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(state.capture_state().await, CaptureState::Stopping);
 }
+
+/// The other order of the same conflict: the observer was already focusing, then pressed
+/// Start. `update_settings` refuses to *enter* the mode while stacking, so this is what
+/// keeps a session from ever beginning under it — and it restores the observer's own
+/// settings at the moment they start mattering.
+#[tokio::test]
+async fn test_starting_a_capture_leaves_focus_mode_and_restores_the_settings() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "sensor_correction": {
+                "hot_pixel_rejection": true,
+                "hot_pixel_sigma": 7.5,
+                "fpn_removal": true,
+                "superpixel_debayer": false,
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], false);
+
+    let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let settings = state.settings.read().await;
+    assert!(!settings.focus_mode, "a capture must never begin under the mode");
+    assert!(settings.focus_mode_snapshot.is_none());
+    assert!(
+        settings.sensor_correction.hot_pixel_rejection,
+        "the stack's corrections must be back before the first frame"
+    );
+    assert!(settings.sensor_correction.fpn_removal);
+    assert_eq!(settings.sensor_correction.hot_pixel_sigma, 7.5);
+    drop(settings);
+
+    state.request_cancel();
+}
+
+/// Starting a capture that was never focusing must not touch the settings at all.
+#[tokio::test]
+async fn test_starting_a_capture_without_focus_mode_changes_nothing() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "background_subtraction": false }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let settings = state.settings.read().await;
+    assert!(!settings.focus_mode);
+    assert!(
+        !settings.background_subtraction,
+        "an unrelated setting the observer turned off must stay off"
+    );
+    drop(settings);
+
+    state.request_cancel();
+}

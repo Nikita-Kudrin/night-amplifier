@@ -280,6 +280,12 @@ pub struct SettingsResponse {
     pub indi_server_host: String,
     /// INDI server port
     pub indi_server_port: u16,
+    /// Whether Focus/Finder mode is holding the cosmetic pipeline stages off.
+    ///
+    /// The snapshot behind it is deliberately not exposed: it is the server's record of
+    /// what to restore, and a client that could read it would be tempted to write it.
+    #[serde(default)]
+    pub focus_mode: bool,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
@@ -332,6 +338,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             eula_accepted: settings.eula_accepted,
             indi_server_host: settings.indi_server_host.clone(),
             indi_server_port: settings.indi_server_port,
+            focus_mode: settings.focus_mode,
         }
     }
 }
@@ -545,6 +552,10 @@ pub struct UpdateSettingsRequest {
     /// INDI server port
     #[serde(default)]
     pub indi_server_port: Option<u16>,
+    /// Enter or leave Focus/Finder mode. Applied after every other field in the
+    /// request, so it wins over a managed setting sent alongside it.
+    #[serde(default)]
+    pub focus_mode: Option<bool>,
 }
 
 /// Configure simulated camera request

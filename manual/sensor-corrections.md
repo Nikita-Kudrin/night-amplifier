@@ -7,6 +7,13 @@ every sub-exposure, so averaging leaves them precisely where they were.
 
 Find them under **Settings → Sensor**.
 
+Hot Pixel Rejection and Row/Column Pattern Removal are two of the seven that
+[Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
+switches grey out while it is on and come back to your values when you turn it off.
+Superpixel Debayer is not one of them. Because these two run before the stack sees the
+frame, that mode is unavailable while you are stacking — see
+[It is not available while you are stacking](/getting-started#it-is-not-available-while-you-are-stacking).
+
 ## Hot Pixel Rejection
 
 Some sensor pixels read far too bright regardless of what light hits them. On a

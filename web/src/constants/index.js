@@ -236,6 +236,7 @@ export const DEFAULT_SETTINGS = {
     bin: 1,
     auto_stretch: true,
     stacking: true,
+    focus_mode: false,
     background_subtraction: true,
     background_extraction_algorithm: 'grid_bilinear',
     raw_frame_saving: {live_view: false, wanderer: false, stacking: false, guide: false},
@@ -312,6 +313,10 @@ export const HELP_TEXTS = {
     bin: 'Combines adjacent pixels to increase sensitivity and Signal-to-Noise Ratio (SNR) at the cost of resolution. 2x2 binning is 4x more sensitive. Changing binning will automatically reset the current stack.',
     auto_stretch:
         'Automatically transforms the image to make faint details and colors visible - stretching',
+    focus_mode_while_stacking:
+        'Not available while you are stacking. Focus/Finder mode turns off hot pixel rejection and row/column pattern removal, which run before the frames reach the stack - and those defects sit in the same place in every frame, so once they are averaged in nothing can take them out again. Stop the capture to focus, or switch to Live view.',
+    focus_mode:
+        'Trades image quality for frame rate while you focus or hunt for a target. Holds off the seven stages that cost time per frame and buy nothing at a focus mask: background subtraction, shadow saturation boost, hot pixel rejection, row/column pattern removal, colour mottle, background grain and dithering. Their Settings toggles are held while the mode is on and every one goes back to your value when you switch it off.',
     stretch_aggressiveness:
         'Controls how strongly the dark areas are boosted. High is best for extremely faint nebulae, Low preserves star colors and contrast.',
     background_subtraction:

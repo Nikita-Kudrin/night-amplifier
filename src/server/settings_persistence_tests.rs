@@ -10,8 +10,9 @@ mod tests {
     use crate::render::StretchAggressiveness;
     use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
     use crate::server::state::{
-        CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
-        RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
+        CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
+        FocusModeSnapshot, PreviewResolution, RawFrameSaving, SensorCorrectionSettings,
+        TelescopeSettings,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
@@ -141,6 +142,18 @@ mod tests {
             eula_accepted: false,
             indi_server_host: "127.0.0.1".to_string(),
             indi_server_port: 7624,
+            // Focus/Finder mode live: the snapshot is the only record of what the seven
+            // managed settings were, so losing it in the file loses them for good.
+            focus_mode: true,
+            focus_mode_snapshot: Some(FocusModeSnapshot {
+                background_subtraction: true,
+                saturation_boost: false,
+                hot_pixel_rejection: true,
+                fpn_removal: false,
+                denoise_chroma: false,
+                denoise_luma: true,
+                dither: true,
+            }),
         };
 
         let persisted = PersistedSettings::from(&settings);
@@ -253,6 +266,113 @@ mod tests {
             restored.planetary_multi_point_alignment,
             settings.planetary_multi_point_alignment
         );
+        assert!(restored.focus_mode);
+        assert_eq!(restored.focus_mode_snapshot, settings.focus_mode_snapshot);
+    }
+
+    /// A file written before Focus/Finder mode existed carries neither key.
+    #[test]
+    fn test_load_settings_without_focus_mode_fields() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": false,
+            "rejection_sigma": 2.5,
+            "background_subtraction": true,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let restored: CaptureSettings = persisted.into();
+
+        assert!(!restored.focus_mode);
+        assert!(restored.focus_mode_snapshot.is_none());
+    }
+
+    /// The other half of `focus_mode == focus_mode_snapshot.is_some()`. A snapshot that
+    /// outlived its flag describes values already in force, and a later helper reaching for
+    /// `focus_mode_snapshot` without re-checking the flag would restore stale ones.
+    #[test]
+    fn test_a_snapshot_without_the_flag_is_discarded() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": false,
+            "rejection_sigma": 2.5,
+            "background_subtraction": true,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "focus_mode": false,
+            "focus_mode_snapshot": {
+                "background_subtraction": true,
+                "saturation_boost": false,
+                "hot_pixel_rejection": true,
+                "fpn_removal": true,
+                "denoise_chroma": true,
+                "denoise_luma": true,
+                "dither": true,
+            },
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let restored: CaptureSettings = persisted.into();
+
+        assert!(!restored.focus_mode);
+        assert!(restored.focus_mode_snapshot.is_none());
+    }
+
+    /// A snapshot written before a setting joined the managed set is missing that key.
+    /// Defaulting it to `false` would silently disable a correction that is on by default —
+    /// six of the seven are — so each field defaults to the setting's own default.
+    #[test]
+    fn test_a_snapshot_missing_a_field_restores_that_settings_default() {
+        let snapshot: FocusModeSnapshot = serde_json::from_value(serde_json::json!({
+            "saturation_boost": false,
+        }))
+        .unwrap();
+
+        let defaults = CaptureSettings::default();
+        assert_eq!(snapshot.background_subtraction, defaults.background_subtraction);
+        assert_eq!(
+            snapshot.hot_pixel_rejection,
+            defaults.sensor_correction.hot_pixel_rejection
+        );
+        assert_eq!(snapshot.fpn_removal, defaults.sensor_correction.fpn_removal);
+        assert_eq!(snapshot.denoise_chroma, defaults.denoise.chroma);
+        assert_eq!(snapshot.denoise_luma, defaults.denoise.luma);
+        assert_eq!(snapshot.dither, defaults.eyepiece.dither);
+        assert_eq!(snapshot.saturation_boost, defaults.saturation_boost);
+    }
+
+    /// A flag with no snapshot has nothing to restore from, so it must not come back on —
+    /// otherwise the seven settings are stuck off with no record of what they were.
+    #[test]
+    fn test_focus_mode_without_a_snapshot_loads_as_off() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": false,
+            "rejection_sigma": 2.5,
+            "background_subtraction": true,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "focus_mode": true,
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let restored: CaptureSettings = persisted.into();
+
+        assert!(!restored.focus_mode);
     }
 
     #[test]
@@ -320,6 +440,8 @@ mod tests {
             eula_accepted: false,
             indi_server_host: "127.0.0.1".to_string(),
             indi_server_port: 7624,
+            focus_mode: false,
+            focus_mode_snapshot: None,
         };
 
         persistence.save(&settings).unwrap();

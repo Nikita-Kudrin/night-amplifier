@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, warn};
 
 use super::state::{
-    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
-    RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
+    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, FocusModeSnapshot,
+    PreviewResolution, RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
@@ -149,6 +149,13 @@ pub struct PersistedSettings {
     pub indi_server_host: String,
     #[serde(default = "default_indi_server_port")]
     pub indi_server_port: u16,
+    /// Whether Focus/Finder mode was on. Persisted with its snapshot so a restart
+    /// mid-session cannot strand the observer's real settings in the disabled state.
+    #[serde(default)]
+    pub focus_mode: bool,
+    /// What the managed settings were before Focus/Finder mode overwrote them.
+    #[serde(default)]
+    pub focus_mode_snapshot: Option<FocusModeSnapshot>,
 }
 
 fn default_true() -> bool {
@@ -249,6 +256,8 @@ impl From<&CaptureSettings> for PersistedSettings {
             eula_accepted: settings.eula_accepted,
             indi_server_host: settings.indi_server_host.clone(),
             indi_server_port: settings.indi_server_port,
+            focus_mode: settings.focus_mode,
+            focus_mode_snapshot: settings.focus_mode_snapshot.clone(),
         }
     }
 }
@@ -323,6 +332,14 @@ impl From<PersistedSettings> for CaptureSettings {
             eula_accepted: persisted.eula_accepted,
             indi_server_host: persisted.indi_server_host,
             indi_server_port: persisted.indi_server_port,
+            // A file written before the mode existed carries neither key, and the
+            // invariant `focus_mode == focus_mode_snapshot.is_some()` has to hold in both
+            // directions: a flag with no snapshot has nothing to restore from, and a
+            // snapshot with no flag describes values already in force.
+            focus_mode: persisted.focus_mode && persisted.focus_mode_snapshot.is_some(),
+            focus_mode_snapshot: persisted
+                .focus_mode_snapshot
+                .filter(|_| persisted.focus_mode),
         }
     }
 }
