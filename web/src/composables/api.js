@@ -142,23 +142,32 @@ export async function fetchEyepieceSnapshot(circular) {
 // ============================================================================
 
 /**
- * Start capture session
+ * Start the camera in `role`: the imaging camera's capture session, or the guide
+ * camera's free-running loop.
  * @param {string} [cameraId] - Optional camera ID
+ * @param {'main'|'guide'} [role] - Which camera to start
  */
-export async function startCapture(cameraId = null) {
+export async function startCapture(cameraId = null, role = 'main') {
+    const body = {}
+    if (cameraId) body.camera_id = cameraId
+    if (role !== 'main') body.role = role
     return request('/capture/start', {
         method: 'POST',
-        body: cameraId ? {camera_id: cameraId} : {},
+        body,
     })
 }
 
 /**
- * Stop capture session
+ * Stop the camera in `role`. See {@link startCapture}.
+ *
+ * The imaging camera sends no body, which is the shape every release before roles
+ * existed used and the shape the server still reads as "the imaging camera".
+ * @param {'main'|'guide'} [role] - Which camera to stop
  */
-export async function stopCapture() {
-    return request('/capture/stop', {
-        method: 'POST',
-    })
+export async function stopCapture(role = 'main') {
+    const options = {method: 'POST'}
+    if (role !== 'main') options.body = {role}
+    return request('/capture/stop', options)
 }
 
 /**

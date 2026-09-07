@@ -39,12 +39,16 @@ describe('CaptureControls', () => {
                 ...overrides.settings,
             }),
             selectedCamera: ref('selectedCamera' in overrides ? overrides.selectedCamera : 'cam1'),
-            // The capture target, which is always the imaging camera and is *not*
-            // whatever the settings panel happens to be editing — that can be the
-            // guide camera.
+            // Which camera the panel addresses. Start/Stop follows it, so a 'guide'
+            // selection drives the guide loop rather than a capture session.
+            selectedCameraRole: ref(overrides.selectedCameraRole ?? 'main'),
             mainCamera: ref(
                 'mainCamera' in overrides ? overrides.mainCamera : {id: 'cam1', role: 'main'},
             ),
+            guideCamera: ref('guideCamera' in overrides ? overrides.guideCamera : null),
+            // Keyed by camera *name*: 'guiding' is the phase the backend stamps while
+            // the guide loop owns the handle.
+            cameraPhase: ref(overrides.cameraPhase ?? {}),
             eventStream: {
                 captureState: ref(overrides.captureState ?? 'Idle'),
                 ...overrides.eventStream,
@@ -122,14 +126,14 @@ describe('CaptureControls', () => {
         })
 
         it('sends no camera at all when there is no imaging camera to capture with', async () => {
-            // The settings panel can be editing the guide camera while nothing holds
-            // the imaging slot. Falling back to the selected camera sent the *guide*
-            // camera's id, and the server answered with a role-mismatch message about
-            // connecting — a remedy for a request the user had not made. Sending
-            // nothing lets the server say plainly that an imaging camera is missing.
+            // Falling back to the selected camera sent whatever id happened to be
+            // selected, and with only a guide camera in the rig the server answered
+            // with a role-mismatch message about connecting — a remedy for a request
+            // the user had not made. Sending nothing lets the server say plainly that
+            // an imaging camera is missing.
             const wrapper = mountCaptureControls({
                 mainCamera: null,
-                selectedCamera: 'guide-cam',
+                selectedCamera: 'stale-cam',
             })
 
             await wrapper.find('.btn-start').trigger('click')
@@ -138,10 +142,10 @@ describe('CaptureControls', () => {
             expect(startCapture).toHaveBeenCalledWith(null)
         })
 
-        it('captures on the imaging camera even while the guide camera is selected', async () => {
+        it('captures on the imaging camera while the imaging camera is selected', async () => {
             const wrapper = mountCaptureControls({
                 mainCamera: {id: 'imaging-cam', role: 'main'},
-                selectedCamera: 'guide-cam',
+                selectedCamera: 'imaging-cam',
             })
 
             await wrapper.find('.btn-start').trigger('click')
@@ -161,6 +165,15 @@ describe('CaptureControls', () => {
             expect(stopCapture).toHaveBeenCalled()
         })
 
+        it('calls stopCapture for the imaging camera by name', async () => {
+            const wrapper = mountCaptureControls({captureState: 'Capturing'})
+
+            await wrapper.find('.btn-stop').trigger('click')
+            await flushPromises()
+
+            expect(stopCapture).toHaveBeenCalledWith('main')
+        })
+
         it('shows error message when start fails', async () => {
             startCapture.mockRejectedValue(new Error('Camera not ready'))
 
@@ -170,6 +183,139 @@ describe('CaptureControls', () => {
             await flushPromises()
 
             expect(wrapper.find('.alert-error').text()).toContain('Camera not ready')
+        })
+    })
+
+    // The guide camera is started and stopped from the same button, because it is the
+    // same question: what should the camera I have selected be doing? Stopping it is
+    // the only way to stop the raw frames it saves without disconnecting it.
+    describe('Start/Stop with the guide camera selected', () => {
+        const GUIDE = {id: 'guide-cam', name: 'Guide Cam', role: 'guide'}
+
+        function mountGuideSelected(overrides = {}) {
+            return mountCaptureControls({
+                selectedCameraRole: 'guide',
+                selectedCamera: GUIDE.id,
+                guideCamera: GUIDE,
+                mainCamera: {id: 'imaging-cam', role: 'main'},
+                ...overrides,
+            })
+        }
+
+        it('offers Start while the guide loop is not running', () => {
+            const wrapper = mountGuideSelected({cameraPhase: {[GUIDE.name]: 'idle'}})
+
+            const button = wrapper.find('.btn-capture')
+            expect(button.classes()).toContain('btn-start')
+            expect(button.text()).toContain('Start guide')
+            expect(button.element.disabled).toBe(false)
+        })
+
+        it('offers Stop while the guide loop is running', () => {
+            const wrapper = mountGuideSelected({cameraPhase: {[GUIDE.name]: 'guiding'}})
+
+            const button = wrapper.find('.btn-capture')
+            expect(button.classes()).toContain('btn-stop')
+            expect(button.text()).toContain('Stop guide')
+        })
+
+        // The guide loop is not a capture session, so the imaging camera's state must
+        // not decide what this button says.
+        it('ignores the imaging camera capture state', () => {
+            const wrapper = mountGuideSelected({
+                captureState: 'Capturing',
+                cameraPhase: {[GUIDE.name]: 'idle'},
+            })
+
+            expect(wrapper.find('.btn-capture').classes()).toContain('btn-start')
+        })
+
+        it('starts the guide camera without naming it', async () => {
+            const wrapper = mountGuideSelected({cameraPhase: {[GUIDE.name]: 'idle'}})
+
+            await wrapper.find('.btn-start').trigger('click')
+            await flushPromises()
+
+            expect(startCapture).toHaveBeenCalledWith(null, 'guide')
+        })
+
+        // The exposure and gain shown are the guide camera's, so the flush that
+        // precedes a start has to carry its role or it would overwrite the imaging
+        // camera's values with them.
+        it('flushes the exposure and gain against the guide profile', async () => {
+            const wrapper = mountGuideSelected({cameraPhase: {[GUIDE.name]: 'idle'}})
+
+            await wrapper.find('.btn-start').trigger('click')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith(
+                expect.objectContaining({camera_role: 'guide'}),
+            )
+        })
+
+        it('stops the guide camera rather than the capture', async () => {
+            const wrapper = mountGuideSelected({
+                captureState: 'Capturing',
+                cameraPhase: {[GUIDE.name]: 'guiding'},
+            })
+
+            await wrapper.find('.btn-stop').trigger('click')
+            await flushPromises()
+
+            expect(stopCapture).toHaveBeenCalledWith('guide')
+        })
+    })
+
+    // Nothing the guide camera produces is stacked, and the capture mode is a global
+    // setting — offering Wanderer or Stacking here would silently change the imaging
+    // camera's mode.
+    describe('Capture mode for the guide camera', () => {
+        const GUIDE = {id: 'guide-cam', name: 'Guide Cam', role: 'guide'}
+
+        function modeButtons(wrapper) {
+            return wrapper.findComponent({name: 'ButtonGroup'})
+        }
+
+        it('offers all three modes for the imaging camera', () => {
+            const wrapper = mountCaptureControls()
+
+            const labels = modeButtons(wrapper).props('options').map((o) => o.label)
+            expect(labels).toEqual(['Live view', 'Wanderer', 'Stacking'])
+        })
+
+        it('offers only Live view for the guide camera', () => {
+            const wrapper = mountCaptureControls({
+                selectedCameraRole: 'guide',
+                selectedCamera: GUIDE.id,
+                guideCamera: GUIDE,
+            })
+
+            const group = modeButtons(wrapper)
+            expect(group.props('options').map((o) => o.label)).toEqual(['Live view'])
+            expect(group.props('modelValue')).toBe('off')
+            expect(group.props('disabled')).toBe(true)
+        })
+
+        // Even in Stacking, which is what the imaging camera is doing behind it.
+        it('shows Live view for the guide camera while the rig is stacking', () => {
+            const wrapper = mountCaptureControls({
+                settings: {stacking: true, wanderer_mode: false},
+                selectedCameraRole: 'guide',
+                selectedCamera: GUIDE.id,
+                guideCamera: GUIDE,
+            })
+
+            expect(modeButtons(wrapper).props('modelValue')).toBe('off')
+        })
+
+        it('disables the stacking type selector for the guide camera', () => {
+            const wrapper = mountCaptureControls({
+                selectedCameraRole: 'guide',
+                selectedCamera: GUIDE.id,
+                guideCamera: GUIDE,
+            })
+
+            expect(wrapper.find('.type-select').element.disabled).toBe(true)
         })
     })
 

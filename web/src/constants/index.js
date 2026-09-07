@@ -335,6 +335,8 @@ export const HELP_TEXTS = {
         'Determines how the camera feed is processed:\n• Live view: Raw feed, no stacking. Best for focusing.\n• Wanderer: Auto-stacks when stationary, resets on movement.\n• Stacking: Continuous real-time image accumulation.',
     stacking_type:
         "Specifies the processing pipeline:\n• Deep Sky: Optimized for long exposures of nebulae and galaxies.\n• Planetary: High-speed imaging for planets/Moon.\n• Comet: Special alignment that tracks the comet's motion",
+    guide_capture_mode:
+        'The guide camera always runs as a live view. Nothing it captures is stacked, so Wanderer and Stacking are not offered for it — select the imaging camera to change those.',
     exposure:
         'Controls how long the camera sensor collects light for each frame. Longer exposures reveal fainter details but are more sensitive to tracking errors.',
     gain: 'Electronic amplification of the signal. Higher gain increases sensitivity but also introduces more read noise.',

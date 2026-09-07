@@ -162,3 +162,32 @@ async fn test_capture_stop_when_capturing() {
     assert_eq!(state.capture_state().await, CaptureState::Stopping);
     assert!(state.is_cancelled());
 }
+
+/// The web client sends `Content-Type: application/json` with no body at all for a
+/// main-camera stop — the exact request shape that predates roles. The handler must
+/// still read it as the imaging camera rather than rejecting it as malformed JSON.
+#[tokio::test]
+async fn a_stop_with_a_json_content_type_and_no_body_stops_the_capture() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/capture/stop")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+}

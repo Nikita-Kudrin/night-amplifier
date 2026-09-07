@@ -79,6 +79,34 @@ describe('API Client', () => {
             expect(result).toEqual(response)
         })
 
+        // Roles travel on the body, and 'main' deliberately sends none of it: that is
+        // the exact request every release before roles existed made.
+        it('startCapture carries the guide role', async () => {
+            fetchMock.mockReturnValue(mockSuccess({message: 'Guide camera started'}))
+
+            await startCapture(null, 'guide')
+
+            expect(fetchMock).toHaveBeenCalledWith('/api/capture/start', {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({role: 'guide'}),
+            })
+        })
+
+        it('stopCapture carries the guide role', async () => {
+            fetchMock.mockReturnValue(mockSuccess({message: 'Guide camera stopping'}))
+
+            await stopCapture('guide')
+
+            expect(fetchMock).toHaveBeenCalledWith('/api/capture/stop', {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({role: 'guide'}),
+            })
+        })
+
         it('getCaptureStatus sends GET to /api/capture/status', async () => {
             const status = {
                 state: 'Capturing',

@@ -68,6 +68,12 @@ pub enum ApiError {
         held: &'static str,
     },
 
+    #[error("No guide camera is connected. Connect one before starting it.")]
+    NoGuideCameraConnected,
+
+    #[error("The guide camera is already running")]
+    GuideAlreadyRunning,
+
     #[error("Cannot change stacking type while capturing")]
     StackingTypeChangeNotAllowed,
 
@@ -104,6 +110,8 @@ impl ApiError {
             ApiError::CameraRoleBusy { .. } => StatusCode::CONFLICT,
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CaptureCameraIsNotMain { .. } => StatusCode::CONFLICT,
+            ApiError::NoGuideCameraConnected => StatusCode::BAD_REQUEST,
+            ApiError::GuideAlreadyRunning => StatusCode::CONFLICT,
             ApiError::StackingTypeChangeNotAllowed => StatusCode::CONFLICT,
             ApiError::InvalidCameraIdFormat => StatusCode::BAD_REQUEST,
             ApiError::InvalidCameraIndex => StatusCode::BAD_REQUEST,

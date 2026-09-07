@@ -29,15 +29,15 @@ const capabilities = inject('capabilities', {
 const {error, loading, clearError, withErrorHandling} = useError()
 
 /**
- * Which camera the exposure and gain controls are editing.
+ * Which camera this panel addresses.
  *
  * Clicking a camera in the list picks it; the guide camera keeps its own exposure and
  * gain, so the same two controls address a different set of values depending on the
- * selection. The *capture* target is unaffected — that is always the imaging camera,
- * which the server resolves for itself.
+ * selection. Start/Stop follows the same selection — see `isCapturing` below.
  */
 const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 const mainCamera = inject('mainCamera', computed(() => null))
+const guideCamera = inject('guideCamera', computed(() => null))
 
 const isEditingGuide = computed(() => settingsRole.value === 'guide')
 
@@ -112,15 +112,65 @@ onMounted(async () => {
   }
 })
 
-const isCapturing = computed(
+const mainCapturing = computed(
     () =>
         eventStream.captureState.value === CAPTURE_STATES.CAPTURING ||
         eventStream.captureState.value === CAPTURE_STATES.STARTING
 )
 
-const isStopping = computed(() => eventStream.captureState.value === CAPTURE_STATES.STOPPING)
+const mainStopping = computed(() => eventStream.captureState.value === CAPTURE_STATES.STOPPING)
 
-const canStart = computed(() => selectedCamera.value && !isCapturing.value && !isStopping.value)
+/**
+ * Whether the guide camera's loop is running.
+ *
+ * Read from the camera's phase rather than from `captureState`: `Guiding` is a phase of
+ * its own precisely because a guide loop is not a capture session, and the backend
+ * already stamps it whenever the loop takes or gives back the handle.
+ */
+const isGuideRunning = computed(() => {
+  const name = guideCamera.value?.name
+  return Boolean(name) && cameraPhase.value?.[name] === 'guiding'
+})
+
+/**
+ * Start/Stop addresses whichever camera the list has selected, the same way the
+ * exposure and gain controls above do. Selecting the guide camera and pressing Stop
+ * stops its loop — and with it the raw frames it was saving.
+ */
+const isCapturing = computed(() =>
+    isEditingGuide.value ? isGuideRunning.value : mainCapturing.value
+)
+
+// The guide camera has no Stopping state to broadcast: its stop is one request that
+// returns once the loop has handed its handle back, so the in-flight request is the
+// only signal there is.
+const isStopping = computed(() =>
+    isEditingGuide.value ? loading.value && isGuideRunning.value : mainStopping.value
+)
+
+const canStart = computed(() => {
+  if (isCapturing.value || isStopping.value) return false
+  return isEditingGuide.value ? Boolean(guideCamera.value) : Boolean(selectedCamera.value)
+})
+
+/** Names the target, so it is never ambiguous which camera the button acts on. */
+const startLabel = computed(() => (isEditingGuide.value ? 'Start guide' : 'Start'))
+const stopLabel = computed(() => (isEditingGuide.value ? 'Stop guide' : 'Stop'))
+
+/**
+ * Only the imaging camera has a capture mode. Nothing the guide camera produces is
+ * stacked, so Wanderer and Stacking are not choices it has — and offering them here
+ * would have written the *imaging* camera's mode, since the setting is global.
+ */
+const captureModeOptions = computed(() =>
+    isEditingGuide.value
+        ? [{value: 'off', label: 'Live view'}]
+        : [
+          {value: 'off', label: 'Live view'},
+          {value: 'wanderer', label: 'Wanderer'},
+          {value: 'stacking', label: 'Stacking'},
+        ]
+)
 
 const selectedCameraName = computed(() => {
   const id = selectedCamera.value
@@ -155,13 +205,19 @@ const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || E
 
 async function handleStart() {
   await withErrorHandling(async () => {
-    // Always the imaging camera's exposure, and always the imaging camera: the guide
-    // camera can be the one selected for editing without being the capture target.
+    // Flush the exposure and gain shown above before starting, so an edit the user
+    // typed but never blurred is not lost. It lands on the camera being started, which
+    // is the one those controls are editing.
     await updateSettings({
-      camera_role: 'main',
+      camera_role: settingsRole.value,
       exposure_us: exposureUs.value,
       gain: gain.value,
     })
+    if (isEditingGuide.value) {
+      // No id: the guide slot holds at most one camera, so the server resolves it.
+      await startCapture(null, 'guide')
+      return
+    }
     // No fallback to `selectedCamera`: with only a guide camera connected that
     // fallback sent the *guide* camera's id, and the server answered with a
     // role-mismatch message about connecting — which is not what the user did.
@@ -173,7 +229,7 @@ async function handleStart() {
 
 async function handleStop() {
   await withErrorHandling(async () => {
-    await stopCapture()
+    await stopCapture(settingsRole.value)
   })
 }
 
@@ -204,6 +260,7 @@ function applyStackingMode(val) {
 }
 
 const showCometLock = computed(() => {
+  if (isEditingGuide.value) return false
   return selectedStackingType.value === 'comet' && !capabilities.comet?.pro_stacking
 })
 
@@ -217,15 +274,12 @@ const HELP = HELP_TEXTS
         <div class="header-control-item">
           <label class="type-label-inline">Capture mode</label>
           <ButtonGroup
-              :model-value="stackingMode"
-              :options="[
-                {value: 'off', label: 'Live view'},
-                {value: 'wanderer', label: 'Wanderer'},
-                {value: 'stacking', label: 'Stacking'}
-              ]"
+              :model-value="isEditingGuide ? 'off' : stackingMode"
+              :options="captureModeOptions"
+              :disabled="isEditingGuide"
               @update:model-value="applyStackingMode"
           />
-          <BaseInfoIcon :message="HELP.stacking"/>
+          <BaseInfoIcon :message="isEditingGuide ? HELP.guide_capture_mode : HELP.stacking"/>
         </div>
       </div>
     </template>
@@ -246,7 +300,7 @@ const HELP = HELP_TEXTS
         <select
             v-model="selectedStackingType"
             class="select type-select"
-            :disabled="isCapturing || isStopping"
+            :disabled="isEditingGuide || isCapturing || isStopping"
             @change="applyStackingType"
         >
           <option v-for="type in stackingTypes" :key="type.id" :value="type.id">
@@ -273,7 +327,7 @@ const HELP = HELP_TEXTS
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
             <polygon points="5,3 19,12 5,21"/>
           </svg>
-          <span>{{ loading ? 'Starting...' : 'Start' }}</span>
+          <span>{{ loading ? 'Starting...' : startLabel }}</span>
         </button>
         <button
             v-else
@@ -284,7 +338,7 @@ const HELP = HELP_TEXTS
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
             <rect x="4" y="4" width="16" height="16" rx="2"/>
           </svg>
-          <span>{{ isStopping ? 'Stopping...' : 'Stop' }}</span>
+          <span>{{ isStopping ? 'Stopping...' : stopLabel }}</span>
         </button>
       </template>
     </div>

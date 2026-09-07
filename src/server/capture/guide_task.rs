@@ -620,7 +620,8 @@ mod tests {
     use crate::camera::{
         CameraInfo, CameraResult, CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
     };
-    use crate::server::state::{JpegTier, StreamKind, TierClientGuard};
+    use crate::server::services::CaptureService;
+    use crate::server::state::{CaptureState, JpegTier, StreamKind, TierClientGuard};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex as StdMutex;
 
@@ -637,6 +638,10 @@ mod tests {
         log: Arc<StdMutex<DriveLog>>,
         /// Sensor temperature `status()` reports, so a ramp has somewhere to start.
         temperature_c: f64,
+        /// How long each exposure takes. Zero for the tests that drive an exact frame
+        /// count; a real interval for the ones that stop a *free-running* loop, which
+        /// otherwise spins as fast as the disk writer accepts frames.
+        frame_delay: Duration,
     }
 
     /// What the guide loop actually asked of the camera.
@@ -680,10 +685,18 @@ mod tests {
                     stop,
                     log: Arc::clone(&log),
                     temperature_c: 20.0,
+                    frame_delay: Duration::ZERO,
                 },
                 captured,
                 log,
             )
+        }
+
+        /// Slow the camera to one frame per `delay`, so a test can watch a loop it does
+        /// not drive frame by frame.
+        fn paced(mut self, delay: Duration) -> Self {
+            self.frame_delay = delay;
+            self
         }
     }
 
@@ -719,6 +732,9 @@ mod tests {
 
         fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
             self.log.lock().unwrap().setpoints.push(config.target_temp_c);
+            if !self.frame_delay.is_zero() {
+                std::thread::sleep(self.frame_delay);
+            }
             let n = self.captured.fetch_add(1, Ordering::SeqCst) + 1;
             if n >= self.stop_after {
                 self.stop.store(true, Ordering::SeqCst);
@@ -1144,6 +1160,162 @@ mod tests {
             "only {} of {want} files reached {dir:?}",
             std::fs::read_dir(dir).map(|d| d.count()).unwrap_or(0)
         );
+    }
+
+    /// Connect a guide camera the way `lifecycle::connect` leaves things — registered in
+    /// the map with a live handle in its slot — and start its loop through the real
+    /// entry point, so the cancel token and the phase are the production ones.
+    ///
+    /// The camera is paced rather than free-running flat out: these tests watch a loop
+    /// they do not step, and an instant `capture()` fills a directory faster than the
+    /// assertions can read it.
+    async fn connect_and_start_guide(state: &Arc<AppState>) {
+        let never_stops = Arc::new(AtomicBool::new(false));
+        let (camera, _captured, _log) = CountingCamera::with_log(usize::MAX, never_stops);
+        let camera = camera.paced(Duration::from_millis(20));
+        let info = guide_camera_info();
+
+        state
+            .cameras
+            .write()
+            .await
+            .insert(info.id.clone(), info.clone());
+        *state
+            .slot(CameraRole::Guide)
+            .handle
+            .lock()
+            .expect("camera handle mutex poisoned") = Some(Box::new(camera));
+
+        start(state, &info);
+    }
+
+    /// Wait until the loop is up, so a test never asserts against a loop still queued on
+    /// the tokio task `start` spawns.
+    async fn wait_until_running(state: &Arc<AppState>) {
+        for _ in 0..200 {
+            if state.guide_loop_running() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("the guide loop never started");
+    }
+
+    fn files_in(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir).map(|d| d.count()).unwrap_or(0)
+    }
+
+    /// The bug this fixes: raw saving sits above every gate in the loop, and the loop
+    /// only ended on disconnect — so a guide camera asked to save subs kept filling its
+    /// folder after the user pressed Stop, with nothing short of unplugging it to stop.
+    #[tokio::test]
+    async fn stopping_the_guide_camera_stops_its_raw_frame_writing() {
+        let (state, disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        std::thread::spawn(move || disk_writer.run());
+
+        state.settings.write().await.raw_frame_saving.guide = true;
+        connect_and_start_guide(&state).await;
+        wait_until_running(&state).await;
+
+        let dir = loop_until_session_dir(&state).await;
+        wait_for_files(&dir, 2).await;
+
+        assert!(
+            CaptureService::stop(&state, CameraRole::Guide).await,
+            "stopping a running guide camera must report that it was running"
+        );
+        assert!(!state.guide_loop_running());
+
+        // The writer queue drains asynchronously, so settle before taking the reading
+        // that the next one is compared against.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let after_stop = files_in(&dir);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert_eq!(
+            files_in(&dir),
+            after_stop,
+            "the guide camera kept writing frames into {dir:?} after it was stopped"
+        );
+    }
+
+    /// A deliberate stop ends the observation. Keeping the resume record would send the
+    /// next Start back into the old folder, where it would carry on the numbering into
+    /// frames from a different session.
+    #[tokio::test]
+    async fn a_stopped_guide_camera_does_not_rejoin_its_old_folder() {
+        let (state, disk_writer) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        std::thread::spawn(move || disk_writer.run());
+
+        state.settings.write().await.raw_frame_saving.guide = true;
+        connect_and_start_guide(&state).await;
+        wait_until_running(&state).await;
+        let first = loop_until_session_dir(&state).await;
+        wait_for_files(&first, 1).await;
+
+        CaptureService::stop(&state, CameraRole::Guide).await;
+        assert!(
+            guide_session_dir(&state).await.is_none(),
+            "a deliberate stop must not park a folder for a later run to rejoin"
+        );
+
+        // Restarting opens a folder of its own rather than appending to the first.
+        CaptureService::start(&state, None, CameraRole::Guide)
+            .await
+            .expect("a stopped guide camera must be startable again");
+        wait_until_running(&state).await;
+        let second = loop_until_session_dir(&state).await;
+        wait_for_files(&second, 1).await;
+        assert_ne!(first, second, "the restarted run rejoined the stopped one");
+        assert!(second.join("frame_000001.fits").exists());
+
+        CaptureService::stop(&state, CameraRole::Guide).await;
+    }
+
+    /// Stop is idempotent: the disconnect path calls it too, and a second press must not
+    /// claim to have stopped something that was already stopped.
+    #[tokio::test]
+    async fn stopping_a_guide_camera_that_is_not_running_reports_nothing_to_stop() {
+        let (state, _dw) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        connect_and_start_guide(&state).await;
+        wait_until_running(&state).await;
+
+        assert!(CaptureService::stop(&state, CameraRole::Guide).await);
+        assert!(!CaptureService::stop(&state, CameraRole::Guide).await);
+    }
+
+    /// The imaging camera and the guide camera are stopped separately, on purpose: a
+    /// guide camera exists to keep solving and framing while no capture is running.
+    #[tokio::test]
+    async fn stopping_the_capture_leaves_the_guide_camera_running() {
+        let (state, _dw) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        connect_and_start_guide(&state).await;
+        wait_until_running(&state).await;
+        state.set_capture_state(CaptureState::Capturing).await;
+
+        assert!(CaptureService::stop(&state, CameraRole::Main).await);
+
+        assert!(
+            state.guide_loop_running(),
+            "stopping the capture stopped the guide camera with it"
+        );
+        CaptureService::stop(&state, CameraRole::Guide).await;
+    }
+
+    /// The directory is opened by the first frame that needs one, so a test that reads it
+    /// straight after the loop starts is racing the first exposure.
+    async fn loop_until_session_dir(state: &Arc<AppState>) -> std::path::PathBuf {
+        for _ in 0..200 {
+            if let Some(dir) = guide_session_dir(state).await {
+                return dir;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("no guide raw-frame directory was opened");
     }
 
     /// Off by default, and it must stay a separate decision from the imaging switches.

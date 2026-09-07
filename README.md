@@ -44,7 +44,7 @@ Enable features for specific manufacturers when compiling:
 - **Background subtraction** - Standard grid-based model to remove light pollution gradients.
 - **Auto stretching** - Color-preserving stretch with automatic background neutralization.
 - **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
-- **Guide camera** - Attach a second camera on a guide scope; it free-runs, drives plate solving from its own optics, and can be previewed in place of the main image.
+- **Guide camera** - Attach a second camera on a guide scope; it free-runs, drives plate solving from its own optics, and can be previewed in place of the main image. Start/Stop acts on whichever camera is selected, so each is started and stopped independently.
 - **Eyepiece view** - Simulation of the eyepiece view. `/eyepiece` is always monocular, with
   fullscreen, pinch zoom, auto-hiding controls and PNG download (round or uncropped);
   `/eyepiece_quality` streams losslessly and follows the binocular/monocular setting.
@@ -67,7 +67,7 @@ Enable features for specific manufacturers when compiling:
 Raw frames are saved to FITS files in the capture modes selected under **Settings → Storage → Save Raw Frames**.
 Live view, Wanderer, Stacking and Guide camera are chosen independently; all four are off by default. The finished
 stack is saved separately, in Stacking mode only. The guide camera writes alongside the imaging one, into a folder
-of its own.
+of its own, for as long as its loop is running — select it and press Stop to end both.
 
 **Image Storage Formats:**
 
