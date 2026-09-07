@@ -313,23 +313,27 @@ describe('useEventStream', () => {
             expect(plateSolving.value.targetName).toBe('M31')
         })
 
-        it('names the current strategy while a multi-attempt solve runs', async () => {
+        it('counts the steps of a multi-attempt solve without naming them', async () => {
             // A cold solve works down several strategies, the last of which can run for
-            // a minute. The status line has to move, or a slow solve reads as a hang.
+            // a minute. The status line has to move, or a slow solve reads as a hang --
+            // but the counter alone does that. The strategy's own label is a diagnostic
+            // long enough to push the object name off the bar, so it stays in the log.
             const {plateSolving, solvingMessage} = useEventStream()
 
             await openWebSocket()
             await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
             await sendEvent({
                 type: 'plate_solving_progress',
-                stage: 'last known pointing',
+                stage: 'last solve (this session) + last known pointing + selected target',
                 attempt: 2,
                 total: 4,
             })
 
             expect(plateSolving.value.inProgress).toBe(true)
             expect(plateSolving.value.targetName).toBe('M31')
-            expect(solvingMessage.value).toBe('Searching (2/4: last known pointing) : M31')
+            expect(solvingMessage.value).toBe('Searching (step 2/4): M31')
+            // The label is still carried, for anything that wants the detail.
+            expect(plateSolving.value.stage.label).toContain('last known pointing')
         })
 
         it('does not clutter the status line when there is only one attempt', async () => {
@@ -344,10 +348,10 @@ describe('useEventStream', () => {
                 total: 1,
             })
 
-            expect(solvingMessage.value).toBe('Searching : M31')
+            expect(solvingMessage.value).toBe('Searching: M31')
         })
 
-        it('drops the strategy label once the solve finishes', async () => {
+        it('drops the step counter once the solve finishes', async () => {
             const {plateSolving, solvingMessage} = useEventStream()
 
             await openWebSocket()
@@ -358,7 +362,7 @@ describe('useEventStream', () => {
             await sendEvent({type: 'position_solved'})
 
             expect(plateSolving.value.stage).toBe(null)
-            expect(solvingMessage.value).toBe('Found : M31')
+            expect(solvingMessage.value).toBe('Found: M31')
         })
 
         it('clears plateSolving on target_cleared event', async () => {
@@ -431,7 +435,7 @@ describe('useEventStream', () => {
 
         it('says the scope is moving instead of leaving the last fix on screen', async () => {
             // The report: push the scope and the status bar went on reading
-            // "Found : M31" the whole way, because a solve ending was the only thing
+            // "Found: M31" the whole way, because a solve ending was the only thing
             // that ever wrote to it. The movement states are now reported, and being
             // newer than the last verdict they have to win.
             const {solvingMessage} = useEventStream()
@@ -439,7 +443,7 @@ describe('useEventStream', () => {
             await openWebSocket()
             await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
             await sendEvent({type: 'position_solved'})
-            expect(solvingMessage.value).toBe('Found : M31')
+            expect(solvingMessage.value).toBe('Found: M31')
 
             await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
             expect(solvingMessage.value).toBe('Telescope is moving')
@@ -457,7 +461,7 @@ describe('useEventStream', () => {
             await openWebSocket()
             await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
             await sendEvent({type: 'position_solve_failed', reason: 'no match'})
-            expect(solvingMessage.value).toBe('Failed to find : M31')
+            expect(solvingMessage.value).toBe('Failed to find: M31')
 
             await sendEvent({
                 type: 'push_to_blocked',
@@ -478,7 +482,7 @@ describe('useEventStream', () => {
             await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
             await sendEvent({type: 'push_to_blocked', reason: null})
 
-            expect(solvingMessage.value).toBe('Found : M31')
+            expect(solvingMessage.value).toBe('Found: M31')
         })
 
         it('keeps showing the search while a solve is running', async () => {
@@ -490,7 +494,7 @@ describe('useEventStream', () => {
             await sendEvent({type: 'push_to_blocked', reason: 'Telescope is moving'})
             await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
 
-            expect(solvingMessage.value).toBe('Searching : M31')
+            expect(solvingMessage.value).toBe('Searching: M31')
         })
 
         it('shows solving again after an equipment change restarts it', async () => {
