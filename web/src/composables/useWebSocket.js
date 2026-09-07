@@ -197,13 +197,16 @@ export function useEventStream() {
 
     const solvingMessage = computed(() => {
         const {inProgress, lastResult, targetName, stage} = plateSolving.value
-        const targetSuffix = targetName ? ` : ${targetName}` : ''
+        const targetSuffix = targetName ? `: ${targetName}` : ''
 
         if (inProgress) {
-            // Name the strategy in flight once there is more than one to distinguish;
-            // a single-attempt solve returns before anyone could read it anyway.
+            // The step counter, not the strategy behind it. A label like "last solve
+            // (this session) + last known pointing" is a diagnostic that overran the
+            // status bar and pushed the one thing the user is looking for -- the object
+            // name -- off the end. It stays in `stage.label` and in the server log.
+            // The counter alone still separates a slow solve from a hung one.
             if (stage && stage.total > 1) {
-                return `Searching (${stage.attempt}/${stage.total}: ${stage.label})${targetSuffix}`
+                return `Searching (step ${stage.attempt}/${stage.total})${targetSuffix}`
             }
             return targetName ? `Searching${targetSuffix}` : 'Updating position...'
         }
@@ -212,7 +215,7 @@ export function useEventStream() {
         // sends one only on a transition, so its presence means the situation has
         // moved on since that verdict -- the scope is being pushed, the view has not
         // settled, a retry is being held off. Ordering these the other way round is
-        // what left "Found : M31" on screen for the whole time the user was pushing
+        // what left "Found: M31" on screen for the whole time the user was pushing
         // away from M31, and hid the retry countdown behind "Failed to find M31"
         // forever, since nothing ever cleared `lastResult`.
         if (pushToBlocked.value) {
