@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::server::capture::{guide_task, run_capture_loop};
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
+use crate::server::state::{focus_mode, AppState, CameraRole, CaptureState, SessionResumePlan};
 
 /// Service for managing capture operations
 pub struct CaptureService;
@@ -150,6 +150,12 @@ impl CaptureService {
         state.clear_stacking_carryover();
         state.set_capture_state(CaptureState::Starting).await;
 
+        // *After* the state moves off `Idle`, which is what closes the window: from here
+        // `update_settings` refuses to enter the mode, so nothing can turn it back on
+        // between this call and the first frame. Clearing before the state change left a
+        // request that had already read `Idle` free to land behind us.
+        Self::leave_focus_mode_for_capture(state).await;
+
         info!(camera_id = %camera_id, "Starting capture session");
 
         // The resume plan is recorded by the capture loop once the disk session
@@ -158,6 +164,36 @@ impl CaptureService {
         Self::spawn_capture(state, camera_id.clone(), None);
 
         Ok(camera_id)
+    }
+
+    /// Leave Focus/Finder mode, restoring the seven settings it was holding off.
+    ///
+    /// Called on the way into every path that accumulates a stack. The mode drops two
+    /// raw-mosaic corrections, and a stack integrated without them can never be cleaned
+    /// again — so a session must never begin under it. `update_settings` refuses to
+    /// *enter* the mode while stacking; this closes the other order, where the observer
+    /// was already focusing and then pressed Start.
+    ///
+    /// Silent by design: it restores the observer's own values at the moment they start
+    /// mattering, and the `SettingsUpdated` broadcast moves the toggle in every client.
+    async fn leave_focus_mode_for_capture(state: &Arc<AppState>) {
+        let left = {
+            let mut settings = state.settings.write().await;
+            if !settings.focus_mode {
+                false
+            } else {
+                focus_mode::set(&mut settings, false);
+                true
+            }
+        };
+        if !left {
+            return;
+        }
+        info!("Leaving Focus/Finder mode: a capture is starting");
+        state.save_settings().await;
+        let _ = state
+            .events
+            .send(crate::server::events::ServerEvent::SettingsUpdated);
     }
 
     /// Restart the capture a device fault interrupted, in the mode it was
@@ -180,6 +216,9 @@ impl CaptureService {
 
         state.reset_cancel();
         state.set_capture_state(CaptureState::Starting).await;
+
+        // After the state change, for the reason `start_capture` gives.
+        Self::leave_focus_mode_for_capture(state).await;
 
         info!(camera_id = %plan.camera_id, "Resuming capture session");
 

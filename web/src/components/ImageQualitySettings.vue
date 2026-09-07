@@ -24,6 +24,12 @@ const props = defineProps({
   sensorCorrection: {type: Object, required: true},
   denoise: {type: Object, required: true},
   previewResolution: {type: String, required: true},
+  /**
+   * Focus/Finder mode holds four of these toggles off and owns the snapshot that
+   * restores them, so while it is on they are read-only — an edit that looked like it
+   * took and then reverted on the next toggle is worse than one the UI refuses.
+   */
+  focusMode: {type: Boolean, default: false},
   formatPercent: {type: Function, required: true},
   formatSigma: {type: Function, required: true},
 })
@@ -64,11 +70,14 @@ function applyValue(key, value) {
   <div class="settings-section">
     <h3 class="section-title">Sensor</h3>
 
+    <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+
     <div class="control-group" style="margin-top: 0.5rem">
       <BaseToggle
           v-model="local.sensor_correction.hot_pixel_rejection"
           label="Hot Pixel Rejection"
           :help="HELP.hot_pixel_rejection"
+          :disabled="focusMode"
           @update:model-value="apply('sensor_correction')"
       />
     </div>
@@ -96,6 +105,7 @@ function applyValue(key, value) {
           v-model="local.sensor_correction.fpn_removal"
           label="Row/Column Pattern Removal"
           :help="HELP.fpn_removal"
+          :disabled="focusMode"
           @update:model-value="apply('sensor_correction')"
       />
     </div>
@@ -139,11 +149,14 @@ function applyValue(key, value) {
   <div class="settings-section">
     <h3 class="section-title">Noise Reduction</h3>
 
+    <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+
     <div class="control-group" style="margin-top: 0.5rem">
       <BaseToggle
           v-model="local.denoise.chroma"
           label="Colour Mottle"
           :help="HELP.denoise_chroma"
+          :disabled="focusMode"
           @update:model-value="apply('denoise')"
       />
     </div>
@@ -167,6 +180,7 @@ function applyValue(key, value) {
           v-model="local.denoise.luma"
           label="Background Grain"
           :help="HELP.denoise_luma"
+          :disabled="focusMode"
           @update:model-value="apply('denoise')"
       />
     </div>

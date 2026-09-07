@@ -668,3 +668,285 @@ async fn test_settings_update_with_no_camera_does_not_create_profile() {
         "no camera connected → no profile should be created"
     );
 }
+
+// --- Focus/Finder mode ---------------------------------------------------------
+//
+// The mode is a snapshot-and-restore over seven settings, so what these cover is the
+// restore: the values the observer chose have to survive a toggle, a second toggle,
+// and a write that arrives while the mode is on.
+
+/// Seed the seven managed settings to a mix of on and off, so a restore that blanket-sets
+/// them either way fails rather than passing by luck. Returns nothing — read it back from
+/// `/api/settings`.
+async fn seed_managed_settings(app: &axum::Router) {
+    let (status, _) = post_json(
+        app,
+        "/api/settings",
+        json!({
+            "background_subtraction": true,
+            "sensor_correction": {
+                "hot_pixel_rejection": true,
+                "hot_pixel_sigma": 7.5,
+                "fpn_removal": false,
+                "superpixel_debayer": true,
+            },
+            "denoise": {
+                "chroma": false,
+                "chroma_strength": 0.25,
+                "luma": true,
+                "luma_strength": 0.75,
+                "star_protection": 0.4,
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_focus_mode_disables_the_managed_settings() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+    seed_managed_settings(&app).await;
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["focus_mode"], true);
+    assert_eq!(json["data"]["background_subtraction"], false);
+    assert_eq!(json["data"]["saturation_boost"], false);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], false);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
+    assert_eq!(json["data"]["denoise"]["chroma"], false);
+    assert_eq!(json["data"]["denoise"]["luma"], false);
+    assert_eq!(json["data"]["eyepiece"]["dither"], false);
+}
+
+#[tokio::test]
+async fn test_focus_mode_leaves_unmanaged_settings_alone() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+    seed_managed_settings(&app).await;
+
+    let (_, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(json["data"]["sensor_correction"]["superpixel_debayer"], true);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_sigma"], 7.5);
+    assert_eq!(json["data"]["denoise"]["chroma_strength"], 0.25);
+    assert_eq!(json["data"]["denoise"]["star_protection"], 0.4);
+}
+
+#[tokio::test]
+async fn test_focus_mode_round_trip_restores_the_managed_settings() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+    seed_managed_settings(&app).await;
+
+    let (_, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["focus_mode"], false);
+    assert_eq!(json["data"]["background_subtraction"], true);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
+    assert_eq!(json["data"]["denoise"]["chroma"], false);
+    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["eyepiece"]["dither"], true);
+}
+
+/// The one that destroys settings if it regresses: a second enter must not snapshot the
+/// already-forced values over the observer's real ones.
+#[tokio::test]
+async fn test_focus_mode_enabled_twice_still_restores_the_originals() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+    seed_managed_settings(&app).await;
+
+    for _ in 0..3 {
+        let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (_, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
+
+    assert_eq!(json["data"]["background_subtraction"], true);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
+    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["eyepiece"]["dither"], true);
+}
+
+#[tokio::test]
+async fn test_focus_mode_wins_over_a_managed_setting_in_the_same_request() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (_, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "focus_mode": true, "background_subtraction": true }),
+    )
+    .await;
+
+    assert_eq!(json["data"]["focus_mode"], true);
+    assert_eq!(json["data"]["background_subtraction"], false);
+
+    // ...and the value sent alongside it is what the snapshot restores.
+    let (_, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
+    assert_eq!(json["data"]["background_subtraction"], true);
+}
+
+/// A stale client writing a managed setting behind the mode's back must not have its write
+/// silently reverted by the next toggle, and must not leak the forced value into the
+/// restore either.
+#[tokio::test]
+async fn test_write_while_focus_mode_is_on_is_absorbed_into_the_snapshot() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+    seed_managed_settings(&app).await;
+    let (_, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    let (_, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "denoise": {
+                "chroma": true,
+                "chroma_strength": 0.9,
+                "luma": false,
+                "luma_strength": 0.75,
+                "star_protection": 0.4,
+            },
+        }),
+    )
+    .await;
+    assert_eq!(
+        json["data"]["denoise"]["chroma"], false,
+        "the mode must re-force it off"
+    );
+    assert_eq!(
+        json["data"]["denoise"]["chroma_strength"], 0.9,
+        "an unmanaged sibling is not the mode's business"
+    );
+
+    let (_, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
+    assert_eq!(
+        json["data"]["denoise"]["chroma"], true,
+        "the write must survive as the restored value"
+    );
+    assert_eq!(json["data"]["denoise"]["chroma_strength"], 0.9);
+}
+
+#[tokio::test]
+async fn test_focus_mode_is_off_by_default() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+
+    let (_, json) = get_json(&app, "/api/settings").await;
+
+    assert_eq!(json["data"]["focus_mode"], false);
+    assert!(state.settings.read().await.focus_mode_snapshot.is_none());
+}
+
+/// Focus/Finder mode drops `hot_pixel_rejection` and `fpn_removal`, which run on the raw
+/// mosaic before demosaic — so the frame the accumulator integrates loses them too. Hot
+/// pixels and row/column banding are exactly the defects averaging cannot remove, so a
+/// stack integrated under the mode can never be cleaned again. Refused, not warned.
+#[tokio::test]
+async fn test_focus_mode_is_refused_while_stacking() {
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(state.clone());
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(json["success"], false);
+    let settings = state.settings.read().await;
+    assert!(!settings.focus_mode);
+    assert!(
+        settings.sensor_correction.hot_pixel_rejection,
+        "the refusal must leave the stack's corrections in place"
+    );
+}
+
+/// The guard is about the *accumulator*, not about the camera being busy. Live view
+/// stacks nothing, and framing is exactly when the mode is wanted.
+#[tokio::test]
+async fn test_focus_mode_is_allowed_during_live_view() {
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(state.clone());
+    let (status, _) = post_json(&app, "/api/settings", json!({ "stacking": false })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["focus_mode"], true);
+}
+
+/// Wanderer resets its stack when the mount moves, but it still integrates between
+/// resets, so it is guarded exactly as continuous stacking is.
+#[tokio::test]
+async fn test_focus_mode_is_refused_in_wanderer_mode() {
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(state.clone());
+    let (status, _) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "stacking": true, "wanderer_mode": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+/// Never trap the observer in the mode: whatever the capture is doing, they can get their
+/// settings back.
+#[tokio::test]
+async fn test_leaving_focus_mode_is_allowed_while_stacking() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+    let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+    assert_eq!(status, StatusCode::OK);
+
+    state.set_capture_state(CaptureState::Capturing).await;
+    let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["focus_mode"], false);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
+}
+
+/// The refusal only guards *entering*. A request that leaves the mode where it is must not
+/// be rejected just because a capture is running.
+#[tokio::test]
+async fn test_an_ordinary_settings_write_is_unaffected_while_stacking() {
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(state);
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "gain": 123 })).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["gain"], 123);
+}
+
+/// The guard keys on "not Idle", not on "Capturing", so the window between Start being
+/// accepted and the first frame arriving is covered too — that is what stops a request
+/// which read `Idle` a moment earlier from landing behind a starting session.
+#[tokio::test]
+async fn test_focus_mode_is_refused_while_a_capture_is_starting() {
+    let state = create_test_state();
+    state.set_capture_state(CaptureState::Starting).await;
+    let app = create_test_router(state.clone());
+
+    let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(!state.settings.read().await.focus_mode);
+}

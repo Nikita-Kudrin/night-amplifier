@@ -8,6 +8,10 @@ where that is.
 
 Find them under **Settings → Noise Reduction**.
 
+Both are among the seven that [Focus/Finder mode](/getting-started#focus-finder-mode)
+holds off while you focus; their switches grey out while it is on and come back to your
+values when you turn it off.
+
 ## They run at the size you view, not the size you capture
 
 Both filters work on the streamed image after it has been reduced to your

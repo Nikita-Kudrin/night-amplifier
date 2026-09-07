@@ -97,6 +97,30 @@ fn bench_preview_pipeline(c: &mut Criterion) {
         )
     });
 
+    // What Focus/Finder mode actually buys, measured against `full` on the same frame.
+    // The mode's whole justification is frame rate, so the claim needs a number rather
+    // than an argument. Only `background_subtraction` and `saturation_boost` of the seven
+    // land in this stage — the CFA pair runs before demosaic (`cfa_benchmark`) and the
+    // denoise pair plus dithering run in the encoders (`denoise_benchmark`,
+    // `encoding_benchmark`) — so this is the preview-stage share of the win, not the
+    // whole of it.
+    let focus_settings = {
+        let mut s = CaptureSettings::default();
+        night_amplifier::server::state::focus_mode::set(&mut s, true);
+        s
+    };
+    group.bench_function(format!("focus_mode_x{}", REPS), |b| {
+        b.iter_batched_ref(
+            || vec![frame.clone(); REPS],
+            |frames| {
+                for f in frames.iter_mut() {
+                    black_box(process_preview_frame(f, &focus_settings).unwrap());
+                }
+            },
+            BatchSize::LargeInput,
+        )
+    });
+
     // The three estimates a cross-frame cache would serve from a previous frame, run
     // against an unmodified frame — which is what the cached values would describe.
     // Read-only, so no clone per sample is needed.

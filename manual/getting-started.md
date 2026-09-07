@@ -52,6 +52,45 @@ What changes once a guide camera is attached:
 The guide camera is only rendered while you are looking at it. With the switch off it
 still exposes and still solves, but nothing is processed or encoded for the browser.
 
+## Focus/Finder mode
+
+Focusing and hunting for a target want frame rate, not a clean picture. The
+**Focus/Finder mode** switch under the capture panel's Color mode trades one for the
+other: it holds off the seven stages that cost time on every frame and buy nothing at a
+focus mask.
+
+- Background Subtraction
+- Shadow Saturation Boost
+- Hot Pixel Rejection
+- Row/Column Pattern Removal
+- Colour Mottle
+- Background Grain
+- Dithering
+
+On an IMX464-sized frame that halves the preview stage — 12.8 ms per frame down to
+6.6 ms — before counting the sensor corrections and the denoisers, which run elsewhere.
+
+Their switches under **Settings** grey out while the mode is on, because the mode
+remembers what each one was set to. Turn it off once you are focused and every one goes
+back to your value — including the ones you had already turned off yourself.
+
+## It is not available while you are stacking
+
+Two of the seven — Hot Pixel Rejection and Row/Column Pattern Removal — are not display
+settings. They run on the raw sensor mosaic, so the frame they clean up is the frame that
+goes into the stack. Turning them off part-way through an integration mixes hot pixels and
+banding into a master that **nothing can clean afterwards**: those defects sit in the same
+place in every frame, which is the whole reason the corrections exist.
+
+So the switch is disabled while you are stacking, and pressing Start while you are focusing
+turns the mode off for you and puts your settings back before the first frame lands. It
+stays available in **Live view**, which accumulates nothing — and switching it off is never
+blocked, whatever the camera is doing.
+
+Superpixel Debayer is deliberately left alone. It is the *cheap* debayer, so forcing it
+either way would work against the frame rate this mode exists to buy — set it to
+whatever suits your sensor and it stays there.
+
 ## If the camera drops out
 
 USB stalls happen — a knocked cable, a hub that browns out, a driver hiccup. When

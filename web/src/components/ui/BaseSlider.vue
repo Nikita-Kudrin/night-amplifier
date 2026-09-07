@@ -22,6 +22,11 @@ const props = defineProps({
     type: Number,
     default: 1,
   },
+  /**
+   * Show a number input beside the slider. It replaces the read-only value in
+   * the label rather than joining it — two copies of the same number a few
+   * pixels apart read as two different settings.
+   */
   showInput: {
     type: Boolean,
     default: false,
@@ -72,7 +77,7 @@ function handleChange(event) {
         <BaseInfoIcon v-if="help" :message="help"/>
         <slot name="label-extra"></slot>
       </span>
-      <span class="current-value">{{ formatValue(modelValue) }}</span>
+      <span v-if="!showInput" class="current-value">{{ formatValue(modelValue) }}</span>
     </label>
     <div class="slider-group">
       <input

@@ -57,6 +57,7 @@ const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
 const wandererMode = ref(DEFAULT_SETTINGS.wanderer_mode)
+const focusMode = ref(DEFAULT_SETTINGS.focus_mode)
 
 const stackingMode = computed(() => {
   if (wandererMode.value) return 'wanderer'
@@ -98,6 +99,9 @@ watch(
         }
         if (newSettings.wanderer_mode !== undefined) {
           wandererMode.value = newSettings.wanderer_mode
+        }
+        if (newSettings.focus_mode !== undefined) {
+          focusMode.value = newSettings.focus_mode
         }
       }
     },
@@ -233,11 +237,11 @@ async function handleStop() {
   })
 }
 
-async function applySetting(settings) {
+async function applySetting(settings, onError = null) {
   await withErrorHandling(async () => {
     await updateSettings(settings)
     await refreshSettings()
-  })
+  }, onError ? {onError} : {})
 }
 
 /** Hardware edits carry the role, so they land on the camera the user selected. */
@@ -249,6 +253,32 @@ const setExposurePreset = (us) => applyHardware({exposure_us: us})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
 const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
+/**
+ * Whether entering Focus/Finder mode would damage a stack already being integrated.
+ *
+ * Two of the seven settings it drops run before demosaic, so the frames the accumulator
+ * integrates lose their hot-pixel and banding corrections — and averaging is exactly what
+ * cannot take those back out. The backend refuses this with a 409; the toggle is disabled
+ * so nobody has to read the error to find out.
+ *
+ * Live view accumulates nothing, so the mode stays available there. Leaving it is never
+ * blocked, hence the `!focusMode` term.
+ */
+const focusModeBlocked = computed(
+    () => !focusMode.value && mainCapturing.value && stackingMode.value !== 'off'
+)
+
+// A pipeline setting, not a hardware one: it goes through `applySetting` rather than
+// `applyHardware` so it never carries a `camera_role`, and stays available while the
+// guide camera is selected — framing is exactly when you want it.
+//
+// On a failed save the ref is put back to what the server still holds: the Settings
+// panel greys its seven toggles off the server value, so an optimistic ref left in place
+// would have the two panels disagreeing about the same setting.
+const applyFocusMode = () =>
+    applySetting({focus_mode: focusMode.value}, () => {
+      focusMode.value = settings?.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
+    })
 
 function applyStackingMode(val) {
   const modes = {
@@ -431,6 +461,21 @@ const HELP = HELP_TEXTS
         </div>
       </div>
     </div>
+
+    <div class="control-group">
+      <div class="control-row focus-mode-controls">
+        <label class="type-label-inline" :class="{ 'text-muted': focusModeBlocked }">
+          Focus/Finder mode
+          <BaseInfoIcon :message="focusModeBlocked ? HELP.focus_mode_while_stacking : HELP.focus_mode"/>
+        </label>
+        <BaseToggle
+            v-model="focusMode"
+            size="small"
+            :disabled="focusModeBlocked"
+            @update:model-value="applyFocusMode"
+        />
+      </div>
+    </div>
     </template>
   </BasePanel>
 </template>
@@ -503,6 +548,12 @@ const HELP = HELP_TEXTS
   margin-bottom: 0.5rem;
 }
 
+/* Without this the slider is a bare flex item and shrinks to fit, leaving the
+   number input stranded well short of the panel's right edge. */
+.slider-control-wrapper {
+  flex: 1;
+  min-width: 0;
+}
 
 .control-row .input-group {
   flex: 1;

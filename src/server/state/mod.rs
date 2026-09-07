@@ -18,6 +18,7 @@ use crate::telemetry::metrics as telemetry_metrics;
 
 mod camera_slot;
 mod capture_mode;
+pub mod focus_mode;
 mod frame_stream;
 mod jpeg_tiers;
 mod session;
@@ -27,6 +28,7 @@ mod types;
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use camera_slot::{CameraOp, CameraSlot, RawSessionResume};
 pub use capture_mode::{CaptureMode, RawFrameSaving};
+pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use jpeg_tiers::{JpegTier, JpegTierCache, StreamKind, TierClientGuard};
 pub use session::{

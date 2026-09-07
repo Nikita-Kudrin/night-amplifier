@@ -275,6 +275,27 @@ merely slowing it. Only a *named, different* camera discards the remembered valu
 boot and disconnect both look it up with no camera, and treating that as a mismatch
 deleted the entry before the session could use it. See the Pro AGENTS.md.
 
+### Focus/Finder mode (`state::focus_mode`)
+
+Forces seven settings off and keeps `focus_mode_snapshot` as the only record of what they
+were. **Entering must be idempotent** — a second `set(.., true)` that re-snapshots captures
+the already-forced `false`s and destroys the observer's values for good. Invariant:
+`focus_mode == focus_mode_snapshot.is_some()`, so drive it through `focus_mode::set`, never
+by assignment, and a persisted flag with no snapshot loads as off. `update_settings` applies
+it *after* every other field so the mode wins over a managed field in the same request;
+with no toggle in the request `reconcile` absorbs a stale client's write into the snapshot
+rather than letting the next toggle silently revert it. `superpixel_debayer` is
+deliberately unmanaged — it is the cheap debayer, so forcing it either way costs frame rate.
+
+**The mode and an accumulating stack are mutually exclusive**, enforced both ways:
+`update_settings` answers 409 to `focus_mode: true` when `conflicts_with_capture` holds, and
+`CaptureService::{start,resume}_capture` leave the mode on the way in. Two of the seven
+(`hot_pixel_rejection`, `fpn_removal`) run pre-demosaic, so `stacking_task` integrates
+whatever they produce and never resets the stack on a `sensor_correction` change — hot
+pixels averaged in cannot be taken out. Live view accumulates nothing and is exempt;
+*leaving* the mode is never refused. Measured win, preview stage only:
+`preview_pipeline/focus_mode_x6` 39.4 ms against `full_x6` 76.8 ms.
+
 ## Push-To gating (`capture::solving`)
 
 A frame is offered on one of two slots. `try_begin_solve` may block for a whole ASTAP

@@ -389,6 +389,151 @@ describe('CaptureControls', () => {
 
             expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', gain: 200})
         })
+
+        // The number input is the value display; the label's read-only copy would be a
+        // second one a few pixels away, which reads as two different settings.
+        it('shows the gain value once, in the number input', async () => {
+            const wrapper = mountCaptureControls({settings: {gain: 46}})
+            await flushPromises()
+
+            const gainGroup = wrapper.find('.slider-control-wrapper')
+            expect(gainGroup.find('input[type="number"].input-sm').element.value).toBe('46')
+            expect(gainGroup.find('.current-value').exists()).toBe(false)
+        })
+    })
+
+    describe('Focus/Finder mode', () => {
+        it('syncs focus_mode value', async () => {
+            const wrapper = mountCaptureControls({settings: {focus_mode: true}})
+            await flushPromises()
+
+            expect(wrapper.find('.focus-mode-controls .toggle').element.checked).toBe(true)
+        })
+
+        it('defaults to off when the server has not sent the field', async () => {
+            const wrapper = mountCaptureControls()
+            await flushPromises()
+
+            expect(wrapper.find('.focus-mode-controls .toggle').element.checked).toBe(false)
+        })
+
+        // A pipeline setting, not a hardware one: a `camera_role` would send it down the
+        // per-camera profile path, where it does not belong.
+        it('calls updateSettings without a camera role when toggled', async () => {
+            const wrapper = mountCaptureControls({settings: {focus_mode: false}})
+            await flushPromises()
+
+            const toggle = wrapper.find('.focus-mode-controls .toggle')
+            await toggle.setValue(true)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({focus_mode: true})
+        })
+
+        it('turns the mode back off', async () => {
+            const wrapper = mountCaptureControls({settings: {focus_mode: true}})
+            await flushPromises()
+
+            const toggle = wrapper.find('.focus-mode-controls .toggle')
+            await toggle.setValue(false)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({focus_mode: false})
+        })
+
+        // The seven settings are greyed in the Settings panel off the *server* value, so
+        // an optimistic local ref left behind by a failed save has the two panels
+        // disagreeing about the same setting.
+        it('puts the toggle back when the save fails', async () => {
+            updateSettings.mockRejectedValue(new Error('Network down'))
+            const provides = createMockProvides({settings: {focus_mode: false}})
+            const wrapper = mount(CaptureControls, {global: {provide: provides}})
+            await flushPromises()
+
+            await wrapper.find('.focus-mode-controls .toggle').setValue(true)
+            await flushPromises()
+
+            expect(wrapper.find('.alert-error').exists()).toBe(true)
+            expect(wrapper.find('.focus-mode-controls .toggle').element.checked).toBe(
+                provides.settings.value.focus_mode,
+            )
+        })
+
+        // Two of the seven run before demosaic, so the frames the accumulator integrates
+        // lose their hot-pixel and banding corrections — and averaging is exactly what
+        // cannot take those back out. The backend answers 409; the toggle never gets there.
+        it('is disabled while a stacking capture runs', async () => {
+            const wrapper = mountCaptureControls({
+                captureState: 'Capturing',
+                settings: {focus_mode: false, stacking: true, wanderer_mode: false},
+            })
+            await flushPromises()
+
+            expect(
+                wrapper.find('.focus-mode-controls .toggle').attributes('disabled'),
+            ).toBeDefined()
+        })
+
+        it('is disabled while a wanderer capture runs', async () => {
+            const wrapper = mountCaptureControls({
+                captureState: 'Capturing',
+                settings: {focus_mode: false, stacking: true, wanderer_mode: true},
+            })
+            await flushPromises()
+
+            expect(
+                wrapper.find('.focus-mode-controls .toggle').attributes('disabled'),
+            ).toBeDefined()
+        })
+
+        // The guard is about the accumulator, not about the camera being busy.
+        it('stays available during a live view capture', async () => {
+            const wrapper = mountCaptureControls({
+                captureState: 'Capturing',
+                settings: {focus_mode: false, stacking: false},
+            })
+            await flushPromises()
+
+            expect(
+                wrapper.find('.focus-mode-controls .toggle').attributes('disabled'),
+            ).toBeUndefined()
+        })
+
+        // Never trap the observer in the mode.
+        it('can always be switched off, even mid-stack', async () => {
+            const wrapper = mountCaptureControls({
+                captureState: 'Capturing',
+                settings: {focus_mode: true, stacking: true},
+            })
+            await flushPromises()
+
+            const toggle = wrapper.find('.focus-mode-controls .toggle')
+            expect(toggle.attributes('disabled')).toBeUndefined()
+
+            await toggle.setValue(false)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({focus_mode: false})
+        })
+
+        // Framing is exactly when the mode is wanted, and the guide camera is what you
+        // frame with — so unlike exposure and gain it is not scoped to the selection.
+        it('stays available while the guide camera is selected', async () => {
+            const wrapper = mountCaptureControls({
+                selectedCameraRole: 'guide',
+                guideCamera: {id: 'cam2', name: 'guide', role: 'guide'},
+                settings: {focus_mode: false},
+            })
+            await flushPromises()
+
+            const toggle = wrapper.find('.focus-mode-controls .toggle')
+            expect(toggle.attributes('disabled')).toBeUndefined()
+
+            await toggle.setValue(true)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({focus_mode: true})
+        })
     })
 
     describe('Color mode Control', () => {
