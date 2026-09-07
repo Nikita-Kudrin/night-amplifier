@@ -562,3 +562,163 @@ async fn the_name_lookup_answers_only_for_connected_cameras() {
     );
     assert_eq!(state.connected_camera_name("mock_missing").await, None);
 }
+
+// ============================================================================
+// Start/Stop follows the selected camera
+// ============================================================================
+//
+// The panel edits whichever camera the list has selected, so the button beside those
+// controls has to act on the same one. Before this, Stop reached only the imaging
+// camera — and a guide camera saving raw frames had no way to be stopped short of
+// disconnecting it.
+
+/// `register_camera` leaves the guide loop marked running, which is what a connected
+/// guide camera looks like: it starts on connect.
+#[tokio::test]
+async fn starting_a_guide_camera_that_is_already_running_is_refused() {
+    let state = create_test_state();
+    register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, body) = post_json(
+        &app,
+        "/api/capture/start",
+        serde_json::json!({"role": "guide"}),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("already running"));
+}
+
+/// Distinct from "no imaging camera is connected": the two answer different requests,
+/// and telling someone who pressed Start on the guide camera about the imaging one
+/// describes a rig they can see is not the one they meant.
+#[tokio::test]
+async fn starting_the_guide_camera_with_none_connected_is_refused() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (status, body) = post_json(
+        &app,
+        "/api/capture/start",
+        serde_json::json!({"role": "guide"}),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("No guide camera is connected"));
+}
+
+/// Naming the imaging camera under the guide role is a client disagreeing with the
+/// server about the rig, not a request to start whichever camera is in the slot.
+#[tokio::test]
+async fn starting_the_guide_role_with_another_cameras_id_is_refused() {
+    let state = create_test_state();
+    register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
+    register_camera(&state, CameraRole::Main, "mock_0", "Imaging").await;
+    state.set_guide_loop_running(false);
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, body) = post_json(
+        &app,
+        "/api/capture/start",
+        serde_json::json!({"role": "guide", "camera_id": "mock_0"}),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Imaging"));
+}
+
+#[tokio::test]
+async fn stopping_the_guide_camera_reports_it_stopping() {
+    let state = create_test_state();
+    register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, body) = post_json(
+        &app,
+        "/api/capture/stop",
+        serde_json::json!({"role": "guide"}),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body["data"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Guide camera stopping"));
+    assert!(!state.guide_loop_running());
+}
+
+#[tokio::test]
+async fn stopping_a_guide_camera_that_is_not_running_says_so() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (status, body) = post_json(
+        &app,
+        "/api/capture/stop",
+        serde_json::json!({"role": "guide"}),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body["data"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("not running"));
+}
+
+/// The two are stopped separately on purpose: a guide camera keeps solving and framing
+/// between capture sessions, so ending a capture must not take it down with it.
+#[tokio::test]
+async fn stopping_the_guide_camera_leaves_the_capture_running() {
+    let state = create_test_state();
+    register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    post_json(
+        &app,
+        "/api/capture/stop",
+        serde_json::json!({"role": "guide"}),
+    )
+    .await;
+
+    assert_eq!(state.capture_state().await, CaptureState::Capturing);
+    assert!(!state.is_cancelled());
+}
+
+/// The other direction, and the shape of every request made before roles reached this
+/// endpoint: no body at all still means the imaging camera.
+#[tokio::test]
+async fn a_stop_with_no_role_stops_the_capture_and_not_the_guide_camera() {
+    let state = create_test_state();
+    register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
+    state.set_capture_state(CaptureState::Capturing).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, body) = post_json(&app, "/api/capture/stop", serde_json::json!({})).await;
+
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body["data"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Capture stopping"));
+    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+    assert!(
+        state.guide_loop_running(),
+        "stopping the capture stopped the guide camera with it"
+    );
+}

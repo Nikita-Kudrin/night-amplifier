@@ -390,11 +390,25 @@ pub struct SimulatorConfigResponse {
 // Request types
 // ============================================================================
 
-/// Start capture request
+/// Body of `POST /api/capture/start`.
+///
+/// `role` says which camera the button was pressed for, mirroring
+/// [`ConnectCameraRequest`]: the panel edits whichever camera is selected in the list,
+/// so Start has to address the same one. Absent means the imaging camera, so a client
+/// that has never heard of roles keeps working.
 #[derive(Debug, Deserialize, Default)]
 pub struct StartCaptureRequest {
     #[serde(default)]
     pub camera_id: Option<String>,
+    #[serde(default)]
+    pub role: Option<CameraRole>,
+}
+
+/// Body of `POST /api/capture/stop`. See [`StartCaptureRequest`] for `role`.
+#[derive(Debug, Deserialize, Default)]
+pub struct StopCaptureRequest {
+    #[serde(default)]
+    pub role: Option<CameraRole>,
 }
 
 /// Update settings request
