@@ -229,6 +229,19 @@ pub async fn connect(
     let (cooler_enabled, target_temp_c, cooler_fast_mode, dew_heater_enabled, dew_heater_power) = {
         let mut settings = state.settings.write().await;
         apply_camera_profile_on_connect(&mut settings, profile_key.clone(), role, &info);
+        // Give the solver a rig key that came from this sensor rather than from the
+        // flat block, which describes whichever camera was configured last. Two
+        // unprofiled cameras otherwise share one key and one remembered FOV — see
+        // `CaptureSettings::ensure_camera_telescope_profile`.
+        if settings.ensure_camera_telescope_profile(&camera_name, &info) {
+            info!(
+                camera_name = %camera_name,
+                role = role.label(),
+                pixel_size_um = info.pixel_size_y_um,
+                sensor = format!("{}x{}", info.max_width, info.max_height),
+                "Seeded a telescope profile from the camera's own sensor"
+            );
+        }
         let profile = settings.profile_for(role);
         (
             profile.cooler_enabled,
