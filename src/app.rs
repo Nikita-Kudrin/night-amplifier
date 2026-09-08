@@ -22,18 +22,36 @@ struct Args {
     indi_host: Option<String>,
     indi_port: Option<u16>,
     span_timings: bool,
+    /// Serve the frontend from this directory instead of the bundle embedded at build
+    /// time. Opt-in: see `Args::parse` for why it is not inferred.
+    static_dir: Option<String>,
 }
 
 impl Args {
     fn parse() -> Self {
-        let mut args = std::env::args().skip(1);
-        let mut port = if std::path::Path::new("Cargo.toml").exists()
+        let default_port = if std::path::Path::new("Cargo.toml").exists()
             || std::path::Path::new("web/index.html").exists()
         {
             9955u16
         } else {
             8844u16
         };
+        Self::parse_from(
+            std::env::args().skip(1),
+            default_port,
+            std::env::var("NIGHT_AMPLIFIER_STATIC_DIR").ok(),
+        )
+    }
+
+    /// The argument logic, with the process environment passed in rather than read, so
+    /// it can be tested without mutating globals shared by every other test.
+    fn parse_from(
+        args: impl Iterator<Item = String>,
+        default_port: u16,
+        env_static_dir: Option<String>,
+    ) -> Self {
+        let mut args = args;
+        let mut port = default_port;
         #[cfg(feature = "telemetry")]
         let mut telemetry = TelemetryConfig::default_enabled();
         #[cfg(feature = "telemetry")]
@@ -41,6 +59,7 @@ impl Args {
         let mut indi_host = None;
         let mut indi_port = None;
         let mut span_timings = false;
+        let mut static_dir = None;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
@@ -58,6 +77,13 @@ impl Args {
                     otlp_endpoint = args.next();
                     if otlp_endpoint.is_none() {
                         eprintln!("Error: --otlp-endpoint requires a value");
+                        std::process::exit(1);
+                    }
+                }
+                "--static-dir" => {
+                    static_dir = args.next();
+                    if static_dir.is_none() {
+                        eprintln!("Error: --static-dir requires a value");
                         std::process::exit(1);
                     }
                 }
@@ -95,6 +121,16 @@ impl Args {
             }
         }
 
+        // Opt-in, and never inferred from the working directory.
+        //
+        // This used to be hardcoded to `web`, which meant that running the binary
+        // anywhere near a checkout served the Vite *source* template — the one that
+        // loads `/src/main.js` and untransformed `.vue` files — in place of the built
+        // bundle, for a frontend that could not start. Nothing depends on it: `npm run
+        // dev` serves the UI from Vite and proxies `/api` and `/ws` here, so the
+        // embedded bundle is the right default for every way the server is actually run.
+        let static_dir = static_dir.or(env_static_dir);
+
         Self {
             port,
             #[cfg(feature = "telemetry")]
@@ -104,6 +140,7 @@ impl Args {
             indi_host,
             indi_port,
             span_timings,
+            static_dir,
         }
     }
 
@@ -138,6 +175,15 @@ impl Args {
         println!();
         println!("  --indi-host HOST    INDI server host (overrides settings)");
         println!("  --indi-port PORT    INDI server port (overrides settings)");
+        println!(
+            "  --static-dir DIR    Serve the frontend from DIR (must contain index.html)"
+        );
+        println!(
+            "                      instead of the bundle embedded at build time."
+        );
+        println!(
+            "                      Also settable via NIGHT_AMPLIFIER_STATIC_DIR."
+        );
     }
 }
 
@@ -258,7 +304,7 @@ pub async fn run(register_plugins: impl FnOnce()) {
 
     let config = ServerConfig::new()
         .with_bind_addr(addr)
-        .with_static_dir(Some("web".to_string()));
+        .with_static_dir(args.static_dir.clone());
 
     info!("Starting server on http://{}", addr);
     info!("API endpoints:");
@@ -291,5 +337,63 @@ pub async fn run(register_plugins: impl FnOnce()) {
     if let Err(e) = server.run().await {
         error!("Server error: {}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+
+    fn parse(argv: &[&str], env_static_dir: Option<&str>) -> Args {
+        Args::parse_from(
+            argv.iter().map(|s| s.to_string()),
+            9955,
+            env_static_dir.map(str::to_string),
+        )
+    }
+
+    /// The regression this flag exists for. `static_dir` was hardcoded to `web`, so a
+    /// binary run from anywhere near a checkout served the Vite *source* template —
+    /// which loads `/src/main.js` and untransformed `.vue` files — instead of the
+    /// embedded bundle, and the frontend never started. Nothing may infer it.
+    #[test]
+    fn the_frontend_is_embedded_unless_asked_otherwise() {
+        assert!(parse(&[], None).static_dir.is_none());
+        assert!(parse(&["8080"], None).static_dir.is_none());
+    }
+
+    #[test]
+    fn static_dir_comes_from_the_flag() {
+        assert_eq!(
+            parse(&["--static-dir", "web/dist"], None).static_dir.as_deref(),
+            Some("web/dist")
+        );
+    }
+
+    #[test]
+    fn static_dir_falls_back_to_the_environment() {
+        assert_eq!(
+            parse(&[], Some("/srv/ui")).static_dir.as_deref(),
+            Some("/srv/ui")
+        );
+    }
+
+    /// An explicit flag outranks an environment variable someone's shell profile set.
+    #[test]
+    fn the_flag_outranks_the_environment() {
+        assert_eq!(
+            parse(&["--static-dir", "web/dist"], Some("/srv/ui"))
+                .static_dir
+                .as_deref(),
+            Some("web/dist")
+        );
+    }
+
+    /// The flag must not swallow a following argument's meaning.
+    #[test]
+    fn static_dir_does_not_disturb_other_arguments() {
+        let args = parse(&["--static-dir", "web/dist", "8080"], None);
+        assert_eq!(args.static_dir.as_deref(), Some("web/dist"));
+        assert_eq!(args.port, 8080);
     }
 }

@@ -499,7 +499,7 @@ fn render_and_publish(
                 match crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
                     &rgb.0, rgb.1, rgb.2, 1,
                 ) {
-                    Ok(encoded) => rt.block_on(stream.set_latest_frame(encoded)),
+                    Ok(encoded) => rt.block_on(stream.set_latest_frame(counter, encoded)),
                     Err(e) => warn!(error = %e, "Guide LZ4 encoding failed"),
                 }
             }

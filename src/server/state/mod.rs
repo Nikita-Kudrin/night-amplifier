@@ -740,8 +740,9 @@ mod tests {
 
         assert!(state.main_stream.get_latest_frame().await.is_none());
 
-        state.main_stream.set_latest_frame(vec![1, 2, 3, 4]).await;
-        let frame = state.main_stream.get_latest_frame().await.unwrap();
+        state.main_stream.set_latest_frame(1, vec![1, 2, 3, 4]).await;
+        let (tag, frame) = state.main_stream.get_latest_frame().await.unwrap();
+        assert_eq!(tag, 1);
         assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
     }
 
@@ -751,7 +752,7 @@ mod tests {
     async fn test_begin_frame_owns_the_counter() {
         let (state, _disk_writer) = AppState::new_for_testing();
 
-        state.main_stream.set_latest_frame(vec![1]).await;
+        state.main_stream.set_latest_frame(1, vec![1]).await;
         assert_eq!(state.main_stream.frame_counter(), 0);
 
         assert_eq!(state.main_stream.begin_frame(), 1);

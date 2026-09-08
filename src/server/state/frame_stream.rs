@@ -9,23 +9,32 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{watch, RwLock};
 
 use super::{JpegTier, JpegTierCache, RenderReadyFrame, StreamKind};
 use crate::telemetry::metrics as telemetry_metrics;
 
 /// Everything singular about one stream of rendered frames.
 pub struct FrameStream {
-    /// Latest rendered frame, LZ4-compressed for the lossless stream.
-    latest_frame: RwLock<Option<bytes::Bytes>>,
+    /// Latest rendered frame, LZ4-compressed for the lossless stream, tagged with the
+    /// counter it was encoded from. The tag is what lets a newly-connected client tell
+    /// this payload apart from one left over by a previous session — see
+    /// [`Self::get_latest_frame`].
+    latest_frame: RwLock<Option<(u64, bytes::Bytes)>>,
     /// Latest frame in linear form, for encoding a tier on demand.
     latest_raw_frame: RwLock<Option<Arc<RenderReadyFrame>>>,
     /// Versions every payload above. Claimed by [`Self::begin_frame`] before the
     /// payloads are stored and published by [`Self::publish_frame`] once they are, so a
     /// woken client never observes a counter whose payloads are still missing.
     frame_counter: AtomicU64,
-    /// Woken when a new frame's payloads are all in place.
-    frame_ready: Arc<Notify>,
+    /// Carries the counter of the most recently published frame.
+    ///
+    /// A `watch` channel rather than a `Notify`: `Notify::notify_waiters` wakes only
+    /// the tasks registered at that instant and stores no permit, so every frame
+    /// published while a handler sat in `socket.send().await` was lost. A watch
+    /// receiver latches the version instead, so a send that lands between two polls
+    /// makes the next `changed()` return immediately.
+    frame_ready: watch::Sender<u64>,
     /// Number of clients per resolution tier. The producer only encodes tiers somebody
     /// is watching — and, for the guide stream, only renders at all when somebody is.
     jpeg_tier_clients: [AtomicUsize; JpegTier::COUNT],
@@ -41,7 +50,7 @@ impl Default for FrameStream {
             latest_frame: RwLock::new(None),
             latest_raw_frame: RwLock::new(None),
             frame_counter: AtomicU64::new(0),
-            frame_ready: Arc::new(Notify::new()),
+            frame_ready: watch::channel(0).0,
             jpeg_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             lz4_tier_clients: std::array::from_fn(|_| AtomicUsize::new(0)),
             jpeg_tier_cache: StdRwLock::new(JpegTierCache::default()),
@@ -50,9 +59,12 @@ impl Default for FrameStream {
 }
 
 impl FrameStream {
-    /// Handle waiters register on to be told a new frame landed.
-    pub fn frame_ready(&self) -> &Arc<Notify> {
-        &self.frame_ready
+    /// Subscribe to frame publications.
+    ///
+    /// The receiver starts with the current counter already marked seen, so the first
+    /// `changed()` resolves on the next frame and not on the backlog.
+    pub fn subscribe_frames(&self) -> watch::Receiver<u64> {
+        self.frame_ready.subscribe()
     }
 
     /// The frame version currently published.
@@ -67,21 +79,30 @@ impl FrameStream {
     }
 
     /// Wake every client waiting on a new frame.
+    ///
+    /// `send_replace` rather than `send`: the latter fails when nothing is subscribed,
+    /// and a stream with no viewers still has to advance the version it publishes.
     pub fn publish_frame(&self) {
         telemetry_metrics::record_frame_published();
-        self.frame_ready.notify_waiters();
+        self.frame_ready.send_replace(self.frame_counter());
     }
 
-    /// Store the LZ4-encoded payload for the lossless stream.
+    /// Store the LZ4-encoded payload for the lossless stream, tagged with the counter
+    /// [`Self::begin_frame`] claimed for it.
     ///
     /// Storing does not advance the frame counter — see [`Self::begin_frame`].
-    pub async fn set_latest_frame(&self, frame_data: Vec<u8>) {
+    pub async fn set_latest_frame(&self, counter: u64, frame_data: Vec<u8>) {
         let frame_size = frame_data.len() as u64;
-        *self.latest_frame.write().await = Some(bytes::Bytes::from(frame_data));
+        *self.latest_frame.write().await = Some((counter, bytes::Bytes::from(frame_data)));
         telemetry_metrics::record_latest_frame_size(frame_size);
     }
 
-    pub async fn get_latest_frame(&self) -> Option<bytes::Bytes> {
+    /// The stored lossless payload and the frame it was encoded from.
+    ///
+    /// The producer writes this only while a lossless client is registered, so it is
+    /// routinely older than [`Self::frame_counter`] — callers must compare the two
+    /// rather than assume the payload is current.
+    pub async fn get_latest_frame(&self) -> Option<(u64, bytes::Bytes)> {
         self.latest_frame.read().await.clone()
     }
 
@@ -157,10 +178,7 @@ impl FrameStream {
             .into_iter()
             .rfind(|&tier| self.tier_client_count(StreamKind::Lossless, tier) > 0);
         match largest {
-            Some(tier) => {
-                let (w, h) = tier.bounding_box();
-                (w.min(cap_w), h.min(cap_h))
-            }
+            Some(tier) => tier.lossless_box(),
             None => (cap_w, cap_h),
         }
     }
@@ -196,5 +214,106 @@ impl FrameStream {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The regression this channel exists for.
+    ///
+    /// `Notify::notify_waiters` wakes only the tasks registered at that instant and
+    /// leaves no permit behind, so every frame published while a handler sat in
+    /// `socket.send().await` was dropped — the client then showed a frame one exposure
+    /// out of date, or, if that was the session's last frame, never caught up at all.
+    /// Here the receiver is deliberately not polled across the publish.
+    #[tokio::test]
+    async fn a_frame_published_while_nobody_polls_is_still_delivered() {
+        let stream = FrameStream::default();
+        let mut frames = stream.subscribe_frames();
+
+        let counter = stream.begin_frame();
+        stream.publish_frame();
+
+        tokio::time::timeout(Duration::from_millis(100), frames.changed())
+            .await
+            .expect("the wakeup was lost")
+            .expect("sender dropped");
+        assert_eq!(*frames.borrow_and_update(), counter);
+    }
+
+    /// Several frames landing between polls collapse into one wakeup carrying the
+    /// newest counter — the client skips to the current frame instead of replaying a
+    /// backlog it has no use for.
+    #[tokio::test]
+    async fn a_burst_between_polls_collapses_to_the_newest_frame() {
+        let stream = FrameStream::default();
+        let mut frames = stream.subscribe_frames();
+
+        for _ in 0..5 {
+            stream.begin_frame();
+            stream.publish_frame();
+        }
+
+        tokio::time::timeout(Duration::from_millis(100), frames.changed())
+            .await
+            .expect("the wakeup was lost")
+            .expect("sender dropped");
+        assert_eq!(*frames.borrow_and_update(), 5);
+
+        // And nothing is left queued behind it.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), frames.changed())
+                .await
+                .is_err()
+        );
+    }
+
+    /// A subscriber starts level with the stream, so it does not immediately wake on a
+    /// frame that was already published before it connected.
+    #[tokio::test]
+    async fn a_new_subscriber_does_not_wake_on_the_backlog() {
+        let stream = FrameStream::default();
+        stream.begin_frame();
+        stream.publish_frame();
+
+        let mut frames = stream.subscribe_frames();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), frames.changed())
+                .await
+                .is_err(),
+            "a connecting client woke on a frame it had already been handed"
+        );
+    }
+
+    /// Publishing with nobody subscribed must not fail — `watch::Sender::send` errors
+    /// when there are no receivers, which would have made an unwatched stream stop
+    /// advancing its published version.
+    #[tokio::test]
+    async fn publishing_with_no_subscribers_still_advances_the_version() {
+        let stream = FrameStream::default();
+        stream.begin_frame();
+        stream.publish_frame();
+
+        let mut frames = stream.subscribe_frames();
+        assert_eq!(*frames.borrow_and_update(), 1);
+    }
+
+    /// The payload tag is what tells a connecting client whether the stored frame
+    /// belongs to the counter it just read, rather than to a previous session.
+    #[tokio::test]
+    async fn the_stored_payload_carries_the_counter_it_was_encoded_from() {
+        let stream = FrameStream::default();
+        let counter = stream.begin_frame();
+        stream.set_latest_frame(counter, vec![1, 2, 3]).await;
+
+        // A later frame the producer skipped, because nobody was watching losslessly.
+        stream.begin_frame();
+
+        let (tag, _) = stream.get_latest_frame().await.unwrap();
+        assert_eq!(tag, counter);
+        assert!(tag < stream.frame_counter());
     }
 }

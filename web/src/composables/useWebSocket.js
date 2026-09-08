@@ -14,7 +14,7 @@ export function useWebSocket(path, options = {}) {
         autoConnect = true,
         reconnect = true,
         reconnectInterval = WS_RECONNECT.interval,
-        maxReconnectAttempts = WS_RECONNECT.maxAttempts,
+        maxReconnectInterval = WS_RECONNECT.maxInterval,
         onMessage = null,
         onOpen = null,
         onClose = null,
@@ -51,31 +51,42 @@ export function useWebSocket(path, options = {}) {
         error.value = null
 
         try {
-            ws = new WebSocket(getUrl())
+            // Held locally as well as in `ws` so every handler below can tell whether it
+            // still speaks for the current connection. Without that, the socket closed by
+            // `disconnect()` — or by the live view swapping camera sources — fires
+            // `onclose` after its replacement is already open, and schedules a reconnect
+            // that opens a second socket nobody asked for. Harmless while retries were
+            // capped at ten; not once they are unbounded.
+            const socket = new WebSocket(getUrl())
+            ws = socket
 
-            ws.onopen = () => {
+            socket.onopen = () => {
+                if (ws !== socket) return
                 connected.value = true
                 reconnectAttempts.value = 0
                 startPing()
                 onOpen?.()
             }
 
-            ws.onclose = (event) => {
+            socket.onclose = (event) => {
+                if (ws !== socket) return
                 connected.value = false
                 stopPing()
                 onClose?.(event)
 
-                if (reconnect && reconnectAttempts.value < maxReconnectAttempts) {
+                if (reconnect) {
                     scheduleReconnect()
                 }
             }
 
-            ws.onerror = (event) => {
+            socket.onerror = (event) => {
+                if (ws !== socket) return
                 error.value = 'WebSocket error'
                 onError?.(event)
             }
 
-            ws.onmessage = (event) => {
+            socket.onmessage = (event) => {
+                if (ws !== socket) return
                 if (event.data === 'pong') {
                     return // Ignore ping responses
                 }
@@ -97,8 +108,11 @@ export function useWebSocket(path, options = {}) {
         stopPing()
 
         if (ws) {
-            ws.close()
+            const socket = ws
+            // Cleared before closing, so the socket's own `onclose` sees itself
+            // superseded and does not schedule a reconnect against a deliberate close.
             ws = null
+            socket.close()
         }
 
         connected.value = false
@@ -121,12 +135,27 @@ export function useWebSocket(path, options = {}) {
     }
 
     /**
-     * Schedule a reconnection attempt
+     * Delay before retry `attempt` (1-based): doubles from `reconnectInterval` up to a
+     * `maxReconnectInterval` ceiling.
+     */
+    function backoffDelay(attempt) {
+        return Math.min(reconnectInterval * 2 ** (attempt - 1), maxReconnectInterval)
+    }
+
+    /**
+     * Schedule a reconnection attempt. Never gives up.
+     *
+     * The attempt count used to be capped, which meant a client that could not reach the
+     * server for thirty seconds stayed dead until someone reloaded the page. On the
+     * kiosk display that runs `/eyepiece_quality` there is no keyboard to reload with, so
+     * a restarted server left a black screen at the telescope for the rest of the night.
+     * The backoff ceiling, not a cap, is what keeps a server that is down until morning
+     * from being polled every second.
      */
     function scheduleReconnect() {
         clearTimeout(reconnectTimer)
         reconnectAttempts.value++
-        reconnectTimer = setTimeout(connect, reconnectInterval)
+        reconnectTimer = setTimeout(connect, backoffDelay(reconnectAttempts.value))
     }
 
     /**
