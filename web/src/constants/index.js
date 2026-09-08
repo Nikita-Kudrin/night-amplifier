@@ -200,8 +200,12 @@ export const CAPTURE_STATES = {
 
 // WebSocket reconnection settings
 export const WS_RECONNECT = {
-    interval: 3000,
-    maxAttempts: 10,
+    // Base of an exponential backoff that doubles to `maxInterval` and then retries at
+    // that rate forever — see `scheduleReconnect`. Starting at 1 s rather than the old
+    // flat 3 s gets the common case (the server restarting under a kiosk display) back
+    // on screen faster, while the ceiling keeps a long outage cheap.
+    interval: 1000,
+    maxInterval: 30000,
     pingInterval: 30000,
 }
 

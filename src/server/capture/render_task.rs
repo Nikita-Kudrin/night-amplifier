@@ -165,7 +165,7 @@ pub fn run_render_task(
                         chunk_count,
                     ) {
                         Ok(encoded_data) => {
-                            rt.block_on(state.main_stream.set_latest_frame(encoded_data))
+                            rt.block_on(state.main_stream.set_latest_frame(counter, encoded_data))
                         }
                         Err(e) => rt.block_on(
                             state.frame_rejected(format!("RGB8+LZ4 encoding failed: {}", e)),
@@ -888,7 +888,8 @@ mod tests {
             .main_stream
             .get_latest_frame()
             .await
-            .expect("render task published no lossless payload");
+            .expect("render task published no lossless payload")
+            .1;
         lz4_payload_dimensions(&payload)
     }
 
@@ -951,7 +952,7 @@ mod tests {
             .await
             .unwrap();
 
-        let payload = state.main_stream.get_latest_frame().await.expect("no payload");
+        let (_, payload) = state.main_stream.get_latest_frame().await.expect("no payload");
         assert_eq!(lz4_payload_dimensions(&payload), (2160, 2160));
     }
 
@@ -993,7 +994,7 @@ mod tests {
             .await
             .unwrap();
 
-        let payload = state.main_stream.get_latest_frame().await.expect("no payload");
+        let (_, payload) = state.main_stream.get_latest_frame().await.expect("no payload");
         let (w, h) = lz4_payload_dimensions(&payload);
         assert!(
             w < IMX464.0 as u32 && h < IMX464.1 as u32,

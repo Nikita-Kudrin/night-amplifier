@@ -31,6 +31,32 @@ big enough that only one runs at a time: if somebody on another device is alread
 saving one, the button keeps spinning and retries for up to fifteen seconds before
 telling you the server is busy.
 
+## Running it as a dedicated display
+
+A tablet or a small panel left on `/eyepiece_quality` all night needs nothing from
+you once it is up:
+
+- The view **reconnects on its own, indefinitely**, backing off from one second to
+  thirty. Restarting Night Amplifier mid-session no longer leaves a black screen
+  that only a page reload can clear — which matters when the display has no keyboard.
+- It shows the **last rendered frame the moment it connects**, rather than waiting
+  for the next exposure. At 60-second subs that used to be a minute of black, and a
+  display opened after capture had stopped stayed black indefinitely.
+
+Launch it in kiosk mode from your startup script, waiting for the server first —
+Chromium will not retry a page that failed to load:
+
+```bash
+until curl -sf -o /dev/null http://localhost:8080/; do sleep 0.5; done
+chromium --kiosk 'http://localhost:8080/eyepiece_quality' \
+    --noerrdialogs --disable-infobars --no-first-run \
+    --ozone-platform-hint=auto --password-store=basic
+```
+
+Upgrading the binary does not need the browser cache cleared. The interface is
+served with validators, so Chromium re-checks `index.html` on every load and reuses
+the fingerprinted bundle only while it is still the current one.
+
 ## Black level
 
 How dark the background sky is pushed. Raising it darkens the sky and lifts the

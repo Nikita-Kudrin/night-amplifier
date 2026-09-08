@@ -51,7 +51,7 @@ use axum::{
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
 /// Server configuration
@@ -176,16 +176,33 @@ impl Server {
 
         // Serve static files: prefer filesystem (for development), fall back
         // to embedded assets (for distribution).
-        let app = if let Some(ref static_dir) = self.config.static_dir {
-            let index_path = std::path::Path::new(static_dir).join("index.html");
+        let disk_index = self.config.static_dir.as_ref().and_then(|dir| {
+            let index_path = std::path::Path::new(dir).join("index.html");
             if index_path.exists() {
-                let serve_dir = ServeDir::new(static_dir).fallback(ServeFile::new(index_path));
-                app.fallback_service(serve_dir)
-            } else {
-                app.fallback(embedded_assets::serve_embedded)
+                info!(directory = %dir, "Serving the frontend from disk");
+                return Some((dir.clone(), index_path));
             }
-        } else {
-            app.fallback(embedded_assets::serve_embedded)
+            // Loud, because the request was explicit: someone passed --static-dir and
+            // would otherwise be served the embedded bundle while believing they were
+            // editing the served one.
+            warn!(
+                directory = %dir,
+                "--static-dir has no index.html; serving the embedded frontend instead"
+            );
+            None
+        });
+
+        let app = match disk_index {
+            Some((static_dir, index_path)) => {
+                // Not `ServeFile::new(index_path)`: that answers a missing
+                // `/assets/*.js` with HTML at status 200, which Chromium's strict MIME
+                // check turns into a silently blank page. See `serve_disk_spa_fallback`.
+                let spa = axum::routing::any(move |uri| {
+                    embedded_assets::serve_disk_spa_fallback(uri, index_path.clone())
+                });
+                app.fallback_service(ServeDir::new(static_dir).fallback(spa))
+            }
+            None => app.fallback(embedded_assets::serve_embedded),
         };
 
         app.with_state(Arc::clone(&self.state))

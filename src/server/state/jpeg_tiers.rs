@@ -87,6 +87,18 @@ impl JpegTier {
         }
     }
 
+    /// Bounding box the *lossless* stream encodes this tier into.
+    ///
+    /// `Original` is unbounded for JPEG but capped here: the producer has always run the
+    /// LZ4 path through [`JPEG_MAX_BOUNDING_BOX`], and a client primed at the raw
+    /// `bounding_box` would be handed a native-resolution frame the stream would never
+    /// send it again.
+    pub fn lossless_box(self) -> (u32, u32) {
+        let (cap_w, cap_h) = crate::server::encoding::JPEG_MAX_BOUNDING_BOX;
+        let (w, h) = self.bounding_box();
+        (w.min(cap_w), h.min(cap_h))
+    }
+
     /// Smallest tier that can serve a viewport, selected by its shorter edge.
     ///
     /// Frames are always fitted to the viewport with their aspect ratio intact,

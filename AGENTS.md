@@ -96,6 +96,7 @@ cargo bench --bench <name>                                          # benchmarks
 cargo bench --bench <name> -- --noplot                              # ~4x faster wall clock: without gnuplot installed, criterion's plotters fallback dominates the run (debayer_benchmark: 95 s -> 22 s) while the measurements are identical. Prefer this unless you want the HTML report.
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
+cargo run --release -- --static-dir web/dist                        # serve the frontend from disk instead of the bundle embedded at build time (or NIGHT_AMPLIFIER_STATIC_DIR). Opt-in: the default is always the embedded bundle, so a binary run from a checkout cannot pick up `web/`'s Vite source template by accident.
 
 # Performance investigation
 cargo run --release -- --span-timings                               # log per-stage durations on span close

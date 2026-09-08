@@ -292,10 +292,15 @@ async fn test_latest_frame_storage() {
 
     // Store a frame
     let frame_data = vec![1, 2, 3, 4, 5];
-    state.main_stream.set_latest_frame(frame_data.clone()).await;
+    let counter = state.main_stream.begin_frame();
+    state
+        .main_stream
+        .set_latest_frame(counter, frame_data.clone())
+        .await;
 
-    // Retrieve frame
-    let retrieved = state.main_stream.get_latest_frame().await.unwrap();
+    // Retrieve frame, tagged with the counter it was encoded from
+    let (tag, retrieved) = state.main_stream.get_latest_frame().await.unwrap();
+    assert_eq!(tag, counter);
     assert_eq!(retrieved.as_ref(), &frame_data);
 }
 
@@ -303,10 +308,11 @@ async fn test_latest_frame_storage() {
 async fn test_latest_frame_overwrites_previous() {
     let state = create_test_state();
 
-    state.main_stream.set_latest_frame(vec![1, 2, 3]).await;
-    state.main_stream.set_latest_frame(vec![4, 5, 6]).await;
+    state.main_stream.set_latest_frame(1, vec![1, 2, 3]).await;
+    state.main_stream.set_latest_frame(2, vec![4, 5, 6]).await;
 
-    let retrieved = state.main_stream.get_latest_frame().await.unwrap();
+    let (tag, retrieved) = state.main_stream.get_latest_frame().await.unwrap();
+    assert_eq!(tag, 2);
     assert_eq!(retrieved.as_ref(), &[4, 5, 6]);
 }
 
@@ -318,16 +324,16 @@ async fn test_frame_counter_increments() {
         .main_stream
         .frame_counter();
 
-    state.main_stream.begin_frame();
-    state.main_stream.set_latest_frame(vec![1]).await;
+    let counter = state.main_stream.begin_frame();
+    state.main_stream.set_latest_frame(counter, vec![1]).await;
     state.main_stream.publish_frame();
     let after_first = state
         .main_stream
         .frame_counter();
     assert_eq!(after_first, initial + 1);
 
-    state.main_stream.begin_frame();
-    state.main_stream.set_latest_frame(vec![2]).await;
+    let counter = state.main_stream.begin_frame();
+    state.main_stream.set_latest_frame(counter, vec![2]).await;
     state.main_stream.publish_frame();
     let after_second = state
         .main_stream

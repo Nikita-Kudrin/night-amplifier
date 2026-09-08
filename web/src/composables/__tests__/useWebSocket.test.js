@@ -144,19 +144,79 @@ describe('useWebSocket', () => {
             expect(MockWebSocket.instances).toHaveLength(1)
         })
 
-        it('stops reconnecting after max attempts', () => {
+        // The kiosk display has no keyboard to reload with, so giving up is the same as
+        // staying black for the rest of the night.
+        it('keeps reconnecting indefinitely', () => {
             useWebSocket('/ws/test', {
                 reconnect: true,
                 reconnectInterval: 100,
-                maxReconnectAttempts: 3,
+                maxReconnectInterval: 400,
             })
 
-            for (let i = 0; i < 4; i++) {
+            // Well past the old ten-attempt cap.
+            for (let i = 0; i < 20; i++) {
                 MockWebSocket.instances[i].simulateClose()
-                vi.advanceTimersByTime(100)
+                vi.advanceTimersByTime(400)
             }
 
-            expect(MockWebSocket.instances).toHaveLength(4)
+            expect(MockWebSocket.instances).toHaveLength(21)
+        })
+
+        it('backs off exponentially up to the ceiling', () => {
+            useWebSocket('/ws/test', {
+                reconnect: true,
+                reconnectInterval: 100,
+                maxReconnectInterval: 400,
+            })
+
+            // 100, 200, 400, then 400 forever. Each step asserts the socket has *not*
+            // appeared one tick early, so a flat interval would fail here.
+            for (const delay of [100, 200, 400, 400]) {
+                const before = MockWebSocket.instances.length
+                MockWebSocket.instances[before - 1].simulateClose()
+
+                vi.advanceTimersByTime(delay - 1)
+                expect(MockWebSocket.instances).toHaveLength(before)
+
+                vi.advanceTimersByTime(1)
+                expect(MockWebSocket.instances).toHaveLength(before + 1)
+            }
+        })
+
+        it('does not reconnect a socket closed by disconnect()', () => {
+            const {disconnect} = useWebSocket('/ws/test', {
+                reconnect: true,
+                reconnectInterval: 100,
+            })
+
+            getWebSocket().simulateOpen()
+            disconnect()
+            // The browser fires onclose after close(); the mock has to be told to.
+            MockWebSocket.instances[0].simulateClose()
+            vi.advanceTimersByTime(5000)
+
+            expect(MockWebSocket.instances).toHaveLength(1)
+        })
+
+        it('ignores a superseded socket closing after its replacement opened', async () => {
+            const {connected, disconnect, connect} = useWebSocket('/ws/test', {
+                reconnect: true,
+                reconnectInterval: 100,
+            })
+
+            getWebSocket().simulateOpen()
+            disconnect()
+            connect()
+            MockWebSocket.instances[1].simulateOpen()
+            await nextTick()
+
+            // The old socket's close event arrives late, as it does in a real browser.
+            MockWebSocket.instances[0].simulateClose()
+            await nextTick()
+            vi.advanceTimersByTime(5000)
+
+            expect(connected.value).toBe(true)
+            expect(MockWebSocket.instances).toHaveLength(2)
         })
 
         it('resets reconnect attempts on successful connection', async () => {
