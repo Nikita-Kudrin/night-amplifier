@@ -194,6 +194,13 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
   bodies of one model cannot overwrite each other. `apply_camera_profile_on_connect` clamps exposure,
   gain and binning to what the camera advertises on *both* paths — an out-of-range one is what
   `CaptureConfig::validate` rejects, and a rejected config stops the camera capturing at all.
+- **Telescope profiles** (`camera_telescope_profiles`, keyed by camera *name*) are what
+  `solver_telescope` hands Push-To, and they key its per-rig FOV cache. A connect seeds one from
+  the sensor the camera reports (`ensure_camera_telescope_profile`) — sensor fields only, focal
+  length carried over just when the flat block already describes that sensor. Without it an
+  unprofiled camera falls back to the flat block, so two bodies share one rig key and one
+  remembered FOV: 2026-09-07 gave the guide rig the main camera's 0.52° for a 1.45° field and
+  Push-To returned no solve for 19 minutes. Never overwrites a profile the equipment UI wrote.
 - **`cooler_fast_mode`**: bypasses the ramp; UI shows a persistent warning while on.
 - **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()` (DeepSky/Comet
   → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`. Main role

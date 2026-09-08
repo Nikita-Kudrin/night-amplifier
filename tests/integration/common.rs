@@ -359,6 +359,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "130mm-imx464-ring-nebulae-png",
         "https://drive.usercontent.google.com/download?id=1qeZJ71NxXdPIuUa3U6SNn_6ZMH6CftF3&export=download&confirm=t",
     ),
+    (
+        "176mm-imx464-m101-fits",
+        "https://drive.usercontent.google.com/download?id=1R4Tjcj5Ztkp4JSnzag2oXsq29ftt98VP&export=download&confirm=t",
+    ),
+    (
+        "176mm-imx464-delphinus-fits",
+        "https://drive.usercontent.google.com/download?id=1fCEHKLGFsLNasuO4ebUqoIDcGwx882PU&export=download&confirm=t",
+    ),
 ];
 
 /// Downloads and extracts test fixture datasets from Google Drive.
@@ -600,6 +608,18 @@ async fn download_with_progress(
         })?;
         _downloaded += chunk.len() as u64;
     }
+
+    // `tokio::fs::File` hands writes to a background blocking task, and dropping it
+    // does not wait for them. Without this the caller can open the file and read a
+    // short prefix — which surfaces as "Could not find EOCD" on an archive that is
+    // perfectly valid a moment later, and retrying cannot help because the next
+    // attempt loses the same race. `shutdown` flushes and awaits the pending op.
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush {}: {}", dest.display(), e))?;
+    file.shutdown()
+        .await
+        .map_err(|e| format!("Failed to close {}: {}", dest.display(), e))?;
 
     Ok(())
 }

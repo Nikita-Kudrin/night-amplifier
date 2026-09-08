@@ -729,6 +729,65 @@ impl CaptureSettings {
             .cloned()
             .unwrap_or_else(|| self.telescope.clone())
     }
+
+    /// Give a newly connected camera a telescope profile of its own, from what the
+    /// camera itself reports. Returns whether one was written.
+    ///
+    /// Without this, `solver_telescope` answers for an unprofiled camera with the flat
+    /// block — which describes whichever camera the user last configured. Two cameras
+    /// then produce the same Push-To rig key and share one remembered field of view.
+    /// On 2026-09-07 that handed the guide camera the main camera's 0.5152 deg for a
+    /// rig imaging 1.4516 deg, and a 2.8x-wrong FOV *fails* a plate solve rather than
+    /// slowing it: 19 minutes with no solve at all, on frames that solve in 0.1 s.
+    ///
+    /// Only the sensor is seeded, because only the sensor is something the camera can
+    /// state. Focal length and Barlow are carried over from the flat block just when
+    /// that block is already describing this sensor — otherwise it belongs to the other
+    /// camera and would attach one scope's focal length to the other's body.
+    ///
+    /// Never overwrites an existing profile: the equipment UI's values are the user's,
+    /// and this is only filling in a camera they have not configured.
+    ///
+    /// A camera that reports no pixel size (the simulator reports zero) is left alone —
+    /// there is nothing to tell it apart with, and `identifies_optics` already treats
+    /// that key as a wildcard rather than an identity.
+    pub fn ensure_camera_telescope_profile(
+        &mut self,
+        camera_name: &str,
+        info: &crate::camera::CameraInfo,
+    ) -> bool {
+        if self.camera_telescope_profiles.contains_key(camera_name) {
+            return false;
+        }
+        let positive = |v: f64| (v > 0.0).then_some(v as f32);
+        let Some(pixel_size_y_um) = positive(info.pixel_size_y_um) else {
+            return false;
+        };
+
+        // Two bodies of the same model in the two roles still land on one key: the
+        // sensor cannot tell them apart, and only a focal length the user enters can.
+        let same_sensor = self
+            .telescope
+            .pixel_size_y_um
+            .is_some_and(|py| (py - pixel_size_y_um).abs() < 1e-4)
+            && self.telescope.sensor_height_px == Some(info.max_height);
+
+        self.camera_telescope_profiles.insert(
+            camera_name.to_string(),
+            TelescopeSettings {
+                focal_length_mm: same_sensor.then_some(self.telescope.focal_length_mm).flatten(),
+                pixel_size_x_um: positive(info.pixel_size_x_um),
+                pixel_size_y_um: Some(pixel_size_y_um),
+                sensor_width_px: Some(info.max_width),
+                sensor_height_px: Some(info.max_height),
+                barlow_coeff: same_sensor
+                    .then_some(self.telescope.barlow_coeff)
+                    .flatten()
+                    .or(Some(1.0)),
+            },
+        );
+        true
+    }
 }
 
 #[cfg(test)]
@@ -934,5 +993,195 @@ mod tests {
         };
         let config = settings.to_capture_config();
         assert_eq!(config.sensor_mode, Some(DualSamplingMode::LowReadoutNoise));
+    }
+
+    // ---- the fallback that put two cameras on one Push-To rig key -------------------
+    //
+    // Reported 2026-09-07. A guide camera (Neptune-C II, 2.9um, 2712x1538, 1.4516 deg)
+    // and a main camera (Ares-C PRO on 1250mm, 0.5152 deg) were both connected. Only
+    // one had a telescope profile, so `solver_telescope` answered with the flat block
+    // for the other, and the solver's per-rig FOV cache — keyed on exactly these
+    // fields — held one entry for both. The guide camera was then handed 0.5152 deg
+    // and returned no plate solve at all for the next 19 minutes.
+
+    fn guide_optics() -> TelescopeSettings {
+        TelescopeSettings {
+            focal_length_mm: None,
+            pixel_size_x_um: Some(2.9),
+            pixel_size_y_um: Some(2.9),
+            sensor_width_px: Some(2712),
+            sensor_height_px: Some(1538),
+            barlow_coeff: Some(1.0),
+        }
+    }
+
+    fn main_optics() -> TelescopeSettings {
+        TelescopeSettings {
+            focal_length_mm: Some(1250.0),
+            pixel_size_x_um: Some(3.76),
+            pixel_size_y_um: Some(3.76),
+            sensor_width_px: Some(3008),
+            sensor_height_px: Some(3008),
+            barlow_coeff: Some(1.0),
+        }
+    }
+
+    #[test]
+    fn a_camera_without_a_profile_is_given_the_other_cameras_optics() {
+        // The fallback itself is deliberate and unchanged — a single-camera user with
+        // only the flat block filled in must still get their optics. It is only unsafe
+        // while a *second* camera can reach it, which is what
+        // `ensure_camera_telescope_profile` prevents at connect.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+        settings
+            .camera_telescope_profiles
+            .insert("Ares-C PRO".to_string(), main_optics());
+
+        assert_eq!(
+            settings.solver_telescope(Some("Neptune-C II")),
+            main_optics(),
+            "the guide camera is described by the main camera's scope and sensor"
+        );
+    }
+
+    #[test]
+    fn two_cameras_without_profiles_are_indistinguishable_to_the_solver() {
+        // The state the FOV cache cannot survive: both cameras answer with the same
+        // optics, so both key to the same rig and share one remembered FOV. Reaching
+        // it now requires a camera that reports no sensor at all — see
+        // `seeding_gives_two_unprofiled_cameras_distinct_optics`.
+        let settings = CaptureSettings {
+            telescope: guide_optics(),
+            ..CaptureSettings::default()
+        };
+
+        assert_eq!(
+            settings.solver_telescope(Some("Neptune-C II")),
+            settings.solver_telescope(Some("Ares-C PRO")),
+        );
+    }
+
+    #[test]
+    fn a_profiled_camera_is_described_by_its_own_optics() {
+        // What the map is for, and the only case that keys the two rigs apart.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+        settings
+            .camera_telescope_profiles
+            .insert("Neptune-C II".to_string(), guide_optics());
+
+        assert_eq!(settings.solver_telescope(Some("Neptune-C II")), guide_optics());
+        assert_eq!(settings.solver_telescope(Some("Ares-C PRO")), main_optics());
+    }
+
+    // ---- seeding a rig identity from the sensor the camera reports -----------------
+
+    fn camera(name: &str, pixel_um: f64, width: u32, height: u32) -> crate::camera::CameraInfo {
+        crate::camera::CameraInfo {
+            name: name.to_string(),
+            max_width: width,
+            max_height: height,
+            pixel_size_x_um: pixel_um,
+            pixel_size_y_um: pixel_um,
+            ..Default::default()
+        }
+    }
+
+    /// The two bodies of the 2026-09-07 session.
+    fn neptune() -> crate::camera::CameraInfo {
+        camera("Neptune-C II", 2.9, 2712, 1538)
+    }
+
+    fn ares() -> crate::camera::CameraInfo {
+        camera("Ares-C PRO", 3.76, 3008, 3008)
+    }
+
+    #[test]
+    fn seeding_gives_two_unprofiled_cameras_distinct_optics() {
+        // The fix: connect both bodies against a flat block describing one of them,
+        // and they no longer answer with the same sensor — so they no longer share a
+        // Push-To rig key, or the FOV filed under it.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+
+        assert!(settings.ensure_camera_telescope_profile("Ares-C PRO", &ares()));
+        assert!(settings.ensure_camera_telescope_profile("Neptune-C II", &neptune()));
+
+        let guide = settings.solver_telescope(Some("Neptune-C II"));
+        let main = settings.solver_telescope(Some("Ares-C PRO"));
+        assert_ne!(guide, main);
+        assert_eq!(guide.pixel_size_y_um, Some(2.9));
+        assert_eq!(guide.sensor_height_px, Some(1538));
+        assert_eq!(main.pixel_size_y_um, Some(3.76));
+        assert_eq!(main.sensor_height_px, Some(3008));
+    }
+
+    #[test]
+    fn seeding_keeps_the_focal_length_for_the_camera_the_flat_block_describes() {
+        // The main camera's own scope is in the flat block, so carrying it over is
+        // correct — dropping it would cost that camera its configured FOV.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+        assert!(settings.ensure_camera_telescope_profile("Ares-C PRO", &ares()));
+
+        assert_eq!(
+            settings.solver_telescope(Some("Ares-C PRO")).focal_length_mm,
+            Some(1250.0)
+        );
+    }
+
+    #[test]
+    fn seeding_withholds_a_focal_length_that_belongs_to_the_other_camera() {
+        // 1250 mm is the main scope. Attaching it to the guide body would compute a
+        // 0.20 deg field for one that measures 1.45 deg — the same class of error the
+        // whole change exists to stop, arriving by a different route.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+        assert!(settings.ensure_camera_telescope_profile("Neptune-C II", &neptune()));
+
+        let guide = settings.solver_telescope(Some("Neptune-C II"));
+        assert_eq!(guide.focal_length_mm, None);
+        assert_eq!(guide.barlow_coeff, Some(1.0));
+    }
+
+    #[test]
+    fn seeding_never_overwrites_what_the_user_configured() {
+        // The equipment UI owns this map. A connect fills a gap in it, nothing more.
+        let mut settings = CaptureSettings::default();
+        let configured = TelescopeSettings {
+            focal_length_mm: Some(176.0),
+            ..guide_optics()
+        };
+        settings
+            .camera_telescope_profiles
+            .insert("Neptune-C II".to_string(), configured.clone());
+
+        assert!(!settings.ensure_camera_telescope_profile("Neptune-C II", &neptune()));
+        assert_eq!(settings.solver_telescope(Some("Neptune-C II")), configured);
+    }
+
+    #[test]
+    fn a_camera_that_reports_no_pixel_size_is_left_to_the_fallback() {
+        // The simulator advertises zero. Seeding a profile from that would file a
+        // camera under a sensor size of nothing, which is worse than not seeding.
+        let mut settings = CaptureSettings {
+            telescope: main_optics(),
+            ..CaptureSettings::default()
+        };
+
+        assert!(!settings.ensure_camera_telescope_profile("Simulator", &camera("Simulator", 0.0, 2712, 1538)));
+        assert!(settings.camera_telescope_profiles.is_empty());
+        assert_eq!(settings.solver_telescope(Some("Simulator")), main_optics());
     }
 }
