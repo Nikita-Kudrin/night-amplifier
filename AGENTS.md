@@ -90,6 +90,7 @@ Stay in budget with `sample_size(10)`, ~500ms warm-up, 1–2s `measurement_time`
 ```bash
 cargo build --release
 cargo test                                                          # fast unit tests
+(cd web && npm ci && npm run build)                                 # only needed for the two `frontend_serving` tests that assert the *real* embedded bundle; `web/dist/` is git-ignored, so without it they skip locally (and fail under CI=1, where CI builds it first). Every other frontend-serving test runs against an in-source fixture bundle instead.
 # These are ignored by default and must be run explicitly:
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
 cargo bench --bench <name>                                          # benchmarks — see **Benchmark sizing** below before adding or editing one.
