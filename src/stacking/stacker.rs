@@ -172,6 +172,12 @@ impl Stacker {
         self.stack.update_config(config);
     }
 
+    /// The configuration the accumulator is actually running, after any gating
+    /// `MasterStack` applied to it.
+    pub fn config(&self) -> &StackingConfig {
+        self.stack.config()
+    }
+
     /// Returns the coverage map.
     pub fn coverage_map(&self) -> Frame {
         self.stack.coverage_map()

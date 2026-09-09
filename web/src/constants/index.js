@@ -74,8 +74,14 @@ export const BLACK_LEVEL_LIMITS = {
     default: 0.3,
 }
 
+// The darkening half is anchored to the sky, so its reach is only meaningful against
+// where the sky actually renders. Shortened from -0.09 when the auto-stretch solver was
+// fixed to hit its own target background: that dropped the rendered sky from 14 to 11 of
+// 255, and the same floor fraction against a darker sky took 56% of the target's
+// contrast at the end stop instead of 37%. Mirrors `MIN_BLACK_FLOOR` in
+// `server/capture/stage_config.rs`, which clamps it server-side.
 export const BLACK_FLOOR_LIMITS = {
-    min: -0.09,
+    min: -0.075,
     max: 0.15,
     step: 0.01,
     default: 0.04,
@@ -143,12 +149,15 @@ export const WEIGHTING_PRESET_OPTIONS = [
     {value: 'snr_only', label: 'SNR Only'},
 ]
 
-// Outlier rejection method options for stacking
+// Outlier rejection method options for stacking.
+//
+// Min-Max is deliberately absent: it needs the minimum and maximum of a sample set the
+// live stack does not keep, so the backend substitutes sigma clipping for it. Offering a
+// choice that silently becomes another one is worse than not offering it.
 export const REJECTION_METHOD_OPTIONS = [
     {value: 'None', label: 'None (Average)'},
     {value: 'SigmaClip', label: 'Sigma Clipping', pro: true},
     {value: 'WinsorizedSigmaClip', label: 'Winsorized', pro: true},
-    {value: 'MinMax', label: 'Min-Max', pro: true},
 ]
 
 // Background extraction algorithm options

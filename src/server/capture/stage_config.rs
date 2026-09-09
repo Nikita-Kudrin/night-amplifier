@@ -128,7 +128,14 @@ const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 /// `f32`, and the darkening half is the half where a wild value has somewhere to
 /// go — `ShadowFloor::from_sky` caps the depth it produces, but the fraction it
 /// is handed would still make one slider step mean nothing.
-const MIN_BLACK_FLOOR: f32 = -0.09;
+///
+/// Shortened from -0.09 when the auto-stretch solver stopped being told a sky
+/// brighter than the black point actually left: the rendered sky dropped from 14
+/// to 11 of 255, and the floor is compressive, so the same fraction against a
+/// darker sky cost 56 % of the target's contrast at the end stop where it used to
+/// cost 37 %. -0.075 restores that reach (39.6 %). The reach is the calibrated
+/// quantity, not the number — re-measure it if the stretch moves again.
+const MIN_BLACK_FLOOR: f32 = -0.075;
 
 /// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
 /// lifting half is clamped in the same place as the darkening one.
@@ -299,6 +306,15 @@ pub fn get_render_pipeline_config(
             config.contrast_config.strength =
                 config.contrast_config.strength * (1.0 - intensity) + 1.0 * intensity;
         }
+    } else {
+        // `RenderPipelineConfig::default()` turns both of these on, and the block above
+        // is the only place that ever sets them deliberately — so skipping it left the
+        // saved FITS carrying an asinh stretch and a contrast S-curve, the one artefact
+        // that is meant to stay linear for PixInsight or Siril. Worse, the stretch is
+        // solved per frame, so no two saved stacks were even comparable.
+        //
+        // Background subtraction and SCNR stay: those are wanted on disk.
+        config = config.with_auto_stretch(false).with_contrast(false);
     }
 
     config
@@ -634,6 +650,24 @@ mod tests {
         let config = get_render_pipeline_config(&settings, true);
         assert!(config.display.is_plain());
         assert!(config.shadow_floor.is_none());
+
+        // Nor the tone curve itself. `RenderPipelineConfig::default()` enables both of
+        // these, and only the `!for_fits` branch ever sets them, so for a long time the
+        // "linear" FITS was written asinh-stretched and contrast-curved — with a stretch
+        // factor solved per frame, which also made two saved stacks incomparable.
+        assert!(
+            !config.auto_stretch,
+            "saved FITS must be linear, not auto-stretched"
+        );
+        assert!(
+            !config.contrast,
+            "saved FITS must not carry the contrast S-curve"
+        );
+
+        // The two stages that are wanted on disk stay on, so this test cannot pass by
+        // disabling the whole pipeline.
+        assert!(config.background_subtraction);
+        assert!(config.scnr);
     }
 
     fn settings_with(

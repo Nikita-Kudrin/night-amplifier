@@ -563,15 +563,52 @@ based on the celestial target:
 
 ### Phase 5: Live Stacking & Rejection
 
-Accumulates aligned frames to dramatically improve Signal-to-Noise Ratio (SNR).
+`MasterStack` accumulates in O(1) memory — 16 bytes per pixel, 434 MB at 3008x3008x3, so
+the struct's size is a hard constraint (`offered` had to fit in `count`'s tail padding).
 
-- **Deep Sky (MasterStack)**: Warps frames via Bilinear Interpolation using the `AffineTransform`. Frames are weighted
-  based on their FWHM/SNR relative to the reference frame. Outliers (satellite trails, cosmic rays) are rejected using
-  specialized algorithms in the Pro version (e.g., `SigmaClip`, `WinsorizedSigmaClip`) via the `REJECTION_PLUGIN`.
-- **Planetary Stacking (Lucky Imaging)**: Employs percentile stacking (e.g., top 10%-30% of frames) based on
-  high-frequency sharpness metrics like Laplacian, Sobel, or Tenengrad.
-- **Comet Stacking**: [Pro] Bypasses traditional weighting and uses highly aggressive `WinsorizedSigmaClip` to
-  ruthlessly reject the trailing star field, cleanly isolating the comet signal.
+**Never estimate the clip threshold from samples that survived the clip.** That is what
+`blend_incremental` did: the scale came from accepted samples only, so an early
+underestimate rejected the very samples that would have widened it, and the estimator
+defended its own error. Measured on 71 real subs it discarded 15 % of samples where 2.5
+sigma predicts 1.2 %, left the stack 34 % noisier than a plain mean, and permanently
+froze the 0.95 % of pixels whose first samples happened to be identical — 3 frames kept
+of 71, for the rest of the session. About 45 % of the integration time, thrown away.
+
+`m2` is now a running mean of squared deviations over *every* offered sample, rejected
+ones winsorised to the threshold. That keeps a cosmic ray from widening the window while
+still letting a collapsed scale climb back out (a winsorised sample carries `k^2` times
+the current variance, so it recovers geometrically — 12 frames at `CLIPPED_SCALE_WINDOW`,
+40 at the ordinary one, which is why clipped samples get the shorter memory). Real-data
+result: coverage 83.7 % -> 97.6 %, and the rejector now costs 1 % of SNR instead of 21 %.
+
+Rejection also has to survive its own warm-up. Below `min_frames_for_rejection` the tight
+clip cannot run, and while nothing ran there at all a satellite trail landing in those 8
+frames was averaged in *and* widened the scale enough that the pixel never rejected
+anything again — 33.5 sigma of permanent error with every frame kept. A loose 8-sigma
+guard now covers everything past `WARMUP_MIN_OBSERVATIONS`; frames 0-2 are irreducible,
+since below three samples there is no spread to test against.
+
+`RejectionMethod` is four variants and the incremental path implements two.
+`WinsorizedSigmaClip` differs from `SigmaClip` in one line — blend the clamped value
+instead of dropping the sample, so a stack of N frames stays a stack of N. `MinMax` needs
+the min and max of a sample set nobody keeps (two more floats a pixel is 650 MB at
+3008x3008x3), so `live_equivalent` substitutes sigma clipping and logs it. Passing it
+through instead left the session with *no* rejection, because
+`add_frame_with_border_and_quality` routes only the two clipping methods to the plugin
+and averages everything else.
+
+Three things that look like details and are not:
+- **The first offered sample has no mean to deviate from.** Its "deviation" is the
+  pixel's absolute level — on a 0.0024 sky with 2e-5 sigma that seeds the scale 120x too
+  wide, and the rejector clips *nothing*. `observe_scale` ignores it.
+- **The mean is an estimate too**, from `count` samples, so the gap under test has
+  variance `sigma^2 * (1 + 1/count)`. Without it the clip is tightest exactly when the
+  mean is least trustworthy.
+- **Do the test on squared quantities.** One avoidable `sqrt` plus a divide per pixel, in
+  a loop over 27 million of them, measured 2.9x on the whole kernel; the tables in
+  `incremental_pixel` hoist the divides out per frame. Only a clipped sample roots
+  anything. `rejection_benchmark`'s `blend_incremental` case guards this — the batch
+  `compute_rejection` cases next to it are not the path a live stack takes.
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
@@ -587,7 +624,31 @@ Neutralizes color casts from light pollution.
 
 ### Phase 9: Black Point Calculation
 
-Establishes the dark reference level.
+Establishes the dark reference level: `black_point = mode - k * sigma`, so the sky
+estimate has to resolve far finer than the sky itself. A 71-frame stack's sky sigma is
+~3.4e-5 of full scale (2.2 ADU at 16 bits) while `estimate_background_mode`'s histogram
+bin is 2.4e-4 (16 ADU) — the whole distribution fits in a fifth of a bin. Reporting the
+bin centre made the mode a step function of stack depth: it held for 50 frames, snapped
+one bin at 71, and moved the black point 16 ADU against a target 30 ADU above sky. Half
+the Dumbbell went below black in a single frame, and deeper integration rendered *worse*
+than shallow. The binned peak still selects the region (that is what rejects nebulosity);
+the value returned is refined by re-binning those samples 512 ways inside the winning bin
+(0.13 ADU) and interpolating that peak. Two failure modes, not one: the bin *choice* has
+to be right as well, and a five-wide box smoothing turns a sky narrower than one bin into
+a five-bin plateau whose first strict maximum sits two bins low — far enough that the
+refinement window misses the samples and falls back to the bin value, 43 ADU out at 2 sky
+levels in 21. Ties therefore break on the raw histogram, where a plateau is unambiguous.
+Test it by *sweeping* a sky across a bin in tenths at a deep-stack sigma (2e-5); two
+sample points found the quantisation but sampled neither plateau position. Refining by *sorting* the window and taking its
+half-sample mode gave the same answer but cost 1.40 ms a frame against 0.39 ms unrefined;
+the sub-histogram keeps the resolution for 0.51 ms. `black_point_benchmark` guards it.
+
+The same depth trap applies to any quantity derived from `sigma` — see
+`estimate_signal_fraction`, which had to stop binning for the same reason — and to the
+solver's floor: floor the sky-above-black gap once and derive the black point from it,
+never floor only the number handed to the solver. Doing the latter had the solver
+stretching for a sky 1.75x brighter than the black point actually left, growing with
+depth. Both are pinned by tests in `black_point_tests.rs` and `autostretch/logic.rs`.
 
 ### Phase 10: Shadow Saturation Boost (Optional)
 

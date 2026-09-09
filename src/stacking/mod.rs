@@ -16,7 +16,10 @@ pub use comet_plugin::{CometCentroid, CometContext, CometPlugin};
 pub use config::{
     FrameQuality, StackingConfig, StackingType, StackingTypeInfo, WeightingConfig, WeightingPreset,
 };
-pub use incremental_pixel::IncrementalPixel;
+pub use incremental_pixel::{
+    mean_error_table, scale_alpha_table, IncrementalPixel, CLIPPED_SCALE_WINDOW,
+    MEAN_ERROR_TABLE_LEN, SCALE_FLOOR, SCALE_WINDOW,
+};
 pub use pipeline::{FrameProcessingResult, PipelineConfig, StackingPipeline, StackingStats};
 pub use rejection::RejectionMethod;
 pub use stack::MasterStack;

@@ -367,6 +367,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "176mm-imx464-delphinus-fits",
         "https://drive.usercontent.google.com/download?id=1fCEHKLGFsLNasuO4ebUqoIDcGwx882PU&export=download&confirm=t",
     ),
+    // 16 subs of M27, cropped to 1024x1024 on an even origin so the RGGB phase survives.
+    // Deliberately not the whole session: this is the shortest run that still shows the
+    // render collapsing as the stack deepens, which is what `stack_depth_regression`
+    // asserts against.
+    (
+        "stack-depth-dumbbell",
+        "https://drive.usercontent.google.com/download?id=1MKQqxU3QSqWqg2wjGuLXmRhTW-iTaCVm&export=download&confirm=t",
+    ),
 ];
 
 /// Downloads and extracts test fixture datasets from Google Drive.
@@ -514,6 +522,14 @@ pub fn ensure_fixtures_sync() {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(ensure_fixtures(Some(MANAGED_FIXTURE_SETS)));
+}
+
+/// [`ensure_fixtures_sync`] for a test that wants named sets rather than the managed
+/// list — a single-dataset test should not pull the other four down to run.
+pub fn ensure_fixtures_sync_named(names: &[&str]) {
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(ensure_fixtures(Some(names)));
 }
 
 use regex::Regex;

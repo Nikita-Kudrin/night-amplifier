@@ -199,3 +199,85 @@ fn test_sigma_factor_affects_black_point() {
     assert!(conservative[0] > aggressive[0]);
     assert!(default[0] > aggressive[0] && default[0] < conservative[0]);
 }
+
+/// Deterministic Gaussian-ish sky, so the assertions below are reproducible.
+fn sky_frame(width: usize, height: usize, level: f32, sigma: f32) -> Frame {
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = || {
+        // xorshift64*, summed in twelves for an approximately normal deviate.
+        let mut sum = 0.0f32;
+        for _ in 0..12 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            sum += (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / 16_777_216.0;
+        }
+        sum - 6.0
+    };
+    let mut data = vec![0.0f32; width * height * 3];
+    for v in data.iter_mut() {
+        *v = (level + next() * sigma).max(0.0);
+    }
+    Frame::from_f32_vec(data, width, height, 3).unwrap()
+}
+
+/// The sky estimate must track a background far narrower than a histogram bin, at every
+/// level — not just at the two the first version of this test happened to sample.
+///
+/// A 71-frame stack has a sky sigma around 3.4e-5 of full scale (2.2 ADU of a 16-bit
+/// frame) against 2.4e-4 bins (16 ADU). Two failure modes live in here and only a sweep
+/// finds both:
+///
+/// * reporting the bin centre makes the mode a step function of stack depth, so the black
+///   point (`mode - k * sigma`) jumps 16 ADU against a target only 30 ADU above sky;
+/// * the five-wide smoothing turns that narrow sky into a plateau, and taking its first
+///   strict maximum puts `peak_bin` two bins low — which the refinement cannot recover
+///   from, because its window no longer contains the samples.
+///
+/// The second only shows at the sky levels where the distribution sits wholly inside one
+/// bin, which is 2 positions in 21. Sweeping a whole bin in tenths is what catches it.
+#[test]
+fn background_mode_tracks_a_sky_narrower_than_a_histogram_bin() {
+    // 2.0e-5 is 1.3 ADU, the sky sigma measured on a 71-frame stack. The value matters:
+    // the plateau failure only exists while the whole distribution fits inside one bin,
+    // so a wider sigma (3.4e-5, say) sweeps clean and pins nothing.
+    const SIGMA: f32 = 2.0e-5;
+    const BIN: f32 = 1.0 / 4095.0;
+    /// Two bins of travel, in tenths. One bin is enough to cross a boundary, but two
+    /// confirms the behaviour repeats rather than being one lucky alignment.
+    const STEPS: usize = 20;
+
+    let mut worst_err = 0.0f32;
+    let mut worst_at = 0.0f32;
+    let mut backward = 0;
+    let mut previous = f32::NEG_INFINITY;
+
+    for step in 0..=STEPS {
+        let level = 10.0 * BIN + step as f32 * BIN / 10.0;
+        let mode = estimate_background_mode(&sky_frame(192, 192, level, SIGMA)).mode;
+
+        let err = (mode - level).abs();
+        if err > worst_err {
+            worst_err = err;
+            worst_at = level;
+        }
+        // The sky only ever moves up across this sweep, so the estimate must too.
+        if mode < previous - 1e-7 {
+            backward += 1;
+        }
+        previous = mode;
+    }
+
+    assert!(
+        worst_err < 2.0 * SIGMA,
+        "worst error {:.2} ADU (at a sky of {:.2} ADU) is {:.1} sigma — the estimate is \
+         not tracking the sky",
+        worst_err * 65535.0,
+        worst_at * 65535.0,
+        worst_err / SIGMA
+    );
+    assert_eq!(
+        backward, 0,
+        "the estimate went backwards {backward} times while the sky rose monotonically"
+    );
+}

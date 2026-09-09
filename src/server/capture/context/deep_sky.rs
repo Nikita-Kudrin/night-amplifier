@@ -13,6 +13,42 @@ use crate::stacking::{
 
 use crate::server::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason};
 
+/// The nearest method the *live* accumulator can actually execute.
+///
+/// `MinMax` needs the minimum and maximum of a sample set nobody keeps — `MasterStack`
+/// holds 16 bytes a pixel and no history, and carrying two more floats would put a
+/// 3008x3008x3 stack at 650 MB. Only the batch `compute_rejection` implements it, and
+/// nothing live calls that, so passing it through leaves the session with *no* rejection:
+/// `add_frame_with_border_and_quality` routes only the two clipping methods to the plugin
+/// and averages everything else. Substituting the nearest method that does run is the
+/// honest reading of what the observer asked for.
+///
+/// Separate from [`resolve_rejection`] so it can be tested exhaustively without a plugin
+/// registered — the licence check is what makes that impossible in Community.
+fn live_equivalent(method: RejectionMethod) -> RejectionMethod {
+    match method {
+        RejectionMethod::MinMax => RejectionMethod::SigmaClip,
+        other => other,
+    }
+}
+
+/// The rejection method a session should run: what the observer asked for, reduced to
+/// what the live path can execute, or `None` when the Pro plugin is not loaded.
+fn resolve_rejection(settings: &CaptureSettings) -> RejectionMethod {
+    if crate::license::pro_plugin(&REJECTION_PLUGIN).is_none() {
+        return RejectionMethod::None;
+    }
+    let resolved = live_equivalent(settings.rejection_method);
+    if resolved != settings.rejection_method {
+        warn!(
+            requested = ?settings.rejection_method,
+            using = ?resolved,
+            "Requested rejection method needs frame history the live stack does not keep"
+        );
+    }
+    resolved
+}
+
 pub struct StackingContext {
     pub stacker: Stacker,
     pub adaptive_registration: AdaptiveRegistration,
@@ -39,11 +75,11 @@ impl StackingContext {
             WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
         };
 
-        let rejection = if crate::license::pro_plugin(&REJECTION_PLUGIN).is_some() {
-            RejectionMethod::SigmaClip
-        } else {
-            RejectionMethod::None
-        };
+        // Resolved the same way `update_from_settings` does it, so a session does not
+        // start on a different method than a no-op settings edit would give it. This
+        // used to hardcode `SigmaClip`, which meant the observer's choice only took
+        // effect if they happened to touch settings mid-session.
+        let rejection = resolve_rejection(settings);
 
         let stacking_config = StackingConfig::default()
             .with_rejection(rejection)
@@ -292,7 +328,7 @@ impl StackingContext {
             WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
         };
 
-        let rejection = settings.rejection_method;
+        let rejection = resolve_rejection(settings);
 
         let config = StackingConfig::default()
             .with_rejection(rejection)
@@ -300,5 +336,113 @@ impl StackingContext {
             .with_weighting(weighting);
 
         self.stacker.update_config(config);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Exhaustive: a new variant must be considered by every test here.
+    const ALL_METHODS: [RejectionMethod; 4] = [
+        RejectionMethod::None,
+        RejectionMethod::SigmaClip,
+        RejectionMethod::WinsorizedSigmaClip,
+        RejectionMethod::MinMax,
+    ];
+
+    /// Without the Pro plugin every method resolves to `None`, whatever the observer
+    /// asked for — Community has no implementation to run.
+    #[test]
+    fn rejection_needs_the_plugin() {
+        let mut settings = CaptureSettings::default();
+        for method in ALL_METHODS {
+            settings.rejection_method = method;
+            assert_eq!(
+                resolve_rejection(&settings),
+                RejectionMethod::None,
+                "{method:?} resolved to something Community cannot run"
+            );
+        }
+    }
+
+    /// Every method must reduce to one the live accumulator actually routes to the
+    /// plugin. `MasterStack` sends only the two clipping methods there and averages
+    /// everything else, so a method that survives this unchanged and is not in that pair
+    /// disables rejection silently — which is what choosing Min-Max used to do.
+    #[test]
+    fn every_method_reduces_to_one_the_live_stack_runs() {
+        for method in ALL_METHODS {
+            let resolved = live_equivalent(method);
+            assert!(
+                matches!(
+                    resolved,
+                    RejectionMethod::None
+                        | RejectionMethod::SigmaClip
+                        | RejectionMethod::WinsorizedSigmaClip
+                ),
+                "{method:?} reduces to {resolved:?}, which the live stack does not route \
+                 to the rejection plugin — it would silently average instead"
+            );
+        }
+    }
+
+    /// The substitution only applies where it has to.
+    #[test]
+    fn methods_the_live_stack_runs_are_left_alone() {
+        for method in [
+            RejectionMethod::None,
+            RejectionMethod::SigmaClip,
+            RejectionMethod::WinsorizedSigmaClip,
+        ] {
+            assert_eq!(live_equivalent(method), method);
+        }
+    }
+
+    /// Starting a session and editing settings mid-session must agree.
+    ///
+    /// They did not: `new` hardcoded `SigmaClip` from licence state while
+    /// `update_from_settings` read `settings.rejection_method`, so the observer's choice
+    /// only took effect if they happened to touch settings after capture began. Compared
+    /// through the config the accumulator actually ends up running, not through the
+    /// resolver both now call — going through the resolver twice would pass however the
+    /// two paths were wired.
+    #[test]
+    fn session_start_and_a_settings_edit_configure_the_stack_alike() {
+        for method in [RejectionMethod::None, RejectionMethod::SigmaClip] {
+            for (preset, sigma) in [
+                (WeightingPreset::Balanced, 2.5),
+                (WeightingPreset::Nebulae, 1.8),
+                (WeightingPreset::Disabled, 3.2),
+            ] {
+                let mut settings = CaptureSettings::default();
+                settings.rejection_method = method;
+                settings.weighting_preset = preset;
+                settings.rejection_sigma = sigma;
+
+                let mut at_start =
+                    StackingContext::new(64, 64, 3, &settings).expect("context builds");
+                let from_start = at_start.stacker.config().clone();
+
+                at_start.update_from_settings(&settings);
+                let after_edit = at_start.stacker.config();
+
+                assert_eq!(from_start.rejection, after_edit.rejection, "{method:?}");
+                assert_eq!(from_start.sigma_low, after_edit.sigma_low);
+                assert_eq!(from_start.sigma_high, after_edit.sigma_high);
+                assert_eq!(from_start.weighting, after_edit.weighting, "{preset:?}");
+            }
+        }
+    }
+
+    /// The shipped default has to name what a Pro session has always actually run, or
+    /// reading the field for the first time turns rejection off for every observer who
+    /// has no persisted setting.
+    #[test]
+    fn default_settings_ask_for_sigma_clipping() {
+        assert_eq!(
+            CaptureSettings::default().rejection_method,
+            RejectionMethod::SigmaClip
+        );
     }
 }

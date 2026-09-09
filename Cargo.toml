@@ -175,3 +175,7 @@ harness = false
 name = "preview_pipeline_benchmark"
 harness = false
 
+[[bench]]
+name = "black_point_benchmark"
+harness = false
+

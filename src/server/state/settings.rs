@@ -532,7 +532,14 @@ impl Default for CaptureSettings {
             auto_stretch: true,
             stacking: true,
             rejection_sigma: 2.5,
-            rejection_method: RejectionMethod::default(),
+            // Not `RejectionMethod::default()`, which is `None`. That is the right
+            // default for `StackingConfig`, which Community also builds, but this field
+            // describes what a session should *ask* for: every Pro session has run sigma
+            // clipping since the plugin existed, because `StackingContext::new` forced it
+            // and ignored this field. Now that it is read, the default has to say the same
+            // thing or wiring it up would silently turn rejection off for anyone without a
+            // persisted setting. Without the plugin it still resolves to `None`.
+            rejection_method: RejectionMethod::SigmaClip,
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
             preview_resolution: PreviewResolution::default(),
