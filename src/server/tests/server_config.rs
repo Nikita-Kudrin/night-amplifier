@@ -89,11 +89,31 @@ mod frontend_serving {
         (status, content_type, String::from_utf8_lossy(&body).into_owned())
     }
 
+    /// Unlike the routing rules in `embedded_assets`, which run against a committed
+    /// fixture, these two assert that the *real* `web/dist/` reaches the router — so
+    /// they need it built. It is git-ignored, so a fresh clone has none and there is
+    /// nothing to assert; CI builds it before running the tests, so a miss there is a
+    /// regression and must fail rather than quietly pass.
+    fn embedded_bundle_is_built() -> bool {
+        if crate::server::embedded_assets::bundle_is_built() {
+            return true;
+        }
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must build web/dist before the Rust tests"
+        );
+        eprintln!("skipped: web/dist is not built (run `npm run build` in web/)");
+        false
+    }
+
     /// The default has to be the embedded bundle. It used to be the string `web`, so a
     /// binary started anywhere near a checkout served the Vite source template and the
     /// frontend never booted.
     #[tokio::test]
     async fn the_default_serves_the_embedded_bundle() {
+        if !embedded_bundle_is_built() {
+            return;
+        }
         let config = ServerConfig::new();
         assert!(config.static_dir.is_none());
 
@@ -146,6 +166,9 @@ mod frontend_serving {
     /// bundle takes over rather than the server answering nothing at all.
     #[tokio::test]
     async fn a_static_dir_without_index_html_falls_back_to_embedded() {
+        if !embedded_bundle_is_built() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
 
         let config =

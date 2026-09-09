@@ -11,6 +11,7 @@
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
+use std::borrow::Cow;
 
 #[derive(Embed)]
 #[folder = "web/dist/"]
@@ -27,6 +28,31 @@ const IMMUTABLE_CACHE: &str = "public, max-age=31536000, immutable";
 /// so serving a stale one points the browser at files an upgraded binary no longer has.
 const REVALIDATE_CACHE: &str = "no-cache";
 
+/// One file out of a frontend bundle: its bytes and the hash the validator is built from.
+struct Asset {
+    data: Cow<'static, [u8]>,
+    sha256: [u8; 32],
+}
+
+/// The bundle a request is answered from.
+///
+/// A port rather than a direct call into `WebAssets`, because the rules below — SPA
+/// fallback, cache policy, revalidation — say nothing about what Vite emitted. Binding
+/// them to `web/dist/` made all of them fail wherever `npm run build` had not run, CI
+/// included; the tests supply an in-source bundle through this same port instead.
+trait AssetBundle {
+    fn get(path: &str) -> Option<Asset>;
+}
+
+impl AssetBundle for WebAssets {
+    fn get(path: &str) -> Option<Asset> {
+        <Self as Embed>::get(path).map(|file| Asset {
+            sha256: file.metadata.sha256_hash(),
+            data: file.data,
+        })
+    }
+}
+
 /// Axum handler that serves files from the embedded `web/dist/` bundle.
 ///
 /// Unknown paths fall back to `index.html` so the Vue SPA handles client-side routes
@@ -35,12 +61,17 @@ const REVALIDATE_CACHE: &str = "no-cache";
 /// status 200 makes Chromium's strict MIME check silently refuse the module script,
 /// leaving a black page with nothing in the log. See `spa_fallback_is_not_for_files`.
 pub async fn serve_embedded(uri: Uri, headers: HeaderMap) -> Response {
+    serve_from::<WebAssets>(&uri, &headers)
+}
+
+/// The routing and caching rules, over whichever bundle the caller names.
+fn serve_from<B: AssetBundle>(uri: &Uri, headers: &HeaderMap) -> Response {
     let path = uri.path().trim_start_matches('/');
 
-    let (file, serve_path) = match WebAssets::get(path) {
+    let (file, serve_path) = match B::get(path) {
         Some(content) => (content, path),
         None if names_a_file(path) => return StatusCode::NOT_FOUND.into_response(),
-        None => match WebAssets::get("index.html") {
+        None => match B::get("index.html") {
             Some(content) => (content, "index.html"),
             None => return StatusCode::NOT_FOUND.into_response(),
         },
@@ -51,9 +82,9 @@ pub async fn serve_embedded(uri: Uri, headers: HeaderMap) -> Response {
     } else {
         REVALIDATE_CACHE
     };
-    let etag = etag_for(&file.metadata.sha256_hash());
+    let etag = etag_for(&file.sha256);
 
-    if if_none_match_hit(&headers, &etag) {
+    if if_none_match_hit(headers, &etag) {
         return (
             StatusCode::NOT_MODIFIED,
             [
@@ -72,7 +103,7 @@ pub async fn serve_embedded(uri: Uri, headers: HeaderMap) -> Response {
             (header::ETAG, etag),
             (header::CACHE_CONTROL, cache_control.to_string()),
         ],
-        file.data.to_vec(),
+        file.data.into_owned(),
     )
         .into_response()
 }
@@ -115,6 +146,15 @@ fn if_none_match_hit(headers: &HeaderMap, etag: &str) -> bool {
         .any(|candidate| candidate == "*" || candidate.trim_start_matches("W/") == etag)
 }
 
+/// Whether `npm run build` had run when this binary was built. `web/dist/` is
+/// git-ignored, so a checkout that never built the frontend embeds nothing and the
+/// server 404s every page — a precondition the `frontend_serving` tests check before
+/// asserting anything about the real bundle.
+#[cfg(test)]
+pub(crate) fn bundle_is_built() -> bool {
+    <WebAssets as AssetBundle>::get("index.html").is_some()
+}
+
 /// The same routing rule for the filesystem (`static_dir`) branch, which otherwise
 /// answers a missing `/assets/*.js` with `index.html` exactly as the embedded path did.
 pub async fn serve_disk_spa_fallback(uri: Uri, index_path: std::path::PathBuf) -> Response {
@@ -144,19 +184,58 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use axum::Router;
+    use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
-    fn app() -> Router {
-        Router::new().fallback(serve_embedded)
+    /// Stands in for the Vite build, shaped like it: an SPA shell naming one hashed
+    /// bundle. It lives in source rather than on disk because every disk-backed version
+    /// of it has gone missing — `web/dist/` is git-ignored and empty until `npm run
+    /// build`, and a fixture directory is one `git clean` or one forgotten `git add`
+    /// away from breaking the build for everyone. The hashes are real SHA-256 over
+    /// these bytes, the same validator `rust_embed` computes, so the ETag tests below
+    /// are not asserting against fabricated values.
+    struct Fixture;
+
+    const FIXTURE_ASSET: &str = "assets/index-TEST0001.js";
+    const FIXTURE_INDEX_HTML: &[u8] = br#"<!doctype html>
+<html lang="en">
+  <head><script type="module" crossorigin src="/assets/index-TEST0001.js"></script></head>
+  <body><div id="app"></div></body>
+</html>
+"#;
+    const FIXTURE_ASSET_BODY: &[u8] = b"export const fixture = 'a hashed bundle';\n";
+
+    impl AssetBundle for Fixture {
+        fn get(path: &str) -> Option<Asset> {
+            let data: &'static [u8] = match path {
+                "index.html" => FIXTURE_INDEX_HTML,
+                FIXTURE_ASSET => FIXTURE_ASSET_BODY,
+                _ => return None,
+            };
+            Some(Asset {
+                data: Cow::Borrowed(data),
+                sha256: Sha256::digest(data).into(),
+            })
+        }
     }
 
-    /// One hashed bundle path out of the embedded build, so the tests never pin a hash
-    /// that the next `npm run build` invalidates.
-    fn a_hashed_asset() -> String {
-        WebAssets::iter()
-            .map(|f| f.to_string())
-            .find(|f| f.starts_with(HASHED_ASSET_PREFIX))
-            .expect("the embedded bundle has no hashed assets — was web/dist built?")
+    fn app() -> Router {
+        Router::new().fallback(|uri: Uri, headers: HeaderMap| async move {
+            serve_from::<Fixture>(&uri, &headers)
+        })
+    }
+
+    /// The fixture must keep looking like a Vite build, or the tests below stop
+    /// exercising the rules they name.
+    #[test]
+    fn the_fixture_bundle_is_shaped_like_a_build() {
+        assert!(FIXTURE_ASSET.starts_with(HASHED_ASSET_PREFIX));
+        assert!(Fixture::get("index.html").is_some());
+        assert!(Fixture::get(FIXTURE_ASSET).is_some());
+        assert_ne!(
+            Fixture::get("index.html").unwrap().sha256,
+            Fixture::get(FIXTURE_ASSET).unwrap().sha256
+        );
     }
 
     async fn get(uri: &str, if_none_match: Option<&str>) -> (StatusCode, HeaderMap, Vec<u8>) {
@@ -218,8 +297,7 @@ mod tests {
     /// re-downloading the bundle on every restart.
     #[tokio::test]
     async fn hashed_assets_are_cached_forever() {
-        let asset = a_hashed_asset();
-        let (status, headers, _) = get(&format!("/{asset}"), None).await;
+        let (status, headers, _) = get(&format!("/{FIXTURE_ASSET}"), None).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(header(&headers, header::CACHE_CONTROL), IMMUTABLE_CACHE);
@@ -266,7 +344,7 @@ mod tests {
     #[tokio::test]
     async fn etags_distinguish_files() {
         let (_, index_headers, _) = get("/", None).await;
-        let (_, asset_headers, _) = get(&format!("/{}", a_hashed_asset()), None).await;
+        let (_, asset_headers, _) = get(&format!("/{FIXTURE_ASSET}"), None).await;
 
         assert_ne!(
             header(&index_headers, header::ETAG),
@@ -279,7 +357,9 @@ mod tests {
     /// fails exactly as silently as it did in production.
     #[tokio::test]
     async fn the_disk_fallback_also_404s_files() {
-        let index = std::path::PathBuf::from("web/dist/index.html");
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.html");
+        std::fs::write(&index, FIXTURE_INDEX_HTML).unwrap();
 
         let response =
             serve_disk_spa_fallback("/assets/index-DEADBEEF.js".parse().unwrap(), index.clone())

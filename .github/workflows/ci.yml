@@ -66,6 +66,22 @@ jobs:
       - name: Install nextest
         timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         uses: taiki-e/install-action@nextest
+      # `web/dist/` is git-ignored, and in a debug build rust-embed reads it from disk
+      # at run time rather than from the test archive — so the bundle has to be built
+      # in the job that *runs* the tests, not the one that compiles them.
+      - name: Setup Node.js
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Build the frontend bundle
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        working-directory: ./web
+        run: |
+          npm ci
+          npm run build
       - name: Download Archive
         uses: actions/download-artifact@v8
         with:
@@ -140,6 +156,22 @@ jobs:
       - name: Install cargo-llvm-cov
         timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         uses: taiki-e/install-action@cargo-llvm-cov
+      # `web/dist/` is git-ignored, and in a debug build rust-embed reads it from disk
+      # at run time rather than from the test archive — so the bundle has to be built
+      # in the job that *runs* the tests, not the one that compiles them.
+      - name: Setup Node.js
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+      - name: Build the frontend bundle
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        working-directory: ./web
+        run: |
+          npm ci
+          npm run build
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Generate coverage
