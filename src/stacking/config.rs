@@ -353,7 +353,12 @@ pub struct StackingConfig {
     pub sigma_high: f32,
     /// Maximum iterations for sigma clipping (default: 3)
     pub max_iterations: usize,
-    /// Minimum number of frames required for rejection to activate
+    /// Offered samples a pixel must see before rejection starts clipping it.
+    ///
+    /// Not user-facing: it is the warm-up the scale estimate needs, not a preference.
+    /// Raised from 3 once the scale stopped being estimated from survivors — three
+    /// samples give a spread with ~70 % relative error, and a window opened on that
+    /// error is what a self-confirming estimator then defends.
     pub min_frames_for_rejection: usize,
     /// Quality-based frame weighting configuration
     pub weighting: WeightingConfig,
@@ -366,7 +371,7 @@ impl Default for StackingConfig {
             sigma_low: 2.5,
             sigma_high: 2.5,
             max_iterations: 3,
-            min_frames_for_rejection: 3,
+            min_frames_for_rejection: 8,
             weighting: WeightingConfig::balanced(),
         }
     }

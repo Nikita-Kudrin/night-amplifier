@@ -20,8 +20,8 @@ pub use autostretch::{
 };
 pub use black_point::{
     calculate_black_point, calculate_black_points, calculate_luminance_black_point,
-    subtract_black_point, subtract_black_point_auto, subtract_black_point_uniform,
-    BlackPointConfig,
+    estimate_background_mode, subtract_black_point, subtract_black_point_auto,
+    subtract_black_point_uniform, BackgroundEstimate, BlackPointConfig,
 };
 pub use denoise::{
     ChromaDenoiseConfig, DenoiseConfig, DenoiseScratch, LumaDenoiseConfig, MAX_LUMA_STRENGTH,

@@ -502,7 +502,7 @@ describe('SettingsPanel', () => {
             const wrapper = mountSettingsPanel()
             const slider = blackFloorSlider(wrapper)
             expect(slider).toBeDefined()
-            expect(slider.props('min')).toBe(-0.09)
+            expect(slider.props('min')).toBe(-0.075)
             expect(slider.props('max')).toBe(0.15)
         })
 
