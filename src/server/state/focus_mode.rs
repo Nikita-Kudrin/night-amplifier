@@ -1,19 +1,21 @@
 //! Focus/Finder mode: hold the cosmetic pipeline stages off while framing.
 //!
-//! Focusing and star-hopping need frame rate, not a clean image — the seven
+//! Focusing and star-hopping need frame rate, not a clean image — the six
 //! settings below are the ones that cost per-frame work and buy nothing at a
 //! focus mask. The mode is reversible, so entering it snapshots what it
 //! overwrites and leaving it puts every value back.
 //!
 //! Deliberately *not* in the managed set: `superpixel_debayer`, which is the
 //! cheap demosaic (bins 2x2 rather than interpolating), so forcing it either
-//! way would trade against the frame rate this mode exists to buy.
+//! way would trade against the frame rate this mode exists to buy. Nor hot-pixel
+//! rejection, which has no switch at all: Push-To solves the frames this mode is used
+//! to hunt with, and without it they do not solve (see `build_cfa_pipeline`).
 
 use super::capture_mode::CaptureMode;
 use super::settings::CaptureSettings;
 use super::types::CaptureState;
 
-/// The seven booleans Focus/Finder mode forces off, as they were before it did.
+/// The six booleans Focus/Finder mode forces off, as they were before it did.
 ///
 /// Stored rather than recomputed because there is nothing to recompute from:
 /// once the live values are `false` they no longer say what the observer chose.
@@ -22,15 +24,14 @@ use super::types::CaptureState;
 /// the whole `PersistedSettings` down with it and `load()` then returns `None`, resetting
 /// *every* setting the observer has. Each default is the setting's own default rather
 /// than `false`, so a field missing from an older file restores the correction rather
-/// than silently disabling it — six of the seven are on by default.
+/// than silently disabling it — five of the six are on by default. A file written while
+/// the mode also managed `hot_pixel_rejection` still carries that key; it is ignored.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FocusModeSnapshot {
     #[serde(default = "default_on")]
     pub background_subtraction: bool,
     #[serde(default)]
     pub saturation_boost: bool,
-    #[serde(default = "default_on")]
-    pub hot_pixel_rejection: bool,
     #[serde(default = "default_on")]
     pub fpn_removal: bool,
     #[serde(default = "default_on")]
@@ -50,7 +51,6 @@ impl FocusModeSnapshot {
         Self {
             background_subtraction: settings.background_subtraction,
             saturation_boost: settings.saturation_boost,
-            hot_pixel_rejection: settings.sensor_correction.hot_pixel_rejection,
             fpn_removal: settings.sensor_correction.fpn_removal,
             denoise_chroma: settings.denoise.chroma,
             denoise_luma: settings.denoise.luma,
@@ -64,7 +64,6 @@ impl FocusModeSnapshot {
         // the mode is on, and restoring blind would hand back a Pro stage through a
         // request that never passed the check that guards it.
         settings.saturation_boost = self.saturation_boost && saturation_boost_licensed();
-        settings.sensor_correction.hot_pixel_rejection = self.hot_pixel_rejection;
         settings.sensor_correction.fpn_removal = self.fpn_removal;
         settings.denoise.chroma = self.denoise_chroma;
         settings.denoise.luma = self.denoise_luma;
@@ -78,11 +77,11 @@ fn saturation_boost_licensed() -> bool {
 
 /// Whether entering the mode now would damage a stack already being integrated.
 ///
-/// Two of the seven — `hot_pixel_rejection` and `fpn_removal` — run on the raw mosaic
-/// *before* demosaic, so the frame they produce is the frame that goes into the
-/// accumulator. Turning them off mid-session mixes hot pixels and row/column banding
-/// into an existing master, and those are precisely the defects averaging cannot
-/// remove: nothing later can take them back out. The other five are render-only.
+/// One of the six — `fpn_removal` — runs on the raw mosaic *before* demosaic, so the
+/// frame it produces is the frame that goes into the accumulator. Turning it off
+/// mid-session mixes row/column banding into an existing master, and that is precisely
+/// the defect averaging cannot remove: nothing later can take it back out. The other
+/// five are render-only.
 ///
 /// Live view accumulates nothing, so it is left alone — the mode is most useful exactly
 /// there. Leaving the mode is never a conflict.
@@ -100,7 +99,6 @@ pub fn conflicts_with_capture(settings: &CaptureSettings, capture_state: Capture
 fn force_off(settings: &mut CaptureSettings) {
     settings.background_subtraction = false;
     settings.saturation_boost = false;
-    settings.sensor_correction.hot_pixel_rejection = false;
     settings.sensor_correction.fpn_removal = false;
     settings.denoise.chroma = false;
     settings.denoise.luma = false;
@@ -153,10 +151,6 @@ pub fn reconcile(settings: &mut CaptureSettings) {
     );
     absorb(&mut settings.saturation_boost, &mut snapshot.saturation_boost);
     absorb(
-        &mut settings.sensor_correction.hot_pixel_rejection,
-        &mut snapshot.hot_pixel_rejection,
-    );
-    absorb(
         &mut settings.sensor_correction.fpn_removal,
         &mut snapshot.fpn_removal,
     );
@@ -177,8 +171,9 @@ mod tests {
             saturation_boost: false,
             ..Default::default()
         };
-        settings.sensor_correction.hot_pixel_rejection = true;
-        settings.sensor_correction.fpn_removal = false;
+        // The one pre-demosaic value the mode manages, set on so a restore that
+        // blanket-forces it off fails.
+        settings.sensor_correction.fpn_removal = true;
         settings.denoise.chroma = false;
         settings.denoise.luma = true;
         settings.eyepiece.dither = true;
@@ -188,7 +183,6 @@ mod tests {
     fn all_managed_off(settings: &CaptureSettings) -> bool {
         !settings.background_subtraction
             && !settings.saturation_boost
-            && !settings.sensor_correction.hot_pixel_rejection
             && !settings.sensor_correction.fpn_removal
             && !settings.denoise.chroma
             && !settings.denoise.luma
@@ -238,8 +232,8 @@ mod tests {
             before.background_subtraction
         );
         assert_eq!(
-            settings.sensor_correction.hot_pixel_rejection,
-            before.sensor_correction.hot_pixel_rejection
+            settings.sensor_correction.fpn_removal,
+            before.sensor_correction.fpn_removal
         );
         assert_eq!(settings.denoise.luma, before.denoise.luma);
         assert_eq!(settings.eyepiece.dither, before.eyepiece.dither);
@@ -260,10 +254,6 @@ mod tests {
             before.background_subtraction
         );
         assert_eq!(settings.saturation_boost, before.saturation_boost);
-        assert_eq!(
-            settings.sensor_correction.hot_pixel_rejection,
-            before.sensor_correction.hot_pixel_rejection
-        );
         assert_eq!(
             settings.sensor_correction.fpn_removal,
             before.sensor_correction.fpn_removal

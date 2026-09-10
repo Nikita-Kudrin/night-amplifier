@@ -441,7 +441,7 @@ describe('CaptureControls', () => {
             expect(updateSettings).toHaveBeenCalledWith({focus_mode: false})
         })
 
-        // The seven settings are greyed in the Settings panel off the *server* value, so
+        // The six settings are greyed in the Settings panel off the *server* value, so
         // an optimistic local ref left behind by a failed save has the two panels
         // disagreeing about the same setting.
         it('puts the toggle back when the save fails', async () => {
@@ -459,9 +459,9 @@ describe('CaptureControls', () => {
             )
         })
 
-        // Two of the seven run before demosaic, so the frames the accumulator integrates
-        // lose their hot-pixel and banding corrections — and averaging is exactly what
-        // cannot take those back out. The backend answers 409; the toggle never gets there.
+        // One of the six runs before demosaic, so the frames the accumulator integrates
+        // lose their banding correction — and averaging is exactly what cannot take that
+        // back out. The backend answers 409; the toggle never gets there.
         it('is disabled while a stacking capture runs', async () => {
             const wrapper = mountCaptureControls({
                 captureState: 'Capturing',

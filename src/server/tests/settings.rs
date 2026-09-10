@@ -671,11 +671,11 @@ async fn test_settings_update_with_no_camera_does_not_create_profile() {
 
 // --- Focus/Finder mode ---------------------------------------------------------
 //
-// The mode is a snapshot-and-restore over seven settings, so what these cover is the
+// The mode is a snapshot-and-restore over six settings, so what these cover is the
 // restore: the values the observer chose have to survive a toggle, a second toggle,
 // and a write that arrives while the mode is on.
 
-/// Seed the seven managed settings to a mix of on and off, so a restore that blanket-sets
+/// Seed the six managed settings to a mix of on and off, so a restore that blanket-sets
 /// them either way fails rather than passing by luck. Returns nothing — read it back from
 /// `/api/settings`.
 async fn seed_managed_settings(app: &axum::Router) {
@@ -685,9 +685,8 @@ async fn seed_managed_settings(app: &axum::Router) {
         json!({
             "background_subtraction": true,
             "sensor_correction": {
-                "hot_pixel_rejection": true,
                 "hot_pixel_sigma": 7.5,
-                "fpn_removal": false,
+                "fpn_removal": true,
                 "superpixel_debayer": true,
             },
             "denoise": {
@@ -715,7 +714,6 @@ async fn test_focus_mode_disables_the_managed_settings() {
     assert_eq!(json["data"]["focus_mode"], true);
     assert_eq!(json["data"]["background_subtraction"], false);
     assert_eq!(json["data"]["saturation_boost"], false);
-    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], false);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
     assert_eq!(json["data"]["denoise"]["luma"], false);
@@ -748,8 +746,7 @@ async fn test_focus_mode_round_trip_restores_the_managed_settings() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["focus_mode"], false);
     assert_eq!(json["data"]["background_subtraction"], true);
-    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
-    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
     assert_eq!(json["data"]["denoise"]["luma"], true);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
@@ -770,7 +767,7 @@ async fn test_focus_mode_enabled_twice_still_restores_the_originals() {
     let (_, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
 
     assert_eq!(json["data"]["background_subtraction"], true);
-    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
     assert_eq!(json["data"]["denoise"]["luma"], true);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
 }
@@ -847,10 +844,10 @@ async fn test_focus_mode_is_off_by_default() {
     assert!(state.settings.read().await.focus_mode_snapshot.is_none());
 }
 
-/// Focus/Finder mode drops `hot_pixel_rejection` and `fpn_removal`, which run on the raw
-/// mosaic before demosaic — so the frame the accumulator integrates loses them too. Hot
-/// pixels and row/column banding are exactly the defects averaging cannot remove, so a
-/// stack integrated under the mode can never be cleaned again. Refused, not warned.
+/// Focus/Finder mode drops `fpn_removal`, which runs on the raw mosaic before demosaic —
+/// so the frame the accumulator integrates loses it too. Row/column banding is exactly the
+/// defect averaging cannot remove, so a stack integrated under the mode can never be
+/// cleaned again. Refused, not warned.
 #[tokio::test]
 async fn test_focus_mode_is_refused_while_stacking() {
     let state = create_test_state();
@@ -864,7 +861,7 @@ async fn test_focus_mode_is_refused_while_stacking() {
     let settings = state.settings.read().await;
     assert!(!settings.focus_mode);
     assert!(
-        settings.sensor_correction.hot_pixel_rejection,
+        settings.sensor_correction.fpn_removal,
         "the refusal must leave the stack's corrections in place"
     );
 }
@@ -919,7 +916,7 @@ async fn test_leaving_focus_mode_is_allowed_while_stacking() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["focus_mode"], false);
-    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], true);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
 }
 
 /// The refusal only guards *entering*. A request that leaves the mode where it is must not
@@ -949,4 +946,64 @@ async fn test_focus_mode_is_refused_while_a_capture_is_starting() {
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(!state.settings.read().await.focus_mode);
+}
+
+/// Hot-pixel rejection lost its switch. A client built before that still posts
+/// `sensor_correction.hot_pixel_rejection`; the rest of that block must still apply, and
+/// nothing may echo the removed key back as if it did anything.
+#[tokio::test]
+async fn test_a_stale_client_writing_hot_pixel_rejection_is_accepted_and_ignored() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({
+            "sensor_correction": {
+                "hot_pixel_rejection": false,
+                "hot_pixel_sigma": 6.5,
+                "fpn_removal": false,
+                "superpixel_debayer": false,
+            },
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_sigma"], 6.5);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
+    assert!(json["data"]["sensor_correction"]
+        .get("hot_pixel_rejection")
+        .is_none());
+}
+
+/// The hot-pixel stage has no switch, so its threshold is the only way to break it: at
+/// sigma <= 0 it silently does nothing, and near 1 it replaces tens of thousands of
+/// ordinary noise samples a frame. The slider stops at 3..12; the API must too.
+#[tokio::test]
+async fn test_hot_pixel_sigma_is_held_to_its_range() {
+    let state = create_test_state();
+    let app = create_test_router(state);
+
+    for (sent, stored) in [(0.0, 3.0), (-1.0, 3.0), (0.5, 3.0), (7.5, 7.5), (100.0, 12.0)] {
+        let (status, json) = post_json(
+            &app,
+            "/api/settings",
+            json!({
+                "sensor_correction": {
+                    "hot_pixel_sigma": sent,
+                    "fpn_removal": true,
+                    "superpixel_debayer": false,
+                },
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["data"]["sensor_correction"]["hot_pixel_sigma"], stored,
+            "sent {sent}"
+        );
+    }
 }

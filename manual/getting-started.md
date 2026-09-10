@@ -56,12 +56,11 @@ still exposes and still solves, but nothing is processed or encoded for the brow
 
 Focusing and hunting for a target want frame rate, not a clean picture. The
 **Focus/Finder mode** switch under the capture panel's Color mode trades one for the
-other: it holds off the seven stages that cost time on every frame and buy nothing at a
+other: it holds off the six stages that cost time on every frame and buy nothing at a
 focus mask.
 
 - Background Subtraction
 - Shadow Saturation Boost
-- Hot Pixel Rejection
 - Row/Column Pattern Removal
 - Colour Mottle
 - Background Grain
@@ -70,17 +69,21 @@ focus mask.
 On an IMX464-sized frame that halves the preview stage — 12.8 ms per frame down to
 6.6 ms — before counting the sensor corrections and the denoisers, which run elsewhere.
 
+Hot pixel removal is not on the list and keeps running. Finding a target is when Push-To
+plate-solves the most, and a frame full of hot pixels does not solve at all — see
+[Hot Pixels](/sensor-corrections#hot-pixels).
+
 Their switches under **Settings** grey out while the mode is on, because the mode
 remembers what each one was set to. Turn it off once you are focused and every one goes
 back to your value — including the ones you had already turned off yourself.
 
 ## It is not available while you are stacking
 
-Two of the seven — Hot Pixel Rejection and Row/Column Pattern Removal — are not display
-settings. They run on the raw sensor mosaic, so the frame they clean up is the frame that
-goes into the stack. Turning them off part-way through an integration mixes hot pixels and
-banding into a master that **nothing can clean afterwards**: those defects sit in the same
-place in every frame, which is the whole reason the corrections exist.
+One of the six — Row/Column Pattern Removal — is not a display setting. It runs on the raw
+sensor mosaic, so the frame it cleans up is the frame that goes into the stack. Turning it
+off part-way through an integration mixes banding into a master that **nothing can clean
+afterwards**: the pattern sits in the same place in every frame, which is the whole reason
+the correction exists.
 
 So the switch is disabled while you are stacking, and pressing Start while you are focusing
 turns the mode off for you and puts your settings back before the first frame lands. It

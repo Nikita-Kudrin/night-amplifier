@@ -8,7 +8,7 @@ where that is.
 
 Find them under **Settings → Noise Reduction**.
 
-Both are among the seven that [Focus/Finder mode](/getting-started#focus-finder-mode)
+Both are among the six that [Focus/Finder mode](/getting-started#focus-finder-mode)
 holds off while you focus; their switches grey out while it is on and come back to your
 values when you turn it off.
 
@@ -120,8 +120,8 @@ result would undo the whole point of the mode.
 
 Coloured dots in the background are hot pixels, not noise — they are in the same
 place in every frame, and no amount of smoothing removes a defect that does not
-average away. Turn on **Hot Pixel Rejection** under
-[Sensor Corrections](/sensor-corrections) instead.
+average away. They are removed on the raw sensor data instead; if some survive,
+lower the **Hot Pixel Threshold** under [Sensor Corrections](/sensor-corrections#hot-pixels).
 
 Similarly, soft banding across the frame is a readout pattern; it needs
 **Row/Column Pattern Removal**, and smoothing it only turns sharp bands into
