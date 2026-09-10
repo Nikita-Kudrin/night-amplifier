@@ -25,7 +25,7 @@ const props = defineProps({
   denoise: {type: Object, required: true},
   previewResolution: {type: String, required: true},
   /**
-   * Focus/Finder mode holds four of these toggles off and owns the snapshot that
+   * Focus/Finder mode holds three of these toggles off and owns the snapshot that
    * restores them, so while it is on they are read-only — an edit that looked like it
    * took and then reverted on the next toggle is worse than one the UI refuses.
    */
@@ -72,24 +72,10 @@ function applyValue(key, value) {
 
     <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
 
-    <div class="control-group" style="margin-top: 0.5rem">
-      <BaseToggle
-          v-model="local.sensor_correction.hot_pixel_rejection"
-          label="Hot Pixel Rejection"
-          :help="HELP.hot_pixel_rejection"
-          :disabled="focusMode"
-          @update:model-value="apply('sensor_correction')"
-      />
-    </div>
-
-    <div
-        v-if="local.sensor_correction.hot_pixel_rejection"
-        class="control-group"
-        style="margin-bottom: 1.5rem"
-    >
+    <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
       <BaseSlider
           v-model="local.sensor_correction.hot_pixel_sigma"
-          label="Detection threshold"
+          label="Hot Pixel Threshold"
           large-gap
           :min="HOT_PIXEL_SIGMA_LIMITS.min"
           :max="HOT_PIXEL_SIGMA_LIMITS.max"

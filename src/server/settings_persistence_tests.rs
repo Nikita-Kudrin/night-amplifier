@@ -58,7 +58,6 @@ mod tests {
             dew_heater_power: 30,
             wanderer_mode: true,
             sensor_correction: SensorCorrectionSettings {
-                hot_pixel_rejection: false,
                 hot_pixel_sigma: 7.5,
                 fpn_removal: false,
                 superpixel_debayer: true,
@@ -142,13 +141,12 @@ mod tests {
             eula_accepted: false,
             indi_server_host: "127.0.0.1".to_string(),
             indi_server_port: 7624,
-            // Focus/Finder mode live: the snapshot is the only record of what the seven
+            // Focus/Finder mode live: the snapshot is the only record of what the six
             // managed settings were, so losing it in the file loses them for good.
             focus_mode: true,
             focus_mode_snapshot: Some(FocusModeSnapshot {
                 background_subtraction: true,
                 saturation_boost: false,
-                hot_pixel_rejection: true,
                 fpn_removal: false,
                 denoise_chroma: false,
                 denoise_luma: true,
@@ -313,7 +311,6 @@ mod tests {
             "focus_mode_snapshot": {
                 "background_subtraction": true,
                 "saturation_boost": false,
-                "hot_pixel_rejection": true,
                 "fpn_removal": true,
                 "denoise_chroma": true,
                 "denoise_luma": true,
@@ -330,7 +327,7 @@ mod tests {
 
     /// A snapshot written before a setting joined the managed set is missing that key.
     /// Defaulting it to `false` would silently disable a correction that is on by default —
-    /// six of the seven are — so each field defaults to the setting's own default.
+    /// five of the six are — so each field defaults to the setting's own default.
     #[test]
     fn test_a_snapshot_missing_a_field_restores_that_settings_default() {
         let snapshot: FocusModeSnapshot = serde_json::from_value(serde_json::json!({
@@ -340,10 +337,6 @@ mod tests {
 
         let defaults = CaptureSettings::default();
         assert_eq!(snapshot.background_subtraction, defaults.background_subtraction);
-        assert_eq!(
-            snapshot.hot_pixel_rejection,
-            defaults.sensor_correction.hot_pixel_rejection
-        );
         assert_eq!(snapshot.fpn_removal, defaults.sensor_correction.fpn_removal);
         assert_eq!(snapshot.denoise_chroma, defaults.denoise.chroma);
         assert_eq!(snapshot.denoise_luma, defaults.denoise.luma);
@@ -352,7 +345,7 @@ mod tests {
     }
 
     /// A flag with no snapshot has nothing to restore from, so it must not come back on —
-    /// otherwise the seven settings are stuck off with no record of what they were.
+    /// otherwise the six settings are stuck off with no record of what they were.
     #[test]
     fn test_focus_mode_without_a_snapshot_loads_as_off() {
         let json = serde_json::json!({
@@ -675,6 +668,89 @@ mod tests {
             .load()
             .expect("settings containing a removed key must still load");
         assert_eq!(loaded.exposure_us, 1_234_567);
+    }
+
+    /// Hot-pixel rejection lost its switch, and Focus/Finder mode stopped managing it. Every
+    /// file written before that carries the key — in `sensor_correction` and, if the mode
+    /// was on, in its snapshot. An observer who had it off, or who quit mid-focus, must
+    /// still get the rest of their settings and the mode back intact.
+    #[test]
+    fn a_file_that_switched_hot_pixel_rejection_off_still_loads() {
+        let json = serde_json::json!({
+            "exposure_us": 1000,
+            "gain": 100,
+            "offset": 10,
+            "bin": 1,
+            "auto_stretch": true,
+            "stacking": false,
+            "rejection_sigma": 2.5,
+            "background_subtraction": false,
+            "save_stacked_image": false,
+            "stacking_type": "deep_sky",
+            "sensor_correction": {
+                "hot_pixel_rejection": false,
+                "hot_pixel_sigma": 7.5,
+                "fpn_removal": false,
+                "superpixel_debayer": true,
+            },
+            "focus_mode": true,
+            "focus_mode_snapshot": {
+                "background_subtraction": true,
+                "saturation_boost": false,
+                "hot_pixel_rejection": true,
+                "fpn_removal": true,
+                "denoise_chroma": true,
+                "denoise_luma": true,
+                "dither": true,
+            },
+        });
+
+        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let mut restored: CaptureSettings = persisted.into();
+
+        assert_eq!(restored.sensor_correction.hot_pixel_sigma, 7.5);
+        assert!(restored.sensor_correction.superpixel_debayer);
+        assert!(restored.focus_mode);
+        assert!(restored.focus_mode_snapshot.is_some());
+
+        crate::server::state::focus_mode::set(&mut restored, false);
+        assert!(restored.sensor_correction.fpn_removal);
+        assert!(restored.background_subtraction);
+
+        let saved = serde_json::to_string(&PersistedSettings::from(&restored)).unwrap();
+        assert!(
+            !saved.contains("hot_pixel_rejection"),
+            "the removed switch must not be written back"
+        );
+    }
+
+    /// A hand-edited or older file is the other way a threshold that disables the
+    /// always-on hot-pixel stage could arrive, so it is held to the same range as the API.
+    #[test]
+    fn an_out_of_range_hot_pixel_sigma_in_a_file_loads_inside_the_range() {
+        for (on_disk, loaded) in [(0.5, 3.0), (-2.0, 3.0), (40.0, 12.0), (6.0, 6.0)] {
+            let json = serde_json::json!({
+                "exposure_us": 1000,
+                "gain": 100,
+                "offset": 10,
+                "bin": 1,
+                "auto_stretch": true,
+                "stacking": false,
+                "rejection_sigma": 2.5,
+                "background_subtraction": true,
+                "save_stacked_image": false,
+                "stacking_type": "deep_sky",
+                "sensor_correction": { "hot_pixel_sigma": on_disk },
+            });
+
+            let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+            let restored: CaptureSettings = persisted.into();
+
+            assert_eq!(
+                restored.sensor_correction.hot_pixel_sigma, loaded,
+                "on disk {on_disk}"
+            );
+        }
     }
 
     #[test]

@@ -543,11 +543,10 @@ describe('SettingsPanel', () => {
     })
 
     describe('Focus/Finder mode', () => {
-        // The seven the mode manages, by their label in this panel. Focus mode owns the
+        // The six the mode manages, by their label in this panel. Focus mode owns the
         // snapshot that restores them, so an edit here while it is on would either be
         // reverted on the next toggle or overwrite what the observer chose.
         const MANAGED = [
-            'Hot Pixel Rejection',
             'Row/Column Pattern Removal',
             'Colour Mottle',
             'Background Grain',
@@ -585,6 +584,20 @@ describe('SettingsPanel', () => {
             expect(
                 findToggleByLabel(wrapper, 'Superpixel Debayer').attributes('disabled')
             ).toBeUndefined()
+        })
+
+        // Hot pixel rejection has no switch at all: bilinear demosaic turns each hot pixel
+        // into a fake star, and Push-To could not plate-solve a single guide frame with the
+        // mode holding it off. Only the threshold is the observer's, and the mode leaves it be.
+        it('offers no Hot Pixel Rejection switch and keeps its threshold editable', () => {
+            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+
+            expect(() => findToggleByLabel(wrapper, 'Hot Pixel Rejection')).toThrow()
+            const threshold = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Hot Pixel Threshold')
+            expect(threshold.exists()).toBe(true)
+            expect(threshold.props('disabled')).toBeFalsy()
         })
 
         it('explains why the settings are greyed out', () => {

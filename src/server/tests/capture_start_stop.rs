@@ -207,7 +207,6 @@ async fn test_starting_a_capture_leaves_focus_mode_and_restores_the_settings() {
         "/api/settings",
         json!({
             "sensor_correction": {
-                "hot_pixel_rejection": true,
                 "hot_pixel_sigma": 7.5,
                 "fpn_removal": true,
                 "superpixel_debayer": false,
@@ -218,7 +217,7 @@ async fn test_starting_a_capture_leaves_focus_mode_and_restores_the_settings() {
     assert_eq!(status, StatusCode::OK);
     let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["data"]["sensor_correction"]["hot_pixel_rejection"], false);
+    assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
 
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -227,10 +226,9 @@ async fn test_starting_a_capture_leaves_focus_mode_and_restores_the_settings() {
     assert!(!settings.focus_mode, "a capture must never begin under the mode");
     assert!(settings.focus_mode_snapshot.is_none());
     assert!(
-        settings.sensor_correction.hot_pixel_rejection,
+        settings.sensor_correction.fpn_removal,
         "the stack's corrections must be back before the first frame"
     );
-    assert!(settings.sensor_correction.fpn_removal);
     assert_eq!(settings.sensor_correction.hot_pixel_sigma, 7.5);
     drop(settings);
 

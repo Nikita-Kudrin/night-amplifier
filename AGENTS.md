@@ -286,7 +286,7 @@ deleted the entry before the session could use it. See the Pro AGENTS.md.
 
 ### Focus/Finder mode (`state::focus_mode`)
 
-Forces seven settings off and keeps `focus_mode_snapshot` as the only record of what they
+Forces six settings off and keeps `focus_mode_snapshot` as the only record of what they
 were. **Entering must be idempotent** — a second `set(.., true)` that re-snapshots captures
 the already-forced `false`s and destroys the observer's values for good. Invariant:
 `focus_mode == focus_mode_snapshot.is_some()`, so drive it through `focus_mode::set`, never
@@ -295,13 +295,14 @@ it *after* every other field so the mode wins over a managed field in the same r
 with no toggle in the request `reconcile` absorbs a stale client's write into the snapshot
 rather than letting the next toggle silently revert it. `superpixel_debayer` is
 deliberately unmanaged — it is the cheap debayer, so forcing it either way costs frame rate.
+Hot-pixel rejection is not a setting at all any more; see the raw-CFA stage below.
 
 **The mode and an accumulating stack are mutually exclusive**, enforced both ways:
 `update_settings` answers 409 to `focus_mode: true` when `conflicts_with_capture` holds, and
-`CaptureService::{start,resume}_capture` leave the mode on the way in. Two of the seven
-(`hot_pixel_rejection`, `fpn_removal`) run pre-demosaic, so `stacking_task` integrates
-whatever they produce and never resets the stack on a `sensor_correction` change — hot
-pixels averaged in cannot be taken out. Live view accumulates nothing and is exempt;
+`CaptureService::{start,resume}_capture` leave the mode on the way in. One of the six
+(`fpn_removal`) runs pre-demosaic, so `stacking_task` integrates whatever it produces and
+never resets the stack on a `sensor_correction` change — banding averaged in cannot be
+taken out. Live view accumulates nothing and is exempt;
 *leaving* the mode is never refused. Measured win, preview stage only:
 `preview_pipeline/focus_mode_x6` 39.4 ms against `full_x6` 76.8 ms.
 
@@ -444,13 +445,17 @@ a test). Same seam will host calibration (dark/flat), not yet wired in.
 
 - Both filters work one colour site at a time — mixing sites reads the mosaic pattern as signal.
 - **`hot_pixels`**: gated on the *fraction* of centre amplitude the brightest neighbour carries,
-  not a raw diff, so bright star cores survive.
+  not a raw diff, so bright star cores survive. **Unconditional** — no setting, and Focus/Finder
+  mode cannot remove it: the plate solver reads this frame, and bilinear turns each hot pixel
+  into a star-sized blob. Guide subs with it off read 72 "stars" vs 25 and failed ASTAP at any
+  FOV (`push_to_guide_hot_pixel_tests` in Pro).
 - **`fpn`**: levels each line against a narrow (±8) even-order average of its own neighbours,
   not a whole-frame reference (which silently removed 5.2% of real flux). Skipped for Planetary.
 - **Planetary gets hot-pixel rejection only** — FPN bands the disc, superpixel halves
   resolution.
-- Timed at `info_span!` (~7ms + ~7.2ms/frame on IMX533/Pi). Per-site stats are precomputed and
-  TTL-cached, so `CfaPipeline` rebuilds per settings-change, not per frame.
+- Timed at `info_span!` (~7ms + ~7.2ms/frame on IMX533/Pi). `hot_pixels` measures its sky
+  and noise **every frame** from 4,096 samples/site — a 32-frame cache served a gain/exposure
+  change the old threshold (1 correction instead of 165, and the guide sub stopped solving).
 
 ### Frame memory layout (planar) — non-obvious and load-bearing
 
