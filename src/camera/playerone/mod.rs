@@ -59,6 +59,14 @@ impl CameraProvider for PlayerOneProvider {
             .collect())
     }
 
+    fn identities(&self) -> CameraResult<Vec<crate::camera::DeviceIdentity>> {
+        Ok(self
+            .list_cameras()?
+            .iter()
+            .map(|info| crate::camera::DeviceIdentity::of(info).with_device_id(info.id))
+            .collect())
+    }
+
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>> {
         let camera = PlayerOneCamera::open(index)?;
         Ok(Box::new(camera))
@@ -234,6 +242,7 @@ impl Camera for PlayerOneCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
+        let start = std::time::Instant::now();
         config.validate(&self.info)?;
         if config.should_reapply(self.last_applied_config.as_ref()) {
             let _span = tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
@@ -253,6 +262,7 @@ impl Camera for PlayerOneCamera {
             &self.cancel_flag,
             &self.buffer_pool,
             &mut self.stream_running,
+            start,
         )
     }
 

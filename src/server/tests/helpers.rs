@@ -114,6 +114,7 @@ pub async fn add_mock_camera(state: &Arc<AppState>, camera_id: &str) {
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
+        serial: None,
     };
 
     let mut cameras = state.cameras.write().await;

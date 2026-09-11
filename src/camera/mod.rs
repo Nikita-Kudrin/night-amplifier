@@ -14,9 +14,11 @@
 //! # Ok::<(), night_amplifier::camera::CameraError>(())
 //! ```
 
+mod catalog;
 mod device_lease;
 mod device_lost;
 mod error;
+pub mod identity;
 mod registry;
 mod simulated;
 mod traits;
@@ -48,14 +50,17 @@ mod touptek;
 mod touptek_stub;
 
 // Re-export everything
+pub use catalog::{DeviceCatalog, OpenedCamera, RegistryCatalog};
 pub use device_lease::DeviceLease;
 pub use device_lost::{is_marked as is_device_lost_message, mark as mark_device_lost};
 pub use error::{CameraError, CameraResult};
 pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};
+pub use identity::{CameraLocator, DeviceIdentity};
 pub use types::{
     BufferPool, CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets,
-    ImageFormat, PooledBuffer, RawFrame, SensorMode, SensorType,
+    ImageFormat, PooledBuffer, RawFrame, SensorMode, SensorType, FRAME_STALL_ALLOWANCE,
+    TRANSFER_FLOOR_BYTES_PER_SEC,
 };
 
 // Provider-specific re-exports

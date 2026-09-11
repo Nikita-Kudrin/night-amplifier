@@ -101,6 +101,7 @@ impl IndiCamera {
             hcg_gain: 0,
             sensor_modes: Vec::new(),
             has_dew_heater: false,
+            serial: None,
         };
 
         Ok(Self {

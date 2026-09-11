@@ -9,8 +9,9 @@
 use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
-use super::monitor;
-use crate::camera::{Camera, CameraInfo, CameraRegistry};
+use super::install;
+use crate::camera::identity::{self, CameraIdError};
+use crate::camera::{Camera, CameraInfo};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::events::ServerEvent;
 use crate::server::state::{
@@ -35,8 +36,11 @@ pub enum DisconnectCause {
     /// reconnecting would fight the request that got us here.
     Requested,
     /// The camera stopped answering or reported its device gone. Recoverable
-    /// in principle: hand it to the reconnect supervisor.
+    /// in principle: suspended for the reconnect supervisor (see `recovery`).
     DeviceFault,
+    /// The supervisor gave up. Ends the session like `Requested`, but keeps the guide
+    /// camera's raw-frame folder, since the observer did not end the observation.
+    RecoveryFailed,
 }
 
 impl DisconnectCause {
@@ -77,6 +81,9 @@ pub(crate) async fn with_camera<T>(
 /// Shared wait loop: register for the hand-back signal, try `f`, and sleep
 /// until either the monitor signals or the budget runs out. Registering before
 /// the check is what stops a hand-back that lands between them from being lost.
+///
+/// A recovering slot ends the wait at once: its handle is gone, and the one a reopen
+/// installs is in the slot before recovery lets go of it, so `f` is tried first.
 async fn with_handle_slot<T>(
     state: &Arc<AppState>,
     role: CameraRole,
@@ -94,6 +101,9 @@ async fn with_handle_slot<T>(
             if let Some(value) = f(&mut guard) {
                 return Some(value);
             }
+        }
+        if slot.is_recovering() {
+            return None;
         }
 
         tokio::select! {
@@ -115,11 +125,9 @@ pub async fn connect(
     camera_id: &str,
     role: CameraRole,
 ) -> ApiResult<ConnectedCameraInfo> {
-    // Serialize connects. The idempotency check below reads `cameras`, which
-    // `finalize_disconnect` clears before the reconnect supervisor starts, so
-    // without this an automatic reconnect and a user clicking Connect would
-    // both pass it, both open the device, and the second would displace — and
-    // therefore close — the first.
+    // Serialize connects, and with them the supervisor's `reopen_for_recovery`: two
+    // concurrent opens of one device would both pass the checks below, and the second
+    // would displace — and therefore close — the first.
     let _connect_guard = state.camera_connect_lock.lock().await;
 
     // Already connected? Return the existing info — matches the prior
@@ -129,6 +137,8 @@ pub async fn connect(
     {
         let cameras = state.cameras.read().await;
         if let Some(info) = cameras.get(camera_id) {
+            // A camera being recovered is still this camera: the answer is the entry,
+            // and the supervisor carries on reopening it.
             if info.role == role {
                 return Ok(info.clone());
             }
@@ -140,249 +150,28 @@ pub async fn connect(
         }
     }
 
+    let (provider, locator) = identity::parse_camera_id(camera_id).map_err(|e| match e {
+        CameraIdError::Format => ApiError::InvalidCameraIdFormat,
+        CameraIdError::Locator => ApiError::InvalidCameraIndex,
+    })?;
+    // A late open takes the device lease when it returns, superseding whatever was
+    // opened in between — the same reason recovery waits on these.
+    if state.slot(role).pending_opens.in_flight() > 0 {
+        return Err(ApiError::CameraOpenFailed(format!(
+            "an earlier open of the {} camera is still inside the vendor SDK",
+            role.label()
+        )));
+    }
+    let use_simulated = state.settings.read().await.use_simulated_camera;
+
+    let (index, listed) = install::locate(state, role, provider, &locator, use_simulated).await?;
+    install::refuse_device_of_other_role(state, role, provider, index, &listed).await?;
     vacate_role(state, role).await?;
 
-    let (provider_name, index) = parse_camera_id(camera_id)?;
-    let use_simulated = state.settings.read().await.use_simulated_camera;
-    let provider_name = provider_name.to_string();
-
-    // Open the camera on a blocking task so the FFI call doesn't occupy a
-    // tokio worker. Returned: the handle plus the canonical provider name
-    // (case-corrected) plus the CameraInfo.
-    let open_result = tokio::task::spawn_blocking(
-        move || -> Result<(Box<dyn Camera>, String), crate::camera::CameraError> {
-            let mut registry = CameraRegistry::new();
-            let _ = registry.register(crate::camera::PlayerOneProvider::new());
-            let _ = registry.register(crate::camera::ZwoProvider::new());
-            if use_simulated {
-                let _ = registry.register(crate::camera::SimulatedProvider::new());
-            }
-            let provider_registry_name = registry
-                .providers()
-                .into_iter()
-                .find(|name| name.to_lowercase() == provider_name.to_lowercase())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| provider_name.clone());
-
-            let camera = registry.open_camera(&provider_registry_name, index)?;
-            Ok((camera, provider_registry_name))
-        },
-    )
-    .await;
-
-    let (mut camera, provider_registry_name) = match open_result {
-        Ok(Ok(pair)) => pair,
-        Ok(Err(e)) => {
-            error!(camera_id = %camera_id, error = %e, "Failed to open camera");
-            return Err(ApiError::CameraOpenFailed(e.to_string()));
-        }
-        Err(e) => {
-            error!(camera_id = %camera_id, error = %e, "Blocking task failed");
-            return Err(ApiError::Internal(e.to_string()));
-        }
-    };
-
-    let info = camera.info().clone();
-    let camera_name = info.name.clone();
-
-    // Prove the handle works before reporting success.
-    //
-    // `open()` returning is not evidence: the field failure this guards against
-    // opened cleanly, seeded the cooler without complaint, and only started
-    // answering `POA_ERROR_NOT_OPENED` a minute later, once the previous
-    // abandoned handle's destructor had closed the device underneath it. A
-    // status read touches the same config path a capture will, so a handle that
-    // is already dead fails here instead of at the first frame.
-    if let Err(e) = camera.status() {
-        if e.is_sdk_disconnected() {
-            error!(
-                camera_id = %camera_id,
-                camera_name = %camera_name,
-                error = %e,
-                "Camera opened but is not responding; discarding the handle"
-            );
-            let _ = camera.close();
-            return Err(ApiError::CameraOpenFailed(format!(
-                "camera opened but did not respond: {}",
-                e
-            )));
-        }
-        debug!(camera_id = %camera_id, error = %e, "Probe read returned a non-fatal error");
-    }
-
-    info!(
-        camera_id = %camera_id,
-        camera_name = %camera_name,
-        provider = %provider_registry_name,
-        "Camera opened and verified"
-    );
-    debug!(
-        camera_id = %camera_id,
-        specifications = ?info,
-        "Camera specifications"
-    );
-
-    // Swap the per-camera profile into this role's live fields before deciding precool
-    // — otherwise a cooled-camera's `cooler_enabled` would leak into the
-    // next-connected uncooled camera.
-    let profile_key = camera_profile_key(&provider_registry_name, &camera_name, role);
-    let (cooler_enabled, target_temp_c, cooler_fast_mode, dew_heater_enabled, dew_heater_power) = {
-        let mut settings = state.settings.write().await;
-        apply_camera_profile_on_connect(&mut settings, profile_key.clone(), role, &info);
-        // Give the solver a rig key that came from this sensor rather than from the
-        // flat block, which describes whichever camera was configured last. Two
-        // unprofiled cameras otherwise share one key and one remembered FOV — see
-        // `CaptureSettings::ensure_camera_telescope_profile`.
-        if settings.ensure_camera_telescope_profile(&camera_name, &info) {
-            info!(
-                camera_name = %camera_name,
-                role = role.label(),
-                pixel_size_um = info.pixel_size_y_um,
-                sensor = format!("{}x{}", info.max_width, info.max_height),
-                "Seeded a telescope profile from the camera's own sensor"
-            );
-        }
-        let profile = settings.profile_for(role);
-        (
-            profile.cooler_enabled,
-            profile.target_temp_c,
-            profile.cooler_fast_mode,
-            profile.dew_heater_enabled,
-            profile.dew_heater_power,
-        )
-    };
-
-    // Decide initial phase: if the camera supports cooling and the user has
-    // a target in settings, kick off precool right now. Otherwise Idle.
-    //
-    // In normal (ramped) mode we hold the TEC setpoint at the current sensor
-    // temperature and let the monitor ramp it toward the user's target at
-    // `RAMP_RATE_C_PER_MIN`. In fast mode we push the final target directly,
-    // restoring the old "snap to setpoint" behavior.
-    let (initial_phase, cooler_applied) = if info.has_cooler && cooler_enabled {
-        if let Some(final_target) = target_temp_c {
-            let initial_setpoint = if cooler_fast_mode {
-                final_target
-            } else {
-                match camera.status() {
-                    Ok(s) => s.temperature_c,
-                    Err(_) => final_target,
-                }
-            };
-            let seed = camera
-                .set_target_temperature(initial_setpoint)
-                .and_then(|()| camera.set_cooler(true));
-            match seed {
-                Ok(()) => (CameraPhase::Precooling, true),
-                Err(e) => {
-                    warn!(error = %e, "Failed to enable cooler on connect — falling back to Idle");
-                    (CameraPhase::Idle, false)
-                }
-            }
-        } else {
-            (CameraPhase::Idle, false)
-        }
-    } else {
-        (CameraPhase::Idle, false)
-    };
-
-    // Apply initial dew heater state if supported.
-    if info.has_dew_heater {
-        let _ = camera.set_dew_heater(dew_heater_enabled, dew_heater_power);
-    }
-
-    let connected_info = ConnectedCameraInfo {
-        id: camera_id.to_string(),
-        provider: provider_registry_name,
-        index,
-        role,
-        info,
-    };
-
-    // Store handle, metadata, selected, phase.
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert(camera_id.to_string(), connected_info.clone());
-        telemetry_metrics::record_cameras_count(cameras.len() as u64);
-    }
-    if role == CameraRole::Main {
-        // The selection is what the settings panel is editing, and a freshly connected
-        // imaging camera is what the user is about to configure. A guide camera does not
-        // steal that focus.
-        *state.selected_camera.write().await = Some(camera_id.to_string());
-    }
-    {
-        let slot = state.slot(role);
-        let mut guard = slot.handle.lock().expect("camera handle mutex poisoned");
-        debug_assert!(
-            guard.is_none(),
-            "connect installed a handle over an occupied {} slot — vacate_role should have cleared it",
-            role.label()
-        );
-        if let Some(mut displaced) = guard.replace(camera) {
-            warn!(camera_name = %camera_name, role = role.label(), "Closing a camera handle displaced by this connect");
-            let _ = displaced.close();
-        }
-    }
-    state.slot(role).notify_handle_returned();
-
-    state.set_camera_phase(&camera_name, initial_phase).await;
-
-    // Spawn the monitor thread. It will drive Precooling→Idle transition
-    // and emit `CameraStatusUpdated` every 2s for any cooled camera.
-    let tx = monitor::spawn(
-        Arc::clone(state),
-        role,
-        camera_name.clone(),
-        tokio::runtime::Handle::current(),
-    );
-    if let Some(orphan) = state.slot(role).set_monitor_tx(Some(tx)) {
-        let _ = orphan.send(MonitorCmd::Shutdown);
-    }
-
-    // If we started precooling, hand the ramp targets off to the monitor so
-    // it can begin rate-limited tracking (or snap to target when in fast mode).
-    if cooler_applied {
-        send_monitor_cmd(
-            state,
-            role,
-            MonitorCmd::UpdateCoolerTarget {
-                enabled: true,
-                target: target_temp_c,
-                fast: cooler_fast_mode,
-            },
-        );
-    }
-
-    let _ = state
-        .events
-        .send(ServerEvent::camera_connected(&camera_name));
-
-    // Name the solving camera and its optics before any frame can reach the solver, so
-    // the first solve of the session is already judged against the right rig. With a
-    // guide camera present that rig is the *guide* scope, which is usually a different
-    // focal length — an ASTAP hint from the main scope sends it searching at the wrong
-    // scale.
-    sync_solver_rig(state).await;
-
-    // Persist the (possibly new / clamped) camera profile to disk.
-    state.save_settings().await;
-
-    // The guide camera free-runs from the moment it connects: solving and its preview
-    // must work while the user is still framing, before any capture has started.
-    if role == CameraRole::Guide {
-        crate::server::capture::guide_task::start(state, &connected_info);
-    }
-
-    debug!(
-        camera_id = %camera_id,
-        role = role.label(),
-        phase = ?initial_phase,
-        cooler_applied,
-        "Camera session started"
-    );
-
-    Ok(connected_info)
+    let opened = install::open_verified(state, role, camera_id, provider, index, &locator, use_simulated)
+        .await
+        .inspect_err(|e| error!(camera_id = %camera_id, error = %e, "Failed to open camera"))?;
+    install::install_camera(state, camera_id, role, opened.provider, index, opened.camera, None).await
 }
 
 /// Make `role` free for a new camera, or explain why it cannot be.
@@ -396,12 +185,12 @@ pub(crate) async fn vacate_role(state: &Arc<AppState>, role: CameraRole) -> ApiR
         return Ok(());
     };
 
-    let phase = state.camera_phase(&incumbent.info.name).await;
+    let phase = state.camera_phase(role).await;
     let capture_state = state.capture_state().await;
     let busy_capturing = role == CameraRole::Main
         && matches!(
             capture_state,
-            CaptureState::Capturing | CaptureState::Starting
+            CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering
         );
 
     // `Guiding` is deliberately absent: a guide loop never ends on its own, so refusing
@@ -570,16 +359,34 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
     // Can't disconnect the imaging camera mid-capture — user must stop capture first.
     // The guide camera has no such tie: its loop is its own and stopping it costs the
     // session nothing but plate solving.
-    if role == CameraRole::Main {
-        let current_capture_state = state.capture_state().await;
-        if current_capture_state == CaptureState::Capturing
-            || current_capture_state == CaptureState::Starting
-        {
-            return Err(ApiError::CameraInUse);
-        }
+    //
+    // A capture paused for recovery ends here instead. Ended first, with the same
+    // compare-and-set a resume makes: checked only, a reopen finishing meanwhile resumed
+    // the capture on the camera this disconnect was warming up, and cancelled the warm-up.
+    if role == CameraRole::Main
+        && !state.end_paused_capture().await
+        && matches!(
+            state.capture_state().await,
+            CaptureState::Capturing | CaptureState::Starting
+        )
+    {
+        return Err(ApiError::CameraInUse);
     }
 
-    let phase = state.camera_phase(&camera_name).await;
+    // Nothing to warm up or stop: the handle is already gone, and ending the session is
+    // what stops the supervisor. Behind the connect lock, which a reopen holds from
+    // opening the device to installing it — tearing down past it was undone the moment
+    // the open returned.
+    if state.slot(role).is_recovering() {
+        let _reopen_done = state.camera_connect_lock.lock().await;
+        if state.slot(role).is_recovering() {
+            finalize_disconnect(state, role, &camera_name, DisconnectCause::Requested).await;
+            return Ok(camera_name);
+        }
+        // It came back while we waited: disconnect it the ordinary way.
+    }
+
+    let phase = state.camera_phase(role).await;
 
     // Already warming up — idempotent no-op.
     if phase == CameraPhase::WarmingUp {
@@ -613,7 +420,7 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
         // Start warmup; monitor thread will close handle + emit
         // CameraDisconnected when the sensor reaches WARMUP_THRESHOLD_C.
         state
-            .set_camera_phase(&camera_name, CameraPhase::WarmingUp)
+            .set_camera_phase(role, &camera_name, CameraPhase::WarmingUp)
             .await;
         send_monitor_cmd(state, role, MonitorCmd::StartWarmup { fast });
         info!(camera_id = %camera_id, fast, "Warmup initiated; disconnect will complete asynchronously");
@@ -632,7 +439,7 @@ pub async fn take_for_capture(
     role: CameraRole,
     camera_name: &str,
 ) -> Result<Box<dyn Camera>, ApiError> {
-    let phase = state.camera_phase(camera_name).await;
+    let phase = state.camera_phase(role).await;
 
     if phase == CameraPhase::WarmingUp {
         // User started capture mid-warmup — cancel, re-enable cooler per
@@ -664,6 +471,11 @@ pub async fn take_for_capture(
     send_monitor_cmd(state, role, MonitorCmd::HandOffToCapture);
 
     let camera = take_camera(state, role).await.ok_or_else(|| {
+        if state.slot(role).is_recovering() {
+            return ApiError::CameraRecovering {
+                camera: camera_name.to_string(),
+            };
+        }
         ApiError::Internal(format!(
             "Camera '{}' did not become available for capture — the monitor is stuck in a camera call",
             camera_name
@@ -676,7 +488,7 @@ pub async fn take_for_capture(
         CameraRole::Main => CameraPhase::Capturing,
         CameraRole::Guide => CameraPhase::Guiding,
     };
-    state.set_camera_phase(camera_name, phase).await;
+    state.set_camera_phase(role, camera_name, phase).await;
 
     Ok(camera)
 }
@@ -701,7 +513,8 @@ pub async fn return_from_capture(
             // superseded handle a no-op against the live device.
             let superseded = state.camera_in_role(role).await.map(|c| c.info.name).as_deref()
                 != Some(camera_name)
-                || state.slot(role).holds_handle();
+                || state.slot(role).holds_handle()
+                || state.slot(role).is_recovering();
             if superseded {
                 warn!(
                     camera_name,
@@ -747,7 +560,7 @@ pub async fn return_from_capture(
                 CameraPhase::Idle
             };
 
-            state.set_camera_phase(camera_name, next_phase).await;
+            state.set_camera_phase(role, camera_name, next_phase).await;
             send_monitor_cmd(state, role, MonitorCmd::ResumeAfterCapture);
 
             // If we're back in Precooling after capture, the capture thread's
@@ -787,6 +600,21 @@ pub async fn finalize_disconnect(
     camera_name: &str,
     cause: DisconnectCause,
 ) {
+    // A report about a camera the role no longer holds — a loop that outlived its
+    // camera's replacement — must not tear down the camera that replaced it.
+    if let Some(current) = state.camera_in_role(role).await {
+        if current.info.name != camera_name {
+            warn!(camera_name, current = %current.info.name, role = role.label(), ?cause, "Ignoring a disconnect for a camera this role no longer holds");
+            return;
+        }
+    }
+    if cause == DisconnectCause::DeviceFault
+        && super::recovery::suspend(state, role, camera_name).await
+    {
+        return;
+    }
+    let was_recovering = state.slot(role).end_recovery();
+
     // Shut down the monitor thread first.
     send_monitor_cmd(state, role, MonitorCmd::Shutdown);
     state.slot(role).set_monitor_tx(None);
@@ -817,21 +645,19 @@ pub async fn finalize_disconnect(
     state.slot(role).drain_ops();
 
     // Drop metadata and status, clear selected.
-    let removed_id = {
+    let removed = {
         let mut cameras = state.cameras.write().await;
         let id = cameras
             .iter()
             .find(|(_, v)| v.info.name == camera_name && v.role == role)
             .map(|(k, _)| k.clone());
-        if let Some(ref id) = id {
-            cameras.remove(id);
-            telemetry_metrics::record_cameras_count(cameras.len() as u64);
-        }
-        id
+        let removed = id.and_then(|id| cameras.remove(&id));
+        telemetry_metrics::record_cameras_count(cameras.len() as u64);
+        removed
     };
-    if let Some(ref id) = removed_id {
+    if let Some(ref removed) = removed {
         let mut selected = state.selected_camera.write().await;
-        if selected.as_ref() == Some(id) {
+        if selected.as_ref() == Some(&removed.id) {
             *selected = None;
         }
     }
@@ -845,7 +671,7 @@ pub async fn finalize_disconnect(
     // along with the main scope's optics.
     sync_solver_rig(state).await;
     state
-        .set_camera_phase(camera_name, CameraPhase::Disconnected)
+        .set_camera_phase(role, camera_name, CameraPhase::Disconnected)
         .await;
     let _ = state
         .events
@@ -853,16 +679,24 @@ pub async fn finalize_disconnect(
 
     info!(camera_name, role = role.label(), "Camera disconnected");
 
+    if was_recovering && role == CameraRole::Main {
+        state.end_paused_capture().await;
+    }
+
     if !cause.should_attempt_reconnect() {
         // A deliberate disconnect ends the observation, so the folder it was filling is
         // not something a later session should rejoin.
-        *state.slot(role).raw_session.write().await = None;
+        if cause == DisconnectCause::Requested {
+            *state.slot(role).raw_session.write().await = None;
+        }
         return;
     }
-    let Some(camera_id) = removed_id else {
+    // Only reached when recovery declined to suspend — automatic reconnect is off — so
+    // the supervisor's job is to say so.
+    let Some(removed) = removed else {
         return;
     };
-    super::reconnect::spawn(state, role, &camera_id, camera_name);
+    super::reconnect::spawn(state, removed);
 }
 
 /// Push `role`'s current `cooler_enabled`/`target_temp_c` settings to that slot's camera
@@ -881,10 +715,13 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>, role: CameraRole) {
         return;
     }
 
-    let phase = state.camera_phase(&camera_name).await;
+    let phase = state.camera_phase(role).await;
     if matches!(
         phase,
-        CameraPhase::Capturing | CameraPhase::Guiding | CameraPhase::WarmingUp
+        CameraPhase::Capturing
+            | CameraPhase::Guiding
+            | CameraPhase::WarmingUp
+            | CameraPhase::Recovering
     ) {
         debug!(
             camera_name = %camera_name,
@@ -928,7 +765,7 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>, role: CameraRole) {
     // drop back to Precooling so the monitor re-drives the settle logic.
     if enabled && target.is_some() && phase == CameraPhase::Idle {
         state
-            .set_camera_phase(&camera_name, CameraPhase::Precooling)
+            .set_camera_phase(role, &camera_name, CameraPhase::Precooling)
             .await;
     }
 
@@ -965,7 +802,7 @@ pub async fn apply_dew_heater_settings(state: &Arc<AppState>, role: CameraRole) 
         return;
     }
 
-    let phase = state.camera_phase(&camera_name).await;
+    let phase = state.camera_phase(role).await;
     let (enabled, power) = {
         let profile = state.settings.read().await.profile_for(role);
         (profile.dew_heater_enabled, profile.dew_heater_power)
@@ -984,10 +821,12 @@ pub async fn apply_dew_heater_settings(state: &Arc<AppState>, role: CameraRole) 
         );
         return;
     }
-    if phase == CameraPhase::Capturing {
+    // A recovering camera has no handle; the reopen applies the stored profile.
+    if matches!(phase, CameraPhase::Capturing | CameraPhase::Recovering) {
         debug!(
             camera_name = %camera_name,
-            "Skipping live dew heater apply — capture owns the handle"
+            ?phase,
+            "Skipping live dew heater apply — no handle to apply it to"
         );
         return;
     }
@@ -1010,42 +849,4 @@ pub async fn apply_dew_heater_settings(state: &Arc<AppState>, role: CameraRole) 
 /// Send a command to one slot's monitor, swallowing failures if it has exited.
 pub(crate) fn send_monitor_cmd(state: &Arc<AppState>, role: CameraRole, cmd: MonitorCmd) {
     state.slot(role).send_monitor_cmd(cmd);
-}
-
-/// Parse camera ID into provider name and index (e.g. "playerone_0" → ("playerone", 0)).
-pub(super) fn parse_camera_id(camera_id: &str) -> ApiResult<(&str, usize)> {
-    let parts: Vec<&str> = camera_id.splitn(2, '_').collect();
-    if parts.len() != 2 {
-        return Err(ApiError::InvalidCameraIdFormat);
-    }
-    let index: usize = parts[1].parse().map_err(|_| ApiError::InvalidCameraIndex)?;
-    Ok((parts[0], index))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_camera_id_valid() {
-        let (provider, index) = parse_camera_id("playerone_0").unwrap();
-        assert_eq!(provider, "playerone");
-        assert_eq!(index, 0);
-    }
-
-    #[test]
-    fn parse_camera_id_invalid_format() {
-        assert!(matches!(
-            parse_camera_id("invalidformat"),
-            Err(ApiError::InvalidCameraIdFormat)
-        ));
-    }
-
-    #[test]
-    fn parse_camera_id_invalid_index() {
-        assert!(matches!(
-            parse_camera_id("provider_notanumber"),
-            Err(ApiError::InvalidCameraIndex)
-        ));
-    }
 }

@@ -7,6 +7,7 @@ import {
   EXPOSURE_PRESETS,
   GAIN_LIMITS,
   CAPTURE_STATES,
+  isCaptureRunning,
   DEFAULT_SETTINGS,
   STRETCH_AGGRESSIVENESS_OPTIONS,
   HELP_TEXTS
@@ -118,7 +119,7 @@ onMounted(async () => {
 
 const mainCapturing = computed(
     () =>
-        eventStream.captureState.value === CAPTURE_STATES.CAPTURING ||
+        isCaptureRunning(eventStream.captureState.value) ||
         eventStream.captureState.value === CAPTURE_STATES.STARTING
 )
 

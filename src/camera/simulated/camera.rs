@@ -352,6 +352,11 @@ impl Camera for SimulatedCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
+        #[cfg(debug_assertions)]
+        if super::stall_injection::stall_now() {
+            return Err(CameraError::ExposureTimeout(config.stall_budget(0)));
+        }
+
         // Store current settings
         self.current_exposure_us = config.exposure_us;
         self.current_gain = config.gain;
@@ -489,6 +494,7 @@ pub fn create_camera_info(
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
+        serial: None,
     }
 }
 

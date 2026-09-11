@@ -319,9 +319,7 @@ impl Camera for TouptekCamera {
         let buf_size = (w as usize) * (h as usize) * bytes_per_pixel;
         let mut buffer = self.buffer_pool.get(buf_size);
 
-        // Calculate timeout: exposure + margin
-        let exposure_duration = Duration::from_micros(config.exposure_us);
-        let total_timeout = config.timeout + exposure_duration;
+        let total_timeout = config.stall_budget(buf_size);
         let wait_ms = total_timeout.as_millis().min(u32::MAX as u128) as u32;
 
         let start = Instant::now();
@@ -508,6 +506,7 @@ fn build_camera_info_from_device(dev: &ToupcamDeviceV2, id: i32) -> Option<Camer
         hcg_gain: 100,
         sensor_modes: Vec::new(),
         has_dew_heater: false,
+        serial: None,
     })
 }
 

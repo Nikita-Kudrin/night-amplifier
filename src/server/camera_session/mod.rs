@@ -11,11 +11,15 @@
 
 use std::time::Duration;
 
+mod install;
 pub mod lifecycle;
 pub mod monitor;
 pub(crate) mod ramp;
 mod reconnect;
+mod recovery;
 
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod tests;
 

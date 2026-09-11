@@ -190,17 +190,8 @@ fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {
     }
 }
 
-pub fn get_capture_dimensions(info: &CameraInfo, config: &CaptureConfig) -> (u32, u32) {
-    if let Some((_, _, w, h)) = config.roi {
-        (w, h)
-    } else {
-        (
-            info.max_width / config.bin as u32,
-            info.max_height / config.bin as u32,
-        )
-    }
-}
-
+/// `start` is when `capture()` was entered, config reapply included — see
+/// [`CaptureConfig::stall_budget`].
 pub fn run_capture(
     camera: &mut POACamera,
     info: &CameraInfo,
@@ -208,6 +199,7 @@ pub fn run_capture(
     cancel_flag: &AtomicBool,
     buffer_pool: &crate::camera::types::BufferPool,
     stream_running: &mut bool,
+    start: Instant,
 ) -> CameraResult<RawFrame> {
     // Reset cancel flag
     cancel_flag.store(false, Ordering::SeqCst);
@@ -219,7 +211,7 @@ pub fn run_capture(
     // correct (the common case, frame to frame), and only zero-fills the
     // newly added tail when growing — no full reallocation/memset every
     // frame the way a fresh `vec![0u8; buffer_len]` would need.
-    let (width, height) = get_capture_dimensions(info, config);
+    let (width, height) = config.frame_dimensions(info);
     let bytes_per_pixel = match config.format {
         ImageFormat::Raw8 => 1,
         ImageFormat::Raw16 => 2,
@@ -230,10 +222,7 @@ pub fn run_capture(
         .saturating_mul(bytes_per_pixel);
     let mut buffer = buffer_pool.get(buffer_len);
 
-    // Calculate timeout
-    let exposure_duration = Duration::from_micros(config.exposure_us);
-    let total_timeout = config.timeout + exposure_duration;
-    let start = Instant::now();
+    let total_timeout = config.stall_budget(buffer_len);
     let is_continuous = config.is_continuous();
 
     // Start exposure if not already running in continuous mode

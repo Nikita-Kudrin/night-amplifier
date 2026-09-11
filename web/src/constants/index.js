@@ -206,6 +206,17 @@ export const CAPTURE_STATES = {
     CAPTURING: 'Capturing',
     STOPPING: 'Stopping',
     ERROR: 'Error',
+    // Paused while the server reopens a camera that dropped out; it resumes on its own.
+    RECOVERING: 'Recovering',
+}
+
+/**
+ * Whether a capture session is running, as far as the observer is concerned. A capture
+ * paused for a camera reconnect still is: showing it as stopped is exactly the
+ * disconnect flicker the server's quiet recovery exists to hide.
+ */
+export function isCaptureRunning(state) {
+    return state === CAPTURE_STATES.CAPTURING || state === CAPTURE_STATES.RECOVERING
 }
 
 // WebSocket reconnection settings

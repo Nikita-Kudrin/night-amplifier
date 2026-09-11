@@ -40,6 +40,10 @@ pub enum ApiError {
     #[error("Capture already in progress")]
     CaptureInProgress,
 
+    /// A resume found no capture paused for recovery — it was stopped or disconnected.
+    #[error("There is no paused capture to resume")]
+    CaptureNotPaused,
+
     #[error("Cannot disconnect camera while capturing")]
     CameraInUse,
 
@@ -86,6 +90,16 @@ pub enum ApiError {
     #[error("Failed to open camera: {0}")]
     CameraOpenFailed(String),
 
+    /// The device that opened is not the camera the id or the recovery named — the USB
+    /// list reordered between enumerating it and opening it.
+    #[error("Opened '{found}' where '{expected}' was expected; the camera list changed")]
+    CameraIdentityMismatch { expected: String, found: String },
+
+    /// The camera's handle was lost and recovery is reopening it; there is nothing to
+    /// hand out until it has.
+    #[error("'{camera}' is being reconnected")]
+    CameraRecovering { camera: String },
+
     #[error("Failed to configure simulator: {0}")]
     SimulatorConfigFailed(String),
 
@@ -106,6 +120,7 @@ impl ApiError {
             ApiError::CameraNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
             ApiError::CaptureInProgress => StatusCode::CONFLICT,
+            ApiError::CaptureNotPaused => StatusCode::CONFLICT,
             ApiError::CameraInUse => StatusCode::CONFLICT,
             ApiError::CameraRoleBusy { .. } => StatusCode::CONFLICT,
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
@@ -116,6 +131,8 @@ impl ApiError {
             ApiError::InvalidCameraIdFormat => StatusCode::BAD_REQUEST,
             ApiError::InvalidCameraIndex => StatusCode::BAD_REQUEST,
             ApiError::CameraOpenFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            ApiError::CameraIdentityMismatch { .. } => StatusCode::CONFLICT,
+            ApiError::CameraRecovering { .. } => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::SimulatorConfigFailed(_) => StatusCode::BAD_REQUEST,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

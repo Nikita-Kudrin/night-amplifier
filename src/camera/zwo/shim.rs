@@ -75,6 +75,46 @@ pub struct CameraInfoASI {
     pub is_trigger_cam: bool,
 }
 
+impl CameraInfoASI {
+    /// Readable without opening the device — `ASIGetCameraProperty` needs no handle.
+    fn from_property(info: &ASI_CAMERA_INFO) -> Self {
+        let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
+            .to_string_lossy()
+            .into_owned();
+        let supported_bins = info
+            .SupportedBins
+            .iter()
+            .take_while(|&&b| b != 0)
+            .map(|&b| b)
+            .collect();
+        let supported_video_format = info
+            .SupportedVideoFormat
+            .iter()
+            .take_while(|&&f| f != ASI_IMG_TYPE_ASI_IMG_END)
+            .copied()
+            .collect();
+
+        Self {
+            name,
+            camera_id: info.CameraID as i32,
+            max_height: info.MaxHeight as i32,
+            max_width: info.MaxWidth as i32,
+            is_color_cam: info.IsColorCam == ASI_BOOL_ASI_TRUE,
+            bayer_pattern: info.BayerPattern,
+            supported_bins,
+            supported_video_format,
+            pixel_size: info.PixelSize as f64,
+            mechanical_shutter: info.MechanicalShutter == ASI_BOOL_ASI_TRUE,
+            is_cooler_cam: info.IsCoolerCam == ASI_BOOL_ASI_TRUE,
+            is_usb3_host: info.IsUSB3Host == ASI_BOOL_ASI_TRUE,
+            is_usb3_camera: info.IsUSB3Camera == ASI_BOOL_ASI_TRUE,
+            elec_per_adu: info.ElecPerADU as f32,
+            bit_depth: info.BitDepth as i32,
+            is_trigger_cam: info.IsTriggerCam == ASI_BOOL_ASI_TRUE,
+        }
+    }
+}
+
 pub struct Camera {
     camera_id: c_int,
     /// Proof this handle still owns `camera_id`. Gates every `ASICloseCamera`.
@@ -93,46 +133,12 @@ impl Camera {
             return Err(asi_err("ASIInitCamera", err));
         }
 
-        let mut info: ASI_CAMERA_INFO = unsafe { std::mem::zeroed() };
-        let err = unsafe { sdk.api.ASIGetCameraProperty(&mut info, camera_id) };
-        if err != ASI_ERROR_CODE_ASI_SUCCESS {
-            return Err(asi_err("ASIGetCameraProperty", err));
-        }
-
-        let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        let supported_bins = info
-            .SupportedBins
-            .iter()
-            .take_while(|&&b| b != 0)
-            .map(|&b| b)
-            .collect();
-        let supported_video_format = info
-            .SupportedVideoFormat
-            .iter()
-            .take_while(|&&f| f != ASI_IMG_TYPE_ASI_IMG_END)
-            .copied()
-            .collect();
-
-        let info_asi = CameraInfoASI {
-            name,
-            camera_id: info.CameraID as i32,
-            max_height: info.MaxHeight as i32,
-            max_width: info.MaxWidth as i32,
-            is_color_cam: info.IsColorCam == ASI_BOOL_ASI_TRUE,
-            bayer_pattern: info.BayerPattern,
-            supported_bins,
-            supported_video_format,
-            pixel_size: info.PixelSize as f64,
-            mechanical_shutter: info.MechanicalShutter == ASI_BOOL_ASI_TRUE,
-            is_cooler_cam: info.IsCoolerCam == ASI_BOOL_ASI_TRUE,
-            is_usb3_host: info.IsUSB3Host == ASI_BOOL_ASI_TRUE,
-            is_usb3_camera: info.IsUSB3Camera == ASI_BOOL_ASI_TRUE,
-            elec_per_adu: info.ElecPerADU as f32,
-            bit_depth: info.BitDepth as i32,
-            is_trigger_cam: info.IsTriggerCam == ASI_BOOL_ASI_TRUE,
-        };
+        // `ASIGetCameraProperty` takes a list *index*, and a camera id stops matching its
+        // index once the bus re-enumerates — which read another camera's name and failed
+        // the reopened camera's identity check.
+        let info_asi = get_camera_properties()
+            .and_then(|mut cameras| cameras.remove(&camera_id))
+            .ok_or_else(|| format!("ASIGetCameraProperty: camera id {camera_id} is not listed"))?;
 
         Ok((
             Self {
@@ -422,25 +428,29 @@ impl Drop for Camera {
     }
 }
 
-pub fn get_camera_ids() -> Option<BTreeMap<i32, String>> {
+/// Every listed camera's properties, keyed — and so ordered — by camera id. Opens
+/// nothing.
+pub fn get_camera_properties() -> Option<BTreeMap<i32, CameraInfoASI>> {
     let sdk = ZwoSdk::try_load()?;
     let count = unsafe { sdk.api.ASIGetNumOfConnectedCameras() };
-    if count <= 0 {
-        return Some(BTreeMap::new());
-    }
-
     let mut map = BTreeMap::new();
-    for i in 0..count {
+    for i in 0..count.max(0) {
         let mut info: ASI_CAMERA_INFO = unsafe { std::mem::zeroed() };
         let err = unsafe { sdk.api.ASIGetCameraProperty(&mut info, i) };
         if err == ASI_ERROR_CODE_ASI_SUCCESS {
-            let name = unsafe { CStr::from_ptr(info.Name.as_ptr()) }
-                .to_string_lossy()
-                .into_owned();
-            map.insert(info.CameraID as i32, name);
+            map.insert(info.CameraID as i32, CameraInfoASI::from_property(&info));
         }
     }
     Some(map)
+}
+
+pub fn get_camera_ids() -> Option<BTreeMap<i32, String>> {
+    get_camera_properties().map(|cameras| {
+        cameras
+            .into_iter()
+            .map(|(id, properties)| (id, properties.name))
+            .collect()
+    })
 }
 
 pub fn num_cameras() -> i32 {

@@ -1,6 +1,6 @@
 <script setup>
 import {computed, inject} from 'vue'
-import {CAPTURE_STATES} from '../constants'
+import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 
 const eventStream = inject('eventStream')
@@ -11,9 +11,8 @@ const currentCamera = computed(() => cameras.value.find((c) => c.id === selected
 
 const stateClass = computed(() => {
   const state = eventStream.captureState.value
+  if (isCaptureRunning(state)) return 'capturing'
   switch (state) {
-    case CAPTURE_STATES.CAPTURING:
-      return 'capturing'
     case CAPTURE_STATES.STARTING:
       return 'starting'
     case CAPTURE_STATES.STOPPING:
@@ -27,9 +26,8 @@ const stateClass = computed(() => {
 
 const stateLabel = computed(() => {
   const state = eventStream.captureState.value
+  if (isCaptureRunning(state)) return 'Capturing'
   switch (state) {
-    case CAPTURE_STATES.CAPTURING:
-      return 'Capturing'
     case CAPTURE_STATES.STARTING:
       return 'Starting...'
     case CAPTURE_STATES.STOPPING:

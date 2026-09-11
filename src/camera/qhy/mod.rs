@@ -67,6 +67,7 @@ impl CameraProvider for QhyProvider {
                     let mut info = CameraInfo {
                         name: id.clone(),
                         id: i as i32,
+                        serial: crate::camera::identity::normalize_serial(id),
                         max_width: chip.img_w,
                         max_height: chip.img_h,
                         pixel_size_x_um: chip.pixel_w,
@@ -104,6 +105,21 @@ impl CameraProvider for QhyProvider {
             }
         }
         Ok(cameras)
+    }
+
+    /// From the scan alone: `list_cameras` opens every device. The QHY id string is
+    /// model plus serial, so it serves as both.
+    fn identities(&self) -> CameraResult<Vec<crate::camera::DeviceIdentity>> {
+        let ids = catch_ffi_panic("QHY::scan_cameras", scan_cameras)
+            .map_err(CameraError::from)?
+            .unwrap_or_default();
+        Ok(ids
+            .into_iter()
+            .map(|id| {
+                let serial = crate::camera::identity::normalize_serial(&id);
+                crate::camera::DeviceIdentity::new(id, serial)
+            })
+            .collect())
     }
 
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>> {
@@ -146,6 +162,7 @@ impl QhyCamera {
         let mut info = CameraInfo {
             name: id.clone(),
             id: index as i32,
+            serial: crate::camera::identity::normalize_serial(id),
             max_width: chip.img_w,
             max_height: chip.img_h,
             pixel_size_x_um: chip.pixel_w,
@@ -425,7 +442,7 @@ impl Camera for QhyCamera {
         }
 
         let exposure_duration = Duration::from_micros(config.exposure_us);
-        let total_timeout = config.timeout + exposure_duration;
+        let total_timeout = config.stall_budget(config.frame_bytes(&self.info));
         let start = Instant::now();
 
         let is_continuous = config.is_continuous();

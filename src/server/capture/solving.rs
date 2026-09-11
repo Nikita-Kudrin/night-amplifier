@@ -60,14 +60,14 @@ pub enum SolveSource {
 impl SolveSource {
     /// Whether this source is the one currently allowed to solve.
     ///
-    /// Keyed on the guide loop *running*, not on a guide camera being connected: a
-    /// camera that is registered but not exposing — mid warm-up, or with a loop that
-    /// failed to start — must hand solving back rather than leave the session with no
-    /// source at all.
-    fn is_active(self, guide_loop_running: bool) -> bool {
+    /// Keyed on the guide loop *running* (or being recovered), not on a guide camera
+    /// being connected: a camera that is registered but not exposing — mid warm-up, or
+    /// with a loop that failed to start — must hand solving back rather than leave the
+    /// session with no source at all. See `AppState::guide_holds_solving`.
+    fn is_active(self, guide_holds_solving: bool) -> bool {
         match self {
-            Self::Main => !guide_loop_running,
-            Self::Guide => guide_loop_running,
+            Self::Main => !guide_holds_solving,
+            Self::Guide => guide_holds_solving,
         }
     }
 }
@@ -79,7 +79,7 @@ impl SolveSource {
 /// full-frame copy. Only covers the checks that are cheap and synchronous; the
 /// rest still happen inside [`try_plate_solve`].
 pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool {
-    if !source.is_active(state.guide_loop_running()) {
+    if !source.is_active(state.guide_holds_solving()) {
         return false;
     }
 
@@ -135,7 +135,7 @@ pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool
 /// again immediately before each dispatch rather than once at the top, since the solve
 /// path crosses further `.await` points of its own after the first check.
 pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
-    if !source.is_active(state.guide_loop_running()) {
+    if !source.is_active(state.guide_holds_solving()) {
         debug!(?source, "Plate solve skipped: no longer the active solve source");
         return;
     }
@@ -183,7 +183,7 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: S
     // that is competing with ASTAP for the machine.
     if let Claim::Watch(watch) = claim {
         let _watch = watch;
-        if !source.is_active(state.guide_loop_running()) {
+        if !source.is_active(state.guide_holds_solving()) {
             debug!(?source, "Plate solve watch skipped: no longer the active solve source");
             return;
         }
@@ -247,7 +247,7 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: S
 
         // The rig may have changed while this task waited on `get_status` above or to
         // be scheduled here — see the note on `source` above `try_plate_solve`.
-        if !source.is_active(state_clone.guide_loop_running()) {
+        if !source.is_active(state_clone.guide_holds_solving()) {
             debug!(?source, "Plate solve dispatch skipped: no longer the active solve source");
             return;
         }

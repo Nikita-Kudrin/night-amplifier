@@ -182,4 +182,8 @@ pub struct SessionResumePlan {
     pub settings: CaptureSettings,
     /// The raw-frame directory to rejoin, if the session was saving frames.
     pub disk_session_dir: Option<PathBuf>,
+    /// The number the resumed run's first frame takes. The writer names raw files
+    /// `frame_{:06}.fits` and replaces one that exists, so a resume that numbered from 1
+    /// again overwrote the subs its folder already held.
+    pub next_frame: u64,
 }

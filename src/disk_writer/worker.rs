@@ -26,6 +26,22 @@ fn ensure_dir(path: &Path) -> Result<(), DiskWriterError> {
     })
 }
 
+/// Where a session's next SER container goes: `capture.ser`, or the first free
+/// `capture_N.ser` when the folder already holds one.
+///
+/// A capture resuming after a reconnect rejoins its folder, and `SerWriter::create`
+/// truncates — reusing the name threw away everything recorded before the dropout.
+pub(super) fn next_ser_path(session_dir: &Path) -> PathBuf {
+    let first = session_dir.join("capture.ser");
+    if !first.exists() {
+        return first;
+    }
+    (2..)
+        .map(|n| session_dir.join(format!("capture_{n}.ser")))
+        .find(|path| !path.exists())
+        .expect("an unbounded range always finds a free name")
+}
+
 /// The base name a stacked export is filed under: its raw session's folder name, so the
 /// stack and the subs it was built from are findable from each other.
 ///
@@ -156,7 +172,7 @@ impl DiskWriter {
 
         if self.ser_writer.is_none() {
             ensure_dir(session_dir)?;
-            let path = session_dir.join("capture.ser");
+            let path = next_ser_path(session_dir);
 
             let (frame_width, frame_height, frame_channels) = match &request.frame_type {
                 FrameType::Raw(r) => (

@@ -70,6 +70,25 @@ impl CameraProvider for SvbonyProvider {
         Ok(cameras)
     }
 
+    /// Every enumerated device, including one whose property read failed: `open` indexes
+    /// the raw enumeration, and `list_cameras` skipping a device would shift the rest.
+    fn identities(&self) -> CameraResult<Vec<crate::camera::DeviceIdentity>> {
+        let devices = catch_ffi_panic("SVBony::enumerate", enumerate_devices)
+            .map_err(CameraError::from)?
+            .unwrap_or_default();
+        Ok(devices
+            .iter()
+            .map(|dev| {
+                crate::camera::DeviceIdentity::new(
+                    c_char_array_to_string(&dev.FriendlyName),
+                    crate::camera::identity::normalize_serial(&c_char_array_to_string(
+                        &dev.CameraSN,
+                    )),
+                )
+            })
+            .collect())
+    }
+
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>> {
         let camera = SvbonyCamera::open(index)?;
         Ok(Box::new(camera))
@@ -390,8 +409,7 @@ impl Camera for SvbonyCamera {
             self.stream_running = true;
         }
 
-        let exposure_duration = Duration::from_micros(config.exposure_us);
-        let total_timeout = config.timeout + exposure_duration + Duration::from_millis(1000);
+        let total_timeout = config.stall_budget(buffer_size);
         let start = Instant::now();
         let timeout_ms = total_timeout.as_millis().min(i32::MAX as u128) as c_int;
 
@@ -574,5 +592,6 @@ fn build_camera_info(dev: &SVB_CAMERA_INFO, index: i32) -> Option<CameraInfo> {
         hcg_gain: 100,
         sensor_modes: Vec::new(),
         has_dew_heater: false,
+        serial: crate::camera::identity::normalize_serial(&c_char_array_to_string(&dev.CameraSN)),
     })
 }

@@ -1,7 +1,7 @@
 use crate::camera::Camera;
 use crate::server::camera_health::{self, FaultKind};
 use crate::server::capture::channel::CapturedFrame;
-use crate::server::state::AppState;
+use crate::server::state::{AppState, CameraRole};
 use crate::telemetry::metrics as telemetry_metrics;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -18,50 +18,65 @@ pub(crate) const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// image-data read exposes a timeout of its own.
 pub(crate) const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Added on top of a capture attempt's own `config.timeout + exposure` budget
-/// to get `capture_frame_bounded`'s watchdog timeout — gives the backend's own
-/// internal timeout-and-cleanup the first chance to fire before this external
-/// last resort does. See `capture_frame_bounded`.
-pub(crate) const CAPTURE_WATCHDOG_SLACK: Duration = Duration::from_secs(10);
-
-/// Floor for `capture_watchdog_margin` at (near-)zero exposure — e.g. a 10ms
-/// live-view frame. Set comfortably above the normal jitter ceiling observed
-/// for healthy captures (up to ~1.6s) so it doesn't false-positive on
-/// ordinary variance, while still catching a multi-second stall quickly
-/// instead of only after the full long-exposure budget.
-pub(crate) const CAPTURE_WATCHDOG_MIN_MARGIN: Duration = Duration::from_secs(5);
-
-/// Exposure length at which `capture_watchdog_margin` finishes ramping up to
-/// the full `config.timeout + CAPTURE_WATCHDOG_SLACK` ceiling. Set above
-/// typical EAA live-stacking sub-exposure lengths (commonly single-digit to
-/// ~20s), so most live-stacking sessions get meaningfully tighter, scaled
-/// protection instead of the flat long-exposure budget — while exposures at
-/// or beyond this (long deep-sky subs, the actual reason for a generous
-/// ceiling) get full trust.
-pub(crate) const CAPTURE_WATCHDOG_RAMP_EXPOSURE: Duration = Duration::from_secs(30);
-
-/// Watchdog margin added on top of the exposure itself to get
-/// `capture_frame_bounded`'s timeout — scaled down for short exposures so a
-/// stall gets caught in seconds during live view instead of only after the
-/// full ~130s long-exposure budget, while long deep-sky exposures keep their
-/// existing tolerance unchanged. Pure/deterministic so it's directly
-/// unit-testable without threads or real time.
+/// Added on top of [`CaptureConfig::stall_budget`] to get the watchdog timeout. The
+/// shim's own stall check fires at the budget and then stops the stream, which is one
+/// more vendor call; the slack is that call's time to return before this last resort
+/// abandons the handle as stuck inside the SDK.
 ///
-/// Ramps linearly from `CAPTURE_WATCHDOG_MIN_MARGIN` (at zero exposure) to
-/// `config_timeout + CAPTURE_WATCHDOG_SLACK` (at or beyond
-/// `CAPTURE_WATCHDOG_RAMP_EXPOSURE`), where it holds flat.
-pub(crate) fn capture_watchdog_margin(exposure_us: u64, config_timeout: Duration) -> Duration {
-    // `.max(...)` guards against a degenerate/misconfigured tiny
-    // `config_timeout` ever producing a ceiling below the floor.
-    let max_margin = (config_timeout + CAPTURE_WATCHDOG_SLACK).max(CAPTURE_WATCHDOG_MIN_MARGIN);
-    let exposure = Duration::from_micros(exposure_us);
-    if exposure >= CAPTURE_WATCHDOG_RAMP_EXPOSURE {
-        return max_margin;
+/// [`CaptureConfig::stall_budget`]: crate::camera::CaptureConfig::stall_budget
+pub(crate) const WATCHDOG_SLACK: Duration = Duration::from_secs(3);
+
+/// How long `capture_frame_bounded` waits for `camera.capture()` before abandoning the
+/// handle.
+///
+/// Derived from the shim's stall budget rather than set independently: when the
+/// watchdog fired first — 7.6 s at a 0.5 s exposure against a 120 s internal budget —
+/// every lost frame cost the whole handle and a reconnect. Now a frame that is merely
+/// not coming is the shim's to recover in place, and only a call that does not return
+/// at all reaches this.
+pub(crate) fn capture_watchdog_timeout(
+    config: &crate::camera::CaptureConfig,
+    info: &crate::camera::CameraInfo,
+) -> Duration {
+    config.stall_budget(config.frame_bytes(info)) + WATCHDOG_SLACK
+}
+
+/// Consecutive stalled frames a loop restarts the stream for in place before it
+/// treats the camera as faulted and hands it to the reconnect supervisor.
+pub(crate) const STALL_ESCALATION: u32 = 3;
+
+/// What a capture loop should do about a stalled frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StallVerdict {
+    /// The shim already stopped the stream; the next `capture()` restarts it.
+    RestartInPlace,
+    /// Restarting has not brought a frame back. Reopen the device.
+    Escalate,
+}
+
+/// Counts stalled frames between good ones, shared by the imaging and guide loops.
+///
+/// A single stall is not a fault — the camera answered, it just lost a frame — so it
+/// must not reach `camera_health`, which would count it toward "persistently
+/// unresponsive". A run of them is.
+#[derive(Debug, Default)]
+pub(crate) struct StallTracker {
+    consecutive: u32,
+}
+
+impl StallTracker {
+    pub(crate) fn frame_delivered(&mut self) {
+        self.consecutive = 0;
     }
-    let fraction = exposure.as_secs_f64() / CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_secs_f64();
-    let min = CAPTURE_WATCHDOG_MIN_MARGIN.as_secs_f64();
-    let max = max_margin.as_secs_f64();
-    Duration::from_secs_f64(min + (max - min) * fraction)
+
+    pub(crate) fn stalled(&mut self) -> StallVerdict {
+        self.consecutive += 1;
+        if self.consecutive >= STALL_ESCALATION {
+            self.consecutive = 0;
+            return StallVerdict::Escalate;
+        }
+        StallVerdict::RestartInPlace
+    }
 }
 
 pub(crate) enum StatusPollOutcome {
@@ -95,11 +110,13 @@ pub(crate) enum StatusPollOutcome {
 pub(crate) fn poll_camera_status_bounded(
     camera: Box<dyn crate::camera::Camera>,
     state: &Arc<AppState>,
+    role: CameraRole,
     target_temp_c: Option<f64>,
     rt: &tokio::runtime::Handle,
 ) -> StatusPollOutcome {
     let (tx, rx) = mpsc::channel();
     let camera_name = camera.info().name.clone();
+    let in_flight = state.slot(role).sdk_calls.begin();
     // `std::thread::spawn` does not carry over the calling thread's tracing
     // context, so `camera_status_poll` would otherwise show up as a root span
     // with no relation to whatever surrounds this call — capture and re-enter
@@ -109,6 +126,7 @@ pub(crate) fn poll_camera_status_bounded(
     if let Err(e) = std::thread::Builder::new()
         .name("status-poll-watchdog".into())
         .spawn(move || {
+            let _in_flight = in_flight;
             let _parent_guard = parent_span.enter();
             let _span = tracing::info_span!("camera_status_poll").entered();
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::StatusPoll);
@@ -153,10 +171,6 @@ pub(crate) fn poll_camera_status_bounded(
                 "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
             );
             camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
-            state.send_error(camera_health::incident_message(
-                &camera_name,
-                FaultKind::Timeout,
-            ));
             StatusPollOutcome::TimedOut
         }
     }
@@ -179,16 +193,14 @@ pub(crate) enum CaptureOutcome {
 }
 
 /// Run `camera.capture(&config)` bounded by `watchdog_timeout`, the same way
-/// `poll_camera_status_bounded` bounds `camera.status()`. Every backend's internal
-/// capture loop already self-enforces a "total budget"
-/// (`config.timeout + exposure duration`) *between* its blocking SDK calls
-/// (confirmed identical across all five vendors), but can't fire if one of those
-/// calls itself hangs — observed: a ~3-minute freeze inside PlayerOne's
-/// `is_image_ready()` poll, unresponsive to Stop, before the SDK finally errored.
-/// `watchdog_timeout` is set slightly above that internal budget for long exposures
-/// (so the backend's own cleanup runs first, this is the last resort), and scaled
-/// down via `capture_watchdog_margin` for short ones (live view, planetary), where
-/// the full budget would be far too tolerant.
+/// `poll_camera_status_bounded` bounds `camera.status()`. Every backend's capture loop
+/// enforces `CaptureConfig::stall_budget` *between* its blocking SDK calls, but can't
+/// fire if one of those calls itself hangs — observed: a ~3-minute freeze inside
+/// PlayerOne's `is_image_ready()` poll, unresponsive to Stop, before the SDK finally
+/// errored. `watchdog_timeout` comes from [`capture_watchdog_timeout`], just above that
+/// budget, so the backend's own stop-and-return always runs first and this stays the
+/// last resort. `role` registers the call in its slot's `sdk_calls`, which a reconnect
+/// waits on before reopening the device.
 ///
 /// Caveat: if cancellation lands while `capture()` is already stuck and this
 /// watchdog fires first, the session ends as a disconnect, not a clean stop — no way
@@ -200,14 +212,17 @@ pub(crate) fn capture_frame_bounded(
     frame_number: u64,
     watchdog_timeout: Duration,
     state: &Arc<AppState>,
+    role: CameraRole,
 ) -> CaptureOutcome {
     let (tx, rx) = mpsc::channel();
     let camera_name = camera.info().name.clone();
     let parent_span = tracing::Span::current();
+    let in_flight = state.slot(role).sdk_calls.begin();
 
     if let Err(e) = std::thread::Builder::new()
         .name("capture-watchdog".into())
         .spawn(move || {
+            let _in_flight = in_flight;
             let mut camera = camera;
             let _parent_guard = parent_span.enter();
             let span = tracing::info_span!(
@@ -280,12 +295,32 @@ pub(crate) fn capture_frame_bounded(
                 "camera.capture() did not return in time — abandoning camera handle (suspected USB stall)"
             );
             camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
-            state.send_error(camera_health::incident_message(
-                &camera_name,
-                FaultKind::Timeout,
-            ));
             CaptureOutcome::TimedOut
         }
+    }
+}
+
+/// Close a handle that has been given up on, without waiting for the close.
+///
+/// A loop gives a handle up after a lost device or a run of stalls — exactly when the bus
+/// is wedged and a vendor close can hang for minutes, which on the capture thread kept
+/// the pipeline from ending and so kept recovery from starting. The close runs on a
+/// thread of its own, counted in `role`'s `sdk_calls` so a reconnect waits for it, and
+/// may finish late: the device lease turns a superseded close into a no-op.
+pub(crate) fn release_faulted_handle(camera: Box<dyn Camera>, state: &Arc<AppState>, role: CameraRole) {
+    let in_flight = state.slot(role).sdk_calls.begin();
+    let spawned = std::thread::Builder::new()
+        .name("camera-release".into())
+        .spawn(move || {
+            let _in_flight = in_flight;
+            let mut camera = camera;
+            if let Err(e) = camera.close() {
+                warn!(error = %e, "Closing a faulted camera handle failed");
+            }
+        });
+    if let Err(e) = spawned {
+        // The handle went with the closure; its `Drop` closes it on this thread instead.
+        error!(error = %e, "Failed to spawn a thread to release a faulted camera handle");
     }
 }
 
@@ -392,7 +427,7 @@ mod watchdog_tests {
 
         let outcome = tokio::task::spawn_blocking({
             let state = Arc::clone(&state);
-            move || poll_camera_status_bounded(camera, &state, None, &rt)
+            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt)
         })
         .await
         .unwrap();
@@ -418,7 +453,7 @@ mod watchdog_tests {
         let start = Instant::now();
         let outcome = tokio::task::spawn_blocking({
             let state = Arc::clone(&state);
-            move || poll_camera_status_bounded(camera, &state, None, &rt)
+            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt)
         })
         .await
         .unwrap();
@@ -442,7 +477,7 @@ mod watchdog_tests {
         ));
         let state = Arc::clone(state);
         let rt = rt.clone();
-        tokio::task::spawn_blocking(move || poll_camera_status_bounded(camera, &state, None, &rt))
+        tokio::task::spawn_blocking(move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt))
             .await
             .unwrap();
     }
@@ -497,7 +532,7 @@ mod watchdog_tests {
             let state = Arc::clone(&state);
             let rt = rt.clone();
             tokio::task::spawn_blocking(move || {
-                poll_camera_status_bounded(fast_camera, &state, None, &rt)
+                poll_camera_status_bounded(fast_camera, &state, CameraRole::Main, None, &rt)
             })
             .await
             .unwrap()
@@ -539,6 +574,7 @@ mod watchdog_tests {
             1,
             TEST_CAPTURE_WATCHDOG_TIMEOUT,
             &state,
+            CameraRole::Main,
         );
 
         assert!(
@@ -565,6 +601,7 @@ mod watchdog_tests {
             1,
             TEST_CAPTURE_WATCHDOG_TIMEOUT,
             &state,
+            CameraRole::Main,
         );
         let elapsed = start.elapsed();
 
@@ -587,6 +624,7 @@ mod watchdog_tests {
             1,
             TEST_CAPTURE_WATCHDOG_TIMEOUT,
             state,
+            CameraRole::Main,
         );
     }
 
@@ -644,6 +682,7 @@ mod watchdog_tests {
             1,
             TEST_CAPTURE_WATCHDOG_TIMEOUT,
             &state,
+            CameraRole::Main,
         );
         assert!(matches!(outcome, CaptureOutcome::Completed(_, Ok(_))));
 
@@ -662,82 +701,5 @@ mod watchdog_tests {
             !saw_persistent,
             "a successful capture in between should have reset the timeout streak"
         );
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_floors_at_zero_exposure() {
-        let margin = capture_watchdog_margin(0, Duration::from_secs(120));
-        assert_eq!(margin, CAPTURE_WATCHDOG_MIN_MARGIN);
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_is_tight_for_live_view_exposure() {
-        // 10ms — the actual live-view exposure from the field incident.
-        let margin = capture_watchdog_margin(10_000, Duration::from_secs(120));
-        assert!(
-            margin > CAPTURE_WATCHDOG_MIN_MARGIN
-                && margin < CAPTURE_WATCHDOG_MIN_MARGIN + Duration::from_millis(100),
-            "expected a margin just barely above the floor for a 10ms exposure, got {margin:?}"
-        );
-        // The whole point: this must be short enough that a repeat of the
-        // 6.96s field incident would actually trip it.
-        assert!(
-            Duration::from_micros(10_000) + margin < Duration::from_secs_f64(6.96),
-            "a 10ms-exposure watchdog timeout of {:?} would not have caught the 6.96s incident",
-            Duration::from_micros(10_000) + margin
-        );
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_is_midpoint_at_half_ramp() {
-        let config_timeout = Duration::from_secs(120);
-        let max_margin = config_timeout + CAPTURE_WATCHDOG_SLACK;
-        let half_ramp = CAPTURE_WATCHDOG_RAMP_EXPOSURE / 2;
-
-        let margin = capture_watchdog_margin(half_ramp.as_micros() as u64, config_timeout);
-        let expected = CAPTURE_WATCHDOG_MIN_MARGIN + (max_margin - CAPTURE_WATCHDOG_MIN_MARGIN) / 2;
-        let diff = margin.as_secs_f64() - expected.as_secs_f64();
-        assert!(diff.abs() < 0.01, "expected ~{expected:?}, got {margin:?}");
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_reaches_and_holds_full_budget_past_ramp() {
-        let config_timeout = Duration::from_secs(120);
-        let max_margin = config_timeout + CAPTURE_WATCHDOG_SLACK;
-
-        let at_ramp = capture_watchdog_margin(
-            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
-            config_timeout,
-        );
-        assert_eq!(at_ramp, max_margin);
-
-        // A long deep-sky sub (5 minutes) must get exactly the same, unchanged
-        // budget as before this change — no regression for long exposures.
-        let long_exposure = capture_watchdog_margin(300_000_000, config_timeout);
-        assert_eq!(long_exposure, max_margin);
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_ceiling_tracks_config_timeout() {
-        // The ceiling must follow a non-default config_timeout, not a
-        // hardcoded constant.
-        let config_timeout = Duration::from_secs(60);
-        let margin = capture_watchdog_margin(
-            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
-            config_timeout,
-        );
-        assert_eq!(margin, config_timeout + CAPTURE_WATCHDOG_SLACK);
-    }
-
-    #[test]
-    pub(crate) fn capture_watchdog_margin_guards_against_inverted_range() {
-        // A pathologically small config_timeout must not produce a ceiling
-        // below the floor.
-        let config_timeout = Duration::from_secs(1);
-        let margin = capture_watchdog_margin(
-            CAPTURE_WATCHDOG_RAMP_EXPOSURE.as_micros() as u64,
-            config_timeout,
-        );
-        assert!(margin >= CAPTURE_WATCHDOG_MIN_MARGIN);
     }
 }

@@ -73,5 +73,11 @@ pub fn camera_info_from_properties(props: &POACameraProperties) -> CameraInfo {
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
+        serial: crate::camera::identity::normalize_serial(&c_chars_to_string(&props.SN)),
     }
+}
+
+fn c_chars_to_string(chars: &[std::os::raw::c_char]) -> String {
+    let len = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+    chars[..len].iter().map(|&c| c as u8 as char).collect()
 }

@@ -510,6 +510,18 @@ describe('CameraPanel', () => {
             expect(wrapper.find('.btn-danger').attributes('disabled')).toBeDefined()
         })
 
+        // The server reopens a dropped camera without disconnecting it; the panel must
+        // not advertise a hiccup the reconnect hides.
+        it('shows the camera as connected with no pill while it is recovering', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'recovering'},
+            })
+
+            expect(wrapper.find('.phase-pill').exists()).toBe(false)
+            expect(wrapper.find('.btn-danger').text()).toBe('Disconnect')
+        })
+
         it('omits phase pill when camera is idle', () => {
             const wrapper = mountCameraPanel({
                 cameras: [cooledCamera],

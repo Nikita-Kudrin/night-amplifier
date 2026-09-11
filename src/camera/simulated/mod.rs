@@ -8,6 +8,8 @@ mod camera;
 mod loaders;
 mod probe;
 mod registry;
+#[cfg(debug_assertions)]
+mod stall_injection;
 
 pub use camera::SimulatedCamera;
 pub use registry::{

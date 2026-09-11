@@ -300,7 +300,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
             .update_camera_status(&ctx.camera_name, status.clone(), target),
     );
 
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
+    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
 
     match phase {
         CameraPhase::Precooling => {
@@ -336,7 +336,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                         ctx.cooldown_ramp = None;
                         ctx.rt.block_on(
                             ctx.state
-                                .set_camera_phase(&ctx.camera_name, CameraPhase::Idle),
+                                .set_camera_phase(ctx.role, &ctx.camera_name, CameraPhase::Idle),
                         );
                         info!(
                             camera_name = %ctx.camera_name,
@@ -428,6 +428,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
         CameraPhase::Idle
         | CameraPhase::Capturing
         | CameraPhase::Guiding
+        | CameraPhase::Recovering
         | CameraPhase::Disconnected => {
             // Nothing to do — status was broadcast above.
             ctx.settle_samples = 0;
@@ -514,7 +515,7 @@ impl MonitorCtx {
 fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
     let state = Arc::clone(&ctx.state);
     let name = ctx.camera_name.clone();
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
+    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
     let cause = if phase == CameraPhase::WarmingUp {
         DisconnectCause::Requested
     } else {
@@ -524,8 +525,9 @@ fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
     warn!(camera_name = %name, role = ctx.role.label(), ?kind, ?phase, "Giving up on camera handle");
 
     let role = ctx.role;
+    // No message to the user here: a fault that recovery fixes is not worth one, and one
+    // it cannot fix is reported when it gives up.
     ctx.rt.block_on(async move {
-        state.send_error(camera_health::incident_message(&name, kind));
         lifecycle::finalize_disconnect(&state, role, &name, cause).await;
     });
 }
@@ -663,8 +665,10 @@ where
         return Err(crate::camera::CameraError::Disconnected);
     };
 
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(&ctx.camera_name));
-    if phase == CameraPhase::Disconnected {
+    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
+    // A slot suspended while ours was out has no camera to give it back to, and the
+    // reopen expects it empty.
+    if phase == CameraPhase::Disconnected || ctx.state.slot(ctx.role).is_recovering() {
         let _ = camera.close();
     } else {
         let mut guard = ctx

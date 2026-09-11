@@ -64,12 +64,12 @@ pub fn run_stacking_task(
         comet: None,
         planetary: None,
     });
+    let (mut was_stacking_enabled, mut last_stacking_type) =
+        reset_detector_start(&carryover, rt.block_on(state.settings.read()).stacking_type);
     let mut stacking_ctx: Option<StackingContext> = carryover.stacking;
     let mut comet_ctx: Option<Box<dyn CometContext>> = carryover.comet;
     let mut planetary_ctx: Option<PlanetaryStackingContext> = carryover.planetary;
     let mut stacking_failed = false;
-    let mut was_stacking_enabled = false;
-    let mut last_stacking_type = StackingType::DeepSky;
 
     // The raw-CFA stage, rebuilt only when what it is derived from moves: a stage
     // may own precomputed state, so it must not be reconstructed per frame. The
@@ -137,9 +137,7 @@ pub fn run_stacking_task(
         let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Stack);
         let stacking_type_changed = settings.stacking_type != last_stacking_type;
 
-        if (stacking_enabled && !was_stacking_enabled)
-            || (stacking_enabled && stacking_type_changed)
-        {
+        if must_reset_stack(stacking_enabled, was_stacking_enabled, stacking_type_changed) {
             stacking_ctx = None;
             comet_ctx = None;
             planetary_ctx = None;
@@ -376,6 +374,27 @@ pub fn run_stacking_task(
     debug!("Stacking task ended");
 }
 
+/// Where the stack-reset detector starts: whether stacking counts as already on, and
+/// with which type.
+///
+/// A resumed session carries a stack built under the settings it resumes with. Starting
+/// from "off" made its first frame read as stacking being switched on, which discarded
+/// the carried stack and zeroed its counters — every reconnect resumed from one frame.
+fn reset_detector_start(carryover: &StackingCarryover, stacking_type: StackingType) -> (bool, StackingType) {
+    let carried =
+        carryover.stacking.is_some() || carryover.comet.is_some() || carryover.planetary.is_some();
+    if carried {
+        return (true, stacking_type);
+    }
+    (false, StackingType::DeepSky)
+}
+
+/// Whether this frame starts a new stack: stacking was just switched on, or its type
+/// changed under a running stack.
+fn must_reset_stack(stacking_enabled: bool, was_stacking_enabled: bool, type_changed: bool) -> bool {
+    stacking_enabled && (!was_stacking_enabled || type_changed)
+}
+
 /// Whether Wanderer mode should treat this frame as the user having moved the
 /// telescope and restart the stack. Only a frame that couldn't be placed against
 /// the reference counts — before the frame gate existed, every rejection meant
@@ -449,6 +468,41 @@ fn save_stacked_result(
 mod tests {
     use super::wanderer_detected_movement as moved;
     use super::RejectionReason;
+    use super::{must_reset_stack, reset_detector_start, StackingCarryover, StackingContext};
+    use crate::server::state::{CaptureSettings, StackingType};
+
+    /// A reconnect hands the stacking task the stack it had built. Its first frame must
+    /// carry on with it, not restart the integration.
+    #[test]
+    fn a_resumed_stack_survives_its_first_frame() {
+        let settings = CaptureSettings::default();
+        let carryover = StackingCarryover {
+            stacking: Some(StackingContext::new(16, 16, 1, &settings).expect("context")),
+            comet: None,
+            planetary: None,
+        };
+        let (was_enabled, last_type) = reset_detector_start(&carryover, StackingType::Planetary);
+        assert_eq!((was_enabled, last_type), (true, StackingType::Planetary));
+        assert!(!must_reset_stack(true, was_enabled, StackingType::Planetary != last_type));
+    }
+
+    #[test]
+    fn a_fresh_session_starts_its_stack_on_the_first_frame() {
+        let empty = StackingCarryover {
+            stacking: None,
+            comet: None,
+            planetary: None,
+        };
+        let (was_enabled, last_type) = reset_detector_start(&empty, StackingType::Planetary);
+        assert!(must_reset_stack(true, was_enabled, StackingType::Planetary != last_type));
+        assert!(!must_reset_stack(false, was_enabled, false), "stacking off resets nothing");
+    }
+
+    #[test]
+    fn changing_the_stacking_type_restarts_a_running_stack() {
+        assert!(must_reset_stack(true, true, true));
+        assert!(!must_reset_stack(true, true, false));
+    }
 
     #[test]
     fn test_check_dimension_mismatch_no_context() {

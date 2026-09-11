@@ -34,6 +34,14 @@ impl CameraRole {
             Self::Guide => "guide",
         }
     }
+
+    /// The role that is not this one.
+    pub fn other(self) -> Self {
+        match self {
+            Self::Main => Self::Guide,
+            Self::Guide => Self::Main,
+        }
+    }
 }
 
 /// Capture session state
@@ -50,6 +58,9 @@ pub enum CaptureState {
     Stopping,
     /// Capture encountered an error
     Error,
+    /// The capture is paused while its camera is reopened after a fault, and resumes on
+    /// its own. The observer's session is still running: the UI shows it as capturing.
+    Recovering,
 }
 
 /// Lifecycle phase of a connected camera handle.
@@ -79,6 +90,10 @@ pub enum CameraPhase {
     Guiding,
     /// Handle open, cooler ramping off before release.
     WarmingUp,
+    /// The handle was lost to a fault and a reconnect is under way. The camera stays
+    /// registered — selected, and still the solve source — so a hiccup the supervisor
+    /// fixes in seconds never reaches the UI as a disconnect.
+    Recovering,
 }
 
 #[derive(Clone)]

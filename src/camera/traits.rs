@@ -135,6 +135,19 @@ pub trait CameraProvider: Send + Sync {
     /// List all connected cameras
     fn list_cameras(&self) -> CameraResult<Vec<CameraInfo>>;
 
+    /// Name and serial of every listed device, in the order [`Self::open`] indexes them.
+    ///
+    /// Recovery calls this on every attempt, while the *other* role's camera may be
+    /// exposing. Providers whose `list_cameras` opens each device to read its
+    /// capabilities (ZWO, QHY) override it with an enumeration that opens nothing.
+    fn identities(&self) -> CameraResult<Vec<super::identity::DeviceIdentity>> {
+        Ok(self
+            .list_cameras()?
+            .iter()
+            .map(super::identity::DeviceIdentity::of)
+            .collect())
+    }
+
     /// Open a camera by index
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>>;
 

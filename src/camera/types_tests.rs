@@ -20,8 +20,7 @@ fn test_capture_config_builder() {
         .with_bin(2)
         .with_format(ImageFormat::Raw8)
         .with_roi(100, 100, 800, 600)
-        .with_target_temp(-10.0)
-        .with_timeout(Duration::from_secs(60));
+        .with_target_temp(-10.0);
 
     assert_eq!(config.exposure_us, 500_000);
     assert_eq!(config.gain, 100);
@@ -31,7 +30,6 @@ fn test_capture_config_builder() {
     assert_eq!(config.roi, Some((100, 100, 800, 600)));
     assert_eq!(config.target_temp_c, Some(-10.0));
     assert!(config.cooler_enabled);
-    assert_eq!(config.timeout, Duration::from_secs(60));
 }
 
 #[test]
@@ -98,6 +96,7 @@ fn test_capture_config_validation() {
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
+        serial: None,
     };
 
     // Valid config
@@ -286,6 +285,7 @@ fn test_camera_info(sensor_type: SensorType, bayer_pattern: Option<CfaPattern>) 
         unity_gain: 100,
         hcg_gain: 120,
         sensor_modes: Vec::new(),
+        serial: None,
     }
 }
 
