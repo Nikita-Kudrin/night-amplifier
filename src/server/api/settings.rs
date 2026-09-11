@@ -381,6 +381,12 @@ pub async fn update_settings(
     // across another lock is an ordering constraint worth not having.
     crate::server::capture::storage::sync_disk_session(&state, &applied_settings, capture_active)
         .await;
+    // A resume restores the plan's settings. An edit made while the capture runs, or while
+    // it is paused for a reconnect, is what the observer wants it to resume with — the
+    // snapshot from capture start silently undid it.
+    if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
+        plan.settings = applied_settings.clone();
+    }
 
     let _ = state.events.send(ServerEvent::SettingsUpdated);
 

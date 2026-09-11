@@ -96,25 +96,42 @@ whatever suits your sensor and it stays there.
 
 ## If the camera drops out
 
-USB stalls happen — a knocked cable, a hub that browns out, a driver hiccup. When
-the camera stops answering, Night Amplifier notices, disconnects it cleanly, and
-tries to bring it back on its own. The imaging and guide cameras recover independently,
-so one dropping out never blocks the other's recovery.
+USB stalls happen — a knocked cable, a hub that browns out, a driver hiccup. Night
+Amplifier handles them in the background, and most of the time you will not notice:
 
-What you see in the status bar:
+- **A lost frame** costs that frame. The camera's stream is restarted on the spot and the
+  capture carries on.
+- **A camera that stops answering** is reopened without being disconnected. The view,
+  the selected camera, Push-To and your capture all stay as they were; the capture pauses
+  for the few seconds this takes and then continues. The status bar keeps showing
+  *Capturing*.
+
+The imaging and guide cameras recover independently, and a recovering camera is always
+reopened as *itself* — never as the other camera, even after the USB bus has renumbered
+its devices.
+
+You only see a message when recovery takes longer than about 20 seconds:
 
 | Message | What it means |
 |---|---|
-| *"… has stopped responding."* | The camera failed several calls in a row and the session was closed. |
-| *"Reconnecting to … — attempt 2 of 5."* | Recovery is under way. The gap between attempts grows: 5 s, then 10, 20, 40, up to a minute. |
-| *"… is back. Capture resumed with N frames still stacked."* | The camera came back and your capture picked up where it stopped. |
-| *"Could not bring … back after 5 attempts."* | Recovery gave up. Check the cable, then reconnect by hand. |
+| *"Reconnecting to … — attempt 4 of 25."* | Recovery is taking a while. Attempts repeat every 2, 3, 5, then 10 seconds, for up to 5 minutes; the total counts only the attempts that still fit in that time. |
+| *"… is back. Capture resumed with N frames still stacked."* | It came back after that notice, and your capture picked up where it stopped. |
+| *"Could not bring … back …"* | Recovery gave up. Check the cable and the power supply, then reconnect by hand. |
+| *"… has stopped responding."* | The camera failed several calls in a row; recovery is under way. |
 
 A resumed capture keeps what it had: the same mode (Live, Wanderer, Stacking or
-Planetary), the same exposure and gain, the same raw-frame folder, and — the
-part that matters on a long target — **the frames already stacked**. A dropout
-90 minutes into a session costs you the dropout, not the 90 minutes. Plate
-solving resumes by itself on the next frame if a target was set.
+Planetary), the exposure and gain you last set — including a change made while it
+was paused — the same raw-frame folder, and — the part that matters on a long
+target — **the frames already stacked**. A dropout 90 minutes into a session costs
+you the dropout, not the 90 minutes. Plate solving resumes by itself on the next
+frame if a target was set.
+
+Nothing already saved is overwritten: raw frames carry on numbering where they
+stopped, and a Planetary video continues in a second file next to the first
+(`capture_2.ser`).
+
+Clicking **Connect** while a camera is recovering is harmless: it joins the recovery
+rather than cancelling it. **Disconnect** or **Stop** end it.
 
 Two switches under **Settings → If the camera drops out**:
 
@@ -124,4 +141,4 @@ Two switches under **Settings → If the camera drops out**:
   reconnect but leave the capture stopped.
 
 Recovery deliberately does nothing while the camera is warming up for a
-disconnect you asked for, and it stops early if you reconnect by hand first.
+disconnect you asked for.

@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use crate::camera::{CameraEntry, CameraRegistry};
+use crate::camera::identity::{self, DeviceIdentity};
+use crate::camera::CameraEntry;
 use crate::server::camera_session::lifecycle;
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::state::{AppState, CameraRole, ConnectedCameraInfo};
@@ -40,14 +41,14 @@ impl CameraService {
         let use_simulated = state.settings.read().await.use_simulated_camera;
 
         // Discover available cameras
-        let discovered = Self::discover_cameras(use_simulated).await;
+        let discovered = Self::discover_cameras(state, use_simulated).await;
         if let Ok(entries) = discovered {
             for entry in entries {
-                let id = format!("{}_{}", entry.provider.to_lowercase(), entry.index);
+                let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
 
                 // Skip if already connected
                 let connected = state.cameras.read().await;
-                if connected.contains_key(&id) {
+                if connected.values().any(|camera| is_same_device(camera, &entry)) {
                     continue;
                 }
                 drop(connected);
@@ -108,24 +109,16 @@ impl CameraService {
         cameras_list
     }
 
-    /// Discover cameras using the registry (runs in blocking task)
+    /// Discover cameras through the state's device catalog (runs in blocking task)
     async fn discover_cameras(
+        state: &AppState,
         use_simulated: bool,
     ) -> Result<Vec<CameraEntry>, crate::camera::CameraError> {
+        let catalog = Arc::clone(&state.device_catalog);
         tokio::task::spawn_blocking(move || {
-            std::panic::catch_unwind(move || {
-                let mut registry = CameraRegistry::new();
-
-                // Manual registration to allow filtering simulated cameras
-                let _ = registry.register(crate::camera::PlayerOneProvider::new());
-                let _ = registry.register(crate::camera::ZwoProvider::new());
-
-                if use_simulated {
-                    let _ = registry.register(crate::camera::SimulatedProvider::new());
-                }
-
-                registry.list_all_cameras()
-            })
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                catalog.list_all(use_simulated)
+            }))
             .unwrap_or(Err(crate::camera::CameraError::NoCamerasFound))
         })
         .await
@@ -158,6 +151,25 @@ impl CameraService {
     /// asynchronously if the cooler was running).
     pub async fn disconnect_camera(state: &Arc<AppState>, camera_id: &str) -> ApiResult<String> {
         lifecycle::disconnect(state, camera_id).await
+    }
+}
+
+/// Whether a discovered entry is a camera that is already connected.
+///
+/// By serial when both sides have one. Otherwise by where the device is listed *now*:
+/// a connected camera's entry keeps the id it was connected under, and a recovered one
+/// whose device moved keeps an index id that names another device's position — matching
+/// on it hid that other camera and offered the connected one again. The entry's `index`
+/// is where it was last opened. Not by `CameraInfo::id`, which some providers fill
+/// differently when listing than when opening.
+fn is_same_device(connected: &ConnectedCameraInfo, entry: &CameraEntry) -> bool {
+    if !connected.provider.eq_ignore_ascii_case(&entry.provider) {
+        return false;
+    }
+    let (ours, theirs) = (DeviceIdentity::of(&connected.info), DeviceIdentity::of(&entry.info));
+    match (&ours.serial, &theirs.serial) {
+        (Some(_), Some(_)) => ours.matches(&theirs),
+        _ => connected.index == entry.index && ours.name == theirs.name,
     }
 }
 

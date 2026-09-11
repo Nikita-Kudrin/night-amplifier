@@ -102,6 +102,16 @@ describe('StatusBar', () => {
             expect(state.text()).toContain('Capturing')
         })
 
+        it('shows a capture paused for a camera reconnect as still capturing', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {captureState: ref('Recovering')},
+            })
+
+            const state = wrapper.find('.state')
+            expect(state.classes()).toContain('capturing')
+            expect(state.text()).toContain('Capturing')
+        })
+
         it('shows Starting state with correct styling', () => {
             const wrapper = mountStatusBar({
                 eventStream: {captureState: ref('Starting')},

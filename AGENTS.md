@@ -255,6 +255,36 @@ detached thread can close a camera that has since reconnected when its `Drop` fi
 - Never close an abandoned handle eagerly — a stuck synchronous FFI call can't be cancelled; the lease
   is what makes abandoning safe.
 - `connect()` **probes the handle before reporting success** — `open()` returning proves nothing.
+- **Every vendor call made under the connect lock is bounded** (`camera_session::install`: list,
+  open + probe, cooler/dew-heater seeding), via `InFlightCalls::run_bounded` on the slot's
+  `pending_opens` under `OPEN_TIMEOUT`. Seeding once ran inline: a camera that answered the probe and
+  then hung held every Connect and the recovery budget never ran out. A late result is dropped on
+  its own thread *before* leaving the count, so nothing reopens past an unclosed handle.
+
+### Camera identity (`camera::identity`)
+
+Ids were `{provider}_{index}`, a position USB re-enumeration reorders: on 2026-09-07 a guide
+camera's reconnect reopened index 0 and installed the *imaging* camera as the guide.
+
+- Where the SDK exposes a serial before open (Player One `SN`, SVBony `CameraSN`, QHY id), the id
+  is `{provider}_sn-{serial}` and `connect` resolves it against a fresh enumeration. Legacy index
+  ids still parse.
+- `CameraProvider::identities()` enumerates **without opening** — ZWO and QHY `list_cameras` open
+  every device, which during a recovery would take the other role's lease.
+- Recovery never trusts a position: `recovery_candidates` excludes the other role's device (serial
+  or SDK `device_id`), and a reopened handle must match before it replaces the entry. It keeps its
+  **recorded id** even when its index moved — the other role may be keyed by the new one.
+- So an index id can name *another* device's position. Nothing may compare ids to find a device:
+  discovery matches serial, else the entry's current `index` + name (not `CameraInfo::id`, which
+  the simulator fills differently listed and opened); `connect` resolves the locator first and
+  refuses the other role's device **before opening** (`install::refuse_device_of_other_role`) —
+  vendor closes go by id, so opening it and closing the result already kills that camera.
+- ZWO discovery opens a device to read its controls, except one `DeviceLease::is_open` says a
+  handle still holds: that open superseded the live lease and its drop closed the capture's device.
+  A held or unopenable device is listed from `ASIGetCameraProperty` alone, keeping positions aligned
+  with `open(index)`. That call takes a list *index*, never a camera id.
+- Discovery, connect and reconnect share one `DeviceCatalog` on `AppState`; tests script a bus
+  that unplugs and reorders (`camera_session::recovery_tests`).
 
 ### Device-loss classification
 
@@ -273,9 +303,55 @@ One detector (`server::camera_health`), one threshold, one streak
 (`consecutive_watchdog_timeouts`) fed by all three watchdog/monitor sites, so an alternating
 fault still escalates; it ages out (`FAULT_STREAK_TTL`) instead of resetting on success.
 
-`camera_session::reconnect` owns recovery (bounded attempts, backoff, re-enumeration,
-liveness probe). `finalize_disconnect` takes a `DisconnectCause`, not a bool — a warmup
-teardown must never reconnect.
+Recovery is a ladder; each rung only reaches the next when it fails, and the user hears
+nothing until `reconnect::NOTICE_AFTER` (20 s):
+
+1. **In-place stream restart.** Every shim waits `CaptureConfig::stall_budget` (exposure + 3 s
+   + transfer at 10 MB/s), timed from *entering* `capture()` — config reapply included, the
+   instant the watchdog starts — then stops the stream; the loop retries. The watchdog is
+   *derived* from it (`capture_watchdog_timeout` = budget + 3 s) — when it was independent
+   (7.6 s against a 120 s internal budget) every lost frame cost the handle. One stall is not
+   a fault; `STALL_ESCALATION` (3) in a row is (`StallTracker`, shared by both loops *and*
+   the first frame, `capture_probe_frame` — outside it one stall ended the session).
+   A given-up handle is closed off-thread (`release_faulted_handle`): a hung close on the
+   capture thread kept the pipeline, and so recovery, from ever starting.
+2. **Quiet suspend** (`camera_session::recovery`). `finalize_disconnect(DeviceFault)` keeps
+   the entry, selection, status, guide stream and solver rig, sets `CameraPhase::Recovering`
+   (and `CaptureState::Recovering` for a resumable capture), and spawns the supervisor.
+   Pipelines end with `end_capture_state`, which will not overwrite `Recovering` — and
+   clears the resume plan and parked stack on any other end, or the next quiet recovery
+   restarted a capture the observer saw end. A recovering guide slot holds solving.
+3. **Supervisor** (`camera_session::reconnect`): waits for the slot's `sdk_calls` (abandoned
+   SDK calls) to drain, max 5 s, then retries 2/3/5/10 s within 300 s; resumes the capture.
+   Each reopen holds the connect lock, is capped at `REOPEN_TIMEOUT`, and re-checks the slot
+   after the open; `disconnect` waits on that lock. A timed-out open blocks further opens
+   (`pending_opens`) until it returns — a late open takes the device lease. Connect during
+   recovery joins it; disconnect or Stop ends it quietly.
+4. **Give-up** → `DisconnectCause::RecoveryFailed`: full teardown, then the first message.
+
+**`CameraSlot::recovery` is the one record of where recovery stands**
+(`None → Suspended → Installing → None`), never the phase. A fault while `Installing`
+belongs to the *new* handle: recorded and acted on when the install ends (a flag swallowed
+it as a duplicate). `reconnect::release_flight` re-arms a suspension that arrived while the
+previous supervisor was still in flight. Phase lives on the slot too — keyed by model
+name, the imaging camera's capture ended a twin guide camera's recovery.
+`finalize_disconnect` ignores a report naming a camera its role no longer holds.
+
+The pause is one state and both ways out are compare-and-sets on it: `resume_capture` moves
+`Recovering → Starting` (else `CaptureNotPaused`), `AppState::end_paused_capture` moves it to
+`Idle` — Disconnect of the imaging camera ends a pause that way first, so a reopen finishing
+meanwhile cannot restart the capture on a camera being warmed up. A resume whose camera fails
+again before it takes the handle gets `CameraRecovering`, and `end_capture_state` keeps the pause
+(slot recovering + plan) rather than discarding the plan the next supervisor resumes. The plan
+follows every settings update, so a resume restores the observer's latest values, then saves and
+announces them; it also carries `next_frame` (see Storage Formats).
+
+A resumed stacking task seeds its reset detector from the carryover
+(`reset_detector_start`); starting from "off" threw the carried stack away on the first
+frame, so every reconnect used to resume from one frame. Debug builds can inject stalls into
+the simulator (`NIGHT_AMPLIFIER_SIM_STALL_EVERY`/`_RUN`, `simulated::stall_injection`).
+`finalize_disconnect` takes a `DisconnectCause`, not a bool — a warmup teardown must never
+reconnect.
 
 Connect and `finalize_disconnect` both call `PushToService::set_active_camera`. The
 solver remembers a field of view per optical configuration, and that key cannot tell two
@@ -362,6 +438,12 @@ Planetary) and `captures/stacked/DD-MM-YYYY_HH-MM-SS-stacking.fits` (named after
 `<mode>` is `live`/`wanderer`/`stacking`, from `CaptureMode::session_dir_suffix`. A collision inside
 one second inserts a counter before the suffix, which is why `from_session_dir_name` matches on the
 end of the name.
+
+**A capture resuming after a reconnect rejoins its folder and must not overwrite it.** The writer
+names subs `frame_{:06}.fits` and replaces an existing file, and `SerWriter::create` truncates. So
+the resume plan carries `next_frame` (recorded as the pipeline ends; `task::FrameNumbers`), and a
+video session rejoining a folder that already holds `capture.ser` writes `capture_2.ser`, … The
+guide loop does the same through `RawSessionResume::next_frame`.
 
 ## Streaming Protocols
 

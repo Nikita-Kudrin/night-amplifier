@@ -327,6 +327,10 @@ pub struct CameraInfo {
     pub sensor_modes: Vec<SensorMode>,
     /// Whether the camera supports anti-dew heater
     pub has_dew_heater: bool,
+    /// Vendor serial number, when the SDK exposes one without opening the device.
+    /// What tells two bodies apart once USB re-enumeration has reordered the device
+    /// list — see `camera::identity`.
+    pub serial: Option<String>,
 }
 
 impl Default for CameraInfo {
@@ -356,9 +360,19 @@ impl Default for CameraInfo {
             hcg_gain: 0,
             sensor_modes: Vec::new(),
             has_dew_heater: false,
+            serial: None,
         }
     }
 }
+
+/// Fixed part of [`CaptureConfig::stall_budget`]: readout and SDK hand-off on top of
+/// the exposure. Healthy captures were measured jittering up to ~1.6 s, so 3 s only
+/// trips on a frame that is not coming.
+pub const FRAME_STALL_ALLOWANCE: Duration = Duration::from_secs(3);
+
+/// Slowest link a frame transfer is budgeted for: well under USB 2.0's ~35 MB/s, so a
+/// busy shared bus still fits.
+pub const TRANSFER_FLOOR_BYTES_PER_SEC: u64 = 10_000_000;
 
 /// Gain presets from the camera
 #[derive(Debug, Clone, Copy, Default)]
@@ -401,8 +415,6 @@ pub struct CaptureConfig {
     pub target_temp_c: Option<f64>,
     /// Enable cooler
     pub cooler_enabled: bool,
-    /// Timeout for exposure completion
-    pub timeout: Duration,
     /// Enable high speed mode (may reduce image quality)
     pub high_speed: bool,
     /// Enable hardware binning (vs software binning)
@@ -424,7 +436,6 @@ impl Default for CaptureConfig {
             roi: None,
             target_temp_c: None,
             cooler_enabled: false,
-            timeout: Duration::from_secs(120),
             high_speed: false,
             hardware_bin: true,
             simulated_preload_images: 5,
@@ -437,6 +448,50 @@ impl CaptureConfig {
     /// Determines if the exposure duration is short enough to warrant continuous video capture (<= 1 second).
     pub fn is_continuous(&self) -> bool {
         self.exposure_us <= 1_000_000
+    }
+
+    /// Width and height of the frame this config reads from `info`'s sensor.
+    pub fn frame_dimensions(&self, info: &CameraInfo) -> (u32, u32) {
+        if let Some((_, _, w, h)) = self.roi {
+            return (w, h);
+        }
+        let bin = u32::from(self.bin.max(1));
+        (info.max_width / bin, info.max_height / bin)
+    }
+
+    /// Bytes of sensor data one frame of this config transfers.
+    pub fn frame_bytes(&self, info: &CameraInfo) -> usize {
+        let (width, height) = self.frame_dimensions(info);
+        let bytes_per_pixel = match self.format {
+            ImageFormat::Raw8 => 1,
+            ImageFormat::Raw16 => 2,
+            ImageFormat::Rgb24 => 3,
+        };
+        (width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(bytes_per_pixel)
+    }
+
+    /// How long a shim waits for a frame before declaring the stream stalled and
+    /// stopping it, so the next `capture()` restarts it in place.
+    ///
+    /// Timed from entering `capture()`, config reapply included — the instant the
+    /// watchdog starts too, so it stays exactly `WATCHDOG_SLACK` above. Timing from after
+    /// the reapply put that time *between* the two clocks, where a slow reapply let the
+    /// watchdog abandon the handle; inside the budget it costs at most one in-place
+    /// restart, since the retry finds the config already applied.
+    ///
+    /// Exposure, plus [`FRAME_STALL_ALLOWANCE`], plus the transfer at
+    /// [`TRANSFER_FLOOR_BYTES_PER_SEC`]. It replaces `timeout + exposure` (120 s + the
+    /// exposure), which the outer watchdog always beat — so a frame that was merely lost
+    /// cost the whole handle and a reconnect instead of one frame. The watchdog is
+    /// derived from this (`capture::watchdog::capture_watchdog_timeout`) and must stay
+    /// above it.
+    pub fn stall_budget(&self, frame_bytes: usize) -> Duration {
+        let transfer_ms = (frame_bytes as u64).saturating_mul(1000) / TRANSFER_FLOOR_BYTES_PER_SEC;
+        Duration::from_micros(self.exposure_us)
+            + FRAME_STALL_ALLOWANCE
+            + Duration::from_millis(transfer_ms)
     }
 
     /// Create a new capture configuration with default values
@@ -496,12 +551,6 @@ impl CaptureConfig {
     /// Enable or disable cooler
     pub fn with_cooler(mut self, enabled: bool) -> Self {
         self.cooler_enabled = enabled;
-        self
-    }
-
-    /// Set timeout for exposure
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
         self
     }
 

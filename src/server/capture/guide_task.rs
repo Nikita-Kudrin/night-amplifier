@@ -28,7 +28,10 @@ use super::render_task::{encode_jpeg_tiers, ConversionCache};
 use super::solving::{self, SolveSource};
 use super::stage_config;
 use super::storage;
-use super::watchdog::{capture_frame_bounded, capture_watchdog_margin, CaptureOutcome};
+use super::watchdog::{
+    capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome, StallTracker, StallVerdict,
+    STALL_ESCALATION,
+};
 use crate::camera::Camera;
 use crate::disk_writer::{OpenSession, WritingSessionType};
 use crate::camera::CameraStatus;
@@ -157,8 +160,13 @@ pub async fn stop(state: &Arc<AppState>) {
     state.slot(CameraRole::Guide).cancel_exposure().await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let slot = state.slot(CameraRole::Guide);
     while tokio::time::Instant::now() < deadline {
-        if state.slot(CameraRole::Guide).holds_handle() {
+        // The loop's thread holds the other reference to its switch until it has finished
+        // handing back — which a recovering slot refuses, closing the handle instead, so
+        // "holds a handle" alone would wait out the whole budget there.
+        let loop_gone = Arc::strong_count(&cancel) == 1;
+        if slot.holds_handle() || loop_gone {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -167,7 +175,7 @@ pub async fn stop(state: &Arc<AppState>) {
 }
 
 /// The loop body. Returns the handle unless a watchdog abandoned it.
-fn run(
+pub(super) fn run(
     state: &Arc<AppState>,
     camera_info: &ConnectedCameraInfo,
     mut camera: Box<dyn Camera>,
@@ -189,6 +197,7 @@ fn run(
     let mut rejected_config: Option<String> = None;
     let mut cooler = GuideCooler::default();
     let mut sensor = SensorReadout::default();
+    let mut stalls = StallTracker::default();
 
     while !cancel.load(Ordering::SeqCst) {
         let settings = rt.block_on(state.settings.read()).clone();
@@ -225,15 +234,20 @@ fn run(
         );
 
         frame_number += 1;
-        let watchdog_timeout = Duration::from_micros(config.exposure_us)
-            + capture_watchdog_margin(config.exposure_us, config.timeout);
-        let (returned, result) =
-            match capture_frame_bounded(camera, config, frame_number, watchdog_timeout, state) {
-                CaptureOutcome::Completed(cam, result) => (cam, result),
-                // The handle went with a detached thread that never returned. Nothing
-                // left to hand back; the fault detector has already recorded it.
-                CaptureOutcome::TimedOut => return None,
-            };
+        let watchdog_timeout = capture_watchdog_timeout(&config, &camera_info.info);
+        let (returned, result) = match capture_frame_bounded(
+            camera,
+            config,
+            frame_number,
+            watchdog_timeout,
+            state,
+            CameraRole::Guide,
+        ) {
+            CaptureOutcome::Completed(cam, result) => (cam, result),
+            // The handle went with a detached thread that never returned. Nothing
+            // left to hand back; the fault detector has already recorded it.
+            CaptureOutcome::TimedOut => return None,
+        };
         camera = returned;
 
         let raw_frame = match result {
@@ -245,8 +259,28 @@ fn run(
                 }
                 if e.is_sdk_disconnected() {
                     error!(error = %e, "Guide camera disconnected during capture");
-                    state.send_error(format!("Guide camera disconnected: {}", e));
                     return None;
+                }
+                if let crate::camera::CameraError::ExposureTimeout(budget) = e {
+                    if stalls.stalled() == StallVerdict::Escalate {
+                        error!(
+                            camera = %camera_info.info.name,
+                            consecutive = STALL_ESCALATION,
+                            "Restarting the guide stream did not bring frames back; reopening the camera"
+                        );
+                        crate::server::camera_health::record_fault(
+                            state,
+                            &camera_info.info.name,
+                            crate::server::camera_health::FaultKind::Timeout,
+                        );
+                        return None;
+                    }
+                    warn!(
+                        camera = %camera_info.info.name,
+                        ?budget,
+                        "Guide frame stalled; restarting the stream in place"
+                    );
+                    continue;
                 }
                 if let crate::camera::CameraError::InvalidParameter { .. } = e {
                     // The camera rejected the config, so it will reject the identical
@@ -271,6 +305,7 @@ fn run(
             }
         };
         rejected_config = None;
+        stalls.frame_delivered();
 
         // Above both gates below: an unwatched guide camera with no solve target is
         // still saving subs if the user asked it to.

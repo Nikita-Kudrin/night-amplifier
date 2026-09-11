@@ -103,9 +103,12 @@ impl CaptureService {
         state: &Arc<AppState>,
         camera_id: Option<String>,
     ) -> ApiResult<String> {
-        // Check if already capturing
+        // Check if already capturing. A capture paused for recovery is still running.
         let current_state = state.capture_state().await;
-        if current_state == CaptureState::Capturing || current_state == CaptureState::Starting {
+        if matches!(
+            current_state,
+            CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering
+        ) {
             return Err(ApiError::CaptureInProgress);
         }
 
@@ -202,20 +205,32 @@ impl CaptureService {
     /// Deliberately not `start_capture`: that resets the session counters and
     /// opens a new raw-frame directory, which for a live-stacking session means
     /// throwing away the whole point of the last hour.
+    ///
+    /// Only a capture paused for recovery resumes, and it leaves the pause with one
+    /// compare-and-set: a Stop or a Disconnect that ends the pause first makes this
+    /// `CaptureNotPaused` instead of a capture restarted behind the observer's back.
     pub async fn resume_capture(state: &Arc<AppState>, plan: &SessionResumePlan) -> ApiResult<()> {
-        let current_state = state.capture_state().await;
-        if current_state == CaptureState::Capturing || current_state == CaptureState::Starting {
-            return Err(ApiError::CaptureInProgress);
-        }
         {
             let cameras = state.cameras.read().await;
             if !cameras.contains_key(&plan.camera_id) {
                 return Err(ApiError::CameraNotConnected(plan.camera_id.clone()));
             }
         }
+        {
+            let mut session = state.session.write().await;
+            match session.state {
+                CaptureState::Recovering => session.state = CaptureState::Starting,
+                CaptureState::Capturing | CaptureState::Starting => {
+                    return Err(ApiError::CaptureInProgress)
+                }
+                _ => return Err(ApiError::CaptureNotPaused),
+            }
+        }
+        let _ = state
+            .events
+            .send(crate::server::events::ServerEvent::state_changed(CaptureState::Starting));
 
         state.reset_cancel();
-        state.set_capture_state(CaptureState::Starting).await;
 
         // After the state change, for the reason `start_capture` gives.
         Self::leave_focus_mode_for_capture(state).await;
@@ -242,7 +257,13 @@ impl CaptureService {
         }
 
         state.request_cancel();
-        state.set_capture_state(CaptureState::Stopping).await;
+        // A capture paused for recovery has no pipeline left to wind down and report
+        // `Idle` when it has; the camera keeps recovering, with nothing to resume.
+        let next = match current_state {
+            CaptureState::Recovering => CaptureState::Idle,
+            _ => CaptureState::Stopping,
+        };
+        state.set_capture_state(next).await;
 
         // A deliberate stop is not something to recover from: drop the resume
         // plan and the parked stack rather than holding full-resolution

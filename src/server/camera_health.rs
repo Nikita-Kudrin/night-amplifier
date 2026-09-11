@@ -42,15 +42,6 @@ pub(crate) enum FaultKind {
     DeviceLost,
 }
 
-impl FaultKind {
-    fn describe(self) -> &'static str {
-        match self {
-            FaultKind::Timeout => "stopped responding",
-            FaultKind::DeviceLost => "reported its device is gone",
-        }
-    }
-}
-
 /// Clear a camera's fault streak. Called whenever any SDK call returns within
 /// its budget and without a device-lost error, since that proves the camera is
 /// currently responding regardless of which call site observed it.
@@ -65,8 +56,8 @@ pub(crate) fn clear_fault_streak(state: &Arc<AppState>, camera_name: &str) {
 /// Record one fault against `camera_name` and report the resulting streak.
 ///
 /// Escalates with `ServerEvent::CameraPersistentlyUnresponsive` on reaching
-/// `PERSISTENT_FAULT_THRESHOLD`, on top of whatever per-incident error the
-/// caller already sends.
+/// `PERSISTENT_FAULT_THRESHOLD`. A single incident sends the user nothing: whether it
+/// is worth a message is decided by `camera_session::recovery`.
 pub(crate) fn record_fault(state: &Arc<AppState>, camera_name: &str, kind: FaultKind) -> u32 {
     let consecutive = state.bump_fault_streak(camera_name, FAULT_STREAK_TTL);
 
@@ -98,15 +89,4 @@ pub(crate) fn record_fault(state: &Arc<AppState>, camera_name: &str, kind: Fault
 /// on rather than retried.
 pub(crate) fn is_persistent(consecutive: u32) -> bool {
     consecutive >= PERSISTENT_FAULT_THRESHOLD
-}
-
-/// The user-facing sentence for one fault incident. Written for an observer at
-/// a telescope, not for a log reader: it names the camera and says what will
-/// happen next.
-pub(crate) fn incident_message(camera_name: &str, kind: FaultKind) -> String {
-    format!(
-        "Camera '{}' {} — disconnecting",
-        camera_name,
-        kind.describe()
-    )
 }

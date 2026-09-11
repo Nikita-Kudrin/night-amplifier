@@ -6,7 +6,7 @@ import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../composables/usePanZoom.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
-import {CAPTURE_STATES} from '../constants'
+import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
@@ -142,7 +142,7 @@ const renderBackend = computed(() => {
   return 'none'
 })
 
-const isCapturing = computed(() => eventStream.captureState.value === CAPTURE_STATES.CAPTURING)
+const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
 function initRenderer() {
@@ -278,9 +278,10 @@ watch(dimensions, (newDims, oldDims) => {
   }
 })
 
-// Clear frame data when a new capture session starts
-watch(() => eventStream.captureState.value, (newState) => {
-  if (newState === CAPTURE_STATES.STARTING) {
+// Clear frame data when a new capture session starts. A capture resuming after a camera
+// reconnect is the same session: blanking it would show the dropout the server hid.
+watch(() => eventStream.captureState.value, (newState, oldState) => {
+  if (newState === CAPTURE_STATES.STARTING && oldState !== CAPTURE_STATES.RECOVERING) {
     clearFrameData()
   }
 })
