@@ -11,6 +11,12 @@ This manual will guide you through setting up and using the software for your EA
 4. Adjust cooling settings if your camera supports it.
 5. Click "Start Capture" to begin live stacking.
 
+## Live view
+
+Pinch or scroll to zoom and drag to pan; **Fit to view** brings the whole frame back. Going
+fullscreen, leaving it, and rotating the device all fit the image to the new screen on their
+own. Resizing a desktop window keeps your zoom, unless you are fullscreen.
+
 ## Guide camera
 
 You can attach a second camera on a guide scope. Click the small arrow at the right of
