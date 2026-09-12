@@ -245,6 +245,28 @@ const framesTooltip = computed(() => {
       <button class="btn-close btn-dismiss">&times;</button>
     </div>
 
+    <!-- The server left Focus/Finder mode because the running capture switched to stacking -->
+    <div
+        v-if="eventStream.focusModeNotice.value"
+        class="status-item resumed focus-mode-left"
+        @click="eventStream.clearFocusModeNotice()"
+    >
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4"/>
+        <path d="M12 8h.01"/>
+      </svg>
+      <span>{{ eventStream.focusModeNotice.value }}</span>
+      <button class="btn-close btn-dismiss">&times;</button>
+    </div>
+
     <!-- Error indicator. Suppressed while a camera warning is showing: the two
          describe the same incident, and stacking them just doubles the noise. -->
     <div

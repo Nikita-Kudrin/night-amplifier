@@ -18,7 +18,7 @@ use crate::planetary::AlignmentRoi;
 use crate::render::StretchAggressiveness;
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
-const DEFAULT_SETTINGS_FILE: &str = "settings.json";
+pub const DEFAULT_SETTINGS_FILE: &str = "settings.json";
 
 /// Persisted settings structure matching CaptureSettings
 #[derive(Debug, Clone, Serialize, Deserialize)]

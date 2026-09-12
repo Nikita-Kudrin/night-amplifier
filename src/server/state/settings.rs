@@ -607,13 +607,7 @@ impl Default for CaptureSettings {
 impl CaptureSettings {
     /// Which of the three capture modes this session is running in.
     pub fn capture_mode(&self) -> CaptureMode {
-        if !self.stacking {
-            return CaptureMode::LiveView;
-        }
-        if self.wanderer_mode {
-            return CaptureMode::Wanderer;
-        }
-        CaptureMode::Stacking
+        CaptureMode::from_flags(self.stacking, self.wanderer_mode)
     }
 
     /// Whether raw frames captured under these settings go to disk.

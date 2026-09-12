@@ -82,4 +82,8 @@ async fn test_event_to_json_all_variants() {
     assert_eq!(json["type"], "capture_resumed");
     assert_eq!(json["name"], "Test Camera");
     assert_eq!(json["stacked_count"], 514);
+
+    let json: serde_json::Value =
+        serde_json::from_str(&ServerEvent::FocusModeLeft.to_json()).unwrap();
+    assert_eq!(json, serde_json::json!({ "type": "focus_mode_left" }));
 }

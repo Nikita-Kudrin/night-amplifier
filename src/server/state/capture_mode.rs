@@ -34,6 +34,18 @@ pub enum CaptureMode {
 }
 
 impl CaptureMode {
+    /// The imaging mode the two UI flags select. `wanderer_mode` only means something
+    /// while stacking: live view with it set still integrates nothing.
+    pub fn from_flags(stacking: bool, wanderer_mode: bool) -> Self {
+        if !stacking {
+            return Self::LiveView;
+        }
+        if wanderer_mode {
+            return Self::Wanderer;
+        }
+        Self::Stacking
+    }
+
     /// Suffix for this mode's raw session directory, so a night's folders say what
     /// produced them.
     pub fn session_dir_suffix(self) -> &'static str {
