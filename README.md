@@ -22,11 +22,8 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Camera SDK Support
 
-The camera module uses a dynamic runtime loading system. Camera SDKs are **optional runtime dependencies**. If an SDK is
-not installed on your system, the binary will still run perfectly, but that specific camera brand will simply be
-disabled.
-
-Enable features for specific manufacturers when compiling:
+Camera SDKs are loaded at runtime and are **optional**: without one installed the binary still runs, with that brand
+disabled. Every provider is a default Cargo feature (`playerone`, `zwo`, `qhy`, `touptek`, `svbony`, `indi`).
 
 | Provider   | SDK Required                                                         | Supported                                                 |
 |------------|----------------------------------------------------------------------|-----------------------------------------------------------|
@@ -40,34 +37,29 @@ Enable features for specific manufacturers when compiling:
 
 ## Features
 
-- **Stacking modes** - Deep Sky, Planetary (![Testing](https://img.shields.io/badge/🚀_Testing-green)) .
-- **Background subtraction** - Standard grid-based model to remove light pollution gradients.
-- **Auto stretching** - Color-preserving stretch with automatic background neutralization.
-- **Cooled camera control** - Target-temperature setpoint, pre-cooling/warming-up
-- **Guide camera** - Attach a second camera on a guide scope; it free-runs, drives plate solving from its own optics, and can be previewed in place of the main image. Start/Stop acts on whichever camera is selected, so each is started and stopped independently.
-- **Eyepiece view** - Simulation of the eyepiece view. `/eyepiece` is always monocular, with
-  fullscreen, pinch zoom, auto-hiding controls and PNG download (round or uncropped);
-  `/eyepiece_quality` streams losslessly and follows the binocular/monocular setting.
-- **Sensor corrections** - Hot-pixel rejection and row/column pattern removal on the raw mosaic, before demosaic.
-- **Noise reduction** - Guided-filter colour smoothing and scale-selective grain removal, run at the resolution you
-  actually view.
+- **Stacking modes** - Deep Sky, Planetary (![Testing](https://img.shields.io/badge/🚀_Testing-green)).
+- **Background subtraction** - grid-based model removing light-pollution gradients.
+- **Auto stretching** - colour-preserving stretch with automatic background neutralization.
+- **Cooled camera control** - target-temperature setpoint, pre-cooling/warm-up.
+- **Guide camera** - a second camera on a guide scope free-runs, plate-solves from its own optics and can be previewed
+  instead of the main image. Start/Stop act on the selected camera, so each runs independently.
+- **Eyepiece view** - `/eyepiece` is monocular, with fullscreen, pinch zoom, auto-hiding controls and PNG download
+  (round or uncropped); `/eyepiece_quality` streams losslessly and follows the binocular/monocular setting.
+- **Sensor corrections** - hot-pixel rejection and row/column pattern removal on the raw mosaic, before demosaic.
+- **Noise reduction** - guided-filter colour smoothing and scale-selective grain removal at your viewing resolution.
 
 > [!NOTE]
-> Pro features are available in the 'Night Amplifier Pro' version:
-> - **Push-To Navigation System** (via ASTAP) - provides real-time directional guidance to help you manually center
-    objects ![Testing](https://img.shields.io/badge/🚀_Testing-green)
-> - **Comet Stacking** - tracks and aligns frames of the comet's
-    nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
-> - **Advanced Outlier Rejection** - Removes satellites, planes, or hot pixels from the stack (Sigma clipping,
-    Winsorized, Min-Max)
-> - **Advanced Background Extraction** - background extraction for improved accuracy (Radial Basis Function method)
+> Pro features, in 'Night Amplifier Pro':
+> - **Push-To Navigation** (via ASTAP) - real-time directions for centering objects by hand ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Comet Stacking** - aligns frames on the comet's nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
+> - **Advanced Outlier Rejection** - removes satellites, planes and hot pixels (Sigma clipping, Winsorized, Min-Max)
+> - **Advanced Background Extraction** - Radial Basis Function background model
 
 ## Frame Storage
 
-Raw frames are saved to FITS files in the capture modes selected under **Settings → Storage → Save Raw Frames**.
-Live view, Wanderer, Stacking and Guide camera are chosen independently; all four are off by default. The finished
-stack is saved separately, in Stacking mode only. The guide camera writes alongside the imaging one, into a folder
-of its own, for as long as its loop is running — select it and press Stop to end both.
+Raw frames are saved as FITS for the modes enabled under **Settings → Storage → Save Raw Frames** (Live view, Wanderer,
+Stacking, Guide camera; each independent, all off by default). The finished stack is saved in Stacking mode only. The
+guide camera writes to its own folder while its loop runs — select it and press Stop to end both.
 
 **Image Storage Formats:**
 
@@ -80,7 +72,7 @@ of its own, for as long as its loop is running — select it and press Stop to e
 
 **Directory Structure:**
 
-Each session gets its own directory, named for the time capture started and the mode that filled it:
+One directory per session, named by start time and mode:
 
 ```
 captures/
@@ -96,9 +88,8 @@ captures/
     └── DD-MM-YYYY_HH-MM-SS-stacking.fits # Final stacked result (same name as session)
 ```
 
-Changing capture mode without stopping opens a new directory, so a folder only holds frames captured
-in the mode it names. Sessions starting within the same second get a counter before the suffix
-(`DD-MM-YYYY_HH-MM-SS_2-stacking`).  
+Switching mode mid-capture opens a new directory; sessions starting in the same second get a counter before the suffix
+(`DD-MM-YYYY_HH-MM-SS_2-stacking`).
 
 **FITS Metadata:** Each file includes standard FITS headers:
 
@@ -114,23 +105,18 @@ in the mode it names. Sessions starting within the same second get a counter bef
 - `SET-TEMP` - Target sensor temperature in Celsius (cooled cameras only)
 - `SOFTWARE` - "Night Amplifier"
 
-**Slow Disk Warning:** If disk I/O can't keep up with the capture rate, a warning appears in the web interface when the
-write queue exceeds 5 frames. The queue depth is shown to help diagnose performance issues.
+**Slow Disk Warning:** if disk I/O can't keep up, the web UI warns once the write queue exceeds 5 frames and shows its
+depth.
 
 ## Distribution Builds
 
-Night Amplifier can be built as a self-contained single binary with the web UI embedded. No external files are needed to
-run the distribution binary.
+A single self-contained binary with the web UI embedded — no external files needed.
 
 ### Pre-built Downloads
 
-Pre-built binaries are available on the [Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) page for
-Linux (x86_64, ARM64) and Windows (x86_64, ARM64). Optimized builds for Raspberry Pi 5 / Orange Pi 5 are included.
-
-For the easiest installation on desktop Linux, download the `.AppImage` file, make it executable, and double-click to
-run.
-
-Alternatively, download the `.tar.gz` archive for your platform, extract, and run:
+[Releases](https://github.com/Nikita-Kudrin/night-amplifier/releases) has Linux (x86_64, ARM64) and Windows (x86_64,
+ARM64) binaries, including optimized Raspberry Pi 5 / Orange Pi 5 builds. On desktop Linux, the `.AppImage` is easiest
+(make it executable, double-click). Otherwise extract the `.tar.gz` for your platform and run:
 
 ```bash
 tar xzf night-amplifier-*.tar.gz
@@ -172,24 +158,14 @@ The archive is created in `dist/`. Extract and run `./night-amplifier`.
 **System prerequisites:**
 
 - **nasm** — required by `turbojpeg-sys` (libjpeg-turbo SIMD acceleration)
-  ```bash
-  # Debian/Ubuntu/Raspberry Pi OS
-  sudo apt-get install nasm
-
-  # Fedora
-  sudo dnf install nasm
-
-  # macOS
-  brew install nasm
-
-  # Windows
-  choco install nasm
-  ```
 
 ```bash
-cargo build
+sudo apt-get install nasm   # Debian/Ubuntu/Raspberry Pi OS
+sudo dnf install nasm       # Fedora
+brew install nasm           # macOS
+choco install nasm          # Windows
 
-cargo build --release
+cargo build --release       # or `cargo build` for a debug build
 ```
 
 ## Running Tests
@@ -198,219 +174,66 @@ cargo build --release
 cargo test
 ```
 
-#### Player One Setup
+#### Camera SDK Setup (Linux, optional)
 
-**Runtime Prerequisites (Optional):**
-
-To use Player One cameras, you must install the following system libraries:
-
-- **libusb-1.0**: Required by the Player One SDK
-  ```bash
-  # Debian/Ubuntu/Raspberry Pi OS
-  sudo apt-get install libusb-1.0-0
-
-  # Fedora
-  sudo dnf install libusb-1.0
-
-  # Arch Linux/Manjaro
-  sudo pacman -S libusb
-  ```
-- **libclang**: Required for bindgen to generate Rust bindings
-  ```bash
-  # Debian/Ubuntu/Raspberry Pi OS
-  sudo apt-get install libclang-dev
-
-  # Fedora
-  sudo dnf install clang-devel
-
-  # Arch Linux/Manjaro
-  sudo pacman -S clang
-  ```
-
-**Linux Installation:**
-
-1. Download the SDK from [Player One Software](https://player-one-astronomy.com/service/software/)
-2. Extract the archive and install udev rules (for USB permissions):
-   ```bash
-   sudo install 99-player_one_astronomy.rules /lib/udev/rules.d/
-   sudo udevadm control --reload-rules
-   sudo udevadm trigger
-   ```
-3. Install the shared library:
-   ```bash
-   sudo cp libPlayerOneCamera.so /usr/local/lib/
-   sudo ldconfig
-   ```
-4. Unplug and replug the camera after installing udev rules
-
-**Verification:**
+Each SDK is needed only to use its brand. Install udev rules (USB permissions) and the shared library as shown per
+vendor below, then **unplug and replug the camera**; `ldconfig -p | grep <library>` confirms the library is found.
+Player One, ZWO and QHYCCD SDKs need **libusb-1.0**; Player One also lists **libclang** (bindgen):
 
 ```bash
-# Check if library is found
-ldconfig -p | grep PlayerOne
+sudo apt-get install libusb-1.0-0 libclang-dev   # Debian/Ubuntu/Raspberry Pi OS
+sudo dnf install libusb-1.0 clang-devel          # Fedora
+sudo pacman -S libusb clang                      # Arch Linux/Manjaro
+```
 
-# Build with Player One support
-cargo build --release --features playerone
+#### Player One Setup
+
+From the extracted [Player One SDK](https://player-one-astronomy.com/service/software/):
+
+```bash
+sudo install 99-player_one_astronomy.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo cp libPlayerOneCamera.so /usr/local/lib/ && sudo ldconfig
+ldconfig -p | grep PlayerOne
 ```
 
 #### ZWO Setup
 
-**Runtime Prerequisites (Optional):**
-
-To use ZWO ASI cameras, you must install the following system libraries:
-
-- **libusb-1.0**: Required by the ZWO ASI SDK
-  ```bash
-  # Debian/Ubuntu/Raspberry Pi OS
-  sudo apt-get install libusb-1.0-0
-
-  # Fedora
-  sudo dnf install libusb-1.0
-
-  # Arch Linux/Manjaro
-  sudo pacman -S libusb
-  ```
-
-**Linux Installation:**
-
-1. Download the SDK from [ZWO Software & Drivers](https://astronomy-imaging-camera.com/software-drivers)
-2. Extract the archive and install udev rules (for USB permissions):
-   ```bash
-   sudo install lib/asi.rules /lib/udev/rules.d/
-   sudo udevadm control --reload-rules
-   sudo udevadm trigger
-   ```
-3. Install the header file (required for building):
-   ```bash
-   sudo cp include/ASICamera2.h /usr/local/include/
-   ```
-4. Install the shared library (for x64):
-   ```bash
-   sudo cp lib/x64/libASICamera2.so /usr/local/lib/
-   sudo ldconfig
-   ```
-   For ARM (Raspberry Pi):
-   ```bash
-   sudo cp lib/armv8/libASICamera2.so /usr/local/lib/
-   sudo ldconfig
-   ```
-5. Unplug and replug the camera after installing udev rules
-
-**Verification:**
+From the extracted [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers):
 
 ```bash
-# Check if library is found
+sudo install lib/asi.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo cp include/ASICamera2.h /usr/local/include/                   # header, required for building
+sudo cp lib/x64/libASICamera2.so /usr/local/lib/ && sudo ldconfig  # ARM (Raspberry Pi): lib/armv8/libASICamera2.so
 ldconfig -p | grep ASICamera
-
-# Build with ZWO support
-cargo build --release --features zwo
-
-# Build with both Player One and ZWO support
-cargo build --release --features playerone,zwo
 ```
 
 #### QHY Setup
 
-**Runtime Prerequisites (Optional):**
-
-To use QHYCCD cameras, you must install the following system libraries:
-
-- **libusb-1.0**: Required by the QHYCCD SDK
-  ```bash
-  # Debian/Ubuntu/Raspberry Pi OS
-  sudo apt-get install libusb-1.0-0
-
-  # Fedora
-  sudo dnf install libusb-1.0
-
-  # Arch Linux/Manjaro
-  sudo pacman -S libusb
-  ```
-
-**Linux Installation:**
-
-1. Download the SDK from [QHYCCD Download](https://www.qhyccd.com/download/)
-2. Extract the archive and install udev rules (for USB permissions):
-   ```bash
-   sudo install sdk/linux/mac/rules/85-qhyccd.rules /lib/udev/rules.d/
-   sudo udevadm control --reload-rules
-   sudo udevadm trigger
-   ```
-3. Install the shared library:
-   ```bash
-   sudo cp sdk/linux/mac/lib/libqhyccd.so* /usr/local/lib/
-   sudo ldconfig
-   ```
-4. Unplug and replug the camera after installing udev rules
-
-**Verification:**
+From the extracted [QHYCCD SDK](https://www.qhyccd.com/download/):
 
 ```bash
-# Check if library is found
+sudo install sdk/linux/mac/rules/85-qhyccd.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo cp sdk/linux/mac/lib/libqhyccd.so* /usr/local/lib/ && sudo ldconfig
 ldconfig -p | grep qhyccd
-
-# Build with QHY support
-cargo build --release --features qhy
-
-# Build with all cameras supported
-cargo build --release --features playerone,zwo,qhy,touptek
 ```
 
 #### ToupTek Setup
 
-**Runtime Prerequisites (Optional):**
-
-To use ToupTek cameras, you must have the ToupTek SDK shared library (`libtoupcam.so`, `libtoupcam.dylib`, or
-`toupcam.dll`) installed on your system.
-
-**Linux Installation:**
-
-1. Download the SDK (`libtoupcam`) from the [ToupTek Download Page](http://www.touptek.com/download/) (look for the
-   Linux SDK) or alternatively from
-   the [INDIGO repository](https://github.com/indigo-astronomy/indigo/tree/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam)
-   which maintains up-to-date binaries for all architectures.
-2. Install the shared library to a library path (e.g., `/usr/local/lib/` or `/usr/lib/`).
-3. Install udev rules for your ToupTek cameras (often provided by the manufacturer or INDI) to ensure proper USB
-   permissions.
-4. Unplug and replug the camera after installing udev rules.
-
-**Verification:**
-
-```bash
-# Check if library is found
-ldconfig -p | grep toupcam
-
-# Build with ToupTek support
-cargo build --release --features touptek
-```
+Needs `libtoupcam.so` / `libtoupcam.dylib` / `toupcam.dll`: the Linux SDK from the
+[ToupTek Download Page](http://www.touptek.com/download/), or up-to-date binaries for all architectures from the
+[INDIGO repository](https://github.com/indigo-astronomy/indigo/tree/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam).
+Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera (often shipped by the
+manufacturer or INDI), then replug. Check: `ldconfig -p | grep toupcam`.
 
 #### SVBony Setup
 
-**Runtime Prerequisites (Optional):**
-
-To use SVBony cameras, you must have the SVBony SDK shared library (`libSVBony.so`, `libSVBCameraSDK.dylib`, or
-`SVBony.dll`) installed on your system.
-
-**Linux Installation:**
-
-1. Download the SDK from the [SVBony Downloads Page](https://www.svbony.com/downloads).
-2. Install the shared library to a library path (e.g., `/usr/local/lib/` or `/usr/lib/`).
-3. Install udev rules for your SVBony cameras to ensure proper USB permissions.
-4. Unplug and replug the camera after installing udev rules.
-
-**Verification:**
-
-```bash
-# Check if library is found
-ldconfig -p | grep SVBony
-
-# Build with SVBony support
-cargo build --release --features svbony
-```
+Needs `libSVBony.so` / `libSVBCameraSDK.dylib` / `SVBony.dll` from the [SVBony Downloads Page](https://www.svbony.com/downloads).
+Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera, then replug. Check:
+`ldconfig -p | grep SVBony`.
 
 ### Web Server
 
-The integrated web server provides remote camera control and live image streaming.
+Remote camera control and live image streaming.
 
 ```bash
 # Run the server (default port 9955)
@@ -456,15 +279,13 @@ The server provides:
 | `/api/catalog/status`         | GET    | Get OpenNGC catalog status        |
 | `/api/catalog/install`        | POST   | Start OpenNGC catalog install     |
 
-Static files are served from the `web/` directory (Vue 3 frontend included).
+The Vue 3 frontend is embedded in the binary; `--static-dir web/dist` serves it from disk instead.
 
 #### Push-To Solve Lifecycle
 
-A plate solve is offered a frame at most once a second, only once the view has settled. Two independent checks decide
-whether that offer is taken: the **movement detector** (has the star field changed enough to re-solve?) and the
-**solve gate** (should we even try?). Conflating these two questions caused some of the worst Push-To bugs.
-
-The gate holds three states:
+A plate solve is offered a frame at most once a second, once the view has settled. Two independent checks decide: the
+**movement detector** (has the star field changed enough to re-solve?) and the **solve gate** (should we try at all?)
+— conflating them caused some of the worst Push-To bugs. The gate's three states:
 
 | State       | Set by                                      | Cleared by                                           |
 |-------------|---------------------------------------------|------------------------------------------------------|
@@ -472,10 +293,9 @@ The gate holds three states:
 | backing off | a failed solve (5 s, doubling, capped 120s) | the delay expiring, or any of the "arming" events    |
 | suppressed  | a user cancel, clearing the target          | a new target, slewing the scope, an equipment change |
 
-A cancel keeps the last solved position (still the best guess, still what drives the guide arrow) and waits for fresh
-user intent. A failure discards it and schedules a retry instead. Changing focal length, sensor, or binning calls
-`restart_solve` rather than a plain cancel: it aborts the in-flight solve *and* resets the movement detector, since a
-bare cancel would leave the star field looking unchanged and nothing would ever re-solve against the new optics.
+A cancel keeps the last solved position (still the best guess and what drives the guide arrow) until fresh user intent;
+a failure discards it and schedules a retry. Changing focal length, sensor or binning calls `restart_solve`, which also
+resets the movement detector — otherwise the field looks unchanged and nothing re-solves against the new optics.
 
 Push-To events on `/ws/events`:
 
@@ -510,26 +330,12 @@ To add support for a new camera manufacturer:
 
 ### OpenTelemetry
 
-Night Amplifier supports optional OpenTelemetry integration for distributed tracing and metrics, useful for debugging
-and performance monitoring.
-
-**Building with telemetry support:**
+Optional tracing and metrics for debugging and performance monitoring, built with `--features telemetry`:
 
 ```bash
-cargo build --release --features telemetry
-```
-
-**Running with telemetry:**
-
-```bash
-# Enable with default OTLP endpoint (http://localhost:4317)
-cargo run --release --features telemetry -- --telemetry
-
-# Specify custom OTLP endpoint (e.g., remote collector)
-cargo run --release --features telemetry -- --telemetry --otlp-endpoint http://192.168.1.100:4317
-
-# Disable telemetry explicitly (even if built with the feature)
-cargo run --release --features telemetry -- --no-telemetry
+cargo run --release --features telemetry -- --telemetry                                            # default endpoint http://localhost:4317
+cargo run --release --features telemetry -- --telemetry --otlp-endpoint http://192.168.1.100:4317  # remote collector
+cargo run --release --features telemetry -- --no-telemetry                                         # force off
 ```
 
 **Environment variables:**
@@ -539,22 +345,8 @@ cargo run --release --features telemetry -- --no-telemetry
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP collector endpoint |
 | `OTEL_SERVICE_NAME`           | `night-amplifier`       | Service name in traces  |
 
-**Running the full observability stack (traces + metrics):**
-
-The project includes a Docker Compose file that starts Jaeger (traces), OpenTelemetry Collector, Prometheus (metrics),
-and Grafana (dashboards):
-
-```bash
-docker compose -f docker-compose.telemetry.yml up -d
-```
-
-Then start the server with telemetry enabled (sends to `localhost:4317` by default):
-
-```bash
-cargo run --release --features telemetry -- --telemetry
-```
-
-**Where to view telemetry data:**
+**Full observability stack:** `docker compose -f docker-compose.telemetry.yml up -d` starts Jaeger (traces), the
+OpenTelemetry Collector, Prometheus (metrics) and Grafana (dashboards); then run the server with `--telemetry` as above.
 
 | URL                        | What you see                                                       |
 |----------------------------|--------------------------------------------------------------------|
@@ -562,51 +354,24 @@ cargo run --release --features telemetry -- --telemetry
 | **http://localhost:9090**  | Prometheus UI — raw **metrics** queries (gauges, counters)         |
 | **http://localhost:3000**  | Grafana UI — **metric dashboards** and graphs (login: admin/admin) |
 
-> **Traces vs Metrics:** Jaeger only shows traces (spans). To view gauges such as
-> `master_stack.memory_bytes` or `disk_writer.queue_depth`, use Prometheus or Grafana.
-
-To query a metric in Prometheus, open http://localhost:9090 and type the metric name (dots are converted to underscores,
-e.g. `master_stack_memory_bytes`).
+> **Traces vs Metrics:** Jaeger shows only traces (spans). For gauges such as `master_stack.memory_bytes` or
+> `disk_writer.queue_depth`, use Prometheus or Grafana; Prometheus names replace dots with underscores
+> (`master_stack_memory_bytes`).
 
 ### Web Frontend
 
-A Vue 3 web interface is included for camera control from any browser (desktop or mobile).
+Vue 3 interface for camera control from any browser: mobile-first, dark theme for night use, real-time WebSocket
+streaming (dynamic JPEG for WiFi, LZ4 for the lossless eyepiece), WebGL rendering with Canvas2D fallback,
+pinch-to-zoom, and Push-To and Comet Stacking panels (Pro). All npm commands run from `web/`:
 
 ```bash
-# Install dependencies
-cd web
 npm install
-
-# Development server (proxies API to localhost:9955)
-npm run dev
-
-# Production build (outputs to web/dist/)
-npm run build
-
-# Run tests
-npm test          # Watch mode
-npm run test:run  # Single run
-
-# Linting and formatting
-npm run lint      # Check for issues
-npm run lint:fix  # Auto-fix ESLint issues
-npm run format    # Format with Prettier
+npm run dev       # development server, proxies API to localhost:9955
+npm run build     # production build to web/dist/, which the server binary embeds
+npm test          # tests in watch mode (npm run test:run: single run)
+npm run lint      # check for issues (npm run lint:fix: auto-fix)
+npm run format    # format with Prettier
 ```
-
-**Note:** All npm commands must be run from the `web/` directory.
-
-**Features:**
-
-- Mobile-first responsive design (phone + desktop)
-- Real-time WebSocket streaming (dynamic JPEG for WiFi, LZ4 for lossless eyepiece)
-- WebGL-accelerated image rendering with Canvas2D fallback
-- Touch support with pinch-to-zoom on live view
-- Push-To navigation panel for manual telescope pointing (Available in Pro version)
-- Comet Stacking specialized tracking and nucleus alignment (Available in Pro version)
-- Dark theme optimized for night use
-
-For production deployment, run `npm run build` then start the Rust server - it automatically serves the built frontend
-from `web/`.
 
 ## License
 
