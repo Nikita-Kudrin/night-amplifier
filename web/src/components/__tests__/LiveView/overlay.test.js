@@ -1,7 +1,18 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
-import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
+import {
+    setupMocks,
+    mountLiveView,
+    createMockFrameData,
+    withRealFullscreen,
+    setFullscreenElement,
+    changeFullscreen,
+    installResizeObserverStub,
+    installScreenOrientationStub,
+    removeScreenOrientationStub,
+} from './setup.js'
 import {IDLE_HIDE_MS} from '../../../composables/useOverlayVisibility.js'
+import {FIT_SETTLE_MS} from '../../../composables/useAutoFit.js'
 
 /** The overlay lives on `LiveViewControls`' own root element. */
 function controls(wrapper) {
@@ -187,66 +198,166 @@ describe('LiveView - Overlay auto-hide', () => {
     })
 })
 
+/**
+ * Fit all when the viewport changes shape. Driven through the real `useFullscreen`
+ * and `useAutoFit`; only the container's layout is reported by hand, since the fit
+ * must measure the size the container settles at, not the one it is leaving.
+ */
 describe('LiveView - Fit all on viewport changes', () => {
     let mocks
+    let layout
 
     beforeEach(() => {
         vi.useFakeTimers()
         mocks = setupMocks()
+        withRealFullscreen(mocks.mockPanZoom)
+        layout = installResizeObserverStub()
+        setFullscreenElement(null)
         mocks.mockImageStream.frameData.value = createMockFrameData(2, 2)
         mocks.mockImageStream.dimensions.value = {width: 2, height: 2}
     })
 
     afterEach(() => {
+        setFullscreenElement(null)
+        removeScreenOrientationStub()
+        vi.unstubAllGlobals()
         vi.useRealTimers()
         vi.restoreAllMocks()
     })
 
-    it('fits the image on a resize while fullscreen', async () => {
+    async function mountAt(width, height) {
         const wrapper = mountLiveView()
         await nextTick()
-        mocks.mockPanZoom.isFullscreen.value = true
+        layout.resizeContainer(wrapper, width, height)
         mocks.mockPanZoom.fitToView.mockClear()
+        return wrapper
+    }
 
-        window.dispatchEvent(new Event('resize'))
-        vi.advanceTimersByTime(250)
+    async function mountFullscreen(width, height) {
+        const wrapper = await mountAt(width, height)
+        changeFullscreen(document.body)
+        vi.advanceTimersByTime(FIT_SETTLE_MS)
+        mocks.mockPanZoom.fitToView.mockClear()
+        return wrapper
+    }
 
-        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalled()
+    function expectFittedTo(width, height) {
+        expect(mocks.mockPanZoom.fitToView).toHaveBeenLastCalledWith(
+            expect.objectContaining({width, height}), 2, 2)
+    }
+
+    // The regression: a fit shortly after `fullscreenchange` measured the
+    // fullscreen container and left the image zoomed for a viewport it had left.
+    it('fits all after leaving fullscreen, to the size the container shrinks to', async () => {
+        const wrapper = await mountFullscreen(1920, 1080)
+
+        changeFullscreen(null)
+        vi.advanceTimersByTime(50)
+        expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
+
+        layout.resizeContainer(wrapper, 800, 450)
+        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalledTimes(1)
+        expectFittedTo(800, 450)
         wrapper.unmount()
     })
 
-    // A rotation does not always come with a `resize` on mobile Safari.
-    it('fits the image on an orientation change while fullscreen', async () => {
-        const wrapper = mountLiveView()
-        await nextTick()
-        mocks.mockPanZoom.isFullscreen.value = true
-        mocks.mockPanZoom.fitToView.mockClear()
+    it('fits all after leaving fullscreen when the container keeps its size', async () => {
+        const wrapper = await mountFullscreen(1920, 1080)
+
+        changeFullscreen(null)
+        vi.advanceTimersByTime(FIT_SETTLE_MS)
+
+        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalledTimes(1)
+        wrapper.unmount()
+    })
+
+    it('fits all on entering fullscreen, to the size the container grows to', async () => {
+        const wrapper = await mountAt(800, 450)
+
+        changeFullscreen(document.body)
+        vi.advanceTimersByTime(50)
+        expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
+
+        layout.resizeContainer(wrapper, 1920, 1080)
+        expectFittedTo(1920, 1080)
+        wrapper.unmount()
+    })
+
+    // `/` lays out differently in landscape, so a windowed rotation fits too.
+    it('fits all on an orientationchange outside fullscreen', async () => {
+        const wrapper = await mountAt(390, 700)
 
         window.dispatchEvent(new Event('orientationchange'))
-        vi.advanceTimersByTime(250)
+        vi.advanceTimersByTime(50)
+        expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
 
-        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalled()
+        layout.resizeContainer(wrapper, 844, 300)
+        vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
+
+        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalledTimes(1)
+        expectFittedTo(844, 300)
+        wrapper.unmount()
+    })
+
+    it('fits all on a screen.orientation change outside fullscreen', async () => {
+        const orientation = installScreenOrientationStub()
+        const wrapper = await mountAt(390, 700)
+
+        orientation.dispatchEvent(new Event('change'))
+        layout.resizeContainer(wrapper, 844, 300)
+
+        expectFittedTo(844, 300)
+        wrapper.unmount()
+    })
+
+    it('fits all once when a rotation fires both orientation events', async () => {
+        const orientation = installScreenOrientationStub()
+        const wrapper = await mountAt(390, 700)
+
+        orientation.dispatchEvent(new Event('change'))
+        window.dispatchEvent(new Event('orientationchange'))
+        layout.resizeContainer(wrapper, 844, 300)
+        vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
+
+        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalledTimes(1)
+        wrapper.unmount()
+    })
+
+    it('fits all on a rotation while fullscreen', async () => {
+        const wrapper = await mountFullscreen(1920, 1080)
+
+        window.dispatchEvent(new Event('orientationchange'))
+        layout.resizeContainer(wrapper, 1080, 1920)
+
+        expectFittedTo(1080, 1920)
+        wrapper.unmount()
+    })
+
+    it('fits all on a resize while fullscreen', async () => {
+        const wrapper = await mountFullscreen(1920, 1080)
+
+        window.dispatchEvent(new Event('resize'))
+        layout.resizeContainer(wrapper, 1600, 900)
+
+        expectFittedTo(1600, 900)
         wrapper.unmount()
     })
 
     // Windowed, the user's own pan and zoom must survive a resize — dragging the
-    // sidebar should not reframe the image.
-    it('leaves the view alone on a resize outside fullscreen', async () => {
-        const wrapper = mountLiveView()
-        await nextTick()
-        mocks.mockPanZoom.isFullscreen.value = false
-        mocks.mockPanZoom.fitToView.mockClear()
+    // sidebar reshapes the container and still must not reframe the image.
+    it('leaves the view alone on a resize outside fullscreen, even as the container reshapes', async () => {
+        const wrapper = await mountAt(1200, 800)
 
         window.dispatchEvent(new Event('resize'))
-        vi.advanceTimersByTime(250)
+        layout.resizeContainer(wrapper, 900, 800)
+        vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
 
         expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
         wrapper.unmount()
     })
 
     it('still reports the new resolution on a resize', async () => {
-        const wrapper = mountLiveView()
-        await nextTick()
+        const wrapper = await mountAt(1200, 800)
         mocks.mockImageStream.sendResolution.mockClear()
 
         window.dispatchEvent(new Event('resize'))
@@ -256,49 +367,40 @@ describe('LiveView - Fit all on viewport changes', () => {
         wrapper.unmount()
     })
 
+    it('still reports the new resolution on a screen.orientation change', async () => {
+        const orientation = installScreenOrientationStub()
+        const wrapper = await mountAt(390, 700)
+        mocks.mockImageStream.sendResolution.mockClear()
+
+        orientation.dispatchEvent(new Event('change'))
+        vi.advanceTimersByTime(250)
+
+        expect(mocks.mockImageStream.sendResolution).toHaveBeenCalled()
+        wrapper.unmount()
+    })
+
     it('stops listening once unmounted', async () => {
-        const wrapper = mountLiveView()
-        await nextTick()
+        const orientation = installScreenOrientationStub()
+        const wrapper = await mountAt(390, 700)
         wrapper.unmount()
         mocks.mockImageStream.sendResolution.mockClear()
 
         window.dispatchEvent(new Event('orientationchange'))
-        vi.advanceTimersByTime(250)
+        orientation.dispatchEvent(new Event('change'))
+        changeFullscreen(document.body)
+        vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
 
         expect(mocks.mockImageStream.sendResolution).not.toHaveBeenCalled()
-    })
-})
-
-/**
- * Entering fullscreen fits all. The composable owns the transition detection, so
- * what LiveView must get right is handing it a callback that fits.
- */
-describe('LiveView - Fit all on entering fullscreen', () => {
-    let mocks
-
-    beforeEach(() => {
-        vi.useFakeTimers()
-        mocks = setupMocks()
-        mocks.mockImageStream.frameData.value = createMockFrameData(2, 2)
-        mocks.mockImageStream.dimensions.value = {width: 2, height: 2}
+        expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
     })
 
-    afterEach(() => {
-        vi.useRealTimers()
-        vi.restoreAllMocks()
-    })
+    it('drops a pending fit when unmounted', async () => {
+        const wrapper = await mountAt(390, 700)
+        window.dispatchEvent(new Event('orientationchange'))
 
-    it('passes usePanZoom an onChange that fits the view', async () => {
-        const {usePanZoom} = await import('../../../composables/usePanZoom.js')
-        const wrapper = mountLiveView()
-        await nextTick()
-        mocks.mockPanZoom.fitToView.mockClear()
-
-        const {onChange} = usePanZoom.mock.calls[usePanZoom.mock.calls.length - 1][0]
-        onChange(false)
-        vi.advanceTimersByTime(50)
-
-        expect(mocks.mockPanZoom.fitToView).toHaveBeenCalled()
         wrapper.unmount()
+        vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
+
+        expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
     })
 })

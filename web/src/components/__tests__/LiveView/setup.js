@@ -25,6 +25,7 @@ import {useImageStream} from '../../../composables/useWebSocket.js'
 import {useWebGLRenderer} from '../../../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../../../composables/usePanZoom.js'
+import {useFullscreen} from '../../../composables/useFullscreen.js'
 import LiveView from '../../LiveView.vue'
 
 /**
@@ -222,6 +223,69 @@ export function createMockPanZoom() {
         }),
         handleFullscreenChange: vi.fn(),
     }
+}
+
+/**
+ * Swaps the mock's fullscreen half for the real `useFullscreen`, so a dispatched
+ * `fullscreenchange` goes through the actual edge detection into LiveView's `onChange`.
+ */
+export function withRealFullscreen(mockPanZoom) {
+    usePanZoom.mockImplementation((options) => ({...mockPanZoom, ...useFullscreen(options)}))
+}
+
+export function setFullscreenElement(element) {
+    Object.defineProperty(document, 'fullscreenElement', {
+        value: element,
+        writable: true,
+        configurable: true,
+    })
+}
+
+export function changeFullscreen(element) {
+    setFullscreenElement(element)
+    document.dispatchEvent(new Event('fullscreenchange'))
+}
+
+/**
+ * A `ResizeObserver` fired by hand: happy-dom does no layout, so it never reports a
+ * reshape on its own. Undo with `vi.unstubAllGlobals()`.
+ */
+export function installResizeObserverStub() {
+    const callbacks = new Set()
+    vi.stubGlobal('ResizeObserver', class {
+        constructor(callback) {
+            this.callback = callback
+        }
+
+        observe() {
+            callbacks.add(this.callback)
+        }
+
+        unobserve() {}
+
+        disconnect() {
+            callbacks.delete(this.callback)
+        }
+    })
+    return {
+        /** Lays the mounted view out at `width`x`height` and reports it. */
+        resizeContainer(wrapper, width, height) {
+            wrapper.element.getBoundingClientRect = () =>
+                ({left: 0, top: 0, x: 0, y: 0, width, height, right: width, bottom: height})
+            callbacks.forEach((callback) => callback([]))
+        },
+    }
+}
+
+/** happy-dom has no `screen.orientation`; install before mounting. */
+export function installScreenOrientationStub() {
+    const orientation = new window.EventTarget()
+    Object.defineProperty(window.screen, 'orientation', {value: orientation, configurable: true})
+    return orientation
+}
+
+export function removeScreenOrientationStub() {
+    delete window.screen.orientation
 }
 
 export function createMockProvides(overrides = {}) {
