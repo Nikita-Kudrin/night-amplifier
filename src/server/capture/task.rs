@@ -122,11 +122,11 @@ pub async fn run_capture_loop(
     camera.invalidate_config_cache();
 
     // Capture a probe frame to determine dimensions and channel capacities
-    let settings = state.settings.read().await.clone();
+    let settings = state.settings_for_new_frame().await;
     let mut capture_config = settings.to_capture_config();
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
-    apply_sensor_mode_support_override(&mut capture_config, &camera_info.info, &camera_name);
+    apply_sensor_mode_support_override(&mut capture_config, &camera_info.info);
     // Bounded like every other capture. Unbounded, this call is where a dead
     // handle hides: the field log shows seventy seconds between "Starting
     // capture session" and the SDK finally admitting the device was gone, with
@@ -477,7 +477,7 @@ pub(crate) fn run_capture_task(
         }
 
         // Read settings snapshot for this frame
-        let settings = rt.block_on(state.settings.read()).clone();
+        let settings = rt.block_on(state.settings_for_new_frame());
         let mut capture_config = settings.to_capture_config();
 
         // Get camera info
@@ -498,11 +498,7 @@ pub(crate) fn run_capture_task(
 
         apply_best_raw_format(&mut capture_config, &camera_info.info, &camera.info().name);
         apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera.info().name);
-        apply_sensor_mode_support_override(
-            &mut capture_config,
-            &camera_info.info,
-            &camera.info().name,
-        );
+        apply_sensor_mode_support_override(&mut capture_config, &camera_info.info);
 
         // Capture a frame (blocking FFI call, bounded so a stuck SDK call
         // can't freeze the pipeline indefinitely — see capture_frame_bounded).

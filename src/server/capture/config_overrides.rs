@@ -60,19 +60,15 @@ pub(crate) fn apply_cooler_support_override(
 /// override, `CaptureConfig::validate` rejects the request with
 /// `ParameterNotSupported("sensor_mode")` for any camera that reports an
 /// empty `sensor_modes` list (e.g. Player One uncooled planetary models).
+///
+/// Silent: `to_capture_config` fills a mode on every call, so a log line here fired before
+/// every guide exposure (5,363 lines, 17% of the 2026-09-07 field log). The capability is
+/// already in the connect-time `Camera specifications` line.
 pub(crate) fn apply_sensor_mode_support_override(
     config: &mut crate::camera::CaptureConfig,
     info: &crate::camera::CameraInfo,
-    camera_name: &str,
 ) {
-    if !info.sensor_modes.is_empty() {
-        return;
-    }
-    if config.sensor_mode.is_some() {
-        debug!(
-            camera = %camera_name,
-            "Camera advertises no sensor modes; clearing sensor_mode from capture config"
-        );
+    if info.sensor_modes.is_empty() {
         config.sensor_mode = None;
     }
 }

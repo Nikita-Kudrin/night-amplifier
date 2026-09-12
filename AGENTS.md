@@ -282,10 +282,15 @@ without a snapshot loads as off. `update_settings` applies it *after* every othe
 `reconcile` absorbs a stale client's write into the snapshot. `superpixel_debayer` is deliberately unmanaged (forcing
 the cheap debayer either way costs frame rate). Hot-pixel rejection is no longer a setting (see raw-CFA stage).
 
-**The mode and an accumulating stack are mutually exclusive**, both ways: `update_settings` answers 409 to
-`focus_mode: true` when `conflicts_with_capture`, and `CaptureService::{start,resume}_capture` leave the mode.
-`fpn_removal` runs pre-demosaic and `stacking_task` never resets on `sensor_correction` changes, so integrated banding
-can't be removed. Live view is exempt; *leaving* is never refused. Preview-stage win: `preview_pipeline/focus_mode_x6`
+**The mode and an accumulating stack are mutually exclusive**, every way in: `update_settings` answers 409 to
+`focus_mode: true` when the request's *resulting* mode `conflicts_with_capture`; `focus_mode::leave_if_conflicting`
+drops the mode on a stacking `CaptureService::{start,resume}_capture` and when a running live view switches to stacking
+(announced as `FocusModeLeft`). `fpn_removal` runs pre-demosaic and `stacking_task` never resets on `sensor_correction`
+changes, so integrated banding can't be removed. Exempt, since no affected frame reaches an accumulator: live view
+(dropping the mode on its start had the observer re-enable it by hand twice on 2026-09-07), types without
+`StackingType::uses_fpn_removal` (planetary — `build_cfa_pipeline` reads the same capability), and states taking no new
+frames (`Idle`, `Stopping`). `update_settings` reads the capture state before its settings lock, so the capture loop
+re-checks every snapshot (`AppState::settings_for_new_frame`). *Leaving* is never refused. Preview-stage win: `preview_pipeline/focus_mode_x6`
 39.4 ms vs `full_x6` 76.8 ms.
 
 ## Push-To gating (`capture::solving`)
@@ -391,7 +396,8 @@ IMX464 barely moves and needs denoising instead.
 
 Add variant to `StackingType` (`src/stacking/config.rs`), update `StackingType::all()`, and implement capability
 methods: `display_name`, `description`, `uses_star_registration`, `supports_stacking`, `supports_quality_weighting`,
-`uses_aggressive_stretch`, `desired_sensor_mode`. No changes needed in `capture.rs`.
+`uses_aggressive_stretch`, `desired_sensor_mode`, `uses_fpn_removal` (also decides whether Focus/Finder mode may run
+under its stack). No changes needed in `capture.rs`.
 
 ## Settings Persistence
 
@@ -624,6 +630,19 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 
 `RUST_LOG` overrides levels. `tracing` + daily file rotation via `tracing-appender`. Telemetry via `--telemetry` /
 `OTEL_EXPORTER_OTLP_ENDPOINT` when built with `--features telemetry`.
+
+The file layer formats span fields with its own `PlainFields` type: tracing-subscriber caches a span's formatted fields
+per formatter *type*, so sharing `DefaultFields` with the coloured console wrote its escapes into the file (15,533 of
+31,108 lines on 2026-09-07). The console colours only on a terminal.
+
+**Startup system report** (`system_info`, called from `app::run`): INFO events for build (git describe, target,
+`target-cpu`, rustc — exported by `build.rs`), host (OS, kernel, board, boot time: a reset between two logs shows as a
+new boot time), CPU (clusters, compiled vs runtime-detected SIMD — release artifacts are per-CPU, so a feature compiled
+but absent warns), memory (cgroup limit, frame-queue budget), process (paths, free space under the working dir, env
+overrides; OTLP endpoint as presence only) and Linux (device-tree model, boot id, euid, governor, usbfs, SoC temp, Pi
+under-voltage). Self-contained (std/`sysinfo`/`fs4`/`chrono`/`tokio`) so it compiles for every release target;
+collected on `spawn_blocking` under a 5 s timeout. `build.rs` deliberately emits no `rerun-if-changed`, so a commit
+not followed by a file change keeps the previous commit id.
 
 ### What the render and stacking threads deliberately skip per frame
 

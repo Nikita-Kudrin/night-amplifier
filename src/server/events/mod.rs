@@ -104,6 +104,11 @@ pub enum ServerEvent {
     /// stack it had already accumulated.
     CaptureResumed { name: String, stacked_count: u64 },
 
+    /// The server left Focus/Finder mode on its own: a running capture switched to stacking,
+    /// which needs the correction the mode holds off. Pressing Start stays silent — the
+    /// observer asked for the stack, and `SettingsUpdated` moves the toggle.
+    FocusModeLeft,
+
     /// Error occurred
     Error { message: String },
 

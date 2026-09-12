@@ -8,7 +8,7 @@ use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
 use super::super::state::{
-    focus_mode, AppState, CameraRole, CaptureSettings, CaptureState, StackingType,
+    focus_mode, AppState, CameraRole, CaptureMode, CaptureSettings, CaptureState, StackingType,
 };
 
 /// Returns the profile key (`"{provider}/{model}"`) for the camera in `role`, if any.
@@ -113,17 +113,23 @@ pub async fn update_settings(
         }
     }
 
-    // Entering Focus/Finder mode drops the two raw-mosaic corrections, and the frame
-    // they produce is the frame the accumulator integrates — so switching it on mid-stack
-    // mixes hot pixels and banding into a master that can never be cleaned again.
-    // Refused rather than warned. Leaving the mode is always allowed: never trap the
-    // observer in it.
-    if request.focus_mode == Some(true)
-        && focus_mode::conflicts_with_capture(
-            &*state.settings.read().await,
-            state.capture_state().await,
-        )
-    {
+    // Entering Focus/Finder mode drops the pre-demosaic banding correction, and the frame
+    // it produces is the frame the accumulator integrates — so switching it on mid-stack
+    // mixes banding into a master that can never be cleaned again. Refused rather than
+    // warned, and judged on the mode this request *leaves* the capture in: `focus_mode`
+    // and `stacking` in one request slipped past a check of the current mode. Leaving the
+    // mode is always allowed: never trap the observer in it.
+    let enters_a_stack = request.focus_mode == Some(true) && {
+        let capture_state = state.capture_state().await;
+        let settings = state.settings.read().await;
+        let resulting_mode = CaptureMode::from_flags(
+            request.stacking.unwrap_or(settings.stacking),
+            request.wanderer_mode.unwrap_or(settings.wanderer_mode),
+        );
+        let stacking_type = request.stacking_type.unwrap_or(settings.stacking_type);
+        focus_mode::conflicts_with_capture(resulting_mode, stacking_type, capture_state)
+    };
+    if enters_a_stack {
         return (
             StatusCode::CONFLICT,
             ApiResponse::err(
@@ -153,7 +159,8 @@ pub async fn update_settings(
     // Same reason as `active_key`: `sync_disk_session` needs this but must not read the
     // session lock while `settings.write()` is held — `frame_processed` takes those two
     // in the opposite order.
-    let capture_active = state.capture_state().await == CaptureState::Capturing;
+    let capture_state = state.capture_state().await;
+    let capture_active = capture_state == CaptureState::Capturing;
 
     let applied_settings;
     {
@@ -345,6 +352,13 @@ pub async fn update_settings(
         match request.focus_mode {
             Some(on) => focus_mode::set(&mut settings, on),
             None => focus_mode::reconcile(&mut settings),
+        }
+        // A running live view switched to stacking: no start path sees that, and the 409
+        // above only guards *entering*. Inside this write guard, so the stacking task never
+        // reads `stacking` on with the corrections still held off.
+        if focus_mode::leave_if_conflicting(&mut settings, capture_state) {
+            tracing::info!("Leaving Focus/Finder mode: the capture switched to stacking");
+            let _ = state.events.send(ServerEvent::FocusModeLeft);
         }
 
         // Snapshot for `sync_disk_session`, which runs once the write guard is gone.

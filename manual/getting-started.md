@@ -85,9 +85,11 @@ off part-way through an integration mixes banding into a master that **nothing c
 afterwards**: the pattern sits in the same place in every frame, which is the whole reason
 the correction exists.
 
-So the switch is disabled while you are stacking, and pressing Start while you are focusing
-turns the mode off for you and puts your settings back before the first frame lands. It
-stays available in **Live view**, which accumulates nothing — and switching it off is never
+So the switch is disabled while you are stacking. Starting a stacking capture while you are
+focusing turns the mode off for you and puts your settings back before the first stacked frame
+lands; switching a running Live view to Stacking or Wanderer does the same and says so in the
+status bar. It stays available in **Live view**, which accumulates nothing, and for
+**Planetary** stacking, which never uses Row/Column Pattern Removal. Switching it off is never
 blocked, whatever the camera is doing.
 
 Superpixel Debayer is deliberately left alone. It is the *cheap* debayer, so forcing it
@@ -142,3 +144,20 @@ Two switches under **Settings → If the camera drops out**:
 
 Recovery deliberately does nothing while the camera is warming up for a
 disconnect you asked for.
+
+## Logs
+
+Night Amplifier writes one log file a day to the `logs` folder beside `settings.json`, in
+the folder you start it from. When something goes wrong, that file is the thing to send.
+
+Every start opens with a short system report: the build, operating system, CPU, memory and
+free disk space, plus the board model, CPU temperature and power warnings on a Raspberry Pi
+or another Linux board. It names the computer and its folder paths, so look it over before
+posting a log publicly.
+
+Two of its warnings are worth acting on straight away:
+
+- **uses CPU features the host lacks** — you have the build for a newer CPU; download the
+  generic one.
+- **runs under emulation** — an Intel (x64) build on an Arm computer such as an Apple
+  Silicon Mac; the native Arm build is several times faster.

@@ -75,7 +75,7 @@ fn saturation_boost_licensed() -> bool {
     crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_some()
 }
 
-/// Whether entering the mode now would damage a stack already being integrated.
+/// Whether the mode would damage a stack integrated by this capture.
 ///
 /// One of the six — `fpn_removal` — runs on the raw mosaic *before* demosaic, so the
 /// frame it produces is the frame that goes into the accumulator. Turning it off
@@ -83,16 +83,91 @@ fn saturation_boost_licensed() -> bool {
 /// the defect averaging cannot remove: nothing later can take it back out. The other
 /// five are render-only.
 ///
-/// Live view accumulates nothing, so it is left alone — the mode is most useful exactly
-/// there. Leaving the mode is never a conflict.
-pub fn conflicts_with_capture(settings: &CaptureSettings, capture_state: CaptureState) -> bool {
-    if capture_state == CaptureState::Idle {
+/// So no conflict wherever no affected frame reaches an accumulator: live view integrates
+/// nothing, a type without line flattening (planetary) loses nothing, and an idle or
+/// stopping capture takes no new frame — the loop checks for Stop before it snapshots
+/// settings. Leaving the mode is never a conflict.
+pub fn conflicts_with_capture(
+    mode: CaptureMode,
+    stacking_type: crate::stacking::StackingType,
+    capture_state: CaptureState,
+) -> bool {
+    takes_new_frames(capture_state)
+        && matches!(mode, CaptureMode::Stacking | CaptureMode::Wanderer)
+        && stacking_type.uses_fpn_removal()
+}
+
+/// `Recovering` counts: the resume takes its frames with these settings.
+fn takes_new_frames(capture_state: CaptureState) -> bool {
+    matches!(
+        capture_state,
+        CaptureState::Starting | CaptureState::Capturing | CaptureState::Recovering
+    )
+}
+
+/// Whether `settings` hold the mode on in conflict with the capture.
+pub fn in_conflict(settings: &CaptureSettings, capture_state: CaptureState) -> bool {
+    settings.focus_mode
+        && conflicts_with_capture(
+            settings.capture_mode(),
+            settings.stacking_type,
+            capture_state,
+        )
+}
+
+/// Leave the mode if it now conflicts with the capture; returns whether it left.
+///
+/// Every way into an accumulating session goes through here: a start, a resume, and a
+/// running live view switched to stacking, which no start path sees. Live view keeps the
+/// mode — 2026-09-07 two live-view starts dropped it and the observer turned it back on by
+/// hand both times.
+pub fn leave_if_conflicting(settings: &mut CaptureSettings, capture_state: CaptureState) -> bool {
+    if !in_conflict(settings, capture_state) {
         return false;
     }
-    matches!(
-        settings.capture_mode(),
-        CaptureMode::Stacking | CaptureMode::Wanderer
-    )
+    set(settings, false);
+    true
+}
+
+impl super::AppState {
+    /// [`leave_if_conflicting`] on the shared settings; when it left, persist them and move
+    /// every client's toggle. Returns whether it left.
+    pub async fn leave_focus_mode_if_conflicting(&self, capture_state: CaptureState) -> bool {
+        let left = leave_if_conflicting(&mut *self.settings.write().await, capture_state);
+        if left {
+            self.save_settings().await;
+            let _ = self
+                .events
+                .send(crate::server::events::ServerEvent::SettingsUpdated);
+        }
+        left
+    }
+
+    /// The settings a frame about to be exposed is captured and stacked with.
+    ///
+    /// Last line of defence for the stacking conflict: `update_settings` must read the
+    /// capture state before taking the settings lock (lock order), so a Start landing in that
+    /// gap beside `stacking: true` would stack under the mode. The capture loop is taking
+    /// frames by definition, so a conflict found here is left before the snapshot. The
+    /// common path costs only the clone the loop always made.
+    pub async fn settings_for_new_frame(&self) -> CaptureSettings {
+        {
+            let settings = self.settings.read().await;
+            if !in_conflict(&settings, CaptureState::Capturing) {
+                return settings.clone();
+            }
+        }
+        if self
+            .leave_focus_mode_if_conflicting(CaptureState::Capturing)
+            .await
+        {
+            tracing::warn!("Leaving Focus/Finder mode: the capture was about to stack under it");
+            let _ = self
+                .events
+                .send(crate::server::events::ServerEvent::FocusModeLeft);
+        }
+        self.settings.read().await.clone()
+    }
 }
 
 /// Force every managed setting off, leaving the rest of the block alone.
@@ -162,6 +237,9 @@ pub fn reconcile(settings: &mut CaptureSettings) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::events::ServerEvent;
+    use crate::server::state::AppState;
+    use crate::stacking::StackingType;
 
     /// A settings block where the managed values are a mix, so a restore that
     /// blanket-sets them either way fails instead of passing by luck.
@@ -312,33 +390,33 @@ mod tests {
         assert!(settings.sensor_correction.superpixel_debayer);
     }
 
+    /// `Recovering` included: the resume takes its frames with these settings.
     #[test]
     fn stacking_captures_conflict_with_entering_the_mode() {
-        let settings = CaptureSettings {
-            stacking: true,
-            wanderer_mode: false,
-            ..Default::default()
-        };
-
+        for state in [
+            CaptureState::Starting,
+            CaptureState::Capturing,
+            CaptureState::Recovering,
+        ] {
+            assert!(
+                conflicts_with_capture(CaptureMode::Stacking, StackingType::DeepSky, state),
+                "{state:?}"
+            );
+        }
         assert!(conflicts_with_capture(
-            &settings,
+            CaptureMode::Stacking,
+            StackingType::Comet,
             CaptureState::Capturing
         ));
-        assert!(conflicts_with_capture(&settings, CaptureState::Starting));
     }
 
     /// Wanderer throws its stack away when the mount moves, but it still integrates
     /// between resets.
     #[test]
     fn wanderer_captures_conflict_too() {
-        let settings = CaptureSettings {
-            stacking: true,
-            wanderer_mode: true,
-            ..Default::default()
-        };
-
         assert!(conflicts_with_capture(
-            &settings,
+            CaptureMode::Wanderer,
+            StackingType::DeepSky,
             CaptureState::Capturing
         ));
     }
@@ -346,25 +424,126 @@ mod tests {
     /// The guard is about the accumulator, not about the camera being busy.
     #[test]
     fn live_view_never_conflicts() {
-        let settings = CaptureSettings {
-            stacking: false,
-            ..Default::default()
-        };
-
         assert!(!conflicts_with_capture(
-            &settings,
+            CaptureMode::LiveView,
+            StackingType::DeepSky,
             CaptureState::Capturing
         ));
     }
 
+    /// After Stop the capture loop checks `is_cancelled()` before it snapshots settings, so
+    /// no frame taken under the mode can follow.
     #[test]
-    fn an_idle_rig_never_conflicts() {
-        let settings = CaptureSettings {
-            stacking: true,
-            ..Default::default()
-        };
+    fn a_capture_taking_no_new_frames_never_conflicts() {
+        for state in [
+            CaptureState::Idle,
+            CaptureState::Stopping,
+            CaptureState::Error,
+        ] {
+            assert!(
+                !conflicts_with_capture(CaptureMode::Stacking, StackingType::DeepSky, state),
+                "{state:?}"
+            );
+        }
+    }
 
-        assert!(!conflicts_with_capture(&settings, CaptureState::Idle));
+    /// Planetary never flattens lines, so the mode has nothing to take from its stack.
+    #[test]
+    fn a_planetary_stack_never_conflicts() {
+        assert!(!conflicts_with_capture(
+            CaptureMode::Stacking,
+            StackingType::Planetary,
+            CaptureState::Capturing
+        ));
+    }
+
+    async fn app_state_stacking_under_focus_mode(
+        stacking_type: StackingType,
+    ) -> (AppState, crate::disk_writer::DiskWriter) {
+        let (state, disk_writer) = AppState::new_for_testing();
+        {
+            let mut settings = state.settings.write().await;
+            settings.stacking = true;
+            settings.stacking_type = stacking_type;
+            settings.sensor_correction.fpn_removal = true;
+            set(&mut settings, true);
+        }
+        (state, disk_writer)
+    }
+
+    /// The gap `update_settings` cannot close: the mode is on under a stack the capture loop
+    /// is about to feed. The frame's snapshot must already carry the correction.
+    #[tokio::test]
+    async fn a_frame_about_to_stack_under_the_mode_takes_it_off_first() {
+        let (state, _disk_writer) = app_state_stacking_under_focus_mode(StackingType::DeepSky).await;
+        let mut events = state.events.subscribe();
+
+        let snapshot = state.settings_for_new_frame().await;
+
+        assert!(!snapshot.focus_mode);
+        assert!(snapshot.sensor_correction.fpn_removal);
+        assert!(!state.settings.read().await.focus_mode);
+        let sent: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        assert!(sent
+            .iter()
+            .any(|event| matches!(event, ServerEvent::SettingsUpdated)));
+        assert!(sent
+            .iter()
+            .any(|event| matches!(event, ServerEvent::FocusModeLeft)));
+    }
+
+    #[tokio::test]
+    async fn a_planetary_frame_keeps_the_mode_and_announces_nothing() {
+        let (state, _disk_writer) =
+            app_state_stacking_under_focus_mode(StackingType::Planetary).await;
+        let mut events = state.events.subscribe();
+
+        let snapshot = state.settings_for_new_frame().await;
+
+        assert!(snapshot.focus_mode);
+        assert!(state.settings.read().await.focus_mode);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn leaving_for_a_stacking_capture_restores_the_managed_settings() {
+        let mut settings = CaptureSettings {
+            stacking: true,
+            wanderer_mode: false,
+            ..mixed()
+        };
+        let before = mixed();
+        set(&mut settings, true);
+
+        assert!(leave_if_conflicting(&mut settings, CaptureState::Starting));
+
+        assert!(!settings.focus_mode);
+        assert!(settings.focus_mode_snapshot.is_none());
+        assert_eq!(
+            settings.sensor_correction.fpn_removal,
+            before.sensor_correction.fpn_removal
+        );
+        assert_eq!(settings.denoise.luma, before.denoise.luma);
+    }
+
+    #[test]
+    fn live_view_and_an_idle_rig_keep_the_mode() {
+        let mut settings = CaptureSettings {
+            stacking: false,
+            ..mixed()
+        };
+        set(&mut settings, true);
+
+        assert!(!leave_if_conflicting(
+            &mut settings,
+            CaptureState::Capturing
+        ));
+        assert!(settings.focus_mode);
+
+        settings.stacking = true;
+        assert!(!leave_if_conflicting(&mut settings, CaptureState::Idle));
+        assert!(settings.focus_mode);
+        assert!(settings.focus_mode_snapshot.is_some());
     }
 
     #[test]

@@ -38,12 +38,9 @@ pub fn build_cfa_pipeline(settings: &CaptureSettings) -> CfaPipeline {
         sigma: correction.hot_pixel_sigma,
         ..HotPixelConfig::default()
     })));
-    // Not for planetary: the correction assumes each sensor line is mostly sky,
-    // so its level measures readout rather than signal. A lunar or planetary
-    // disc fills enough of a line to move that level, and flattening it would
-    // carve bands across the disc.
-    if correction.fpn_removal && settings.stacking_type != crate::stacking::StackingType::Planetary
-    {
+    // Per stacking type (not planetary — see `uses_fpn_removal`). Focus/Finder mode's
+    // stacking conflict reads the same capability, so the two cannot drift apart.
+    if correction.fpn_removal && settings.stacking_type.uses_fpn_removal() {
         pipeline = pipeline.with_stage(Box::new(FpnFilter));
     }
     pipeline
@@ -726,6 +723,30 @@ mod tests {
             build_cfa_pipeline(&settings).stage_names(),
             vec!["hot_pixels"]
         );
+    }
+
+    /// Focus/Finder mode may run under a stack exactly when this pipeline has no line
+    /// flattening for it to take away — the rule and the pipeline must never drift apart.
+    #[test]
+    fn focus_mode_conflicts_exactly_where_the_pipeline_flattens_lines() {
+        use crate::server::state::{focus_mode, CaptureMode, CaptureState};
+
+        for &stacking_type in StackingType::all() {
+            let settings = settings_with(SensorCorrectionSettings::default(), stacking_type);
+            let flattens = build_cfa_pipeline(&settings)
+                .stage_names()
+                .contains(&"row_column_fpn");
+
+            assert_eq!(
+                focus_mode::conflicts_with_capture(
+                    CaptureMode::Stacking,
+                    stacking_type,
+                    CaptureState::Capturing
+                ),
+                flattens,
+                "{stacking_type:?}"
+            );
+        }
     }
 
     #[test]

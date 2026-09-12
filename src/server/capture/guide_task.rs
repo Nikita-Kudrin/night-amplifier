@@ -227,11 +227,7 @@ pub(super) fn run(
             &camera_info.info,
             &camera_info.info.name,
         );
-        super::config_overrides::apply_sensor_mode_support_override(
-            &mut config,
-            &camera_info.info,
-            &camera_info.info.name,
-        );
+        super::config_overrides::apply_sensor_mode_support_override(&mut config, &camera_info.info);
 
         frame_number += 1;
         let watchdog_timeout = capture_watchdog_timeout(&config, &camera_info.info);

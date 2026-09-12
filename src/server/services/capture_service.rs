@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::server::capture::{guide_task, run_capture_loop};
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::state::{focus_mode, AppState, CameraRole, CaptureState, SessionResumePlan};
+use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
 
 /// Service for managing capture operations
 pub struct CaptureService;
@@ -169,34 +169,24 @@ impl CaptureService {
         Ok(camera_id)
     }
 
-    /// Leave Focus/Finder mode, restoring the seven settings it was holding off.
+    /// Leave Focus/Finder mode if the capture about to run would stack under it.
     ///
-    /// Called on the way into every path that accumulates a stack. The mode drops two
-    /// raw-mosaic corrections, and a stack integrated without them can never be cleaned
-    /// again — so a session must never begin under it. `update_settings` refuses to
-    /// *enter* the mode while stacking; this closes the other order, where the observer
-    /// was already focusing and then pressed Start.
+    /// The mode drops a raw-mosaic correction, and a stack integrated without it can never
+    /// be cleaned again — so a stacking session must never begin under it. `update_settings`
+    /// refuses to *enter* the mode while stacking; this closes the other order, where the
+    /// observer was already focusing and then pressed Start. Live view keeps the mode.
     ///
     /// Silent by design: it restores the observer's own values at the moment they start
     /// mattering, and the `SettingsUpdated` broadcast moves the toggle in every client.
     async fn leave_focus_mode_for_capture(state: &Arc<AppState>) {
-        let left = {
-            let mut settings = state.settings.write().await;
-            if !settings.focus_mode {
-                false
-            } else {
-                focus_mode::set(&mut settings, false);
-                true
-            }
-        };
-        if !left {
-            return;
+        // Both callers have just moved the state to `Starting`; a resume has already
+        // restored the plan's stacking mode (`reconnect::restore_settings`).
+        if state
+            .leave_focus_mode_if_conflicting(CaptureState::Starting)
+            .await
+        {
+            info!("Leaving Focus/Finder mode: a stacking capture is starting");
         }
-        info!("Leaving Focus/Finder mode: a capture is starting");
-        state.save_settings().await;
-        let _ = state
-            .events
-            .send(crate::server::events::ServerEvent::SettingsUpdated);
     }
 
     /// Restart the capture a device fault interrupted, in the mode it was

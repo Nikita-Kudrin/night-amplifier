@@ -216,6 +216,8 @@ export function useEventStream() {
     // none — so its recovery can clear it.
     const unresponsiveCamera = ref(null)
     const resumeNotice = ref(null)
+    // Why the server switched Focus/Finder mode off on its own; stays until dismissed.
+    const focusModeNotice = ref(null)
 
     // Push-To state
     const pushDirection = ref(null)
@@ -342,6 +344,10 @@ export function useEventStream() {
             lastError.value = null
             resumeNotice.value =
                 `${data.name} is back. Capture resumed with ${data.stacked_count} frames still stacked.`
+        },
+        focus_mode_left() {
+            focusModeNotice.value =
+                'Focus/Finder mode turned off: stacking needs the sensor corrections it holds off.'
         },
         settings_updated() { /* components should refresh */
         },
@@ -547,6 +553,10 @@ export function useEventStream() {
         resumeNotice.value = null
     }
 
+    function clearFocusModeNotice() {
+        focusModeNotice.value = null
+    }
+
     return {
         connected,
         error,
@@ -562,6 +572,7 @@ export function useEventStream() {
         diskWriterWarning,
         unresponsiveWarning,
         resumeNotice,
+        focusModeNotice,
         pushDirection,
         currentTarget,
         plateSolving,
@@ -573,6 +584,7 @@ export function useEventStream() {
         clearDiskWriterWarning,
         clearUnresponsiveWarning,
         clearResumeNotice,
+        clearFocusModeNotice,
         clearPushDirection,
         clearPlateSolving,
         clearAstapInstallProgress,

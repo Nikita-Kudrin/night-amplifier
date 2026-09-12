@@ -11,7 +11,7 @@ Row/Column Pattern Removal is one of the six that
 [Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; its
 switch greys out while it is on and comes back to your value when you turn it off.
 Superpixel Debayer is not one of them. Because pattern removal runs before the stack sees
-the frame, that mode is unavailable while you are stacking — see
+the frame, that mode is unavailable while you are stacking deep-sky objects or comets — see
 [It is not available while you are stacking](/getting-started#it-is-not-available-while-you-are-stacking).
 
 ## Hot Pixels

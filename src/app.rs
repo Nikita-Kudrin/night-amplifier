@@ -242,6 +242,42 @@ fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
 /// ```ignore
 /// night_amplifier::app::run(|| { BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok(); }).await;
 /// ```
+/// What the startup system report needs from the application (`system_info::AppContext`).
+fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_info::AppContext {
+    let plugins = [
+        ("push_to", crate::PUSH_TO_PLUGIN.get().is_some()),
+        (
+            "rejection",
+            crate::stacking::REJECTION_PLUGIN.get().is_some(),
+        ),
+        ("comet", crate::stacking::COMET_PLUGIN.get().is_some()),
+        (
+            "background",
+            crate::background::BACKGROUND_PLUGIN.get().is_some(),
+        ),
+        (
+            "planetary",
+            crate::planetary::PLANETARY_PLUGIN.get().is_some(),
+        ),
+        (
+            "saturation",
+            crate::render::SATURATION_PLUGIN.get().is_some(),
+        ),
+    ];
+    crate::system_info::AppContext {
+        port: args.port,
+        static_dir: args.static_dir.clone(),
+        log_dir,
+        settings_file: crate::server::DEFAULT_SETTINGS_FILE.into(),
+        pro_active: crate::license::is_pro_active(),
+        plugins: plugins
+            .into_iter()
+            .filter_map(|(name, registered)| registered.then_some(name))
+            .collect(),
+        frame_queue_budget_bytes: crate::server::capture::channel::frame_queue_budget_bytes(),
+    }
+}
+
 pub async fn run(register_plugins: impl FnOnce()) {
     let args = Args::parse();
 
@@ -280,9 +316,11 @@ pub async fn run(register_plugins: impl FnOnce()) {
     let log_config = LogConfig::default().with_span_events(args.span_timings);
 
     // Initialize logging - keep the guard alive for the duration of main
+    let log_dir = log_config.log_dir.clone();
     let _log_guard = init_logging(log_config).expect("Failed to initialize logging");
 
     info!("Night Amplifier - EAA Live Stacking Server");
+    crate::system_info::log_startup_report(startup_context(&args, log_dir)).await;
 
     if args.span_timings {
         info!("Span timings enabled - per-stage durations are logged on span close");

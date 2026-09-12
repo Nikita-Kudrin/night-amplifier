@@ -486,6 +486,24 @@ describe('CaptureControls', () => {
             ).toBeDefined()
         })
 
+        // Planetary never runs row/column pattern removal, so the mode cannot touch its stack.
+        it('stays available during a planetary stacking capture', async () => {
+            const wrapper = mountCaptureControls({
+                captureState: 'Capturing',
+                settings: {
+                    focus_mode: false,
+                    stacking: true,
+                    wanderer_mode: false,
+                    stacking_type: 'planetary',
+                },
+            })
+            await flushPromises()
+
+            expect(
+                wrapper.find('.focus-mode-controls .toggle').attributes('disabled'),
+            ).toBeUndefined()
+        })
+
         // The guard is about the accumulator, not about the camera being busy.
         it('stays available during a live view capture', async () => {
             const wrapper = mountCaptureControls({

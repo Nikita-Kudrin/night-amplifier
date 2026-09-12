@@ -39,6 +39,7 @@ pub mod render;
 pub mod ser;
 pub mod stacking;
 pub mod statistics;
+pub mod system_info;
 pub mod telemetry;
 
 pub mod app;

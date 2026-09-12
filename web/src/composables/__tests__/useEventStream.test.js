@@ -217,6 +217,17 @@ describe('useEventStream', () => {
             expect(resumeNotice.value).toContain('514 frames still stacked')
         })
 
+        it('explains why Focus/Finder mode switched off, until dismissed', async () => {
+            const {focusModeNotice, clearFocusModeNotice} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'focus_mode_left'})
+            expect(focusModeNotice.value).toContain('Focus/Finder mode turned off')
+
+            clearFocusModeNotice()
+            expect(focusModeNotice.value).toBe(null)
+        })
+
         it('handles malformed JSON gracefully', async () => {
             const {lastEvent} = useEventStream()
             const consoleSpy = suppressConsoleErrors()

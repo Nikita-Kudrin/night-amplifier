@@ -61,6 +61,18 @@ impl StackingType {
         }
     }
 
+    /// Whether the raw-CFA stage flattens row/column banding for this type. Not planetary:
+    /// the correction assumes each sensor line is mostly sky, and a disc fills enough of one
+    /// to move the level it measures — flattening would carve bands across the disc.
+    /// Focus/Finder mode's stacking conflict reads the same answer (`focus_mode`).
+    pub fn uses_fpn_removal(&self) -> bool {
+        match self {
+            StackingType::DeepSky => true,
+            StackingType::Planetary => false,
+            StackingType::Comet => true,
+        }
+    }
+
     /// Whether this stacking type supports quality-based frame weighting
     pub fn supports_quality_weighting(&self) -> bool {
         match self {
@@ -488,5 +500,12 @@ mod tests {
             StackingType::Planetary.desired_sensor_mode(),
             DualSamplingMode::Normal
         );
+    }
+
+    #[test]
+    fn only_planetary_skips_line_flattening() {
+        assert!(StackingType::DeepSky.uses_fpn_removal());
+        assert!(StackingType::Comet.uses_fpn_removal());
+        assert!(!StackingType::Planetary.uses_fpn_removal());
     }
 }

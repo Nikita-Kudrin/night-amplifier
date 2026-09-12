@@ -53,6 +53,11 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2.5"
 
+# Startup system report (`system_info`): OS, CPU and memory facts on every release target, and
+# free space for one path without touching other mounts
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+fs4 = { version = "1.1.0", default-features = false }
+
 # OpenTelemetry (optional, enabled by default in debug builds)
 opentelemetry = { version = "0.32.0", optional = true }
 opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"], optional = true }
