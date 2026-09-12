@@ -20,6 +20,8 @@ describe('StatusBar', () => {
                 clearUnresponsiveWarning: vi.fn(),
                 resumeNotice: ref(null),
                 clearResumeNotice: vi.fn(),
+                focusModeNotice: ref(null),
+                clearFocusModeNotice: vi.fn(),
                 clearError: vi.fn(),
                 diskWriterWarning: ref(null),
                 clearDiskWriterWarning: vi.fn(),
@@ -95,6 +97,16 @@ describe('StatusBar', () => {
         it('shows Capturing state with correct styling', () => {
             const wrapper = mountStatusBar({
                 eventStream: {captureState: ref('Capturing')},
+            })
+
+            const state = wrapper.find('.state')
+            expect(state.classes()).toContain('capturing')
+            expect(state.text()).toContain('Capturing')
+        })
+
+        it('shows a capture paused for a camera reconnect as still capturing', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {captureState: ref('Recovering')},
             })
 
             const state = wrapper.find('.state')
@@ -278,6 +290,23 @@ describe('StatusBar', () => {
             const resumed = wrapper.find('.resumed')
             expect(resumed.exists()).toBe(true)
             expect(resumed.text()).toContain('514 frames still stacked')
+        })
+
+        it('shows why Focus/Finder mode switched off, and dismisses it on click', async () => {
+            const clearFocusModeNotice = vi.fn()
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    focusModeNotice: ref(
+                        'Focus/Finder mode turned off: stacking needs the sensor corrections it holds off.',
+                    ),
+                    clearFocusModeNotice,
+                },
+            })
+
+            const notice = wrapper.find('.focus-mode-left')
+            expect(notice.text()).toContain('Focus/Finder mode turned off')
+            await notice.trigger('click')
+            expect(clearFocusModeNotice).toHaveBeenCalled()
         })
 
         it('shows warning message when unresponsiveWarning is set', () => {

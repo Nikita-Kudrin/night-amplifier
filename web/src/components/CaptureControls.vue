@@ -7,6 +7,7 @@ import {
   EXPOSURE_PRESETS,
   GAIN_LIMITS,
   CAPTURE_STATES,
+  isCaptureRunning,
   DEFAULT_SETTINGS,
   STRETCH_AGGRESSIVENESS_OPTIONS,
   HELP_TEXTS
@@ -118,7 +119,7 @@ onMounted(async () => {
 
 const mainCapturing = computed(
     () =>
-        eventStream.captureState.value === CAPTURE_STATES.CAPTURING ||
+        isCaptureRunning(eventStream.captureState.value) ||
         eventStream.captureState.value === CAPTURE_STATES.STARTING
 )
 
@@ -256,16 +257,21 @@ const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: s
 /**
  * Whether entering Focus/Finder mode would damage a stack already being integrated.
  *
- * Two of the seven settings it drops run before demosaic, so the frames the accumulator
- * integrates lose their hot-pixel and banding corrections — and averaging is exactly what
- * cannot take those back out. The backend refuses this with a 409; the toggle is disabled
- * so nobody has to read the error to find out.
+ * One of the six settings it drops (row/column pattern removal) runs before demosaic, so
+ * the frames the accumulator integrates lose their banding correction — and averaging is
+ * exactly what cannot take that back out. The backend refuses this with a 409; the toggle
+ * is disabled so nobody has to read the error to find out.
  *
- * Live view accumulates nothing, so the mode stays available there. Leaving it is never
- * blocked, hence the `!focusMode` term.
+ * Mirrors the backend's exemptions: live view accumulates nothing, planetary never runs
+ * that correction, and a stopping capture takes no new frames (`mainCapturing` excludes
+ * it). Leaving is never blocked, hence the `!focusMode` term.
  */
 const focusModeBlocked = computed(
-    () => !focusMode.value && mainCapturing.value && stackingMode.value !== 'off'
+    () =>
+        !focusMode.value &&
+        mainCapturing.value &&
+        stackingMode.value !== 'off' &&
+        selectedStackingType.value !== 'planetary'
 )
 
 // A pipeline setting, not a hardware one: it goes through `applySetting` rather than

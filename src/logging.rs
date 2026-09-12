@@ -9,6 +9,7 @@
 //! init_logging(config).expect("Failed to initialize logging");
 //! ```
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -197,6 +198,69 @@ impl Drop for LogGuard {
     }
 }
 
+/// Span fields for the log file.
+///
+/// A type of its own on purpose: tracing-subscriber formats a span's fields once and
+/// caches the text per `FormatFields` *type*, so a file layer sharing `DefaultFields` with
+/// the coloured console reused the console's escaped copy — 15,533 of 31,108 lines in the
+/// 2026-09-07 field log. The default `add_fields` builds on `format_fields`, so nothing
+/// else needs forwarding.
+struct PlainFields(fmt::format::DefaultFields);
+
+impl<'writer> fmt::FormatFields<'writer> for PlainFields {
+    fn format_fields<R: tracing_subscriber::field::RecordFields>(
+        &self,
+        writer: fmt::format::Writer<'writer>,
+        fields: R,
+    ) -> std::fmt::Result {
+        fmt::FormatFields::format_fields(&self.0, writer, fields)
+    }
+}
+
+fn span_events(config: &LogConfig) -> FmtSpan {
+    if config.include_span_events {
+        FmtSpan::NEW | FmtSpan::CLOSE
+    } else {
+        FmtSpan::NONE
+    }
+}
+
+fn build_console_layer<S, W>(
+    config: &LogConfig,
+    writer: W,
+    ansi: bool,
+) -> fmt::Layer<S, fmt::format::DefaultFields, fmt::format::Format, W>
+where
+    W: for<'writer> fmt::MakeWriter<'writer> + 'static,
+{
+    fmt::layer()
+        .with_writer(writer)
+        .with_target(config.include_target)
+        .with_file(config.include_location)
+        .with_line_number(config.include_location)
+        .with_thread_ids(config.include_thread_ids)
+        .with_span_events(span_events(config))
+        .with_ansi(ansi)
+}
+
+fn build_file_layer<S, W>(
+    config: &LogConfig,
+    writer: W,
+) -> fmt::Layer<S, PlainFields, fmt::format::Format, W>
+where
+    W: for<'writer> fmt::MakeWriter<'writer> + 'static,
+{
+    fmt::layer()
+        .with_writer(writer)
+        .fmt_fields(PlainFields(fmt::format::DefaultFields::new()))
+        .with_target(config.include_target)
+        .with_file(config.include_location)
+        .with_line_number(config.include_location)
+        .with_thread_ids(config.include_thread_ids)
+        .with_span_events(span_events(config))
+        .with_ansi(false)
+}
+
 /// Initialize the logging system. Returns a guard that must be kept alive for the
 /// program's duration; dropping it flushes any pending log messages.
 ///
@@ -214,34 +278,13 @@ pub fn init_logging(config: LogConfig) -> Result<LogGuard, LoggingError> {
         EnvFilter::new(format!("night_amplifier={},{}", config.level, config.level))
     });
 
-    // Determine span events
-    let console_span_events = if config.include_span_events {
-        FmtSpan::NEW | FmtSpan::CLOSE
-    } else {
-        FmtSpan::NONE
-    };
-    let file_span_events = if config.include_span_events {
-        FmtSpan::NEW | FmtSpan::CLOSE
-    } else {
-        FmtSpan::NONE
-    };
-
     // Build layers
     let registry = tracing_subscriber::registry();
 
-    // Console layer
-    let console_layer = if config.console_output {
-        let layer = fmt::layer()
-            .with_target(config.include_target)
-            .with_file(config.include_location)
-            .with_line_number(config.include_location)
-            .with_thread_ids(config.include_thread_ids)
-            .with_span_events(console_span_events)
-            .with_ansi(true);
-        Some(layer)
-    } else {
-        None
-    };
+    // Colour only on a terminal: under a service manager stdout is a journal, not a screen.
+    let console_layer = config
+        .console_output
+        .then(|| build_console_layer(&config, std::io::stdout, std::io::stdout().is_terminal()));
 
     // File layer with rotation
     let file_layer = if config.file_output {
@@ -260,16 +303,7 @@ pub fn init_logging(config: LogConfig) -> Result<LogGuard, LoggingError> {
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         guards.push(guard);
 
-        let layer = fmt::layer()
-            .with_writer(non_blocking)
-            .with_target(config.include_target)
-            .with_file(config.include_location)
-            .with_line_number(config.include_location)
-            .with_thread_ids(config.include_thread_ids)
-            .with_span_events(file_span_events)
-            .with_ansi(false); // No ANSI colors in files
-
-        Some(layer)
+        Some(build_file_layer(&config, non_blocking))
     } else {
         None
     };
@@ -380,5 +414,95 @@ mod tests {
         assert_eq!(config.level, Level::INFO);
         assert!(!config.console_output);
         assert!(!config.include_location);
+    }
+
+    #[derive(Clone, Default)]
+    struct Buffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> fmt::MakeWriter<'a> for Buffer {
+        type Writer = Buffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    impl Buffer {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    /// Span fields are formatted once per span and cached under the *field formatter's
+    /// type*; with both layers on `DefaultFields` the file layer reused the console layer's
+    /// coloured copy. 2026-09-07 field log: 15,533 of 31,108 lines carried escapes. Uses
+    /// `init_logging`'s own builders, in its order (console first).
+    #[test]
+    fn file_layer_span_fields_carry_no_ansi_escapes_next_to_a_coloured_console() {
+        let config = LogConfig::default();
+        let console = Buffer::default();
+        let file = Buffer::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(build_console_layer(&config, console.clone(), true))
+            .with(build_file_layer(&config, file.clone()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("stacking_iteration", frame_number = 1);
+            let _entered = span.enter();
+            tracing::info!("Frame added to stack");
+        });
+
+        assert!(
+            console.text().contains('\x1b'),
+            "the console layer must actually colour, or this test proves nothing"
+        );
+        let file_text = file.text();
+        assert!(file_text.contains("frame_number"), "{file_text}");
+        assert!(
+            !file_text.contains('\x1b'),
+            "escapes leaked into the file: {file_text:?}"
+        );
+    }
+
+    /// Registration spans record `matched_stars` after creation, which goes through
+    /// `add_fields` rather than `format_fields` — the half `PlainFields` does not forward.
+    #[test]
+    fn file_layer_fields_recorded_after_span_creation_stay_plain() {
+        let config = LogConfig::default();
+        let console = Buffer::default();
+        let file = Buffer::default();
+        let subscriber = tracing_subscriber::registry()
+            .with(build_console_layer(&config, console.clone(), true))
+            .with(build_file_layer(&config, file.clone()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "register",
+                frame_number = 7,
+                matched_stars = tracing::field::Empty
+            );
+            let _entered = span.enter();
+            span.record("matched_stars", 42);
+            tracing::info!("Registered");
+        });
+
+        let file_text = file.text();
+        assert!(
+            file_text.contains("frame_number=7 matched_stars=42"),
+            "{file_text:?}"
+        );
+        assert!(!file_text.contains('\x1b'), "{file_text:?}");
+        assert!(console.text().contains('\x1b'));
     }
 }

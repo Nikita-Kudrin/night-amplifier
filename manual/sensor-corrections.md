@@ -1,20 +1,20 @@
 # Sensor Corrections
 
-These three settings run on the raw sensor data, before the colour mosaic is
+These corrections run on the raw sensor data, before the colour mosaic is
 interpolated into RGB. They exist because **more frames will never remove these
 defects**: a hot pixel and a readout offset land in exactly the same place in
 every sub-exposure, so averaging leaves them precisely where they were.
 
 Find them under **Settings → Sensor**.
 
-Hot Pixel Rejection and Row/Column Pattern Removal are two of the seven that
-[Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
-switches grey out while it is on and come back to your values when you turn it off.
-Superpixel Debayer is not one of them. Because these two run before the stack sees the
-frame, that mode is unavailable while you are stacking — see
+Row/Column Pattern Removal is one of the six that
+[Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; its
+switch greys out while it is on and comes back to your value when you turn it off.
+Superpixel Debayer is not one of them. Because pattern removal runs before the stack sees
+the frame, that mode is unavailable while you are stacking deep-sky objects or comets — see
 [It is not available while you are stacking](/getting-started#it-is-not-available-while-you-are-stacking).
 
-## Hot Pixel Rejection
+## Hot Pixels
 
 Some sensor pixels read far too bright regardless of what light hits them. On a
 2-second, gain-300 frame from an IMX533 there are several thousand of them.
@@ -22,14 +22,26 @@ After colour interpolation each one has been smeared into a small coloured
 cross, which is why they show up as scattered red and blue dots in the
 background rather than as white specks.
 
-Turning this on replaces each one with the average of its same-colour
+Night Amplifier always replaces each one with the average of its same-colour
 neighbours. It only touches a pixel that is far brighter than *all* of its
-neighbours, so stars — which are several pixels wide — are left alone.
+neighbours, so stars — which are several pixels wide — are left alone. The
+exception is a very sharp star, under about 3 pixels across: its core can land on
+a single sensor pixel and be read as a hot one, losing a little of one colour. On
+a guide scope imaging at 2 pixels that happened to about 6 % of stars, all of
+them faint.
 
-**Detection threshold** sets how far above its brightest neighbour a pixel must
-sit. The default of 5σ is measured against the frame's own noise, so it adapts
-to your exposure and gain. Lower it if dots survive; raise it if star counts
-drop or stars start to look soft.
+There is no switch to turn this off, in Focus/Finder mode or anywhere else. That
+smeared cross is about the size of a real star, and on a short, high-gain guide
+exposure there can be several times more of them than stars. Push-To's plate
+solver cannot tell them apart and fails on every frame, whatever the field of
+view: one such frame read 72 "stars" with the hot pixels left in and 25 with
+them removed — and only the cleaned one solved.
+
+**Hot Pixel Threshold** sets how far above its brightest neighbour a pixel must
+sit, from 3σ to 12σ. The default of 5σ is measured against every frame's own
+noise, so it follows exposure, gain and sky changes from one frame to the next.
+Lower it if dots survive; raise it if star counts drop or stars start to look
+soft.
 
 ## Row/Column Pattern Removal
 

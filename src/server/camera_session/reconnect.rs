@@ -1,18 +1,16 @@
-//! Recovery after a camera drops out mid-session. A USB stall or bus reset leaves
-//! the session dead though the hardware is usually fine seconds later — the
-//! observing log this was built from shows three dropouts costing three app
-//! restarts and an hour of integration each time. Safe to automate only because of
-//! two guards: a stale handle can no longer close a device a reconnect just opened
-//! (`camera::DeviceLease`), and a reopened handle isn't assumed to work just because
-//! `open()` returned (`lifecycle::connect` probes it) — without both, the first
-//! reconnect attempt lands inside the abandoned handle's still-alive window and
-//! loops forever.
+//! The reconnect supervisor: reopens a suspended camera (see `recovery`) and resumes
+//! what it was doing.
 //!
-//! Deliberately reluctant: **bounded** (`MAX_ATTEMPTS` inside `TOTAL_BUDGET`, then
-//! stops and says so), **backed off** (first wait longer than the stall, since an
-//! abandoned SDK handle may still be running), **re-enumerated** (a missing device
-//! index means unplugged, not hiccuped, so it's not reopened), **single-flight**
-//! (one supervisor at a time, none while the user disconnects on purpose).
+//! Safe to automate only because of three guards: a stale handle can no longer close a
+//! device a reconnect just opened (`camera::DeviceLease`), a reopened handle isn't
+//! trusted until it answers (`lifecycle::verify_responsive`), and it isn't trusted
+//! until it is the *same camera* (`camera::identity`) — reopening by list position put
+//! the imaging camera in the guide role on 2026-09-07.
+//!
+//! Prompt, but not reckless: the first attempt waits for any SDK call the watchdog
+//! abandoned to come back out of the vendor library (up to `ABANDONED_CALL_WAIT`),
+//! retries follow `RETRY_SCHEDULE`, and the whole effort is bounded by `TOTAL_BUDGET`.
+//! Silent until `NOTICE_AFTER`. Single-flight per slot.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -20,49 +18,109 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
-use super::lifecycle;
-use crate::camera::CameraRegistry;
+use super::recovery;
+use crate::server::error::ApiError;
 use crate::server::events::ServerEvent;
-use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
+use crate::server::state::{
+    AppState, CameraRole, CaptureState, ConnectedCameraInfo, Recovery, SessionResumePlan,
+};
 
-/// How many times to try before giving up.
-const MAX_ATTEMPTS: u32 = 5;
+#[cfg(not(test))]
+mod timing {
+    use std::time::Duration;
+    /// Floor on the first attempt, so a device that is re-enumerating is not asked for
+    /// before the OS has it back.
+    pub const FIRST_ATTEMPT_MIN_WAIT: Duration = Duration::from_secs(1);
+    /// Cap on waiting for abandoned SDK calls. A call stuck for good never returns, and
+    /// the lease makes reopening past it safe; 5 s is what the old fixed wait was.
+    pub const ABANDONED_CALL_WAIT: Duration = Duration::from_secs(5);
+    /// Waits between failed attempts; the last one repeats.
+    pub const RETRY_SCHEDULE: &[Duration] = &[
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+        Duration::from_secs(5),
+        Duration::from_secs(10),
+    ];
+    /// How long recovery runs before the observer is told about it. Every dropout in the
+    /// 2026-09-07 log was back within ~6 s.
+    pub const NOTICE_AFTER: Duration = Duration::from_secs(20);
+    /// Past this the camera is not coming back on its own and something physical needs
+    /// attention.
+    pub const TOTAL_BUDGET: Duration = Duration::from_secs(300);
+    /// Cap on each vendor stage of a connect or a reopen — listing, opening and probing,
+    /// seeding the cooler and dew heater — all of which hold the connect lock. One that
+    /// hangs otherwise held every Connect and never let the recovery budget run out.
+    pub const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
+}
 
-/// Wait before the first attempt.
-///
-/// Longer than the monitor's and capture path's own 3 s call budgets on
-/// purpose: when those time out they abandon a handle to a thread still inside
-/// the vendor SDK, and reopening the device while that thread is running is the
-/// exact race this whole subsystem exists to avoid. The field log shows a
-/// manual reconnect 9 s after a stall still landing inside that window.
-const FIRST_BACKOFF: Duration = Duration::from_secs(5);
+/// Test-time shadow of the production timings, same shape, milliseconds instead of
+/// seconds — the pattern `RAMP_RATE_C_PER_MIN` uses.
+#[cfg(test)]
+pub(super) mod timing {
+    use std::time::Duration;
+    pub const FIRST_ATTEMPT_MIN_WAIT: Duration = Duration::from_millis(20);
+    pub const ABANDONED_CALL_WAIT: Duration = Duration::from_millis(400);
+    pub const RETRY_SCHEDULE: &[Duration] = &[
+        Duration::from_millis(40),
+        Duration::from_millis(60),
+        Duration::from_millis(100),
+        Duration::from_millis(150),
+    ];
+    pub const NOTICE_AFTER: Duration = Duration::from_millis(700);
+    pub const TOTAL_BUDGET: Duration = Duration::from_millis(2_500);
+    pub const OPEN_TIMEOUT: Duration = Duration::from_millis(300);
+}
 
-/// Ceiling for the doubling backoff.
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+pub(super) use timing::*;
 
-/// Overall wall-clock budget. Past this the camera is not coming back on its
-/// own and something physical needs attention.
-const TOTAL_BUDGET: Duration = Duration::from_secs(300);
+/// The wait after failed attempt number `attempt` (counting from 1).
+pub(super) fn retry_delay(attempt: u32) -> Duration {
+    let last = RETRY_SCHEDULE.len() - 1;
+    RETRY_SCHEDULE[(attempt.max(1) as usize - 1).min(last)]
+}
 
-/// Start recovering `role`'s camera in the background, unless a supervisor is
-/// already running for that slot or the user has turned auto-reconnect off.
+/// How many more attempts still start inside `TOTAL_BUDGET` after attempt `attempt`
+/// ended `elapsed` into recovery — for the "attempt N of M" the UI shows. Counted from the
+/// time actually left: attempts are not instant, and a count from zero-cost attempts
+/// promised 32 where the budget ran out near 20.
+pub(super) fn attempts_left(elapsed: Duration, attempt: u32) -> u32 {
+    let mut starts_at = elapsed;
+    let mut after = attempt;
+    let mut left = 0;
+    loop {
+        starts_at += retry_delay(after);
+        if starts_at >= TOTAL_BUDGET {
+            return left;
+        }
+        left += 1;
+        after += 1;
+    }
+}
+
+/// Why the supervisor stopped without reconnecting.
+enum Stop {
+    /// Out of budget, or reconnecting was switched off. The observer must be told.
+    GaveUp { attempts: u32, reason: String },
+    /// The observer took over — disconnected the camera or replaced it — so there is
+    /// nothing left to recover and nothing to report.
+    Abandoned(&'static str),
+}
+
+/// Start reconnecting `recorded`'s camera in the background, unless its slot already
+/// has a supervisor.
 ///
 /// The single-flight guard is per slot, not global: a guide camera dropping out while
 /// the main camera is being recovered has its own device to reopen, and refusing it —
 /// which one shared flag did — left the guide camera down for the rest of the night.
-pub(super) fn spawn(
-    state: &Arc<AppState>,
-    role: CameraRole,
-    camera_id: &str,
-    camera_name: &str,
-) {
+pub(super) fn spawn(state: &Arc<AppState>, recorded: ConnectedCameraInfo) {
+    let role = recorded.role;
     let in_flight = Arc::clone(&state.slot(role).reconnect_in_flight);
     if in_flight
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         warn!(
-            camera_id,
+            camera_id = %recorded.id,
             role = role.label(),
             "Reconnect already in progress for this slot; not starting another"
         );
@@ -70,166 +128,131 @@ pub(super) fn spawn(
     }
 
     let state = Arc::clone(state);
-    let camera_id = camera_id.to_string();
-    let camera_name = camera_name.to_string();
-
     tokio::spawn(async move {
-        let outcome = supervise(&state, role, &camera_id, &camera_name).await;
-        in_flight.store(false, Ordering::SeqCst);
-
-        match outcome {
-            Ok(()) => info!(camera_id = %camera_id, role = role.label(), "Camera recovered"),
-            Err(reason) => {
-                warn!(camera_id = %camera_id, %reason, "Giving up on reconnecting the camera");
-                let _ = state.events.send(ServerEvent::camera_reconnect_failed(
-                    camera_name.clone(),
-                    MAX_ATTEMPTS,
-                    reason.clone(),
-                ));
-                state.send_error(format!(
-                    "Could not bring camera '{}' back ({}). Check the cable and reconnect.",
-                    camera_name, reason
-                ));
+        match supervise(&state, &recorded).await {
+            Ok(()) => info!(camera_id = %recorded.id, role = role.label(), "Camera recovered"),
+            Err(Stop::Abandoned(why)) => {
+                info!(camera_id = %recorded.id, why, "Stopped reconnecting the camera")
+            }
+            Err(Stop::GaveUp { attempts, reason }) => {
+                recovery::give_up(&state, &recorded, attempts, &reason).await
             }
         }
+        release_flight(&state, role).await;
     });
 }
 
-/// Run the attempt sequence. `Err` carries the reason to show the user.
-async fn supervise(
-    state: &Arc<AppState>,
-    role: CameraRole,
-    camera_id: &str,
-    camera_name: &str,
-) -> Result<(), String> {
+/// End a supervisor's hold on `role`'s slot.
+///
+/// A fault that landed while the supervisor was finishing — resuming the capture, say —
+/// found it still in flight and was refused one of its own. Cleared first and checked
+/// second, so either this check sees that suspension or the suspension's own spawn got
+/// through.
+pub(super) async fn release_flight(state: &Arc<AppState>, role: CameraRole) {
+    state.slot(role).reconnect_in_flight.store(false, Ordering::SeqCst);
+    if state.slot(role).recovery() != Recovery::Suspended {
+        return;
+    }
+    let Some(orphan) = state.camera_in_role(role).await else {
+        return;
+    };
+    warn!(camera_id = %orphan.id, role = role.label(), "Camera failed again as its recovery ended; recovering it again");
+    spawn(state, orphan);
+}
+
+/// Run the attempt sequence until the camera is back or the supervisor has to stop.
+async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Result<(), Stop> {
+    let started = Instant::now();
+    let role = recorded.role;
+    let name = &recorded.info.name;
+    let mut recorded = recorded.clone();
+
     if !state.settings.read().await.auto_reconnect {
-        return Err("automatic reconnect is switched off".to_string());
+        return Err(Stop::GaveUp {
+            attempts: 0,
+            reason: "automatic reconnect is switched off".to_string(),
+        });
     }
 
-    let started = Instant::now();
-    let mut backoff = FIRST_BACKOFF;
+    if !state.slot(role).sdk_calls.wait_drained(ABANDONED_CALL_WAIT).await {
+        info!(camera = %name, "An abandoned SDK call is still running; reopening past it");
+    }
+    tokio::time::sleep(FIRST_ATTEMPT_MIN_WAIT.saturating_sub(started.elapsed())).await;
 
-    for attempt in 1..=MAX_ATTEMPTS {
-        let _ = state.events.send(ServerEvent::camera_reconnecting(
-            camera_name,
-            attempt,
-            MAX_ATTEMPTS,
-            backoff.as_secs(),
-        ));
-        info!(
-            camera_id,
-            attempt,
-            of = MAX_ATTEMPTS,
-            wait_s = backoff.as_secs(),
-            "Waiting before reconnect attempt"
-        );
-        tokio::time::sleep(backoff).await;
-
-        if let Some(reason) = abandon_reason(state, camera_id).await {
-            return Err(reason);
+    let mut noticed = false;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        if !state.settings.read().await.auto_reconnect {
+            return Err(Stop::GaveUp {
+                attempts: attempt - 1,
+                reason: "automatic reconnect was switched off".to_string(),
+            });
+        }
+        if !recovery::is_recovering(state, &recorded).await {
+            return Err(Stop::Abandoned("the camera was disconnected or replaced"));
         }
         if started.elapsed() >= TOTAL_BUDGET {
-            return Err(format!(
-                "still unreachable after {} s",
-                TOTAL_BUDGET.as_secs()
-            ));
+            return Err(Stop::GaveUp {
+                attempts: attempt - 1,
+                reason: format!("still unreachable after {} s", TOTAL_BUDGET.as_secs()),
+            });
         }
 
-        if !device_is_present(state, camera_id).await {
-            warn!(camera_id, attempt, "Device is not enumerated; will retry");
-            backoff = (backoff * 2).min(MAX_BACKOFF);
-            continue;
+        // A handle that failed during its install left the entry at its new position.
+        if let Some(current) = state.camera_in_role(role).await.filter(|c| c.id == recorded.id) {
+            recorded = current;
         }
-
-        // `connect` probes the handle before reporting success, so reaching
-        // here means the camera answered, not merely that `open()` returned.
-        match lifecycle::connect(state, camera_id, role).await {
-            Ok(_) => {
-                info!(camera_id, role = role.label(), attempt, "Reconnected");
+        match recovery::reopen_for_recovery(state, &recorded).await {
+            Ok(connected) => {
+                info!(camera = %name, role = role.label(), attempt, elapsed = ?started.elapsed(), "Reconnected");
                 // Only the imaging camera has a capture to resume. For the guide camera
-                // `connect` has already restarted its loop and reapplied its profile, so
-                // reconnecting *is* resuming — there is nothing further to restore.
+                // the reopen has already restarted its loop and reapplied its profile.
                 if role == CameraRole::Main {
-                    resume_capture_if_planned(state, camera_id, camera_name).await;
+                    resume_capture_if_planned(state, &connected, noticed).await;
                 }
                 return Ok(());
             }
-            Err(e) => {
-                warn!(camera_id, attempt, error = %e, "Reconnect attempt failed");
-                backoff = (backoff * 2).min(MAX_BACKOFF);
-            }
+            Err(e) => warn!(camera = %name, attempt, error = %e, "Reconnect attempt failed"),
         }
-    }
 
-    Err(format!("{} attempts failed", MAX_ATTEMPTS))
-}
-
-/// Why the supervisor should stop trying, if it should. Re-checked before every
-/// attempt because all of these can change while it is sleeping.
-async fn abandon_reason(state: &Arc<AppState>, camera_id: &str) -> Option<String> {
-    if !state.settings.read().await.auto_reconnect {
-        return Some("automatic reconnect was switched off".to_string());
-    }
-    if state.cameras.read().await.contains_key(camera_id) {
-        // Somebody connected it by hand while we were waiting.
-        return Some("the camera was reconnected manually".to_string());
-    }
-    None
-}
-
-/// Whether the device index is still enumerated by its provider.
-///
-/// Reopening an index the SDK no longer lists is how a reconnect ends up
-/// holding a handle to nothing — which is indistinguishable, from the outside,
-/// from the failure this module exists to fix.
-async fn device_is_present(state: &Arc<AppState>, camera_id: &str) -> bool {
-    let Ok((provider, index)) = lifecycle::parse_camera_id(camera_id) else {
-        return false;
-    };
-    let provider = provider.to_string();
-    let use_simulated = state.settings.read().await.use_simulated_camera;
-
-    tokio::task::spawn_blocking(move || {
-        let mut registry = CameraRegistry::new();
-        registry.register_defaults();
-        if use_simulated {
-            let _ = registry.register(crate::camera::SimulatedProvider::new());
+        let wait = retry_delay(attempt);
+        let left = attempts_left(started.elapsed(), attempt);
+        if started.elapsed() + wait >= NOTICE_AFTER && left > 0 {
+            noticed = true;
+            let _ = state.events.send(ServerEvent::camera_reconnecting(
+                name.clone(),
+                role,
+                attempt + 1,
+                attempt + left,
+                wait.as_secs(),
+            ));
         }
-        let Some(name) = registry
-            .providers()
-            .into_iter()
-            .find(|p| p.eq_ignore_ascii_case(&provider))
-            .map(str::to_string)
-        else {
-            return false;
-        };
-        registry
-            .list_cameras(&name)
-            .map(|cameras| index < cameras.len())
-            .unwrap_or(false)
-    })
-    .await
-    .unwrap_or(false)
+        tokio::time::sleep(wait).await;
+    }
 }
 
-/// Restart the capture the dropout interrupted, in the mode it was running in,
-/// keeping the stack it had already built.
-async fn resume_capture_if_planned(state: &Arc<AppState>, camera_id: &str, camera_name: &str) {
+/// Restart the capture the dropout interrupted, in the mode it was running in, keeping
+/// the stack it had already built. Tells the observer only if they were told about the
+/// dropout in the first place.
+async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedCameraInfo, noticed: bool) {
+    // Failed again straight after the install: the capture stays paused for the recovery
+    // that fault started, which resumes it instead.
+    if state.slot(CameraRole::Main).is_recovering() {
+        info!(camera_id = %connected.id, "Camera failed again before its capture could resume");
+        return;
+    }
     let plan = state.session_resume_plan.read().await.clone();
-    let Some(plan) = plan else {
+    let Some(plan) = plan.filter(|plan| plan.camera_id == connected.id) else {
+        state.end_paused_capture().await;
         return;
     };
-    if plan.camera_id != camera_id {
-        return;
-    }
     if !state.settings.read().await.auto_resume_capture {
-        info!(
-            camera_id,
-            "Not resuming capture — auto-resume is switched off"
-        );
+        info!(camera_id = %connected.id, "Not resuming capture — auto-resume is switched off");
+        state.end_paused_capture().await;
         return;
     }
-    if state.capture_state().await != CaptureState::Idle {
+    if state.capture_state().await != CaptureState::Recovering {
         return;
     }
 
@@ -241,16 +264,23 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, camera_id: &str, camer
 
     match crate::server::services::CaptureService::resume_capture(state, &plan).await {
         Ok(()) => {
-            info!(camera_id, stacked_count, "Capture resumed after reconnect");
-            let _ = state
-                .events
-                .send(ServerEvent::capture_resumed(camera_name, stacked_count));
+            info!(camera_id = %connected.id, stacked_count, "Capture resumed after reconnect");
+            if noticed {
+                let _ = state
+                    .events
+                    .send(ServerEvent::capture_resumed(connected.info.name.clone(), stacked_count));
+            }
+        }
+        // Stopped or disconnected between the check above and the resume.
+        Err(ApiError::CaptureNotPaused) => {
+            info!(camera_id = %connected.id, "The paused capture was ended before it could resume")
         }
         Err(e) => {
-            warn!(camera_id, error = %e, "Could not resume capture after reconnect");
+            warn!(camera_id = %connected.id, error = %e, "Could not resume capture after reconnect");
+            state.end_paused_capture().await;
             state.send_error(format!(
                 "Camera '{}' is back, but the capture could not be resumed: {}",
-                camera_name, e
+                connected.info.name, e
             ));
         }
     }
@@ -258,13 +288,20 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, camera_id: &str, camer
 
 /// Put back the capture-shaping settings the session was running with.
 ///
-/// `connect` applies the camera's stored profile, which can differ from what
-/// the interrupted session was actually using — and the settings file may have
-/// been edited while the supervisor was waiting. The camera-hardware fields
-/// (cooler, dew heater, sensor mode) are deliberately left as `connect` set
-/// them, since those belong to the device rather than the session.
+/// The reopen applies the camera's stored profile, which can differ from what the
+/// interrupted session was actually using. The plan follows every settings update made
+/// while the capture ran or was paused (`update_settings`), so this restores the
+/// observer's latest values, not the ones the capture started with. Saved and announced:
+/// a silent write left every client showing values the resumed capture was not using.
+/// The camera-hardware fields (cooler, dew heater, sensor mode) are deliberately left as
+/// the reopen set them, since those belong to the device rather than the session.
 async fn restore_settings(state: &Arc<AppState>, plan: &SessionResumePlan) {
-    let mut settings = state.settings.write().await;
+    restore_capture_fields(&mut *state.settings.write().await, plan);
+    state.save_settings().await;
+    let _ = state.events.send(ServerEvent::SettingsUpdated);
+}
+
+fn restore_capture_fields(settings: &mut crate::server::state::CaptureSettings, plan: &SessionResumePlan) {
     let planned = &plan.settings;
 
     settings.exposure_us = planned.exposure_us;
@@ -278,4 +315,41 @@ async fn restore_settings(state: &Arc<AppState>, plan: &SessionResumePlan) {
     settings.save_stacked_image = planned.save_stacked_image;
     settings.comet_roi = planned.comet_roi;
     settings.planetary_roi = planned.planetary_roi;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retries_follow_the_schedule_and_then_hold() {
+        assert_eq!(retry_delay(1), RETRY_SCHEDULE[0]);
+        assert_eq!(retry_delay(2), RETRY_SCHEDULE[1]);
+        let last = *RETRY_SCHEDULE.last().unwrap();
+        assert_eq!(retry_delay(RETRY_SCHEDULE.len() as u32), last);
+        assert_eq!(retry_delay(50), last);
+    }
+
+    /// Every advertised attempt starts inside the budget, and none past it is promised.
+    #[test]
+    fn the_advertised_attempts_all_start_inside_the_budget() {
+        let elapsed = FIRST_ATTEMPT_MIN_WAIT;
+        let left = attempts_left(elapsed, 1);
+        let mut starts_at = elapsed;
+        for after in 1..=left {
+            starts_at += retry_delay(after);
+            assert!(starts_at < TOTAL_BUDGET, "attempt {} would start past the budget", after + 1);
+        }
+        assert!(starts_at + retry_delay(left + 1) >= TOTAL_BUDGET, "one more attempt would still fit");
+        assert!(NOTICE_AFTER < TOTAL_BUDGET, "the observer must hear before the give-up");
+    }
+
+    /// Time spent inside slow attempts shrinks the promise instead of being ignored.
+    #[test]
+    fn slow_attempts_leave_fewer_attempts_to_advertise() {
+        let quick = attempts_left(FIRST_ATTEMPT_MIN_WAIT, 3);
+        let slow = attempts_left(TOTAL_BUDGET / 2, 3);
+        assert!(slow < quick, "{slow} attempts left at half the budget, {quick} at the start");
+        assert_eq!(attempts_left(TOTAL_BUDGET, 3), 0);
+    }
 }

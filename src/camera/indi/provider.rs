@@ -140,6 +140,7 @@ impl IndiProvider {
                 hcg_gain: 0,
                 sensor_modes: Vec::new(),
                 has_dew_heater: false,
+                serial: None,
             };
 
             entries.push(info);

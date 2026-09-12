@@ -11,8 +11,11 @@ pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use shim::{get_camera_ids, num_cameras, Camera as ZwoShimCamera, CameraInfoASI};
+use shim::{
+    get_camera_ids, get_camera_properties, num_cameras, Camera as ZwoShimCamera, CameraInfoASI,
+};
 
+use super::device_lease::DeviceLease;
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
@@ -22,7 +25,7 @@ use super::types::{
 
 mod props;
 
-use props::build_camera_info;
+use props::{build_camera_info, camera_info_from_properties};
 
 /// ZWO camera provider
 pub struct ZwoProvider;
@@ -54,22 +57,20 @@ impl CameraProvider for ZwoProvider {
     }
 
     fn list_cameras(&self) -> CameraResult<Vec<CameraInfo>> {
+        ZwoCamera::list_cameras()
+    }
+
+    /// From the property table alone: `list_cameras` opens every device, which would
+    /// take the lease of a camera the other role is exposing with. Sorted by camera id,
+    /// the order `ZwoCamera::open` indexes. The SDK exposes no serial before open.
+    fn identities(&self) -> CameraResult<Vec<crate::camera::DeviceIdentity>> {
         let ids =
             catch_ffi_panic("ZWO::get_camera_ids", get_camera_ids).map_err(CameraError::from)?;
-        match ids {
-            Some(map) => {
-                let mut cameras = Vec::new();
-                for (id, _name) in map {
-                    if let Ok(Ok((cam, info))) =
-                        catch_ffi_panic("ZWO::open_camera", || ZwoShimCamera::open(id))
-                    {
-                        cameras.push(build_camera_info(&cam, &info, id));
-                    }
-                }
-                Ok(cameras)
-            }
-            None => Ok(Vec::new()),
-        }
+        Ok(ids
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, name)| crate::camera::DeviceIdentity::new(name, None).with_device_id(id))
+            .collect())
     }
 
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>> {
@@ -95,23 +96,30 @@ impl ZwoCamera {
         Ok(count.max(0) as usize)
     }
 
-    /// List all connected cameras
+    /// List all connected cameras, one entry per position [`Self::open`] indexes.
+    ///
+    /// The capabilities need an open handle, but a device some handle still holds is
+    /// described from its properties alone: opening it took a lease over the live handle's
+    /// and closing it again closed the device underneath a running capture. A device that
+    /// fails to open is described the same way — dropping it shifted every later entry
+    /// onto its neighbour's index.
     pub fn list_cameras() -> CameraResult<Vec<CameraInfo>> {
-        let ids =
-            catch_ffi_panic("ZWO::get_camera_ids", get_camera_ids).map_err(CameraError::from)?;
-        match ids {
-            Some(map) => {
-                let mut cameras = Vec::new();
-                for (id, _name) in map {
-                    if let Ok(Ok((cam, info))) =
-                        catch_ffi_panic("ZWO::open_camera", || ZwoShimCamera::open(id))
-                    {
-                        cameras.push(build_camera_info(&cam, &info, id));
-                    }
-                }
-                Ok(cameras)
-            }
-            None => Ok(Vec::new()),
+        let properties = catch_ffi_panic("ZWO::get_camera_properties", get_camera_properties)
+            .map_err(CameraError::from)?
+            .unwrap_or_default();
+        Ok(properties
+            .iter()
+            .map(|(&id, properties)| Self::describe(id, properties))
+            .collect())
+    }
+
+    fn describe(id: i32, properties: &CameraInfoASI) -> CameraInfo {
+        if DeviceLease::is_open(shim::PROVIDER, id) {
+            return camera_info_from_properties(properties, id);
+        }
+        match catch_ffi_panic("ZWO::open_camera", || ZwoShimCamera::open(id)) {
+            Ok(Ok((camera, opened))) => build_camera_info(&camera, &opened, id),
+            _ => camera_info_from_properties(properties, id),
         }
     }
 
@@ -262,17 +270,6 @@ impl ZwoCamera {
 
         Ok(())
     }
-
-    fn get_capture_dimensions(&self, config: &CaptureConfig) -> (u32, u32) {
-        if let Some((_, _, w, h)) = config.roi {
-            (w, h)
-        } else {
-            (
-                self.info.max_width / config.bin as u32,
-                self.info.max_height / config.bin as u32,
-            )
-        }
-    }
 }
 
 impl Camera for ZwoCamera {
@@ -388,14 +385,14 @@ impl Camera for ZwoCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
+        // Before the config reapply below, on purpose — see `CaptureConfig::stall_budget`.
+        let start = Instant::now();
         config.validate(&self.info)?;
         self.cancel_flag.store(false, Ordering::SeqCst);
-        let exposure_duration = Duration::from_micros(config.exposure_us);
-        let total_timeout = config.timeout + exposure_duration;
-        let start = Instant::now();
+        let total_timeout = config.stall_budget(config.frame_bytes(&self.info));
         let is_continuous = config.is_continuous();
 
-        let (width, height) = self.get_capture_dimensions(config);
+        let (width, height) = config.frame_dimensions(&self.info);
         let channels = match config.format {
             ImageFormat::Raw8 | ImageFormat::Raw16 => 1,
             ImageFormat::Rgb24 => 3,
@@ -453,6 +450,12 @@ impl Camera for ZwoCamera {
                     Ok(Ok(())) => {
                         got_frame = true;
                         break;
+                    }
+                    Ok(Err(e)) if crate::camera::device_lost::is_marked(&e) => {
+                        // Retrying a lost device only runs the stall budget down before
+                        // the loop above can report what the SDK already said.
+                        self.stream_running = false;
+                        return Err(CameraError::ImageReadFailed(e));
                     }
                     Ok(Err(_)) => {
                         // Timeout or error, loop and retry if time remains. Avoid 100% CPU spin-loop

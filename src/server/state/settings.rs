@@ -266,11 +266,11 @@ pub struct TelescopeSettings {
 /// exactly where they were. Both are only well defined on the mosaic — after
 /// demosaic a hot site has already been smeared into a coloured 3x3 cross, and
 /// neighbouring sensor rows have been mixed together.
+///
+/// Hot-pixel rejection has no switch: it always runs, and `hot_pixel_sigma` is its only
+/// tuning. See `stage_config::build_cfa_pipeline` for why.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SensorCorrectionSettings {
-    /// Replace isolated hot samples with their same-colour neighbourhood mean.
-    #[serde(default = "default_hot_pixel_rejection")]
-    pub hot_pixel_rejection: bool,
     /// How far above its brightest same-colour neighbour a sample must sit to
     /// count as hot, in sigmas of that colour site's own noise.
     #[serde(default = "default_hot_pixel_sigma")]
@@ -288,9 +288,13 @@ pub struct SensorCorrectionSettings {
     pub superpixel_debayer: bool,
 }
 
-fn default_hot_pixel_rejection() -> bool {
-    true
-}
+/// The range `hot_pixel_sigma` is held to at every boundary it can arrive through. Keep in
+/// sync with `HOT_PIXEL_SIGMA_LIMITS` in `web/src/constants/index.js`.
+///
+/// Enforced rather than trusted because the stage has no off switch any more, so this is
+/// the only way to break it. Measured on a guide sub: sigma <= 0 or a huge value disables it
+/// outright (0 corrections), and 0.5-1 replaced 48-65k noise samples a frame.
+const HOT_PIXEL_SIGMA_RANGE: std::ops::RangeInclusive<f32> = 3.0..=12.0;
 
 fn default_hot_pixel_sigma() -> f32 {
     5.0
@@ -300,10 +304,25 @@ fn default_fpn_removal() -> bool {
     true
 }
 
+impl SensorCorrectionSettings {
+    /// This block with `hot_pixel_sigma` inside [`HOT_PIXEL_SIGMA_RANGE`]; a non-finite
+    /// value falls back to the default rather than to either end of the range.
+    pub fn sanitized(mut self) -> Self {
+        self.hot_pixel_sigma = if self.hot_pixel_sigma.is_finite() {
+            self.hot_pixel_sigma.clamp(
+                *HOT_PIXEL_SIGMA_RANGE.start(),
+                *HOT_PIXEL_SIGMA_RANGE.end(),
+            )
+        } else {
+            default_hot_pixel_sigma()
+        };
+        self
+    }
+}
+
 impl Default for SensorCorrectionSettings {
     fn default() -> Self {
         Self {
-            hot_pixel_rejection: default_hot_pixel_rejection(),
             hot_pixel_sigma: default_hot_pixel_sigma(),
             fpn_removal: default_fpn_removal(),
             superpixel_debayer: false,
@@ -588,13 +607,7 @@ impl Default for CaptureSettings {
 impl CaptureSettings {
     /// Which of the three capture modes this session is running in.
     pub fn capture_mode(&self) -> CaptureMode {
-        if !self.stacking {
-            return CaptureMode::LiveView;
-        }
-        if self.wanderer_mode {
-            return CaptureMode::Wanderer;
-        }
-        CaptureMode::Stacking
+        CaptureMode::from_flags(self.stacking, self.wanderer_mode)
     }
 
     /// Whether raw frames captured under these settings go to disk.

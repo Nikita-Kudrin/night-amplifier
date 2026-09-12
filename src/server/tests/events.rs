@@ -1,7 +1,7 @@
 //! Tests for WebSocket events
 
 use crate::server::events::ServerEvent;
-use crate::server::state::CaptureState;
+use crate::server::state::{CameraRole, CaptureState};
 
 #[tokio::test]
 async fn test_event_to_json_all_variants() {
@@ -61,10 +61,11 @@ async fn test_event_to_json_all_variants() {
     // The web client reads these field names directly. A mismatch here renders
     // as "Camera undefined has stopped responding" and no test catches it
     // unless both sides are pinned to the same shape.
-    let event = ServerEvent::camera_reconnecting("Test Camera", 2, 5, 10);
+    let event = ServerEvent::camera_reconnecting("Test Camera", CameraRole::Guide, 2, 5, 10);
     let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
     assert_eq!(json["type"], "camera_reconnecting");
     assert_eq!(json["name"], "Test Camera");
+    assert_eq!(json["role"], "guide");
     assert_eq!(json["attempt"], 2);
     assert_eq!(json["of"], 5);
     assert_eq!(json["next_attempt_in_s"], 10);
@@ -81,4 +82,8 @@ async fn test_event_to_json_all_variants() {
     assert_eq!(json["type"], "capture_resumed");
     assert_eq!(json["name"], "Test Camera");
     assert_eq!(json["stacked_count"], 514);
+
+    let json: serde_json::Value =
+        serde_json::from_str(&ServerEvent::FocusModeLeft.to_json()).unwrap();
+    assert_eq!(json, serde_json::json!({ "type": "focus_mode_left" }));
 }

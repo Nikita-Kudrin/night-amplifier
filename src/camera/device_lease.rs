@@ -15,10 +15,16 @@ use std::sync::{Mutex, OnceLock};
 
 use tracing::warn;
 
-/// Current generation per `(provider, index)`. A slot absent from the map has
-/// never been opened; generations start at 1 so a default-constructed 0 can
-/// never look current.
-type SlotTable = HashMap<(&'static str, i32), u64>;
+/// One vendor device slot: the generation of its newest lease, and whether that lease
+/// is still open. Generations start at 1 so a default-constructed 0 can never look
+/// current; a slot absent from the map has never been opened.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    generation: u64,
+    open: bool,
+}
+
+type SlotTable = HashMap<(&'static str, i32), Slot>;
 
 fn slots() -> &'static Mutex<SlotTable> {
     static SLOTS: OnceLock<Mutex<SlotTable>> = OnceLock::new();
@@ -42,14 +48,14 @@ impl DeviceLease {
     /// it. Call this once per successful vendor open.
     pub fn acquire(provider: &'static str, index: i32) -> Self {
         let mut table = slots().lock().unwrap_or_else(|e| e.into_inner());
-        let generation = table
+        let slot = table
             .entry((provider, index))
-            .and_modify(|g| *g += 1)
-            .or_insert(1);
+            .and_modify(|slot| *slot = Slot { generation: slot.generation + 1, open: true })
+            .or_insert(Slot { generation: 1, open: true });
         Self {
             provider,
             index,
-            generation: *generation,
+            generation: slot.generation,
             closed: AtomicBool::new(false),
         }
     }
@@ -69,7 +75,20 @@ impl DeviceLease {
     /// superseded it. Read-only; does not affect `begin_close`.
     pub fn is_current(&self) -> bool {
         let table = slots().lock().unwrap_or_else(|e| e.into_inner());
-        table.get(&(self.provider, self.index)) == Some(&self.generation)
+        table
+            .get(&(self.provider, self.index))
+            .is_some_and(|slot| slot.generation == self.generation)
+    }
+
+    /// Whether a handle that has not been closed yet holds `(provider, index)` — one in
+    /// use, or one abandoned inside a stuck SDK call.
+    ///
+    /// Discovery must not open such a device. Opening it would take a lease that
+    /// supersedes the live handle's, and closing it again would close the device under
+    /// that handle.
+    pub fn is_open(provider: &'static str, index: i32) -> bool {
+        let table = slots().lock().unwrap_or_else(|e| e.into_inner());
+        table.get(&(provider, index)).is_some_and(|slot| slot.open)
     }
 
     /// Authorize one vendor close call, or explain why not.
@@ -79,16 +98,25 @@ impl DeviceLease {
     /// handle's device) and so does a second call on the same lease (the
     /// explicit `close()` already ran, and `Drop` is following it).
     pub fn begin_close(&self) -> bool {
-        if !self.is_current() {
-            warn!(
-                provider = self.provider,
-                index = self.index,
-                generation = self.generation,
-                "Skipping close of a superseded camera handle — the device now belongs to a newer handle"
-            );
-            return false;
+        let mut table = slots().lock().unwrap_or_else(|e| e.into_inner());
+        match table.get_mut(&(self.provider, self.index)) {
+            Some(slot) if slot.generation == self.generation => {
+                if self.closed.swap(true, Ordering::SeqCst) {
+                    return false;
+                }
+                slot.open = false;
+                true
+            }
+            _ => {
+                warn!(
+                    provider = self.provider,
+                    index = self.index,
+                    generation = self.generation,
+                    "Skipping close of a superseded camera handle — the device now belongs to a newer handle"
+                );
+                false
+            }
         }
-        !self.closed.swap(true, Ordering::SeqCst)
     }
 
     pub fn provider(&self) -> &'static str {
@@ -179,5 +207,24 @@ mod tests {
         assert!(a1.is_current(), "index 1 must be unaffected");
         assert!(b0.is_current(), "the other provider must be unaffected");
         assert!(a0_again.is_current());
+    }
+
+    /// Discovery asks this before it opens a device to read its capabilities: a device a
+    /// handle still holds is open until that handle's close, and only the live lease's
+    /// close counts — a superseded handle closing late leaves the newer one open.
+    #[test]
+    fn a_device_stays_open_until_its_current_lease_closes() {
+        assert!(!DeviceLease::is_open("test-open", 0), "never opened");
+
+        let first = DeviceLease::acquire("test-open", 0);
+        assert!(DeviceLease::is_open("test-open", 0));
+        assert!(!DeviceLease::is_open("test-open", 1), "another index is unaffected");
+
+        let reopened = DeviceLease::acquire("test-open", 0);
+        assert!(!first.begin_close());
+        assert!(DeviceLease::is_open("test-open", 0), "a superseded close is not the device's close");
+
+        assert!(reopened.begin_close());
+        assert!(!DeviceLease::is_open("test-open", 0));
     }
 }

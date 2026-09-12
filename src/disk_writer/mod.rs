@@ -630,4 +630,64 @@ mod tests {
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
+
+    /// A capture resuming after a reconnect rejoins its folder. Its container must go
+    /// next to the first one: `capture.ser` again was created over it, truncating
+    /// everything recorded before the dropout.
+    #[test]
+    fn a_resumed_video_session_keeps_the_container_it_rejoined() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_ser_resume");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let writer_task = std::thread::spawn(move || writer.run());
+        let frame = std::sync::Arc::new(crate::camera::RawFrame {
+            data: crate::camera::BufferPool::new().get(32 * 32 * 2),
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        });
+        let record = |frames: u64| {
+            for i in 0..frames {
+                handle
+                    .queue_raw_frame(
+                        std::sync::Arc::clone(&frame),
+                        i + 1,
+                        FitsMetadata::new(),
+                        crate::camera::SensorType::Mono,
+                        None,
+                    )
+                    .unwrap();
+            }
+            handle.end_session();
+        };
+        let frames_in = |path: &std::path::Path| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let count = crate::ser::SerReader::open(path).map(|r| r.frame_count()).unwrap_or(0);
+                if count > 0 || std::time::Instant::now() >= deadline {
+                    return count;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+
+        let session_dir = handle
+            .start_session(WritingSessionType::VideoContainer, "-stacking")
+            .unwrap();
+        record(4);
+        assert_eq!(frames_in(&session_dir.join("capture.ser")), 4);
+
+        handle
+            .resume_session(session_dir.clone(), WritingSessionType::VideoContainer)
+            .unwrap();
+        record(2);
+
+        let resumed = frames_in(&session_dir.join("capture_2.ser"));
+        let first = frames_in(&session_dir.join("capture.ser"));
+        drop(handle);
+        writer_task.join().unwrap();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert_eq!(first, 4, "the resumed run truncated the container it rejoined");
+        assert_eq!(resumed, 2);
+    }
 }

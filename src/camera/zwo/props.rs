@@ -3,8 +3,17 @@ use super::shim::{Camera as ZwoShimCamera, CameraInfoASI};
 use crate::camera::types::{CameraInfo, ImageFormat, SensorType};
 use crate::CfaPattern;
 
-/// Build CameraInfo from the available camera data
+/// Build CameraInfo from an opened camera: its properties plus what only a handle can
+/// answer.
 pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i32) -> CameraInfo {
+    CameraInfo {
+        has_dew_heater: cam.is_control_supported(ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER),
+        ..camera_info_from_properties(info, id)
+    }
+}
+
+/// Build CameraInfo from properties alone, for a device discovery must not open.
+pub(crate) fn camera_info_from_properties(info: &CameraInfoASI, id: i32) -> CameraInfo {
     let bayer_pattern = match info.bayer_pattern {
         ASI_BAYER_PATTERN_ASI_BAYER_RG => Some(CfaPattern::Rggb),
         ASI_BAYER_PATTERN_ASI_BAYER_BG => Some(CfaPattern::Bggr),
@@ -45,7 +54,7 @@ pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i
         },
         bayer_pattern,
         has_cooler: info.is_cooler_cam,
-        has_dew_heater: cam.is_control_supported(ASI_CONTROL_TYPE_ASI_ANTI_DEW_HEATER),
+        has_dew_heater: false,
         min_temp_c: if info.is_cooler_cam {
             Some(-40.0)
         } else {
@@ -64,5 +73,6 @@ pub(crate) fn build_camera_info(cam: &ZwoShimCamera, info: &CameraInfoASI, id: i
         unity_gain: 120,
         hcg_gain: 100,
         sensor_modes: Vec::new(),
+        serial: None,
     }
 }

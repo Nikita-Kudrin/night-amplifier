@@ -55,6 +55,32 @@ describe('useEventStream', () => {
             expect(captureState.value).toBe('Capturing')
         })
 
+        it('keeps the session counters when a paused capture resumes', async () => {
+            const {captureState, frameCount, stackedCount} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'state_changed', state: 'Capturing'})
+            await sendEvent({type: 'frame_captured', frame_number: 42, stacked_count: 40})
+            await sendEvent({type: 'state_changed', state: 'Recovering'})
+            await sendEvent({type: 'state_changed', state: 'Starting'})
+
+            expect(captureState.value).toBe('Starting')
+            expect(frameCount.value).toBe(42)
+            expect(stackedCount.value).toBe(40)
+        })
+
+        it('zeroes the counters for a fresh start', async () => {
+            const {frameCount, stackedCount} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'frame_captured', frame_number: 42, stacked_count: 40})
+            await sendEvent({type: 'state_changed', state: 'Idle'})
+            await sendEvent({type: 'state_changed', state: 'Starting'})
+
+            expect(frameCount.value).toBe(0)
+            expect(stackedCount.value).toBe(0)
+        })
+
         it('updates frameCount and stackedCount on frame_captured event', async () => {
             const {frameCount, stackedCount} = useEventStream()
 
@@ -129,6 +155,35 @@ describe('useEventStream', () => {
             expect(unresponsiveWarning.value).toBe(null)
         })
 
+        // A guide camera, or an idle one, has no capture to resume — nothing else would
+        // ever take the warning down after it came back.
+        it('clears the reconnect warning once that camera is back', async () => {
+            const {unresponsiveWarning} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'camera_reconnecting', name: 'Guide', attempt: 3, of: 31, next_attempt_in_s: 5})
+            await sendEvent({type: 'camera_phase_changed', name: 'Guide', phase: 'recovering'})
+            await sendEvent({type: 'camera_phase_changed', name: 'Imaging', phase: 'idle'})
+            expect(unresponsiveWarning.value).toContain('Reconnecting to Guide')
+
+            await sendEvent({type: 'camera_phase_changed', name: 'Guide', phase: 'guiding'})
+            expect(unresponsiveWarning.value).toBe(null)
+        })
+
+        // Two bodies of one model share a name; the imaging camera coming back to idle
+        // must not take down the warning about the guide camera still reconnecting.
+        it('keeps the reconnect warning while only a twin in the other role is back', async () => {
+            const {unresponsiveWarning} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'camera_reconnecting', name: 'ASI120MM', role: 'guide', attempt: 3, of: 31, next_attempt_in_s: 5})
+            await sendEvent({type: 'camera_phase_changed', name: 'ASI120MM', role: 'main', phase: 'idle'})
+            expect(unresponsiveWarning.value).toContain('Reconnecting to ASI120MM')
+
+            await sendEvent({type: 'camera_phase_changed', name: 'ASI120MM', role: 'guide', phase: 'guiding'})
+            expect(unresponsiveWarning.value).toBe(null)
+        })
+
         it('reports reconnect progress and how it ended', async () => {
             const {unresponsiveWarning} = useEventStream()
 
@@ -160,6 +215,17 @@ describe('useEventStream', () => {
 
             expect(unresponsiveWarning.value).toBe(null)
             expect(resumeNotice.value).toContain('514 frames still stacked')
+        })
+
+        it('explains why Focus/Finder mode switched off, until dismissed', async () => {
+            const {focusModeNotice, clearFocusModeNotice} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'focus_mode_left'})
+            expect(focusModeNotice.value).toContain('Focus/Finder mode turned off')
+
+            clearFocusModeNotice()
+            expect(focusModeNotice.value).toBe(null)
         })
 
         it('handles malformed JSON gracefully', async () => {

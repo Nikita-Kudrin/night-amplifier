@@ -18,7 +18,7 @@ use crate::planetary::AlignmentRoi;
 use crate::render::StretchAggressiveness;
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
-const DEFAULT_SETTINGS_FILE: &str = "settings.json";
+pub const DEFAULT_SETTINGS_FILE: &str = "settings.json";
 
 /// Persisted settings structure matching CaptureSettings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -314,7 +314,7 @@ impl From<PersistedSettings> for CaptureSettings {
             planetary_multi_point_alignment: persisted.planetary_multi_point_alignment,
             wanderer_mode: persisted.wanderer_mode,
             eyepiece: persisted.eyepiece,
-            sensor_correction: persisted.sensor_correction,
+            sensor_correction: persisted.sensor_correction.sanitized(),
             denoise: persisted.denoise,
             preview_resolution: persisted.preview_resolution,
             telescope: persisted.telescope,

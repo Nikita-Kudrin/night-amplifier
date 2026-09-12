@@ -26,7 +26,10 @@ mod settings;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
-pub use camera_slot::{CameraOp, CameraSlot, RawSessionResume};
+pub use camera_slot::{
+    BoundedCallError, CameraOp, CameraSlot, InstallOutcome, RawSessionResume, Recovery,
+    SuspendVerdict,
+};
 pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
@@ -99,6 +102,9 @@ pub struct AppState {
     /// concurrent connects for one id would both pass it, both open the
     /// device, and the second would displace — and so close — the first.
     pub camera_connect_lock: Mutex<()>,
+    /// Where cameras are discovered and opened. A trait object so tests can script
+    /// the USB bus — including one that reorders itself between two enumerations.
+    pub device_catalog: Arc<dyn crate::camera::DeviceCatalog>,
     /// What an interrupted capture needs in order to pick up where it left
     /// off. Recorded when a capture starts, consumed by the reconnect
     /// supervisor, cleared on a clean stop. Main camera only — for the guide
@@ -118,8 +124,6 @@ pub struct AppState {
     /// return immediately, and close the handle underneath a loop that was still
     /// starting up.
     pub guide_cancel: StdMutex<Option<Arc<AtomicBool>>>,
-    /// Current lifecycle phase per connected camera (keyed by camera name).
-    pub camera_phase: RwLock<HashMap<String, CameraPhase>>,
     /// Consecutive camera faults keyed by camera name, with the instant the
     /// streak was last extended. Every fault detector — the capture watchdog,
     /// the status-poll watchdog and the monitor's cooler poll — feeds this one
@@ -210,8 +214,8 @@ impl AppState {
             latest_camera_status: RwLock::new(HashMap::new()),
             camera_slots: std::array::from_fn(|_| CameraSlot::default()),
             guide_cancel: StdMutex::new(None),
-            camera_phase: RwLock::new(HashMap::new()),
             camera_connect_lock: Mutex::new(()),
+            device_catalog: Arc::new(crate::camera::RegistryCatalog),
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
@@ -266,6 +270,14 @@ impl AppState {
     /// ask it per frame.
     pub fn guide_loop_running(&self) -> bool {
         self.guide_loop_running.load(Ordering::SeqCst)
+    }
+
+    /// Whether the guide camera owns plate solving: its loop is running, or it is being
+    /// reopened after a fault. Recovery keeps the solver pointed at the guide scope's
+    /// optics, so the imaging camera offering frames meanwhile would be judged against
+    /// the wrong focal length.
+    pub fn guide_holds_solving(&self) -> bool {
+        self.guide_loop_running() || self.slot(CameraRole::Guide).is_recovering()
     }
 
     pub fn set_guide_loop_running(&self, running: bool) {
@@ -333,6 +345,59 @@ impl AppState {
             session.state = state;
         }
         let _ = self.events.send(ServerEvent::state_changed(state));
+    }
+
+    /// End a capture paused for recovery, dropping what its resume would have needed.
+    /// Returns whether one was paused.
+    ///
+    /// One compare-and-set on the session state, the same one `resume_capture` makes
+    /// the other way: whichever lands first wins, so a resume and a Disconnect or give-up
+    /// can no longer both act on one pause.
+    pub async fn end_paused_capture(&self) -> bool {
+        {
+            let mut session = self.session.write().await;
+            if session.state != CaptureState::Recovering {
+                return false;
+            }
+            session.state = CaptureState::Idle;
+        }
+        *self.session_resume_plan.write().await = None;
+        self.clear_stacking_carryover();
+        let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
+        true
+    }
+
+    /// End a capture pipeline: `Idle`, unless it has been paused for recovery.
+    ///
+    /// A pipeline that ended on a device fault has already been suspended by the time it
+    /// stops, and marking it `Idle` would tell the UI the session was over. So has one that
+    /// never got going because its camera failed again between a reopen and the resume —
+    /// the slot is recovering and the plan is still there — and ending that one discarded
+    /// the plan the recovery under way would have resumed. Any other end is final, so the
+    /// resume plan and the parked stack go with it: left behind, the next quiet recovery of
+    /// the idle camera restarted a capture the observer saw end.
+    pub async fn end_capture_state(&self) {
+        let recovering = self.slot(CameraRole::Main).is_recovering()
+            && self.session_resume_plan.read().await.is_some();
+        {
+            let mut session = self.session.write().await;
+            if session.state == CaptureState::Recovering {
+                return;
+            }
+            // `Stopping` is the observer's Stop, which a recovery must not undo.
+            if recovering && session.state != CaptureState::Stopping {
+                session.state = CaptureState::Recovering;
+                drop(session);
+                let _ = self
+                    .events
+                    .send(ServerEvent::state_changed(CaptureState::Recovering));
+                return;
+            }
+            session.state = CaptureState::Idle;
+        }
+        *self.session_resume_plan.write().await = None;
+        self.clear_stacking_carryover();
+        let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
     }
 
     /// Increment frame count and broadcast event.
@@ -538,29 +603,18 @@ impl AppState {
             .cloned()
     }
 
-    /// Set the lifecycle phase for a camera and broadcast a `CameraPhaseChanged` event.
-    pub async fn set_camera_phase(&self, camera_name: &str, phase: CameraPhase) {
-        {
-            let mut map = self.camera_phase.write().await;
-            if phase == CameraPhase::Disconnected {
-                map.remove(camera_name);
-            } else {
-                map.insert(camera_name.to_string(), phase);
-            }
-        }
+    /// Set the lifecycle phase of `role`'s camera and broadcast `CameraPhaseChanged`,
+    /// which names the camera for the UI.
+    pub async fn set_camera_phase(&self, role: CameraRole, camera_name: &str, phase: CameraPhase) {
+        *self.slot(role).phase.write().await = phase;
         let _ = self
             .events
-            .send(ServerEvent::camera_phase_changed(camera_name, phase));
+            .send(ServerEvent::camera_phase_changed(camera_name, role, phase));
     }
 
-    /// Read the current lifecycle phase for a camera (defaults to Disconnected).
-    pub async fn camera_phase(&self, camera_name: &str) -> CameraPhase {
-        self.camera_phase
-            .read()
-            .await
-            .get(camera_name)
-            .copied()
-            .unwrap_or(CameraPhase::Disconnected)
+    /// The lifecycle phase of `role`'s camera; `Disconnected` when the slot is empty.
+    pub async fn camera_phase(&self, role: CameraRole) -> CameraPhase {
+        *self.slot(role).phase.read().await
     }
 
     /// Update the cached "plugin holds a target" flag. No-op without Push-To.

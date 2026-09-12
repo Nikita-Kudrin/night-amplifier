@@ -40,7 +40,7 @@ pub use encoding::{
 pub use error::{ApiError, ApiResult, ServerError};
 pub use events::ServerEvent;
 pub use services::{CameraService, CaptureService};
-pub use settings_persistence::SettingsPersistence;
+pub use settings_persistence::{SettingsPersistence, DEFAULT_SETTINGS_FILE};
 pub use state::*;
 pub use ws::*;
 

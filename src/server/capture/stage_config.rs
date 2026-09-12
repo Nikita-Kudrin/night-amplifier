@@ -27,24 +27,20 @@ pub fn build_cfa_pipeline(settings: &CaptureSettings) -> CfaPipeline {
     // Hot pixels first: a column carrying hundreds of them would otherwise drag
     // its own median, and the FPN correction would spread that across the column.
     //
-    // Kept for planetary, unlike the two stages below. A hot pixel is in the
-    // same place in all 5000 frames of a lucky-imaging run, so it survives the
-    // stack exactly as it survives a deep-sky one — and the filter is one-sided
-    // and isolation-gated, so it cannot bite the disc it is imaging. The cost
-    // that once argued against it is now a per-frame sweep only: the noise
-    // estimate is cached across frames inside the stage.
-    if correction.hot_pixel_rejection {
-        pipeline = pipeline.with_stage(Box::new(HotPixelFilter::new(HotPixelConfig {
-            sigma: correction.hot_pixel_sigma,
-            ..HotPixelConfig::default()
-        })));
-    }
-    // Not for planetary: the correction assumes each sensor line is mostly sky,
-    // so its level measures readout rather than signal. A lunar or planetary
-    // disc fills enough of a line to move that level, and flattening it would
-    // carve bands across the disc.
-    if correction.fpn_removal && settings.stacking_type != crate::stacking::StackingType::Planetary
-    {
+    // Unconditional, and not user-switchable, because the plate solver reads the frame
+    // this stage produces. Without it bilinear demosaic turns every hot pixel into a
+    // star-sized blob: on 0.5 s gain-337 guide subs they outnumbered the real stars 72
+    // to 25 and ASTAP failed at any FOV, where the cleaned frame solved full-sky in
+    // 2-4 s. Focus/Finder mode used to switch it off for frame rate — precisely while
+    // hunting a target. Kept for planetary too: the filter is one-sided and
+    // isolation-gated, so it cannot bite a disc.
+    pipeline = pipeline.with_stage(Box::new(HotPixelFilter::new(HotPixelConfig {
+        sigma: correction.hot_pixel_sigma,
+        ..HotPixelConfig::default()
+    })));
+    // Per stacking type (not planetary — see `uses_fpn_removal`). Focus/Finder mode's
+    // stacking conflict reads the same capability, so the two cannot drift apart.
+    if correction.fpn_removal && settings.stacking_type.uses_fpn_removal() {
         pipeline = pipeline.with_stage(Box::new(FpnFilter));
     }
     pipeline
@@ -691,16 +687,33 @@ mod tests {
     }
 
     #[test]
-    fn disabling_both_corrections_leaves_the_pre_debayer_seam_empty() {
+    fn turning_fpn_off_still_rejects_hot_pixels() {
         let settings = settings_with(
             SensorCorrectionSettings {
-                hot_pixel_rejection: false,
                 fpn_removal: false,
                 ..SensorCorrectionSettings::default()
             },
             StackingType::DeepSky,
         );
-        assert!(build_cfa_pipeline(&settings).is_empty());
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
+    }
+
+    /// The 2026-09-09 failure: Finder mode switched hot-pixel rejection off, and the
+    /// guide frames it produced could not be plate-solved at any FOV. The mode may shed
+    /// every other stage, but not this one.
+    #[test]
+    fn finder_mode_cannot_take_hot_pixel_rejection_out_of_the_pipeline() {
+        let mut settings =
+            settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        crate::server::state::focus_mode::set(&mut settings, true);
+
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
     }
 
     #[test]
@@ -710,6 +723,30 @@ mod tests {
             build_cfa_pipeline(&settings).stage_names(),
             vec!["hot_pixels"]
         );
+    }
+
+    /// Focus/Finder mode may run under a stack exactly when this pipeline has no line
+    /// flattening for it to take away — the rule and the pipeline must never drift apart.
+    #[test]
+    fn focus_mode_conflicts_exactly_where_the_pipeline_flattens_lines() {
+        use crate::server::state::{focus_mode, CaptureMode, CaptureState};
+
+        for &stacking_type in StackingType::all() {
+            let settings = settings_with(SensorCorrectionSettings::default(), stacking_type);
+            let flattens = build_cfa_pipeline(&settings)
+                .stage_names()
+                .contains(&"row_column_fpn");
+
+            assert_eq!(
+                focus_mode::conflicts_with_capture(
+                    CaptureMode::Stacking,
+                    stacking_type,
+                    CaptureState::Capturing
+                ),
+                flattens,
+                "{stacking_type:?}"
+            );
+        }
     }
 
     #[test]

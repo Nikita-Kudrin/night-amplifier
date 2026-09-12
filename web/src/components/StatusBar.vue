@@ -1,6 +1,6 @@
 <script setup>
 import {computed, inject} from 'vue'
-import {CAPTURE_STATES} from '../constants'
+import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 
 const eventStream = inject('eventStream')
@@ -11,9 +11,8 @@ const currentCamera = computed(() => cameras.value.find((c) => c.id === selected
 
 const stateClass = computed(() => {
   const state = eventStream.captureState.value
+  if (isCaptureRunning(state)) return 'capturing'
   switch (state) {
-    case CAPTURE_STATES.CAPTURING:
-      return 'capturing'
     case CAPTURE_STATES.STARTING:
       return 'starting'
     case CAPTURE_STATES.STOPPING:
@@ -27,9 +26,8 @@ const stateClass = computed(() => {
 
 const stateLabel = computed(() => {
   const state = eventStream.captureState.value
+  if (isCaptureRunning(state)) return 'Capturing'
   switch (state) {
-    case CAPTURE_STATES.CAPTURING:
-      return 'Capturing'
     case CAPTURE_STATES.STARTING:
       return 'Starting...'
     case CAPTURE_STATES.STOPPING:
@@ -244,6 +242,28 @@ const framesTooltip = computed(() => {
         <path d="M20 4v4h-4"/>
       </svg>
       <span>{{ eventStream.resumeNotice.value }}</span>
+      <button class="btn-close btn-dismiss">&times;</button>
+    </div>
+
+    <!-- The server left Focus/Finder mode because the running capture switched to stacking -->
+    <div
+        v-if="eventStream.focusModeNotice.value"
+        class="status-item resumed focus-mode-left"
+        @click="eventStream.clearFocusModeNotice()"
+    >
+      <svg
+          viewBox="0 0 24 24"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+      >
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4"/>
+        <path d="M12 8h.01"/>
+      </svg>
+      <span>{{ eventStream.focusModeNotice.value }}</span>
       <button class="btn-close btn-dismiss">&times;</button>
     </div>
 

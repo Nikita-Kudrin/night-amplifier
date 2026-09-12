@@ -212,7 +212,12 @@ export function useEventStream() {
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
     const unresponsiveWarning = ref(null)
+    // Which camera the warning is about — `{name, role}`, role null when the event had
+    // none — so its recovery can clear it.
+    const unresponsiveCamera = ref(null)
     const resumeNotice = ref(null)
+    // Why the server switched Focus/Finder mode off on its own; stays until dismissed.
+    const focusModeNotice = ref(null)
 
     // Push-To state
     const pushDirection = ref(null)
@@ -288,8 +293,11 @@ export function useEventStream() {
 
     const eventHandlers = {
         state_changed(data) {
+            // A capture resuming after a camera reconnect carries its session on; only a
+            // fresh start zeroes the counters.
+            const resuming = captureState.value === 'Recovering'
             captureState.value = data.state
-            if (data.state === 'Starting') {
+            if (data.state === 'Starting' && !resuming) {
                 frameCount.value = 0
                 stackedCount.value = 0
                 rejectedCount.value = 0
@@ -307,10 +315,25 @@ export function useEventStream() {
             // The server sends `name`, not `camera_name` — see the shape pinned
             // by src/server/tests/events.rs.
             unresponsiveWarning.value = `${data.name} has stopped responding.`
+            unresponsiveCamera.value = {name: data.name, role: null}
         },
         camera_reconnecting(data) {
             unresponsiveWarning.value =
                 `Reconnecting to ${data.name} — attempt ${data.attempt} of ${data.of}.`
+            unresponsiveCamera.value = {name: data.name, role: data.role ?? null}
+        },
+        camera_phase_changed(data) {
+            // A camera that came back needs no warning, and a guide camera or an idle
+            // one gets no `capture_resumed` to clear it. Matched on role too where both
+            // sides carry one: two bodies of one model share a name.
+            const healthy = data.phase !== 'recovering' && data.phase !== 'disconnected'
+            const warned = unresponsiveCamera.value
+            const sameCamera = warned?.name === data.name
+                && (!warned.role || !data.role || warned.role === data.role)
+            if (healthy && sameCamera) {
+                unresponsiveWarning.value = null
+                unresponsiveCamera.value = null
+            }
         },
         camera_reconnect_failed(data) {
             unresponsiveWarning.value =
@@ -321,6 +344,10 @@ export function useEventStream() {
             lastError.value = null
             resumeNotice.value =
                 `${data.name} is back. Capture resumed with ${data.stacked_count} frames still stacked.`
+        },
+        focus_mode_left() {
+            focusModeNotice.value =
+                'Focus/Finder mode turned off: stacking needs the sensor corrections it holds off.'
         },
         settings_updated() { /* components should refresh */
         },
@@ -526,6 +553,10 @@ export function useEventStream() {
         resumeNotice.value = null
     }
 
+    function clearFocusModeNotice() {
+        focusModeNotice.value = null
+    }
+
     return {
         connected,
         error,
@@ -541,6 +572,7 @@ export function useEventStream() {
         diskWriterWarning,
         unresponsiveWarning,
         resumeNotice,
+        focusModeNotice,
         pushDirection,
         currentTarget,
         plateSolving,
@@ -552,6 +584,7 @@ export function useEventStream() {
         clearDiskWriterWarning,
         clearUnresponsiveWarning,
         clearResumeNotice,
+        clearFocusModeNotice,
         clearPushDirection,
         clearPlateSolving,
         clearAstapInstallProgress,

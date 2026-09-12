@@ -117,6 +117,7 @@ export const STAR_PROTECTION_LIMITS = {
 
 // How far above its brightest same-colour neighbour a sample must sit to be
 // treated as a hot pixel
+// Mirrors `HOT_PIXEL_SIGMA_RANGE` in src/server/state/settings.rs, which enforces it.
 export const HOT_PIXEL_SIGMA_LIMITS = {
     min: 3.0,
     max: 12.0,
@@ -205,6 +206,17 @@ export const CAPTURE_STATES = {
     CAPTURING: 'Capturing',
     STOPPING: 'Stopping',
     ERROR: 'Error',
+    // Paused while the server reopens a camera that dropped out; it resumes on its own.
+    RECOVERING: 'Recovering',
+}
+
+/**
+ * Whether a capture session is running, as far as the observer is concerned. A capture
+ * paused for a camera reconnect still is: showing it as stopped is exactly the
+ * disconnect flicker the server's quiet recovery exists to hide.
+ */
+export function isCaptureRunning(state) {
+    return state === CAPTURE_STATES.CAPTURING || state === CAPTURE_STATES.RECOVERING
 }
 
 // WebSocket reconnection settings
@@ -272,7 +284,6 @@ export const DEFAULT_SETTINGS = {
     target_temp_c: null,
     cooler_fast_mode: false,
     sensor_correction: {
-        hot_pixel_rejection: true,
         hot_pixel_sigma: 5.0,
         fpn_removal: true,
         superpixel_debayer: false,
@@ -327,9 +338,9 @@ export const HELP_TEXTS = {
     auto_stretch:
         'Automatically transforms the image to make faint details and colors visible - stretching',
     focus_mode_while_stacking:
-        'Not available while you are stacking. Focus/Finder mode turns off hot pixel rejection and row/column pattern removal, which run before the frames reach the stack - and those defects sit in the same place in every frame, so once they are averaged in nothing can take them out again. Stop the capture to focus, or switch to Live view.',
+        'Not available while you are stacking. Focus/Finder mode turns off row/column pattern removal, which runs before the frames reach the stack - and that banding sits in the same place in every frame, so once it is averaged in nothing can take it out again. Stop the capture to focus, or switch to Live view.',
     focus_mode:
-        'Trades image quality for frame rate while you focus or hunt for a target. Holds off the seven stages that cost time per frame and buy nothing at a focus mask: background subtraction, shadow saturation boost, hot pixel rejection, row/column pattern removal, colour mottle, background grain and dithering. Their Settings toggles are held while the mode is on and every one goes back to your value when you switch it off.',
+        'Trades image quality for frame rate while you focus or hunt for a target. Holds off the six stages that cost time per frame and buy nothing at a focus mask: background subtraction, shadow saturation boost, row/column pattern removal, colour mottle, background grain and dithering. Hot pixel rejection keeps running - Push-To cannot plate-solve a frame full of them. Their Settings toggles are held while the mode is on and every one goes back to your value when you switch it off.',
     stretch_aggressiveness:
         'Controls how strongly the dark areas are boosted. High is best for extremely faint nebulae, Low preserves star colors and contrast.',
     background_subtraction:
@@ -376,10 +387,8 @@ export const HELP_TEXTS = {
         'Sets where black sits.\n• Positive keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise it if the background shows hard black dots.\n• Negative pushes the sky itself toward black without dimming the target, which is what lowering Black level does instead. Around -5% puts the floor at the sky level and takes the background down by about two thirds; the far end takes it down by around 85%. The negative half needs a measured sky level, so it does nothing with Auto stretch off or in Planetary mode.',
     eyepiece_darker_sky:
         'Lets the darkening half of Black floor reach true black instead of rolling off into it. Buys the deepest possible sky and a little more separation between the target and the background, and costs the black speckle the positive half of Black floor exists to remove - around a third of the sky ends up fully off. No effect while Black floor is positive.',
-    hot_pixel_rejection:
-        'Replaces isolated bright pixels on the raw sensor mosaic — the coloured dots scattered through the background. They sit in the same place in every frame, so stacking never removes them. Only a pixel far brighter than its own neighbours is touched, so stars are left alone.',
     hot_pixel_sigma:
-        'How far above its brightest neighbour a pixel must sit to count as hot. Lower catches more dots but risks the faintest stars; raise it if stars look softer or the count drops.',
+        'Hot pixels - the coloured dots scattered through the background - are always replaced on the raw sensor mosaic. They sit in the same place in every frame, so stacking never removes them, and Push-To cannot plate-solve a frame full of them. This sets how far above its brightest neighbour a pixel must sit to count as hot. Lower catches more dots but risks the faintest stars; raise it if stars look softer or the count drops.',
     fpn_removal:
         'Flattens the small brightness offset every sensor row and column reads out with. Like hot pixels it does not average away with more frames, and on a drifting mount it shows up as soft banding. Not applied to planetary targets, where a bright disc fills enough of each line to move its level.',
     superpixel_debayer:

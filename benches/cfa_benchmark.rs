@@ -15,11 +15,13 @@
 //! clone.
 //!
 //! **The reported `time:` covers `reps` invocations.** Divide, or read the throughput.
+//! `reject_hot_pixels` is the production path: `HotPixelFilter::apply` delegates to it and
+//! re-measures the sky every frame, so there is no cached variant to bench separately.
 //! Per-call figures the current `reps` were sized from (x86 dev box, not a Pi 5):
 //!
 //! | Stage | 3008² (IMX533) | 2712x1538 (IMX464) |
 //! |---|---|---|
-//! | hot pixels | 7.0 ms | 4.3 ms |
+//! | hot pixels | 6.1 ms | 3.2 ms |
 //! | row/column FPN | 5.9 ms | 2.7 ms |
 //! | superpixel debayer | 2.7 ms | 0.8 ms |
 //!
@@ -38,7 +40,7 @@ use std::time::Duration;
 /// `reps` is per *case*, not per group: the two sensors differ by 3.8x in area, so one
 /// global figure would either leave the smaller case under the 100 ms floor or hold
 /// four times the frames live for the larger one.
-const HOT_PIXEL_CASES: [(usize, usize, usize); 2] = [(3008, 3008, 16), (2712, 1538, 25)];
+const HOT_PIXEL_CASES: [(usize, usize, usize); 2] = [(3008, 3008, 18), (2712, 1538, 34)];
 const FPN_CASES: [(usize, usize, usize); 2] = [(3008, 3008, 20), (2712, 1538, 42)];
 const SUPERPIXEL_CASES: [(usize, usize, usize); 2] = [(3008, 3008, 40), (2712, 1538, 130)];
 

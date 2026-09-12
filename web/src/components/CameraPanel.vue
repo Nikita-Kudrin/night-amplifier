@@ -9,7 +9,7 @@ import {
 } from '../composables/api.js'
 import {useError} from '../composables/useError.js'
 import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
-import {CAPTURE_STATES} from '../constants'
+import {isCaptureRunning} from '../constants'
 
 const cameras = inject('cameras')
 const selectedCamera = inject('selectedCamera')
@@ -71,7 +71,7 @@ const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.c
 
 const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
 
-const isCapturing = computed(() => eventStream.captureState.value === CAPTURE_STATES.CAPTURING)
+const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 
 async function handleConnect(cameraId, role = 'main') {
   connecting.value = cameraId

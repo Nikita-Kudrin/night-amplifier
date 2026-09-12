@@ -2,13 +2,16 @@ use super::channel;
 use super::config_overrides::*;
 use super::drop_log::DropLog;
 use super::watchdog::*;
+use crate::camera::{Camera, CameraError, CaptureConfig};
 use crate::frame::Frame;
 use crate::server::capture::channel::{pipeline_capacities, QueueDepth};
 use crate::server::capture::channel::{CapturedFrame, StackedFrame};
+use crate::server::error::ApiError;
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CameraRole, CaptureState, SessionResumePlan, StackingType};
 use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -42,7 +45,7 @@ pub async fn run_capture_loop(
         None => {
             error!(camera_id = %camera_id, "Camera not found in capture loop");
             state.send_error("Camera not found".to_string());
-            state.set_capture_state(CaptureState::Idle).await;
+            state.end_capture_state().await;
             return;
         }
     };
@@ -52,7 +55,7 @@ pub async fn run_capture_loop(
     if let Err(e) = storage::initialize_capture_session(&state, resume_dir).await {
         error!(error = %e, "Failed to initialize capture session");
         state.send_error(e);
-        state.set_capture_state(CaptureState::Idle).await;
+        state.end_capture_state().await;
         return;
     }
 
@@ -64,12 +67,14 @@ pub async fn run_capture_loop(
     // Snapshot what a resume would need, now that the disk session exists and
     // the settings for this run are fixed. Recorded for every capture, because
     // a dropout can happen in any of them.
+    let numbers = FrameNumbers::starting_at(resume.as_ref().map_or(1, |plan| plan.next_frame));
     let settings = {
         let settings = state.settings.read().await.clone();
         *state.session_resume_plan.write().await = Some(SessionResumePlan {
             camera_id: camera_id.clone(),
             settings: settings.clone(),
             disk_session_dir: state.disk_writer.session_dir(),
+            next_frame: numbers.peek(),
         });
         settings
     };
@@ -91,10 +96,17 @@ pub async fn run_capture_loop(
             );
             cam
         }
+        // Failed again after the reopen and before this resume could take the handle:
+        // the capture stays paused for the recovery under way, which resumes it.
+        Err(e @ ApiError::CameraRecovering { .. }) => {
+            warn!(camera_id = %camera_id, error = %e, "Camera is recovering; the capture stays paused");
+            state.end_capture_state().await;
+            return;
+        }
         Err(e) => {
             error!(camera_id = %camera_id, error = %e, "Failed to take camera handle for capture");
             state.send_error(format!("Failed to take camera handle: {}", e));
-            state.set_capture_state(CaptureState::Idle).await;
+            state.end_capture_state().await;
             return;
         }
     };
@@ -110,21 +122,21 @@ pub async fn run_capture_loop(
     camera.invalidate_config_cache();
 
     // Capture a probe frame to determine dimensions and channel capacities
-    let settings = state.settings.read().await.clone();
+    let settings = state.settings_for_new_frame().await;
     let mut capture_config = settings.to_capture_config();
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
-    apply_sensor_mode_support_override(&mut capture_config, &camera_info.info, &camera_name);
+    apply_sensor_mode_support_override(&mut capture_config, &camera_info.info);
     // Bounded like every other capture. Unbounded, this call is where a dead
     // handle hides: the field log shows seventy seconds between "Starting
     // capture session" and the SDK finally admitting the device was gone, with
     // nothing on screen for the whole of it.
-    let probe_timeout = Duration::from_micros(capture_config.exposure_us)
-        + capture_watchdog_margin(capture_config.exposure_us, capture_config.timeout);
+    let probe_timeout = capture_watchdog_timeout(&capture_config, &camera_info.info);
     let probe_state = Arc::clone(&state);
     let probe_config = capture_config.clone();
+    let probe_number = numbers.peek();
     let (camera, probe_result) = match tokio::task::spawn_blocking(move || {
-        capture_frame_bounded(camera, probe_config, 1, probe_timeout, &probe_state)
+        capture_probe_frame(camera, probe_config, probe_number, probe_timeout, &probe_state)
     })
     .await
     {
@@ -139,30 +151,33 @@ pub async fn run_capture_loop(
     let (camera, probe_raw) = match (camera, probe_result) {
         (Some(cam), Some(Ok(frame))) => (cam, frame),
         (camera, probe_result) => {
+            state.clear_camera_token(CameraRole::Main).await;
             let reason = match &probe_result {
                 Some(Err(e)) => e.to_string(),
                 _ => "camera did not return the first frame in time".to_string(),
             };
-            error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
-            state.send_error(format!("Failed to capture initial frame: {}", reason));
-            state.clear_camera_token(CameraRole::Main).await;
-
-            // A lost device invalidates the handle; a timeout already abandoned
-            // it. Either way the session ends as a fault, so the reconnect
-            // supervisor gets a chance at it.
-            let handle_is_usable =
-                matches!(&probe_result, Some(Err(e)) if !e.is_sdk_disconnected());
-            match (camera, handle_is_usable) {
-                (Some(cam), true) => {
+            // A lost device, a stall restarting did not cure, and a timeout that already
+            // abandoned the handle all end as a fault, and recovery decides what the
+            // observer hears. Anything else is this capture's own failure to report.
+            let faulted = !matches!(
+                &probe_result,
+                Some(Err(e)) if !e.is_sdk_disconnected() && !matches!(e, CameraError::ExposureTimeout(_))
+            );
+            match camera {
+                Some(cam) if !faulted => {
+                    error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
+                    state.send_error(format!("Failed to capture initial frame: {}", reason));
                     lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(cam)).await
                 }
-                (Some(mut cam), false) => {
-                    let _ = cam.close();
+                camera => {
+                    warn!(reason = %reason, "The camera faulted on the first frame; handing it to recovery");
+                    if let Some(cam) = camera {
+                        release_faulted_handle(cam, &state, CameraRole::Main);
+                    }
                     lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
                 }
-                (None, _) => lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await,
             }
-            state.set_capture_state(CaptureState::Idle).await;
+            state.end_capture_state().await;
             return;
         }
     };
@@ -181,7 +196,7 @@ pub async fn run_capture_loop(
             state.send_error(format!("Failed to decode initial frame: {}", e));
             state.clear_camera_token(CameraRole::Main).await;
             lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
-            state.set_capture_state(CaptureState::Idle).await;
+            state.end_capture_state().await;
             return;
         }
     };
@@ -227,16 +242,17 @@ pub async fn run_capture_loop(
     let storage_queue_depth = QueueDepth::default();
 
     // Send the probe frame as the first frame through the pipeline
+    let first_number = numbers.claim();
     let first_raw = Arc::new(probe_raw);
     let first_msg = CapturedFrame {
         frame: Arc::clone(&first_raw),
-        frame_number: 1,
+        frame_number: first_number,
         settings: settings.clone(),
         camera_info: camera_info.clone(),
     };
     let first_msg_storage = CapturedFrame {
         frame: first_raw,
-        frame_number: 1,
+        frame_number: first_number,
         settings: settings.clone(),
         camera_info: camera_info.clone(),
     };
@@ -267,6 +283,7 @@ pub async fn run_capture_loop(
     let rt_stacking = rt_handle.clone();
     let rt_render = rt_handle.clone();
     let rt_storage = rt_handle.clone();
+    let numbers_capture = numbers.clone();
 
     let capture_handle = std::thread::Builder::new()
         .name("capture-task".into())
@@ -281,6 +298,7 @@ pub async fn run_capture_loop(
                     storage_depth: storage_depth_capture,
                     capacities,
                 },
+                numbers_capture,
                 rt_capture,
             )
         })
@@ -373,10 +391,15 @@ pub async fn run_capture_loop(
 
     info!(camera_id = %camera_id, "Capture pipeline ended");
 
+    // Before the handle goes back: a fault hands it to recovery, which may resume at once.
+    if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
+        plan.next_frame = numbers.peek();
+    }
+
     // Return the camera handle to the session (or finalize disconnect if lost).
     state.clear_camera_token(CameraRole::Main).await;
     lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
-    state.set_capture_state(CaptureState::Idle).await;
+    state.end_capture_state().await;
 }
 
 // =============================================================================
@@ -398,6 +421,27 @@ pub(crate) struct CaptureChannels {
     pub capacities: channel::PipelineCapacities,
 }
 
+/// A capture session's frame numbers: the probe frame and the capture thread claim them,
+/// and the orchestrator records where they got to so a resume carries on from there.
+#[derive(Debug, Clone)]
+pub(crate) struct FrameNumbers(Arc<AtomicU64>);
+
+impl FrameNumbers {
+    /// Numbering whose first claimed frame is `first`.
+    pub(crate) fn starting_at(first: u64) -> Self {
+        Self(Arc::new(AtomicU64::new(first.max(1) - 1)))
+    }
+
+    pub(crate) fn claim(&self) -> u64 {
+        self.0.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// The number the next [`Self::claim`] returns.
+    pub(crate) fn peek(&self) -> u64 {
+        self.0.load(Ordering::SeqCst) + 1
+    }
+}
+
 /// Camera capture loop running on a dedicated OS thread.
 ///
 /// Acquires frames from the camera and sends them (as `Arc<Frame>`) to the
@@ -408,6 +452,7 @@ pub(crate) fn run_capture_task(
     state: Arc<AppState>,
     mut camera: Box<dyn crate::camera::Camera>,
     channels: CaptureChannels,
+    numbers: FrameNumbers,
     rt: tokio::runtime::Handle,
 ) -> Option<Box<dyn crate::camera::Camera>> {
     let CaptureChannels {
@@ -419,13 +464,12 @@ pub(crate) fn run_capture_task(
     } = channels;
     debug!("Capture task started");
 
-    // Frame numbering continues from 1 (probe frame was #1)
-    let mut frame_number: u64 = 1;
     let mut last_status_at = Instant::now()
         .checked_sub(STATUS_POLL_INTERVAL)
         .unwrap_or_else(Instant::now);
     let mut camera_ok = true;
     let mut storage_drops = DropLog::default();
+    let mut stalls = StallTracker::default();
 
     loop {
         if state.is_cancelled() {
@@ -433,7 +477,7 @@ pub(crate) fn run_capture_task(
         }
 
         // Read settings snapshot for this frame
-        let settings = rt.block_on(state.settings.read()).clone();
+        let settings = rt.block_on(state.settings_for_new_frame());
         let mut capture_config = settings.to_capture_config();
 
         // Get camera info
@@ -454,22 +498,18 @@ pub(crate) fn run_capture_task(
 
         apply_best_raw_format(&mut capture_config, &camera_info.info, &camera.info().name);
         apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera.info().name);
-        apply_sensor_mode_support_override(
-            &mut capture_config,
-            &camera_info.info,
-            &camera.info().name,
-        );
+        apply_sensor_mode_support_override(&mut capture_config, &camera_info.info);
 
         // Capture a frame (blocking FFI call, bounded so a stuck SDK call
         // can't freeze the pipeline indefinitely — see capture_frame_bounded).
-        let watchdog_timeout = Duration::from_micros(capture_config.exposure_us)
-            + capture_watchdog_margin(capture_config.exposure_us, capture_config.timeout);
+        let watchdog_timeout = capture_watchdog_timeout(&capture_config, &camera_info.info);
         let (new_camera, capture_result) = match capture_frame_bounded(
             camera,
             capture_config,
-            frame_number + 1,
+            numbers.peek(),
             watchdog_timeout,
             &state,
+            CameraRole::Main,
         ) {
             CaptureOutcome::Completed(cam, result) => (cam, result),
             // The handle is gone — moved into a detached thread that didn't
@@ -492,12 +532,36 @@ pub(crate) fn run_capture_task(
                     continue;
                 }
 
-                // Hard disconnect errors invalidate the handle — don't return it.
+                // Hard disconnect errors invalidate the handle — don't return it. No
+                // message to the user here: recovery decides whether they need one.
                 if e.is_sdk_disconnected() {
                     error!(error = %e, "Camera disconnected during capture");
-                    state.send_error(format!("Camera disconnected: {}", e));
                     camera_ok = false;
                     break;
+                }
+
+                if let crate::camera::CameraError::ExposureTimeout(budget) = e {
+                    if stalls.stalled() == StallVerdict::Escalate {
+                        error!(
+                            camera_name = %camera.info().name,
+                            consecutive = STALL_ESCALATION,
+                            "Restarting the stream did not bring frames back; reopening the camera"
+                        );
+                        crate::server::camera_health::record_fault(
+                            &state,
+                            &camera.info().name,
+                            crate::server::camera_health::FaultKind::Timeout,
+                        );
+                        camera_ok = false;
+                        break;
+                    }
+                    warn!(
+                        camera_name = %camera.info().name,
+                        ?budget,
+                        "Frame stalled; restarting the stream in place"
+                    );
+                    rt.block_on(state.frame_rejected(format!("Frame stalled after {budget:?}")));
+                    continue;
                 }
 
                 warn!(error = %e, "Frame capture failed");
@@ -511,12 +575,20 @@ pub(crate) fn run_capture_task(
             }
         };
 
+        stalls.frame_delivered();
+
         if state.is_cancelled() {
             break;
         }
 
         if camera.info().has_cooler && last_status_at.elapsed() >= STATUS_POLL_INTERVAL {
-            camera = match poll_camera_status_bounded(camera, &state, settings.target_temp_c, &rt) {
+            camera = match poll_camera_status_bounded(
+                camera,
+                &state,
+                CameraRole::Main,
+                settings.target_temp_c,
+                &rt,
+            ) {
                 StatusPollOutcome::Completed(camera) => {
                     last_status_at = Instant::now();
                     camera
@@ -525,7 +597,7 @@ pub(crate) fn run_capture_task(
             };
         }
 
-        frame_number += 1;
+        let frame_number = numbers.claim();
         // Counted before either send: the denominator of the drop rate is what the
         // camera produced, not what the pipeline managed to accept.
         state.frame_delivered();
@@ -586,9 +658,48 @@ pub(crate) fn run_capture_task(
     // Return the handle so the orchestrator can hand it back to the camera
     // session (or drop it on a hard disconnect).
     if camera_ok {
-        Some(camera)
-    } else {
-        let _ = camera.close();
-        None
+        return Some(camera);
+    }
+    release_faulted_handle(camera, &state, CameraRole::Main);
+    None
+}
+
+/// The first frame of a session, through the same stall ladder as every later one: a
+/// stall restarts the stream in place, and only a run of `STALL_ESCALATION` is handed
+/// back, as the fault it is. After a (re)open this is the frame most likely to be slow —
+/// config reapplied, stream started cold — and ending the session over one stall
+/// discarded the capture recovery had just saved.
+fn capture_probe_frame(
+    mut camera: Box<dyn Camera>,
+    config: CaptureConfig,
+    frame_number: u64,
+    watchdog_timeout: Duration,
+    state: &Arc<AppState>,
+) -> CaptureOutcome {
+    let mut stalls = StallTracker::default();
+    loop {
+        let outcome = capture_frame_bounded(
+            camera,
+            config.clone(),
+            frame_number,
+            watchdog_timeout,
+            state,
+            CameraRole::Main,
+        );
+        let (returned, budget) = match outcome {
+            CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget))) => (returned, budget),
+            other => return other,
+        };
+        let name = returned.info().name.clone();
+        if stalls.stalled() == StallVerdict::Escalate {
+            error!(camera_name = %name, consecutive = STALL_ESCALATION, "Restarting the stream did not bring the first frame; reopening the camera");
+            crate::server::camera_health::record_fault(state, &name, crate::server::camera_health::FaultKind::Timeout);
+            return CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget)));
+        }
+        if state.is_cancelled() {
+            return CaptureOutcome::Completed(returned, Err(CameraError::Cancelled));
+        }
+        warn!(camera_name = %name, ?budget, "First frame stalled; restarting the stream in place");
+        camera = returned;
     }
 }

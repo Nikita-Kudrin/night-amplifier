@@ -6,7 +6,7 @@ mod install;
 
 use serde::Serialize;
 
-use super::state::{CameraPhase, CaptureState};
+use super::state::{CameraPhase, CameraRole, CaptureState};
 
 /// Event types sent to WebSocket clients
 #[derive(Debug, Clone, Serialize)]
@@ -64,8 +64,13 @@ pub enum ServerEvent {
         target_temp_c: Option<f64>,
     },
 
-    /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected)
-    CameraPhaseChanged { name: String, phase: CameraPhaseDto },
+    /// Camera lifecycle phase changed (Precooling, Idle, Capturing, WarmingUp, Disconnected).
+    /// `role` tells two bodies of one model apart, which `name` cannot.
+    CameraPhaseChanged {
+        name: String,
+        role: CameraRole,
+        phase: CameraPhaseDto,
+    },
 
     /// The camera hit a run of consecutive status-poll watchdog timeouts across
     /// reconnects — likely a persistent hardware/USB fault rather than an
@@ -81,6 +86,7 @@ pub enum ServerEvent {
     /// attempt runs.
     CameraReconnecting {
         name: String,
+        role: CameraRole,
         attempt: u32,
         of: u32,
         next_attempt_in_s: u64,
@@ -97,6 +103,11 @@ pub enum ServerEvent {
     /// A reconnect succeeded and the interrupted capture resumed, keeping the
     /// stack it had already accumulated.
     CaptureResumed { name: String, stacked_count: u64 },
+
+    /// The server left Focus/Finder mode on its own: a running capture switched to stacking,
+    /// which needs the correction the mode holds off. Pressing Start stays silent — the
+    /// observer asked for the stack, and `SettingsUpdated` moves the toggle.
+    FocusModeLeft,
 
     /// Error occurred
     Error { message: String },
@@ -265,6 +276,7 @@ pub enum CaptureStateDto {
     Capturing,
     Stopping,
     Error,
+    Recovering,
 }
 
 impl From<CaptureState> for CaptureStateDto {
@@ -275,6 +287,7 @@ impl From<CaptureState> for CaptureStateDto {
             CaptureState::Capturing => CaptureStateDto::Capturing,
             CaptureState::Stopping => CaptureStateDto::Stopping,
             CaptureState::Error => CaptureStateDto::Error,
+            CaptureState::Recovering => CaptureStateDto::Recovering,
         }
     }
 }
@@ -289,6 +302,7 @@ pub enum CameraPhaseDto {
     Capturing,
     Guiding,
     WarmingUp,
+    Recovering,
 }
 
 impl From<CameraPhase> for CameraPhaseDto {
@@ -300,6 +314,7 @@ impl From<CameraPhase> for CameraPhaseDto {
             CameraPhase::Capturing => CameraPhaseDto::Capturing,
             CameraPhase::Guiding => CameraPhaseDto::Guiding,
             CameraPhase::WarmingUp => CameraPhaseDto::WarmingUp,
+            CameraPhase::Recovering => CameraPhaseDto::Recovering,
         }
     }
 }
@@ -369,9 +384,10 @@ impl ServerEvent {
         }
     }
 
-    pub fn camera_phase_changed(name: impl Into<String>, phase: CameraPhase) -> Self {
+    pub fn camera_phase_changed(name: impl Into<String>, role: CameraRole, phase: CameraPhase) -> Self {
         ServerEvent::CameraPhaseChanged {
             name: name.into(),
+            role,
             phase: phase.into(),
         }
     }
@@ -388,12 +404,14 @@ impl ServerEvent {
 
     pub fn camera_reconnecting(
         name: impl Into<String>,
+        role: CameraRole,
         attempt: u32,
         of: u32,
         next_attempt_in_s: u64,
     ) -> Self {
         ServerEvent::CameraReconnecting {
             name: name.into(),
+            role,
             attempt,
             of,
             next_attempt_in_s,
@@ -665,17 +683,19 @@ mod tests {
 
     #[test]
     fn test_camera_phase_changed_serialization() {
-        let event = ServerEvent::camera_phase_changed("Test Cam", CameraPhase::Precooling);
+        let event =
+            ServerEvent::camera_phase_changed("Test Cam", CameraRole::Guide, CameraPhase::Precooling);
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_phase_changed");
         assert_eq!(json["name"], "Test Cam");
+        assert_eq!(json["role"], "guide");
         assert_eq!(json["phase"], "precooling");
     }
 
     #[test]
     fn test_camera_phase_warming_up_serialization() {
-        let event = ServerEvent::camera_phase_changed("Test Cam", CameraPhase::WarmingUp);
+        let event = ServerEvent::camera_phase_changed("Test Cam", CameraRole::Main, CameraPhase::WarmingUp);
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["phase"], "warming_up");

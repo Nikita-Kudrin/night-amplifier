@@ -63,25 +63,17 @@ Tests might run a minute or two - you should wait for them to finish. Benches mi
 
 ## Benchmark sizing
 
-Two hard rules: every case reports **≥~100ms** (below that, criterion overhead and thermal
-throttling dominate the number), and every bench binary stays **≤~30s** wall clock.
+Every case reports **≥~100ms** (below that, criterion overhead and thermal throttling dominate); every bench binary
+stays **≤~30s**. Budget: `sample_size(10)`, ~500ms warm-up, 1–2s `measurement_time`, `SamplingMode::Flat` (Linear's
+55 iterations/case alone blows 30s).
 
-To hit both: repeat pure routines `REPS`× in `b.iter` with `Throughput::Elements(REPS*n)` and
-a `_xN` suffix (`debayer_benchmark`); for in-place mutation use `iter_batched_ref` over `REPS`
-clones, not plain repetition (`render_benchmark`); match production input *size and shape*, not
-an arbitrary buffer (`star_detection_benchmark` was mono-only and missed `mean_luminance`'s
-24.9ms colour-channel cost); delete cases that only re-measure a bigger sibling's kernel; add
-cases that can *refute* a hypothesis, not just confirm it (`image_stats/full_precision` reads
-42x the samples to prove a gather wasn't the cost); benchmark whole-pipeline sums too — per-stage
-coverage still missed a regression in `process_preview_frame` (190 of 300ms).
-
-Stay in budget with `sample_size(10)`, ~500ms warm-up, 1–2s `measurement_time`, and
-`SamplingMode::Flat` (default Linear's 55 iterations/case alone blows 30s).
-
-- Suffix `_x5` etc. whenever `time:` covers more than one call.
-- Hoist reusable setup out of `iter_batched`'s loop — setup still runs every iteration.
-- Use `iter_batched_ref(.., BatchSize::LargeInput)`, never `frame.clone()` inside `b.iter`.
-- Watch for workloads that drift across iterations (op applied to its own prior output).
+- Pure routines: repeat `REPS`× in `b.iter`, `Throughput::Elements(REPS*n)` (`debayer_benchmark`); suffix `_xN`
+  whenever `time:` covers more than one call.
+- In-place mutation: `iter_batched_ref(.., BatchSize::LargeInput)` over `REPS` clones, never `frame.clone()` in
+  `b.iter` (`render_benchmark`); hoist reusable setup out (it runs every iteration); beware ops applied to their own output.
+- Match production input size *and shape* — mono-only `star_detection_benchmark` missed `mean_luminance`'s 24.9ms.
+- Drop cases re-measuring a bigger sibling's kernel; add ones that can *refute* (`image_stats/full_precision`).
+- Bench whole-pipeline sums too: per-stage coverage missed `process_preview_frame` (190 of 300ms).
 
 ## Build & Test
 
@@ -90,34 +82,28 @@ Stay in budget with `sample_size(10)`, ~500ms warm-up, 1–2s `measurement_time`
 ```bash
 cargo build --release
 cargo test                                                          # fast unit tests
-(cd web && npm ci && npm run build)                                 # only needed for the two `frontend_serving` tests that assert the *real* embedded bundle; `web/dist/` is git-ignored, so without it they skip locally (and fail under CI=1, where CI builds it first). Every other frontend-serving test runs against an in-source fixture bundle instead.
-# These are ignored by default and must be run explicitly:
-cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow)
-cargo bench --bench <name>                                          # benchmarks — see **Benchmark sizing** below before adding or editing one.
-cargo bench --bench <name> -- --noplot                              # ~4x faster wall clock: without gnuplot installed, criterion's plotters fallback dominates the run (debayer_benchmark: 95 s -> 22 s) while the measurements are identical. Prefer this unless you want the HTML report.
+(cd web && npm ci && npm run build)                                 # only for the 2 `frontend_serving` tests on the *real* bundle (web/dist/ is git-ignored: skip locally, fail under CI=1); the rest use a fixture
+cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow, ignored by default)
+cargo bench --bench <name> -- --noplot                              # read **Benchmark sizing** first; --noplot is ~4x faster (no gnuplot: 95 s -> 22 s), same numbers
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
-cargo run --release -- --static-dir web/dist                        # serve the frontend from disk instead of the bundle embedded at build time (or NIGHT_AMPLIFIER_STATIC_DIR). Opt-in: the default is always the embedded bundle, so a binary run from a checkout cannot pick up `web/`'s Vite source template by accident.
+cargo run --release -- --static-dir web/dist                        # opt-in disk frontend (or NIGHT_AMPLIFIER_STATIC_DIR); default embedded bundle can't pick up web/'s Vite template
 
 # Performance investigation
 cargo run --release -- --span-timings                               # log per-stage durations on span close
 cargo build --profile profiling                                     # release codegen with symbols, for `perf`
 
-# Frontend (from web/)
+# Frontend: all npm commands run from web/, with nvm loaded
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm install && npm run dev      # dev server on :8844, proxies to :9955
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run build                    # production build to web/dist/
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run lint:fix
 cd web && (. "$HOME/.nvm/nvm.sh" 2>/dev/null || true) && npm run test:run
 ```
 
-Load nvm in subshells when needed: `. "$HOME/.nvm/nvm.sh" 2>/dev/null || true`.
-**Note:** All `npm` commands must be run from the `web/` directory.
+**Do not run `npm run format`** — Prettier rewrites the whole tree and pollutes the diff; the developer formats on
+their own schedule.
 
-**Do not run `npm run format`.** Prettier rewrites every file in the tree, which pollutes the diff with
-unrelated changes. The developer runs formatting on their own schedule — agents must leave it alone.
-
-**Important:** Always run `cargo test` after making any code changes to ensure nothing is broken. For frontend changes,
-also run `cd web && npm run test:run` to verify frontend tests pass.
+**Always run `cargo test` after code changes**; for frontend changes also `npm run test:run`.
 
 ## Core Modules (src/)
 
@@ -149,29 +135,20 @@ also run `cd web && npm run test:run` to verify frontend tests pass.
 
 ### Server (src/server/)
 
-Axum-based. REST at `/api/*`, WebSocket streams at `/ws/stream` and `/ws/eyepiece` (dynamic JPEG,
-`?source=guide` for the guide camera), `/ws/eyepiece_quality` (lossless LZ4), and `/ws/events`
-(JSON). Shared state via `Arc<RwLock<_>>` in `AppState`. See source for exact endpoints, DTOs, and
-event variants.
+Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (dynamic JPEG, `?source=guide` for the guide camera),
+`/ws/eyepiece_quality` (lossless LZ4), `/ws/events` (JSON). State: `Arc<RwLock<_>>` in `AppState`; exact endpoints,
+DTOs and events in source.
 
-`GET /api/eyepiece/snapshot?circular=` is the one REST route returning image bytes: it PNG-encodes
-`latest_raw_frame` at the frame's *own* size (no tier), on `spawn_blocking`. RGB8 either way.
-`circular=true` returns the **centre square** with the field stop **opaque black** — square because
-the view's canvas is `100cqmin` + `object-fit: cover`, so masking the full rectangle gave the right
-circle in a shape nobody saw (55 % padding on an IMX464); black rather than transparent because a
-viewer composites alpha onto its own background, which is white in every default light theme.
+`GET /api/eyepiece/snapshot?circular=` is the only REST route returning image bytes: RGB8 PNG of `latest_raw_frame`
+at its *own* size, on `spawn_blocking`. `circular=true` returns the **centre square** (the view is `100cqmin` +
+`object-fit: cover`; masking the full rectangle left 55 % padding on IMX464) with an **opaque black** field stop
+(viewers composite alpha onto white). Native size is costly — 26 MP with denoisers ≈ 933 MB scratch + two ≤77 MB
+buffers, ~0.5 s — so `SNAPSHOT_SLOT` (`Semaphore(1)`) *refuses* rather than queues: 503 + `Retry-After: 2`, retried
+by the frontend for 15 s. 404 (nothing rendered yet) is terminal.
 
-Native resolution is deliberate and expensive: 26 MP with the denoisers on transiently holds ~933 MB
-of denoise scratch plus two RGB8 buffers of up to 77 MB each, ~0.5 s on a desktop. `SNAPSHOT_SLOT`
-(`Semaphore(1)`) therefore admits one render process-wide and *refuses* rather than queues — 503 +
-`Retry-After: 2`, which the frontend retries on that cadence for 15 s. 404 is the other refusal (no
-frame rendered yet) and is terminal.
-
-The server names the file in `Content-Disposition`, but the browser never sees that header: the
-frontend has to `fetch` the PNG for the retry loop, and the `blob:` URL it ends up saving carries no
-headers. So `fetchEyepieceSnapshot` returns `{blob, filename}` and `utils/saveBlob.js` puts the name
-on `<a download>`. That attribute is load-bearing — without it the browser navigates to the blob and
-renders the PNG in the tab, taking the page's streams down with it.
+The retry loop must `fetch`, and a `blob:` URL carries no `Content-Disposition`, so `fetchEyepieceSnapshot` returns
+`{blob, filename}` and `utils/saveBlob.js` sets `<a download>` — without it the browser navigates to the blob and
+drops the page's streams.
 
 ### Web Frontend (web/)
 
@@ -180,81 +157,76 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
 
 ## Camera Notes
 
-- **Camera roles**: the rig holds at most one `CameraRole::Main` and one `Guide`. Every handle,
-  monitor, cancel token and reconnect guard lives in `AppState.camera_slots[role]` — there is no
-  "the camera" any more, and each lifecycle entry point names a role. `connect` resolves a taken
-  role through `vacate_role`: swap while idle or `Guiding`, refuse (`CameraRoleBusy`) while
-  `Capturing` or `WarmingUp`.
-- **Cooler lifecycle**: handle lives in `AppState.slot(role).handle`. `CameraPhase`:
-  `Precooling → Idle → Capturing | Guiding → WarmingUp`; ramp limited to 5°C/min (`camera_session::ramp`,
-  driven by the monitor for a parked handle and by `guide_task` for one it holds); warm-up ramps to
-  20°C, closing the handle once sensor ≥10°C and duty ≤5% (or 5min timeout).
-- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing`/`Guiding` → owned by the
-  per-frame path; `WarmingUp` → monitor holds cooler off intentionally. The dew heater has no
-  `CaptureConfig` field, so under `Guiding` it is queued as a `CameraOp` for the loop instead.
-- **Per-camera profiles** are keyed `"{provider}/{model}"`, plus `#guide` for the guide role so two
-  bodies of one model cannot overwrite each other. `apply_camera_profile_on_connect` clamps exposure,
-  gain and binning to what the camera advertises on *both* paths — an out-of-range one is what
-  `CaptureConfig::validate` rejects, and a rejected config stops the camera capturing at all.
-- **Telescope profiles** (`camera_telescope_profiles`, keyed by camera *name*) are what
-  `solver_telescope` hands Push-To, and they key its per-rig FOV cache. A connect seeds one from
-  the sensor the camera reports (`ensure_camera_telescope_profile`) — sensor fields only, focal
-  length carried over just when the flat block already describes that sensor. Without it an
-  unprofiled camera falls back to the flat block, so two bodies share one rig key and one
-  remembered FOV: 2026-09-07 gave the guide rig the main camera's 0.52° for a 1.45° field and
-  Push-To returned no solve for 19 minutes. Never overwrites a profile the equipment UI wrote.
-- **`cooler_fast_mode`**: bypasses the ramp; UI shows a persistent warning while on.
-- **Dual Sampling (Player One)**: sensor mode auto-picked by `desired_sensor_mode()` (DeepSky/Comet
-  → `LowReadoutNoise`, Planetary → `Normal`), overridable via `sensor_mode_override`. Main role
-  only — nothing the guide camera produces is integrated, so it stays `Normal`.
-- **Monitor thread**: dedicated `std::thread`, not tokio, so USB stalls can't poison the runtime;
-  uses one reusable `monitor::FfiWorker` rather than a thread per poll. One per slot, bound to its
-  role at spawn — it must never look up "whatever is connected".
+- **Camera roles**: at most one `CameraRole::Main` and one `Guide`. Every handle, monitor, cancel token and reconnect
+  guard lives in `AppState.camera_slots[role]`; every lifecycle entry point names a role. `connect` to a taken role
+  goes through `vacate_role`: swap while idle/`Guiding`, `CameraRoleBusy` while `Capturing`/`WarmingUp`.
+- **Cooler lifecycle** (`AppState.slot(role).handle`), `CameraPhase`: `Precooling → Idle → Capturing | Guiding → WarmingUp`. Ramp
+  ≤5°C/min (`camera_session::ramp`; stepped by the monitor for a parked handle, by `guide_task` for its own). Warm-up
+  ramps to 20°C and closes at sensor ≥10°C + duty ≤5% (or 5 min). `cooler_fast_mode` bypasses the ramp (UI warns).
+- **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing`/`Guiding` → per-frame path; `WarmingUp` →
+  cooler held off. The dew heater has no `CaptureConfig` field, so under `Guiding` it is a queued `CameraOp`.
+- **Per-camera profiles**: keyed `"{provider}/{model}"` (+ `#guide`, so two bodies of one model don't collide).
+  `apply_camera_profile_on_connect` clamps exposure/gain/binning to the camera's advertised range on *both* paths —
+  `CaptureConfig::validate` rejects out-of-range values and a rejected config stops capture entirely.
+- **Telescope profiles** (`camera_telescope_profiles`, keyed by camera *name*) feed `solver_telescope` and key Push-To's
+  per-rig FOV cache. `ensure_camera_telescope_profile` seeds one on connect from the reported sensor (focal length only
+  if the flat block describes that sensor; never overwrites an equipment-UI profile). Without it both bodies share the
+  flat block's key: 2026-09-07 the guide rig got the main camera's 0.52° for a 1.45° field — no solve for 19 minutes.
+- **Dual Sampling (Player One)**: `desired_sensor_mode()` (DeepSky/Comet → `LowReadoutNoise`, Planetary → `Normal`),
+  overridable via `sensor_mode_override`. Main role only; the guide is never integrated, so it stays `Normal`.
+- **Monitor thread**: a `std::thread` (tokio would let USB stalls poison the runtime) with one reusable
+  `monitor::FfiWorker`; one per slot, bound to its role at spawn — never "whatever is connected".
 
 ### Guide camera — non-obvious and load-bearing
 
-- **One thread, not the four-stage pipeline** (`capture::guide_task`). Nothing it produces is
-  stacked or queued. Started by `connect`, not by Start Capture: solving and the guide preview are
-  wanted *while* framing.
-- **The render gate is the whole point.** Post-processing and encoding run only while
-  `guide_stream.has_viewers()`. Solving and raw saving sit **above** both early exits — they are why
-  the loop runs. Covered by `guide_task::tests`; if you move the gate, keep those honest (they
-  assert the camera really exposed the frames it did not render).
-- **Two `FrameStream`s, two counters.** `JpegTierCache` serves a tier only while its counter
-  matches, so one shared counter would make each camera invalidate the other's payloads every
-  exposure. `/ws/stream?source=guide` selects the stream at upgrade time.
-- **Hardware settings are per role.** Flat `CaptureSettings` fields are the main camera's;
-  `CaptureSettings::guide_camera` is the guide's. Read them through `profile_for(role)`, never
-  flat. `POST /api/settings` carries `camera_role` (absent ⇒ main).
-- **One solve source at a time.** `solving::plate_solve_available(state, SolveSource)` decides, on
-  `guide_loop_running` — the loop *exposing*, not a camera being connected. The two diverge: a
-  cooled guide camera stays registered through minutes of warm-up with its loop already stopped,
-  and `connect` returns before a loop that may fail to start. Keying on presence stood the imaging
-  camera down for a solve source that was not there. `lifecycle::sync_solver_rig` names the solving
-  camera *and* its optics together — `camera_telescope_profiles` is finally read here, and naming
-  one without the other is worse than naming neither.
-- **The loop is the only path to its device.** It owns the handle for the whole connection, so the
-  monitor can never check it out: the loop drains `slot.drain_ops()`, samples `status()` itself
-  every 2s, and steps its own `RampState` into `config.target_temp_c`. Without that the guide camera
-  reported no temperature and its setpoint bypassed the 5°C/min limit.
-- **A raw session carries its frame number.** `slot.raw_session` parks `RawSessionResume { dir,
-  next_frame }`: rejoining the directory a dropout left while restarting at 1 wrote straight over
-  the frames already in it (`frame_{:06}.fits`).
-- **`selected_camera` means "the camera being configured", not the capture target.** Captures
-  resolve to `camera_in_role(Main)`; a guide camera id is refused.
+- **One thread, not the pipeline** (`capture::guide_task`): nothing stacked or queued. Started by `connect`, not Start
+  Capture — solving and preview are wanted *while* framing.
+- **Render gate**: post-processing/encoding run only while `guide_stream.has_viewers()`; solving and raw saving sit
+  **above** both early exits. `guide_task::tests` assert unrendered frames were really exposed — keep that if it moves.
+- **Two `FrameStream`s, two counters**: `JpegTierCache` serves a tier only while its counter matches, so a shared
+  counter would invalidate the other camera's payloads every exposure. `/ws/stream?source=guide` picks at upgrade.
+- **Per-role hardware settings**: flat `CaptureSettings` fields are main's, `CaptureSettings::guide_camera` the
+  guide's — read via `profile_for(role)`. `POST /api/settings` carries `camera_role` (absent ⇒ main).
+- **One solve source**: `solving::plate_solve_available(state, SolveSource)` keys on `guide_loop_running` (loop
+  *exposing*), not presence — a guide camera stays registered through warm-up, and `connect` returns before a loop
+  that may fail to start. `lifecycle::sync_solver_rig` names camera *and* optics together; one alone is worse than none.
+- **The loop is the only path to its device**: it owns the handle, drains `slot.drain_ops()`, samples `status()` every
+  2s and steps its own `RampState` to `config.target_temp_c` (else no temperature and an unramped setpoint).
+- **Raw sessions resume numbering**: `slot.raw_session` parks `RawSessionResume { dir, next_frame }` — restarting at 1
+  overwrote `frame_{:06}.fits`.
+- **`selected_camera` = camera being configured**, not the capture target: captures use `camera_in_role(Main)`.
 
 ### Handle ownership — non-obvious and load-bearing
 
-**A vendor close takes a device *index*, not a handle** — `POACloseCamera(0)` / `ASICloseCamera(0)` /
-`SVBCloseCamera(0)` close whatever occupies index 0 at that moment, so a stuck FFI call handed to a
-detached thread can close a camera that has since reconnected when its `Drop` fires minutes later.
+**Vendor closes take a device *index*, not a handle** — `POACloseCamera(0)` / `ASICloseCamera(0)` /
+`SVBCloseCamera(0)` close whatever is at index 0 *now*, so a stuck call's late `Drop` can close a reconnected camera.
 
-- Every shim-level handle holds a `camera::DeviceLease`; **every vendor close goes through
-  `lease.begin_close()`**, which authorizes exactly one close for the lease that still owns the slot.
-  A `Drop` that calls the SDK directly is a review flag.
-- Never close an abandoned handle eagerly — a stuck synchronous FFI call can't be cancelled; the lease
-  is what makes abandoning safe.
+- Every shim handle holds a `camera::DeviceLease`; **every vendor close goes through `lease.begin_close()`** (one
+  close, only for the lease still owning the slot). A `Drop` calling the SDK directly is a review flag.
+- Never close an abandoned handle eagerly — stuck FFI can't be cancelled; the lease makes abandoning safe.
 - `connect()` **probes the handle before reporting success** — `open()` returning proves nothing.
+- **Every vendor call under the connect lock is bounded** (`camera_session::install`: list, open + probe,
+  cooler/dew-heater seeding) via `InFlightCalls::run_bounded` on `pending_opens` under `OPEN_TIMEOUT` — inline seeding
+  let a hung camera hold every Connect forever. A late result drops on its own thread *before* leaving the count, so
+  nothing reopens past an unclosed handle.
+
+### Camera identity (`camera::identity`)
+
+`{provider}_{index}` ids follow USB enumeration order: 2026-09-07 a guide reconnect installed the *imaging* camera.
+
+- SDKs exposing a serial before open (Player One `SN`, SVBony `CameraSN`, QHY id) get `{provider}_sn-{serial}`,
+  resolved against a fresh enumeration. Legacy index ids still parse.
+- `CameraProvider::identities()` enumerates **without opening** (ZWO/QHY `list_cameras` open every device — mid-recovery
+  that takes the other role's lease).
+- Recovery never trusts a position: `recovery_candidates` excludes the other role's device (serial or SDK `device_id`),
+  a reopened handle must match, and it keeps its **recorded id** even if the index moved.
+- So never compare ids to find a device: discovery matches serial, else current `index` + name (not `CameraInfo::id`);
+  `connect` refuses the other role's device **before opening** (`install::refuse_device_of_other_role`) — closes go
+  by id, so open-then-close already kills it.
+- ZWO discovery skips opening a device `DeviceLease::is_open` holds (that open superseded the live lease); held or
+  unopenable devices list from `ASIGetCameraProperty` (list *index*, not camera id), keeping positions aligned with
+  `open(index)`.
+- Discovery, connect and reconnect share one `DeviceCatalog`; `camera_session::recovery_tests` script a reordering bus.
 
 ### Device-loss classification
 
@@ -269,63 +241,74 @@ unsupported parameter falls back while a lost device still propagates instead of
 
 ### Fault detection and recovery
 
-One detector (`server::camera_health`), one threshold, one streak
-(`consecutive_watchdog_timeouts`) fed by all three watchdog/monitor sites, so an alternating
-fault still escalates; it ages out (`FAULT_STREAK_TTL`) instead of resetting on success.
+One detector (`server::camera_health`), threshold and streak (`consecutive_watchdog_timeouts`) serve all three
+watchdog/monitor sites, so alternating faults still escalate; the streak ages out (`FAULT_STREAK_TTL`), never resets on
+success. Recovery is a ladder — each rung runs only if the previous failed; the user hears nothing before
+`reconnect::NOTICE_AFTER` (20 s):
 
-`camera_session::reconnect` owns recovery (bounded attempts, backoff, re-enumeration,
-liveness probe). `finalize_disconnect` takes a `DisconnectCause`, not a bool — a warmup
-teardown must never reconnect.
+1. **Stream restart.** Shims wait `CaptureConfig::stall_budget` (exposure + 3 s + transfer at 10 MB/s) from *entering*
+   `capture()`, then stop the stream for the loop to retry. `capture_watchdog_timeout` derives from it (budget + 3 s;
+   independent, every lost frame cost the handle). A fault is `STALL_ESCALATION` (3) stalls in a row (`StallTracker`,
+   shared by both loops *and* `capture_probe_frame`). Given-up handles close off-thread (`release_faulted_handle`).
+2. **Quiet suspend** (`camera_session::recovery`): `finalize_disconnect(DeviceFault)` keeps entry, selection, status,
+   guide stream and solver rig; sets `CameraPhase::Recovering` (+ `CaptureState::Recovering` if resumable); spawns the
+   supervisor. `end_capture_state` never overwrites `Recovering`, and on any other end clears resume plan + parked
+   stack. A recovering guide slot holds solving.
+3. **Supervisor** (`camera_session::reconnect`): drains abandoned `sdk_calls` (≤5 s), retries 2/3/5/10 s within 300 s,
+   resumes the capture. Reopens hold the connect lock (`disconnect` waits on it), cap at `REOPEN_TIMEOUT` and re-check
+   the slot; a timed-out open blocks further opens (`pending_opens`). Connect joins recovery; Disconnect/Stop ends it.
+4. **Give-up** → `DisconnectCause::RecoveryFailed`: full teardown, then the first message.
 
-Connect and `finalize_disconnect` both call `PushToService::set_active_camera`. The
-solver remembers a field of view per optical configuration, and that key cannot tell two
-cameras sharing a sensor format apart; a stale FOV *fails* a hinted solve rather than
-merely slowing it. Only a *named, different* camera discards the remembered value —
-boot and disconnect both look it up with no camera, and treating that as a mismatch
-deleted the entry before the session could use it. See the Pro AGENTS.md.
+- **`CameraSlot::recovery` (`None → Suspended → Installing → None`) is the only recovery record**, never the phase.
+  A fault while `Installing` belongs to the *new* handle (acted on when install ends); `reconnect::release_flight`
+  re-arms one that arrived mid-flight. Phase is per slot, not per model name (twins ended each other's recovery);
+  `finalize_disconnect` ignores a camera its role no longer holds.
+- **The pause exits only by compare-and-set**: `resume_capture` (`Recovering → Starting`, else `CaptureNotPaused`) or
+  `AppState::end_paused_capture` (→ `Idle`; imaging Disconnect runs it first, so a late reopen can't restart a warming
+  camera). A resume whose camera fails first gets `CameraRecovering`; pause + plan survive. The plan follows every
+  settings update (resume restores, saves, announces them) and carries `next_frame`.
+- Resumed stacking seeds `reset_detector_start` from the carryover — starting "off" discarded the stack on frame one.
+- `finalize_disconnect` takes a `DisconnectCause`, not a bool: warm-up teardown must never reconnect.
+- Connect and `finalize_disconnect` call `PushToService::set_active_camera` — the FOV cache can't tell same-format
+  cameras apart and a stale FOV *fails* hinted solves. Only a *named, different* camera discards it (see Pro AGENTS.md).
+- Debug builds inject simulator stalls: `NIGHT_AMPLIFIER_SIM_STALL_EVERY`/`_RUN` (`simulated::stall_injection`).
 
 ### Focus/Finder mode (`state::focus_mode`)
 
-Forces seven settings off and keeps `focus_mode_snapshot` as the only record of what they
-were. **Entering must be idempotent** — a second `set(.., true)` that re-snapshots captures
-the already-forced `false`s and destroys the observer's values for good. Invariant:
-`focus_mode == focus_mode_snapshot.is_some()`, so drive it through `focus_mode::set`, never
-by assignment, and a persisted flag with no snapshot loads as off. `update_settings` applies
-it *after* every other field so the mode wins over a managed field in the same request;
-with no toggle in the request `reconcile` absorbs a stale client's write into the snapshot
-rather than letting the next toggle silently revert it. `superpixel_debayer` is
-deliberately unmanaged — it is the cheap debayer, so forcing it either way costs frame rate.
+Forces six settings off; `focus_mode_snapshot` is the only record of their values. **Entering must be idempotent** —
+re-snapshotting captures the forced `false`s and destroys the observer's values. Invariant:
+`focus_mode == focus_mode_snapshot.is_some()` — drive it via `focus_mode::set`, never assignment; a persisted flag
+without a snapshot loads as off. `update_settings` applies it *after* every other field (the mode wins); with no toggle in the request,
+`reconcile` absorbs a stale client's write into the snapshot. `superpixel_debayer` is deliberately unmanaged (forcing
+the cheap debayer either way costs frame rate). Hot-pixel rejection is no longer a setting (see raw-CFA stage).
 
-**The mode and an accumulating stack are mutually exclusive**, enforced both ways:
-`update_settings` answers 409 to `focus_mode: true` when `conflicts_with_capture` holds, and
-`CaptureService::{start,resume}_capture` leave the mode on the way in. Two of the seven
-(`hot_pixel_rejection`, `fpn_removal`) run pre-demosaic, so `stacking_task` integrates
-whatever they produce and never resets the stack on a `sensor_correction` change — hot
-pixels averaged in cannot be taken out. Live view accumulates nothing and is exempt;
-*leaving* the mode is never refused. Measured win, preview stage only:
-`preview_pipeline/focus_mode_x6` 39.4 ms against `full_x6` 76.8 ms.
+**The mode and an accumulating stack are mutually exclusive**, every way in: `update_settings` answers 409 to
+`focus_mode: true` when the request's *resulting* mode `conflicts_with_capture`; `focus_mode::leave_if_conflicting`
+drops the mode on a stacking `CaptureService::{start,resume}_capture` and when a running live view switches to stacking
+(announced as `FocusModeLeft`). `fpn_removal` runs pre-demosaic and `stacking_task` never resets on `sensor_correction`
+changes, so integrated banding can't be removed. Exempt, since no affected frame reaches an accumulator: live view
+(dropping the mode on its start had the observer re-enable it by hand twice on 2026-09-07), types without
+`StackingType::uses_fpn_removal` (planetary — `build_cfa_pipeline` reads the same capability), and states taking no new
+frames (`Idle`, `Stopping`). `update_settings` reads the capture state before its settings lock, so the capture loop
+re-checks every snapshot (`AppState::settings_for_new_frame`). *Leaving* is never refused. Preview-stage win: `preview_pipeline/focus_mode_x6`
+39.4 ms vs `full_x6` 76.8 ms.
 
 ## Push-To gating (`capture::solving`)
 
-A frame is offered on one of two slots. `try_begin_solve` may block for a whole ASTAP
-ladder; `try_begin_watch` runs *during* one, so a slew can be noticed and the doomed
-search abandoned — that path used to be closed, and the movement detector saw nothing
-for the minutes a full-sky search took. Separate cadence floors (1 s / 1.5 s): the solve
-timestamp is stamped once per ladder, so sharing it would let the watch free-run.
+Two slots: `try_begin_solve` may block for a whole ASTAP ladder; `try_begin_watch` runs *during* one, so a slew is
+noticed and the doomed search abandoned (closed, the movement detector was blind for minutes of full-sky search).
+Separate cadence floors (1 s / 1.5 s) — the solve timestamp is stamped once per ladder, so sharing it lets the watch
+free-run.
 
-`plate_solve_available` declines when no target is set *or* the applicable floor has not
-elapsed. It is advisory — the `try_begin_*` compare-and-swap still decides — and exists
-so the stacking thread does not clone a frame handle for an offer about to be dropped: a
-live second handle makes the render task's `Arc::try_unwrap` fail and copy a full frame.
+`plate_solve_available` (declines with no target or before the floor) is advisory; the `try_begin_*` compare-and-swap
+decides. It stops the stacking thread cloning a frame handle for a doomed offer — a live second handle fails the render
+task's `Arc::try_unwrap` and copies a full frame.
 
-`PushToBlocker` is the vocabulary for "why nothing is happening", including the ordinary
-states of a pushed scope (moving, settling, trailing). All of it flows through
-`FrameOutcome::blocker` into `announce_blocker`, which emits one event per transition —
-including the shutdown clear, which used to update the de-duplication record without
-sending anything and so left the last blocker on screen. The plugin must not broadcast
-its own — one that did bypassed the de-duplication. The UI ranks a live blocker above
-the last solve verdict, so `StatusBar.vue`'s branches must keep the same order as
-`solvingMessage`, or a blocker inherits the previous solve's tick and `success` class.
+`PushToBlocker` says why nothing is happening, incl. normal pushed-scope states (moving, settling, trailing), via
+`FrameOutcome::blocker` → `announce_blocker`: one event per transition, including the shutdown clear. The plugin must
+not broadcast its own (bypasses de-duplication). The UI ranks a live blocker above the last verdict, so
+`StatusBar.vue`'s branches must keep `solvingMessage`'s order, or a blocker inherits the last solve's tick and
+`success` class.
 
 ## Storage Formats
 
@@ -355,19 +338,20 @@ SER is the standard format for planetary imaging - uncompressed with per-frame t
 | 100| RGB | RGB color (3 channels) |
 | 101| BGR | BGR color (3 channels) |
 
-Directory layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser` for
-Planetary) and `captures/stacked/DD-MM-YYYY_HH-MM-SS-stacking.fits` (named after its raw session).
+Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (Planetary: `capture.ser`) and
+`captures/stacked/DD-MM-YYYY_HH-MM-SS-stacking.fits` (named after its raw session). `<mode>` (`live`/`wanderer`/`stacking`)
+comes from `CaptureMode::session_dir_suffix`; a same-second collision inserts a counter before it, so
+`from_session_dir_name` matches the name's end.
 
-`<mode>` is `live`/`wanderer`/`stacking`, from `CaptureMode::session_dir_suffix`. A collision inside
-one second inserts a counter before the suffix, which is why `from_session_dir_name` matches on the
-end of the name.
+**A resumed capture rejoins its folder and must not overwrite it**: `frame_{:06}.fits` replaces existing files and
+`SerWriter::create` truncates. So the resume plan carries `next_frame` (`task::FrameNumbers`), video writes
+`capture_2.ser`, …, and the guide loop uses `RawSessionResume::next_frame`.
 
 ## Streaming Protocols
 
 ### Dynamic JPEG (SA10) — `/ws/stream`, `/ws/eyepiece`
 
-Default streaming format. Encoded via TurboJPEG (SIMD) in the render task, not in the
-WebSocket handlers.
+Default format; TurboJPEG (SIMD) encodes in the render task, not the WebSocket handlers.
 
 ```
 Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
@@ -375,8 +359,8 @@ Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u
 
 #### Demand-driven resolution tiers
 
-Clients send `{width, height}`; tier is picked from the viewport's **shorter edge**, clamped
-1080…2160 (fitting both edges into a box would push a portrait phone into the 4K tier).
+Clients send `{width, height}`; the tier follows the viewport's **shorter edge**, clamped 1080…2160 (fitting both
+edges pushed portrait phones into 4K).
 
 | Tier       | Bounding box  | Serves class | IMX464 (2712×1538) output |
 |------------|---------------|--------------|---------------------------|
@@ -385,39 +369,35 @@ Clients send `{width, height}`; tier is picked from the viewport's **shorter edg
 | `Uhd2160`  | 3840×2160     | ≤ 2160       | 2712×1538 (no downsample) |
 | `Original` | unbounded     | —            | 2712×1538                 |
 
-The render task encodes one cached payload per tier with clients (shared across
-non-downsampling tiers on sub-4K sensors); handlers serve it on `frame_ready` except a
-newly-connected client, which encodes once inline. `begin_frame`/`publish_frame` keep
-publication race-free.
+The render task caches one payload per tier with clients (shared by non-downsampling tiers on sub-4K sensors);
+handlers serve it on `frame_ready`, except a new client, which encodes once inline. `begin_frame`/`publish_frame`
+keep publication race-free.
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
-Lossless (unquantized-beyond-8-bit) path for the eyepiece quality view.
+Lossless (beyond 8-bit) path for the eyepiece quality view. SA09 is the chunked variant (parallel LZ4); the frontend
+renders via WebGL with Canvas2D fallback.
 
 ```
 Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload
 ```
 
-SA09 is the chunked variant (parallel LZ4 compression). Frontend renders via WebGL with
-Canvas2D fallback.
-
 #### Client streaming resolution negotiation
 
-Reports `{width, height}` (was hardcoded 3840×2160), box-averages down through the same
-`JpegTier`. The averaging *removes noise* proportional to the reduction — unlike WebGL's
-~1.45x-capped fallback — so value scales with spare resolution (IMX533 2.25x smaller payload
-at 8.26→6.76 sky-sigma; IMX464 barely moves, needs denoising instead).
+Clients report `{width, height}` and are box-averaged down through the same `JpegTier`. Averaging *removes noise* in
+proportion to the reduction (WebGL's fallback caps at ~1.45x): IMX533 payload 2.25x smaller at 8.26→6.76 sky-sigma;
+IMX464 barely moves and needs denoising instead.
 
-- Stream sizes to the **largest** requested tier; unreported viewport defaults to the **4K
-  cap**, not the floor — never downgrade an old client.
-- Frontend reports **canvas**, not window, size (binoview's eyes are ~half-window each).
-- Re-reported on every reconnect (no server-side memory) — never memoize "same size, skip".
+- Size to the **largest** requested tier; an unreported viewport gets the **4K cap**, not the floor.
+- Report **canvas**, not window, size (binoview eyes are ~half-window each).
+- Re-report on every reconnect (no server-side memory) — never memoize "same size, skip".
 
 ## Adding a Stacking Type
 
 Add variant to `StackingType` (`src/stacking/config.rs`), update `StackingType::all()`, and implement capability
 methods: `display_name`, `description`, `uses_star_registration`, `supports_stacking`, `supports_quality_weighting`,
-`uses_aggressive_stretch`, `desired_sensor_mode`. No changes needed in `capture.rs`.
+`uses_aggressive_stretch`, `desired_sensor_mode`, `uses_fpn_removal` (also decides whether Focus/Finder mode may run
+under its stack). No changes needed in `capture.rs`.
 
 ## Settings Persistence
 
@@ -438,33 +418,30 @@ Corrects for sensor imperfections:
 
 ### The raw-CFA stage (`cfa/`) — where pre-demosaic corrections live
 
-`RawFrame::to_cfa_frame` yields a still-mosaiced `CfaFrame`; the **stacking task** runs a
-`CfaPipeline` over it before demosaic (`to_frame` = that + empty pipeline + bilinear, pinned by
-a test). Same seam will host calibration (dark/flat), not yet wired in.
+`RawFrame::to_cfa_frame` yields a still-mosaiced `CfaFrame`; the **stacking task** runs a `CfaPipeline` on it before
+demosaic (`to_frame` = that + empty pipeline + bilinear, pinned by a test). Calibration (dark/flat) will use the same
+seam; not wired in yet. Timed at `info_span!`: ~7ms + ~7.2ms/frame on IMX533/Pi.
 
 - Both filters work one colour site at a time — mixing sites reads the mosaic pattern as signal.
-- **`hot_pixels`**: gated on the *fraction* of centre amplitude the brightest neighbour carries,
-  not a raw diff, so bright star cores survive.
-- **`fpn`**: levels each line against a narrow (±8) even-order average of its own neighbours,
-  not a whole-frame reference (which silently removed 5.2% of real flux). Skipped for Planetary.
-- **Planetary gets hot-pixel rejection only** — FPN bands the disc, superpixel halves
-  resolution.
-- Timed at `info_span!` (~7ms + ~7.2ms/frame on IMX533/Pi). Per-site stats are precomputed and
-  TTL-cached, so `CfaPipeline` rebuilds per settings-change, not per frame.
+- **`hot_pixels`**: gated on the *fraction* of centre amplitude the brightest neighbour carries (not a raw diff), so
+  star cores survive. **Unconditional** — no setting, Focus/Finder can't remove it: the solver reads this frame and
+  bilinear makes each hot pixel a star-sized blob (guide subs: 72 "stars" vs 25, no ASTAP solve at any FOV;
+  `push_to_guide_hot_pixel_tests` in Pro). Sky and noise measured **every frame** from 4,096 samples/site — a
+  32-frame cache kept a stale threshold across gain/exposure changes (1 correction instead of 165).
+- **`fpn`**: levels each line against a narrow (±8) even-order average of its own neighbours; a whole-frame reference
+  silently removed 5.2% of real flux.
+- **Planetary gets hot-pixel rejection only** — FPN bands the disc, superpixel halves resolution.
 
 ### Frame memory layout (planar) — non-obvious and load-bearing
 
-`Frame` stores samples **plane-major** (`idx = channel*w*h + y*w + x`) so filters read a
-channel as one contiguous run. **Every 8-bit output format is interleaved instead** — crossing
-the boundary wrongly still compiles and collapses channels toward grey. FITS (NAXIS3=3) alone
+`Frame` stores samples **plane-major** (`idx = channel*w*h + y*w + x`) so filters read a channel contiguously. **Every
+8-bit output format is interleaved** — crossing wrongly still compiles and greys the channels. Only FITS (NAXIS3=3)
 stays planar.
 
-Rules: use `planes()`/`channel_data()`/`get_pixel()`, never `frame.data()` with `* channels`
-math; build fixtures with `set_pixel`, covered by `layout_tests` per format and traversal;
-8-bit conversion always rounds via `sample_to_u8` (16-bit truncates); never derive a channel
-index from a flat rayon chunk index, dispatch per plane instead. `get_pixel` in a whole-frame
-loop is a review flag — cost 120ms/frame in `white_balance::block_medians` until moved onto
-`planes()` + rayon (27ms).
+Rules: use `planes()`/`channel_data()`/`get_pixel()`, never `frame.data()` with `* channels` math; build fixtures with
+`set_pixel`, covered by `layout_tests` per format and traversal; 8-bit conversion always rounds via `sample_to_u8`
+(16-bit truncates); dispatch per plane, never derive a channel from a flat rayon chunk index. `get_pixel` in a
+whole-frame loop is a review flag (120ms/frame in `white_balance::block_medians`, 27ms on `planes()` + rayon).
 
 ### Spatial denoising (`render::denoise`) — runs in the encoder, not the pipeline
 
@@ -526,20 +503,15 @@ fused; ~1.3ms of a 28ms 1440² encode when deferred.
 
 ### Phase 2: Debayering (Demosaicing)
 
-Converts mosaic Bayer (CFA) data to full RGB. Auto-detects RGGB/BGGR/GRBG/GBRG.
+Bayer (CFA) mosaic → full RGB; auto-detects RGGB/BGGR/GRBG/GBRG.
 
-- **Bilinear**: fast, for live preview.
-- **VNG**: higher quality, avoids edge-transition color artifacts.
-- **Superpixel**: one RGB pixel per 2x2 quad (half width/height), interpolates nothing so it
-  invents no chroma noise. Opt-in (`superpixel_debayer`) — only worthwhile on sensors that
-  oversample the display (IMX533 3008²→1504² is still above a 1440² eyepiece; IMX464
-  2712x1538→1356x769 is below it).
+- **Bilinear**: fast, live preview. **VNG**: higher quality, no edge-transition colour artifacts.
+- **Superpixel** (opt-in `superpixel_debayer`): one RGB pixel per 2x2 quad, invents no chroma noise. Only worth it when
+  the sensor oversamples the display (IMX533 3008²→1504² still exceeds a 1440² eyepiece; IMX464 → 1356x769 doesn't).
 
-**Non-obvious invariant** (source of a fixed GRBG bug): at a green pixel, whether red
-interpolates horizontally or vertically depends on **row only, never column** —
-`get_rb_orientation` keys on `y & 1` alone. Keying on `x` too used to misroute GRBG's odd-row
-greens across a quarter of every frame; `test_debayer_reproduces_constant_colour_planes` pins
-all four patterns.
+**Invariant** (fixed GRBG bug): at a green pixel, red interpolates horizontally or vertically by **row only, never
+column** — `get_rb_orientation` keys on `y & 1`. Keying on `x` misrouted GRBG's odd-row greens over a quarter of
+every frame; `test_debayer_reproduces_constant_colour_planes` pins all four patterns.
 
 ### Phase 3: Star Detection & Centroiding
 
@@ -564,52 +536,33 @@ based on the celestial target:
 
 ### Phase 5: Live Stacking & Rejection
 
-`MasterStack` accumulates in O(1) memory — 16 bytes per pixel, 434 MB at 3008x3008x3, so
-the struct's size is a hard constraint (`offered` had to fit in `count`'s tail padding).
+`MasterStack` accumulates in O(1) memory — 16 B/pixel, 434 MB at 3008x3008x3 — so struct size is a hard constraint
+(`offered` fits in `count`'s tail padding).
 
-**Never estimate the clip threshold from samples that survived the clip.** That is what
-`blend_incremental` did: the scale came from accepted samples only, so an early
-underestimate rejected the very samples that would have widened it, and the estimator
-defended its own error. Measured on 71 real subs it discarded 15 % of samples where 2.5
-sigma predicts 1.2 %, left the stack 34 % noisier than a plain mean, and permanently
-froze the 0.95 % of pixels whose first samples happened to be identical — 3 frames kept
-of 71, for the rest of the session. About 45 % of the integration time, thrown away.
+**Never estimate the clip threshold from samples that survived the clip.** `blend_incremental` once did, so an early
+underestimate rejected the samples that would have widened it: on 71 real subs it discarded 15 % (2.5 sigma predicts
+1.2 %), was 34 % noisier than a plain mean, and froze 0.95 % of pixels at 3 of 71 frames — ~45 % of integration lost.
+`m2` is now a running mean of squared deviations over *every* offered sample, rejected ones winsorised to the
+threshold: cosmic rays can't widen the window, yet a collapsed scale recovers geometrically (`k^2` × variance per
+clipped sample — 12 frames at `CLIPPED_SCALE_WINDOW` vs 40 at the ordinary one). Coverage 83.7 % → 97.6 %; SNR cost
+21 % → 1 %.
 
-`m2` is now a running mean of squared deviations over *every* offered sample, rejected
-ones winsorised to the threshold. That keeps a cosmic ray from widening the window while
-still letting a collapsed scale climb back out (a winsorised sample carries `k^2` times
-the current variance, so it recovers geometrically — 12 frames at `CLIPPED_SCALE_WINDOW`,
-40 at the ordinary one, which is why clipped samples get the shorter memory). Real-data
-result: coverage 83.7 % -> 97.6 %, and the rejector now costs 1 % of SNR instead of 21 %.
+**Warm-up**: below `min_frames_for_rejection` the tight clip can't run; unguarded, a satellite trail in those 8 frames
+was averaged in and widened the scale for good (33.5 sigma permanent error). A loose 8-sigma guard covers everything
+past `WARMUP_MIN_OBSERVATIONS`; frames 0-2 are irreducible (no spread below three samples).
 
-Rejection also has to survive its own warm-up. Below `min_frames_for_rejection` the tight
-clip cannot run, and while nothing ran there at all a satellite trail landing in those 8
-frames was averaged in *and* widened the scale enough that the pixel never rejected
-anything again — 33.5 sigma of permanent error with every frame kept. A loose 8-sigma
-guard now covers everything past `WARMUP_MIN_OBSERVATIONS`; frames 0-2 are irreducible,
-since below three samples there is no spread to test against.
+**`RejectionMethod` has four variants; the incremental path implements two.** `WinsorizedSigmaClip` = `SigmaClip` but
+blends the clamped value (N frames stay N). `MinMax` would need per-pixel min/max (+650 MB at 3008x3008x3), so
+`live_equivalent` substitutes sigma clipping and logs it — `add_frame_with_border_and_quality` routes only the two
+clipping methods to the plugin and silently averages the rest.
 
-`RejectionMethod` is four variants and the incremental path implements two.
-`WinsorizedSigmaClip` differs from `SigmaClip` in one line — blend the clamped value
-instead of dropping the sample, so a stack of N frames stays a stack of N. `MinMax` needs
-the min and max of a sample set nobody keeps (two more floats a pixel is 650 MB at
-3008x3008x3), so `live_equivalent` substitutes sigma clipping and logs it. Passing it
-through instead left the session with *no* rejection, because
-`add_frame_with_border_and_quality` routes only the two clipping methods to the plugin
-and averages everything else.
-
-Three things that look like details and are not:
-- **The first offered sample has no mean to deviate from.** Its "deviation" is the
-  pixel's absolute level — on a 0.0024 sky with 2e-5 sigma that seeds the scale 120x too
-  wide, and the rejector clips *nothing*. `observe_scale` ignores it.
-- **The mean is an estimate too**, from `count` samples, so the gap under test has
-  variance `sigma^2 * (1 + 1/count)`. Without it the clip is tightest exactly when the
-  mean is least trustworthy.
-- **Do the test on squared quantities.** One avoidable `sqrt` plus a divide per pixel, in
-  a loop over 27 million of them, measured 2.9x on the whole kernel; the tables in
-  `incremental_pixel` hoist the divides out per frame. Only a clipped sample roots
-  anything. `rejection_benchmark`'s `blend_incremental` case guards this — the batch
-  `compute_rejection` cases next to it are not the path a live stack takes.
+- **The first sample has no mean to deviate from** — its "deviation" is the absolute level (on a 0.0024 sky with 2e-5
+  sigma the scale seeds 120x too wide and clips nothing). `observe_scale` ignores it.
+- **The mean is an estimate too**: test against `sigma^2 * (1 + 1/count)`, or the clip is tightest when the mean is
+  least trustworthy.
+- **Test on squared quantities**: a `sqrt` + divide per pixel over 27M pixels cost 2.9x; `incremental_pixel`'s tables
+  hoist divides per frame and only clipped samples root. `rejection_benchmark`'s `blend_incremental` case guards it (the
+  batch `compute_rejection` cases are not the live path).
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
@@ -625,31 +578,21 @@ Neutralizes color casts from light pollution.
 
 ### Phase 9: Black Point Calculation
 
-Establishes the dark reference level: `black_point = mode - k * sigma`, so the sky
-estimate has to resolve far finer than the sky itself. A 71-frame stack's sky sigma is
-~3.4e-5 of full scale (2.2 ADU at 16 bits) while `estimate_background_mode`'s histogram
-bin is 2.4e-4 (16 ADU) — the whole distribution fits in a fifth of a bin. Reporting the
-bin centre made the mode a step function of stack depth: it held for 50 frames, snapped
-one bin at 71, and moved the black point 16 ADU against a target 30 ADU above sky. Half
-the Dumbbell went below black in a single frame, and deeper integration rendered *worse*
-than shallow. The binned peak still selects the region (that is what rejects nebulosity);
-the value returned is refined by re-binning those samples 512 ways inside the winning bin
-(0.13 ADU) and interpolating that peak. Two failure modes, not one: the bin *choice* has
-to be right as well, and a five-wide box smoothing turns a sky narrower than one bin into
-a five-bin plateau whose first strict maximum sits two bins low — far enough that the
-refinement window misses the samples and falls back to the bin value, 43 ADU out at 2 sky
-levels in 21. Ties therefore break on the raw histogram, where a plateau is unambiguous.
-Test it by *sweeping* a sky across a bin in tenths at a deep-stack sigma (2e-5); two
-sample points found the quantisation but sampled neither plateau position. Refining by *sorting* the window and taking its
-half-sample mode gave the same answer but cost 1.40 ms a frame against 0.39 ms unrefined;
-the sub-histogram keeps the resolution for 0.51 ms. `black_point_benchmark` guards it.
+`black_point = mode - k * sigma`, so the sky estimate must resolve far finer than the sky: a 71-frame stack's sky sigma
+is ~3.4e-5 (2.2 ADU at 16 bits), `estimate_background_mode`'s bin 2.4e-4 (16 ADU). Reporting the bin centre made the
+mode a step function of depth — it snapped one bin at 71 frames, moving the black point 16 ADU against a target 30 ADU
+above sky; half the Dumbbell went black and deeper stacks rendered *worse*.
 
-The same depth trap applies to any quantity derived from `sigma` — see
-`estimate_signal_fraction`, which had to stop binning for the same reason — and to the
-solver's floor: floor the sky-above-black gap once and derive the black point from it,
-never floor only the number handed to the solver. Doing the latter had the solver
-stretching for a sky 1.75x brighter than the black point actually left, growing with
-depth. Both are pinned by tests in `black_point_tests.rs` and `autostretch/logic.rs`.
+The binned peak still picks the region (rejecting nebulosity); the value is refined by re-binning its samples 512 ways
+inside the winning bin (0.13 ADU) and interpolating the peak — 0.51 ms/frame vs 0.39 ms unrefined (sort + half-sample
+mode: 1.40 ms; `black_point_benchmark` guards it). The bin *choice* must be right too: five-wide box smoothing turns a
+sub-bin sky into a plateau whose first strict maximum sits two bins low, so refinement misses and falls back (43 ADU off
+at 2 of 21 sky levels) — ties break on the raw histogram. Test by *sweeping* a sky across a bin in tenths at deep-stack
+sigma (2e-5); two sample points found the quantisation but neither plateau position.
+
+The same depth trap hits anything derived from `sigma` (`estimate_signal_fraction` stopped binning too) and the solver's
+floor: floor the sky-above-black gap once and derive the black point from it — flooring only the solver's input had it
+stretch for a sky 1.75x brighter, growing with depth. Pinned in `black_point_tests.rs` and `autostretch/logic.rs`.
 
 ### Phase 10: Shadow Saturation Boost (Optional)
 
@@ -688,25 +631,34 @@ Luminance-preserving contrast adjustment using a parametric S-curve:
 `RUST_LOG` overrides levels. `tracing` + daily file rotation via `tracing-appender`. Telemetry via `--telemetry` /
 `OTEL_EXPORTER_OTLP_ENDPOINT` when built with `--features telemetry`.
 
-### Three things the render and stacking threads deliberately do not do every frame
+The file layer formats span fields with its own `PlainFields` type: tracing-subscriber caches a span's formatted fields
+per formatter *type*, so sharing `DefaultFields` with the coloured console wrote its escapes into the file (15,533 of
+31,108 lines on 2026-09-07). The console colours only on a terminal.
 
-From one production trace: both workers at 97% utilisation, 34.7% of captured frames dropped
-for want of a stacking thread. A dropped *capture* frame loses signal permanently — most of
-these favor the stacking side for that reason.
+**Startup system report** (`system_info`, called from `app::run`): INFO events for build (git describe, target,
+`target-cpu`, rustc — exported by `build.rs`), host (OS, kernel, board, boot time: a reset between two logs shows as a
+new boot time), CPU (clusters, compiled vs runtime-detected SIMD — release artifacts are per-CPU, so a feature compiled
+but absent warns), memory (cgroup limit, frame-queue budget), process (paths, free space under the working dir, env
+overrides; OTLP endpoint as presence only) and Linux (device-tree model, boot id, euid, governor, usbfs, SoC temp, Pi
+under-voltage). Self-contained (std/`sysinfo`/`fs4`/`chrono`/`tokio`) so it compiles for every release target;
+collected on `spawn_blocking` under a 5 s timeout. `build.rs` deliberately emits no `rerun-if-changed`, so a commit
+not followed by a file change keeps the previous commit id.
 
-- **Display copy skipped when unneeded**: `MasterStack::compute()`'s copy (434MB read/108MB
-  written) is gated by `want_display`; the frame still stacks regardless.
-- **Queue budget sized from the board**: `min(MemTotal/5, 1GiB)`, floored at 64MiB, sized per
-  channel from its own payload — capture→stacking is also **bounded by latency** (2s of
-  exposures, since a deeper queue only delays the drop and adds preview lag; memory alone put
-  19 frames/2.9s ahead of the stacking thread). All three report `pipeline.queue_depth`/
-  `_capacity` under `--features telemetry`, separating "slow" from "stalled once".
-- **Preview may run binned**, by the largest integer factor `PreviewResolution` allows —
-  all-or-nothing at the 2x boundary, fixed for the session (never from the connected client
-  set, since 2x2 binning moved the solved `scale_lut` by +25.7% and would re-grade the
-  picture for every viewer whenever somebody opened a tab). Default `Native` (no binning).
-- **Per-stack estimates (white balance, background, stats) are reused across frames**,
-  refreshed by *proportional* stack-depth growth (MAD ~ 1/√N); live view never reuses.
+### What the render and stacking threads deliberately skip per frame
+
+One production trace: both workers at 97%, 34.7% of captured frames dropped for want of a stacking thread. A dropped
+*capture* frame is signal lost for good, so these favour stacking.
+
+- **Display copy only when wanted**: `MasterStack::compute()`'s copy (434MB read/108MB written) is gated by
+  `want_display`; the frame always stacks.
+- **Queue budget from the board**: `min(MemTotal/5, 1GiB)`, floor 64MiB, per channel from its own payload;
+  capture→stacking is also **latency-bounded** at 2s of exposures (memory alone put 19 frames/2.9s ahead of stacking).
+  All three report `pipeline.queue_depth`/`_capacity` under `--features telemetry` ("slow" vs "stalled once").
+- **Preview may run binned** by the largest integer factor `PreviewResolution` allows — all-or-nothing at 2x, fixed per
+  session, never from connected clients (2x2 moved `scale_lut` +25.7%, re-grading every viewer when a tab opened).
+  Default `Native`.
+- **Per-stack estimates (white balance, background, stats) are reused**, refreshed on *proportional* depth growth
+  (MAD ~ 1/√N); live view never reuses.
 
 ### The accumulator layout
 
@@ -721,11 +673,10 @@ signature — either fix breaks Pro and needs both repos moved together.
 
 ### Pipeline performance instrumentation
 
-`--span-timings` logs every stage span's duration on-device. Per-frame/payload work belongs at
-`info_span!`, not `debug_span!`, or it's invisible.
+`--span-timings` logs every stage span's duration on-device. Per-frame/payload work belongs at `info_span!`, not
+`debug_span!`, or it's invisible. Stage granularity only; cache instruments in a `OnceLock`, never rebuild per frame.
 
-A span with large self time and no children is a **blind spot**: these were added because the
-residue (duration minus children) was the largest thing in a production trace:
+A span with large self time and no children is a **blind spot**; these split the largest residues in a production trace:
 
 | Span | Inside | Separates |
 |---|---|---|
@@ -734,18 +685,12 @@ residue (duration minus children) was the largest thing in a production trace:
 | `resample`/`row_tail` | `frame_to_rgb8` | input-scaled gather vs. output-scaled tail |
 | `publish_state` | render/stacking iteration | async-lock overhead off-tokio |
 
-`camera_capture` has `call_us` + a **signed** `overhead_us` instead (one opaque vendor
-call, no seam for a child span). Signed because the saturating unsigned version read `0`
-on the continuous path it was added for — `get_video_data` returns an already-completed
-frame in under one exposure. Negative now means the frame was already waiting.
-`process_preview_frame`'s render tail is fused, so it carries no per-sub-stage span.
+`camera_capture` (one opaque vendor call) has `call_us` + a **signed** `overhead_us`: negative means the frame was
+already waiting (continuous `get_video_data` returns in under one exposure, so unsigned read `0`).
+`process_preview_frame`'s render tail is fused — no per-sub-stage span.
 
-`--features telemetry` adds histograms `frame.{capture,debayer,stack,render,encode_jpeg}_ms`
-and counters `frame.published/dropped/render_skipped`, plus per-channel
-`pipeline.queue_depth`/`queue_capacity` gauges. The **drop rate**, not the count, is what
-the UI shows: `AppState::drop_rate()` divides by `delivered_frames`, because 40 drops is a
-ruined evening at 30s subs and a rounding error at 100ms.
+`--features telemetry`: histograms `frame.{capture,debayer,stack,render,encode_jpeg}_ms`, counters
+`frame.published/dropped/render_skipped`, per-channel `pipeline.queue_depth`/`queue_capacity` gauges. The UI shows the
+**drop rate** (`AppState::drop_rate()` over `delivered_frames`): 40 drops ruin an evening at 30s subs, and are noise at 100ms.
 
-Rules: stage granularity only; cache instruments in a `OnceLock`, never rebuild per frame.
-
-Build `--profile profiling` for `perf`; rayon threads there show as `tokio-rt-worker`.
+Build `--profile profiling` for `perf`; rayon threads show as `tokio-rt-worker`.

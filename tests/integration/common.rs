@@ -367,6 +367,17 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "176mm-imx464-delphinus-fits",
         "https://drive.usercontent.google.com/download?id=1fCEHKLGFsLNasuO4ebUqoIDcGwx882PU&export=download&confirm=t",
     ),
+    // Guide frames whose hot pixels, spread by bilinear demosaic, stop ASTAP solving.
+    (
+        "176mm-imx464-guide-hot-pixels-fits",
+        "https://drive.usercontent.google.com/download?id=1wiLkVvM-yNS9LFXHTxEO-odscGq0Bz41&export=download&confirm=t",
+    ),
+    // The same guide rig across a 5 s/g376 -> 0.5 s/g123 change: a noise estimate carried
+    // over between them stopped the short sub plate-solving.
+    (
+        "176mm-imx464-guide-exposure-change-fits",
+        "https://drive.usercontent.google.com/download?id=1ZeJEc_OC33oz_QuoNdkJOIgjxxE-Szc-&export=download&confirm=t",
+    ),
     // 16 subs of M27, cropped to 1024x1024 on an even origin so the RGGB phase survives.
     // Deliberately not the whole session: this is the shortest run that still shows the
     // render collapsing as the stack deepens, which is what `stack_depth_regression`
@@ -379,11 +390,20 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
 
 /// Downloads and extracts test fixture datasets from Google Drive.
 ///
-/// Each fixture is only downloaded once — if the target directory already exists,
-/// it is skipped. After downloading, the zip is extracted and removed.
+/// A fixture directory only ever appears complete: the archive is downloaded and
+/// extracted under a per-process staging name and renamed into place. Extracting in place
+/// let parallel tests that each found the directory missing read a FITS another test was
+/// still writing — and nextest runs every test in its own process, so an in-process lock
+/// alone cannot prevent that. The lock here only stops one binary downloading N copies.
 pub async fn ensure_fixtures(names: Option<&[&str]>) {
     use std::fs;
-    use std::io;
+    use std::sync::OnceLock;
+
+    static SERIAL: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let _serial = SERIAL
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
 
     let fixtures: Vec<(&str, &str)> = if let Some(names) = names {
         DEFAULT_FIXTURES
@@ -408,12 +428,9 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
             continue;
         }
 
-        let zip_path = fixtures_dir.join(format!("{}.zip", name));
-
-        // Check again after potential race
-        if dir_path.exists() {
-            continue;
-        }
+        let pid = std::process::id();
+        let zip_path = fixtures_dir.join(format!(".{name}.{pid}.zip"));
+        let staging = fixtures_dir.join(format!(".{name}.{pid}.staging"));
 
         const MAX_RETRIES: usize = 3;
         let mut last_error = String::new();
@@ -478,27 +495,18 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
                 }
             };
 
-            for i in 0..archive.len() {
-                let mut file = archive.by_index(i).unwrap();
-                let outpath = match file.enclosed_name() {
-                    Some(path) => fixtures_dir.join(path),
-                    None => continue,
-                };
-
-                if file.name().ends_with('/') {
-                    let _ = std::fs::create_dir_all(&outpath);
-                } else {
-                    if let Some(p) = outpath.parent() {
-                        let _ = std::fs::create_dir_all(p);
-                    }
-                    if let Ok(mut outfile) = fs::File::create(&outpath) {
-                        let _ = io::copy(&mut file, &mut outfile);
-                    }
-                }
-            }
-
-            // Remove the zip after extraction (ignore if already removed by another test)
+            let _ = fs::remove_dir_all(&staging);
+            let extracted = extract_archive(&mut archive, &staging);
             let _ = fs::remove_file(&zip_path);
+            if let Err(e) = extracted.and_then(|()| publish_staged(&staging, name, &dir_path)) {
+                let _ = fs::remove_dir_all(&staging);
+                if dir_path.exists() {
+                    break;
+                }
+                last_error = e;
+                continue;
+            }
+            let _ = fs::remove_dir_all(&staging);
             last_error.clear();
             break;
         }
@@ -514,6 +522,46 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
 
         // Brief cooldown between fixtures to avoid Google Drive rate limiting
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+fn extract_archive(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    into: &Path,
+) -> Result<(), String> {
+    for i in 0..archive.len() {
+        let mut entry = archive
+            .by_index(i)
+            .map_err(|e| format!("Unreadable zip entry {i}: {e}"))?;
+        let Some(outpath) = entry.enclosed_name().map(|p| into.join(p)) else {
+            continue;
+        };
+        if entry.is_dir() {
+            fs::create_dir_all(&outpath).map_err(|e| format!("{}: {e}", outpath.display()))?;
+            continue;
+        }
+        if let Some(parent) = outpath.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let mut outfile =
+            fs::File::create(&outpath).map_err(|e| format!("{}: {e}", outpath.display()))?;
+        std::io::copy(&mut entry, &mut outfile)
+            .map_err(|e| format!("Failed to extract {}: {e}", outpath.display()))?;
+    }
+    Ok(())
+}
+
+/// Move `staging/<name>` to `dir_path` in one rename. Losing that rename to another
+/// process that published the same fixture first is success, not an error.
+fn publish_staged(staging: &Path, name: &str, dir_path: &Path) -> Result<(), String> {
+    let staged = staging.join(name);
+    if !staged.is_dir() {
+        return Err(format!("archive has no top-level {name}/ directory"));
+    }
+    match fs::rename(&staged, dir_path) {
+        Ok(()) => Ok(()),
+        Err(_) if dir_path.is_dir() => Ok(()),
+        Err(e) => Err(format!("Failed to move {name} into place: {e}")),
     }
 }
 

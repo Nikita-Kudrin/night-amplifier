@@ -4,18 +4,18 @@ import {useImageStream} from '../composables/useWebSocket.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../composables/usePanZoom.js'
+import {useAutoFit} from '../composables/useAutoFit.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
-import {CAPTURE_STATES} from '../constants'
+import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {getAppState} from '../composables/useAppState.js'
 
 /**
- * How long to wait before measuring the container after something reshapes it.
- * Fullscreen, a rotation and a new frame's dimensions all land before the browser
- * has laid the element out, so fitting on the event itself fits to the old size.
+ * How long to wait before fitting after a frame changes the image's size. Viewport
+ * changes (fullscreen, rotation) wait for the container itself — see `useAutoFit`.
  */
 const FIT_AFTER_LAYOUT_MS = 10
 
@@ -87,8 +87,13 @@ const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
 const webglRenderer = useWebGLRenderer()
 const canvas2dRenderer = useCanvas2DRenderer()
 
-// Pan/zoom controls. Entering fullscreen fits the image to the new viewport —
-// deferred, because the browser has not resized it yet when the event fires.
+const {
+  requestFit,
+  handleContainerResize,
+  dispose: disposeAutoFit,
+} = useAutoFit({fit: fitToView})
+
+// Pan/zoom controls. Both fullscreen edges fit the image to the new viewport.
 const {
   scale,
   isDragging,
@@ -107,7 +112,7 @@ const {
   fitToView: fitToViewBase,
   toggleFullscreen: toggleFullscreenBase,
   handleFullscreenChange,
-} = usePanZoom({onChange: () => setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)})
+} = usePanZoom({onChange: requestFit})
 
 const {
   visible: overlayVisible,
@@ -142,7 +147,7 @@ const renderBackend = computed(() => {
   return 'none'
 })
 
-const isCapturing = computed(() => eventStream.captureState.value === CAPTURE_STATES.CAPTURING)
+const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
 function initRenderer() {
@@ -278,9 +283,10 @@ watch(dimensions, (newDims, oldDims) => {
   }
 })
 
-// Clear frame data when a new capture session starts
-watch(() => eventStream.captureState.value, (newState) => {
-  if (newState === CAPTURE_STATES.STARTING) {
+// Clear frame data when a new capture session starts. A capture resuming after a camera
+// reconnect is the same session: blanking it would show the dropout the server hid.
+watch(() => eventStream.captureState.value, (newState, oldState) => {
+  if (newState === CAPTURE_STATES.STARTING && oldState !== CAPTURE_STATES.RECOVERING) {
     clearFrameData()
   }
 })
@@ -294,15 +300,25 @@ let resizeObserver = null
 let windowResizeTimeout = null
 
 function handleWindowResize() {
+  // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
+  // (dragging the sidebar, say), and re-fitting would throw their framing away.
+  // Armed now, not after the debounce, or the reshape would already be over.
+  if (isFullscreen.value) requestFit()
   if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   windowResizeTimeout = setTimeout(() => {
     const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
     const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
     sendResolution(newWidth, newHeight)
-    // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
-    // (dragging the sidebar, say), and re-fitting would throw their framing away.
-    if (isFullscreen.value) fitToView()
   }, 200)
+}
+
+// Rotating fits windowed too: `/` lays out differently in landscape, so the old
+// framing no longer describes anything. Both events are listened to — Safari before
+// 16.4 has no `screen.orientation`, and mobile Safari rotates without always firing
+// a `resize`.
+function handleOrientationChange() {
+  requestFit()
+  handleWindowResize()
 }
 
 function updateContainerSize() {
@@ -326,14 +342,15 @@ function updateContainerSize() {
         height: containerRect.height,
       }
     }
+    handleContainerResize(containerRect.width, containerRect.height)
   }
 }
 
 onMounted(() => {
   document.addEventListener('fullscreenchange', handleFullscreenChange)
   window.addEventListener('resize', handleWindowResize)
-  // Not redundant with `resize`: mobile Safari rotates without always firing one.
-  window.addEventListener('orientationchange', handleWindowResize)
+  window.addEventListener('orientationchange', handleOrientationChange)
+  window.screen.orientation?.addEventListener('change', handleOrientationChange)
   initRenderer()
   updateContainerSize()
   resizeObserver = new ResizeObserver(updateContainerSize)
@@ -345,8 +362,10 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
   window.removeEventListener('resize', handleWindowResize)
-  window.removeEventListener('orientationchange', handleWindowResize)
+  window.removeEventListener('orientationchange', handleOrientationChange)
+  window.screen.orientation?.removeEventListener('change', handleOrientationChange)
   if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
+  disposeAutoFit()
   cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
