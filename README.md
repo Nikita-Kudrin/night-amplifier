@@ -23,7 +23,7 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 ## Camera SDK Support
 
 Camera SDKs are loaded at runtime and are **optional**: without one installed the binary still runs, with that brand
-disabled. Every provider is a default Cargo feature (`playerone`, `zwo`, `qhy`, `touptek`, `svbony`, `indi`).
+disabled. They are not shipped with Night Amplifier — install each from its vendor (see Camera SDK Setup below). Every provider is a default Cargo feature (`playerone`, `zwo`, `qhy`, `touptek`, `svbony`, `indi`).
 
 | Provider   | SDK Required                                                         | Supported                                                 |
 |------------|----------------------------------------------------------------------|-----------------------------------------------------------|

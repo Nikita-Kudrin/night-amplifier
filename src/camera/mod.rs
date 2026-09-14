@@ -24,6 +24,9 @@ mod simulated;
 mod traits;
 mod types;
 
+#[cfg(test)]
+mod sdk_loading_tests;
+
 #[cfg(feature = "playerone")]
 mod playerone;
 #[cfg(not(feature = "playerone"))]
