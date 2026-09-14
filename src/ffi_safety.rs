@@ -165,9 +165,37 @@ impl<F: FnOnce()> Drop for FfiCleanupGuard<F> {
     }
 }
 
+/// A value for an SDK `long` parameter, refused rather than wrapped when it does not fit. C
+/// `long` is 32 bits on Windows, where `as` turned anything past ±2 147 483 647 — an exposure
+/// over 35 minutes in µs — into a different, possibly negative, number.
+pub fn to_sdk_long<T, V>(name: &str, value: V) -> Result<T, String>
+where
+    T: TryFrom<V>,
+    V: Copy + std::fmt::Display,
+{
+    T::try_from(value).map_err(|_| format!("{name} {value} does not fit the camera SDK's `long`"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `i32` stands in for Windows' 32-bit `long`, whatever the host.
+    #[test]
+    fn a_value_past_a_32_bit_sdk_long_is_refused_not_wrapped() {
+        assert!(to_sdk_long::<i32, _>("exposure", 3_000_000_000_i64).is_err());
+        assert!(to_sdk_long::<i32, _>("exposure", 3_000_000_000_u64).is_err());
+    }
+
+    #[test]
+    fn a_value_that_fits_an_sdk_long_passes_unchanged() {
+        assert_eq!(to_sdk_long::<i32, _>("gain", 450_i64), Ok(450));
+        assert_eq!(to_sdk_long::<i32, _>("target temperature", -20_i64), Ok(-20));
+        assert_eq!(
+            to_sdk_long::<std::os::raw::c_long, _>("exposure", 2_000_000_000_u64),
+            Ok(2_000_000_000)
+        );
+    }
 
     #[test]
     fn test_catch_ffi_panic_success() {

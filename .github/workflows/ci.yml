@@ -211,3 +211,47 @@ jobs:
       - name: Run web linting
         working-directory: ./web
         run: npm run lint
+
+  # Every other Rust job builds `--no-default-features`, which compiles no vendor provider
+  # code: an ARM64-only type error and a Windows-only struct layout both reached a release.
+  rust-vendor-providers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        run: |
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20"
+          sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20" nasm libusb-1.0-0-dev libclang-dev libcfitsio-dev
+      - name: Install nextest
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: taiki-e/install-action@nextest
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Test vendor providers
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo nextest run --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony -E 'test(/^camera::/)'
+
+  # ToupTek's structs are UTF-16 on Windows; a const assertion in its FFI types fails the
+  # build when their layout drifts from toupcam.h.
+  rust-vendor-providers-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install system deps
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        run: |
+          choco install pkgconfiglite nasm
+          vcpkg install cfitsio:x64-windows-static
+          $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows-static"
+          echo "PKG_CONFIG_PATH=$vcpkg_path/lib/pkgconfig" >> $env:GITHUB_ENV
+          echo "CFITSIO_STATIC=1" >> $env:GITHUB_ENV
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Check vendor providers
+        run: cargo check --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony

@@ -80,9 +80,20 @@ impl QhySdk {
                 "libqhyccd.so"
             };
 
-            match unsafe { Container::<QhySdkApi>::load(lib_name) } {
+            match unsafe { crate::camera::sdk_library::load_eagerly::<QhySdkApi>(lib_name) } {
                 Ok(api) => {
                     info!("QHY SDK ({}) loaded successfully.", lib_name);
+                    // Before the resource init, which otherwise prints a dozen lines to
+                    // stderr. Older SDKs lack the switch, so it stays out of `QhySdkApi`.
+                    let enable_messages = unsafe {
+                        crate::camera::sdk_library::optional_symbol::<unsafe extern "C" fn(bool)>(
+                            lib_name,
+                            "EnableQHYCCDMessage",
+                        )
+                    };
+                    if let Some(enable_messages) = enable_messages {
+                        unsafe { enable_messages(false) };
+                    }
                     // Initialize the QHY resource (required by QHY SDK)
                     let res = unsafe { api.InitQHYCCDResource() };
                     if res != QHYCCD_SUCCESS {

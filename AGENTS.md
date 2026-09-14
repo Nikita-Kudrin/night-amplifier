@@ -121,7 +121,7 @@ their own schedule.
 | `background/`                 | Grid-based gradient extraction (gradient_only / adaptive modes)                      |
 | `render/`                     | Stretch (asinh/MTF), autostretch solver, white balance, black point, S-curve, shadow floor, output |
 | `statistics/`                 | Robust per-channel median/MAD (sampling-based)                                       |
-| `camera/`                     | Traits + ZWO/PlayerOne/QHY/ToupTek SDKs + simulator (see Camera Notes below)         |
+| `camera/`                     | Traits + ZWO/PlayerOne/QHY/ToupTek/SVBony SDKs + simulator (see Camera Notes below)  |
 | `planetary/`                  | Correlation-based alignment, percentile stacking (Moon/planets)                      |
 | `ser/`                        | SER video format (read/write) for planetary                                          |
 | `disk_writer/`                | Async bounded-queue frame writer                                                     |
@@ -180,6 +180,16 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
   rustc passes `-l` even for an unused `#[link]` block, so one breaks every build without that SDK. QHY publishes no
   redistribution grant, and the binary has no RUNPATH to find a copy beside it. Enforced by
   `camera::sdk_loading_tests` and the shared-library check in `scripts/build-dist.sh`.
+- **QHY, ToupTek and SVBony bind eagerly** (`camera::sdk_library::load_eagerly`, `RTLD_NOW`): a lazily bound SDK with an
+  unresolvable symbol kills the process at its first call. The Linux SVBony SDK uses libusb without declaring it, so
+  `preload_libusb` loads it `RTLD_GLOBAL` first. ZWO and Player One still load lazily (not yet hardware-checked).
+  A symbol only some SDK versions export goes through `optional_symbol` (QHY's `EnableQHYCCDMessage`), never the
+  required API struct.
+- **SDK strings are per-platform**: ToupTek's device strings and `Toupcam_Open` id are UTF-16 on Windows (`TChar`, with a
+  const layout assertion in `touptek/ffi_types.rs`); other C string buffers are `c_char`, never `i8` (`u8` on Linux
+  ARM). C `long` is 32 bits on Windows: widen SDK `long`s with `i64::from` and narrow with
+  `ffi_safety::to_sdk_long`, never `as` (it wraps). CI's `rust-vendor-providers*` jobs are the only ones that compile
+  vendor code — the Windows one first caught `c_long` returned as `i64` (Player One, ZWO; broken since `ed379af`).
 
 ### Guide camera — non-obvious and load-bearing
 
@@ -227,9 +237,17 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
 - So never compare ids to find a device: discovery matches serial, else current `index` + name (not `CameraInfo::id`);
   `connect` refuses the other role's device **before opening** (`install::refuse_device_of_other_role`) — closes go
   by id, so open-then-close already kills it.
-- ZWO discovery skips opening a device `DeviceLease::is_open` holds (that open superseded the live lease); held or
-  unopenable devices list from `ASIGetCameraProperty` (list *index*, not camera id), keeping positions aligned with
-  `open(index)`.
+- ZWO discovery skips opening a device `DeviceLease::is_open` holds. A QHY device has **one handle per process**:
+  `QhyHandle` claims the id atomically (`DeviceLease::try_acquire_unique_device`) *before* `OpenQHYCCD` — discovery
+  skips a claimed id, connect waits `HELD_WAIT` (5 s) — and scan/open/init/close share one SDK lock. Held or unopenable
+  devices list from pre-open data (`ASIGetCameraProperty`, QHY scan id), keeping positions aligned with `open(index)`
+  (list *index*, not camera id). ToupTek lists a model-less device by name and reads its serial only after open.
+- `RegistryCatalog` offers every vendor (`CameraRegistry::register_vendors`; registration order is list order) to
+  discovery, connect and recovery alike; INDI is not (its own discovery path, never connectable).
+  `AppState::new_for_testing` uses `RegistryCatalog::simulator_only()`, so tests never call installed SDKs.
+- **Discovery is bounded per provider** (`CameraService::discover_cameras`): providers list concurrently, each under
+  `DISCOVERY_TIMEOUT` (20 s) on `AppState::discovery_calls_for`; a refresh waits on, then skips, a provider still
+  inside its SDK. A hung device froze `/api/cameras` and parked one more thread per refresh.
 - Discovery, connect and reconnect share one `DeviceCatalog`; `camera_session::recovery_tests` script a reordering bus.
 
 ### Device-loss classification

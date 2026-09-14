@@ -178,7 +178,7 @@ cargo test
 
 Each SDK is needed only to use its brand. Install udev rules (USB permissions) and the shared library as shown per
 vendor below, then **unplug and replug the camera**; `ldconfig -p | grep <library>` confirms the library is found.
-Player One, ZWO and QHYCCD SDKs need **libusb-1.0**; Player One also lists **libclang** (bindgen):
+Player One, ZWO, QHYCCD and SVBony SDKs need **libusb-1.0**; Player One also lists **libclang** (bindgen):
 
 ```bash
 sudo apt-get install libusb-1.0-0 libclang-dev   # Debian/Ubuntu/Raspberry Pi OS

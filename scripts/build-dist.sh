@@ -28,7 +28,7 @@ USE_CROSS="${CROSS:-0}"
 BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
 # Default features for distribution: camera providers whose SDKs are dlopen'd at runtime
-EXTRA_FEATURES="playerone,zwo,qhy"
+EXTRA_FEATURES="playerone,zwo,qhy,touptek,svbony"
 OVERRIDE_VERSION=""
 
 # ── Parse arguments ──────────────────────────────────────────────────

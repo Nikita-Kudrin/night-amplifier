@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar};
 use std::sync::OnceLock;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 use dlopen2::wrapper::{Container, WrapperApi};
 
@@ -135,30 +135,62 @@ static SDK: OnceLock<Option<SvbonySdk>> = OnceLock::new();
 impl SvbonySdk {
     pub fn try_load() -> Option<&'static SvbonySdk> {
         SDK.get_or_init(|| {
-            let lib_names = if cfg!(target_os = "windows") {
-                vec!["SVBony.dll"]
-            } else if cfg!(target_os = "macos") {
-                vec!["libSVBony.dylib", "libSVBCameraSDK.dylib"]
-            } else {
-                vec!["libSVBony.so", "libSVBCameraSDK.so"]
-            };
-
-            for name in lib_names {
-                match unsafe { Container::load(name) } {
+            crate::camera::sdk_library::preload_libusb();
+            let mut failures = Vec::new();
+            for &name in library_candidates(std::env::consts::OS) {
+                match unsafe { crate::camera::sdk_library::load_eagerly::<SvbonyApi>(name) } {
                     Ok(container) => {
-                        debug!("Successfully loaded SVBony SDK from {}", name);
+                        info!("SVBony SDK ({}) loaded successfully.", name);
                         return Some(SvbonySdk { api: container });
                     }
-                    Err(e) => {
-                        debug!("Failed to load SVBony SDK {}: {}", name, e);
-                    }
+                    Err(e) => failures.push((name, e)),
                 }
             }
 
-            warn!("SVBONY SDK not found. SVBony provider will be disabled.");
+            if failures
+                .iter()
+                .all(|(_, e)| crate::camera::sdk_library::is_missing_file(e))
+            {
+                info!("SVBony SDK not installed. SVBony cameras disabled.");
+            } else {
+                let reasons: Vec<String> = failures
+                    .iter()
+                    .map(|(name, e)| format!("{name}: {e}"))
+                    .collect();
+                warn!(
+                    "SVBony SDK found but failed to load ({}). SVBony cameras disabled.",
+                    reasons.join("; ")
+                );
+            }
             None
         })
         .as_ref()
+    }
+}
+
+/// SDK file names to try for `std::env::consts::OS`, the SDK's own name first. The Windows
+/// SDK ships `SVBCameraSDK.dll`; `SVBony.dll` alone never loaded there.
+fn library_candidates(os: &str) -> &'static [&'static str] {
+    match os {
+        "windows" => &["SVBCameraSDK.dll", "SVBony.dll"],
+        "macos" => &["libSVBCameraSDK.dylib", "libSVBony.dylib"],
+        _ => &["libSVBCameraSDK.so", "libSVBony.so"],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::library_candidates;
+
+    #[test]
+    fn every_platform_tries_the_sdk_file_name_first() {
+        for (os, sdk_file) in [
+            ("linux", "libSVBCameraSDK.so"),
+            ("macos", "libSVBCameraSDK.dylib"),
+            ("windows", "SVBCameraSDK.dll"),
+        ] {
+            assert_eq!(library_candidates(os)[0], sdk_file);
+        }
     }
 }
 

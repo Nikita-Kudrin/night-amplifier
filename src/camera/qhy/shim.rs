@@ -1,16 +1,57 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 use super::ffi_types::*;
 use super::sdk::QhySdk;
 use crate::camera::DeviceLease;
 
-/// Provider key for [`DeviceLease`] slots. QHY closes by opaque pointer, so
-/// reopening cannot alias a live handle; the lease is here for the
-/// double-close guard — `close()` is followed by `Drop`, and `CloseQHYCCD`
-/// twice on one pointer is a use-after-free.
+/// Provider key for [`DeviceLease`] slots. QHY closes by opaque pointer, so the lease is the
+/// double-close guard (`close()` is followed by `Drop`, and `CloseQHYCCD` twice on one pointer
+/// is a use-after-free) and it names the device id: one QHY device has at most one handle in
+/// this process, since what a second `OpenQHYCCD` of an open id returns is undocumented.
 pub(super) const PROVIDER: &str = "QHY";
+
+/// How long `open` waits for another handle to let go of the device — discovery holds one
+/// for a few seconds to read its capabilities. A device held longer is refused.
+const HELD_WAIT: Duration = Duration::from_secs(5);
+
+/// Serializes the SDK's device-table calls — scan, open, init, close — which discovery,
+/// connect and recovery otherwise make from different threads at once. Calls on an open
+/// handle during capture are left out.
+fn device_table_calls() -> MutexGuard<'static, ()> {
+    static CALLS: Mutex<()> = Mutex::new(());
+    CALLS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Claim `id` for this process, then run `open`. The claim is atomic and taken before the SDK
+/// sees the id, so discovery and a connect never open one device side by side; a failed open
+/// gives it back.
+fn claim_then_open<H>(
+    id: &str,
+    wait: Duration,
+    open: impl FnOnce() -> Result<H, String>,
+) -> Result<(H, DeviceLease), String> {
+    let deadline = Instant::now() + wait;
+    let lease = loop {
+        if let Some(lease) = DeviceLease::try_acquire_unique_device(PROVIDER, id) {
+            break lease;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("QHY camera {id} is held by another handle"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    match open() {
+        Ok(handle) => Ok((handle, lease)),
+        Err(e) => {
+            lease.begin_close();
+            Err(e)
+        }
+    }
+}
 
 pub struct ChipInfo {
     pub chip_w: f64,
@@ -35,31 +76,45 @@ unsafe impl Send for QhyHandle {}
 unsafe impl Sync for QhyHandle {}
 
 impl QhyHandle {
+    /// Open `id`, waiting briefly for another handle of this process to let go of it.
     pub fn open(id: &str) -> Result<Self, String> {
+        Self::open_claimed(id, HELD_WAIT)
+    }
+
+    /// Open `id` only if no other handle of this process holds it — for discovery, which must
+    /// neither wait on a live camera nor open one alongside it.
+    pub fn open_if_free(id: &str) -> Result<Self, String> {
+        Self::open_claimed(id, Duration::ZERO)
+    }
+
+    fn open_claimed(id: &str, wait: Duration) -> Result<Self, String> {
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-
         let id_cstring = std::ffi::CString::new(id).map_err(|e| e.to_string())?;
-        let handle = unsafe { sdk.api.OpenQHYCCD(id_cstring.as_ptr()) };
 
-        if handle.is_null() {
-            return Err(format!("Failed to open QHY camera {}", id));
-        }
+        let (handle, lease) = claim_then_open(id, wait, || {
+            let handle = {
+                let _calls = device_table_calls();
+                unsafe { sdk.api.OpenQHYCCD(id_cstring.as_ptr()) }
+            };
+            if handle.is_null() {
+                Err(format!("Failed to open QHY camera {id}"))
+            } else {
+                Ok(handle)
+            }
+        })?;
 
-        let res = unsafe { sdk.api.InitQHYCCD(handle) };
-        if res != QHYCCD_SUCCESS {
-            unsafe { sdk.api.CloseQHYCCD(handle) };
-            return Err(format!("InitQHYCCD failed with code {}", res));
-        }
-
-        Ok(Self {
-            handle,
-            lease: DeviceLease::acquire_unique(PROVIDER),
-        })
+        let camera = Self { handle, lease };
+        // A failed init drops `camera`, which closes it through its lease.
+        camera.init()?;
+        Ok(camera)
     }
 
     pub fn init(&self) -> Result<(), String> {
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.InitQHYCCD(self.handle) };
+        let res = {
+            let _calls = device_table_calls();
+            unsafe { sdk.api.InitQHYCCD(self.handle) }
+        };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -72,7 +127,10 @@ impl QhyHandle {
             return Ok(());
         }
         let sdk = QhySdk::try_load().ok_or("QHY SDK not loaded")?;
-        let res = unsafe { sdk.api.CloseQHYCCD(self.handle) };
+        let res = {
+            let _calls = device_table_calls();
+            unsafe { sdk.api.CloseQHYCCD(self.handle) }
+        };
         if res == QHYCCD_SUCCESS {
             Ok(())
         } else {
@@ -339,6 +397,7 @@ impl Drop for QhyHandle {
 
 pub fn scan_cameras() -> Option<Vec<String>> {
     let sdk = QhySdk::try_load()?;
+    let _calls = device_table_calls();
 
     let count = unsafe { sdk.api.ScanQHYCCD() };
     if count == 0 {
@@ -347,8 +406,9 @@ pub fn scan_cameras() -> Option<Vec<String>> {
 
     let mut cameras = Vec::new();
     for i in 0..count {
-        let mut id_buf = [0i8; 64];
-        let res = unsafe { sdk.api.GetQHYCCDId(i, id_buf.as_mut_ptr() as *mut c_char) };
+        // `c_char`, not `i8`: it is `u8` on Linux ARM, the Raspberry Pi builds.
+        let mut id_buf = [0 as c_char; 64];
+        let res = unsafe { sdk.api.GetQHYCCDId(i, id_buf.as_mut_ptr()) };
         if res == QHYCCD_SUCCESS {
             let id = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
                 .to_string_lossy()
@@ -421,5 +481,59 @@ mod tests {
             matches!(ctrl, ControlId::CamBin1x1mode | ControlId::CamBin2x2mode)
         });
         assert_eq!(bins, vec![1, 2]);
+    }
+
+    /// Discovery and a connect never open one device side by side: the claim is in place
+    /// before the SDK sees the id.
+    #[test]
+    fn a_device_is_claimed_before_the_sdk_opens_it() {
+        let id = "QHY-test-claimed-before-open";
+        let (_, lease) = claim_then_open(id, Duration::ZERO, || {
+            assert!(DeviceLease::is_device_open(PROVIDER, id));
+            Ok::<_, String>(())
+        })
+        .unwrap();
+        assert!(lease.begin_close());
+        assert!(!DeviceLease::is_device_open(PROVIDER, id));
+    }
+
+    #[test]
+    fn a_failed_open_gives_the_claim_back() {
+        let id = "QHY-test-failed-open";
+        let failed = claim_then_open(id, Duration::ZERO, || {
+            Err::<(), _>("OpenQHYCCD returned null".to_string())
+        });
+        assert!(failed.is_err());
+        assert!(!DeviceLease::is_device_open(PROVIDER, id));
+    }
+
+    /// A device another handle holds is never opened alongside it, however long the wait.
+    #[test]
+    fn a_held_device_is_never_opened_again() {
+        let id = "QHY-test-held";
+        let holder = DeviceLease::try_acquire_unique_device(PROVIDER, id).unwrap();
+        let mut opened = false;
+        let refused = claim_then_open(id, Duration::from_millis(60), || {
+            opened = true;
+            Ok::<_, String>(())
+        });
+        assert!(refused.is_err());
+        assert!(!opened);
+        assert!(holder.begin_close());
+    }
+
+    /// A connect waits out discovery's few seconds with the device.
+    #[test]
+    fn a_connect_waits_for_a_short_hold_to_end() {
+        let id = "QHY-test-short-hold";
+        let holder = DeviceLease::try_acquire_unique_device(PROVIDER, id).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(holder.begin_close());
+        });
+        let (_, lease) = claim_then_open(id, Duration::from_secs(2), || Ok::<_, String>(()))
+            .expect("claimed once the holder let go");
+        release.join().unwrap();
+        assert!(lease.begin_close());
     }
 }

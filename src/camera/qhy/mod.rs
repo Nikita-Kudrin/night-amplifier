@@ -52,59 +52,16 @@ impl CameraProvider for QhyProvider {
         Ok(cameras.len())
     }
 
+    /// Every scanned device, in scan order so positions match `open(index)`.
     fn list_cameras(&self) -> CameraResult<Vec<CameraInfo>> {
         let ids = catch_ffi_panic("QHY::scan_cameras", scan_cameras)
             .map_err(CameraError::from)?
             .unwrap_or_default();
-
-        let mut cameras = Vec::new();
-        // Unlike ZWO (ASIGetCameraProperty), QHY requires opening each camera to
-        // query chip info. This open/init/close cycle per camera is unavoidable
-        // and may be slow on systems with many QHY devices.
-        for (i, id) in ids.iter().enumerate() {
-            if let Ok(Ok(cam)) = catch_ffi_panic("QHY::open_camera", || QhyHandle::open(id)) {
-                if let Ok(Ok(chip)) = catch_ffi_panic("QHY::chip_info", || cam.chip_info()) {
-                    let mut info = CameraInfo {
-                        name: id.clone(),
-                        id: i as i32,
-                        serial: crate::camera::identity::normalize_serial(id),
-                        max_width: chip.img_w,
-                        max_height: chip.img_h,
-                        pixel_size_x_um: chip.pixel_w,
-                        pixel_size_y_um: chip.pixel_h,
-                        sensor_type: if chip.bayer == "MONO" {
-                            SensorType::Mono
-                        } else {
-                            SensorType::Color
-                        },
-                        ..Default::default()
-                    };
-                    if let Ok(Ok((_, max, _))) =
-                        catch_ffi_panic("QHY::gain_range", || cam.param_range(ControlId::Gain))
-                    {
-                        info.max_gain = max as i32;
-                    }
-
-                    info.has_cooler = cam.is_control_available(ControlId::Cooler);
-                    info.supported_bins = cam.supported_bins();
-                    info.bayer_pattern = match chip.bayer.as_str() {
-                        "GBRG" => Some(CfaPattern::Gbrg),
-                        "GRBG" => Some(CfaPattern::Grbg),
-                        "BGGR" => Some(CfaPattern::Bggr),
-                        "RGGB" => Some(CfaPattern::Rggb),
-                        _ => None,
-                    };
-                    info.bit_depth = chip.bpp as u8;
-                    info.supported_formats = if chip.bpp > 8 {
-                        vec![ImageFormat::Raw16, ImageFormat::Raw8]
-                    } else {
-                        vec![ImageFormat::Raw8]
-                    };
-                    cameras.push(info);
-                }
-            }
-        }
-        Ok(cameras)
+        Ok(ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| describe(id, index as i32))
+            .collect())
     }
 
     /// From the scan alone: `list_cameras` opens every device. The QHY id string is
@@ -126,6 +83,70 @@ impl CameraProvider for QhyProvider {
         let camera = QhyCamera::open(index)?;
         Ok(Box::new(camera))
     }
+}
+
+/// Capabilities need an open handle (QHY has no `ASIGetCameraProperty`), but a device another
+/// handle holds is described from its id alone and never opened — a second open of an open
+/// QHY id is undocumented, and closing it could close the live camera. One that fails to
+/// open is described the same way: dropping it shifted every later device onto its
+/// neighbour's position.
+fn describe(id: &str, index: i32) -> CameraInfo {
+    catch_ffi_panic("QHY::open_camera", || QhyHandle::open_if_free(id))
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|camera| build_camera_info(&camera, id, index).ok())
+        .unwrap_or_else(|| camera_info_from_id(id, index))
+}
+
+/// What the scan alone says: the QHY id is model plus serial.
+fn camera_info_from_id(id: &str, index: i32) -> CameraInfo {
+    CameraInfo {
+        name: id.to_string(),
+        id: index,
+        serial: crate::camera::identity::normalize_serial(id),
+        ..Default::default()
+    }
+}
+
+fn build_camera_info(camera: &QhyHandle, id: &str, index: i32) -> CameraResult<CameraInfo> {
+    let chip = catch_ffi_panic("QHY::chip_info", || camera.chip_info())
+        .map_err(CameraError::from)?
+        .map_err(CameraError::OpenFailed)?;
+
+    let mut info = CameraInfo {
+        max_width: chip.img_w,
+        max_height: chip.img_h,
+        pixel_size_x_um: chip.pixel_w,
+        pixel_size_y_um: chip.pixel_h,
+        sensor_type: if chip.bayer == "MONO" {
+            SensorType::Mono
+        } else {
+            SensorType::Color
+        },
+        ..camera_info_from_id(id, index)
+    };
+    if let Ok(Ok((_, max, _))) =
+        catch_ffi_panic("QHY::gain_range", || camera.param_range(ControlId::Gain))
+    {
+        info.max_gain = max as i32;
+    }
+
+    info.has_cooler = camera.is_control_available(ControlId::Cooler);
+    info.supported_bins = camera.supported_bins();
+    info.bayer_pattern = match chip.bayer.as_str() {
+        "GBRG" => Some(CfaPattern::Gbrg),
+        "GRBG" => Some(CfaPattern::Grbg),
+        "BGGR" => Some(CfaPattern::Bggr),
+        "RGGB" => Some(CfaPattern::Rggb),
+        _ => None,
+    };
+    info.bit_depth = chip.bpp as u8;
+    info.supported_formats = if chip.bpp > 8 {
+        vec![ImageFormat::Raw16, ImageFormat::Raw8]
+    } else {
+        vec![ImageFormat::Raw8]
+    };
+    Ok(info)
 }
 
 pub struct QhyCamera {
@@ -155,46 +176,7 @@ impl QhyCamera {
             .map_err(CameraError::from)?
             .map_err(CameraError::OpenFailed)?;
 
-        let chip = catch_ffi_panic("QHY::chip_info", || camera.chip_info())
-            .map_err(CameraError::from)?
-            .map_err(CameraError::OpenFailed)?;
-
-        let mut info = CameraInfo {
-            name: id.clone(),
-            id: index as i32,
-            serial: crate::camera::identity::normalize_serial(id),
-            max_width: chip.img_w,
-            max_height: chip.img_h,
-            pixel_size_x_um: chip.pixel_w,
-            pixel_size_y_um: chip.pixel_h,
-            sensor_type: if chip.bayer == "MONO" {
-                SensorType::Mono
-            } else {
-                SensorType::Color
-            },
-            ..Default::default()
-        };
-        if let Ok(Ok((_, max, _))) =
-            catch_ffi_panic("QHY::gain_range", || camera.param_range(ControlId::Gain))
-        {
-            info.max_gain = max as i32;
-        }
-
-        info.has_cooler = camera.is_control_available(ControlId::Cooler);
-        info.supported_bins = camera.supported_bins();
-        info.bayer_pattern = match chip.bayer.as_str() {
-            "GBRG" => Some(CfaPattern::Gbrg),
-            "GRBG" => Some(CfaPattern::Grbg),
-            "BGGR" => Some(CfaPattern::Bggr),
-            "RGGB" => Some(CfaPattern::Rggb),
-            _ => None,
-        };
-        info.bit_depth = chip.bpp as u8;
-        info.supported_formats = if chip.bpp > 8 {
-            vec![ImageFormat::Raw16, ImageFormat::Raw8]
-        } else {
-            vec![ImageFormat::Raw8]
-        };
+        let info = build_camera_info(&camera, id, index as i32)?;
 
         let slf = Self {
             camera,
@@ -209,9 +191,11 @@ impl QhyCamera {
         let _ = slf.camera.set_stream_mode(0); // Single frame mode
         let _ = slf.camera.set_param(
             ControlId::TransferBit,
-            if chip.bpp > 8 { 16.0 } else { 8.0 },
+            if slf.info.bit_depth > 8 { 16.0 } else { 8.0 },
         );
-        let _ = slf.camera.set_resolution(0, 0, chip.img_w, chip.img_h);
+        let _ = slf
+            .camera
+            .set_resolution(0, 0, slf.info.max_width, slf.info.max_height);
 
         Ok(slf)
     }

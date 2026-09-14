@@ -12,7 +12,7 @@ pub struct TouptekSdkApi {
     Toupcam_EnumV2: unsafe extern "C" fn(arr: *mut ToupcamDeviceV2) -> c_uint,
 
     // Lifecycle
-    Toupcam_Open: unsafe extern "C" fn(camId: *const c_char) -> HToupcam,
+    Toupcam_Open: unsafe extern "C" fn(camId: *const TChar) -> HToupcam,
     Toupcam_Close: unsafe extern "C" fn(h: HToupcam),
 
     // Pull mode
@@ -130,7 +130,7 @@ impl TouptekSdk {
                 "libtoupcam.so"
             };
 
-            match unsafe { Container::<TouptekSdkApi>::load(lib_name) } {
+            match unsafe { crate::camera::sdk_library::load_eagerly::<TouptekSdkApi>(lib_name) } {
                 Ok(api) => {
                     info!("ToupTek SDK ({}) loaded successfully.", lib_name);
                     Some(TouptekSdk { api })

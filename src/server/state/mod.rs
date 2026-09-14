@@ -105,6 +105,9 @@ pub struct AppState {
     /// Where cameras are discovered and opened. A trait object so tests can script
     /// the USB bus — including one that reorders itself between two enumerations.
     pub device_catalog: Arc<dyn crate::camera::DeviceCatalog>,
+    /// One counter per provider for `CameraService`'s bounded enumerations: a refresh waits on
+    /// a provider still inside its SDK instead of starting a second call behind it.
+    pub discovery_calls: StdMutex<HashMap<String, Arc<camera_slot::InFlightCalls>>>,
     /// What an interrupted capture needs in order to pick up where it left
     /// off. Recorded when a capture starts, consumed by the reconnect
     /// supervisor, cleared on a clean stop. Main camera only — for the guide
@@ -215,7 +218,8 @@ impl AppState {
             camera_slots: std::array::from_fn(|_| CameraSlot::default()),
             guide_cancel: StdMutex::new(None),
             camera_connect_lock: Mutex::new(()),
-            device_catalog: Arc::new(crate::camera::RegistryCatalog),
+            device_catalog: Arc::new(crate::camera::RegistryCatalog::new()),
+            discovery_calls: StdMutex::new(HashMap::new()),
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
@@ -227,6 +231,12 @@ impl AppState {
     /// The slot owning `role`'s handle, monitor and reconnect guard.
     pub fn slot(&self, role: CameraRole) -> &CameraSlot {
         &self.camera_slots[role as usize]
+    }
+
+    /// The in-flight counter for `provider`'s camera discovery, created on first use.
+    pub fn discovery_calls_for(&self, provider: &str) -> Arc<camera_slot::InFlightCalls> {
+        let mut calls = self.discovery_calls.lock().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(calls.entry(provider.to_string()).or_default())
     }
 
     /// The rendered image stream `role`'s camera produces.
@@ -325,12 +335,16 @@ impl AppState {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
 
-        Self::build(
+        let (mut state, disk_writer) = Self::build(
             DiskWriterConfig::new(captures_dir),
             SettingsPersistence::new("/nonexistent/test/settings.json"),
             CaptureSettings::default(),
             None,
-        )
+        );
+        // Discovery would otherwise call every vendor SDK installed on the machine, and open
+        // its cameras, from tests running in parallel.
+        state.device_catalog = Arc::new(crate::camera::RegistryCatalog::simulator_only());
+        (state, disk_writer)
     }
 
     /// Get the current capture state

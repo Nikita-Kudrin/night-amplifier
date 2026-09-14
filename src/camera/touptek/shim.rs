@@ -29,14 +29,18 @@ unsafe impl Send for TouptekHandle {}
 unsafe impl Sync for TouptekHandle {}
 
 impl TouptekHandle {
-    pub fn open(cam_id: &str) -> Result<Self, String> {
+    /// `cam_id` is the enumerated `ToupcamDeviceV2::id`, passed on unconverted: it is UTF-16
+    /// on Windows.
+    pub fn open(cam_id: &[TChar; 64]) -> Result<Self, String> {
         let sdk = TouptekSdk::try_load().ok_or("ToupTek SDK not loaded")?;
 
-        let id_cstring = std::ffi::CString::new(cam_id).map_err(|e| e.to_string())?;
-        let handle = unsafe { sdk.api.Toupcam_Open(id_cstring.as_ptr()) };
+        // The SDK reads the id up to its terminator; make sure there is one.
+        let mut id = *cam_id;
+        id[id.len() - 1] = 0;
+        let handle = unsafe { sdk.api.Toupcam_Open(id.as_ptr()) };
 
         if handle.is_null() {
-            return Err(format!("Failed to open ToupTek camera {}", cam_id));
+            return Err(format!("Failed to open ToupTek camera {}", tchar_to_string(&id)));
         }
 
         Ok(Self {
@@ -230,7 +234,8 @@ impl TouptekHandle {
 
     pub fn serial_number(&self) -> Result<String, String> {
         let sdk = TouptekSdk::try_load().ok_or("ToupTek SDK not loaded")?;
-        let mut sn = [0i8; 32];
+        // `c_char`, not `i8`: it is `u8` on Linux ARM, the Raspberry Pi builds.
+        let mut sn = [0 as std::os::raw::c_char; 32];
         let hr = unsafe {
             sdk.api
                 .Toupcam_get_SerialNumber(self.handle, sn.as_mut_ptr())

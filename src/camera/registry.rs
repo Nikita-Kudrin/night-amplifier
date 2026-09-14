@@ -1,7 +1,5 @@
 //! Camera registry for managing multiple providers
 
-use std::collections::HashMap;
-
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::CameraInfo;
@@ -30,14 +28,16 @@ pub struct CameraEntry {
 /// # Ok::<(), night_amplifier::camera::CameraError>(())
 /// ```
 pub struct CameraRegistry {
-    providers: HashMap<String, Box<dyn CameraProvider>>,
+    /// In registration order, which is the order cameras are listed in: a map reshuffled the
+    /// camera list on every refresh, since each discovery builds a fresh registry.
+    providers: Vec<Box<dyn CameraProvider>>,
 }
 
 impl CameraRegistry {
     /// Create a new empty registry
     pub fn new() -> Self {
         Self {
-            providers: HashMap::new(),
+            providers: Vec::new(),
         }
     }
 
@@ -47,51 +47,48 @@ impl CameraRegistry {
     /// Returns `CameraError::ProviderAlreadyRegistered` if a provider with
     /// the same name is already registered.
     pub fn register<P: CameraProvider + 'static>(&mut self, provider: P) -> CameraResult<()> {
-        let name = provider.name().to_string();
-        if self.providers.contains_key(&name) {
-            return Err(CameraError::ProviderAlreadyRegistered(name));
+        if self.get_provider(provider.name()).is_some() {
+            return Err(CameraError::ProviderAlreadyRegistered(
+                provider.name().to_string(),
+            ));
         }
-        self.providers.insert(name, Box::new(provider));
+        self.providers.push(Box::new(provider));
         Ok(())
     }
 
-    /// Register all available default providers
-    ///
-    /// This registers all camera providers that are compiled in (based on
-    /// enabled features). Providers whose SDK is not available will still
-    /// be registered but will return errors when used.
-    pub fn register_defaults(&mut self) {
-        // Register Player One provider
+    /// Register every vendor camera provider. One built without its feature is a stub that
+    /// reports unavailable, and one whose SDK is not installed returns errors when used, so
+    /// the set never depends on the build or the machine.
+    pub fn register_vendors(&mut self) {
         let _ = self.register(super::PlayerOneProvider::new());
-
-        // Register ZWO provider
         let _ = self.register(super::ZwoProvider::new());
-
-        // Register simulated camera provider (always available)
-        let _ = self.register(super::SimulatedProvider::new());
-
-        // Register SVBony provider
         let _ = self.register(super::SvbonyProvider::new());
         let _ = self.register(super::QhyProvider::new());
-
-        // Register ToupTek provider
         let _ = self.register(super::TouptekProvider::new());
     }
 
-    /// Get a list of registered provider names
+    /// Register every vendor provider plus the simulator.
+    pub fn register_defaults(&mut self) {
+        self.register_vendors();
+        let _ = self.register(super::SimulatedProvider::new());
+    }
+
+    /// Registered provider names, in registration order
     pub fn providers(&self) -> Vec<&str> {
-        self.providers.keys().map(|s| s.as_str()).collect()
+        self.providers.iter().map(|p| p.name()).collect()
     }
 
     /// Get a specific provider by name
     pub fn get_provider(&self, name: &str) -> Option<&dyn CameraProvider> {
-        self.providers.get(name).map(|p| p.as_ref())
+        self.providers
+            .iter()
+            .find(|p| p.name() == name)
+            .map(|p| p.as_ref())
     }
 
     /// Check if a provider is available (SDK loaded)
     pub fn is_provider_available(&self, name: &str) -> bool {
-        self.providers
-            .get(name)
+        self.get_provider(name)
             .map(|p| p.is_available())
             .unwrap_or(false)
     }
@@ -99,8 +96,7 @@ impl CameraRegistry {
     /// List cameras from a specific provider
     pub fn list_cameras(&self, provider: &str) -> CameraResult<Vec<CameraInfo>> {
         let provider = self
-            .providers
-            .get(provider)
+            .get_provider(provider)
             .ok_or_else(|| CameraError::ProviderNotFound(provider.to_string()))?;
         provider.list_cameras()
     }
@@ -112,7 +108,7 @@ impl CameraRegistry {
     pub fn list_all_cameras(&self) -> CameraResult<Vec<CameraEntry>> {
         let mut all_cameras = Vec::new();
 
-        for (name, provider) in &self.providers {
+        for provider in &self.providers {
             if !provider.is_available() {
                 continue;
             }
@@ -121,7 +117,7 @@ impl CameraRegistry {
                 Ok(cameras) => {
                     for (index, info) in cameras.into_iter().enumerate() {
                         all_cameras.push(CameraEntry {
-                            provider: name.clone(),
+                            provider: provider.name().to_string(),
                             index,
                             info,
                         });
@@ -137,7 +133,7 @@ impl CameraRegistry {
     /// Get total camera count across all providers
     pub fn total_camera_count(&self) -> usize {
         self.providers
-            .values()
+            .iter()
             .filter(|p| p.is_available())
             .filter_map(|p| p.camera_count().ok())
             .sum()
@@ -146,8 +142,7 @@ impl CameraRegistry {
     /// Open a camera from a specific provider by index
     pub fn open_camera(&self, provider: &str, index: usize) -> CameraResult<Box<dyn Camera>> {
         let provider = self
-            .providers
-            .get(provider)
+            .get_provider(provider)
             .ok_or_else(|| CameraError::ProviderNotFound(provider.to_string()))?;
         provider.open(index)
     }
@@ -180,7 +175,7 @@ impl CameraRegistry {
     /// Searches all available providers for a camera whose name contains
     /// the given substring.
     pub fn open_by_name(&self, name: &str) -> CameraResult<Box<dyn Camera>> {
-        for provider in self.providers.values() {
+        for provider in &self.providers {
             if !provider.is_available() {
                 continue;
             }
@@ -198,7 +193,7 @@ impl CameraRegistry {
 
     /// Open the first available camera from any provider
     pub fn open_first(&self) -> CameraResult<Box<dyn Camera>> {
-        for provider in self.providers.values() {
+        for provider in &self.providers {
             if !provider.is_available() {
                 continue;
             }
