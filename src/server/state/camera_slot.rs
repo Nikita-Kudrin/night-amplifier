@@ -279,8 +279,8 @@ pub enum BoundedCallError {
     Panicked,
 }
 
-/// Held for the length of one call; dropping it — on whatever thread the call finally
-/// returns on — takes the call off the count.
+/// Held for the length of one call; dropping it takes the call off the count — on
+/// whatever thread the call finally returns on, or with the result it hands back.
 #[must_use = "the call is counted only while the guard is alive"]
 pub struct InFlightCall(Arc<InFlightCalls>);
 
@@ -300,26 +300,41 @@ impl InFlightCalls {
     /// handle, typically — is dropped on its own thread *before* the call leaves the
     /// count, so a caller that waits for the count to drain never reopens a device whose
     /// late handle has not been closed yet.
+    ///
+    /// A call that does come back in time is off the count before this returns, so the
+    /// caller's next `in_flight` check never sees it.
     pub async fn run_bounded<T: Send + 'static>(
         self: &Arc<Self>,
         timeout: Duration,
         call: impl FnOnce() -> T + Send + 'static,
     ) -> Result<T, BoundedCallError> {
         let counted = self.begin();
-        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let (tx, mut rx) = tokio::sync::oneshot::channel::<(T, InFlightCall)>();
         tokio::task::spawn_blocking(move || {
-            // An unclaimed result comes back as the send's error, dropped right here.
-            let _ = tx.send(call());
-            drop(counted);
+            // Bound in this order so a panicking call leaves the count before the caller
+            // hears of it: locals drop in reverse.
+            let tx = tx;
+            let counted = counted;
+            let value = call();
+            // The guard travels with the result. An unclaimed result comes back as the
+            // send's error and is dropped right here, before its guard.
+            if let Err((late, counted)) = tx.send((value, counted)) {
+                drop(late);
+                drop(counted);
+            }
         });
+        let claim = |(value, counted): (T, InFlightCall)| {
+            drop(counted);
+            value
+        };
         match tokio::time::timeout(timeout, &mut rx).await {
-            Ok(Ok(value)) => Ok(value),
+            Ok(Ok(returned)) => Ok(claim(returned)),
             Ok(Err(_)) => Err(BoundedCallError::Panicked),
             Err(_) => {
                 rx.close();
                 // Returned between the deadline and the close: take it rather than drop
                 // it on this thread.
-                rx.try_recv().map_err(|_| BoundedCallError::TimedOut)
+                rx.try_recv().map(claim).map_err(|_| BoundedCallError::TimedOut)
             }
         }
     }
@@ -452,6 +467,18 @@ mod tests {
         let outcome = calls.run_bounded(Duration::from_secs(2), || 42).await;
         assert_eq!(outcome, Ok(42));
         assert!(calls.wait_drained(Duration::from_secs(1)).await);
+    }
+
+    /// `connect` refuses while an open is counted, and checks the moment the previous
+    /// call hands back. The count used to drop only after the result was sent, so a call
+    /// that had already returned could still look stuck inside the SDK.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bounded_call_is_off_the_count_by_the_time_its_result_is_back() {
+        let calls = Arc::new(InFlightCalls::default());
+        for attempt in 0..2_000 {
+            assert_eq!(calls.run_bounded(Duration::from_secs(2), move || attempt).await, Ok(attempt));
+            assert_eq!(calls.in_flight(), 0, "attempt {attempt}: a returned call is still counted");
+        }
     }
 
     #[tokio::test]
