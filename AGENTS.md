@@ -176,6 +176,10 @@ Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, componen
   overridable via `sensor_mode_override`. Main role only; the guide is never integrated, so it stays `Normal`.
 - **Monitor thread**: a `std::thread` (tokio would let USB stalls poison the runtime) with one reusable
   `monitor::FfiWorker`; one per slot, bound to its role at spawn — never "whatever is connected".
+- **Vendor SDKs are dlopen'd, never linked or shipped** (`dlopen2::Container::load` in each provider's `sdk.rs`).
+  rustc passes `-l` even for an unused `#[link]` block, so one breaks every build without that SDK. QHY publishes no
+  redistribution grant, and the binary has no RUNPATH to find a copy beside it. Enforced by
+  `camera::sdk_loading_tests` and the shared-library check in `scripts/build-dist.sh`.
 
 ### Guide camera — non-obvious and load-bearing
 

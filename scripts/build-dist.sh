@@ -27,8 +27,8 @@ TARGET_CPU="native"
 USE_CROSS="${CROSS:-0}"
 BUILD_FRONTEND=true
 BUILD_APPIMAGE=false
-# Default features for distribution: include camera support
-EXTRA_FEATURES="playerone,zwo"
+# Default features for distribution: camera providers whose SDKs are dlopen'd at runtime
+EXTRA_FEATURES="playerone,zwo,qhy"
 OVERRIDE_VERSION=""
 
 # ── Parse arguments ──────────────────────────────────────────────────
@@ -247,18 +247,14 @@ cp "${BINARY_PATH}" "${DIST_DIR}/${OUT_BINARY_NAME}"
 cp "${PROJECT_ROOT}/LICENSE" "${DIST_DIR}/"
 cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
 
-# ── Optional: bundle QHY SDK (libqhyccd.so) ──────────────────────────
-for QHY_LIB in /usr/local/lib/libqhyccd.so /usr/lib/libqhyccd.so; do
-    if [[ -f "${QHY_LIB}" ]]; then
-        echo "Bundling QHY SDK: ${QHY_LIB}"
-        cp "${QHY_LIB}" "${DIST_DIR}/"
-        # Copy versioned symlink targets too (e.g. libqhyccd.so.20)
-        for VER_LIB in "${QHY_LIB}."*; do
-            [[ -f "${VER_LIB}" ]] && cp "${VER_LIB}" "${DIST_DIR}/"
-        done
-        break
-    fi
-done
+# Vendor camera SDKs are dlopen'd from the user's own install, never shipped: QHY grants no
+# redistribution right, and the binary has no RUNPATH to find a copy next to it anyway.
+BUNDLED_LIBS=$(find "${DIST_DIR}" -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.dll' \))
+if [[ -n "${BUNDLED_LIBS}" ]]; then
+    echo "Error: shared libraries must not be shipped in the distribution:" >&2
+    echo "${BUNDLED_LIBS}" >&2
+    exit 1
+fi
 
 # Create archive
 cd "${PROJECT_ROOT}/dist"
