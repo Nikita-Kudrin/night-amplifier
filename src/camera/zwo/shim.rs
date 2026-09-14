@@ -200,10 +200,12 @@ impl Camera {
         }
     }
 
+    // Control values are C `long`s, 32 bits on Windows: narrowed with `to_sdk_long` here,
+    // widened with `i64::from` in the getters.
     pub fn set_exposure(&self, us: i64) -> Result<(), String> {
         self.set_control_value(
             ASI_CONTROL_TYPE_ASI_EXPOSURE,
-            us as c_long,
+            crate::ffi_safety::to_sdk_long("exposure", us)?,
             ASI_BOOL_ASI_FALSE,
         )
     }
@@ -211,7 +213,7 @@ impl Camera {
     pub fn set_gain_raw(&self, gain: i64) -> Result<(), String> {
         self.set_control_value(
             ASI_CONTROL_TYPE_ASI_GAIN,
-            gain as c_long,
+            crate::ffi_safety::to_sdk_long("gain", gain)?,
             ASI_BOOL_ASI_FALSE,
         )
     }
@@ -247,17 +249,17 @@ impl Camera {
 
     pub fn get_gain_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_GAIN)
-            .map(|(v, _)| v)
+            .map(|(v, _)| i64::from(v))
     }
 
     pub fn get_offset_raw(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_OFFSET)
-            .map(|(v, _)| v)
+            .map(|(v, _)| i64::from(v))
     }
 
     pub fn get_exposure(&self) -> Result<i64, String> {
         self.get_control_value(ASI_CONTROL_TYPE_ASI_EXPOSURE)
-            .map(|(v, _)| v)
+            .map(|(v, _)| i64::from(v))
     }
 
     pub fn get_cooler(&self) -> Result<bool, String> {

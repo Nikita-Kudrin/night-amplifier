@@ -8,7 +8,7 @@ then curated to only the types/constants needed by the night-amplifier integrati
     clippy::upper_case_acronyms
 )]
 
-use std::os::raw::{c_char, c_int, c_short, c_uint, c_ulonglong, c_ushort, c_void};
+use std::os::raw::{c_int, c_short, c_uint, c_ulonglong, c_ushort, c_void};
 
 // ── HRESULT (Windows-style, >= 0 is success, < 0 is failure) ────────────────
 pub type HRESULT = c_int;
@@ -75,7 +75,7 @@ pub struct ToupcamResolution {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ToupcamModelV2 {
-    pub name: *const c_char,
+    pub name: *const TChar,
     pub flag: c_ulonglong,
     pub maxspeed: c_uint,
     pub preview: c_uint,
@@ -90,9 +90,44 @@ pub struct ToupcamModelV2 {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct ToupcamDeviceV2 {
-    pub displayname: [c_char; 64usize],
-    pub id: [c_char; 64usize],
+    pub displayname: [TChar; 64usize],
+    pub id: [TChar; 64usize],
     pub model: *const ToupcamModelV2,
+}
+
+// The layout straight from toupcam.h, independent of `TChar`: two 64-unit strings of 2-byte
+// `wchar_t` on Windows (1-byte `char` elsewhere), then a pointer. Read with the wrong unit,
+// `model` came from inside `displayname`.
+const _: () = {
+    let unit = if cfg!(windows) { 2 } else { 1 };
+    let pointer = std::mem::size_of::<*const u8>();
+    let header_size = (2 * 64 * unit + pointer).div_ceil(pointer) * pointer;
+    assert!(std::mem::size_of::<ToupcamDeviceV2>() == header_size);
+};
+
+// ── Strings ─────────────────────────────────────────────────────────────────
+/// toupcam.h: "In Windows platform, we always use UNICODE wchar_t" — the device strings and
+/// `Toupcam_Open`'s id are UTF-16 there and narrow `char` everywhere else.
+#[cfg(windows)]
+pub type TChar = u16;
+#[cfg(not(windows))]
+pub type TChar = std::os::raw::c_char;
+
+/// An SDK string array up to its terminator, and never past the array's end.
+pub fn tchar_to_string(units: &[TChar]) -> String {
+    let len = units.iter().position(|&unit| unit == 0).unwrap_or(units.len());
+    decode(&units[..len])
+}
+
+#[cfg(windows)]
+fn decode(units: &[TChar]) -> String {
+    String::from_utf16_lossy(units)
+}
+
+#[cfg(not(windows))]
+fn decode(units: &[TChar]) -> String {
+    let bytes: Vec<u8> = units.iter().map(|&unit| unit as u8).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[repr(C)]

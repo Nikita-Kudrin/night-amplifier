@@ -102,7 +102,9 @@ function selectCamera(cameraId) {
 }
 
 function formatResolution(cam) {
-  return `${cam.info.max_width}x${cam.info.max_height}`
+  const {max_width: width, max_height: height} = cam?.info ?? {}
+  // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.
+  return width && height ? `${width}x${height}` : '—'
 }
 
 function temperaturePill(cam) {

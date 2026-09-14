@@ -40,29 +40,25 @@ impl CameraService {
         // Get current setting for simulated camera
         let use_simulated = state.settings.read().await.use_simulated_camera;
 
-        // Discover available cameras
-        let discovered = Self::discover_cameras(state, use_simulated).await;
-        if let Ok(entries) = discovered {
-            for entry in entries {
-                let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
+        for entry in Self::discover_cameras(state, use_simulated).await {
+            let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
 
-                // Skip if already connected
-                let connected = state.cameras.read().await;
-                if connected.values().any(|camera| is_same_device(camera, &entry)) {
-                    continue;
-                }
-                drop(connected);
-
-                cameras_list.push(CameraListItem {
-                    id,
-                    name: entry.info.name.clone(),
-                    connected: false,
-                    provider: Some(entry.provider),
-                    index: Some(entry.index),
-                    role: None,
-                    info: entry.info,
-                });
+            // Skip if already connected
+            let connected = state.cameras.read().await;
+            if connected.values().any(|camera| is_same_device(camera, &entry)) {
+                continue;
             }
+            drop(connected);
+
+            cameras_list.push(CameraListItem {
+                id,
+                name: entry.info.name.clone(),
+                connected: false,
+                provider: Some(entry.provider),
+                index: Some(entry.index),
+                role: None,
+                info: entry.info,
+            });
         }
 
         // Get INDI settings
@@ -109,20 +105,63 @@ impl CameraService {
         cameras_list
     }
 
-    /// Discover cameras through the state's device catalog (runs in blocking task)
-    async fn discover_cameras(
-        state: &AppState,
-        use_simulated: bool,
-    ) -> Result<Vec<CameraEntry>, crate::camera::CameraError> {
+    /// Cap on one provider's enumeration: QHY and ZWO open every idle device to read its
+    /// capabilities, a few seconds each.
+    #[cfg(not(test))]
+    const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+    #[cfg(test)]
+    const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+    /// Every provider's cameras, in catalog order. Each provider enumerates on its own blocking
+    /// thread under [`Self::DISCOVERY_TIMEOUT`], so one hung SDK neither holds up nor hides the
+    /// others. A provider whose earlier call is still in flight is waited for and, when still
+    /// stuck, skipped: a wedged device costs one parked thread, not one per refresh.
+    async fn discover_cameras(state: &AppState, use_simulated: bool) -> Vec<CameraEntry> {
         let catalog = Arc::clone(&state.device_catalog);
-        tokio::task::spawn_blocking(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                catalog.list_all(use_simulated)
-            }))
-            .unwrap_or(Err(crate::camera::CameraError::NoCamerasFound))
-        })
-        .await
-        .unwrap_or(Err(crate::camera::CameraError::NoCamerasFound))
+        let listings: Vec<_> = catalog
+            .provider_names(use_simulated)
+            .into_iter()
+            .map(|provider| {
+                let catalog = Arc::clone(&catalog);
+                let calls = state.discovery_calls_for(&provider);
+                async move {
+                    if !calls.wait_drained(Self::DISCOVERY_TIMEOUT).await {
+                        tracing::warn!(
+                            %provider,
+                            "Camera discovery skipped: its previous enumeration is still inside the SDK"
+                        );
+                        return Vec::new();
+                    }
+                    let listing = provider.clone();
+                    let listed = calls
+                        .run_bounded(Self::DISCOVERY_TIMEOUT, move || {
+                            catalog.list(&listing, use_simulated)
+                        })
+                        .await;
+                    match listed {
+                        Ok(Ok(entries)) => entries,
+                        Ok(Err(e)) => {
+                            tracing::debug!(%provider, error = %e, "Camera discovery failed");
+                            Vec::new()
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                %provider,
+                                error = ?e,
+                                timeout = ?Self::DISCOVERY_TIMEOUT,
+                                "Camera discovery did not return"
+                            );
+                            Vec::new()
+                        }
+                    }
+                }
+            })
+            .collect();
+        futures_util::future::join_all(listings)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Get information about a specific connected camera

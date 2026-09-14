@@ -106,7 +106,12 @@ impl FakeCatalog {
 }
 
 impl DeviceCatalog for FakeCatalog {
-    fn list_all(&self, _use_simulated: bool) -> CameraResult<Vec<CameraEntry>> {
+    fn provider_names(&self, _use_simulated: bool) -> Vec<String> {
+        vec![PROVIDER.to_string()]
+    }
+
+    fn list(&self, provider: &str, _use_simulated: bool) -> CameraResult<Vec<CameraEntry>> {
+        Self::check_provider(provider)?;
         Ok(self
             .devices
             .lock()

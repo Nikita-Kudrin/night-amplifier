@@ -111,3 +111,48 @@ fn test_provider_not_available_without_sdk() {
     let _available = provider.is_available();
     assert_eq!(provider.name(), "ToupTek");
 }
+
+#[test]
+fn an_sdk_string_ends_at_its_terminator() {
+    let mut units = [0 as TChar; 16];
+    for (slot, byte) in units.iter_mut().zip(b"GP-1200") {
+        *slot = *byte as TChar;
+    }
+    assert_eq!(tchar_to_string(&units), "GP-1200");
+}
+
+/// A string that fills its array has no terminator; reading one with `CStr` ran past the end.
+#[test]
+fn an_unterminated_sdk_string_stops_at_the_array_end() {
+    let units = [b'A' as TChar; 64];
+    assert_eq!(tchar_to_string(&units), "A".repeat(64));
+}
+
+fn device(name: &str, model: *const ToupcamModelV2) -> ToupcamDeviceV2 {
+    let mut displayname = [0 as TChar; 64];
+    for (slot, byte) in displayname.iter_mut().zip(name.bytes()) {
+        *slot = byte as TChar;
+    }
+    ToupcamDeviceV2 {
+        displayname,
+        id: [0; 64],
+        model,
+    }
+}
+
+/// `open(index)` indexes the raw enumeration and `identities` comes from the list, so a
+/// device the list cannot describe must still hold its position.
+#[test]
+fn a_device_without_a_model_keeps_every_position() {
+    // SAFETY: a plain C struct of numbers and pointers; all-zero is a valid empty model.
+    let model: ToupcamModelV2 = unsafe { std::mem::zeroed() };
+    let devices = [device("No Model", std::ptr::null()), device("GP-1200", &model)];
+    let listed: Vec<_> = super::describe_devices(&devices)
+        .into_iter()
+        .map(|info| (info.id, info.name))
+        .collect();
+    assert_eq!(
+        listed,
+        [(0, "No Model".to_string()), (1, "GP-1200".to_string())]
+    );
+}

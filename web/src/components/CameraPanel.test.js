@@ -217,6 +217,21 @@ describe('CameraPanel', () => {
 
             expect(wrapper.find('.camera-details').text()).toBe('2712x1538')
         })
+
+        it('shows an unknown resolution as a dash, not 0x0', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [
+                    {
+                        id: 'qhy_sn-QHY268M-1a2b',
+                        name: 'QHY268M-1a2b',
+                        connected: false,
+                        info: {max_width: 0, max_height: 0},
+                    },
+                ],
+            })
+
+            expect(wrapper.find('.camera-details').text()).toBe('—')
+        })
     })
 
     describe('Camera Selection', () => {

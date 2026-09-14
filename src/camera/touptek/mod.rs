@@ -1,6 +1,5 @@
 //! ToupTek camera implementation
 
-use std::ffi::CStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,14 +57,7 @@ impl CameraProvider for TouptekProvider {
         let devices = catch_ffi_panic("ToupTek::enumerate", enumerate_devices)
             .map_err(CameraError::from)?
             .unwrap_or_default();
-
-        let mut cameras = Vec::new();
-        for (i, dev) in devices.iter().enumerate() {
-            if let Some(info) = build_camera_info_from_device(dev, i as i32) {
-                cameras.push(info);
-            }
-        }
-        Ok(cameras)
+        Ok(describe_devices(&devices))
     }
 
     fn open(&self, index: usize) -> CameraResult<Box<dyn Camera>> {
@@ -98,13 +90,17 @@ impl TouptekCamera {
         }
 
         let dev = &devices[index];
-        let cam_id = c_char_array_to_string(&dev.id);
-
-        let handle = catch_ffi_panic("ToupTek::open", || TouptekHandle::open(&cam_id))
+        let handle = catch_ffi_panic("ToupTek::open", || TouptekHandle::open(&dev.id))
             .map_err(CameraError::from)?
             .map_err(CameraError::OpenFailed)?;
 
-        let info = build_camera_info_from_handle(&handle, dev, index as i32)?;
+        let mut info = build_camera_info_from_handle(&handle, dev, index as i32)?;
+        // The SDK lists no serial before open. With one here, recovery can tell whether a
+        // reopened handle is the same body.
+        info.serial = catch_ffi_panic("ToupTek::serial_number", || handle.serial_number())
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|serial| crate::camera::identity::normalize_serial(&serial));
 
         // Configure for astronomy: RAW mode, auto-exposure off, max speed
         catch_ffi_panic("ToupTek::set_raw", || handle.set_raw_mode(true))
@@ -412,11 +408,21 @@ impl Camera for TouptekCamera {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn c_char_array_to_string(arr: &[i8]) -> String {
-    let ptr = arr.as_ptr();
-    unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned()
+/// Every enumerated device, in the order `open` indexes them. `identities` derives from this
+/// list, so a device without a model lists by name instead of being dropped — dropping it
+/// shifted every later device onto its neighbour's position.
+fn describe_devices(devices: &[ToupcamDeviceV2]) -> Vec<CameraInfo> {
+    devices
+        .iter()
+        .enumerate()
+        .map(|(index, dev)| {
+            build_camera_info_from_device(dev, index as i32).unwrap_or_else(|| CameraInfo {
+                name: tchar_to_string(&dev.displayname),
+                id: index as i32,
+                ..Default::default()
+            })
+        })
+        .collect()
 }
 
 /// Build CameraInfo from enumeration data only (no handle needed).
@@ -426,7 +432,7 @@ fn build_camera_info_from_device(dev: &ToupcamDeviceV2, id: i32) -> Option<Camer
     }
 
     let model = unsafe { &*dev.model };
-    let name = c_char_array_to_string(&dev.displayname);
+    let name = tchar_to_string(&dev.displayname);
     let flag = model.flag;
 
     let max_width = if model.preview > 0 {

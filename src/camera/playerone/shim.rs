@@ -121,24 +121,26 @@ impl Camera {
             .map(|(v, _)| unsafe { v.floatValue } as f32)
     }
 
+    // `intValue` is a C `long`, 32 bits on Windows: widened with `i64::from` here, narrowed
+    // with `to_sdk_long` below.
     pub fn gain(&self) -> Result<(i64, bool), String> {
         self.get_config(POAConfig::POA_GAIN)
-            .map(|(v, auto)| (unsafe { v.intValue }, auto))
+            .map(|(v, auto)| (i64::from(unsafe { v.intValue }), auto))
     }
 
     pub fn offset(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_OFFSET)
-            .map(|(v, _)| unsafe { v.intValue })
+            .map(|(v, _)| i64::from(unsafe { v.intValue }))
     }
 
     pub fn exposure(&self) -> Result<(i64, bool), String> {
         self.get_config(POAConfig::POA_EXPOSURE)
-            .map(|(v, auto)| (unsafe { v.intValue }, auto))
+            .map(|(v, auto)| (i64::from(unsafe { v.intValue }), auto))
     }
 
     pub fn cooler_power(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_COOLER_POWER)
-            .map(|(v, _)| unsafe { v.intValue })
+            .map(|(v, _)| i64::from(unsafe { v.intValue }))
     }
 
     pub fn cooler(&self) -> Result<bool, String> {
@@ -148,7 +150,7 @@ impl Camera {
 
     pub fn dew_heater_power(&self) -> Result<i64, String> {
         self.get_config(POAConfig::POA_HEATER_POWER)
-            .map(|(v, _)| unsafe { v.intValue })
+            .map(|(v, _)| i64::from(unsafe { v.intValue }))
     }
 
     pub fn is_config_supported(&self, conf_id: POAConfig) -> bool {
@@ -159,7 +161,7 @@ impl Camera {
         self.set_config(
             POAConfig::POA_TARGET_TEMP,
             POAConfigValue {
-                intValue: temp as std::os::raw::c_long,
+                intValue: crate::ffi_safety::to_sdk_long("target temperature", temp)?,
             },
             false,
         )
@@ -183,7 +185,7 @@ impl Camera {
         self.set_config(
             POAConfig::POA_HEATER_POWER,
             POAConfigValue {
-                intValue: power as std::os::raw::c_long,
+                intValue: crate::ffi_safety::to_sdk_long("dew heater power", power)?,
             },
             false,
         )
@@ -193,7 +195,7 @@ impl Camera {
         self.set_config(
             POAConfig::POA_EXPOSURE,
             POAConfigValue {
-                intValue: exp as std::os::raw::c_long,
+                intValue: crate::ffi_safety::to_sdk_long("exposure", exp)?,
             },
             auto,
         )
@@ -203,7 +205,7 @@ impl Camera {
         self.set_config(
             POAConfig::POA_GAIN,
             POAConfigValue {
-                intValue: gain as std::os::raw::c_long,
+                intValue: crate::ffi_safety::to_sdk_long("gain", gain)?,
             },
             auto,
         )
@@ -213,7 +215,7 @@ impl Camera {
         self.set_config(
             POAConfig::POA_OFFSET,
             POAConfigValue {
-                intValue: offset as std::os::raw::c_long,
+                intValue: crate::ffi_safety::to_sdk_long("offset", offset)?,
             },
             false,
         )

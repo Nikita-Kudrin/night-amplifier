@@ -136,7 +136,8 @@ impl SvbonyCamera {
 
         // Disable auto-exposure by default
         let _ = catch_ffi_panic("SVBony::set_auto_exp", || {
-            handle.set_control_value(SVB_EXPOSURE, info.min_exposure_us as c_long, false)
+            let exposure = crate::ffi_safety::to_sdk_long("exposure", info.min_exposure_us)?;
+            handle.set_control_value(SVB_EXPOSURE, exposure, false)
         });
 
         // Set max speed if available
@@ -312,8 +313,8 @@ impl Camera for SvbonyCamera {
         let (w, h) = if config.should_reapply(self.last_applied_config.as_ref()) {
             // Update exposure
             catch_ffi_panic("SVBony::set_exposure", || {
-                self.handle
-                    .set_control_value(SVB_EXPOSURE, config.exposure_us as c_long, false)
+                let exposure = crate::ffi_safety::to_sdk_long("exposure", config.exposure_us)?;
+                self.handle.set_control_value(SVB_EXPOSURE, exposure, false)
             })
             .map_err(CameraError::from)?
             .map_err(CameraError::ExposureFailed)?;
