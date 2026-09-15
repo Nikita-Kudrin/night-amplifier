@@ -108,14 +108,9 @@ pub fn record_disk_writer_queue_capacity(capacity: u64) {
 #[cfg(not(feature = "telemetry"))]
 pub fn record_disk_writer_queue_capacity(_capacity: u64) {}
 
-/// Record the catalog entry count and index sizes.
+/// Record the catalog entry count and search key counts.
 #[cfg(feature = "telemetry")]
-pub fn record_catalog_stats(
-    entries_count: u64,
-    designation_index_size: u64,
-    messier_index_size: u64,
-    alias_index_size: u64,
-) {
+pub fn record_catalog_stats(entries_count: u64, name_key_count: u64, identifier_key_count: u64) {
     if let Some(provider) = super::METER_PROVIDER.get() {
         let meter = provider.meter("night_amplifier.catalog");
 
@@ -128,26 +123,16 @@ pub fn record_catalog_stats(
 
         let index_gauge = meter
             .u64_gauge("catalog.index_size")
-            .with_description("Number of entries in catalog index")
-            .with_unit("{entries}")
+            .with_description("Number of search keys in catalog index")
+            .with_unit("{keys}")
             .build();
-        index_gauge.record(
-            designation_index_size,
-            &[KeyValue::new("index", "designation")],
-        );
-        index_gauge.record(messier_index_size, &[KeyValue::new("index", "messier")]);
-        index_gauge.record(alias_index_size, &[KeyValue::new("index", "alias")]);
+        index_gauge.record(name_key_count, &[KeyValue::new("index", "name")]);
+        index_gauge.record(identifier_key_count, &[KeyValue::new("index", "identifier")]);
     }
 }
 
 #[cfg(not(feature = "telemetry"))]
-pub fn record_catalog_stats(
-    _entries_count: u64,
-    _designation_index_size: u64,
-    _messier_index_size: u64,
-    _alias_index_size: u64,
-) {
-}
+pub fn record_catalog_stats(_entries_count: u64, _name_key_count: u64, _identifier_key_count: u64) {}
 
 /// Record the number of connected cameras.
 #[cfg(feature = "telemetry")]
