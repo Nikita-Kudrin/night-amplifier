@@ -116,6 +116,8 @@
  * @property {string} designation - Catalog designation (e.g., "M31", "NGC 224")
  * @property {string} name - Common name
  * @property {string} catalog_type - Catalog type (Messier, NGC, IC, Star)
+ * @property {string} [messier] - Messier number (e.g., "M4") when the object is in the Messier catalog
+ * @property {string} [matched_name] - Name or identifier the search matched, when neither designation nor name did
  * @property {string} object_type - Object type (Galaxy, Nebula, etc.)
  * @property {string} constellation - Constellation
  * @property {number} ra_degrees - Right Ascension in degrees

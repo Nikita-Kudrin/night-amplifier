@@ -87,6 +87,7 @@ cargo test --test integration_pipeline -- --ignored --test-threads=1 # integrati
 cargo bench --bench <name> -- --noplot                              # read **Benchmark sizing** first; --noplot is ~4x faster (no gnuplot: 95 s -> 22 s), same numbers
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
+cargo check --lib --no-default-features --features telemetry       # CI guards it: nothing else compiles telemetry (1a243da broke it for 3 days)
 cargo run --release -- --static-dir web/dist                        # opt-in disk frontend (or NIGHT_AMPLIFIER_STATIC_DIR); default embedded bundle can't pick up web/'s Vite template
 
 # Performance investigation
@@ -154,6 +155,10 @@ drops the page's streams.
 
 Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, components in `src/components/`. Vite proxies
 `/api` and `/ws` to `localhost:9955` in dev.
+
+`useCatalogSearch` skips a programmatic query by *value* (`setQueryWithoutSearch`), never with a one-shot flag: clearing
+a 1-character query armed the flag, so typing "M" then "M4" never searched and M1–M9 were unfindable. It also drops
+responses from superseded searches, or a slow reply reopens the dropdown after a target was picked.
 
 ## Camera Notes
 

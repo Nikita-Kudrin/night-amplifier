@@ -139,7 +139,8 @@ pub async fn search_catalog(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(params): axum::extract::Query<SearchCatalogRequest>,
 ) -> impl IntoResponse {
-    let results = PushToService::search_catalog(&state, &params.query, params.limit).await;
+    let results =
+        PushToService::search_catalog(&state, &params.query, params.bounded_limit()).await;
     (StatusCode::OK, ApiResponse::ok(results))
 }
 

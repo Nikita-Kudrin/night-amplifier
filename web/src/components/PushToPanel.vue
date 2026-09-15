@@ -1,7 +1,7 @@
 <script setup>
 import {ref, onMounted, onUnmounted, inject, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
-import {useCatalogSearch, getCatalogClass} from '../composables/useCatalogSearch.js'
+import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
 import {useCoordinateInput, formatRA, formatDec} from '../composables/useCoordinates.js'
 import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
@@ -94,7 +94,7 @@ const fovWarning = computed(() => {
 })
 
 // Catalog search
-const {searchQuery, searchResults, searching, showResults, clearSearch, hideResults, revealResults} =
+const {searchQuery, searchResults, searching, showResults, setQueryWithoutSearch, hideResults, revealResults} =
     useCatalogSearch()
 
 const eventStream = inject('eventStream')
@@ -132,9 +132,7 @@ function formatFov(deg) {
 }
 
 async function selectTarget(entry) {
-  // Clear search first (sets skipNextSearch flag), then set query
-  clearSearch()
-  searchQuery.value = entry.name || entry.designation
+  setQueryWithoutSearch(entry.name || entry.designation)
   await selectTargetByName(entry.designation)
 }
 
@@ -276,11 +274,15 @@ onUnmounted(() => {
               @click="selectTarget(entry)"
           >
             <div class="result-main">
+              <span v-if="messierLabel(entry)" class="catalog-badge badge-messier">
+                {{ messierLabel(entry) }}
+              </span>
               <span :class="['catalog-badge', getCatalogClass(entry.catalog_type)]">
                 {{ entry.designation }}
               </span>
               <span class="result-name">{{ entry.name }}</span>
             </div>
+            <div v-if="entry.matched_name" class="result-matched">Matched: {{ entry.matched_name }}</div>
             <div class="result-details">
               <span class="result-type">{{ entry.object_type }}</span>
               <span class="result-constellation">{{ entry.constellation }}</span>
@@ -562,6 +564,15 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.result-matched {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.125rem;
 }
 
 .result-details {
