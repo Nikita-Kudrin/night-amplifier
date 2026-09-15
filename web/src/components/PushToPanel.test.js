@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref} from 'vue'
 import PushToPanel from './PushToPanel.vue'
@@ -22,7 +22,7 @@ vi.mock('../composables/api.js', () => ({
     cancelPushToSolve: vi.fn(),
 }))
 
-import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
+import {getAstapStatus, getAstapDatabases, updatePushToConfig, searchCatalog, setTargetByName} from '../composables/api.js'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
@@ -570,5 +570,94 @@ describe('PushToPanel – database selection', () => {
         await flushPromises()
 
         expect(updatePushToConfig).not.toHaveBeenCalled()
+    })
+})
+
+describe('PushToPanel – catalog search', () => {
+    const SEARCH_DEBOUNCE_MS = 300
+    const M4 = {
+        designation: 'NGC 6121',
+        catalog_type: 'NGC',
+        messier: 'M4',
+        object_type: 'Globular Cluster',
+        constellation: 'Scorpius',
+    }
+
+    // flushPromises schedules through setImmediate, which fake timers freeze
+    const settle = () => vi.advanceTimersByTimeAsync(0)
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+        vi.useRealTimers()
+    })
+
+    async function mountSearchPanel() {
+        const wrapper = mountPanel(settingsForFov(heightForFov(1)), astapStatus('D80'))
+        await settle()
+        return wrapper
+    }
+
+    async function typeKeys(wrapper, ...values) {
+        const input = wrapper.find('.search-input')
+        for (const value of values) {
+            await input.setValue(value)
+        }
+        await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS)
+        await settle()
+        return input
+    }
+
+    it('finds M4 typed one key at a time and targets the picked object without searching again', async () => {
+        searchCatalog.mockResolvedValue([M4])
+        setTargetByName.mockResolvedValue(M4)
+        const wrapper = await mountSearchPanel()
+
+        const input = await typeKeys(wrapper, 'M', 'M4')
+
+        expect(searchCatalog).toHaveBeenCalledTimes(1)
+        expect(searchCatalog).toHaveBeenCalledWith('M4')
+        const item = wrapper.find('.search-result-item')
+        expect(item.text()).toContain('NGC 6121')
+        expect(item.find('.badge-messier').text()).toBe('M4')
+
+        await item.trigger('click')
+        await vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS)
+        await settle()
+
+        expect(setTargetByName).toHaveBeenCalledWith('NGC 6121')
+        expect(input.element.value).toBe('NGC 6121')
+        expect(searchCatalog).toHaveBeenCalledTimes(1)
+        expect(wrapper.find('.search-results').exists()).toBe(false)
+    })
+
+    it('says which name or identifier a result was found by', async () => {
+        searchCatalog.mockResolvedValue([{
+            designation: 'NGC 6302',
+            name: 'Bug Nebula',
+            catalog_type: 'NGC',
+            matched_name: 'C 69',
+            object_type: 'Planetary Nebula',
+            constellation: 'Scorpius',
+        }])
+        const wrapper = await mountSearchPanel()
+
+        await typeKeys(wrapper, 'C69')
+
+        expect(wrapper.find('.result-matched').text()).toBe('Matched: C 69')
+        expect(wrapper.find('.badge-messier').exists()).toBe(false)
+    })
+
+    it('shows no matched line when the designation or name matched', async () => {
+        searchCatalog.mockResolvedValue([M4])
+        const wrapper = await mountSearchPanel()
+
+        await typeKeys(wrapper, 'NGC 6121')
+
+        expect(wrapper.find('.search-result-item').exists()).toBe(true)
+        expect(wrapper.find('.result-matched').exists()).toBe(false)
     })
 })

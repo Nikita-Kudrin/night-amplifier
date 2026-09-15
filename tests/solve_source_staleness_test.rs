@@ -61,6 +61,8 @@ fn fake_target() -> CatalogEntryResponse {
         object_type: String::new(),
         magnitude: None,
         constellation: String::new(),
+        messier: None,
+        matched_name: None,
     }
 }
 

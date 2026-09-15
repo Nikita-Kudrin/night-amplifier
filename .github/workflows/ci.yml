@@ -29,6 +29,9 @@ jobs:
         run: cargo nextest archive --archive-file tests.tar.zst --no-default-features
       - name: Build benchmarks
         run: cargo bench --no-run --no-default-features
+      # Nothing else compiles the telemetry feature; 1a243da broke it unnoticed for three days
+      - name: Check telemetry build
+        run: cargo check --lib --no-default-features --features telemetry
       - name: Archive benchmark binaries
         run: |
           mkdir -p bench-binaries
