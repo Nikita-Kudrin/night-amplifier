@@ -94,7 +94,9 @@ impl IncrementalPixel {
     /// West's algorithm for incrementally updating the weighted mean in O(1).
     #[inline]
     pub fn blend(&mut self, value: f32, weight: f32) {
-        self.count += 1;
+        // Saturates at 65,535 frames (~18 h of 1 s subs): `+=` panicked in debug builds
+        // and wrapped in release, resetting the coverage map. The mean uses `weight_sum`.
+        self.count = self.count.saturating_add(1);
         let temp_weight_sum = self.weight_sum + weight;
 
         let diff = value - self.mean;
@@ -209,6 +211,18 @@ mod tests {
         }
         assert!((p.mean - 0.4).abs() < 1e-6, "{}", p.mean);
         assert_eq!(p.count, 3);
+    }
+
+    #[test]
+    fn count_saturates_instead_of_overflowing() {
+        let mut p = IncrementalPixel::new();
+        p.blend(0.5, 1.0);
+        p.count = u16::MAX;
+
+        p.blend(0.5, 1.0);
+
+        assert_eq!(p.count, u16::MAX);
+        assert!((p.mean - 0.5).abs() < 1e-6, "{}", p.mean);
     }
 
     /// The scale is a variance of what arrived, so equal-sized deviations either side of

@@ -605,7 +605,15 @@ clipping methods to the plugin and silently averages the rest.
   least trustworthy.
 - **Test on squared quantities**: a `sqrt` + divide per pixel over 27M pixels cost 2.9x; `incremental_pixel`'s tables
   hoist divides per frame and only clipped samples root. `rejection_benchmark`'s `blend_incremental` case guards it (the
-  batch `compute_rejection` cases are not the live path).
+  batch `compute_rejection` cases are not the live path). The plain mean (rejection None) has
+  `stacking_benchmark`.
+- **Non-finite samples are skipped like borders** — one NaN left a pixel NaN for the session. The plain mean checks
+  `is_finite` (unmeasurable in `stacking_benchmark`); the clip folds it into `!(d^2 <= limit)`, since NaN/±Inf fail
+  `<=` — a separate up-front `is_finite` cost 10 % of `blend_incremental`.
+- **The settings toggle lands mid-stack** (settings are re-applied every frame). The first switch to clipping starts the
+  warm-up from nothing (the plain mean keeps no scale), so frames 0-2 after it are ungated. Switching *back* on keeps
+  the old scale: no gap, but a sky that moved while it was off loses frames, as a real brightness step does under
+  clipping: 10/15/19/24 frames at 30/100/300/1000 sigma. Pro's `master_stack_tests::robustness` pins both.
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 

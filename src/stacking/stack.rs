@@ -151,8 +151,9 @@ impl MasterStack {
                 .par_iter_mut()
                 .zip(data.par_iter())
                 .for_each(|(pixel, &val)| {
-                    // Ignore borders
-                    if (val - border_value).abs() < border_tolerance {
+                    // Skip borders, and non-finite samples: a NaN in a running mean
+                    // never leaves again.
+                    if !val.is_finite() || (val - border_value).abs() < border_tolerance {
                         return;
                     }
 
