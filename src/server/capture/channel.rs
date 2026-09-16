@@ -49,6 +49,15 @@ impl QueueDepth {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Claim the only slot of a channel whose consumer takes one message at a time:
+    /// succeeds only when nothing is queued or being handled. A compare-and-swap, so two
+    /// producers racing for an idle consumer cannot both hand it a message.
+    pub fn try_claim_idle(&self) -> bool {
+        self.0
+            .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
+
     /// Give a slot back: one message taken off the channel, or one send that did not
     /// happen.
     ///
@@ -127,7 +136,7 @@ fn read_mem_total_bytes() -> Option<usize> {
     parse_mem_total(&std::fs::read_to_string("/proc/meminfo").ok()?)
 }
 
-/// Pull `MemTotal` out of `/proc/meminfo` content.
+/// Pull `field` (`MemTotal`, `MemAvailable`…) out of `/proc/meminfo` content, in bytes.
 ///
 /// Split out from the read so the parser is testable on any host.
 ///
@@ -137,14 +146,20 @@ fn read_mem_total_bytes() -> Option<usize> {
 /// "unknown" is the safe failure. The arithmetic runs in `u64` and saturates on the way
 /// back to `usize`, because a 32-bit ARM build cannot hold a large `kB` value scaled by
 /// 1024.
-fn parse_mem_total(meminfo: &str) -> Option<usize> {
-    let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
-    let mut fields = line.split_whitespace().skip(1);
+pub(crate) fn parse_meminfo_bytes(meminfo: &str, field: &str) -> Option<usize> {
+    let line = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix(field)?.strip_prefix(':'))?;
+    let mut fields = line.split_whitespace();
     let value: u64 = fields.next()?.parse().ok()?;
     match fields.next() {
         Some("kB") => Some(value.saturating_mul(1024).try_into().unwrap_or(usize::MAX)),
         _ => None,
     }
+}
+
+fn parse_mem_total(meminfo: &str) -> Option<usize> {
+    parse_meminfo_bytes(meminfo, "MemTotal")
 }
 
 /// Frames that fit in one channel's share of `budget`, clamped to `[2, 256]`.

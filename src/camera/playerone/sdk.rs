@@ -52,8 +52,22 @@ pub struct PlayerOneSdkApi {
     POAGetSensorMode: unsafe extern "C" fn(nCameraID: c_int, pModeIndex: *mut c_int) -> POAErrors,
 }
 
+/// `POAGetDroppedImagesCount`: frames dropped in video mode since the stream started.
+pub type DroppedImagesCount =
+    unsafe extern "C" fn(nCameraID: c_int, pDroppedCount: *mut c_int) -> POAErrors;
+
+/// `POAGetConfigAttributesByConfigID`: a config's range and access flags.
+pub type ConfigAttributesByConfigId = unsafe extern "C" fn(
+    nCameraID: c_int,
+    confID: POAConfig,
+    pConfAttr: *mut POAConfigAttributes,
+) -> POAErrors;
+
+/// The optional symbols are looked up apart from `api`, so an SDK without them still loads.
 pub struct PlayerOneSdk {
     pub api: Container<PlayerOneSdkApi>,
+    pub dropped_images_count: Option<DroppedImagesCount>,
+    pub config_attributes: Option<ConfigAttributesByConfigId>,
 }
 
 static SDK: OnceLock<Option<PlayerOneSdk>> = OnceLock::new();
@@ -72,7 +86,24 @@ impl PlayerOneSdk {
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
                     info!("PlayerOne SDK ({}) loaded successfully.", lib_name);
-                    Some(PlayerOneSdk { api })
+                    use crate::camera::sdk_library::optional_symbol_lazy;
+                    let (dropped_images_count, config_attributes) = unsafe {
+                        (
+                            optional_symbol_lazy::<DroppedImagesCount>(
+                                lib_name,
+                                "POAGetDroppedImagesCount",
+                            ),
+                            optional_symbol_lazy::<ConfigAttributesByConfigId>(
+                                lib_name,
+                                "POAGetConfigAttributesByConfigID",
+                            ),
+                        )
+                    };
+                    Some(PlayerOneSdk {
+                        api,
+                        dropped_images_count,
+                        config_attributes,
+                    })
                 }
                 Err(e) => {
                     info!("PlayerOne SDK ({}) not found or failed to load: {}. PlayerOne cameras disabled.", lib_name, e);

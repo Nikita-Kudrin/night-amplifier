@@ -28,10 +28,8 @@ use super::render_task::{encode_jpeg_tiers, ConversionCache};
 use super::solving::{self, SolveSource};
 use super::stage_config;
 use super::storage;
-use super::watchdog::{
-    capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome, StallTracker, StallVerdict,
-    STALL_ESCALATION,
-};
+use super::stall::{handle_stall, StallSite, StallTracker, StallVerdict};
+use super::watchdog::{capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome};
 use crate::camera::Camera;
 use crate::disk_writer::{OpenSession, WritingSessionType};
 use crate::camera::CameraStatus;
@@ -197,7 +195,7 @@ pub(super) fn run(
     let mut rejected_config: Option<String> = None;
     let mut cooler = GuideCooler::default();
     let mut sensor = SensorReadout::default();
-    let mut stalls = StallTracker::default();
+    let mut stalls = StallTracker::for_camera(state, CameraRole::Guide, &camera_info.info.name);
 
     while !cancel.load(Ordering::SeqCst) {
         let settings = rt.block_on(state.settings.read()).clone();
@@ -228,6 +226,7 @@ pub(super) fn run(
             &camera_info.info.name,
         );
         super::config_overrides::apply_sensor_mode_support_override(&mut config, &camera_info.info);
+        super::config_overrides::apply_guide_acquisition_override(&mut config);
 
         frame_number += 1;
         let watchdog_timeout = capture_watchdog_timeout(&config, &camera_info.info);
@@ -258,24 +257,12 @@ pub(super) fn run(
                     return None;
                 }
                 if let crate::camera::CameraError::ExposureTimeout(budget) = e {
-                    if stalls.stalled() == StallVerdict::Escalate {
-                        error!(
-                            camera = %camera_info.info.name,
-                            consecutive = STALL_ESCALATION,
-                            "Restarting the guide stream did not bring frames back; reopening the camera"
-                        );
-                        crate::server::camera_health::record_fault(
-                            state,
-                            &camera_info.info.name,
-                            crate::server::camera_health::FaultKind::Timeout,
-                        );
+                    let name = &camera_info.info.name;
+                    if let StallVerdict::Escalate(_) =
+                        handle_stall(&mut stalls, StallSite::Guide, state, name, budget)
+                    {
                         return None;
                     }
-                    warn!(
-                        camera = %camera_info.info.name,
-                        ?budget,
-                        "Guide frame stalled; restarting the stream in place"
-                    );
                     continue;
                 }
                 if let crate::camera::CameraError::InvalidParameter { .. } = e {
@@ -336,13 +323,7 @@ pub(super) fn run(
         };
 
         if solving_wanted {
-            rt.spawn({
-                let state = Arc::clone(state);
-                let frame = Arc::clone(&frame);
-                async move {
-                    solving::try_plate_solve(&state, frame, SolveSource::Guide).await;
-                }
-            });
+            solving::offer_plate_solve(state, rt, Arc::clone(&frame), SolveSource::Guide);
         }
 
         if !watched {

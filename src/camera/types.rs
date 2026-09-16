@@ -395,6 +395,68 @@ pub struct GainPresets {
     pub offset_lowest_rn: i32,
 }
 
+/// How a shim takes frames: a continuous video stream, or one exposure per `capture()`.
+///
+/// `Auto` is the long-standing rule, video for exposures up to one second. The others are
+/// for field experiments: see `config_overrides::apply_guide_acquisition_override`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AcquisitionMode {
+    #[default]
+    Auto,
+    Video,
+    Snap,
+}
+
+impl AcquisitionMode {
+    /// `auto`, `video` or `snap`, in any case.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "video" => Some(Self::Video),
+            "snap" => Some(Self::Snap),
+            _ => None,
+        }
+    }
+}
+
+/// Environment switch for a field test of USB traffic: the share of USB bandwidth a camera
+/// may use, applied by providers exposing that control (Player One).
+pub const USB_BANDWIDTH_ENV: &str = "NIGHT_AMPLIFIER_USB_BANDWIDTH";
+
+/// A bandwidth percentage as [`USB_BANDWIDTH_ENV`] takes it: 1 to 100.
+pub fn parse_usb_bandwidth_percent(value: &str) -> Option<u8> {
+    value
+        .trim()
+        .parse::<u8>()
+        .ok()
+        .filter(|percent| (1..=100).contains(percent))
+}
+
+/// The limit to set for a requested `percent`, or the camera's advertised `(min, max)` when
+/// it lies outside it. `None` for a range the camera did not report: the SDK then decides.
+/// The parser takes any 1-100 because the floor is per camera, and a refused value used to
+/// log only "not applied".
+pub fn usb_bandwidth_within(percent: u8, range: Option<(i64, i64)>) -> Result<i64, (i64, i64)> {
+    let percent = i64::from(percent);
+    match range {
+        Some((min, max)) if !(min..=max).contains(&percent) => Err((min, max)),
+        _ => Ok(percent),
+    }
+}
+
+/// [`USB_BANDWIDTH_ENV`], read once. A value that does not parse is reported and ignored.
+pub fn usb_bandwidth_override() -> Option<u8> {
+    static PERCENT: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    *PERCENT.get_or_init(|| {
+        let raw = std::env::var(USB_BANDWIDTH_ENV).ok()?;
+        let percent = parse_usb_bandwidth_percent(&raw);
+        if percent.is_none() {
+            tracing::warn!(value = %raw, "Ignoring {USB_BANDWIDTH_ENV}: expected a percentage from 1 to 100");
+        }
+        percent
+    })
+}
+
 /// Configuration for image capture
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaptureConfig {
@@ -423,6 +485,8 @@ pub struct CaptureConfig {
     pub simulated_preload_images: usize,
     /// Desired dual-sampling sensor mode. None leaves the camera's current mode unchanged.
     pub sensor_mode: Option<DualSamplingMode>,
+    /// Video stream or single exposures. See [`AcquisitionMode`].
+    pub acquisition: AcquisitionMode,
 }
 
 impl Default for CaptureConfig {
@@ -440,14 +504,20 @@ impl Default for CaptureConfig {
             hardware_bin: true,
             simulated_preload_images: 5,
             sensor_mode: None,
+            acquisition: AcquisitionMode::Auto,
         }
     }
 }
 
 impl CaptureConfig {
-    /// Determines if the exposure duration is short enough to warrant continuous video capture (<= 1 second).
+    /// Whether the shim runs a continuous video stream: for exposures up to one second,
+    /// unless [`CaptureConfig::acquisition`] says otherwise.
     pub fn is_continuous(&self) -> bool {
-        self.exposure_us <= 1_000_000
+        match self.acquisition {
+            AcquisitionMode::Auto => self.exposure_us <= 1_000_000,
+            AcquisitionMode::Video => true,
+            AcquisitionMode::Snap => false,
+        }
     }
 
     /// Width and height of the frame this config reads from `info`'s sensor.

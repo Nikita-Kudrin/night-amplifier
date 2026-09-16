@@ -6,6 +6,7 @@ use crate::camera::{
     RawFrame, SensorType, FRAME_STALL_ALLOWANCE, TRANSFER_FLOOR_BYTES_PER_SEC,
 };
 use crate::server::capture::channel::{PipelineCapacities, QueueDepth};
+use crate::server::capture::stall::{EscalationReason, StallTracker, StallVerdict, STALL_ESCALATION};
 use crate::server::capture::task::{run_capture_task, CaptureChannels, FrameNumbers};
 use crate::server::capture::watchdog::*;
 use crate::server::events::ServerEvent;
@@ -128,12 +129,92 @@ fn stalls_escalate_only_when_consecutive() {
             "a delivered frame must reset the run"
         );
     }
-    assert_eq!(tracker.stalled(), StallVerdict::Escalate);
+    assert_eq!(tracker.stalled(), StallVerdict::Escalate(EscalationReason::Run));
     assert_eq!(
         tracker.stalled(),
         StallVerdict::RestartInPlace,
         "an escalation starts a fresh run"
     );
+}
+
+/// 2026-09-14: restarting in place cured at most 3 of 145 guide stalls, and each useless
+/// restart cost a stall budget. Once a camera's restarts have failed in a row, the loop
+/// the reopen starts goes straight back to reopening.
+#[test]
+fn a_camera_whose_restarts_never_recover_is_reopened_at_its_first_stall() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    let mut first_run = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
+    assert_eq!(first_run.stalled(), StallVerdict::RestartInPlace);
+    assert_eq!(first_run.stalled(), StallVerdict::RestartInPlace);
+    assert_eq!(first_run.stalled(), StallVerdict::Escalate(EscalationReason::Run));
+
+    let mut after_reopen = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
+    assert_eq!(
+        after_reopen.stalled(),
+        StallVerdict::Escalate(EscalationReason::RestartsNotRecovering {
+            failed: crate::server::camera_health::RESTART_DISTRUST_AFTER
+        })
+    );
+
+    let mut other_camera = StallTracker::for_camera(&state, CameraRole::Main, "Ares-C PRO");
+    assert_eq!(
+        other_camera.stalled(),
+        StallVerdict::RestartInPlace,
+        "the record belongs to the camera whose restarts failed"
+    );
+    let mut twin = StallTracker::for_camera(&state, CameraRole::Main, "Neptune-C II");
+    assert_eq!(
+        twin.stalled(),
+        StallVerdict::RestartInPlace,
+        "a second body of the same model, in the other role, is another device"
+    );
+}
+
+#[test]
+fn a_restart_that_brings_frames_back_keeps_the_ordinary_ladder() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    let mut tracker = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
+    assert_eq!(tracker.stalled(), StallVerdict::RestartInPlace);
+    assert_eq!(tracker.stalled(), StallVerdict::RestartInPlace, "the first restart failed");
+    tracker.frame_delivered();
+
+    let mut after = StallTracker::for_camera(&state, CameraRole::Guide, "Neptune-C II");
+    assert_eq!(
+        after.stalled(),
+        StallVerdict::RestartInPlace,
+        "a restart that worked clears the failure before it"
+    );
+}
+
+#[test]
+fn restart_history_ages_out_and_a_success_clears_it() {
+    use crate::server::camera_health::{
+        distrusted_restarts, record_restart_outcome, RestartHistory, RESTART_HISTORY_TTL,
+    };
+    let t0 = std::time::Instant::now();
+    let stale = t0 + RESTART_HISTORY_TTL + Duration::from_secs(1);
+
+    let mut history = RestartHistory::default();
+    history.record_failure(t0);
+    assert_eq!(history.distrusted(t0), None, "one failure is not a pattern");
+    history.record_failure(t0);
+    assert_eq!(history.distrusted(t0), Some(2));
+    assert_eq!(history.distrusted(stale), None, "an old record must not shape a new session");
+
+    history.record_failure(stale);
+    assert_eq!(history.distrusted(stale), None, "a stale count restarts rather than resumes");
+    history.record_failure(stale);
+    assert_eq!(history.distrusted(stale), Some(2));
+
+    let (state, _dw) = AppState::new_for_testing();
+    distrust_restarts(&state, CameraRole::Guide, "Neptune-C II");
+    assert!(distrusted_restarts(&state, CameraRole::Guide, "Neptune-C II").is_some(), "precondition");
+    record_restart_outcome(&state, CameraRole::Guide, "Neptune-C II", true);
+    assert_eq!(distrusted_restarts(&state, CameraRole::Guide, "Neptune-C II"), None, "a restart that worked clears it");
 }
 
 /// A call the watchdog abandoned is still inside the SDK, and a reconnect must be able
@@ -310,7 +391,10 @@ struct MainLoopRun {
 
 async fn drive_main_loop(steps: Vec<Step>, extra_frames: usize) -> MainLoopRun {
     let (state, _dw) = AppState::new_for_testing();
-    let state = Arc::new(state);
+    drive_main_loop_on(Arc::new(state), steps, extra_frames).await
+}
+
+async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Step>, extra_frames: usize) -> MainLoopRun {
     let mut events = state.subscribe_events();
 
     let camera = {
@@ -414,21 +498,7 @@ async fn a_run_of_stalls_hands_the_camera_to_recovery() {
 
 async fn drive_guide_loop(steps: Vec<Step>, extra_frames: usize) -> (bool, usize) {
     let (state, _dw) = AppState::new_for_testing();
-    let state = Arc::new(state);
-    let cancel = Arc::new(AtomicBool::new(false));
-    let camera = {
-        let cancel = Arc::clone(&cancel);
-        ScriptedCamera::new(steps).then_frames(extra_frames, move || cancel.store(true, Ordering::SeqCst))
-    };
-    let frames = Arc::clone(&camera.frames);
-    let info = connected(&camera.info, CameraRole::Guide);
-    let rt = tokio::runtime::Handle::current();
-    let returned = tokio::task::spawn_blocking(move || {
-        crate::server::capture::guide_task::run(&state, &info, Box::new(camera), &cancel, None, &rt)
-    })
-    .await
-    .unwrap();
-    (returned.is_some(), frames.load(Ordering::SeqCst))
+    run_guide_loop_on(&Arc::new(state), steps, extra_frames).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -481,4 +551,66 @@ async fn the_guide_loop_hands_a_run_of_stalls_to_recovery() {
     let (kept_handle, frames) = drive_guide_loop(steps, 2).await;
     assert!(!kept_handle);
     assert_eq!(frames, 0);
+}
+
+// --- Restarts that do not work are skipped ------------------------------------------
+
+/// What a reopen-and-stall spell leaves behind: this camera's restarts failing in a row.
+fn distrust_restarts(state: &AppState, role: CameraRole, camera_name: &str) {
+    for _ in 0..crate::server::camera_health::RESTART_DISTRUST_AFTER {
+        crate::server::camera_health::record_restart_outcome(state, role, camera_name, false);
+    }
+}
+
+async fn run_guide_loop_on(
+    state: &Arc<AppState>,
+    steps: Vec<Step>,
+    extra_frames: usize,
+) -> (bool, usize) {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let camera = {
+        let cancel = Arc::clone(&cancel);
+        ScriptedCamera::new(steps).then_frames(extra_frames, move || cancel.store(true, Ordering::SeqCst))
+    };
+    let frames = Arc::clone(&camera.frames);
+    let info = connected(&camera.info, CameraRole::Guide);
+    let state = Arc::clone(state);
+    let rt = tokio::runtime::Handle::current();
+    let returned = tokio::task::spawn_blocking(move || {
+        crate::server::capture::guide_task::run(&state, &info, Box::new(camera), &cancel, None, &rt)
+    })
+    .await
+    .unwrap();
+    (returned.is_some(), frames.load(Ordering::SeqCst))
+}
+
+/// The field sequence end to end: the first run pays for its restarts, and the loop the
+/// reopen starts on the same camera goes straight back to reopening — ~6 s an outage at a
+/// 0.5 s exposure instead of ~15 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_guide_loop_after_a_reopen_skips_restarts_that_did_not_work() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+
+    let run = (0..STALL_ESCALATION).map(|_| Step::Stall).collect();
+    let (kept_handle, _) = run_guide_loop_on(&state, run, 2).await;
+    assert!(!kept_handle, "precondition: the first run escalates");
+
+    let (kept_handle, frames) = run_guide_loop_on(&state, vec![Step::Stall], 2).await;
+    assert!(!kept_handle, "the reopened loop must not restart a stream that never recovered");
+    assert_eq!(frames, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_camera_whose_restarts_never_work_is_reopened_at_its_first_stall() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    distrust_restarts(&state, CameraRole::Main, "Scripted Camera");
+
+    let run = drive_main_loop_on(state, vec![Step::Frame, Step::Stall], 3).await;
+
+    assert!(!run.returned_handle, "a restart known not to work must not be spent");
+    assert_eq!(run.frames, 1);
+    assert_eq!(run.fault_streak, Some(1), "reopened as the fault it is");
+    assert!(!has_error_or_disconnect(&run.events), "recovery decides what the user sees");
 }

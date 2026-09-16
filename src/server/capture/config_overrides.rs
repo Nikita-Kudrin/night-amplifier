@@ -72,3 +72,46 @@ pub(crate) fn apply_sensor_mode_support_override(
         config.sensor_mode = None;
     }
 }
+
+/// Environment switch forcing the guide camera's acquisition mode: `snap`, `video` or `auto`.
+pub(crate) const GUIDE_ACQUISITION_ENV: &str = "NIGHT_AMPLIFIER_GUIDE_ACQUISITION";
+
+/// Apply [`GUIDE_ACQUISITION_ENV`] to a guide camera's config.
+///
+/// A field experiment, not a setting: 2026-09-14 the USB 2 guide camera's video stream
+/// latched until a reopen, and a snap exposure transfers only the frame the loop asks for.
+/// A night with this set says whether that avoids the latch. Read once; the loop builds a
+/// config per frame.
+pub(crate) fn apply_guide_acquisition_override(config: &mut crate::camera::CaptureConfig) {
+    static MODE: std::sync::OnceLock<crate::camera::AcquisitionMode> = std::sync::OnceLock::new();
+    config.acquisition = *MODE
+        .get_or_init(|| guide_acquisition(std::env::var(GUIDE_ACQUISITION_ENV).ok().as_deref()));
+}
+
+fn guide_acquisition(raw: Option<&str>) -> crate::camera::AcquisitionMode {
+    let Some(raw) = raw else {
+        return crate::camera::AcquisitionMode::Auto;
+    };
+    crate::camera::AcquisitionMode::parse(raw).unwrap_or_else(|| {
+        warn!(value = %raw, "Ignoring {GUIDE_ACQUISITION_ENV}: expected snap, video or auto");
+        crate::camera::AcquisitionMode::Auto
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::AcquisitionMode;
+
+    #[test]
+    fn the_guide_acquisition_switch_keeps_the_ordinary_rule_unless_set() {
+        assert_eq!(guide_acquisition(None), AcquisitionMode::Auto);
+        assert_eq!(guide_acquisition(Some("snap")), AcquisitionMode::Snap);
+        assert_eq!(guide_acquisition(Some("Video")), AcquisitionMode::Video);
+        assert_eq!(
+            guide_acquisition(Some("sometimes")),
+            AcquisitionMode::Auto,
+            "a typo must not change how the camera runs"
+        );
+    }
+}

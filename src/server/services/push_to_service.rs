@@ -22,9 +22,9 @@ impl PushToService {
     /// Read-only on purpose. `PushToState` mirrors the plugin so the stacking
     /// thread can gate plate solving without awaiting it, but a status poll is
     /// the wrong place to repair that mirror: `solving_in_progress` is a latch
-    /// owned by `try_plate_solve`, and clearing it from here would let a second
+    /// owned by `solve_frame`, and clearing it from here would let a second
     /// solve start under one already in flight. The mirror is maintained by the
-    /// target mutations below and re-synced from `try_plate_solve`'s own
+    /// target mutations below and re-synced from `solve_frame`'s own
     /// authoritative read of the plugin.
     pub async fn get_status(_state: &AppState) -> PushToStatusResponse {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
@@ -235,13 +235,13 @@ impl PushToService {
 /// plugin's own locks. The first two fields are caches, not the source of truth
 /// (the plugin is) — they exist only to keep `capture::solving::plate_solve_available`
 /// synchronous and cheap; every consequential check repeats against the plugin
-/// inside `try_plate_solve`. Write `has_target` through
+/// inside `solve_frame`. Write `has_target` through
 /// [`AppState::set_push_to_has_target`]. The last two are event de-duplication
 /// state, owned here since they're about what this server already told clients,
 /// which the plugin has no view of.
 #[derive(Default)]
 pub struct PushToState {
-    /// Latch owned by `try_plate_solve`: raised before a solve is spawned, cleared
+    /// Latch owned by `solve_frame`: raised before a solve is dispatched, cleared
     /// when it finishes.
     ///
     /// An `Arc<AtomicBool>` rather than a plain field so [`SolveLatch`] can release
@@ -260,7 +260,7 @@ pub struct PushToState {
     /// When a frame was last offered to the movement watch.
     last_watch: std::sync::Mutex<Option<Instant>>,
     /// Whether the plugin currently holds a target. Written by the target
-    /// mutations in [`PushToService`] and re-synced from `try_plate_solve`.
+    /// mutations in [`PushToService`] and re-synced from `solve_frame`.
     pub has_target: bool,
     /// Last push direction announced to clients, rounded — see
     /// [`PushToState::direction_is_news`].

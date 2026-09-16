@@ -11,6 +11,9 @@ mod cpu;
 #[cfg(target_os = "linux")]
 mod linux;
 
+#[cfg(target_os = "linux")]
+pub(crate) use linux::cpu_temperature;
+
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -32,6 +35,8 @@ const ENV_OVERRIDES: &[&str] = &[
     "NIGHT_AMPLIFIER_STATIC_DIR",
     "NIGHT_AMPLIFIER_SIM_STALL_EVERY",
     "NIGHT_AMPLIFIER_SIM_STALL_RUN",
+    "NIGHT_AMPLIFIER_GUIDE_ACQUISITION",
+    "NIGHT_AMPLIFIER_USB_BANDWIDTH",
     "OTEL_ENABLED",
     "OTEL_SERVICE_NAME",
 ];

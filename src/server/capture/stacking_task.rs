@@ -275,7 +275,7 @@ pub fn run_stacking_task(
         // task's `Arc::try_unwrap` fail and copy instead.
         //
         // Skipped along with the display copy on an iteration that made none: the solve
-        // wants the stack, not a single sub, and `try_plate_solve` is rate-limited by
+        // wants the stack, not a single sub, and `solve_frame` is rate-limited by
         // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
         // Declines outright while a guide camera is connected: that camera is the solve
         // source then, and it offers frames far more often than an imaging sub arrives.
@@ -283,13 +283,12 @@ pub fn run_stacking_task(
             solving::plate_solve_available(&state, solving::SolveSource::Main),
             display_frame.as_ref(),
         ) {
-            rt.spawn({
-                let state = Arc::clone(&state);
-                let solve_frame = Arc::clone(frame_to_solve);
-                async move {
-                    solving::try_plate_solve(&state, solve_frame, solving::SolveSource::Main).await;
-                }
-            });
+            solving::offer_plate_solve(
+                &state,
+                &rt,
+                Arc::clone(frame_to_solve),
+                solving::SolveSource::Main,
+            );
         }
 
         // Update frame counters. The reason rides on `frame_captured`, never on

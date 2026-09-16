@@ -70,6 +70,8 @@ pub struct AppState {
     pub disk_writer: DiskWriterHandle,
     /// Push-To navigation state
     pub push_to: RwLock<Option<PushToState>>,
+    /// Push-To's solve and watch consumer threads, started by the first frame offered.
+    pub(crate) push_to_tasks: std::sync::OnceLock<crate::server::capture::push_to_tasks::PushToTasks>,
     /// True while the guide loop is actually exposing, so the plate-solve source can be
     /// decided with an atomic load on the stacking thread rather than a lock — see
     /// `capture::solving::SolveSource`.
@@ -135,6 +137,11 @@ pub struct AppState {
     /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
     /// behind the occasional success. See `camera_health`.
     pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, (u32, Instant)>>,
+    /// Whether restarting a stalled stream in place has lately worked, per role and camera
+    /// name. Outlives the capture loop, whose next reopen it decides on. See
+    /// `camera_health::RestartHistory`.
+    pub(crate) restart_histories:
+        StdMutex<HashMap<(CameraRole, String), crate::server::camera_health::RestartHistory>>,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -210,6 +217,7 @@ impl AppState {
             events: events_tx,
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to),
+            push_to_tasks: std::sync::OnceLock::new(),
             guide_loop_running: AtomicBool::new(false),
             settings_persistence,
             dropped_frames: AtomicU64::new(0),
@@ -223,6 +231,7 @@ impl AppState {
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
+            restart_histories: StdMutex::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -634,7 +643,7 @@ impl AppState {
     /// Update the cached "plugin holds a target" flag. No-op without Push-To.
     ///
     /// A cache, not the source of truth — see [`PushToState`]. Written by the
-    /// target mutations in `PushToService` and re-synced from `try_plate_solve`,
+    /// target mutations in `PushToService` and re-synced from `solve_frame`,
     /// so that the stacking thread can gate plate solving synchronously.
     pub async fn set_push_to_has_target(&self, has_target: bool) {
         if let Some(ref mut pt) = *self.push_to.write().await {

@@ -108,7 +108,11 @@ USB stalls happen — a knocked cable, a hub that browns out, a driver hiccup. N
 Amplifier handles them in the background, and most of the time you will not notice:
 
 - **A lost frame** costs that frame. The camera's stream is restarted on the spot and the
-  capture carries on.
+  capture carries on. If restarting has not brought that camera's frames back lately, it is
+  reopened at the first stall instead, which gets frames flowing again within seconds.
+  That lasts for 10 minutes after the last restart that failed, or until you connect the
+  camera again. While it lasts, each lost frame briefly pauses a running capture, and a
+  planetary capture continues in a new video file.
 - **A camera that stops answering** is reopened without being disconnected. The view,
   the selected camera, Push-To and your capture all stay as they were; the capture pauses
   for the few seconds this takes and then continues. The status bar keeps showing

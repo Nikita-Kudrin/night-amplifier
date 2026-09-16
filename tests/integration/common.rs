@@ -378,6 +378,12 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "176mm-imx464-guide-exposure-change-fits",
         "https://drive.usercontent.google.com/download?id=1ZeJEc_OC33oz_QuoNdkJOIgjxxE-Szc-&export=download&confirm=t",
     ),
+    // Guide frames from the 2026-09-14 Lagoon push: one still pointing that Push-To solved
+    // twice (134-142), then the push onto M8 (183, 184, 187).
+    (
+        "176mm-imx464-guide-lagoon-fits",
+        "https://drive.usercontent.google.com/download?id=1O4lUyZZtH8XJeb_Ef7MDuuo1LhVT9Cc4&export=download&confirm=t",
+    ),
     // 16 subs of M27, cropped to 1024x1024 on an even origin so the RGGB phase survives.
     // Deliberately not the whole session: this is the shortest run that still shows the
     // render collapsing as the stack deepens, which is what `stack_depth_regression`

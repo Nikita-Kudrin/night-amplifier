@@ -311,6 +311,48 @@ impl Camera {
             Err(poa_err("POAGetImageData", err))
         }
     }
+
+    /// Frames the SDK dropped since the video stream started (stopping resets it), or
+    /// `None` from an SDK without `POAGetDroppedImagesCount`.
+    pub fn dropped_images_count(&self) -> Option<Result<i32, String>> {
+        let get = PlayerOneSdk::try_load()?.dropped_images_count?;
+        let mut count = 0;
+        let err = unsafe { get(self.id, &mut count) };
+        Some(if err == POAErrors::POA_OK {
+            Ok(count)
+        } else {
+            Err(poa_err("POAGetDroppedImagesCount", err))
+        })
+    }
+
+    /// The `(min, max)` this camera accepts for `POA_USB_BANDWIDTH_LIMIT`, or `None` from an
+    /// SDK without `POAGetConfigAttributesByConfigID`.
+    pub fn usb_bandwidth_range(&self) -> Option<Result<(i64, i64), String>> {
+        let get = PlayerOneSdk::try_load()?.config_attributes?;
+        let mut attributes = POAConfigAttributes::default();
+        let err = unsafe { get(self.id, POAConfig::POA_USB_BANDWIDTH_LIMIT, &mut attributes) };
+        Some(if err == POAErrors::POA_OK {
+            let (min, max) = unsafe { (attributes.minValue.intValue, attributes.maxValue.intValue) };
+            Ok((i64::from(min), i64::from(max)))
+        } else {
+            Err(poa_err("POAGetConfigAttributesByConfigID", err))
+        })
+    }
+
+    pub fn usb_bandwidth_limit(&self) -> Result<i64, String> {
+        self.get_config(POAConfig::POA_USB_BANDWIDTH_LIMIT)
+            .map(|(v, _)| i64::from(unsafe { v.intValue }))
+    }
+
+    pub fn set_usb_bandwidth_limit(&mut self, percent: i64) -> Result<(), String> {
+        self.set_config(
+            POAConfig::POA_USB_BANDWIDTH_LIMIT,
+            POAConfigValue {
+                intValue: crate::ffi_safety::to_sdk_long("USB bandwidth limit", percent)?,
+            },
+            false,
+        )
+    }
 }
 
 impl Drop for Camera {

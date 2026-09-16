@@ -8,9 +8,9 @@
 //! that is still in flight when a guide camera connects or disconnects — offered
 //! before the switch, dispatched after it — used to reach the plugin anyway, reading
 //! as the *new* rig's telescope having moved and aborting a solve that had just
-//! started. `try_plate_solve` now re-checks `SolveSource::is_active` immediately
-//! before every dispatch, not only once at the `plate_solve_available` gate the
-//! caller checks first.
+//! started. `solve_frame` and `watch_frame` now re-check `SolveSource::is_active`
+//! immediately before every dispatch, not only once at the `plate_solve_available`
+//! gate the caller checks first.
 //!
 //! One test function, deliberately: it registers a fake plugin into the
 //! process-global `PUSH_TO_PLUGIN` and flips the process-global `PRO_LICENSE_ACTIVE`
@@ -29,7 +29,7 @@ use night_amplifier::push_to::{
     FrameOutcome, PushToCatalogPlugin, PushToInstallerPlugin, PushToResult, PushToSolverPlugin,
     PUSH_TO_PLUGIN,
 };
-use night_amplifier::server::capture::solving::{try_plate_solve, SolveSource};
+use night_amplifier::server::capture::solving::{solve_frame, watch_frame, SolveSource};
 use night_amplifier::server::services::PushToState;
 use night_amplifier::server::state::AppState;
 use night_amplifier::server::{
@@ -124,7 +124,7 @@ impl PushToSolverPlugin for CountingPlugin {
     async fn set_active_camera(&self, _camera: Option<String>) {}
 }
 
-/// None of these are exercised by this test — `try_plate_solve` only ever reaches
+/// None of these are exercised by this test — `solve_frame`/`watch_frame` only ever reach
 /// `PushToSolverPlugin` methods — but `PushToSystemPlugin` requires all three traits.
 #[async_trait]
 impl PushToCatalogPlugin for CountingPlugin {
@@ -198,8 +198,8 @@ fn isolate_cwd() {
     std::env::set_current_dir(&dir).expect("switch into the isolated working directory");
 }
 
-/// A fresh app state with a `PushToState` claiming the solve slot, so `try_plate_solve`
-/// routes to the watch arm rather than starting a new solve.
+/// A fresh app state with a `PushToState` claiming the solve slot, so `watch_frame`
+/// finds a solve to watch.
 async fn state_mid_solve() -> Arc<AppState> {
     // No raw frames are queued in this test, so the writer half can simply drop —
     // nothing needs it running.
@@ -218,7 +218,7 @@ async fn state_mid_solve() -> Arc<AppState> {
     state
 }
 
-/// A fresh app state with nothing running yet, so `try_plate_solve` starts a solve.
+/// A fresh app state with nothing running yet, so `solve_frame` starts a solve.
 async fn state_ready_to_solve() -> Arc<AppState> {
     let (state, _disk_writer) = AppState::new();
     let state = Arc::new(state);
@@ -226,8 +226,7 @@ async fn state_ready_to_solve() -> Arc<AppState> {
     state
 }
 
-/// Poll for up to a second: `process_new_frame` runs on a detached `tokio::spawn`, so
-/// a caller that only awaits `try_plate_solve` cannot see it finish.
+/// Poll for up to a second for a dispatch count to be reached.
 async fn wait_for_count(counter: &AtomicUsize, expected: usize) {
     for _ in 0..100 {
         if counter.load(Ordering::SeqCst) >= expected {
@@ -265,20 +264,20 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
     let state = state_mid_solve().await;
     state.set_guide_loop_running(false); // Main is the active source
 
-    try_plate_solve(&state, Arc::clone(&frame), SolveSource::Main).await;
+    watch_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
     assert_eq!(
         observe_calls.load(Ordering::SeqCst),
         1,
         "the active source's frame must still reach the watch"
     );
 
-    // ---- watch arm: the source went stale before try_plate_solve even started -----
+    // ---- watch arm: the source went stale before watch_frame even started ---------
     let state = state_mid_solve().await;
     // The guide camera connects in the gap between the caller's `plate_solve_available`
     // check and this call — exactly the race the fix closes.
     state.set_guide_loop_running(true);
 
-    try_plate_solve(&state, Arc::clone(&frame), SolveSource::Main).await;
+    watch_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
     assert_eq!(
         observe_calls.load(Ordering::SeqCst),
         1,
@@ -290,13 +289,13 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
     let state = state_ready_to_solve().await;
     state.set_guide_loop_running(false);
 
-    try_plate_solve(&state, Arc::clone(&frame), SolveSource::Main).await;
+    solve_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
     wait_for_count(&process_calls, 1).await;
 
     // ---- solve arm: the rig changes while `get_status` is in flight ---------------
     // The gap unique to this arm: claiming the slot and dispatching into
-    // `process_new_frame` cross `get_status().await` and a `tokio::spawn`, either of
-    // which can outlast a rig switch that lands in between.
+    // `process_new_frame` cross `get_status().await`, which can outlast a rig switch that
+    // lands in between.
     let state = state_ready_to_solve().await;
     state.set_guide_loop_running(false);
     let flip_state = Arc::clone(&state);
@@ -304,10 +303,7 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
         flip_state.set_guide_loop_running(true);
     }));
 
-    try_plate_solve(&state, Arc::clone(&frame), SolveSource::Main).await;
-    // No count to poll *up* to — this asserts the detached task never runs, so give it
-    // a real window to have done so before checking it did not.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    solve_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
     assert_eq!(
         process_calls.load(Ordering::SeqCst),
         1,
