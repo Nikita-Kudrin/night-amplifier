@@ -25,42 +25,6 @@ fn test_master_stack_simple() {
 }
 
 #[test]
-#[ignore = "Requires Pro rejection plugin"]
-fn test_master_stack_sigma_clip() {
-    // Use ACTUAL SigmaClip, and set min_frames_for_rejection to 3
-    // so it has enough history to build a standard deviation before frame 5
-    let config = StackingConfig::default()
-        .with_rejection(RejectionMethod::SigmaClip)
-        .with_sigma(2.0); // 2.0 standard deviations
-
-    let mut config = config;
-    config.min_frames_for_rejection = 3;
-
-    let mut stack = MasterStack::new(4, 4, 1, config).unwrap();
-
-    // 1. Establish the "baseline" running average and variance
-    for _ in 0..4 {
-        let frame = Frame::filled(4, 4, 1, 0.5).unwrap();
-        stack.add_frame(&frame).unwrap();
-    }
-
-    // 2. Introduce the outlier
-    let frame_outlier = Frame::filled(4, 4, 1, 0.9).unwrap();
-    stack.add_frame(&frame_outlier).unwrap();
-
-    let result = stack.compute().unwrap();
-    let data = result.data();
-
-    // The running Sigma Clip should detect 0.9 as an outlier and reject it instantly.
-    // The running mean remains exactly 0.5.
-    assert!(
-        (data[0] - 0.5).abs() < 0.01,
-        "SigmaClip should reject the outlier and give ~0.5, got {}",
-        data[0]
-    );
-}
-
-#[test]
 fn test_border_handling() {
     let config = StackingConfig::default();
     let mut stack = MasterStack::new(8, 8, 1, config).unwrap();
@@ -82,6 +46,33 @@ fn test_border_handling() {
         "Interior should be 0.5"
     );
     assert!(result_data[0].abs() < 1e-6, "Border should be 0.0");
+}
+
+/// A running mean has no way back from NaN: one bad sample used to leave the pixel NaN
+/// for the rest of the session. Non-finite samples are skipped like border pixels.
+#[test]
+fn test_non_finite_samples_do_not_poison_the_stack() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+        let mut stack = MasterStack::new(2, 1, 1, config).unwrap();
+
+        for i in 0..6 {
+            let first = if i == 3 { bad } else { 0.4 };
+            let frame = Frame::from_f32_vec(vec![first, 0.6], 2, 1, 1).unwrap();
+            stack.add_frame(&frame).unwrap();
+        }
+
+        let result = stack.compute().unwrap();
+        assert!(
+            (result.data()[0] - 0.4).abs() < 1e-6,
+            "{bad} sample reached the mean: {}",
+            result.data()[0]
+        );
+        assert!((result.data()[1] - 0.6).abs() < 1e-6);
+        let coverage = stack.coverage_map();
+        assert!((coverage.data()[0] - 5.0 / 6.0).abs() < 1e-6, "{bad} was counted");
+        assert_eq!(coverage.data()[1], 1.0);
+    }
 }
 
 #[test]
@@ -209,38 +200,6 @@ fn test_weighted_stacking_favor_high_snr() {
     assert!(
         data[0] > 0.5,
         "Should favor high SNR frame: got {}, expected > 0.5",
-        data[0]
-    );
-}
-
-#[test]
-#[ignore = "Requires Pro rejection plugin"]
-fn test_weighted_stacking_with_sigma_clip() {
-    let config = StackingConfig::default()
-        .with_rejection(RejectionMethod::SigmaClip)
-        .with_weighting(WeightingConfig::balanced());
-
-    let mut stack = MasterStack::new(4, 4, 1, config).unwrap();
-
-    for i in 0..4 {
-        let frame = Frame::filled(4, 4, 1, 0.5).unwrap();
-        let fwhm = 2.0 + i as f32 * 0.1;
-        stack
-            .add_frame_with_quality(&frame, FrameQuality::from_fwhm(fwhm))
-            .unwrap();
-    }
-
-    let outlier = Frame::filled(4, 4, 1, 0.9).unwrap();
-    stack
-        .add_frame_with_quality(&outlier, FrameQuality::from_fwhm(5.0))
-        .unwrap();
-
-    let result = stack.compute().unwrap();
-    let data = result.data();
-
-    assert!(
-        (data[0] - 0.5).abs() < 0.1,
-        "Should reject outlier: got {}, expected ~0.5",
         data[0]
     );
 }
