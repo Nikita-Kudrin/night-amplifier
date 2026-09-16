@@ -1000,7 +1000,7 @@ async fn stopping_the_guide_loop_of_a_recovering_slot_waits_for_the_loop() {
 /// pauses for recovery, comes back, and resumes — without an error on the way.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
-    use crate::server::capture::watchdog::STALL_ESCALATION;
+    use crate::server::capture::stall::STALL_ESCALATION;
 
     let catalog = FakeCatalog::with(&[NEPTUNE]);
     let state = rig(&catalog);
@@ -1422,4 +1422,32 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
     assert!(resumed, "the capture never resumed");
     assert_eq!(exposure, edited, "the resume put back the exposure the capture started with");
     assert!(announced, "restoring the session's settings must tell the clients");
+}
+
+// --- Restart history across a manual reconnect ---------------------------------------
+
+/// Failed in-place restarts describe one cable and one hub. An observer who disconnects
+/// and connects again — typically after reseating that cable — must get the ordinary
+/// ladder back, not ten minutes of reopen-at-first-stall (or, with auto-reconnect off, a
+/// disconnect at the first lost frame).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manual_reconnect_forgets_restarts_that_did_not_work() {
+    use crate::server::camera_health::{
+        distrusted_restarts, record_restart_outcome, RESTART_DISTRUST_AFTER,
+    };
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    for _ in 0..RESTART_DISTRUST_AFTER {
+        record_restart_outcome(&state, CameraRole::Guide, NEPTUNE.name, false);
+    }
+    assert!(distrusted_restarts(&state, CameraRole::Guide, NEPTUNE.name).is_some(), "precondition");
+
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await.expect("disconnect");
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let distrusted = distrusted_restarts(&state, CameraRole::Guide, NEPTUNE.name);
+    teardown(&state).await;
+
+    assert_eq!(distrusted, None, "a reconnect the observer asked for starts with a clean record");
 }

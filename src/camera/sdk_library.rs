@@ -28,6 +28,18 @@ pub(crate) unsafe fn optional_symbol<T>(library: &str, symbol: &str) -> Option<T
     handle.symbol::<T>(symbol).ok()
 }
 
+/// [`optional_symbol`] for an SDK that still loads lazily (Player One, ZWO): reopening it
+/// with `RTLD_NOW` would bind all of its pending symbols, the eager binding those SDKs have
+/// not been hardware-checked with.
+///
+/// # Safety
+/// As for [`optional_symbol`].
+#[cfg_attr(not(feature = "playerone"), allow(dead_code))]
+pub(crate) unsafe fn optional_symbol_lazy<T>(library: &str, symbol: &str) -> Option<T> {
+    let handle = dlopen2::raw::Library::open_with_flags(library, None).ok()?;
+    handle.symbol::<T>(symbol).ok()
+}
+
 /// Whether a failed load means the file is not there, as opposed to a library that exists
 /// but cannot load (an unresolvable symbol, the wrong architecture). The platform's message
 /// is all there is to go by.

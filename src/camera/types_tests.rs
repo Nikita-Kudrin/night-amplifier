@@ -11,6 +11,51 @@ fn test_capture_config_defaults() {
     assert!(config.roi.is_none());
 }
 
+/// `Auto` keeps the long-standing rule; the overrides exist for field experiments on a
+/// USB 2 guide camera whose video stream latched (2026-09-14).
+#[test]
+fn acquisition_mode_decides_between_video_and_single_exposures() {
+    let continuous = |exposure_us, acquisition| {
+        CaptureConfig {
+            exposure_us,
+            acquisition,
+            ..Default::default()
+        }
+        .is_continuous()
+    };
+    assert!(continuous(500_000, AcquisitionMode::Auto));
+    assert!(continuous(1_000_000, AcquisitionMode::Auto));
+    assert!(!continuous(1_000_001, AcquisitionMode::Auto));
+    assert!(!continuous(500_000, AcquisitionMode::Snap));
+    assert!(continuous(5_000_000, AcquisitionMode::Video));
+    assert_eq!(CaptureConfig::default().acquisition, AcquisitionMode::Auto);
+}
+
+#[test]
+fn field_switches_parse_what_an_observer_types() {
+    assert_eq!(AcquisitionMode::parse(" Snap "), Some(AcquisitionMode::Snap));
+    assert_eq!(AcquisitionMode::parse("video"), Some(AcquisitionMode::Video));
+    assert_eq!(AcquisitionMode::parse("AUTO"), Some(AcquisitionMode::Auto));
+    assert_eq!(AcquisitionMode::parse("single"), None);
+
+    assert_eq!(parse_usb_bandwidth_percent("80"), Some(80));
+    assert_eq!(parse_usb_bandwidth_percent(" 100 "), Some(100));
+    assert_eq!(parse_usb_bandwidth_percent("0"), None);
+    assert_eq!(parse_usb_bandwidth_percent("101"), None);
+    assert_eq!(parse_usb_bandwidth_percent("fast"), None);
+}
+
+/// The camera's advertised range decides, not the parser's 1-100: a refused value used to
+/// log only "not applied".
+#[test]
+fn a_bandwidth_request_is_checked_against_the_cameras_range() {
+    assert_eq!(usb_bandwidth_within(80, Some((35, 100))), Ok(80));
+    assert_eq!(usb_bandwidth_within(35, Some((35, 100))), Ok(35));
+    assert_eq!(usb_bandwidth_within(100, Some((35, 100))), Ok(100));
+    assert_eq!(usb_bandwidth_within(20, Some((35, 100))), Err((35, 100)));
+    assert_eq!(usb_bandwidth_within(20, None), Ok(20), "no range reported: the SDK decides");
+}
+
 #[test]
 fn test_capture_config_builder() {
     let config = CaptureConfig::new()

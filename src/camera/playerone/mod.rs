@@ -21,6 +21,43 @@ mod sensor_mode;
 
 pub use properties::{camera_info_from_description, camera_info_from_properties};
 
+/// Apply the `USB_BANDWIDTH_ENV` field switch, then read the limit back. The read-back is
+/// `info` while the switch is set: a field log at the default level must say what the
+/// stream ran at, or the experiment answers nothing.
+fn apply_usb_bandwidth_override(camera: &mut POACamera, name: &str) {
+    let requested = super::types::usb_bandwidth_override();
+    if let Some(percent) = requested {
+        let range = match catch_ffi_panic("PlayerOne::usb_bandwidth_range", || camera.usb_bandwidth_range()) {
+            Ok(Some(Ok(range))) => Some(range),
+            _ => None,
+        };
+        match super::types::usb_bandwidth_within(percent, range) {
+            Err((min, max)) => tracing::warn!(
+                camera = %name, percent, min, max,
+                "USB bandwidth limit is outside what this camera accepts; not applied"
+            ),
+            Ok(limit) => {
+                let applied = catch_ffi_panic("PlayerOne::set_usb_bandwidth_limit", || {
+                    camera.set_usb_bandwidth_limit(limit)
+                })
+                .map_err(|e| e.to_string())
+                .and_then(|result| result);
+                if let Err(e) = applied {
+                    tracing::warn!(camera = %name, percent, error = %e, "USB bandwidth limit was not applied");
+                }
+            }
+        }
+    }
+    let Ok(Ok(limit)) = catch_ffi_panic("PlayerOne::usb_bandwidth_limit", || camera.usb_bandwidth_limit()) else {
+        return;
+    };
+    if requested.is_some() {
+        tracing::info!(camera = %name, usb_bandwidth_limit = limit, requested, "USB bandwidth limit");
+    } else {
+        tracing::debug!(camera = %name, usb_bandwidth_limit = limit, "USB bandwidth limit");
+    }
+}
+
 /// Player One camera provider
 pub struct PlayerOneProvider;
 
@@ -100,12 +137,14 @@ impl PlayerOneCamera {
         let description = descriptions.into_iter().nth(index).unwrap();
         let mut info = camera_info_from_description(&description);
 
-        let camera = catch_ffi_panic("PlayerOne::open::description.open", || description.open())
+        let mut camera = catch_ffi_panic("PlayerOne::open::description.open", || description.open())
             .map_err(CameraError::from)?
             .map_err(|e| CameraError::OpenFailed(format!("{:?}", e)))?;
 
         info.sensor_modes = sensor_mode::list_sensor_modes(camera.id());
         info.has_dew_heater = camera.is_config_supported(ffi_types::POAConfig::POA_HEATER_POWER);
+
+        apply_usb_bandwidth_override(&mut camera, &info.name);
 
         Ok(Self {
             camera,

@@ -41,44 +41,6 @@ pub(crate) fn capture_watchdog_timeout(
     config.stall_budget(config.frame_bytes(info)) + WATCHDOG_SLACK
 }
 
-/// Consecutive stalled frames a loop restarts the stream for in place before it
-/// treats the camera as faulted and hands it to the reconnect supervisor.
-pub(crate) const STALL_ESCALATION: u32 = 3;
-
-/// What a capture loop should do about a stalled frame.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StallVerdict {
-    /// The shim already stopped the stream; the next `capture()` restarts it.
-    RestartInPlace,
-    /// Restarting has not brought a frame back. Reopen the device.
-    Escalate,
-}
-
-/// Counts stalled frames between good ones, shared by the imaging and guide loops.
-///
-/// A single stall is not a fault — the camera answered, it just lost a frame — so it
-/// must not reach `camera_health`, which would count it toward "persistently
-/// unresponsive". A run of them is.
-#[derive(Debug, Default)]
-pub(crate) struct StallTracker {
-    consecutive: u32,
-}
-
-impl StallTracker {
-    pub(crate) fn frame_delivered(&mut self) {
-        self.consecutive = 0;
-    }
-
-    pub(crate) fn stalled(&mut self) -> StallVerdict {
-        self.consecutive += 1;
-        if self.consecutive >= STALL_ESCALATION {
-            self.consecutive = 0;
-            return StallVerdict::Escalate;
-        }
-        StallVerdict::RestartInPlace
-    }
-}
-
 pub(crate) enum StatusPollOutcome {
     /// The call returned in time. The camera handle is returned so the
     /// capture loop can keep using it.

@@ -275,8 +275,12 @@ success. Recovery is a ladder — each rung runs only if the previous failed; th
 
 1. **Stream restart.** Shims wait `CaptureConfig::stall_budget` (exposure + 3 s + transfer at 10 MB/s) from *entering*
    `capture()`, then stop the stream for the loop to retry. `capture_watchdog_timeout` derives from it (budget + 3 s;
-   independent, every lost frame cost the handle). A fault is `STALL_ESCALATION` (3) stalls in a row (`StallTracker`,
-   shared by both loops *and* `capture_probe_frame`). Given-up handles close off-thread (`release_faulted_handle`).
+   independent, every lost frame cost the handle). A fault is `STALL_ESCALATION` (3) stalls in a row (`capture::stall`:
+   both loops *and* `capture_probe_frame` go through `handle_stall`, which also logs what surrounded the stall). A camera
+   whose in-place restarts failed `RESTART_DISTRUST_AFTER` (2) times in a row within 10 min escalates at its *first*
+   stall (`camera_health::RestartHistory`, kept in `AppState` per role and name because the reopen rebuilds the
+   tracker; a user `connect` forgets it): 2026-09-14 restarts cured at most 3 of 145 guide stalls, each costing a whole
+   budget. Given-up handles close off-thread (`release_faulted_handle`).
 2. **Quiet suspend** (`camera_session::recovery`): `finalize_disconnect(DeviceFault)` keeps entry, selection, status,
    guide stream and solver rig; sets `CameraPhase::Recovering` (+ `CaptureState::Recovering` if resumable); spawns the
    supervisor. `end_capture_state` never overwrites `Recovering`, and on any other end clears resume plan + parked
@@ -299,6 +303,10 @@ success. Recovery is a ladder — each rung runs only if the previous failed; th
 - Connect and `finalize_disconnect` call `PushToService::set_active_camera` — the FOV cache can't tell same-format
   cameras apart and a stale FOV *fails* hinted solves. Only a *named, different* camera discards it (see Pro AGENTS.md).
 - Debug builds inject simulator stalls: `NIGHT_AMPLIFIER_SIM_STALL_EVERY`/`_RUN` (`simulated::stall_injection`).
+- Field switches for USB stalls, logged by the system report: `NIGHT_AMPLIFIER_GUIDE_ACQUISITION=snap|video|auto` (guide
+  camera only, `CaptureConfig::acquisition`) and `NIGHT_AMPLIFIER_USB_BANDWIDTH=1..100` (Player One
+  `POA_USB_BANDWIDTH_LIMIT`, applied at open if inside the camera's advertised range, read back at `info` while set). The Player One shim logs `POAGetDroppedImagesCount` on a
+  stall, read before the stop that resets it.
 
 ### Focus/Finder mode (`state::focus_mode`)
 
@@ -327,9 +335,17 @@ noticed and the doomed search abandoned (closed, the movement detector was blind
 Separate cadence floors (1 s / 1.5 s) — the solve timestamp is stamped once per ladder, so sharing it lets the watch
 free-run.
 
-`plate_solve_available` (declines with no target or before the floor) is advisory; the `try_begin_*` compare-and-swap
-decides. It stops the stacking thread cloning a frame handle for a doomed offer — a live second handle fails the render
-task's `Arc::try_unwrap` and copies a full frame.
+Loops offer frames through `offer_plate_solve` to two pipeline tasks (`capture::push_to_tasks`): `push-to-solve` and
+`push-to-watch` threads, each fed by a one-slot channel and running the plugin under `rt.block_on`, so its synchronous
+detection and FITS write never hold a runtime worker. A frame goes only to an *idle* consumer
+(`QueueDepth::try_claim_idle`) and is dropped otherwise — never queued: spawning a task per offer kept 27 of 32 frames
+alive, 5.7 s stale, while solve and watch were busy (`tests/push_to_offer_backlog_test.rs`). Detection shares the global
+rayon pool at normal priority; niceness and a second pool were tried and removed (4.6x slower under load, and
+`pre_exec` forced `fork` for ASTAP: ~50 ms per spawn at 3 GiB RSS).
+
+`plate_solve_available` (declines with no target, before the floor, or with the lane's task busy) is advisory; the
+`try_begin_*` compare-and-swap decides. It stops the loops converting or cloning a frame for a doomed offer — a live
+second handle fails the render task's `Arc::try_unwrap` and copies a full frame.
 
 `PushToBlocker` says why nothing is happening, incl. normal pushed-scope states (moving, settling, trailing), via
 `FrameOutcome::blocker` → `announce_blocker`: one event per transition, including the shutdown clear. The plugin must
