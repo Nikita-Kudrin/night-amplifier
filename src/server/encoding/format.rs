@@ -38,22 +38,3 @@ pub const JPEG_MAGIC: u32 = 0x53413130; // "SA10" in little-endian
 pub const SA09_HEADER_SIZE: usize = 20;
 pub const SA09_CHUNK_DESCRIPTOR_SIZE: usize = 8;
 pub const SA10_HEADER_SIZE: usize = 16;
-
-/// Smallest bounding box a JPEG client may ask for.
-pub const JPEG_MIN_BOUNDING_BOX: (u32, u32) = (1920, 1080);
-/// Largest bounding box a JPEG client may ask for.
-pub const JPEG_MAX_BOUNDING_BOX: (u32, u32) = (3840, 2160);
-
-/// Clamp a client-requested viewport to the streamable JPEG range.
-///
-/// Single source of truth for the bounds: resolution tiers and the encoder
-/// both derive from it, so a request always maps to the tier that is actually
-/// encoded.
-pub fn clamp_client_resolution(req_w: Option<u32>, req_h: Option<u32>) -> (u32, u32) {
-    let (min_w, min_h) = JPEG_MIN_BOUNDING_BOX;
-    let (max_w, max_h) = JPEG_MAX_BOUNDING_BOX;
-    (
-        req_w.unwrap_or(min_w).clamp(min_w, max_w),
-        req_h.unwrap_or(min_h).clamp(min_h, max_h),
-    )
-}

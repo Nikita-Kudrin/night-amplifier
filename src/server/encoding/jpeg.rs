@@ -17,8 +17,8 @@ pub(crate) fn calculate_dynamic_jpeg_quality(width: u32, height: u32) -> i32 {
 }
 
 thread_local! {
-    /// Reused TurboJPEG compressor. The render task encodes one payload per
-    /// active resolution tier per frame, so keeping the compressor alive avoids
+    /// Reused TurboJPEG compressor. The render task encodes a JPEG every frame,
+    /// so keeping the compressor alive avoids
     /// re-allocating libjpeg-turbo's internal buffers on every encode.
     static JPEG_COMPRESSOR: std::cell::RefCell<Option<turbojpeg::Compressor>> =
         const { std::cell::RefCell::new(None) };
@@ -68,9 +68,8 @@ fn compress_rgb8_to_jpeg(rgb8_data: &[u8], width: u32, height: u32) -> Result<Ve
 
 /// Encode a frame as JPEG (SA10 format) fitted into an exact bounding box.
 ///
-/// The box is used verbatim, which lets the `Original` resolution tier stream a
-/// frame at its native size. Clients go through [`encode_rgb8_jpeg_dynamic`],
-/// which clamps the request first.
+/// The box is used verbatim: `(u32::MAX, u32::MAX)` streams the frame at its native size
+/// (see `Resolution::bounding_box`).
 pub fn encode_rgb8_jpeg_bounded(
     ready_frame: &crate::server::state::RenderReadyFrame,
     max_w: u32,
@@ -104,14 +103,4 @@ pub fn encode_rgb8_jpeg_bounded_from_u8(
     output.extend_from_slice(&compressed);
 
     Ok(output)
-}
-
-/// Encode frame as JPEG at a client-requested resolution (SA10 format)
-pub fn encode_rgb8_jpeg_dynamic(
-    ready_frame: &crate::server::state::RenderReadyFrame,
-    req_w: Option<u32>,
-    req_h: Option<u32>,
-) -> Result<Vec<u8>, String> {
-    let (max_w, max_h) = clamp_client_resolution(req_w, req_h);
-    encode_rgb8_jpeg_bounded(ready_frame, max_w, max_h)
 }

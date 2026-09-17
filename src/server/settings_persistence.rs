@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use super::state::{
     CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, FocusModeSnapshot,
-    PreviewResolution, RawFrameSaving, SensorCorrectionSettings, TelescopeSettings,
+    RawFrameSaving, Resolution, SensorCorrectionSettings, TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
@@ -102,8 +102,10 @@ pub struct PersistedSettings {
     pub sensor_correction: SensorCorrectionSettings,
     #[serde(default)]
     pub denoise: DenoiseSettings,
-    #[serde(default)]
-    pub preview_resolution: PreviewResolution,
+    #[serde(default = "crate::server::state::default_preview_resolution")]
+    pub preview_resolution: Resolution,
+    #[serde(default = "crate::server::state::default_streaming_resolution")]
+    pub streaming_resolution: Resolution,
     #[serde(default)]
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -240,6 +242,7 @@ impl From<&CaptureSettings> for PersistedSettings {
             sensor_correction: settings.sensor_correction.clone(),
             denoise: settings.denoise.clone(),
             preview_resolution: settings.preview_resolution,
+            streaming_resolution: settings.streaming_resolution,
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
             camera_profiles: settings.camera_profiles.clone(),
@@ -317,6 +320,7 @@ impl From<PersistedSettings> for CaptureSettings {
             sensor_correction: persisted.sensor_correction.sanitized(),
             denoise: persisted.denoise,
             preview_resolution: persisted.preview_resolution,
+            streaming_resolution: persisted.streaming_resolution,
             telescope: persisted.telescope,
             camera_telescope_profiles: persisted.camera_telescope_profiles,
             camera_profiles: persisted.camera_profiles,

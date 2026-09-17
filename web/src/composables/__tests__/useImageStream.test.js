@@ -40,102 +40,23 @@ describe('useImageStream', () => {
         }
     })
 
-    describe('resolution reporting', () => {
-        // The lossless stream sizes its output from this report, exactly like
-        // the JPEG stream does. Before it did, the server always sent a
-        // near-native frame and left the browser to minify it with a four-tap
-        // bilinear filter, which discards most of the noise averaging a
-        // server-side box downsample delivers.
-        it('reports the viewport on the lossless endpoint', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            await openWebSocket()
+    // The server sizes every frame from its Streaming Resolution settings, so a stream
+    // socket has nothing to tell it. Reports from older builds are ignored server-side,
+    // but none may be sent: not on open, not after a reconnect, on no endpoint.
+    describe('no viewport negotiation', () => {
+        for (const endpoint of ['/ws/stream', '/ws/eyepiece', '/ws/eyepiece_quality']) {
+            it(`sends nothing on open or reconnect to ${endpoint}`, async () => {
+                const stream = useImageStream({endpoint})
+                expect(stream).not.toHaveProperty('sendResolution')
 
-            sendResolution(1440, 1440)
+                await openWebSocket()
+                expect(MockWebSocket.lastSent).toBeNull()
 
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
-        })
-
-        it('reports the viewport on the JPEG endpoint', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece'})
-            await openWebSocket()
-
-            sendResolution(1920, 1080)
-
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1920, height: 1080})
-        })
-
-        it('rounds fractional device-pixel sizes', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            await openWebSocket()
-
-            sendResolution(719.5, 1439.4)
-
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 720, height: 1439})
-        })
-
-        // The server registers a fresh tier for every connection, so a socket
-        // that reconnects without re-reporting is served at the server's
-        // default. The lossless stream used to lose its viewport this way and
-        // spend the rest of the session at 1080p — below where it started.
-        it('replays the viewport after a reconnect', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            await openWebSocket()
-            sendResolution(1440, 1440)
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
-
-            MockWebSocket.lastSent = null
-            getWebSocket().simulateClose()
-            await openWebSocket()
-
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
-        })
-
-        // ...but on one socket a repeat is not re-sent, so a component may
-        // report on every layout tick without putting a write on each one.
-        it('does not repeat an unchanged viewport on the same socket', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            await openWebSocket()
-            sendResolution(1440, 1440)
-
-            MockWebSocket.lastSent = null
-            sendResolution(1440, 1440)
-            expect(MockWebSocket.lastSent).toBeNull()
-
-            sendResolution(1080, 1080)
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1080, height: 1080})
-        })
-
-        // A report made before the socket opened is dropped by `send`. Treating
-        // it as delivered is what left the stream on the default tier.
-        it('re-sends a viewport reported before the socket opened', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            sendResolution(1440, 1440)
-            expect(MockWebSocket.lastSent).toBeNull()
-
-            await openWebSocket()
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
-        })
-
-        // A caller that knows its viewport up front should not have to wait for
-        // the socket before it counts.
-        it('reports an initial viewport on open, on the lossless endpoint too', async () => {
-            useImageStream({endpoint: '/ws/eyepiece_quality', width: 1440, height: 1440})
-            await openWebSocket()
-
-            expect(JSON.parse(MockWebSocket.lastSent)).toEqual({width: 1440, height: 1440})
-        })
-
-        // A canvas that has not been laid out yet reports 0, which would
-        // otherwise be sent as a viewport and clamp the server to its smallest tier.
-        it('ignores a zero-sized viewport', async () => {
-            const {sendResolution} = useImageStream({endpoint: '/ws/eyepiece_quality'})
-            await openWebSocket()
-            MockWebSocket.lastSent = null
-
-            sendResolution(0, 0)
-
-            expect(MockWebSocket.lastSent).toBeNull()
-        })
+                getWebSocket().simulateClose()
+                await openWebSocket()
+                expect(MockWebSocket.lastSent).toBeNull()
+            })
+        }
     })
 
     it('connects to /ws/stream', () => {

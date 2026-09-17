@@ -261,7 +261,7 @@ The server provides:
 | `/api/settings`                | POST   | Update settings                                                                      |
 | `/ws/stream`                   | WS     | Live image stream (dynamic JPEG)                                                     |
 | `/ws/eyepiece`                 | WS     | Eyepiece image stream (dynamic JPEG)                                                 |
-| `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8), sized to the client's reported viewport |
+| `/ws/eyepiece_quality`         | WS     | Lossless image stream (LZ4 compressed RGB8) at Eyepiece Streaming Resolution         |
 | `/ws/events`                   | WS     | Server events (JSON)                                                                 |
 
 > [!IMPORTANT]
@@ -315,11 +315,10 @@ Push-To events on `/ws/events`:
 
 #### Live Stream Scaling
 
-The JPEG streams are encoded once per frame in the render task rather than once per connected client. Clients announce
-their viewport (`{width, height}` JSON) and are mapped to the nearest of four fixed resolution tiers — 1920×1080,
-2560×1440, 3840×2160, and native sensor resolution. Only tiers with at least one connected client are encoded, and tiers
-that would not downsample the frame share a single encode. Ten phones on the same tier therefore cost one JPEG encode
-per frame, and a tier nobody is watching costs nothing.
+Each stream is encoded once per frame in the render task, not once per connected client, at a size chosen in
+Settings: **Streaming Resolution** for the live view and eyepiece view (JPEG), **Eyepiece Streaming Resolution** for
+the lossless eyepiece view — 1080p (JPEG only), 1440p, 4K or Native, both 1440p by default. Every client of a stream
+receives the same frame, so ten phones cost one encode per frame, and a stream nobody is watching costs nothing.
 
 #### Adding New Camera Providers
 

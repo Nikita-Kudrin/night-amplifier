@@ -12,13 +12,13 @@ Both are among the six that [Focus/Finder mode](/getting-started#focus-finder-mo
 holds off while you focus; their switches grey out while it is on and come back to your
 values when you turn it off.
 
-## They run at the size you view, not the size you capture
+## They run at the size you stream, not the size you capture
 
-Both filters work on the streamed image after it has been reduced to your
-screen's resolution, not on the full sensor frame. On a 9-megapixel camera
-feeding a 1440×1440 eyepiece display that is four and a half times less work for
-exactly the same visible result — three quarters of a denoised sensor frame is
-thrown away by the resize anyway.
+Both filters work on the streamed image after it has been reduced to its
+[streaming resolution](#streaming-resolution), not on the full sensor frame. On a
+9-megapixel camera streamed at 1440p to a 1440×1440 eyepiece display that is four
+and a half times less work for exactly the same visible result — three quarters of
+a denoised sensor frame is thrown away by the resize anyway.
 
 There is a bonus in the ordering: that resize is itself an area average, which
 already halves the noise before either filter starts.
@@ -72,7 +72,7 @@ target brightness still within half a per cent.
 
 The trade is real, so find it by eye: bring protection down until the tightest
 stars start to soften, then back off a step. On a camera whose frames arrive at
-close to your screen's resolution — an IMX464 on a 1440p display, say — this
+close to their streaming resolution — an IMX464 streamed at 1440p, say — this
 control is doing nearly all the work, because there is no spare resolution for
 the resize to average away first.
 
@@ -108,6 +108,34 @@ Two things worth knowing before you move it:
 Leave it on **Native** unless the live view is not keeping up. If it is — a
 Raspberry Pi with a large sensor is the usual case — drop it to the size you
 actually view at and check the shadows still look right.
+:::
+
+## Streaming Resolution
+
+Two settings decide the size of the image the server sends, and every screen on
+the same view receives exactly the same picture:
+
+| Setting | Where | Sets the size for | Choices |
+|---|---|---|---|
+| **Streaming Resolution** | Settings → Preview | the live view `/` and `/eyepiece` | 1080p, 1440p, 4K, Native |
+| **Eyepiece Streaming Resolution** | Settings → Eyepiece | `/eyepiece_quality` | 1440p, 4K, Native |
+
+Both start at **1440p**, and the image is fitted inside the chosen size with its
+shape kept — a square sensor at 1440p arrives as 1440×1440. Neither ever goes
+above the Processing Resolution, and a camera smaller than the choice is sent at
+its own size.
+
+- **Match the screen you look at.** The server shrinks the image with an area
+  average, which also removes noise. A larger image left for the browser to shrink
+  looks grainier and shimmers through an eyepiece lens.
+- **Bigger costs everyone.** Every screen on that view pays for the size in
+  bandwidth, and the server in encoding time. A view nobody has open costs nothing.
+- **A change applies to the next frame** the server renders — including the frame
+  of an exposure that was already running when you changed it.
+
+::: warning After upgrading
+Older versions picked the size from each screen. A 4K tablet on the live view now
+receives 1440p until you raise **Streaming Resolution**.
 :::
 
 ## Not applied to planetary targets

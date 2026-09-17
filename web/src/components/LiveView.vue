@@ -40,10 +40,8 @@ const streamEndpoint = computed(() =>
     showGuide.value ? '/ws/stream?source=guide' : '/ws/stream'
 )
 
-const {connected, frameData, isJpeg, dimensions, fps, clearFrameData, sendResolution} = useImageStream({
+const {connected, frameData, isJpeg, dimensions, fps, clearFrameData} = useImageStream({
   endpoint: streamEndpoint,
-  width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
-  height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
 })
 
 /** The camera whose image is on screen right now. */
@@ -297,19 +295,11 @@ watch([scale, frameData, hasFrame], () => {
 })
 
 let resizeObserver = null
-let windowResizeTimeout = null
 
 function handleWindowResize() {
   // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
   // (dragging the sidebar, say), and re-fitting would throw their framing away.
-  // Armed now, not after the debounce, or the reshape would already be over.
   if (isFullscreen.value) requestFit()
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
-  windowResizeTimeout = setTimeout(() => {
-    const newWidth = Math.round(window.innerWidth * (window.devicePixelRatio || 1))
-    const newHeight = Math.round(window.innerHeight * (window.devicePixelRatio || 1))
-    sendResolution(newWidth, newHeight)
-  }, 200)
 }
 
 // Rotating fits windowed too: `/` lays out differently in landscape, so the old
@@ -364,7 +354,6 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleWindowResize)
   window.removeEventListener('orientationchange', handleOrientationChange)
   window.screen.orientation?.removeEventListener('change', handleOrientationChange)
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   disposeAutoFit()
   cleanupRenderer()
   if (resizeObserver) {

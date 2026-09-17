@@ -356,41 +356,16 @@ describe('LiveView - Fit all on viewport changes', () => {
         wrapper.unmount()
     })
 
-    it('still reports the new resolution on a resize', async () => {
-        const wrapper = await mountAt(1200, 800)
-        mocks.mockImageStream.sendResolution.mockClear()
-
-        window.dispatchEvent(new Event('resize'))
-        vi.advanceTimersByTime(250)
-
-        expect(mocks.mockImageStream.sendResolution).toHaveBeenCalled()
-        wrapper.unmount()
-    })
-
-    it('still reports the new resolution on a screen.orientation change', async () => {
-        const orientation = installScreenOrientationStub()
-        const wrapper = await mountAt(390, 700)
-        mocks.mockImageStream.sendResolution.mockClear()
-
-        orientation.dispatchEvent(new Event('change'))
-        vi.advanceTimersByTime(250)
-
-        expect(mocks.mockImageStream.sendResolution).toHaveBeenCalled()
-        wrapper.unmount()
-    })
-
     it('stops listening once unmounted', async () => {
         const orientation = installScreenOrientationStub()
         const wrapper = await mountAt(390, 700)
         wrapper.unmount()
-        mocks.mockImageStream.sendResolution.mockClear()
 
         window.dispatchEvent(new Event('orientationchange'))
         orientation.dispatchEvent(new Event('change'))
         changeFullscreen(document.body)
         vi.advanceTimersByTime(FIT_SETTLE_MS * 2)
 
-        expect(mocks.mockImageStream.sendResolution).not.toHaveBeenCalled()
         expect(mocks.mockPanZoom.fitToView).not.toHaveBeenCalled()
     })
 

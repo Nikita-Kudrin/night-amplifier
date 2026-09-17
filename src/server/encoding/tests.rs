@@ -296,50 +296,24 @@ fn test_calculate_dynamic_jpeg_quality() {
 }
 
 #[test]
-fn test_jpeg_encode_4k_clamp() {
-    // Mock a massive 5000x5000 frame
+fn test_jpeg_encode_fits_a_square_frame_into_the_4k_box() {
     let frame = Frame::zeros(5000, 5000, 3).unwrap();
-    // Request 5000x5000
-    let encoded =
-        encode_rgb8_jpeg_dynamic(&to_ready_frame(&frame), Some(5000), Some(5000)).unwrap();
+    let encoded = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), 3840, 2160).unwrap();
 
     let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
-
-    // It should clamp to the 4K bounding box (3840x2160).
-    // Since aspect ratio is 1:1, fitting into 3840x2160 means 2160x2160.
-    assert_eq!(width, 2160);
-    assert_eq!(height, 2160);
+    // A 1:1 frame fitted into 3840x2160 is limited by the short edge.
+    assert_eq!((width, height), (2160, 2160));
 }
 
 #[test]
-fn test_jpeg_encode_1080p_clamp() {
-    // Mock a 2000x2000 frame
+fn test_jpeg_encode_fits_a_square_frame_into_the_1080p_box() {
     let frame = Frame::zeros(2000, 2000, 3).unwrap();
-    // Request a tiny 640x480 stream
-    let encoded = encode_rgb8_jpeg_dynamic(&to_ready_frame(&frame), Some(640), Some(480)).unwrap();
+    let encoded = encode_rgb8_jpeg_bounded(&to_ready_frame(&frame), 1920, 1080).unwrap();
 
     let width = u32::from_le_bytes([encoded[4], encoded[5], encoded[6], encoded[7]]);
     let height = u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]);
-
-    // It should clamp up to the 1080p bounding box (1920x1080).
-    // Since aspect ratio is 1:1, fitting into 1920x1080 means 1080x1080.
-    assert_eq!(width, 1080);
-    assert_eq!(height, 1080);
-}
-
-#[test]
-fn test_clamp_client_resolution() {
-    assert_eq!(clamp_client_resolution(None, None), (1920, 1080));
-    assert_eq!(clamp_client_resolution(Some(1280), Some(720)), (1920, 1080));
-    assert_eq!(
-        clamp_client_resolution(Some(2560), Some(1440)),
-        (2560, 1440)
-    );
-    assert_eq!(
-        clamp_client_resolution(Some(5000), Some(3000)),
-        (3840, 2160)
-    );
+    assert_eq!((width, height), (1080, 1080));
 }
 
 #[test]
@@ -493,7 +467,7 @@ fn test_downsample_matches_reference_within_1_lsb() {
         (400, 300, 137, 111),
         (271, 153, 96, 54),
         (300, 400, 111, 137),
-        // Near unity (IMX464 at the 1440 tier) and 1.42x, where the sharpen applies.
+        // Near unity (IMX464 at 1440p) and 1.42x, where the sharpen applies.
         (321, 300, 300, 281),
         (284, 200, 200, 141),
     ] {
@@ -1063,7 +1037,7 @@ fn the_staged_path_still_applies_the_stretch_before_quantizing() {
 }
 
 /// A non-integer box downsample must average the same source area into every output
-/// pixel, or sky noise prints a lattice. 3008 -> 1440 (the eyepiece tier on IMX533)
+/// pixel, or sky noise prints a lattice. 3008 -> 1440 (the eyepiece default on IMX533)
 /// is 2.089x: boxes are 2 px wide except every ~11th row/column, which is 3, so those
 /// lines are less noisy. Seen in the 2026-09-14 globular session at 18 arcmin per
 /// block through a 100 mm eyepiece lens: ~11 % less sky grain on the 3-px lines,
@@ -1108,7 +1082,7 @@ fn non_integer_downsample_gives_every_output_pixel_the_same_noise() {
 }
 
 /// Near-unity ratios are where the area-tent kernel costs the most sharpness: IMX464 is
-/// 1.07x over the 1440 tier, where a 2.5 px star kept 83 % of the whole-pixel box's peak
+/// 1.07x over the 1440p box, where a 2.5 px star kept 83 % of the whole-pixel box's peak
 /// before the output-grid sharpen. Planetary live view exists for exactly that detail.
 #[test]
 fn a_near_unity_downsample_keeps_star_peaks() {

@@ -27,7 +27,7 @@ use crate::server::state::RenderReadyFrame;
 use super::axis_taps::AxisTaps;
 
 thread_local! {
-    /// One interleaved RGB row, reused across frames and tiers. The fused
+    /// One interleaved RGB row, reused across frames and payloads. The fused
     /// driver is the only user: the staged driver transforms rows of its own
     /// buffer in place.
     static ROW_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
@@ -40,7 +40,7 @@ thread_local! {
 /// channels are simply replicated across RGB. The old code instead ran
 /// `detect_cfa_pattern` (never errors on a 1-channel frame, confidence discarded)
 /// and debayered unconditionally — a full-resolution f32 RGB frame (3x the mono
-/// source, ~196MB on an ASI1600MM) per tier per frame, with colour fringing on grey
+/// source, ~196MB on an ASI1600MM) per payload per frame, with colour fringing on grey
 /// data.
 pub fn frame_to_rgb8_downsampled(
     ready_frame: &RenderReadyFrame,
@@ -96,8 +96,8 @@ pub fn frame_to_rgb8_downsampled_with(
 /// a bounding box, without doing the conversion.
 ///
 /// The render task keys its per-frame conversion cache on this: two payloads
-/// whose clients asked for different boxes but that resolve to the same output
-/// size are the *same* conversion, and since tier 2 that conversion carries the
+/// whose resolutions are different boxes but resolve to the same output
+/// size are the *same* conversion, and that conversion carries the
 /// denoisers and costs several times the encode that follows it. Sharing it is
 /// only sound if the size is decided by exactly the arithmetic the conversion
 /// will use, which is why this is the one copy of that arithmetic.
@@ -159,7 +159,7 @@ pub(crate) fn expand_to_rgb8_fused(
 /// Stretch happens after downsampling, not before (the pre-fusion order): the
 /// stretch curves here (asinh, MTF) are concave, so Jensen's inequality guarantees
 /// `curve(average(pixels)) >= average(curve(pixels))` for any source box — this
-/// order can only preserve or brighten faint detail in a downsampled tier, never dim
+/// order can only preserve or brighten faint detail in a downsampled stream, never dim
 /// it (see `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample`).
 ///
 /// The kernel is [`AxisTaps`], not a whole-pixel box: see there for why.
@@ -467,7 +467,7 @@ fn stage_and_denoise<S: RowSource>(
     // `resample` and `row_tail` are split because only the staged path can tell them
     // apart: the gather scales with *input* pixel count, the tail with *output*.
     // `frame_to_rgb8` reported 75ms as one number (39 from `denoise`, 36 unexplained
-    // between the two) — no way to predict what a smaller tier would save. The fused
+    // between the two) — no way to predict what a smaller resolution would save. The fused
     // path above has no equivalent split: it gathers, transforms and writes one row
     // in a single closure against a thread-local scratch row, which is why it's
     // cheaper — splitting would mean per-row spans, which AGENTS.md rules out as

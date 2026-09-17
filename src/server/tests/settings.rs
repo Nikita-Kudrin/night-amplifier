@@ -25,6 +25,41 @@ async fn test_get_settings_default() {
     assert_eq!(json["data"]["stacking"], true);
 }
 
+/// The wire names the settings panel relies on, and the defaults it promises.
+#[tokio::test]
+async fn test_streaming_resolutions_default_to_1440p() {
+    let app = create_test_router(create_test_state());
+
+    let (status, json) = get_json(&app, "/api/settings").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["preview_resolution"], "native");
+    assert_eq!(json["data"]["streaming_resolution"], "qhd1440");
+    assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+}
+
+/// Streaming Resolution accepts every option; a partial update leaves the eyepiece
+/// setting and Processing Resolution untouched.
+#[tokio::test]
+async fn test_update_streaming_resolution_leaves_the_other_resolutions_alone() {
+    let state = create_test_state();
+    let app = create_test_router(Arc::clone(&state));
+
+    for value in ["native", "uhd2160", "hd1080", "qhd1440"] {
+        let (status, json) =
+            post_json(&app, "/api/settings", json!({"streaming_resolution": value})).await;
+        assert_eq!(status, StatusCode::OK, "{value}: {json}");
+        assert_eq!(json["data"]["streaming_resolution"], value);
+        assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+        assert_eq!(json["data"]["preview_resolution"], "native");
+    }
+
+    let (status, _) =
+        post_json(&app, "/api/settings", json!({"streaming_resolution": "8k"})).await;
+    assert!(status.is_client_error(), "an unknown resolution was accepted");
+    assert_eq!(state.settings.read().await.streaming_resolution, Resolution::Qhd1440);
+}
+
 #[tokio::test]
 async fn test_update_settings_single_field() {
     let state = create_test_state();

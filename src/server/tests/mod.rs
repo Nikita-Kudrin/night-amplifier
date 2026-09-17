@@ -15,6 +15,7 @@ mod capture_start_stop;
 mod capture_status;
 mod events;
 mod guide_camera;
+mod image_stream_clients;
 mod push_to_state;
 mod server_config;
 mod settings;
