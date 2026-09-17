@@ -489,7 +489,7 @@ pub struct EyepieceSettings {
     pub black_floor: f32,
 
     /// Let the darkening half of `black_floor` clip to true black instead of
-    /// rolling off into it.
+    /// scaling the sky down (`render::output::sky_shadow`).
     ///
     /// Sky noise is as wide as the sky level, so a hard floor puts around 40 %
     /// of all samples on exactly zero. That buys the deepest possible sky and a

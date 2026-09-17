@@ -106,6 +106,11 @@ impl BackgroundExtractor {
         let (grid_template, nodes_x, nodes_y) =
             initialize_grid(width, height, grid_cols, grid_rows);
 
+        // The pruning channel's values come with its disc samples, so it is clipped once.
+        let stats_channel = if channels > 1 { 1 } else { 0 };
+        let stats_samples =
+            super::TargetDisc::sample_nodes(frame, &grid_template, box_size, stats_channel);
+
         // Extract node values per channel (parallelized)
         let per_channel_grids: Vec<Vec<GridNode>> = {
             let _span =
@@ -114,18 +119,34 @@ impl BackgroundExtractor {
                 .into_par_iter()
                 .map(|channel| {
                     let mut grid = grid_template.clone();
-                    grid.par_iter_mut().for_each(|node| {
-                        node.value = extract_node_value(frame, node, box_size, channel);
-                    });
+                    if channel == stats_channel {
+                        for (node, sample) in grid.iter_mut().zip(&stats_samples) {
+                            node.value = sample.map(|s| s.value);
+                        }
+                    } else {
+                        grid.par_iter_mut().for_each(|node| {
+                            node.value = extract_node_value(frame, node, box_size, channel);
+                        });
+                    }
                     grid
                 })
                 .collect()
         };
 
+        let target = super::TargetDisc::find(
+            &grid_template,
+            &stats_samples,
+            grid_cols,
+            grid_rows,
+            width,
+            height,
+        );
+
         // Build the completed model (pruning + inpainting)
         let _span = tracing::info_span!("bilinear_build_model").entered();
         let model = build_bilinear_model(
             per_channel_grids,
+            target.map(|disc| (disc, width, height)),
             nodes_x,
             nodes_y,
             grid_cols,
@@ -276,6 +297,7 @@ fn inpaint_grid(grid: &mut [Option<f32>], rows: usize, cols: usize) {
 /// nebulosity rejection and applies the same mask to all channels.
 fn build_bilinear_model(
     mut per_channel_grids: Vec<Vec<GridNode>>,
+    target: Option<(super::TargetDisc, usize, usize)>,
     nodes_x: Vec<usize>,
     nodes_y: Vec<usize>,
     grid_cols: usize,
@@ -309,6 +331,15 @@ fn build_bilinear_model(
                 node.value = None;
             }
         }
+    }
+
+    // Every channel shares the prune mask, so they fit their planes or fail together.
+    if let Some((disc, width, height)) = target {
+        let filled: Vec<bool> = per_channel_grids
+            .iter_mut()
+            .map(|grid| disc.fill(grid, width, height))
+            .collect();
+        debug!(?disc, ?filled, "Bilinear target disc");
     }
 
     // Count surviving nodes

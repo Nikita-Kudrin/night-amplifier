@@ -138,6 +138,45 @@ fn bench_encoding(c: &mut Criterion) {
         })
     });
 
+    // The eyepiece tier on IMX533: a 2.089x non-integer downsample, the case whose
+    // resampling kernel decides whether sky noise prints a lattice. x86 20-core:
+    // 2.9 ms/call with the whole-pixel box, 4.3 ms with the area-tent kernel.
+    let ready_imx533_rgb = to_ready_frame(&create_test_frame(3008, 3008, 3));
+    const EYEPIECE_REPS: usize = 24;
+    group_conv.bench_function(format!("imx533_to_eyepiece_1440_x{}", EYEPIECE_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..EYEPIECE_REPS {
+                black_box(
+                    frame_to_rgb8_downsampled(
+                        black_box(&ready_imx533_rgb),
+                        2560,
+                        1440,
+                    )
+                    .unwrap(),
+                );
+            }
+        })
+    });
+
+    // The same tier with the black floor's sky shadow on (denoise off), x86 20-core:
+    // 4.3 ms plain; 10.3 ms staging the image; 9.3 streamed with a sorted sky estimate;
+    // 6.0 ms streamed with selection, 8k sky samples and vectorising row loops.
+    let mut shadowed_imx533_rgb = ready_imx533_rgb.clone();
+    shadowed_imx533_rgb.stretch_result = Some(night_amplifier::server::state::StretchResult {
+        black_point: 0.0,
+        scale_lut: std::sync::Arc::new(vec![]),
+        color_intensity: 1.0,
+        deferred_shadow_floor: None,
+        sky_shadow: night_amplifier::render::SkyShadow::from_sky(0.7, 0.1),
+    });
+    group_conv.bench_function(format!("imx533_to_eyepiece_1440_sky_shadow_x{}", EYEPIECE_REPS), |b| {
+        b.iter(|| {
+            for _ in 0..EYEPIECE_REPS {
+                black_box(frame_to_rgb8_downsampled(black_box(&shadowed_imx533_rgb), 2560, 1440).unwrap());
+            }
+        })
+    });
+
     // Already ~138 ms on its own — clears the floor without repeating.
     group_conv.bench_function("8k_to_4k", |b| {
         b.iter(|| {

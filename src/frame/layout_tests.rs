@@ -166,13 +166,13 @@ fn expand_to_rgb8_fused_is_interleaved() {
 /// i.e. what most clients actually receive.
 ///
 /// `expand_to_rgb8_fused_is_interleaved` above only reaches `expand_to_rgb8_fused`,
-/// because its fixture already fits the bounding box. `box_downsample_to_rgb8_fused`
+/// because its fixture already fits the bounding box. `area_downsample_to_rgb8_fused`
 /// is a separate traversal with its own planar indexing (`plane_size + idx`), and the
 /// only integration test that touched it asserted on a uniform grey frame, which is
 /// layout-invariant by construction. A source larger than the box is what makes the
 /// downsampling branch run at all.
 #[test]
-fn box_downsample_to_rgb8_fused_is_interleaved() {
+fn area_downsample_to_rgb8_fused_is_interleaved() {
     let ready = passthrough_ready(tricolour_frame(64, 32));
     let (rgb8, w, h) = crate::server::encoding::frame_to_rgb8_downsampled(&ready, 32, 16).unwrap();
 
@@ -186,7 +186,7 @@ fn box_downsample_to_rgb8_fused_is_interleaved() {
         w as usize,
         h as usize,
         (R_U8, G_U8, B_U8),
-        "box_downsample_to_rgb8_fused",
+        "area_downsample_to_rgb8_fused",
     );
 }
 
@@ -784,7 +784,7 @@ fn display_transform_preserves_channel_order_in_both_fused_kernels() {
         rh as usize,
         expect,
         1,
-        "box_downsample_to_rgb8_fused + display transform",
+        "area_downsample_to_rgb8_fused + display transform",
     );
 }
 

@@ -13,14 +13,16 @@ mod config;
 mod extractor;
 pub mod grid;
 mod model;
+pub mod target_disc;
 
 pub use config::{BackgroundConfig, BackgroundExtractionAlgorithm};
 pub use extractor::BackgroundExtractor;
 pub use grid::{
-    compute_box_size, extract_node_value, mad, mad_with_scratch, median, prune_nebulosity, GridNode,
-    PruneConfig,
+    compute_box_size, extract_node_sample, extract_node_value, mad, mad_with_scratch, median,
+    prune_nebulosity, GridNode, NodeSample, PruneConfig,
 };
 pub use model::BackgroundModel;
+pub use target_disc::TargetDisc;
 
 use crate::error::Result;
 use crate::frame::Frame;

@@ -103,11 +103,11 @@ pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
 /// sky level under a brighter one, which is the whole point of anchoring.
 const NOMINAL_SKY_LEVEL: f32 = 0.052;
 
-/// Pedestal held under a soft shadow floor, in fractions of full scale.
+/// Pedestal held under the soft (spatial) darkening, in fractions of full scale.
 ///
-/// About 1.5 output levels. The soft floor compresses the sub-floor sky toward
-/// zero rather than clipping it, so nothing lands on zero by construction — this
-/// is what makes that hold after rounding as well.
+/// About 1.5 output levels. The gain never takes a sky sample to zero, but the
+/// autostretch black point clamps ~0.8 % of them there before it — the speckle
+/// the lifting half of the slider exists to remove, which a darkened sky loses.
 const DARKENED_FLOOR_PEDESTAL: f32 = 0.006;
 
 /// Slider positions this close to zero mean zero.
@@ -125,13 +125,11 @@ const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 /// go — `ShadowFloor::from_sky` caps the depth it produces, but the fraction it
 /// is handed would still make one slider step mean nothing.
 ///
-/// Shortened from -0.09 when the auto-stretch solver stopped being told a sky
-/// brighter than the black point actually left: the rendered sky dropped from 14
-/// to 11 of 255, and the floor is compressive, so the same fraction against a
-/// darker sky cost 56 % of the target's contrast at the end stop where it used to
-/// cost 37 %. -0.075 restores that reach (39.6 %). The reach is the calibrated
-/// quantity, not the number — re-measure it if the stretch moves again.
-const MIN_BLACK_FLOOR: f32 = -0.075;
+/// -0.06 is where the spatial darkening saturates (`sky_shadow::MAX_DARKENING`, a
+/// tenth of the sky left): further travel would do nothing. The hard form reaches
+/// ~1.15 sky levels there. The reach is the calibrated quantity, not the number —
+/// re-measure it if the stretch moves again.
+const MIN_BLACK_FLOOR: f32 = -0.06;
 
 /// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
 /// lifting half is clamped in the same place as the darkening one.
@@ -260,9 +258,8 @@ pub fn get_render_pipeline_config(
             // The point of the hard floor is reaching true black; guarding it
             // off the panel's off state would undo exactly that.
             Some(request) if request.hard => 0.0,
-            // The soft floor approaches zero without arriving, and this is what
-            // turns that into a guarantee: roughly one and a half output levels,
-            // enough that no sample rounds to the off state.
+            // The spatial gain keeps the sky off zero, but not what the black
+            // point already clamped there: roughly one and a half output levels.
             Some(_) => DARKENED_FLOOR_PEDESTAL,
             // The lifting half — or a darkening this frame cannot honour, in
             // which case the pedestal must stay where a zero floor leaves it
@@ -488,7 +485,7 @@ mod tests {
         assert!(!config.shadow_floor.hard);
         assert!(
             (config.display.pedestal - DARKENED_FLOOR_PEDESTAL).abs() < 1e-6,
-            "the soft floor must keep a pedestal under it, got {}",
+            "the soft darkening must keep a pedestal under it, got {}",
             config.display.pedestal
         );
 
@@ -499,7 +496,7 @@ mod tests {
         assert!(config.shadow_floor.is_none());
     }
 
-    /// "Darker sky" trades the roll-off for a clip, and the pedestal has to go
+    /// "Darker sky" trades the spatial gain for a clip, and the pedestal has to go
     /// with it — guarding the output off zero is precisely what it is asking not
     /// to have done.
     #[test]

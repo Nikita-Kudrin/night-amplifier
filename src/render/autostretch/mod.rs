@@ -43,10 +43,11 @@ pub fn auto_stretch_frame(
         compute_image_stats(frame)?
     };
     let result = compute_auto_stretch_with_algorithm(frame, &stats, config, config.tone_mapping);
-    let floor = floor.resolve(crate::render::output::sky_level_after_contrast(
+    let shadow = floor.resolve(crate::render::output::sky_level_after_contrast(
         result.target_background,
         contrast_config,
     ));
+    let floor = shadow.floor;
 
     // Only the fused kernel can carry the floor for free, and only two of the
     // five arms below reach it: MTF stretches each channel through its own
@@ -124,6 +125,10 @@ pub fn auto_stretch_frame(
     if floor_pending {
         let _span = tracing::info_span!("apply_shadow_floor_frame").entered();
         crate::render::output::apply_shadow_floor_frame(frame, floor)?;
+    }
+    if let Some(sky) = shadow.sky {
+        let _span = tracing::info_span!("apply_sky_shadow_frame").entered();
+        crate::render::output::apply_sky_shadow_frame(frame, sky)?;
     }
 
     Ok(result)
