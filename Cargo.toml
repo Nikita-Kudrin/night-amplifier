@@ -114,6 +114,7 @@ fitsio = "0.21.10"     # FITS file reading (astronomy format)
 tempfile = "3.27.0"   # For creating temporary test outputs
 image = "0.25.10"      # General image handling for test output
 tower = "0.5.3"       # For server endpoint testing (ServiceExt::oneshot)
+tokio-tungstenite = "0.29.0" # WebSocket client for end-to-end stream tests; axum's version, so no second copy
 sha2 = "0.11.0"         # Content hashes for the in-source frontend-bundle test fixture
 serial_test = "4.0.1" # Run integration tests sequentially
 proptest = "1.11.0"

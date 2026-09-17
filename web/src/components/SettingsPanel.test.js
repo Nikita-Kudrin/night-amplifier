@@ -318,6 +318,96 @@ describe('SettingsPanel', () => {
 
             expect(wrapper.find('#preview-resolution-select').element.value).toBe('hd1080')
         })
+
+        const optionValues = (select) => select.findAll('option').map((o) => o.element.value)
+
+        it('offers every streaming resolution, defaulting to 1440p', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const select = wrapper.find('#streaming-resolution-select')
+            expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440', 'hd1080'])
+            expect(select.element.value).toBe('qhd1440')
+        })
+
+        it('sends the chosen streaming resolution as a bare value', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            await wrapper.find('#streaming-resolution-select').setValue('native')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({streaming_resolution: 'native'})
+        })
+
+        it('shows the streaming resolution the server reports', async () => {
+            const wrapper = mountSettingsPanel({settings: {streaming_resolution: 'uhd2160'}})
+            await flushPromises()
+
+            expect(wrapper.find('#streaming-resolution-select').element.value).toBe('uhd2160')
+        })
+
+        it('keeps the two resolution settings independent', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            await wrapper.find('#streaming-resolution-select').setValue('hd1080')
+            await flushPromises()
+
+            expect(updateSettings).not.toHaveBeenCalledWith(
+                expect.objectContaining({preview_resolution: expect.anything()})
+            )
+        })
+    })
+
+    describe('Eyepiece Streaming Resolution', () => {
+        const optionValues = (select) => select.findAll('option').map((o) => o.element.value)
+
+        it('starts at 1440p and offers no 1080p', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const select = wrapper.find('#eyepiece-stream-resolution-select')
+            expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440'])
+            expect(select.element.value).toBe('qhd1440')
+        })
+
+        it('sends the whole eyepiece object with the chosen resolution', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {eyepiece: {binoview: false, intensity: 0.5, stream_resolution: 'qhd1440'}},
+            })
+            await flushPromises()
+
+            await wrapper.find('#eyepiece-stream-resolution-select').setValue('native')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                eyepiece: expect.objectContaining({
+                    stream_resolution: 'native',
+                    binoview: false,
+                    intensity: 0.5,
+                }),
+            })
+            expect(updateSettings).not.toHaveBeenCalledWith(
+                expect.objectContaining({streaming_resolution: expect.anything()})
+            )
+        })
+
+        it('shows the resolution the server reports', async () => {
+            const wrapper = mountSettingsPanel({settings: {eyepiece: {stream_resolution: 'uhd2160'}}})
+            await flushPromises()
+
+            expect(wrapper.find('#eyepiece-stream-resolution-select').element.value).toBe('uhd2160')
+        })
+
+        // A server predating the setting sends an eyepiece object without it. The select
+        // must still show the default, and an edit must not post `undefined`.
+        it('falls back to 1440p when the server omits the field', async () => {
+            const wrapper = mountSettingsPanel({settings: {eyepiece: {binoview: true}}})
+            await flushPromises()
+
+            expect(wrapper.find('#eyepiece-stream-resolution-select').element.value).toBe('qhd1440')
+        })
     })
 
     describe('Noise Reduction Section', () => {

@@ -21,6 +21,7 @@ import {
     BLACK_FLOOR_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
+  EYEPIECE_STREAM_RESOLUTION_OPTIONS,
   defaultSettings,
   RAW_FRAME_SAVING_MODES,
   WEIGHTING_PRESET_OPTIONS,
@@ -94,7 +95,7 @@ watch(
           show_focus_image: newSettings.show_focus_image ?? DEFAULT_SETTINGS.show_focus_image,
           force_focus_image_now: newSettings.force_focus_image_now ?? DEFAULT_SETTINGS.force_focus_image_now,
           eyepiece: newSettings.eyepiece
-              ? {...newSettings.eyepiece}
+              ? {...DEFAULT_SETTINGS.eyepiece, ...newSettings.eyepiece}
               : {...DEFAULT_SETTINGS.eyepiece},
           sensor_correction: newSettings.sensor_correction
               ? {...newSettings.sensor_correction}
@@ -104,6 +105,8 @@ watch(
               : {...DEFAULT_SETTINGS.denoise},
           preview_resolution:
               newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
+          streaming_resolution:
+              newSettings.streaming_resolution ?? DEFAULT_SETTINGS.streaming_resolution,
         }
       }
     },
@@ -170,6 +173,7 @@ const HELP = HELP_TEXTS
         :sensor-correction="localSettings.sensor_correction"
         :denoise="localSettings.denoise"
         :preview-resolution="localSettings.preview_resolution"
+        :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
@@ -392,6 +396,30 @@ const HELP = HELP_TEXTS
               :help="HELP.eyepiece_circular_view"
               @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
           />
+        </div>
+      </div>
+
+      <div class="control-group">
+        <div class="control-row">
+          <label class="control-label" style="margin-bottom: 0; flex: 1">
+            Eyepiece Streaming Resolution
+            <BaseInfoIcon :message="HELP.eyepiece_stream_resolution"/>
+          </label>
+          <select
+              id="eyepiece-stream-resolution-select"
+              v-model="localSettings.eyepiece.stream_resolution"
+              class="select"
+              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+              @change="applySetting('eyepiece', localSettings.eyepiece)"
+          >
+            <option
+                v-for="opt in EYEPIECE_STREAM_RESOLUTION_OPTIONS"
+                :key="opt.value"
+                :value="opt.value"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
         </div>
       </div>
 

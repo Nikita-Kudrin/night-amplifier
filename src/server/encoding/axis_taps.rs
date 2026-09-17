@@ -8,7 +8,7 @@
 //! tent keeps ratios from 1.4x up under 1.05x.
 //!
 //! The tent costs sharpness near unity — a 2.5 px star kept 83 % of the box's peak at
-//! 1.07x (IMX464 at the 1440 tier), 90 % at 1.42x — so a `[-a, 1+2a, -a]` sharpen on the
+//! 1.07x (IMX464 at 1440p), 90 % at 1.42x — so a `[-a, 1+2a, -a]` sharpen on the
 //! output grid, folded into the taps, gives it back. Shift-invariant on the output grid,
 //! it scales every pixel's noise alike and prints no lattice of its own. `a` tapers with
 //! the ratio: from 1.9x the tent alone already beats the box's worst-phase peak.
@@ -26,7 +26,8 @@ const SHARPEN_NONE_FROM: f64 = 1.9;
 
 use std::sync::{Arc, Mutex};
 
-/// Axes kept by [`AxisTaps::cached`]: two per tier (four tiers) per camera, main and guide.
+/// Axes kept by [`AxisTaps::cached`]: two per output size, with headroom for resolution changes,
+/// both families and both cameras.
 const CACHED_AXES: usize = 16;
 
 static CACHE: Mutex<Vec<((usize, usize), Arc<AxisTaps>)>> = Mutex::new(Vec::new());
@@ -39,7 +40,7 @@ pub(super) struct AxisTaps {
 
 impl AxisTaps {
     /// [`AxisTaps::new`], built once per `(source_len, target_len)`: every encode of every
-    /// tier otherwise rebuilt ~4k small weight vectors per frame.
+    /// payload otherwise rebuilt ~4k small weight vectors per frame.
     pub(super) fn cached(source_len: usize, target_len: usize) -> Arc<Self> {
         let key = (source_len, target_len);
         let mut cache = CACHE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

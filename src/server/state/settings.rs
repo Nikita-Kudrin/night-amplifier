@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::capture_mode::{CaptureMode, RawFrameSaving};
 use super::focus_mode::FocusModeSnapshot;
+use super::StreamKind;
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
@@ -91,7 +92,9 @@ pub struct CaptureSettings {
     /// Spatial denoising, applied at stream resolution inside the encoders
     pub denoise: DenoiseSettings,
     /// How much sensor resolution the preview pipeline may bin away before it runs
-    pub preview_resolution: PreviewResolution,
+    pub preview_resolution: Resolution,
+    /// The JPEG size every `/` and `/eyepiece` client receives
+    pub streaming_resolution: Resolution,
     /// Eyepiece view settings
     pub eyepiece: EyepieceSettings,
     /// Telescope and camera parameters for FOV calculation
@@ -330,52 +333,88 @@ impl Default for SensorCorrectionSettings {
     }
 }
 
-/// How much sensor resolution the preview pipeline is allowed to bin away. Preview
-/// stages (neutralisation, background subtraction, SCNR, black-point) walk every
-/// sample before the encoder throws away what the tier doesn't need; binning first
-/// runs the whole pipeline on a quarter of the samples, and `Frame::downsample`'s
-/// exact integer box average produces the same surviving pixels the encoder would
-/// anyway.
+/// A resolution the observer picks, as a bounding box: the frame is fitted inside it with
+/// its aspect ratio intact and never upscaled. Serves three settings:
 ///
-/// A setting, not the connected client set — it used to be: `preview_bin_factor`
-/// resolved fresh each iteration against the largest client's box, so a phone
-/// joining/leaving flipped the factor mid-session, moving the tone curve (solved
-/// from median/MAD, which 2x2 binning shifts): measured **25.7% shadow lift at the
-/// 1% input point**, applied to every viewer, triggered by someone else's tab. So
-/// the resolution is a session property, chosen once and held — which also makes
-/// `JpegTier::Original`'s "no downsampling" guarantee structurally true by default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+/// - **Processing Resolution** (`preview_resolution`): how far the preview pipeline may
+///   bin before it runs. Preview stages walk every sample, so binning first runs them on a
+///   quarter of the data. A setting rather than derived from clients: re-deriving it per
+///   frame moved the tone curve under every viewer (**25.7% shadow lift at the 1% input
+///   point**) when someone else's tab joined.
+/// - **Streaming Resolution** (`streaming_resolution`): the one JPEG size every `/` and
+///   `/eyepiece` client receives.
+/// - **Eyepiece Streaming Resolution** ([`EyepieceStreamResolution`]): the one RGB8+LZ4 size
+///   every `/eyepiece_quality` client receives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PreviewResolution {
-    /// Never bin: every stage sees every sensor sample.
-    ///
-    /// The default, because the alternative silently costs resolution that no part of
-    /// the UI asks for. An observer on a small board who would rather have the frame
-    /// rate picks one of the others.
-    #[default]
+pub enum Resolution {
+    /// No bounding box: every stage and stream sees the full frame.
     Native,
-    /// Bin toward a 4K preview. Only reaches sensors above ~8000 px on an edge.
     Uhd2160,
-    /// Bin toward a 1440p preview. A 3008x3008 sensor bins by 2 here.
     Qhd1440,
-    /// Bin toward a 1080p preview — the cheapest, and the floor of what any client
-    /// asks for.
     Hd1080,
 }
 
-impl PreviewResolution {
-    /// The bounding box the preview may be binned down toward, or `None` for
-    /// [`Self::Native`].
-    ///
-    /// Deliberately the same boxes as [`crate::server::state::JpegTier`], because the
-    /// binned frame is what every payload is encoded from: choosing a box no tier uses
-    /// would throw away pixels for a size nothing serves.
+impl Resolution {
+    /// The bounding box, or `None` for [`Self::Native`].
     pub fn target_box(self) -> Option<(u32, u32)> {
         match self {
             Self::Native => None,
             Self::Uhd2160 => Some((3840, 2160)),
             Self::Qhd1440 => Some((2560, 1440)),
             Self::Hd1080 => Some((1920, 1080)),
+        }
+    }
+
+    /// [`Self::target_box`] with `Native` as an unbounded box, for the encoders.
+    pub fn bounding_box(self) -> (u32, u32) {
+        self.target_box().unwrap_or((u32::MAX, u32::MAX))
+    }
+
+    /// The name the settings UI shows.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Native => "Native",
+            Self::Uhd2160 => "4K",
+            Self::Qhd1440 => "1440p",
+            Self::Hd1080 => "1080p",
+        }
+    }
+}
+
+/// The Processing Resolution default: never bin, because the alternative silently costs
+/// resolution no part of the UI asked for.
+pub const DEFAULT_PREVIEW_RESOLUTION: Resolution = Resolution::Native;
+
+/// The Streaming Resolution default for `/` and `/eyepiece`.
+pub const DEFAULT_STREAMING_RESOLUTION: Resolution = Resolution::Qhd1440;
+
+pub fn default_preview_resolution() -> Resolution {
+    DEFAULT_PREVIEW_RESOLUTION
+}
+
+pub fn default_streaming_resolution() -> Resolution {
+    DEFAULT_STREAMING_RESOLUTION
+}
+
+/// The subset of [`Resolution`] the eyepiece quality stream offers. No 1080p: the eyepiece
+/// screens this view exists for are at least 1440 px on their short edge, and a variant
+/// that cannot be stored cannot be selected by a stale client either — `serde` rejects it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EyepieceStreamResolution {
+    Native,
+    Uhd2160,
+    #[default]
+    Qhd1440,
+}
+
+impl EyepieceStreamResolution {
+    pub const fn resolution(self) -> Resolution {
+        match self {
+            Self::Native => Resolution::Native,
+            Self::Uhd2160 => Resolution::Uhd2160,
+            Self::Qhd1440 => Resolution::Qhd1440,
         }
     }
 }
@@ -502,6 +541,9 @@ pub struct EyepieceSettings {
     /// banding once denoising removes the noise that currently masks the steps.
     #[serde(default = "default_dither")]
     pub dither: bool,
+    /// The RGB8+LZ4 size every `/eyepiece_quality` client receives.
+    #[serde(default)]
+    pub stream_resolution: EyepieceStreamResolution,
 }
 
 fn default_intensity() -> f32 {
@@ -534,6 +576,7 @@ impl Default for EyepieceSettings {
             black_floor: default_black_floor(),
             darker_sky: false,
             dither: default_dither(),
+            stream_resolution: EyepieceStreamResolution::default(),
         }
     }
 }
@@ -561,7 +604,8 @@ impl Default for CaptureSettings {
             rejection_method: RejectionMethod::SigmaClip,
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
-            preview_resolution: PreviewResolution::default(),
+            preview_resolution: DEFAULT_PREVIEW_RESOLUTION,
+            streaming_resolution: DEFAULT_STREAMING_RESOLUTION,
             raw_frame_saving: RawFrameSaving::default(),
             save_stacked_image: false,
             stacking_type: StackingType::default(),
@@ -605,6 +649,19 @@ impl Default for CaptureSettings {
 }
 
 impl CaptureSettings {
+    /// The size a stream family is sent at: Streaming Resolution for JPEG, Eyepiece
+    /// Streaming Resolution for lossless.
+    ///
+    /// Encoders read it from the live settings, never from a frame's snapshot: the capture
+    /// loop snapshots when an exposure *starts*, so a change landed one exposure late (up to
+    /// two minutes at 60 s subs), and a client joining in between flipped new -> old -> new.
+    pub fn stream_resolution(&self, kind: StreamKind) -> Resolution {
+        match kind {
+            StreamKind::Jpeg => self.streaming_resolution,
+            StreamKind::Lossless => self.eyepiece.stream_resolution.resolution(),
+        }
+    }
+
     /// Which of the three capture modes this session is running in.
     pub fn capture_mode(&self) -> CaptureMode {
         CaptureMode::from_flags(self.stacking, self.wanderer_mode)
@@ -813,6 +870,18 @@ impl CaptureSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_stream_family_reads_its_own_resolution_setting() {
+        let mut settings = CaptureSettings::default();
+        assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Qhd1440);
+        assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Qhd1440);
+
+        settings.streaming_resolution = Resolution::Native;
+        settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
+        assert_eq!(settings.stream_resolution(StreamKind::Jpeg), Resolution::Native);
+        assert_eq!(settings.stream_resolution(StreamKind::Lossless), Resolution::Uhd2160);
+    }
 
     #[test]
     fn capture_config_picks_lrn_for_deep_sky() {

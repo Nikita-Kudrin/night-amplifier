@@ -9,7 +9,6 @@ vi.mock('../../composables/useWebSocket.js', () => ({
     frameData: ref(null),
     dimensions: ref({ width: 0, height: 0 }),
     isJpeg: ref(false),
-    sendResolution: vi.fn(),
   }))
 }))
 
@@ -117,11 +116,7 @@ describe('EyepieceView.vue Endpoint Selection', () => {
       }
     })
 
-    expect(useImageStream).toHaveBeenCalledWith({
-      endpoint: '/ws/eyepiece',
-      width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
-      height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
-    })
+    expect(useImageStream).toHaveBeenCalledWith({endpoint: '/ws/eyepiece'})
   })
 
   it('uses /ws/eyepiece_quality when path is /eyepiece_quality (raw 8bit + LZ4)', async () => {
@@ -140,22 +135,21 @@ describe('EyepieceView.vue Endpoint Selection', () => {
       }
     })
 
-    expect(useImageStream).toHaveBeenCalledWith({
-      endpoint: '/ws/eyepiece_quality',
-      width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
-      height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
-    })
+    // Only the endpoint: the server sizes the frame from Eyepiece Streaming Resolution.
+    expect(useImageStream).toHaveBeenCalledWith({endpoint: '/ws/eyepiece_quality'})
   })
 
-  it('sends resolution updates on window resize', async () => {
+  // The size is a server setting now, so no layout change may produce a report — an
+  // old per-client report would be ignored anyway, but it must not be sent at all.
+  it('reports no viewport on mount, resize, rotation or binoview layout', async () => {
     vi.useFakeTimers()
-    window.location = { ...originalLocation, pathname: '/eyepiece' }
-    window.innerWidth = 800
-    window.innerHeight = 600
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
+    window.innerWidth = 1440
+    window.innerHeight = 1440
     window.devicePixelRatio = 2
-    
+
     const EyepieceView = (await import('../EyepieceView.vue')).default
-    mount(EyepieceView, {
+    const wrapper = mount(EyepieceView, {
       global: {
         provide: {
           settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
@@ -167,94 +161,16 @@ describe('EyepieceView.vue Endpoint Selection', () => {
       }
     })
 
-    const { sendResolution } = useImageStream.mock.results[0].value
-    
-    // Simulate resize
-    window.innerWidth = 1000
-    window.innerHeight = 800
+    const stream = useImageStream.mock.results[0].value
+    expect(stream).not.toHaveProperty('sendResolution')
+    window.innerWidth = 2880
     window.dispatchEvent(new Event('resize'))
-    
-    // Fast forward debounce timer
-    vi.advanceTimersByTime(250)
-    
-    // No canvas layout in jsdom, so this exercises the window fallback.
-    expect(sendResolution).toHaveBeenCalledWith(2000, 1600) // 1000 * 2, 800 * 2
-    vi.useRealTimers()
-  })
-
-  // The reason the report is canvas-derived rather than window-derived: in
-  // binoview each eye canvas shows the whole frame at roughly half the window
-  // width, so reporting the window would have the server send twice the pixels
-  // either eye can display and leave the GPU to minify the rest away.
-  it('reports the per-eye canvas size in binoview, not the window size', async () => {
-    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
-    window.innerWidth = 1440
-    window.innerHeight = 1440
-    window.devicePixelRatio = 1
-
-    // jsdom reports 0 for every element's offset size; stand in for a laid-out
-    // binoview where each eye canvas is half the window wide.
-    const offsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
-    const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
-    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {configurable: true, get: () => 720})
-    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {configurable: true, get: () => 720})
-
-    try {
-      const EyepieceView = (await import('../EyepieceView.vue')).default
-      mount(EyepieceView, {
-        global: {
-          provide: {
-            settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
-            eventStream: {
-              pushDirection: ref(null),
-              currentTarget: ref(null),
-            }
-          }
-        }
-      })
-
-      const { sendResolution } = useImageStream.mock.results[0].value
-      expect(sendResolution).toHaveBeenCalledWith(720, 720)
-      expect(sendResolution).not.toHaveBeenCalledWith(1440, 1440)
-    } finally {
-      Object.defineProperty(HTMLElement.prototype, 'offsetWidth', offsetWidth)
-      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', offsetHeight)
-    }
-  })
-
-  // The de-duplication that used to live here moved into `useImageStream`. It is
-  // the only layer that can tell "same size, same socket" (skip) from "same size,
-  // new socket" (must re-send) — and a memo here suppressed exactly the report a
-  // reconnect needs, pinning the lossless stream to the server's default tier for
-  // the rest of the session.
-  it('keeps reporting the viewport so a reconnect can replay it', async () => {
-    vi.useFakeTimers()
-    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
-    window.innerWidth = 1440
-    window.innerHeight = 1440
-    window.devicePixelRatio = 1
-
-    const EyepieceView = (await import('../EyepieceView.vue')).default
-    mount(EyepieceView, {
-      global: {
-        provide: {
-          settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
-          eventStream: {
-            pushDirection: ref(null),
-            currentTarget: ref(null),
-          }
-        }
-      }
-    })
-
-    const { sendResolution } = useImageStream.mock.results[0].value
-    const afterMount = sendResolution.mock.calls.length
-
-    window.dispatchEvent(new Event('resize'))
+    window.dispatchEvent(new Event('orientationchange'))
     vi.advanceTimersByTime(250)
 
-    expect(sendResolution.mock.calls.length).toBeGreaterThan(afterMount)
-    expect(sendResolution).toHaveBeenLastCalledWith(1440, 1440)
+    expect(useImageStream).toHaveBeenCalledTimes(1)
+    expect(useImageStream).toHaveBeenCalledWith({endpoint: '/ws/eyepiece_quality'})
+    wrapper.unmount()
     vi.useRealTimers()
   })
 })

@@ -20,7 +20,7 @@ use image::{
 };
 use night_amplifier::frame::Frame;
 use night_amplifier::server::encoding::frame_to_rgb8_downsampled;
-use night_amplifier::server::{encode_rgb8_jpeg_dynamic, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
+use night_amplifier::server::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use std::fs;
 use std::hint::black_box;
 use std::io::Cursor;
@@ -285,10 +285,10 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..JPEG_REPS {
                 black_box(
-                    encode_rgb8_jpeg_dynamic(
+                    encode_rgb8_jpeg_bounded(
                         black_box(&to_ready_frame(&frame_imx464_rgb)),
-                        Some(1920),
-                        Some(1080),
+                        1920,
+                        1080,
                     )
                     .unwrap(),
                 );
@@ -300,10 +300,10 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..JPEG_REPS {
                 black_box(
-                    encode_rgb8_jpeg_dynamic(
+                    encode_rgb8_jpeg_bounded(
                         black_box(&to_ready_frame(&frame_imx464_rgb)),
-                        Some(1280),
-                        Some(720),
+                        1280,
+                        720,
                     )
                     .unwrap(),
                 );
@@ -315,7 +315,7 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..JPEG_REPS {
                 black_box(
-                    encode_rgb8_jpeg_dynamic(black_box(&to_ready_frame(&frame_imx464_rgb)), None, None)
+                    encode_rgb8_jpeg_bounded(black_box(&to_ready_frame(&frame_imx464_rgb)), u32::MAX, u32::MAX)
                         .unwrap(),
                 );
             }
@@ -328,10 +328,10 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             for _ in 0..JPEG_REPS {
                 black_box(
-                    encode_rgb8_jpeg_dynamic(
+                    encode_rgb8_jpeg_bounded(
                         black_box(&to_ready_frame(&frame_mono_large)),
-                        Some(1920),
-                        Some(1080),
+                        1920,
+                        1080,
                     )
                     .unwrap(),
                 );

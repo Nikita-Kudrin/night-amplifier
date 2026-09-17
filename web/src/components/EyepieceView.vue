@@ -18,11 +18,7 @@ const capabilities = appState.capabilities
 
 const routePath = window.location.pathname
 const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
-const {connected, frameData, dimensions, isJpeg, sendResolution} = useImageStream({ 
-  endpoint,
-  width: Math.round(window.innerWidth * (window.devicePixelRatio || 1)),
-  height: Math.round(window.innerHeight * (window.devicePixelRatio || 1)),
-})
+const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 const canvasLeftRef = ref(null)
 const canvasRightRef = ref(null)
@@ -388,38 +384,9 @@ function handleTouchEnd(e) {
 let resizeObserver = null
 let windowResizeTimeout = null
 
-/**
- * The canvas a frame is actually drawn into, in device pixels.
- *
- * Not the window: in binoview each eye canvas shows the whole frame at roughly
- * half the window's width, so reporting the window would have the server send
- * twice the pixels either eye can display and leave the GPU to minify the rest
- * away — which is exactly the averaging this reporting exists to reclaim.
- */
-function displayedCanvasSize() {
-  const dpr = window.devicePixelRatio || 1
-  const canvas = isBinoview.value ? canvasLeftRef.value : canvasSingleRef.value
-  const width = canvas?.offsetWidth || window.innerWidth
-  const height = canvas?.offsetHeight || window.innerHeight
-  return {width: width * dpr, height: height * dpr}
-}
-
-/**
- * Report the canvas size to the server.
- *
- * Deliberately not memoised here: `sendResolution` remembers the last viewport
- * and replays it on reconnect, so a local "same size, skip it" guard would
- * suppress exactly the report a fresh socket needs.
- */
-function reportViewportResolution() {
-  const {width, height} = displayedCanvasSize()
-  sendResolution(width, height)
-}
-
 function handleWindowResize() {
   if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   windowResizeTimeout = setTimeout(() => {
-    reportViewportResolution()
     // Fullscreen only, for the same reason as the live view: a windowed resize
     // must not throw away a zoom the user set deliberately.
     if (isFullscreen.value) resetZoom()
@@ -454,9 +421,6 @@ function updateBounds() {
       }
     }
   }
-  // Runs on mount, on every layout change the ResizeObserver sees, and on the
-  // first frame — so a binoview toggle re-reports without its own watcher.
-  reportViewportResolution()
 }
 
 watch(hasFrame, (newVal) => {

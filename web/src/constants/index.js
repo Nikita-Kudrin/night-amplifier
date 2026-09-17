@@ -184,6 +184,16 @@ export const PREVIEW_RESOLUTION_OPTIONS = [
     {value: 'hd1080', label: '1080p'},
 ]
 
+// The one JPEG size every client of `/` and `/eyepiece` receives — see the Rust
+// `Resolution`. Same choices as Processing Resolution.
+export const STREAMING_RESOLUTION_OPTIONS = PREVIEW_RESOLUTION_OPTIONS
+
+// The one RGB8+LZ4 size every client of `/eyepiece_quality` receives. No 1080p: the
+// server's `EyepieceStreamResolution` refuses it.
+export const EYEPIECE_STREAM_RESOLUTION_OPTIONS = PREVIEW_RESOLUTION_OPTIONS.filter(
+    (opt) => opt.value !== 'hd1080'
+)
+
 // Telescope setup limits
 export const TELESCOPE_LIMITS = {
     focal_length_min: 50,
@@ -294,6 +304,7 @@ export const DEFAULT_SETTINGS = {
         star_protection: 1.0,
     },
     preview_resolution: 'native',
+    streaming_resolution: 'qhd1440',
     eyepiece: {
         binoview: true,
         screen_width: 140.0,
@@ -306,6 +317,7 @@ export const DEFAULT_SETTINGS = {
         black_floor: 0.04,
         darker_sky: false,
         dither: true,
+        stream_resolution: 'qhd1440',
     },
     dew_heater_enabled: true,
     dew_heater_power: 10,
@@ -377,6 +389,8 @@ export const HELP_TEXTS = {
         'Splits the screen into two independent copies of the image based on physical screen dimensions and resolution.',
     eyepiece_screen_settings:
         'Configure physical screen dimensions and resolution to calculate accurate split for Binoview.',
+    eyepiece_stream_resolution:
+        'Image size for the lossless eyepiece view (/eyepiece_quality). Match your eyepiece screen: 1440p for a 1440 × 1440 panel. Larger than the screen and the browser has to shrink the image, which adds grain and shimmer you will see through the lens; Native sends every processed pixel. Changes apply from the next frame.',
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     eyepiece_intensity:
@@ -393,6 +407,8 @@ export const HELP_TEXTS = {
         'Turns each 2x2 sensor square into one colour pixel instead of interpolating. Halves the width and height, invents no colour noise, and keeps any surviving hot pixel to a single dot. Free on a large sensor that already oversamples your screen; a real loss of detail on a smaller one.',
     preview_resolution:
         'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
+    streaming_resolution:
+        'Image size sent to every screen viewing the live view and the eyepiece view. All of them get the same picture, so larger sizes cost bandwidth and server time for every viewer. It never goes above the Processing Resolution. On a screen smaller than the image the browser shrinks it, which looks grainier than choosing the smaller size here. Changes apply from the next frame.',
     denoise_chroma:
         'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
     denoise_chroma_strength:

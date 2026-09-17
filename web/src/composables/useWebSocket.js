@@ -595,13 +595,14 @@ export function useEventStream() {
 }
 
 /**
- * WebSocket composable for high-quality RGB16 image streaming: receives RGB16+LZ4
- * frames, exposing `rgb16Data` (raw 16-bit RGB for WebGL) and `dimensions`.
+ * WebSocket composable for the image streams: receives JPEG (SA10) or RGB8+LZ4 (SA09)
+ * frames, exposing `frameData` and `dimensions`.
+ *
+ * The server decides the size from the Streaming Resolution settings and sends every
+ * client of an endpoint the same frame, so there is nothing to negotiate here.
  *
  * @param {object} options - Stream options
  * @param {string} options.endpoint - WebSocket endpoint (default: '/ws/stream')
- * @param {number|null} options.width - Initial viewport width, until the caller reports a real one
- * @param {number|null} options.height - Initial viewport height, until the caller reports a real one
  * @returns {object} Image stream state and methods
  */
 export function useImageStream(options = {}) {
@@ -610,8 +611,7 @@ export function useImageStream(options = {}) {
     const endpointSource = options.endpoint ?? '/ws/stream'
     const resolveEndpoint = () => toValue(endpointSource) || '/ws/stream'
 
-    // Selects the decoder, not whether resolution can be negotiated: both the
-    // JPEG and the lossless endpoints size their output from the client's report.
+    // Selects the decoder.
     const isDynamicJpeg = !resolveEndpoint().startsWith('/ws/eyepiece_quality')
 
     // Use shallowRef for large binary data to avoid deep reactivity overhead
@@ -624,39 +624,6 @@ export function useImageStream(options = {}) {
 
     let framesSinceLastFPS = 0
     let fpsTimer = null
-
-    /**
-     * The viewport this client wants, kept across reconnects.
-     *
-     * The server registers a fresh tier for every connection, so a socket that
-     * reconnects without re-reporting is served at the server's default — the
-     * *smallest* tier. This has to survive the socket, not live on it.
-     */
-    let viewport = normalizeViewport(options.width, options.height)
-    /** What the current socket has actually been told, so a repeat is not re-sent. */
-    let sentViewport = null
-
-    function normalizeViewport(w, h) {
-        if (!(w > 0 && h > 0)) return null
-        return {width: Math.round(w), height: Math.round(h)}
-    }
-
-    function sameViewport(a, b) {
-        return a !== null && b !== null && a.width === b.width && a.height === b.height
-    }
-
-    /**
-     * Report the current viewport to the server, unless this socket already has it.
-     *
-     * Only records the send when the socket actually took it: a report made
-     * before the socket opened is a no-op, and treating it as delivered is what
-     * would leave the stream stuck at the default tier.
-     */
-    function pushViewport() {
-        if (viewport === null || sameViewport(sentViewport, viewport)) return
-        if (!send(JSON.stringify(viewport))) return
-        sentViewport = viewport
-    }
 
     /**
      * Clear frame data to reset the live view
@@ -686,21 +653,14 @@ export function useImageStream(options = {}) {
         }
     }
 
-    const {connected, error, connect, disconnect, send} = useWebSocket(resolveEndpoint, {
+    const {connected, error, connect, disconnect} = useWebSocket(resolveEndpoint, {
         onOpen: () => {
             startFpsTimer()
-            // A new socket knows nothing about the viewport, whichever stream
-            // family it belongs to.
-            sentViewport = null
-            pushViewport()
         },
         onClose: () => {
             stopFpsTimer()
             fps.value = 0
             clearFrameData()
-            // The next socket has to be told again, even though nothing about
-            // the viewport changed.
-            sentViewport = null
         },
         onMessage: async (event) => {
             let buffer
@@ -746,22 +706,6 @@ export function useImageStream(options = {}) {
         stopFpsTimer()
     })
 
-    /**
-     * Report the viewport this client will actually display, so the server resamples
-     * to it instead of shipping a larger frame for the GPU to minify — matters most on
-     * the lossless endpoint, where the browser's four-tap bilinear filter would
-     * otherwise discard most of the averaging a server-side box downsample delivers.
-     *
-     * Callers may report on every layout change: remembered and de-duplicated here, so
-     * a repeated size costs nothing and a reconnect replays the last one unprompted.
-     */
-    function sendResolution(w, h) {
-        const next = normalizeViewport(w, h)
-        if (next === null) return
-        viewport = next
-        pushViewport()
-    }
-
     return {
         connected,
         error,
@@ -775,6 +719,5 @@ export function useImageStream(options = {}) {
         connect,
         disconnect,
         clearFrameData,
-        sendResolution,
     }
 }

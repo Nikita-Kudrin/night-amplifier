@@ -146,7 +146,6 @@ export function createMockImageStream() {
         connect: vi.fn(),
         disconnect: vi.fn(),
         clearFrameData: vi.fn(),
-        sendResolution: vi.fn(),
     }
 }
 

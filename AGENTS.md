@@ -136,8 +136,8 @@ their own schedule.
 
 ### Server (src/server/)
 
-Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (dynamic JPEG, `?source=guide` for the guide camera),
-`/ws/eyepiece_quality` (lossless LZ4), `/ws/events` (JSON). State: `Arc<RwLock<_>>` in `AppState`; exact endpoints,
+Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG at Streaming Resolution, `?source=guide` for the guide
+camera), `/ws/eyepiece_quality` (lossless LZ4 at Eyepiece Streaming Resolution), `/ws/events` (JSON). State: `Arc<RwLock<_>>` in `AppState`; exact endpoints,
 DTOs and events in source.
 
 `GET /api/eyepiece/snapshot?circular=` is the only REST route returning image bytes: RGB8 PNG of `latest_raw_frame`
@@ -202,7 +202,7 @@ responses from superseded searches, or a slow reply reopens the dropdown after a
   Capture — solving and preview are wanted *while* framing.
 - **Render gate**: post-processing/encoding run only while `guide_stream.has_viewers()`; solving and raw saving sit
   **above** both early exits. `guide_task::tests` assert unrendered frames were really exposed — keep that if it moves.
-- **Two `FrameStream`s, two counters**: `JpegTierCache` serves a tier only while its counter matches, so a shared
+- **Two `FrameStream`s, two counters**: a payload is served only while its counter matches, so a shared
   counter would invalidate the other camera's payloads every exposure. `/ws/stream?source=guide` picks at upgrade.
 - **Per-role hardware settings**: flat `CaptureSettings` fields are main's, `CaptureSettings::guide_camera` the
   guide's — read via `profile_for(role)`. `POST /api/settings` carries `camera_role` (absent ⇒ main).
@@ -400,21 +400,32 @@ Default format; TurboJPEG (SIMD) encodes in the render task, not the WebSocket h
 Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
 ```
 
-#### Demand-driven resolution tiers
+#### Streaming resolution is a setting, not negotiated
 
-Clients send `{width, height}`; the tier follows the viewport's **shorter edge**, clamped 1080…2160 (fitting both
-edges pushed portrait phones into 4K).
+Every client of a family gets the **same payload**, sized by a setting (`state::Resolution`: `Native`, `Uhd2160`
+3840×2160, `Qhd1440` 2560×1440, `Hd1080` 1920×1080 — boxes, aspect kept, never upscaled):
 
-| Tier       | Bounding box  | Serves class | IMX464 (2712×1538) output |
-|------------|---------------|--------------|---------------------------|
-| `Hd1080`   | 1920×1080     | ≤ 1080       | 1904×1080                 |
-| `Qhd1440`  | 2560×1440     | ≤ 1440       | 2539×1440                 |
-| `Uhd2160`  | 3840×2160     | ≤ 2160       | 2712×1538 (no downsample) |
-| `Original` | unbounded     | —            | 2712×1538                 |
+| Family (`StreamKind`) | Endpoints                                 | Setting                                           | Default |
+|-----------------------|-------------------------------------------|---------------------------------------------------|---------|
+| `Jpeg`                | `/ws/stream` (`/`), `/ws/eyepiece`        | `streaming_resolution` (Streaming Resolution)     | 1440p   |
+| `Lossless`            | `/ws/eyepiece_quality`                    | `eyepiece.stream_resolution` (no 1080p variant)   | 1440p   |
 
-The render task caches one payload per tier with clients (shared by non-downsampling tiers on sub-4K sensors);
-handlers serve it on `frame_ready`, except a new client, which encodes once inline. `begin_frame`/`publish_frame`
-keep publication race-free.
+- **Why not per client**: per-viewport tiers cost one denoised conversion per distinct size on the render thread
+  and unbounded concurrent first-frame encodes. Replaced by user decision; don't reintroduce viewport negotiation.
+- `capture::stream_encoding` encodes each family once per frame, only while `viewer_count(kind) > 0`; equal output
+  sizes share one conversion. `FrameStream` keeps one `(counter, Bytes)` slot per family.
+- A changed setting applies from the **next rendered frame**: encoders read the *live* setting
+  (`CaptureSettings::stream_resolution`), never the frame's snapshot, which is taken at exposure start — that landed a
+  change one exposure late and flipped a joining client new → old → new. A client joining before that frame gets the
+  current payload at its old size, like everyone else.
+- `ws::image_stream::serve` handles all three sockets: registers a `ViewerGuard`, logs one `info` line (page, peer,
+  resolution, output), sends the current frame, then every published one. Client text other than `ping` is ignored.
+- **First-frame encodes** (family unwatched when the frame rendered) are serialised per family
+  (`on_demand_encode_lock`): simultaneous arrivals share one encode. A client that leaves mid-encode is released
+  only when that encode ends.
+- Encode failures log + `send_error`; never `frame_rejected` (that feeds the camera's rejection rate). A failure
+  repeating every frame is reported once per family (`FailureReports`): the UI re-raises every `error` event.
+- Pinned end to end by `server::tests::image_stream_clients` (real sockets, real render task, settings endpoint).
 
 ### Lossless LZ4 (SA08/SA09) — `/ws/eyepiece_quality`
 
@@ -425,11 +436,12 @@ renders via WebGL with Canvas2D fallback.
 Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload
 ```
 
-#### Client streaming resolution negotiation
+#### Downsampling to the streaming resolution
 
-Clients report `{width, height}` and are area-averaged down through the same `JpegTier`. Averaging *removes noise* in
-proportion to the reduction (WebGL's fallback caps at ~1.45x): IMX533 payload 2.25x smaller at 8.26→6.76 sky-sigma.
-IMX464 is only 1.07x over the 1440 tier: sky sigma 10.2 levels through the whole-pixel box, 8.2 now.
+The encoder area-averages down to the configured box. Averaging *removes noise* in proportion to the reduction, where
+the browser's minification caps at ~1.45x: IMX533 payload 2.25x smaller at 8.26→6.76 sky-sigma. IMX464 is only 1.07x
+over the 1440 box: sky sigma 10.2 levels through the whole-pixel box, 8.2 now. So pick the setting that matches the
+screen, not a larger one.
 
 **The kernel must give every output pixel the same noise** (`encoding::axis_taps`: footprint integrated over a 1 px
 tent per source sample). A whole-pixel box at 3008→1440 averaged 2 samples on most lines and 3 on every ~11th: 18 %
@@ -444,9 +456,8 @@ box's worst-phase peak at 2.09x). Shift-invariant, so no lattice of its own; 1.0
 clip no ring beside bright stars (deepest +1.1 sigma vs a 2.8-sigma black point). Taps are built once per axis size
 (`AxisTaps::cached`): rebuilding them per encode was 8.6 % of `imx533_to_eyepiece_1440`.
 
-- Size to the **largest** requested tier; an unreported viewport gets the **4K cap**, not the floor.
-- Report **canvas**, not window, size (binoview eyes are ~half-window each).
-- Re-report on every reconnect (no server-side memory) — never memoize "same size, skip".
+- The frontend uploads RGB rows unpadded, so WebGL needs `UNPACK_ALIGNMENT` 1: at the default 4 any width not
+  divisible by 4 (IMX464 at 1440p: 2539 px) failed `texImage2D` and froze the previous frame.
 
 ## Adding a Stacking Type
 
@@ -515,14 +526,14 @@ memory traffic. ~17ms combined at 1440² (20-core x86).
 
 ### Denoising cost
 
-Denoising is ~**5x the cost of the encode it sits in** (IMX533 @1440 tier, 20-core x86: 4.7ms
+Denoising is ~**5x the cost of the encode it sits in** (IMX533 @1440p, 20-core x86: 4.7ms
 without, 17.9ms with). Two structures stop that from multiplying:
 
 - **`ConversionCache`** shares one RGB8 conversion per distinct output size, keyed on
-  `output_dimensions`, so a session with lossless + two JPEG tiers doesn't denoise three times.
+  `output_dimensions`, so both families at the same streaming resolution denoise once.
 - **`DenoiseScratch`** is owned by the render thread, not allocated per pass — a 1440² pass
   would otherwise page-fault ~75MB (13 of the 20ms the filters add). Passed down explicitly
-  rather than thread-local, since per-client inline encodes run on pooled tokio blocking
+  rather than thread-local, since first-frame encodes run on pooled tokio blocking
   threads where thread-local would strand 75MB/thread.
 
 Both spans report under `--span-timings`.
@@ -740,7 +751,7 @@ One production trace: both workers at 97%, 34.7% of captured frames dropped for 
 - **Queue budget from the board**: `min(MemTotal/5, 1GiB)`, floor 64MiB, per channel from its own payload;
   capture→stacking is also **latency-bounded** at 2s of exposures (memory alone put 19 frames/2.9s ahead of stacking).
   All three report `pipeline.queue_depth`/`_capacity` under `--features telemetry` ("slow" vs "stalled once").
-- **Preview may run binned** by the largest integer factor `PreviewResolution` allows — all-or-nothing at 2x, fixed per
+- **Preview may run binned** by the largest integer factor `preview_resolution` allows — all-or-nothing at 2x, fixed per
   session, never from connected clients (2x2 moved `scale_lut` +25.7%, re-grading every viewer when a tab opened).
   Default `Native`.
 - **Per-stack estimates (white balance, background, stats) are reused**, refreshed on *proportional* depth growth

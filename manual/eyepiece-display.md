@@ -25,8 +25,8 @@ on screen while you are navigating to a target.
 | Download | Saves the round eyepiece image: a square PNG, black outside the field stop — the view as you were looking at it. |
 | Download original | On the button's dropdown. The same picture uncropped — the full rectangular frame. |
 
-Both downloads come from the server at the frame's own resolution, not at
-whatever size your screen is streaming, so they are worth keeping. That render is
+Both downloads come from the server at the frame's own resolution, not at the
+[streaming resolution](/noise-reduction#streaming-resolution), so they are worth keeping. That render is
 big enough that only one runs at a time: if somebody on another device is already
 saving one, the button keeps spinning and retries for up to fifteen seconds before
 telling you the server is busy.
@@ -42,6 +42,9 @@ you once it is up:
 - It shows the **last rendered frame the moment it connects**, rather than waiting
   for the next exposure. At 60-second subs that used to be a minute of black, and a
   display opened after capture had stopped stayed black indefinitely.
+- Its size is **Settings → Eyepiece → Eyepiece Streaming Resolution**, not the
+  display's own: set it to match the panel — 1440p for a 1440×1440 screen (see
+  [Streaming Resolution](/noise-reduction#streaming-resolution)).
 
 Launch it in kiosk mode from your startup script, waiting for the server first —
 Chromium will not retry a page that failed to load:

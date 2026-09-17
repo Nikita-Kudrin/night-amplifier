@@ -17,6 +17,7 @@ import {
   STAR_PROTECTION_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
   PREVIEW_RESOLUTION_OPTIONS,
+  STREAMING_RESOLUTION_OPTIONS,
   HELP_TEXTS,
 } from '../constants'
 
@@ -24,6 +25,7 @@ const props = defineProps({
   sensorCorrection: {type: Object, required: true},
   denoise: {type: Object, required: true},
   previewResolution: {type: String, required: true},
+  streamingResolution: {type: String, required: true},
   /**
    * Focus/Finder mode holds three of these toggles off and owns the snapshot that
    * restores them, so while it is on they are read-only — an edit that looked like it
@@ -42,14 +44,16 @@ const local = reactive({
   sensor_correction: {...props.sensorCorrection},
   denoise: {...props.denoise},
   preview_resolution: props.previewResolution,
+  streaming_resolution: props.streamingResolution,
 })
 
 watch(
-    () => [props.sensorCorrection, props.denoise, props.previewResolution],
-    ([sensorCorrection, denoise, previewResolution]) => {
+    () => [props.sensorCorrection, props.denoise, props.previewResolution, props.streamingResolution],
+    ([sensorCorrection, denoise, previewResolution, streamingResolution]) => {
       Object.assign(local.sensor_correction, sensorCorrection)
       Object.assign(local.denoise, denoise)
       local.preview_resolution = previewResolution
+      local.streaming_resolution = streamingResolution
     },
     {deep: true}
 )
@@ -106,7 +110,7 @@ function applyValue(key, value) {
     </div>
   </div>
 
-  <!-- Preview resolution: fixed for the session, deliberately not client-driven -->
+  <!-- Preview and streaming resolutions: settings, deliberately not client-driven -->
   <div class="settings-section">
     <h3 class="section-title">Preview</h3>
 
@@ -129,9 +133,29 @@ function applyValue(key, value) {
         </select>
       </div>
     </div>
+
+    <div class="control-group">
+      <div class="control-row">
+        <label class="control-label" style="margin-bottom: 0; flex: 1">
+          Streaming Resolution
+          <BaseInfoIcon :message="HELP.streaming_resolution"/>
+        </label>
+        <select
+            id="streaming-resolution-select"
+            v-model="local.streaming_resolution"
+            class="select"
+            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            @change="applyValue('streaming_resolution', $event.target.value)"
+        >
+          <option v-for="opt in STREAMING_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
+            {{ opt.label }}
+          </option>
+        </select>
+      </div>
+    </div>
   </div>
 
-  <!-- Noise reduction: runs on the streamed image, at the size you view it -->
+  <!-- Noise reduction: runs on the streamed image, at its streaming resolution -->
   <div class="settings-section">
     <h3 class="section-title">Noise Reduction</h3>
 

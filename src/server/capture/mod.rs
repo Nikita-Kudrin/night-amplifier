@@ -21,11 +21,14 @@ pub mod guide_task;
 pub mod pipeline;
 pub(crate) mod push_to_tasks;
 mod render_task;
+#[cfg(test)]
+pub(crate) use render_task::run_render_task;
 pub mod solving;
 mod stacking_task;
 mod stage_config;
 pub(crate) mod stall;
 pub mod storage;
+mod stream_encoding;
 
 pub mod config_overrides;
 pub mod task;

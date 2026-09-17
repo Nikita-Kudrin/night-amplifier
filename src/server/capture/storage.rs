@@ -653,7 +653,7 @@ mod tests {
 }
 
 /// Fully render a stacked frame for PNG export: the exact interleaved RGB8 bytes a
-/// live viewer at the "Original" tier would see (background, stretch, saturation,
+/// live viewer at Native Streaming Resolution would see (background, stretch, saturation,
 /// contrast, spatial denoise, 8-bit quantization). Routes through
 /// `process_preview_frame` and `frame_to_rgb8_downsampled` — the render task's own
 /// per-frame calls, bounding box left unbounded — rather than calling
