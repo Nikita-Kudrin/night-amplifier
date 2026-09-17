@@ -537,6 +537,119 @@ mod tests {
             byte_sigma(&plain)
         );
     }
+
+    /// A left-to-right sky gradient with mild noise: the thing background removal exists
+    /// to flatten.
+    fn gradient_frame() -> crate::frame::Frame {
+        let (w, h) = (256, 256);
+        let plane = w * h;
+        let mut data = vec![0.0f32; plane * 3];
+        let mut seed: u32 = 13579;
+        for y in 0..h {
+            for x in 0..w {
+                let sky = 0.05 + 0.15 * x as f32 / (w - 1) as f32;
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.004;
+                    data[c * plane + y * w + x] = sky + noise;
+                }
+            }
+        }
+        crate::frame::Frame::from_f32_vec(data, w, h, 3).unwrap()
+    }
+
+    /// Mean byte of the leftmost minus the rightmost 16 columns, all channels.
+    fn edge_difference(rgb8: &[u8], width: usize, height: usize) -> f64 {
+        let band_mean = |x0: usize| {
+            let mut sum = 0u64;
+            for y in 0..height {
+                for x in x0..x0 + 16 {
+                    let i = (y * width + x) * 3;
+                    sum += rgb8[i..i + 3].iter().map(|&v| v as u64).sum::<u64>();
+                }
+            }
+            sum as f64 / (height * 16 * 3) as f64
+        };
+        band_mean(0) - band_mean(width - 16)
+    }
+
+    /// Both tests above switch background subtraction off, so nothing guarded that the
+    /// saved PNG loses the gradient the live view removes. Stretch stays off so the
+    /// ramp is compared in linear bytes (~35 levels edge to edge without removal). The
+    /// default profile's preset has `aggressiveness: 0.7`, so ~30 % of the ramp is meant
+    /// to stay: 12.2 levels measured, against 34.6 with removal off.
+    #[test]
+    fn render_stacked_png_removes_the_background_gradient() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = false;
+        settings.denoise.chroma = false;
+        settings.denoise.luma = false;
+
+        settings.background_subtraction = false;
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings).unwrap();
+        settings.background_subtraction = true;
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings).unwrap();
+
+        let kept = edge_difference(&kept, w as usize, h as usize).abs();
+        let removed = edge_difference(&removed, w as usize, h as usize).abs();
+        assert!(kept > 30.0, "fixture gradient too weak to test against: {kept:.1} levels");
+        assert!(
+            removed < kept * 0.5,
+            "background removal did not reach the saved PNG: edge difference {removed:.1} \
+             levels with it on, {kept:.1} with it off"
+        );
+    }
+
+    /// The saved PNG is byte-for-byte what the render task streams for the same stack at
+    /// sensor resolution, with every display stage on: background neutralization and
+    /// removal, SCNR, stretch, saturation, contrast, eyepiece darkening, black floor,
+    /// dither, denoise. A stage added to the live path but not the export fails here.
+    #[test]
+    fn render_stacked_png_matches_the_live_render_with_every_stage_on() {
+        use crate::render::denoise::DenoiseScratch;
+        use crate::server::capture::analysis::{AnalysisContext, PreviewAnalysis};
+        use crate::server::capture::pipeline::process_preview_frame_with_analysis;
+        use crate::server::encoding::frame_to_rgb8_downsampled_with;
+        use crate::server::state::RenderReadyFrame;
+
+        let mut settings = CaptureSettings::default();
+        settings.background_subtraction = true;
+        settings.auto_stretch = true;
+        settings.saturation_boost = true;
+        settings.eyepiece.intensity = 0.7;
+        settings.eyepiece.black_floor = -0.03;
+        settings.eyepiece.dither = true;
+        settings.denoise.chroma = true;
+        settings.denoise.luma = true;
+
+        let (exported, _, _) = render_stacked_png(gradient_frame(), &settings).unwrap();
+
+        let mut live = gradient_frame();
+        let (pipeline_config, stretch_result) = process_preview_frame_with_analysis(
+            &mut live,
+            &settings,
+            AnalysisContext {
+                showing_stack: true,
+                stack_depth: 40,
+            },
+            &mut PreviewAnalysis::new(),
+        )
+        .unwrap();
+        let ready = RenderReadyFrame {
+            linear_frame: Arc::new(live),
+            pipeline_config,
+            stretch_result,
+        };
+        let (streamed, _, _) = frame_to_rgb8_downsampled_with(
+            &ready,
+            u32::MAX,
+            u32::MAX,
+            &mut DenoiseScratch::default(),
+        )
+        .unwrap();
+
+        assert!(exported == streamed, "saved PNG bytes differ from the live render");
+    }
 }
 
 /// Fully render a stacked frame for PNG export: the exact interleaved RGB8 bytes a
