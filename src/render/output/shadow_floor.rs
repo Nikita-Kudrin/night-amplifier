@@ -1,46 +1,27 @@
-//! The darkening half of the black floor: how the sky gets to black. Not the
-//! pedestal with the sign flipped — [`super::DisplayOutput::pedestal`] is a property
-//! of the *panel* (absolute fraction of full scale), while this floor is a property
-//! of the *sky* (fraction of wherever the sky actually landed).
+//! The darkening half of the black floor. Not the pedestal with the sign flipped —
+//! [`super::DisplayOutput::pedestal`] is a property of the *panel* (absolute fraction of
+//! full scale), while darkening is a property of the *sky* (fraction of wherever the sky
+//! actually landed), so one slider position means one thing across targets.
 //!
-//! Fraction of the sky, not of full scale: a fixed absolute floor tracks reasonably
-//! (5.5% of full scale measured 79%/71% darker on two fixtures) but the two figures
-//! differ because the skies landed at 14 and 17 output levels — anchoring to the
-//! measured level instead makes one slider position mean one thing across targets.
-//!
-//! A knee, not a hard cutoff: sky noise is as wide as the sky level (sigma 5.2/10.2
-//! vs medians 14/17), so a hard floor puts 38-40% of samples on exactly zero — the
-//! same speckle the pedestal removes. The softplus knee compresses the sub-floor
-//! half into a narrow dark band instead (0.00% at zero vs 38% hard, same sky level).
-//! The hard form stays reachable via the "Darker sky" setting, for deeper sky and
-//! more target-to-sky separation.
+//! Two forms. The default is spatial ([`super::SkyShadow`]): a gain chosen from the
+//! neighbourhood, because every pointwise roll-off raised relative sky grain. The clip
+//! here is the "Darker sky" setting: deepest background, paid for in pixels switched off.
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use rayon::prelude::*;
 
-/// The knee width, as a fraction of the sky level.
-///
-/// Scaled with the sky rather than fixed so the curve keeps its shape when the
-/// anchor moves; a fixed width would sharpen into a hard clip under a bright
-/// sky and smear into a plain dim under a dark one.
-const KNEE_FRACTION: f32 = 0.15;
+use super::sky_shadow::SkyShadow;
 
 /// The deepest floor that still leaves a usable range above it.
 const MAX_DEPTH: f32 = 0.5;
 
-/// Where black sits below the sky, and how sharply the image gets there.
-///
-/// Both fields are absolute output-referred levels. Build one with
-/// [`ShadowFloor::from_sky`] rather than by hand — the anchoring to the measured
-/// sky level is the whole point, and a literal loses it.
+/// A hard floor: output below `depth` clips to black, the rest is rescaled so white
+/// stays white.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShadowFloor {
     /// Output level that maps to black, in `[0, 0.5]`. Zero disables.
     pub depth: f32,
-    /// Softplus knee width. Zero clips at `depth` instead of rolling off into
-    /// it, which is the only way to reach a true zero output.
-    pub knee: f32,
 }
 
 impl Default for ShadowFloor {
@@ -51,24 +32,12 @@ impl Default for ShadowFloor {
 
 impl ShadowFloor {
     /// No darkening: [`ShadowFloor::apply`] is the identity.
-    pub const NONE: Self = Self {
-        depth: 0.0,
-        knee: 0.0,
-    };
+    pub const NONE: Self = Self { depth: 0.0 };
 
-    /// A floor `fraction` of the way down from the measured sky level.
-    ///
-    /// `fraction` is the slider: `0.0` disables, `1.0` puts the floor exactly at
-    /// the sky's own level, so half its noise falls under the knee. `hard`
-    /// selects the clipping form.
-    pub fn from_sky(fraction: f32, sky_level: f32, hard: bool) -> Self {
-        let depth = (fraction.max(0.0) * sky_level.max(0.0)).min(MAX_DEPTH);
-        if depth <= 0.0 {
-            return Self::NONE;
-        }
+    /// A floor `fraction` of the way up to the measured sky level.
+    pub fn from_sky(fraction: f32, sky_level: f32) -> Self {
         Self {
-            depth,
-            knee: if hard { 0.0 } else { KNEE_FRACTION * depth },
+            depth: (fraction.max(0.0) * sky_level.max(0.0)).min(MAX_DEPTH),
         }
     }
 
@@ -79,57 +48,25 @@ impl ShadowFloor {
     }
 
     /// Map one output-referred value through the floor. `apply(0.0) == 0.0` and
-    /// `apply(1.0) == 1.0` always: white staying white keeps star cores at 255 while
-    /// the sky moves; black staying black lets this compose into a *scale* table
-    /// (`curve(L) / L`), which can't represent a curve missing the origin — the ratio
-    /// diverges and the limit-holding entry would scale the faintest bin toward white.
-    ///
-    /// The softplus doesn't pass through the origin on its own, so its zero value is
-    /// subtracted before normalizing — costs nothing visible, since the only input
-    /// that moves to exactly zero is already where the autostretch black point put
-    /// it, and the pedestal lifts it off the panel's off state regardless.
+    /// `apply(1.0) == 1.0` always: white staying white keeps star cores at 255, and
+    /// black staying black lets this compose into a *scale* table (`curve(L) / L`).
     #[inline]
     pub fn apply(&self, y: f32) -> f32 {
         if self.is_none() {
             return y;
         }
-        if self.knee <= 0.0 {
-            return ((y - self.depth) / (1.0 - self.depth)).max(0.0);
-        }
-        let base = self.softplus(0.0);
-        (self.softplus(y) - base) / (self.softplus(1.0) - base)
+        ((y - self.depth) / (1.0 - self.depth)).max(0.0)
     }
 
-    /// The `y → 0` limit of `apply(y) / y`.
-    ///
-    /// For callers composing this into a scale table whose entry 0 holds that
-    /// limit rather than a sample of the curve — see `render::stretch`. The hard
-    /// form's limit is genuinely zero: everything under the floor is black, and
-    /// that is what the setting asks for.
+    /// The `y → 0` limit of `apply(y) / y`, for a scale table's entry 0: genuinely
+    /// zero for a clip — everything under the floor is black, as asked.
     #[inline]
     pub fn slope_at_zero(&self) -> f32 {
         if self.is_none() {
-            return 1.0;
+            1.0
+        } else {
+            0.0
         }
-        if self.knee <= 0.0 {
-            return 0.0;
-        }
-        // d/dy softplus(y) is the logistic sigmoid of the same argument. A knee
-        // narrow enough to overflow the exp saturates the sigmoid to zero, which
-        // is the hard form's answer and so is faithful rather than merely safe.
-        let sigmoid = 1.0 / (1.0 + (self.depth / self.knee).exp());
-        sigmoid / (self.softplus(1.0) - self.softplus(0.0))
-    }
-
-    /// `knee * ln(1 + exp((y - depth) / knee))`, guarded against overflow.
-    ///
-    /// For large `t` the function is `t` to well within f32 precision, and
-    /// `exp(t)` would otherwise reach infinity around `t = 88` and make the
-    /// normalization NaN.
-    #[inline]
-    fn softplus(&self, y: f32) -> f32 {
-        let t = (y - self.depth) / self.knee;
-        self.knee * if t > 20.0 { t } else { (1.0 + t.exp()).ln() }
     }
 }
 
@@ -141,7 +78,7 @@ impl ShadowFloor {
 ///
 /// 4096 entries, linear interpolation — matching the scale LUT's sizing rationale:
 /// the curve's shape lives below `depth` (~0.05), so a coarser table would still
-/// resolve the knee with a handful of samples.
+/// resolve the clip with a handful of samples.
 pub struct ShadowFloorTable {
     entries: Vec<f32>,
 }
@@ -221,22 +158,25 @@ pub fn apply_shadow_floor_frame(frame: &mut Frame, floor: ShadowFloor) -> Result
     Ok(())
 }
 
-/// The shadow floor as the settings express it, before the solve has said where
-/// the sky landed.
-///
-/// Two stages exist because the two facts arrive at different times:
-/// `get_render_pipeline_config` knows what the observer asked for and nothing
-/// about the frame, while the autostretch solver knows where the sky ended up
-/// and nothing about the request. [`resolve`](Self::resolve) is where they meet.
+/// The darkening as the settings express it, before the solve has said where the sky
+/// landed. `get_render_pipeline_config` knows the request and nothing about the frame;
+/// the autostretch solver knows the sky and nothing about the request —
+/// [`resolve`](Self::resolve) is where they meet.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ShadowFloorRequest {
-    /// How far down to put the floor, as a fraction of the sky level. `0.0`
-    /// disables; `1.0` puts it exactly at the sky, so half the sky's noise falls
-    /// under the knee.
+    /// Slider position in nominal sky levels. `0.0` disables.
     pub fraction: f32,
-    /// Clip at the floor instead of rolling off into it — deeper sky and a
-    /// little more separation, paid for in samples on the panel's off state.
+    /// Clip at `fraction` of the sky ("Darker sky") instead of the spatial gain.
     pub hard: bool,
+}
+
+/// A request resolved against a sky level: at most one of the two forms is active.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ResolvedShadow {
+    /// Pointwise, so it can ride the scale LUT.
+    pub floor: ShadowFloor,
+    /// Spatial, so the encoder applies it after the per-row tail.
+    pub sky: Option<SkyShadow>,
 }
 
 impl ShadowFloorRequest {
@@ -250,10 +190,19 @@ impl ShadowFloorRequest {
         self.fraction <= 0.0
     }
 
-    /// Turn the request into a curve, given where the sky actually landed.
-    #[inline]
-    pub fn resolve(&self, sky_level: f32) -> ShadowFloor {
-        ShadowFloor::from_sky(self.fraction, sky_level, self.hard)
+    /// Turn the request into a transform, given where the sky actually landed.
+    pub fn resolve(&self, sky_level: f32) -> ResolvedShadow {
+        if self.hard {
+            ResolvedShadow {
+                floor: ShadowFloor::from_sky(self.fraction, sky_level),
+                sky: None,
+            }
+        } else {
+            ResolvedShadow {
+                floor: ShadowFloor::NONE,
+                sky: SkyShadow::from_sky(self.fraction, sky_level),
+            }
+        }
     }
 }
 
@@ -281,21 +230,13 @@ pub fn sky_level_after_contrast(
 mod tests {
     use super::*;
 
-    /// The property that keeps stars where they are. A floor that failed this
-    /// would dim the whole frame, which is exactly the complaint the black level
-    /// slider already has.
     #[test]
     fn white_stays_white_for_every_configuration() {
         for fraction in [0.1f32, 0.5, 1.0, 2.0, 10.0] {
             for sky in [0.01f32, 0.055, 0.2] {
-                for hard in [false, true] {
-                    let floor = ShadowFloor::from_sky(fraction, sky, hard);
-                    let out = floor.apply(1.0);
-                    assert!(
-                        (out - 1.0).abs() < 1e-5,
-                        "{floor:?} took white to {out}, not 1.0"
-                    );
-                }
+                let floor = ShadowFloor::from_sky(fraction, sky);
+                let out = floor.apply(1.0);
+                assert!((out - 1.0).abs() < 1e-5, "{floor:?} took white to {out}");
             }
         }
     }
@@ -305,105 +246,28 @@ mod tests {
         for y in [0.0f32, 0.01, 0.5, 1.0] {
             assert_eq!(ShadowFloor::NONE.apply(y), y);
         }
-        assert!(ShadowFloor::NONE.is_none());
-        assert!(ShadowFloor::from_sky(0.0, 0.055, false).is_none());
-        assert!(ShadowFloor::from_sky(1.0, 0.0, false).is_none());
+        assert!(ShadowFloor::from_sky(0.0, 0.055).is_none());
+        assert!(ShadowFloor::from_sky(1.0, 0.0).is_none());
     }
 
-    /// Monotonicity is what makes this a tone curve rather than a scrambler: two
-    /// pixels that differed in brightness must still differ, in the same order.
     #[test]
-    fn every_form_is_monotone_over_the_whole_range() {
-        for hard in [false, true] {
-            let floor = ShadowFloor::from_sky(1.0, 0.055, hard);
-            let mut previous = -1.0;
-            for i in 0..=1000 {
-                let out = floor.apply(i as f32 / 1000.0);
-                assert!(out >= previous, "{floor:?} went backwards at {i}: {out}");
-                previous = out;
-            }
+    fn the_clip_is_monotone_over_the_whole_range() {
+        let floor = ShadowFloor::from_sky(1.0, 0.055);
+        let mut previous = -1.0;
+        for i in 0..=1000 {
+            let out = floor.apply(i as f32 / 1000.0);
+            assert!(out >= previous, "went backwards at {i}: {out}");
+            previous = out;
         }
     }
 
     /// The hard form's defining behaviour, and the reason it is opt-in.
     #[test]
     fn the_hard_form_clips_exactly_at_the_floor() {
-        let floor = ShadowFloor::from_sky(1.0, 0.055, true);
-        assert_eq!(floor.knee, 0.0);
+        let floor = ShadowFloor::from_sky(1.0, 0.055);
         assert_eq!(floor.apply(0.055), 0.0);
         assert_eq!(floor.apply(0.0), 0.0);
         assert!(floor.apply(0.056) > 0.0);
-    }
-
-    /// The soft form's defining behaviour: it *compresses* the sub-floor sky
-    /// instead of deleting it. Two values below the floor stay two values, which
-    /// is exactly what the hard form cannot do — and it is the whole reason the
-    /// soft form leaves no sample on the panel's off state.
-    #[test]
-    fn the_soft_form_compresses_below_the_floor_rather_than_clipping() {
-        let soft = ShadowFloor::from_sky(1.0, 0.055, false);
-        let hard = ShadowFloor::from_sky(1.0, 0.055, true);
-        assert!(soft.knee > 0.0);
-
-        for (lo, hi) in [(0.005f32, 0.010f32), (0.02, 0.03), (0.04, 0.05)] {
-            assert!(
-                soft.apply(hi) > soft.apply(lo),
-                "soft floor collapsed {lo} and {hi} onto {}",
-                soft.apply(lo)
-            );
-            assert_eq!(
-                hard.apply(hi),
-                hard.apply(lo),
-                "the hard form is supposed to clip this pair"
-            );
-        }
-
-        // Compressed, though: the whole sub-floor range lands inside one output
-        // level, which is what reads as a smooth dark field rather than speckle.
-        assert!(soft.apply(0.055) * 255.0 < 2.0);
-        assert!(soft.apply(0.0) == 0.0);
-    }
-
-    /// The anchoring, stated as a test.
-    ///
-    /// The claim is *not* that two skies come out identical — they cannot, since
-    /// the curve is normalized against white and a deeper floor leaves less room
-    /// below it. The claim is that anchoring collapses the spread that an
-    /// absolute floor leaves behind, and the two sky levels here are the ones
-    /// the fixtures actually produce: 14 and 17 output levels.
-    #[test]
-    fn anchoring_collapses_what_an_absolute_floor_leaves_spread() {
-        const DIM: f32 = 14.0 / 255.0;
-        const BRIGHT: f32 = 17.0 / 255.0;
-        let levels = |floor: ShadowFloor, sky: f32| floor.apply(sky) * 255.0;
-
-        let anchored = (
-            levels(ShadowFloor::from_sky(1.0, DIM, false), DIM),
-            levels(ShadowFloor::from_sky(1.0, BRIGHT, false), BRIGHT),
-        );
-        // One absolute floor, tuned on the dim sky, applied to both.
-        let fixed = ShadowFloor::from_sky(1.0, DIM, false);
-        let absolute = (levels(fixed, DIM), levels(fixed, BRIGHT));
-
-        let anchored_spread = (anchored.0 - anchored.1).abs();
-        let absolute_spread = (absolute.0 - absolute.1).abs();
-
-        assert!(
-            anchored_spread < 1.0,
-            "anchored skies landed {:.2} and {:.2} levels apart",
-            anchored.0,
-            anchored.1
-        );
-        assert!(
-            anchored_spread < absolute_spread * 0.5,
-            "anchoring bought nothing: spread {anchored_spread:.2} against \
-             {absolute_spread:.2} for a fixed floor"
-        );
-
-        // The mechanism, so a failure above says which half moved.
-        let bright_floor = ShadowFloor::from_sky(1.0, BRIGHT, false);
-        assert!((bright_floor.depth / fixed.depth - BRIGHT / DIM).abs() < 1e-5);
-        assert!((bright_floor.knee / fixed.knee - BRIGHT / DIM).abs() < 1e-5);
     }
 
     /// The anchor has to follow the solver's target, not the configured one.
@@ -418,94 +282,57 @@ mod tests {
             (anchor - 0.0517).abs() < 1e-3,
             "anchor {anchor} is not where the S-curve puts the sky"
         );
-
-        // No contrast, no move.
         assert_eq!(sky_level_after_contrast(0.08, None), 0.08);
-        // A raised target has to raise the anchor with it.
         assert!(sky_level_after_contrast(0.104, Some(&shipped)) > anchor);
     }
 
     #[test]
-    fn a_request_resolves_against_the_sky_it_is_given() {
+    fn a_request_resolves_to_exactly_one_form() {
         assert!(ShadowFloorRequest::NONE.is_none());
-        assert!(ShadowFloorRequest::NONE.resolve(0.05).is_none());
+        let none = ShadowFloorRequest::NONE.resolve(0.05);
+        assert!(none.floor.is_none() && none.sky.is_none());
 
         let soft = ShadowFloorRequest {
             fraction: 1.0,
             hard: false,
-        };
-        assert_eq!(soft.resolve(0.05).depth, 0.05);
-        assert!(soft.resolve(0.05).knee > 0.0);
+        }
+        .resolve(0.05);
+        assert!(soft.floor.is_none());
+        assert_eq!(soft.sky.map(|s| s.sky), Some(0.05));
 
         let hard = ShadowFloorRequest {
             fraction: 0.5,
             hard: true,
-        };
-        assert_eq!(hard.resolve(0.05).depth, 0.025);
-        assert_eq!(hard.resolve(0.05).knee, 0.0);
+        }
+        .resolve(0.05);
+        assert_eq!(hard.floor.depth, 0.025);
+        assert!(hard.sky.is_none());
     }
 
-    /// The table stands in for the curve in the encoder's row tail, so a
-    /// visible disagreement between them is a visible difference between
-    /// Community and Pro output at the same setting.
+    /// The table stands in for the curve in the encoder's row tail.
     #[test]
     fn the_table_tracks_the_curve_to_well_under_an_output_level() {
-        for hard in [false, true] {
-            let floor = ShadowFloor::from_sky(1.0, 0.055, hard);
-            let table = ShadowFloorTable::new(floor);
-            let mut worst = 0.0f32;
-            for i in 0..=20_000 {
-                let y = i as f32 / 20_000.0;
-                worst = worst.max((table.lookup(y) - floor.apply(y)).abs());
-            }
-            assert!(
-                worst * 255.0 < 0.15,
-                "{floor:?}: table is off by {:.3} output levels",
-                worst * 255.0
-            );
+        let floor = ShadowFloor::from_sky(1.0, 0.055);
+        let table = ShadowFloorTable::new(floor);
+        let mut worst = 0.0f32;
+        for i in 0..=20_000 {
+            let y = i as f32 / 20_000.0;
+            worst = worst.max((table.lookup(y) - floor.apply(y)).abs());
         }
+        assert!(worst * 255.0 < 0.15, "table is off by {:.3} levels", worst * 255.0);
     }
 
-    /// A nonsense slider value must not produce a curve that eats the image.
     #[test]
     fn depth_is_capped_and_negatives_disable() {
-        assert_eq!(ShadowFloor::from_sky(100.0, 0.5, false).depth, MAX_DEPTH);
-        assert!(ShadowFloor::from_sky(-1.0, 0.055, false).is_none());
-        assert!(ShadowFloor::from_sky(1.0, -0.055, false).is_none());
+        assert_eq!(ShadowFloor::from_sky(100.0, 0.5).depth, MAX_DEPTH);
+        assert!(ShadowFloor::from_sky(-1.0, 0.055).is_none());
+        assert!(ShadowFloor::from_sky(1.0, -0.055).is_none());
     }
 
-    /// Entry 0 of a composed scale table is a limit, not a sample, so the
-    /// limit has to agree with the curve just above zero or the faintest bin
-    /// steps.
     #[test]
     fn the_zero_limit_agrees_with_the_curve_just_above_zero() {
-        for hard in [false, true] {
-            let floor = ShadowFloor::from_sky(1.0, 0.055, hard);
-            // Small enough to stay in the linear regime, large enough that the
-            // f32 subtraction inside `apply` keeps its significant digits.
-            let y = 1e-4;
-            let sampled = floor.apply(y) / y;
-            let limit = floor.slope_at_zero();
-            assert!(
-                (sampled - limit).abs() <= limit * 0.02 + 1e-9,
-                "{floor:?}: limit {limit} against sampled {sampled}"
-            );
-        }
+        let floor = ShadowFloor::from_sky(1.0, 0.055);
+        assert_eq!(floor.apply(1e-4) / 1e-4, floor.slope_at_zero());
         assert_eq!(ShadowFloor::NONE.slope_at_zero(), 1.0);
-    }
-
-    /// Overflow guard: without the `t > 20` branch the normalizer is `inf` and
-    /// every output becomes NaN.
-    #[test]
-    fn a_very_narrow_knee_stays_finite() {
-        let floor = ShadowFloor {
-            depth: 0.05,
-            knee: 1e-4,
-        };
-        for i in 0..=100 {
-            let out = floor.apply(i as f32 / 100.0);
-            assert!(out.is_finite(), "non-finite output {out} at {i}");
-        }
-        assert!((floor.apply(1.0) - 1.0).abs() < 1e-5);
     }
 }

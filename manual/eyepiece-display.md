@@ -112,35 +112,34 @@ stretch, so the target keeps its brightness. Measured on the reference frames:
 
 | Setting | Sky | Target contrast |
 |---|---|---|
-| 0 % | 14 and 17 levels | — |
-| −5 % | 4 and 6 levels (−65 to −71 %) | +9 % and +25 % |
-| −9 % | 2 levels (−86 to −88 %) | −38 % and −1 % |
+| 0 % | 11 and 17 levels | — |
+| −5 % | 4 and 6 levels (−64 to −65 %) | +32 % and 0 % |
+| −6 % (end stop) | 3 levels (−73 to −82 %) | +31 % and +14 % |
 | Black level at full | 7 and 8 levels (−50 %) | −62 % |
 
 Those are code values. What reaches your eye falls further, because the panel
-applies its own gamma on top: 14 levels down to 4 is a 72 to 94 % drop in
-emitted light depending on the screen.
+applies its own gamma on top.
 
-The setting is anchored to the sky it measures, not to full scale, so one
-position behaves the same on a bright target and a faint one. Around −5 % puts
-the floor level with the sky itself. Past that you are cutting into the sky's own
-noise, which is what makes the last of the travel cost some faint detail.
+It works by dimming the sky, not by cutting it off: each pixel is darkened
+according to its small neighbourhood, so flat sky darkens evenly while stars and
+the faint glow of a nebula or globular cluster keep their level. The grain in the
+sky shrinks with it, instead of turning into dark clumps and bright specks.
 
-Because it is anchored to a measured sky level, the negative half needs something
-to measure. It does nothing with **Auto stretch** off, and nothing in **Planetary**
-mode — there the middle of the frame is the Moon or the planet rather than sky, so
-a floor set from it would darken the subject instead of the background.
+The setting follows the sky it measures, not full scale, so one position behaves
+the same on a bright target and a faint one. A large dark area in the frame — a roof,
+a tree, a dewed-over corner — is not mistaken for the sky. It does nothing with **Auto stretch**
+off, and nothing in **Planetary** mode — there the middle of the frame is the Moon
+or the planet rather than sky, so it would darken the subject instead.
 
 ### Darker sky
 
-The negative half rolls off into black rather than clipping, so no pixel is ever
-switched fully off. **Darker sky** removes that roll-off and lets the sky clip.
+The negative half never switches a pixel fully off. **Darker sky** replaces the
+dimming with a hard cut at the chosen level.
 
-It buys the deepest possible background and a little more separation between
-target and sky, and it costs the black speckle the positive half of this slider
-exists to remove — around a third of the sky ends up fully off. Worth trying on
-an LCD, or on a target bright enough that you do not care what happens to the
-background. It does nothing while Black floor is positive.
+It buys the deepest possible background, and it costs the black speckle the
+positive half of this slider exists to remove — a third to a half of the sky ends
+up fully off. Worth trying on an LCD, or on a target bright enough that you do not
+care what happens to the background. It does nothing while Black floor is positive.
 
 ## Dithering
 

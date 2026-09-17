@@ -709,14 +709,26 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
         );
 
         // 3. And without putting a single sample on the panel's off state. The
-        //    curve approaches zero without arriving and the pedestal underneath
-        //    it is what makes that survive rounding.
+        //    gain never reaches zero and the pedestal underneath covers what the
+        //    black point already clamped.
         assert_eq!(
             soft.zeros, 0.0,
             "{}: soft floor put {:.2}% of samples on exactly 0 — that is the \
              black speckle the whole floor exists to avoid",
             fixture.label,
             soft.zeros * 100.0
+        );
+
+        // 3b. Nor relatively grainier: the knee this replaced flattened the lower
+        //     half of the sky noise and kept the upper, raising grain against the
+        //     sky 1.7-2x — dark clumps and bright specks at a pixel-resolving
+        //     eyepiece (2026-09-14 globular session).
+        assert!(
+            soft.sigma / soft.sky <= base.sigma / base.sky * 1.1,
+            "{}: darkening raised relative sky grain from {:.3} to {:.3}",
+            fixture.label,
+            base.sigma / base.sky,
+            soft.sigma / soft.sky
         );
 
         // 4. The slider's end stop has to stay usable. It costs contrast — that
@@ -899,6 +911,9 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
             prepare_fixture_with(fixture, |settings| {
                 settings.eyepiece.intensity = 0.0;
                 settings.eyepiece.black_floor = black_floor;
+                // The clip is the pointwise form that can ride either path; the
+                // default spatial form rides neither and is checked below.
+                settings.eyepiece.darker_sky = true;
                 settings.saturation_boost = saturation;
             })
         };
@@ -955,10 +970,10 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
         control.0
     );
     assert!(
-        // Measured 0.0028 without the floor and 0.0099 with it: a hundredth of
-        // an output level, which is the two tables' interpolation and nothing
-        // else. The bound leaves room for a stretch retune to move both.
-        floored.1 <= control.1 + 0.02,
+        // Measured 0.0026 without the floor and 0.0264 with the clip: three
+        // hundredths of an output level, the two tables interpolating across the
+        // clip's kink and nothing else. The bound leaves room for a retune.
+        floored.1 <= control.1 + 0.05,
         "the floor widened the average disagreement from {:.4} to {:.4}",
         control.1,
         floored.1

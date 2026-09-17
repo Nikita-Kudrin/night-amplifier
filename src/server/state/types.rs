@@ -111,6 +111,9 @@ pub struct StretchResult {
     /// `render_task::ConversionCache` exists: a session with lossless + two JPEG
     /// tiers would otherwise resample and allocate the same curve four times a frame.
     pub deferred_shadow_floor: Option<std::sync::Arc<crate::render::ShadowFloorTable>>,
+    /// The soft darkening, applied by the encoder after the row tail: it reads a
+    /// 3x3 neighbourhood, so it can ride neither the LUT nor a per-row pass.
+    pub sky_shadow: Option<crate::render::SkyShadow>,
 }
 
 /// A frame ready to be rendered and encoded.

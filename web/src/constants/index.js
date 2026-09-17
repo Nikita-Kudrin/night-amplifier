@@ -75,13 +75,11 @@ export const BLACK_LEVEL_LIMITS = {
 }
 
 // The darkening half is anchored to the sky, so its reach is only meaningful against
-// where the sky actually renders. Shortened from -0.09 when the auto-stretch solver was
-// fixed to hit its own target background: that dropped the rendered sky from 14 to 11 of
-// 255, and the same floor fraction against a darker sky took 56% of the target's
-// contrast at the end stop instead of 37%. Mirrors `MIN_BLACK_FLOOR` in
+// where the sky actually renders. -6% is where the spatial darkening saturates (a tenth
+// of the sky left); further travel would do nothing. Mirrors `MIN_BLACK_FLOOR` in
 // `server/capture/stage_config.rs`, which clamps it server-side.
 export const BLACK_FLOOR_LIMITS = {
-    min: -0.075,
+    min: -0.06,
     max: 0.15,
     step: 0.01,
     default: 0.04,

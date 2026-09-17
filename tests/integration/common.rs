@@ -392,6 +392,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "stack-depth-dumbbell",
         "https://drive.usercontent.google.com/download?id=1MKQqxU3QSqWqg2wjGuLXmRhTW-iTaCVm&export=download&confirm=t",
     ),
+    // 12 subs of a globular (IMX533, 6 s) from the 2026-09-14 session that rendered blocky
+    // at the eyepiece, cropped to 2048x2048 on an even origin around the cluster.
+    // `eyepiece_globular_regression` (Pro) asserts the downsample lattice, black-floor
+    // grain and RBF halo against it.
+    (
+        "globular-cluster-eyepiece",
+        "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
+    ),
 ];
 
 /// Downloads and extracts test fixture datasets from Google Drive.

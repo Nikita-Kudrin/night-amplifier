@@ -21,7 +21,7 @@ fn to_ready_frame(frame: &Frame) -> crate::server::state::RenderReadyFrame {
 /// Like `to_ready_frame`, but with `auto_stretch` actually enabled and a real
 /// `StretchResult` attached — every fused-kernel test up to this point runs with
 /// stretch/saturation/contrast all disabled, so the scale-LUT application branch in
-/// `expand_to_rgb8_fused`/`box_downsample_to_rgb8_fused` had no coverage at all.
+/// `expand_to_rgb8_fused`/`area_downsample_to_rgb8_fused` had no coverage at all.
 fn to_ready_frame_with_stretch(
     frame: &Frame,
     black_point: f32,
@@ -36,6 +36,7 @@ fn to_ready_frame_with_stretch(
         pipeline_config: config,
         stretch_result: Some(crate::server::state::StretchResult {
             deferred_shadow_floor: None,
+            sky_shadow: None,
             black_point,
             scale_lut,
             color_intensity: 1.0,
@@ -409,33 +410,65 @@ fn gradient_frame(width: usize, height: usize, channels: usize) -> Frame {
     Frame::from_f32_vec(data, width, height, channels).unwrap()
 }
 
-/// The pre-rewrite algorithm: box-average into f32 with a real division, then
-/// convert. This is the "current implementation" the ±1 LSB bound is against.
+/// The resampling kernel written out the slow way: every output pixel integrates its
+/// footprint `[i*scale, (i+1)*scale)` over linearly interpolated source samples (a
+/// 1 px tent each), weights computed in 2D per pixel with f64 and a real division.
+/// Independent of `AxisTaps` on purpose: a shared helper would agree with itself.
 fn reference_downsample_to_rgb8(frame: &Frame, target_w: usize, target_h: usize) -> Vec<u8> {
     let (w, h, channels) = (frame.width(), frame.height(), frame.channels());
-    let x_scale = w as f32 / target_w as f32;
-    let y_scale = h as f32 / target_h as f32;
+    let tent_integral = |lo: f64, hi: f64, centre: f64| {
+        // Midpoint rule at 1/64 px: exact enough for a 1 LSB bound.
+        let steps = (((hi - lo) * 64.0).ceil() as usize).max(1);
+        let dt = (hi - lo) / steps as f64;
+        (0..steps)
+            .map(|k| (1.0 - (lo + (k as f64 + 0.5) * dt - centre).abs()).max(0.0) * dt)
+            .sum::<f64>()
+    };
+    // Normalised area-tent weights of one output pixel.
+    let footprint = |len: usize, target: usize, i: usize| -> Vec<(usize, f64)> {
+        let scale = len as f64 / target as f64;
+        let (lo, hi) = (i as f64 * scale, (i + 1) as f64 * scale);
+        let near = (lo - 2.0).max(0.0) as usize..((hi + 2.0) as usize).min(len);
+        let w: Vec<(usize, f64)> = near
+            .map(|j| (j, tent_integral(lo, hi, j as f64 + 0.5)))
+            .filter(|&(_, weight)| weight > 0.0)
+            .collect();
+        let sum: f64 = w.iter().map(|(_, v)| v).sum();
+        w.into_iter().map(|(j, v)| (j, v / sum)).collect()
+    };
+    // The output-grid sharpen `[-a, 1+2a, -a]`, restated: 0.15 up to 1.1x, none from 1.9x.
+    let axis = |len: usize, target: usize, i: usize| -> Vec<(usize, f64)> {
+        let scale = len as f64 / target as f64;
+        let a = 0.15 * ((1.9 - scale) / 0.8).clamp(0.0, 1.0);
+        if a == 0.0 || target < 3 {
+            return footprint(len, target, i);
+        }
+        let mut acc = std::collections::BTreeMap::<usize, f64>::new();
+        for (k, n) in [(1.0 + 2.0 * a, i), (-a, i.saturating_sub(1)), (-a, (i + 1).min(target - 1))] {
+            for (j, v) in footprint(len, target, n) {
+                *acc.entry(j).or_default() += k * v;
+            }
+        }
+        acc.into_iter().collect()
+    };
     let mut out = vec![0u8; target_w * target_h * 3];
 
     for y in 0..target_h {
-        let sy0 = (y as f32 * y_scale) as usize;
-        let sy1 = (((y + 1) as f32 * y_scale) as usize).min(h);
-        let y_count = (sy1 - sy0).max(1);
+        let rows = axis(h, target_h, y);
         for x in 0..target_w {
-            let sx0 = (x as f32 * x_scale) as usize;
-            let sx1 = (((x + 1) as f32 * x_scale) as usize).min(w);
-            let x_count = (sx1 - sx0).max(1);
-            let area = (y_count * x_count) as f32;
-
-            let mut avg = [0.0f32; 3];
-            for c in 0..channels {
-                let mut sum = 0.0f32;
-                for sy in sy0..sy1 {
-                    for sx in sx0..sx1 {
-                        sum += frame.get_pixel(sx, sy, c);
+            let cols = axis(w, target_w, x);
+            let mut avg = [0.0f64; 3];
+            let mut total = 0.0;
+            for &(sy, wy) in &rows {
+                for &(sx, wx) in &cols {
+                    total += wy * wx;
+                    for (c, a) in avg.iter_mut().enumerate().take(channels) {
+                        *a += wy * wx * frame.get_pixel(sx, sy, c) as f64;
                     }
                 }
-                avg[c] = sum / area;
+            }
+            for a in avg.iter_mut() {
+                *a /= total;
             }
             if channels == 1 {
                 avg[1] = avg[0];
@@ -444,24 +477,25 @@ fn reference_downsample_to_rgb8(frame: &Frame, target_w: usize, target_h: usize)
 
             let idx = (y * target_w + x) * 3;
             for c in 0..3 {
-                out[idx + c] = (avg[c].max(0.0).min(1.0) * 255.0 + 0.5) as u8;
+                out[idx + c] = (avg[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
             }
         }
     }
     out
 }
 
-/// The bound the plan asks for: the fused kernel replaced `sum / area` with
-/// `sum * (1/y_count) * (1/x_count)`, so results may differ by a rounding
-/// step but must never differ visibly.
+/// The fused kernel against the slow reference: separable f32 taps against 2D f64
+/// weights may differ by a rounding step but must never differ visibly.
 #[test]
 fn test_downsample_matches_reference_within_1_lsb() {
-    // Non-integer scale factors so `x_count`/`y_count` vary across the row and
-    // the area divisor is exercised at more than one value.
+    // Non-integer scale factors, so the footprint's phase varies along both axes.
     for (w, h, box_w, box_h) in [
         (400, 300, 137, 111),
         (271, 153, 96, 54),
         (300, 400, 111, 137),
+        // Near unity (IMX464 at the 1440 tier) and 1.42x, where the sharpen applies.
+        (321, 300, 300, 281),
+        (284, 200, 200, 141),
     ] {
         let frame = gradient_frame(w, h, 3);
         let (got, gw, gh) =
@@ -490,8 +524,6 @@ fn test_downsample_matches_reference_within_1_lsb() {
                 differing += 1;
             }
         }
-        // Informational: the reciprocal is exact whenever both counts are
-        // powers of two, so most samples match bit for bit.
         println!(
             "{w}x{h} -> {gw}x{gh}: {differing}/{} samples differ by 1",
             got.len()
@@ -626,7 +658,7 @@ fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
     assert_eq!(&rgb8[9..12], &[0, 0, 0]);
 }
 
-/// Pins the ordering documented on `box_downsample_to_rgb8_fused`: for a concave
+/// Pins the ordering documented on `area_downsample_to_rgb8_fused`: for a concave
 /// tone curve, averaging in linear light and *then* stretching must never come out
 /// dimmer than stretching each source pixel first and averaging the results
 /// afterward — see that function's doc comment for the Jensen's-inequality argument.
@@ -653,7 +685,7 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
     let frame = Frame::from_f32_vec(data, 2, 2, 3).unwrap();
     let ready = to_ready_frame_with_stretch(&frame, 0.0, scale_lut);
 
-    let actual = box_downsample_to_rgb8_fused(&ready, 1, 1, &mut Default::default());
+    let actual = area_downsample_to_rgb8_fused(&ready, 1, 1, &mut Default::default());
 
     // Production order (downsample-then-stretch): average = 0.4, curve(0.4) =
     // sqrt(0.4) ~= 0.632456 -> u8 ~= 161 (+-1 for LUT interpolation error).
@@ -1028,4 +1060,300 @@ fn the_staged_path_still_applies_the_stretch_before_quantizing() {
         unfiltered.iter().any(|&b| b > 26),
         "stretch did not run: 0.1 should be lifted well above its linear byte"
     );
+}
+
+/// A non-integer box downsample must average the same source area into every output
+/// pixel, or sky noise prints a lattice. 3008 -> 1440 (the eyepiece tier on IMX533)
+/// is 2.089x: boxes are 2 px wide except every ~11th row/column, which is 3, so those
+/// lines are less noisy. Seen in the 2026-09-14 globular session at 18 arcmin per
+/// block through a 100 mm eyepiece lens: ~11 % less sky grain on the 3-px lines,
+/// 21 % at their crossings. Same 2.089x ratio here, at half the size.
+#[test]
+fn non_integer_downsample_gives_every_output_pixel_the_same_noise() {
+    let (src, dst) = (1504usize, 720u32);
+    let mut frame = Frame::zeros(src, src, 1).unwrap();
+    let mut seed = 0x9e37_79b9_u32;
+    for y in 0..src {
+        for x in 0..src {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let uniform = (seed >> 8) as f32 / (1u32 << 24) as f32;
+            frame.set_pixel(x, y, 0, 0.3 + 0.4 * uniform);
+        }
+    }
+
+    let (rgb8, width, height) =
+        frame_to_rgb8_downsampled(&to_ready_frame(&frame), dst, dst).unwrap();
+    assert_eq!((width, height), (dst, dst));
+
+    let scale = src as f64 / dst as f64;
+    let span = |i: usize| ((i + 1) as f64 * scale) as usize - (i as f64 * scale) as usize;
+    let mut groups = [(0.0f64, 0.0f64, 0usize); 2];
+    for x in 1..dst as usize - 1 {
+        let group = usize::from(span(x) != 2);
+        for y in (1..dst as usize - 1).filter(|&y| span(y) == 2) {
+            let v = rgb8[(y * dst as usize + x) * 3] as f64;
+            let g = &mut groups[group];
+            g.0 += v;
+            g.1 += v * v;
+            g.2 += 1;
+        }
+    }
+    let std = |(sum, sq, n): (f64, f64, usize)| (sq / n as f64 - (sum / n as f64).powi(2)).sqrt();
+    let (narrow, wide) = (std(groups[0]), std(groups[1]));
+    assert!(
+        (wide / narrow - 1.0).abs() < 0.05,
+        "output columns averaging a wider source box are {:.1} % less noisy ({wide:.2} vs {narrow:.2} levels)",
+        (1.0 - wide / narrow) * 100.0
+    );
+}
+
+/// Near-unity ratios are where the area-tent kernel costs the most sharpness: IMX464 is
+/// 1.07x over the 1440 tier, where a 2.5 px star kept 83 % of the whole-pixel box's peak
+/// before the output-grid sharpen. Planetary live view exists for exactly that detail.
+#[test]
+fn a_near_unity_downsample_keeps_star_peaks() {
+    let (src, dst) = (1538usize, 1440usize);
+    let sigma = 2.5 / 2.3548;
+    let scale = src as f32 / dst as f32;
+    let mut worst = f32::MAX;
+    for phase in 0..8 {
+        let (cx, cy) = (src as f32 / 2.0 + phase as f32 * 0.133, src as f32 / 2.0);
+        let star = |x: usize, y: usize| {
+            let r2 = (x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2);
+            0.9 * (-r2 / (2.0 * sigma * sigma)).exp()
+        };
+        let mut frame = Frame::zeros(src, src, 1).unwrap();
+        for y in src / 2 - 12..src / 2 + 12 {
+            for x in src / 2 - 12..src / 2 + 12 {
+                frame.set_pixel(x, y, 0, star(x, y));
+            }
+        }
+        let (rgb, _, _) =
+            frame_to_rgb8_downsampled(&to_ready_frame(&frame), dst as u32, dst as u32).unwrap();
+        let peak = rgb.iter().copied().max().unwrap() as f32;
+
+        // The whole-pixel box this kernel replaced, as the sharpness reference.
+        let span = |i: usize| ((i as f32 * scale) as usize, (((i + 1) as f32 * scale) as usize).max((i as f32 * scale) as usize + 1));
+        let box_peak = (dst / 2 - 12..dst / 2 + 12)
+            .flat_map(|oy| (dst / 2 - 12..dst / 2 + 12).map(move |ox| (ox, oy)))
+            .map(|(ox, oy)| {
+                let ((x0, x1), (y0, y1)) = (span(ox), span(oy));
+                let sum: f32 = (y0..y1).flat_map(|y| (x0..x1).map(move |x| star(x, y))).sum();
+                sum / ((x1 - x0) * (y1 - y0)) as f32 * 255.0
+            })
+            .fold(0.0f32, f32::max);
+        worst = worst.min(peak / box_peak);
+    }
+    assert!(
+        worst >= 0.97,
+        "a 2.5 px star kept {:.0} % of the whole-pixel box's peak",
+        worst * 100.0
+    );
+}
+
+/// A ready frame with the sky shadow set and an identity tail (no stretch, contrast or
+/// saturation), so the expected bytes can be built from the frame's own samples.
+fn ready_with_sky_shadow(frame: &Frame, shadow: crate::render::SkyShadow) -> crate::server::state::RenderReadyFrame {
+    let mut ready = to_ready_frame(frame);
+    ready.stretch_result = Some(crate::server::state::StretchResult {
+        black_point: 0.0,
+        scale_lut: std::sync::Arc::new(vec![]),
+        color_intensity: 1.0,
+        deferred_shadow_floor: None,
+        sky_shadow: Some(shadow),
+    });
+    ready
+}
+
+/// The denoise-off path streams the sky shadow chunk by chunk; the staged path applies
+/// it to the whole image. One setting must produce one image on both — the sky is
+/// measured on the same sample rows, each guide row from the same three rows.
+#[test]
+fn sky_shadow_streaming_matches_staged() {
+    let sky = 0.052f32;
+    for (w, h) in [(71usize, 97usize), (40, 1), (33, 2), (129, 200)] {
+        let mut frame = Frame::zeros(w, h, 3).unwrap();
+        let mut seed = 0x5eed_u32;
+        for y in 0..h {
+            for x in 0..w {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let u = (seed >> 8) as f32 / (1u32 << 24) as f32;
+                let star = if (x * 7 + y * 3) % 53 == 0 { 0.6 } else { 0.0 };
+                for c in 0..3 {
+                    frame.set_pixel(x, y, c, sky * (0.6 + 0.8 * u) * (1.0 + 0.1 * c as f32) + star);
+                }
+            }
+        }
+        let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
+        let (streamed, _, _) = frame_to_rgb8_downsampled(&ready_with_sky_shadow(&frame, shadow), 4096, 4096).unwrap();
+
+        let mut staged: Vec<f32> = (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
+            .map(|(x, y, c)| frame.get_pixel(x, y, c))
+            .collect();
+        crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
+        let mut expected = vec![0u8; w * h * 3];
+        for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
+            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
+        }
+        assert_eq!(streamed, expected, "{w}x{h}: streaming and staged sky shadow disagree");
+        assert_ne!(streamed, frame_to_rgb8_downsampled(&to_ready_frame(&frame), 4096, 4096).unwrap().0, "{w}x{h}: shadow did nothing");
+    }
+}
+
+/// The output-grid sharpen has negative lobes, and the black point sits only 2.8 deep-stack
+/// sigmas (~3 % of the sky) under the sky, so an undershoot beside a bright star would
+/// clip a dark ring. At IMX464's 1.07x none does: deepest +1.1 sigma at FWHM 3 px, -2.9
+/// at 1.6 px, the whole-pixel box -3.0.
+#[test]
+fn a_near_unity_downsample_leaves_no_dark_ring_around_bright_stars() {
+    use super::axis_taps::AxisTaps;
+    const SKY: f32 = 0.0028;
+    const SIGMA: f32 = 3.4e-5;
+    const K: f32 = 2.8;
+    let (src_len, dst_len) = (1538usize, 1440usize);
+    let (n, out_n) = (440usize, 400usize);
+    let scale = src_len as f64 / dst_len as f64;
+
+    let mut seed = 0x0bad_5eed_u32;
+    let mut gauss = move || {
+        let mut u = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 + 1e-7
+        };
+        let (u1, u2) = (u(), u());
+        (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+    };
+    let mut src = vec![0.0f32; n * n];
+    src.iter_mut().for_each(|v| *v = SKY + SIGMA * gauss());
+
+    // Moffat beta 2.5, FWHM 3 px: saturated and bright-unsaturated stars on a grid.
+    let alpha = 3.0 / (2.0 * (2f32.powf(0.4) - 1.0).sqrt());
+    let mut stars = Vec::new();
+    for (k, (gy, gx)) in (0..9).flat_map(|gy| (0..9).map(move |gx| (gy, gx))).enumerate() {
+        let (cx, cy) = (40.0 + gx as f32 * 45.0 + 0.37 * (k % 3) as f32, 40.0 + gy as f32 * 45.0 + 0.29 * (k % 4) as f32);
+        let amplitude = if k % 2 == 0 { 20.0 } else { 0.05 };
+        for y in (cy as usize - 20)..(cy as usize + 20) {
+            for x in (cx as usize - 20)..(cx as usize + 20) {
+                let r2 = (x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2);
+                src[y * n + x] += amplitude * (1.0 + r2 / (alpha * alpha)).powf(-2.5);
+            }
+        }
+        stars.push(((cx as f64 / scale) as f32, (cy as f64 / scale) as f32));
+    }
+    src.iter_mut().for_each(|v| *v = v.min(1.0));
+
+    let taps = AxisTaps::new(src_len, dst_len);
+    let tent = |img: &[f32]| -> Vec<f32> {
+        let mut out = vec![0.0f32; out_n * out_n];
+        for oy in 0..out_n {
+            let (fy, wy) = taps.of(oy);
+            for ox in 0..out_n {
+                let (fx, wx) = taps.of(ox);
+                let mut acc = 0.0f32;
+                for (j, &a) in wy.iter().enumerate() {
+                    for (i, &b) in wx.iter().enumerate() {
+                        acc += a * b * img[(fy + j) * n + fx + i];
+                    }
+                }
+                out[oy * out_n + ox] = acc;
+            }
+        }
+        out
+    };
+    let whole_pixel_box = |img: &[f32]| -> Vec<f32> {
+        let span = |i: usize| ((i as f64 * scale) as usize, (((i + 1) as f64 * scale) as usize).max((i as f64 * scale) as usize + 1));
+        let mut out = vec![0.0f32; out_n * out_n];
+        for oy in 0..out_n {
+            let (y0, y1) = span(oy);
+            for ox in 0..out_n {
+                let (x0, x1) = span(ox);
+                let sum: f32 = (y0..y1).flat_map(|y| (x0..x1).map(move |x| img[y * n + x])).sum();
+                out[oy * out_n + ox] = sum / ((y1 - y0) * (x1 - x0)) as f32;
+            }
+        }
+        out
+    };
+
+    let black_point = SKY - K * SIGMA;
+    let ring_stats = |out: &[f32]| {
+        let (mut ring, mut ring_black, mut sky, mut sky_black, mut worst) = (0usize, 0usize, 0usize, 0usize, f32::MAX);
+        for oy in 0..out_n {
+            for ox in 0..out_n {
+                let d = stars
+                    .iter()
+                    .map(|&(cx, cy)| (ox as f32 + 0.5 - cx).hypot(oy as f32 + 0.5 - cy))
+                    .fold(f32::MAX, f32::min);
+                let v = out[oy * out_n + ox];
+                if (2.0..8.0).contains(&d) {
+                    ring += 1;
+                    ring_black += usize::from(v < black_point);
+                    worst = worst.min((v - SKY) / SIGMA);
+                } else if d > 15.0 {
+                    sky += 1;
+                    sky_black += usize::from(v < black_point);
+                }
+            }
+        }
+        (ring_black as f32 / ring as f32, sky_black as f32 / sky as f32, worst)
+    };
+    let (tent_ring, tent_sky, tent_worst) = ring_stats(&tent(&src));
+    let (box_ring, box_sky, box_worst) = ring_stats(&whole_pixel_box(&src));
+    println!(
+        "below black point: area-tent ring {:.2} % (sky {:.2} %, deepest {tent_worst:.1} sigma), \
+         whole-pixel box ring {:.2} % (sky {:.2} %, deepest {box_worst:.1} sigma)",
+        tent_ring * 100.0,
+        tent_sky * 100.0,
+        box_ring * 100.0,
+        box_sky * 100.0
+    );
+    assert!(
+        tent_ring <= (box_ring + 0.005).max(tent_sky * 2.0),
+        "the sharpen clips {:.1} % of the pixels 2-8 px from bright stars to black \
+         (box: {:.1} %, open sky: {:.2} %) — a dark ring round every bright star",
+        tent_ring * 100.0,
+        box_ring * 100.0,
+        tent_sky * 100.0
+    );
+}
+
+/// The denoise-on path streams its denoised rows through the same sky-shadow driver; it
+/// must still equal denoise, then the whole-image shadow, then the 8-bit write.
+#[test]
+fn sky_shadow_after_denoise_matches_the_whole_image_reference() {
+    let sky = 0.052f32;
+    let denoise = crate::render::DenoiseConfig {
+        luma: crate::render::denoise::LumaDenoiseConfig::default(),
+        ..crate::render::DenoiseConfig::OFF
+    };
+    for (w, h) in [(129usize, 200usize), (64, 3)] {
+        let mut frame = Frame::zeros(w, h, 3).unwrap();
+        let mut seed = 0xface_u32;
+        for y in 0..h {
+            for x in 0..w {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let u = (seed >> 8) as f32 / (1u32 << 24) as f32;
+                let star = if (x * 5 + y * 11) % 47 == 0 { 0.5 } else { 0.0 };
+                for c in 0..3 {
+                    frame.set_pixel(x, y, c, sky * (0.6 + 0.8 * u) + star);
+                }
+            }
+        }
+        let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
+        let mut ready = ready_with_sky_shadow(&frame, shadow);
+        ready.pipeline_config.denoise = denoise;
+        let (encoded, _, _) = frame_to_rgb8_downsampled(&ready, 4096, 4096).unwrap();
+
+        let mut staged: Vec<f32> = (0..h)
+            .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
+            .map(|(x, y, c)| frame.get_pixel(x, y, c))
+            .collect();
+        crate::render::denoise::denoise_rgb_interleaved_with(&mut staged, w, h, &denoise, &mut Default::default());
+        crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
+        let mut expected = vec![0u8; w * h * 3];
+        for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
+            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
+        }
+        assert_eq!(encoded, expected, "{w}x{h}: denoised sky shadow disagrees with the reference");
+    }
 }

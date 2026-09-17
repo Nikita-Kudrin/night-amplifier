@@ -169,6 +169,111 @@ pub fn extract_node_value(
     Some(median(&mut pixels))
 }
 
+/// A node's star-rejected level plus how rough the sky inside its box is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NodeSample {
+    /// Same value [`extract_node_value`] returns.
+    pub value: f32,
+    /// Robust sigma of the clip survivors about a plane fitted to them. The plane takes
+    /// out a gradient across the box, so what is left is noise plus unresolved
+    /// structure — a crowded star field reads rougher than sky at the same level.
+    pub scatter: f32,
+    /// Clip survivors the two figures were measured on.
+    pub samples: usize,
+}
+
+/// [`extract_node_value`] plus [`NodeSample::scatter`], for the one channel pruning
+/// reads. Kept separate so the per-channel value extraction pays for no plane fit.
+pub fn extract_node_sample(
+    frame: &Frame,
+    node: &GridNode,
+    box_size: usize,
+    channel: usize,
+) -> Option<NodeSample> {
+    let (width, height) = (frame.width(), frame.height());
+    let half = box_size / 2;
+    let (x_start, y_start) = (node.x.saturating_sub(half), node.y.saturating_sub(half));
+    let (x_end, y_end) = ((node.x + half + 1).min(width), (node.y + half + 1).min(height));
+    if x_start >= x_end || y_start >= y_end {
+        return None;
+    }
+
+    let plane = frame.channel_data(channel);
+    let mut pixels: Vec<[f32; 3]> = (y_start..y_end)
+        .flat_map(|y| (x_start..x_end).map(move |x| (x, y)))
+        .map(|(x, y)| [(x - x_start) as f32, (y - y_start) as f32, plane[y * width + x]])
+        .collect();
+
+    let mut values = Vec::with_capacity(pixels.len());
+    let mut mad_buf = Vec::with_capacity(pixels.len());
+    let mut early = None;
+    for _ in 0..SIGMA_CLIP_ITERATIONS {
+        values.clear();
+        values.extend(pixels.iter().map(|p| p[2]));
+        let med = median(&mut values);
+        let dispersion = mad_with_scratch(&values, med, &mut mad_buf);
+        if dispersion < 1e-9 {
+            break;
+        }
+        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * 1.4826;
+        let before = pixels.len();
+        pixels.retain(|p| p[2] <= threshold);
+        if pixels.is_empty() {
+            early = Some(med);
+            break;
+        }
+        if pixels.len() == before {
+            break;
+        }
+    }
+    if let Some(value) = early {
+        return Some(NodeSample {
+            value,
+            scatter: 0.0,
+            samples: 0,
+        });
+    }
+
+    values.clear();
+    values.extend(pixels.iter().map(|p| p[2]));
+    let value = median(&mut values);
+    let residuals = plane_residuals(&pixels);
+    let centre = median(&mut residuals.clone());
+    let scatter = mad(&residuals, centre) * 1.4826;
+    Some(NodeSample {
+        value,
+        scatter,
+        samples: pixels.len(),
+    })
+}
+
+/// Residuals of `[x, y, v]` points about their least-squares plane; about their mean
+/// when the fit is degenerate.
+fn plane_residuals(points: &[[f32; 3]]) -> Vec<f32> {
+    let n = points.len() as f64;
+    let mean = |i: usize| points.iter().map(|p| p[i] as f64).sum::<f64>() / n.max(1.0);
+    let (mx, my, mv) = (mean(0), mean(1), mean(2));
+    let (mut sxx, mut syy, mut sxy, mut sxv, mut syv) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for p in points {
+        let (dx, dy, dv) = (p[0] as f64 - mx, p[1] as f64 - my, p[2] as f64 - mv);
+        sxx += dx * dx;
+        syy += dy * dy;
+        sxy += dx * dy;
+        sxv += dx * dv;
+        syv += dy * dv;
+    }
+    let det = sxx * syy - sxy * sxy;
+    let (a, b) = if det.abs() > 1e-12 {
+        ((sxv * syy - syv * sxy) / det, (syv * sxx - sxv * sxy) / det)
+    } else {
+        (0.0, 0.0)
+    };
+    points
+        .iter()
+        .map(|p| (p[2] as f64 - mv - a * (p[0] as f64 - mx) - b * (p[1] as f64 - my)) as f32)
+        .collect()
+}
+
 /// Thresholds for [`prune_nebulosity`].
 ///
 /// Parameterised because the two extractors deliberately disagree: the bilinear grid
@@ -254,154 +359,5 @@ pub fn prune_nebulosity(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn box_size_is_always_odd_and_at_least_the_floor() {
-        // 2712 * 0.015 = 40.68 -> 40 -> 41
-        assert_eq!(compute_box_size(2712), 41);
-        // Below the floor, the floor wins and is already odd.
-        assert_eq!(compute_box_size(100), MIN_BOX_SIZE);
-        for width in [64usize, 200, 640, 1936, 3008, 4144] {
-            assert!(!compute_box_size(width).is_multiple_of(2));
-        }
-    }
-
-    #[test]
-    fn median_handles_both_parities_and_the_empty_case() {
-        assert_eq!(median(&mut []), 0.0);
-        assert_eq!(median(&mut [5.0]), 5.0);
-        assert_eq!(median(&mut [3.0, 1.0, 2.0]), 2.0);
-        assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), 2.5);
-    }
-
-    #[test]
-    fn mad_and_mad_with_scratch_agree() {
-        let values = [1.0f32, 2.0, 3.0, 10.0];
-        let med = median(&mut values.to_vec());
-        let mut scratch = vec![0.0; 99];
-        assert_eq!(mad(&values, med), mad_with_scratch(&values, med, &mut scratch));
-        assert_eq!(mad(&[], 0.0), 0.0);
-    }
-
-    /// A star inside the box must be clipped away, leaving the sky level.
-    #[test]
-    fn node_extraction_rejects_a_star_in_the_box() {
-        let mut frame = Frame::filled(64, 64, 1, 0.1).unwrap();
-        for y in 30..34 {
-            for x in 30..34 {
-                frame.set_pixel(x, y, 0, 0.95);
-            }
-        }
-        let node = GridNode::new(32, 32, 0, 0);
-        let value = extract_node_value(&frame, &node, 21, 0).unwrap();
-        assert!(
-            (value - 0.1).abs() < 1e-4,
-            "sigma clipping should have left the 0.1 sky level, got {value}"
-        );
-    }
-
-    /// The node reads the plane it was asked for, not plane 0 with an offset slip.
-    /// A colour fixture is what makes that observable at all.
-    #[test]
-    fn node_extraction_reads_the_requested_plane() {
-        let mut frame = Frame::zeros(32, 32, 3).unwrap();
-        for y in 0..32 {
-            for x in 0..32 {
-                frame.set_pixel(x, y, 0, 0.10);
-                frame.set_pixel(x, y, 1, 0.50);
-                frame.set_pixel(x, y, 2, 0.90);
-            }
-        }
-        let node = GridNode::new(16, 16, 0, 0);
-        for (channel, want) in [(0usize, 0.10f32), (1, 0.50), (2, 0.90)] {
-            let got = extract_node_value(&frame, &node, 9, channel).unwrap();
-            assert!((got - want).abs() < 1e-6, "channel {channel}: {got} != {want}");
-        }
-    }
-
-    /// A node whose box falls entirely outside the frame has nothing to sample.
-    #[test]
-    fn a_node_outside_the_frame_yields_nothing() {
-        let frame = Frame::filled(16, 16, 1, 0.2).unwrap();
-        let node = GridNode::new(64, 64, 0, 0);
-        assert!(extract_node_value(&frame, &node, 9, 0).is_none());
-    }
-
-    #[test]
-    fn pruning_rejects_a_bright_node_and_keeps_the_sky() {
-        let cols = 4;
-        let rows = 4;
-        let mut nodes: Vec<GridNode> = (0..rows)
-            .flat_map(|row| (0..cols).map(move |col| GridNode::new(col, row, col, row)))
-            .collect();
-        for node in nodes.iter_mut() {
-            node.value = Some(0.1);
-        }
-        nodes[5].value = Some(0.9);
-
-        prune_nebulosity(
-            &mut nodes,
-            cols,
-            rows,
-            PruneConfig {
-                global_sigma: 2.5,
-                neighbour_threshold: 1.05,
-            },
-        );
-
-        assert!(nodes[5].value.is_none(), "the bright node should be pruned");
-        assert_eq!(
-            nodes.iter().filter(|n| n.value.is_some()).count(),
-            cols * rows - 1,
-            "only the bright node should be pruned"
-        );
-    }
-
-    /// A stricter config prunes strictly more. Pins that the thresholds are actually
-    /// wired through rather than shadowed by a constant.
-    #[test]
-    fn a_stricter_config_prunes_at_least_as_much() {
-        let cols = 6;
-        let rows = 6;
-        let build = || {
-            let mut nodes: Vec<GridNode> = (0..rows)
-                .flat_map(|row| (0..cols).map(move |col| GridNode::new(col, row, col, row)))
-                .collect();
-            for (i, node) in nodes.iter_mut().enumerate() {
-                node.value = Some(0.1 + (i % 5) as f32 * 0.01);
-            }
-            nodes
-        };
-
-        let mut lenient = build();
-        prune_nebulosity(
-            &mut lenient,
-            cols,
-            rows,
-            PruneConfig {
-                global_sigma: 2.5,
-                neighbour_threshold: 1.05,
-            },
-        );
-
-        let mut strict = build();
-        prune_nebulosity(
-            &mut strict,
-            cols,
-            rows,
-            PruneConfig {
-                global_sigma: 1.0,
-                neighbour_threshold: 1.02,
-            },
-        );
-
-        let survivors = |n: &[GridNode]| n.iter().filter(|g| g.value.is_some()).count();
-        assert!(
-            survivors(&strict) < survivors(&lenient),
-            "strict {} vs lenient {} — the thresholds are not reaching the algorithm",
-            survivors(&strict),
-            survivors(&lenient)
-        );
-    }
+    include!("grid_tests.rs");
 }

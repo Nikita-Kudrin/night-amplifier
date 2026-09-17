@@ -427,9 +427,22 @@ Magic "SA08" (4B, 0x53413038 LE) | Width u32 LE | Height u32 LE | Compressed siz
 
 #### Client streaming resolution negotiation
 
-Clients report `{width, height}` and are box-averaged down through the same `JpegTier`. Averaging *removes noise* in
-proportion to the reduction (WebGL's fallback caps at ~1.45x): IMX533 payload 2.25x smaller at 8.26→6.76 sky-sigma;
-IMX464 barely moves and needs denoising instead.
+Clients report `{width, height}` and are area-averaged down through the same `JpegTier`. Averaging *removes noise* in
+proportion to the reduction (WebGL's fallback caps at ~1.45x): IMX533 payload 2.25x smaller at 8.26→6.76 sky-sigma.
+IMX464 is only 1.07x over the 1440 tier: sky sigma 10.2 levels through the whole-pixel box, 8.2 now.
+
+**The kernel must give every output pixel the same noise** (`encoding::axis_taps`: footprint integrated over a 1 px
+tent per source sample). A whole-pixel box at 3008→1440 averaged 2 samples on most lines and 3 on every ~11th: 18 %
+less noise there (2D worst 1.5x; 2.0x on IMX464), a lattice at 18 arcmin through a 100 mm eyepiece lens. Fractional
+box edges alone still vary 1.26x; the tent keeps ratios from 1.4x under 1.05x. Cost 2.9 → 4.3 ms/call
+(`encoding_benchmark` `imx533_to_eyepiece_1440`).
+
+**The tent softens near unity**, so a `[-a, 1+2a, -a]` sharpen on the output grid is folded into the taps: a 2.5 px
+star kept 83 % of the box's peak at 1.07x without it. `a` = 0.15 to 1.1x, none from 1.9x (the tent alone beats the
+box's worst-phase peak at 2.09x). Shift-invariant, so no lattice of its own; 1.07x noise non-uniformity 1.24 (box
+2.0). Pinned by `a_near_unity_downsample_keeps_star_peaks` and the reference's 1.07x/1.42x cases. Its negative lobes
+clip no ring beside bright stars (deepest +1.1 sigma vs a 2.8-sigma black point). Taps are built once per axis size
+(`AxisTaps::cached`): rebuilding them per encode was 8.6 % of `imx533_to_eyepiece_1440`.
 
 - Size to the **largest** requested tier; an unreported viewport gets the **4K cap**, not the floor.
 - Report **canvas**, not window, size (binoview eyes are ~half-window each).
@@ -529,20 +542,30 @@ because parallel 8-bit conversions have drifted by an LSB here before.
 `black_point_sigma` is scale-invariant (grain doesn't shrink with stack depth), so the eyepiece
 slider interpolates it *upward*, not down.
 
-### The shadow floor (`render::output::shadow_floor`) — the other half of black floor slider
+### The darkening half of the black floor (`render::output::{sky_shadow, shadow_floor}`)
 
-`EyepieceSettings::black_floor` is **signed**: positive is `DisplayOutput::pedestal`
-(panel-relative), negative is the shadow floor (sky-relative) — at `-5%`, sky measures
-71%/65% darker with contrast *up*, vs. a plain black-level slider's flat 50% darker.
+`EyepieceSettings::black_floor` is **signed**: positive is `DisplayOutput::pedestal` (panel-relative), negative
+darkens the sky (sky-relative). At `-5%`: sky 64 %/65 % darker, target excess *up* (IMX533/IMX464 fixtures).
 
-- Tone-curve stage, before quantization, applied in exactly **two** places that must agree.
+- **Default form is spatial** (`SkyShadow`): a gain from a 3x3 mean of stretched luminance (or the pixel's own
+  excess over one sky), smoothstep 1.05→2.0 sky. Every pointwise roll-off keeping a faint target's excess keeps
+  equal noise excursions: the softplus knee it replaced pinned 20-35 % of sky pixels at the pedestal and raised
+  relative grain 1.7-2x (blocky clumps at a pixel-resolving eyepiece). A 5x5 guide lit a square around each star.
+- The sky is **measured in-kernel**: the solver's anchor missed IMX464 by 1.3x and put the whole sky inside the
+  shoulder (grain +40 %). It is the *darkest* histogram peak holding >= 20 % of guide samples, not the median: a
+  1.6-sky nebula over 60 % of the frame was the median and was darkened like the sky (contrast halved). The 20 %
+  keeps a registration border's spike out; a peak under half the anchor is skipped (a roof over 35 % of the frame
+  was measured as the sky and the real sky went undarkened). A tie of >= 25 % at the low end (clamped zeros) sizes
+  the bins from what lies above it. Selection, not a sort (a 92k-sample sort was 2 ms of a 4.6 ms encode).
+- **"Darker sky" is the pointwise clip** (`ShadowFloor`), anchored to `target_background` after contrast; it rides
+  the scale LUT or, with saturation boost, the row tail's table.
+- Applied in exactly **two** places that must agree (encoder after the row tail; `auto_stretch_frame` last).
   Order is always `stretch → saturation → contrast → floor`.
-- Anchors to the *solved* `AutoStretchResult::target_background`, not the configured value.
-- Three gates: sign, auto-stretch on, and not `StackingType::Planetary`.
-
-MTF stretch arms (incl. default `Medium`) can't fuse the floor into a table and apply it
-explicitly after contrast instead — silently dropped once, now swept by a test. Cost: free
-fused; ~1.3ms of a 28ms 1440² encode when deferred.
+- **It is streamed** (`encoding::sky_shadow_rows`): 32-row chunks plus a context row each side, the sky from 32
+  fixed rows x 256 columns rendered first. Staging the image cost 10.3 ms against 4.3 plain; streamed, 6.0. Denoise
+  on feeds its staged image in as a row source (whole-image guide planes were ~208 MB at 26 MP). Both are pinned to
+  the test-only `apply_sky_shadow_interleaved` (`sky_shadow_streaming_matches_staged`, `..._after_denoise_...`).
+- Three gates: sign, auto-stretch on, and not `StackingType::Planetary`. Slider end stop -6 % = 90 % darker.
 
 ### Phase 2: Debayering (Demosaicing)
 
@@ -618,6 +641,18 @@ clipping methods to the plugin and silently averages the rest.
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
 Removes uneven illumination gradients common in urban skies.
+
+**Crowded targets stay out of both models** (`background::target_disc`, used by bilinear and Pro's RBF): brightness
+pruning measures on the nodes, so a frame-filling halo was its own reference (~50 % of a globular's glow taken at
+256 px). Crowding seeds a disc (`NodeSample::scatter`, plane-detrended so gradients never seed), sized by the ring
+excess over an outer surface, capped at 0.45 frame / 24 outside nodes, refilled from that surface before
+interpolation: 5-10 % taken. Gradients, satellite trails and a Milky Way band find no disc. The pruning channel's
+node values come from the disc's samples (one clip: grid -11 %, RBF -8 %).
+
+The surface is a **plane unless a quadratic halves the outer nodes' residual RMS** (`MAX_CURVED_RESIDUAL`).
+Vignetting (flats aren't wired in) is a dome a plane reads as excess: the disc ran to its cap and 2.78 of a
+7.66 sigma rise was cut out of the model. A quadratic always, though, follows the halo's own wing on the field crop
+(5/10 % -> 18/36 % taken). Ratios: vignetting 0.09, horizon glow 0.29, that halo 0.83.
 
 ### Phase 7: Image Statistics (The Foundation)
 

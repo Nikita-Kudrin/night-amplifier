@@ -72,7 +72,6 @@ struct LutCacheKey {
     contrast_strength: i32,
     contrast_midpoint: i32,
     floor_depth: i32,
-    floor_knee: i32,
 }
 
 impl LutCacheKey {
@@ -100,7 +99,6 @@ impl LutCacheKey {
             contrast_strength: cs,
             contrast_midpoint: cm,
             floor_depth: quantize(floor.depth),
-            floor_knee: quantize(floor.knee),
         }
     }
 }
