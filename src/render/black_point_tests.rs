@@ -397,21 +397,108 @@ fn a_frame_filling_target_does_not_drag_the_sky_estimate() {
 }
 
 /// The window is sized from a one-sided spread, so the constant that turns it into a
-/// sigma has to be right: a half-normal's median is `0.6745 * sigma`, the same as a MAD.
-/// A sky with no target in it is where that is checkable against the sigma it was built
-/// with.
+/// sigma has to be right: a half-normal's quartile is `0.3186 * sigma` (its median,
+/// `0.6745`, is the MAD constant). A sky with no target in it is where that is
+/// checkable against the sigma it was built with.
+///
+/// Swept across the whole range of sky widths a real frame reaches, in histogram bins
+/// (a bin is 1/4095 of full scale, ~16 ADU): a 106-sub IMX533 stack sits near 0.06
+/// bins, a single sub on a high-gain camera at 3-4, and the estimator has to be as
+/// accurate at both. A fixed cap on the window was the other candidate fix for
+/// `a_population_darker_than_the_sky_does_not_drag_the_estimate` and is what this
+/// sweep rejects: capping at the refinement window's own four bins reads 12.75 ADU low
+/// at the wide end, where the quartile reads 0.85 low.
 #[test]
 fn the_window_is_scaled_to_one_sigma_of_the_sky_it_measures() {
     const LEVEL: f32 = 0.0023;
-    for sigma in [1.0e-4f32, 3.0e-5, 1.5e-5] {
+    const BIN: f32 = 1.0 / 4095.0;
+    for sigma in [1.5e-5f32, 3.0e-5, 1.0e-4, 2.44e-4, 5.0e-4, 1.0e-3, 2.0e-3] {
         let frame = sky_frame(256, 256, LEVEL, sigma);
         let err = (estimate_background_mode(&frame).mode - LEVEL).abs();
+        println!(
+            "sigma {:>6.1} ADU ({:>5.2} bins): {:.2} ADU off, {:.3} sigma",
+            sigma * 65535.0,
+            sigma / BIN,
+            err * 65535.0,
+            err / sigma
+        );
         assert!(
             err < 0.25 * sigma,
-            "sigma {:.2} ADU: estimate {:.2} ADU off the sky, {:.2} sigma",
+            "sigma {:.2} ADU ({:.2} bins): estimate {:.2} ADU off the sky, {:.2} sigma",
             sigma * 65535.0,
+            sigma / BIN,
             err * 65535.0,
             err / sigma
         );
     }
+}
+
+/// A sky with the lower `share` of its rows clamped to zero: what a background model
+/// that over-subtracts a corner, a heavy vignette or a partly illuminated frame leaves
+/// behind, since `subtract_black_point`-style passes clamp at zero.
+fn sky_under_a_clipped_floor(width: usize, height: usize, sky: f32, sigma: f32, share: f32) -> Frame {
+    let mut state = 0xA076_1D64_78BD_642Fu64;
+    let mut next = || {
+        let mut sum = 0.0f32;
+        for _ in 0..12 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            sum += (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / 16_777_216.0;
+        }
+        sum - 6.0
+    };
+    let cut = (height as f32 * share) as usize;
+    let mut data = vec![0.0f32; width * height * 3];
+    let plane = width * height;
+    for c in 0..3 {
+        for y in 0..height {
+            for x in 0..width {
+                let v = if y < cut { 0.0 } else { (sky + next() * sigma).max(0.0) };
+                data[c * plane + y * width + x] = v;
+            }
+        }
+    }
+    Frame::from_f32_vec(data, width, height, 3).unwrap()
+}
+
+/// The other half of `a_frame_filling_target_does_not_drag_the_sky_estimate`, and the
+/// one the one-sided spread is *not* automatically safe against.
+///
+/// A target is brighter than its sky, so the samples below the peak cannot see it. A
+/// clipped or vignetted region is darker, so they see nothing else: it piles up at the
+/// far end of the one-sided spread and takes the window with it. Measured with the
+/// spread as a median: -1.43 ADU at 40 % of the frame, -4.95 at 50 %, and -150.73 at
+/// 60 % — the whole sky, the window having grown wide enough to put its own median
+/// among the zeros. The quartile (`CENTRE_SPREAD_QUANTILE`) survives to 60 %.
+///
+/// Swept, like its sibling, because the failure only appears once the contaminant
+/// passes half of what the spread reads and then collapses at once.
+#[test]
+fn a_population_darker_than_the_sky_does_not_drag_the_estimate() {
+    const SKY: f32 = 0.0023;
+    const SIGMA: f32 = 3.0e-5;
+
+    let mut worst = (0.0f32, 0.0f32);
+    for share in [0.0f32, 0.2, 0.4, 0.5, 0.6] {
+        let frame = sky_under_a_clipped_floor(256, 256, SKY, SIGMA, share);
+        let err = estimate_background_mode(&frame).mode - SKY;
+        println!(
+            "{:>4.0}% of the frame clipped to black: {:+.2} ADU ({:+.2} sigma)",
+            share * 100.0,
+            err * 65535.0,
+            err / SIGMA
+        );
+        if err.abs() > worst.0.abs() {
+            worst = (err, share);
+        }
+    }
+
+    assert!(
+        worst.0.abs() * 65535.0 < 0.5,
+        "the sky estimate moved {:+.2} ADU with {:.0}% of the frame clipped to black — \
+         the refinement window is being sized by the clipped population, not by the sky",
+        worst.0 * 65535.0,
+        worst.1 * 100.0
+    );
 }

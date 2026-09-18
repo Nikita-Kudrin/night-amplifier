@@ -522,11 +522,11 @@ mod tests {
         settings.background_subtraction = false;
 
         settings.denoise.chroma = true;
-        settings.denoise.luma = true;
+        settings.denoise.luma_strength = 1.0;
         let (denoised, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
 
         settings.denoise.chroma = false;
-        settings.denoise.luma = false;
+        settings.denoise.luma_strength = 0.0;
         let (plain, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
 
         assert!(
@@ -583,7 +583,7 @@ mod tests {
         let mut settings = CaptureSettings::default();
         settings.auto_stretch = false;
         settings.denoise.chroma = false;
-        settings.denoise.luma = false;
+        settings.denoise.luma_strength = 0.0;
 
         settings.background_subtraction = false;
         let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
@@ -620,7 +620,7 @@ mod tests {
         settings.eyepiece.black_floor = -0.03;
         settings.eyepiece.dither = true;
         settings.denoise.chroma = true;
-        settings.denoise.luma = true;
+        settings.denoise.luma_strength = 1.0;
 
         let (exported, _, _) = render_stacked_png(gradient_frame(), &settings, 40).unwrap();
 
@@ -660,7 +660,7 @@ mod tests {
         let mut settings = CaptureSettings::default();
         settings.auto_stretch = true;
         settings.denoise.chroma = false;
-        settings.denoise.luma = false;
+        settings.denoise.luma_strength = 0.0;
 
         let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
         let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, 64).unwrap();

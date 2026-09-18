@@ -89,6 +89,11 @@ const MIN_EPSILON: f32 = 1e-14;
 const ROUNDING_FLOOR: f32 = 1e-6;
 
 /// Guide samples read for the noise estimate. The MAD converges long before this.
+///
+/// Read by selection (`statistics::select_median`), not `fast_median`, which
+/// parallel-sorts from 4096 up — see `wavelet::MAX_SIGMA_SAMPLES`. Unlike the wavelet's
+/// this runs once a frame on the subsampled guide, so it is not worth trading sample
+/// count against stride here; the count stays where it was.
 const NOISE_SAMPLES: usize = 16_384;
 pub const DEFAULT_SUBSAMPLE: usize = 4;
 
@@ -293,7 +298,8 @@ fn guide_epsilon(small: &[f32], sw: usize, sh: usize, noise_k: f32) -> f32 {
     if diffs.is_empty() {
         return MIN_EPSILON;
     }
-    let sigma = crate::statistics::fast_median(&mut diffs) * 1.4826 / std::f32::consts::SQRT_2;
+    let sigma =
+        crate::statistics::select_median(&mut diffs) * 1.4826 / std::f32::consts::SQRT_2;
     let epsilon = (noise_k.max(0.0) * sigma).powi(2);
     if epsilon.is_finite() {
         epsilon.max(MIN_EPSILON)

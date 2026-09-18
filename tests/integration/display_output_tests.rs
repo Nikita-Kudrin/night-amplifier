@@ -628,10 +628,14 @@ fn measure_setting(fixture: &Fixture, black_floor: f32, darker_sky: bool) -> Opt
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
-    /// Mid-travel on the darkening half: the floor lands at the sky's own level.
-    const SOFT: f32 = -0.05;
-    /// The slider's end stop, which has to stay usable rather than merely legal.
-    const DEEPEST: f32 = -0.09;
+    /// Mid-travel on the darkening half.
+    const SOFT: f32 = -0.03;
+    /// The slider's end stop, which has to stay usable rather than merely legal — and
+    /// where **both** forms are measured, since that is the position each one fails at
+    /// first: the soft form by saturating (every deeper position reads the same) and the
+    /// hard form by clipping above the sky. `MIN_BLACK_FLOOR` is one nominal sky level, so
+    /// assertions 4 and 5 are what keep that calibration honest when the stretch moves.
+    const DEEPEST: f32 = -0.045;
 
     println!("\n=== Black floor, darkening half ===");
     let mut measured = 0;
@@ -641,7 +645,9 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             measure_setting(fixture, 0.0, false),
             measure_setting(fixture, SOFT, false),
             measure_setting(fixture, DEEPEST, false),
-            measure_setting(fixture, SOFT, true),
+            // The hard form at the **end stop**, not mid-travel: clipping above the sky is
+            // what it fails by, and only the deepest position gets near that.
+            measure_setting(fixture, DEEPEST, true),
         ) else {
             println!("  {} not present. Skipping.", fixture.dir);
             continue;
@@ -651,9 +657,9 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
         println!("  {}", fixture.label);
         for (label, m) in [
             ("baseline (floor 0%)", &base),
-            ("soft floor -5%", &soft),
-            ("soft floor -9% (slider end)", &deep),
-            ("hard floor -5% (Darker sky)", &hard),
+            ("soft floor -3%", &soft),
+            ("soft floor -4.5% (slider end)", &deep),
+            ("hard floor -4.5% (Darker sky, end stop)", &hard),
         ] {
             println!(
                 "    {label:<31} sky {:>4.0} ({:>5.1}% darker)  sigma {:>4.1}  \
@@ -677,10 +683,11 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             base.sky
         );
 
-        // 1. The soft floor darkens the sky substantially. Measured 71 % and
-        //    65 %; the bound sits below both so a retune does not trip it.
+        // 1. The soft floor darkens the sky substantially, by mid-travel. Measured 36 %
+        //    and 40 % at -3 %; the bound sits above both so a retune does not trip it.
+        //    The deep end is assertion 4's business.
         assert!(
-            soft.sky <= base.sky * 0.4,
+            soft.sky <= base.sky * 0.75,
             "{}: soft floor left the sky at {:.0} levels, from {:.0}",
             fixture.label,
             soft.sky,
@@ -719,17 +726,36 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             soft.zeros * 100.0
         );
 
-        // 3b. Nor relatively grainier: the knee this replaced flattened the lower
-        //     half of the sky noise and kept the upper, raising grain against the
-        //     sky 1.7-2x — dark clumps and bright specks at a pixel-resolving
-        //     eyepiece (2026-09-14 globular session).
+        // 3b. Nor grainier: the knee this replaced flattened the lower half of the
+        //     sky noise and kept the upper, raising grain against the sky 1.7-2x —
+        //     dark clumps and bright specks at a pixel-resolving eyepiece
+        //     (2026-09-14 globular session). That shows up as grain holding station
+        //     while the sky drops, so the absolute bound is the one that always
+        //     means something.
         assert!(
-            soft.sigma / soft.sky <= base.sigma / base.sky * 1.1,
-            "{}: darkening raised relative sky grain from {:.3} to {:.3}",
+            soft.sigma <= base.sigma,
+            "{}: darkening raised absolute sky grain from {:.1} to {:.1} output \
+             levels — it is flattening part of the noise and keeping the rest",
             fixture.label,
-            base.sigma / base.sky,
-            soft.sigma / soft.sky
+            base.sigma,
+            soft.sigma
         );
+
+        //     The relative bound is the sharper of the two, but only while the
+        //     baseline has grain to speak of. With the wavelet measuring each scale
+        //     against its own noise the baseline sky now sits near 1 output level
+        //     (4.2 -> 1.4 on this fixture), and a ratio between two single-digit
+        //     integers is mostly 8-bit quantisation: darkening 1.4 to 0.9 while the
+        //     sky goes 13 to 5 "raises" it 1.6x with nothing wrong.
+        if base.sigma >= 2.0 {
+            assert!(
+                soft.sigma / soft.sky <= base.sigma / base.sky * 1.1,
+                "{}: darkening raised relative sky grain from {:.3} to {:.3}",
+                fixture.label,
+                base.sigma / base.sky,
+                soft.sigma / soft.sky
+            );
+        }
 
         // 4. The slider's end stop has to stay usable. It costs contrast — that
         //    is what the last of the travel is for — but an end position that
@@ -763,13 +789,32 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             fixture.label,
             hard.zeros * 100.0
         );
+        // What "buys separation" means, and it is a ratio rather than a difference. The
+        // absolute sky-to-target gap used to *rise* under the hard floor (6.9 -> 7.3 output
+        // levels on the IMX533 fixture) because the clip rescales everything above it. At
+        // `ContrastConfig` strength 1.0 the S-curve has already spent that headroom, so the
+        // gap now lands within ±6 % either way (-3.9 % here, +5.6 % on the IMX464) — which
+        // on integers three levels wide is mostly quantisation, and asserting a rise would
+        // pin the measurement rather than the property. The ratio is the claim: the target
+        // stands far further clear of the sky than it did.
         assert!(
-            hard.excess >= base.excess,
-            "{}: the hard floor is supposed to buy separation, not spend it \
-             ({:.1} from {:.1})",
+            hard.excess >= base.excess * 0.9,
+            "{}: the hard floor spent {:.0}% of the sky-to-target gap ({:.1} from {:.1}) \
+             — it is dimming the target, not lowering the background",
             fixture.label,
+            (1.0 - hard.excess / base.excess) * 100.0,
             hard.excess,
             base.excess
+        );
+        let (base_ratio, hard_ratio) = (
+            (base.sky + base.excess) / base.sky.max(1.0),
+            (hard.sky + hard.excess) / hard.sky.max(1.0),
+        );
+        assert!(
+            hard_ratio >= base_ratio * 1.5,
+            "{}: the hard floor left the target only {hard_ratio:.2}x the sky against \
+             {base_ratio:.2}x — that is not the separation it exists to buy",
+            fixture.label
         );
 
         // 6. Colour, on the one fixture that has any. A floor applied per

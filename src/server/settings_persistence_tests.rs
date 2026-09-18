@@ -67,9 +67,8 @@ mod tests {
             denoise: DenoiseSettings {
                 chroma: true,
                 chroma_strength: 0.8,
-                luma: false,
+                background_grain: 0.25,
                 luma_strength: 0.5,
-                star_protection: 0.25,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,
@@ -151,7 +150,7 @@ mod tests {
                 saturation_boost: false,
                 fpn_removal: false,
                 denoise_chroma: false,
-                denoise_luma: true,
+                denoise_luma_strength: 1.0,
                 dither: true,
             }),
         };
@@ -344,7 +343,7 @@ mod tests {
         assert_eq!(snapshot.background_subtraction, defaults.background_subtraction);
         assert_eq!(snapshot.fpn_removal, defaults.sensor_correction.fpn_removal);
         assert_eq!(snapshot.denoise_chroma, defaults.denoise.chroma);
-        assert_eq!(snapshot.denoise_luma, defaults.denoise.luma);
+        assert_eq!(snapshot.denoise_luma_strength, defaults.denoise.luma_strength);
         assert_eq!(snapshot.dither, defaults.eyepiece.dither);
         assert_eq!(snapshot.saturation_boost, defaults.saturation_boost);
     }

@@ -207,7 +207,7 @@ impl ShadowFloorRequest {
 }
 
 /// Where the sky sits by the time the floor sees it. The autostretch maps the sky to
-/// `target_background`, then the contrast S-curve moves it (0.08 -> 0.052 at shipped
+/// `target_background`, then the contrast S-curve moves it (0.08 -> 0.045 at shipped
 /// settings) — anchoring *after* contrast is what makes the slider mean the same
 /// thing whether contrast is on or not. Must be the solver's own
 /// [`AutoStretchResult::target_background`](crate::render::AutoStretchResult), not the
@@ -276,10 +276,10 @@ mod tests {
         use crate::render::output::ContrastConfig;
         let shipped = ContrastConfig::default();
 
-        // The shipped numbers: an 0.08 target reaches the floor at 0.052.
+        // The shipped numbers: an 0.08 target reaches the floor at 0.045.
         let anchor = sky_level_after_contrast(0.08, Some(&shipped));
         assert!(
-            (anchor - 0.0517).abs() < 1e-3,
+            (anchor - 0.0447).abs() < 1e-3,
             "anchor {anchor} is not where the S-curve puts the sky"
         );
         assert_eq!(sky_level_after_contrast(0.08, None), 0.08);

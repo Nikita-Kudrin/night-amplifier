@@ -68,10 +68,31 @@ const SCALE_LUT_SIZE: usize = 8192;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LutCacheKey {
     algorithm: ToneMappingAlgorithm,
-    strength: i32,
-    contrast_strength: i32,
-    contrast_midpoint: i32,
-    floor_depth: i32,
+    strength: u32,
+    contrast: Option<(u32, u32)>,
+    floor_depth: u32,
+}
+
+/// `v` with its low mantissa bits cleared, so the quantisation is **relative**.
+///
+/// The cache exists to absorb the solver's frame-to-frame jitter, which is a fraction of
+/// the value — not an absolute amount. This used to round `v * 10_000`, an absolute step
+/// of `1e-4`, and an MTF midtone on a deep-sky stack is around `1e-3`: barely one
+/// significant figure. Two stretch profiles whose curves differed by 3 % (0.001053 against
+/// 0.001085 on a 106-sub IMX533 stack) landed on the same key, so whichever rendered
+/// second silently reused the first's tone curve — target core 141 -> 144 output levels
+/// and sky 18 -> 19, decided by nothing but which profile happened to render first in the
+/// process. Live view changes stretch profile, eyepiece intensity and target background
+/// mid-session, and each of those is exactly this collision.
+///
+/// Keeping 13 of f32's 23 mantissa bits leaves a step of `2^-13`, about 0.012 % of the
+/// value at any magnitude — well inside the solver's own `tolerance` of 1e-3, and ~250
+/// steps clear of the collision above. Masking bits rather than scaling also gives zero,
+/// negatives, infinities and NaN distinct keys for free, where a sentinel could collide
+/// with a real one.
+fn quantize_relative(v: f32) -> u32 {
+    const KEPT_MANTISSA_BITS: u32 = 13;
+    v.to_bits() & !((1u32 << (23 - KEPT_MANTISSA_BITS)) - 1)
 }
 
 impl LutCacheKey {
@@ -81,13 +102,6 @@ impl LutCacheKey {
         contrast: Option<&crate::render::output::ContrastConfig>,
         floor: ShadowFloor,
     ) -> Self {
-        // Quantize parameters to avoid recalculating on tiny float jitter
-        // 10000.0 gives 4 decimals of precision, which is plenty for these params
-        let quantize = |v: f32| (v * 10000.0).round() as i32;
-        let (cs, cm) = match contrast {
-            Some(c) => (quantize(c.strength), quantize(c.midpoint)),
-            None => (0, 0),
-        };
         // The floor belongs in the key where the black point deliberately does
         // not: it changes the table's contents rather than being subtracted
         // per pixel. It is cache-friendly for the same reason the stretch factor
@@ -95,10 +109,12 @@ impl LutCacheKey {
         // steady, not to a per-frame statistic.
         Self {
             algorithm,
-            strength: quantize(strength),
-            contrast_strength: cs,
-            contrast_midpoint: cm,
-            floor_depth: quantize(floor.depth),
+            strength: quantize_relative(strength),
+            // `Option`, not a `(0, 0)` stand-in: contrast off and a contrast whose
+            // parameters quantise to zero are different tables.
+            contrast: contrast
+                .map(|c| (quantize_relative(c.strength), quantize_relative(c.midpoint))),
+            floor_depth: quantize_relative(floor.depth),
         }
     }
 }
@@ -454,6 +470,53 @@ mod tests {
                 ShadowFloor::NONE,
             );
         assert!(result.is_err());
+    }
+
+    /// Two curves an observer can tell apart must not share a cached table.
+    ///
+    /// The regression this guards: the key quantised `strength` to an absolute `1e-4`,
+    /// and an MTF midtone on a deep-sky stack is ~`1e-3`. The Nebulae and Deep Sky
+    /// profiles solved to 0.001053 and 0.001085 on a 106-sub IMX533 stack — 3 % apart,
+    /// the same key — so the second render of a frame used the first profile's tone
+    /// curve, and which one you got depended on render order alone.
+    #[test]
+    fn the_lut_cache_separates_curves_it_can_tell_apart() {
+        let key = |strength: f32| {
+            LutCacheKey::new(ToneMappingAlgorithm::Mtf, strength, None, ShadowFloor::NONE)
+        };
+
+        assert_ne!(
+            key(0.001_052_682),
+            key(0.001_085_046_8),
+            "two stretch profiles' curves 3 % apart share a cached table"
+        );
+
+        // Across four decades, since the depth gain pushes the solved midtone down as a
+        // stack deepens and an absolute step is coarsest exactly where it ends up.
+        for decade in [1e-4f32, 1e-3, 1e-2, 1e-1] {
+            assert_ne!(
+                key(decade),
+                key(decade * 1.01),
+                "a 1 % change at {decade} does not reach the cache"
+            );
+        }
+
+        // ...and the jitter it exists to absorb still hits, at every magnitude.
+        for decade in [1e-4f32, 1e-3, 1e-2, 1e-1, 1.0] {
+            assert_eq!(
+                key(decade),
+                key(decade * (1.0 + 1e-5)),
+                "a 0.001 % wobble at {decade} rebuilt the table"
+            );
+        }
+
+        // Contrast off is not contrast at zero: different tables.
+        let off = LutCacheKey::new(ToneMappingAlgorithm::Mtf, 0.1, None, ShadowFloor::NONE);
+        let zero = crate::render::output::ContrastConfig { strength: 0.0, midpoint: 0.0 };
+        assert_ne!(
+            off,
+            LutCacheKey::new(ToneMappingAlgorithm::Mtf, 0.1, Some(&zero), ShadowFloor::NONE)
+        );
     }
 
     /// The LUT cache must survive the black point changing, because the solver's black

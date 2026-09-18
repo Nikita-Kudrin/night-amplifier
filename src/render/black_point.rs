@@ -6,7 +6,7 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use crate::render::simd::subtract_scalar_clamp_simd;
-use crate::statistics::{compute_image_stats, ChannelStats, ImageStats};
+use crate::statistics::{compute_image_stats, select_median, select_nth, ChannelStats, ImageStats};
 use rayon::prelude::*;
 
 /// Configuration for black point calculation
@@ -238,23 +238,47 @@ const CENTRE_WINDOW_SIGMAS: f32 = 2.5;
 /// Samples that must fall in that window before its median is trusted over the peak.
 const CENTRE_MIN_SAMPLES: usize = 64;
 
-/// Samples either median reads. The median of a sky converges long before this: 8 192
-/// samples place it to `1.25 * sigma / sqrt(n)`, 0.02 ADU on a deep stack. Above it
-/// the two selections cost more than the refinement they follow.
+/// Samples the spread and the centre are read from. Both converge long before this:
+/// 8 192 samples place a median to `1.25 * sigma / sqrt(n)`, 0.02 ADU on a deep stack.
+/// Above it the two selections cost more than the refinement they follow.
 const CENTRE_MAX_SAMPLES: usize = 8192;
+
+/// Quantile of the one-sided spread the window is scaled from.
+///
+/// The **lower quartile**, not the median, and that is what makes the window robust in
+/// both directions. The samples below the peak are ordered by how far below they sit,
+/// so a population darker than the sky — a corner the background model over-subtracted
+/// and clamped to zero, a vignette, a partly illuminated frame — piles up at the *far*
+/// end of that list. A median only survives while such a population is under half of
+/// it: measured on a sky with a share of the frame clipped to zero, the estimate went
+/// -1.43 ADU off at 40 %, -4.95 at 50 % and -150.73 at 60 % — the sky level itself, the
+/// window having grown wide enough to swallow the zeros and put its median among them.
+/// The quartile survives to 60 % and costs nothing where there is no contaminant:
+/// swept over sky sigmas from 0.06 to 8.2 histogram bins the estimate stays within
+/// 0.01 sigma of the sky, the same as the median gave.
+///
+/// A half-normal's quartile is `0.3186 * sigma` (its median is `0.6745`, the MAD
+/// constant), hence [`CENTRE_QUARTILE_TO_SIGMA`].
+const CENTRE_SPREAD_QUANTILE: f32 = 0.25;
+
+/// Turns that quartile into a sigma: `1 / 0.31864`.
+const CENTRE_QUARTILE_TO_SIGMA: f32 = 3.1383;
 
 /// Median of the samples within `CENTRE_WINDOW_SIGMAS` of `peak`.
 ///
-/// The spread comes from the samples **below** the peak only. A MAD over every sample
-/// is robust while what contaminates it is a minority, and a target filling the frame
-/// is not: the window then sizes itself around the *target's* spread, swallows it, and
-/// the median lands on the target. Measured on a halo covering 69 % of the frame the
-/// answer went 1.4 ADU off the sky to 7.3; on a 75 % ramp, 349. A target is brighter
-/// than the sky it sits on, so the sky's lower half is the half it cannot reach.
+/// The spread comes from the samples **below** the peak only. A spread over every
+/// sample is robust while what contaminates it is a minority, and a target filling the
+/// frame is not: the window then sizes itself around the *target's* spread, swallows
+/// it, and the median lands on the target. Measured on a halo covering 69 % of the
+/// frame the answer went 1.4 ADU off the sky to 7.3; on a 75 % ramp, 349. A target is
+/// brighter than the sky it sits on, so the sky's lower half is the half it cannot
+/// reach. What *can* reach it is a population darker than the sky — see
+/// [`CENTRE_SPREAD_QUANTILE`], which is why the spread is a quartile rather than a
+/// median.
 ///
-/// `select_nth_unstable`, not `statistics::fast_median`, which `par_sort_unstable`s
-/// anything above 4 096 — three of those per frame took `estimate_background_mode`
-/// from 0.50 ms to 1.62 ms, above the sort `refine_peak` exists to avoid.
+/// Selection, not `statistics::fast_median`, which `par_sort_unstable`s anything above
+/// 4 096 — three of those per frame took `estimate_background_mode` from 0.50 ms to
+/// 1.62 ms, above the sort `refine_peak` exists to avoid.
 fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
     if samples.len() < CENTRE_MIN_SAMPLES {
         return None;
@@ -269,7 +293,8 @@ fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
     if below.len() < CENTRE_MIN_SAMPLES {
         return None;
     }
-    let sigma = select_median(&mut below) * 1.4826;
+    let quartile = (below.len() as f32 * CENTRE_SPREAD_QUANTILE) as usize;
+    let sigma = select_nth(&mut below, quartile) * CENTRE_QUARTILE_TO_SIGMA;
     if !(sigma > 0.0) || !sigma.is_finite() {
         return None;
     }
@@ -285,16 +310,6 @@ fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
         return None;
     }
     Some(select_median(&mut kept))
-}
-
-/// Median by selection, reordering `values`. Panics on an empty slice; both callers
-/// have already refused one shorter than `CENTRE_MIN_SAMPLES`.
-fn select_median(values: &mut [f32]) -> f32 {
-    let mid = values.len() / 2;
-    values.select_nth_unstable_by(mid, |a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater)
-    });
-    values[mid]
 }
 
 /// Coarse bins spanned by the refinement window: the winning bin, one below, two above.
