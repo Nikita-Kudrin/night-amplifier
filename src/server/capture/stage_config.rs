@@ -98,10 +98,15 @@ pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
 /// darkening half is anchored to the sky rather than to full scale, though, so
 /// the two have to be related by something: this is the post-contrast sky level
 /// at the shipped stretch settings — `sky_level_after_contrast(0.08, default)`,
-/// which is where a deep-sky frame lands. A setting of `-0.052` therefore puts
+/// which is where a deep-sky frame lands. A setting of `-0.045` therefore puts
 /// the floor at the sky level under a nominal sky, and *still* puts it at the
 /// sky level under a brighter one, which is the whole point of anchoring.
-const NOMINAL_SKY_LEVEL: f32 = 0.052;
+///
+/// It is a *derived* number, not a chosen one: it moved 0.052 -> 0.045 when
+/// `ContrastConfig`'s strength went to 1.0, because a stronger curve compresses the
+/// sky further. `the_nominal_sky_level_matches_the_shipped_curve` is what makes the
+/// next change to the curve fail here instead of silently mis-scaling the slider.
+const NOMINAL_SKY_LEVEL: f32 = 0.045;
 
 /// Pedestal held under the soft (spatial) darkening, in fractions of full scale.
 ///
@@ -125,11 +130,25 @@ const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 /// go — `ShadowFloor::from_sky` caps the depth it produces, but the fraction it
 /// is handed would still make one slider step mean nothing.
 ///
-/// -0.06 is where the spatial darkening saturates (`sky_shadow::MAX_DARKENING`, a
-/// tenth of the sky left): further travel would do nothing. The hard form reaches
-/// ~1.15 sky levels there. The reach is the calibrated quantity, not the number —
-/// re-measure it if the stretch moves again.
-const MIN_BLACK_FLOOR: f32 = -0.06;
+/// -0.045 is one `NOMINAL_SKY_LEVEL`: the end of the slider puts the floor exactly at the
+/// sky, a fraction of 1.0. That is where the *hard* form has to stop, and it is the binding
+/// half — `ShadowFloor` clips at `fraction * sky`, so past 1.0 "Darker sky" clips above the
+/// sky and starts eating the target it exists to separate (measured, a fraction of 1.11 cost
+/// 6 % of target excess and put 34 % of samples on pure black). The soft form's own ceiling
+/// is a little further out (`sky_shadow::MAX_DARKENING`, a tenth of the sky left, at a
+/// fraction of 1.125), so calibrating to the hard form leaves a sliver of spatial travel
+/// unused rather than letting one slider position mean two different trades.
+///
+/// **The reach is the calibrated quantity, not the number.** It moved from -0.06 when
+/// `ContrastConfig`'s strength went to 1.0: that lowered `NOMINAL_SKY_LEVEL` 0.052 -> 0.045,
+/// so the same slider position now asks for a larger fraction of a smaller sky. Almost
+/// nothing is lost at the eyepiece — the darkest reachable sky is within an output level of
+/// where it was, because the stronger S-curve had already darkened it before the floor saw
+/// it. Re-measure this if the stretch moves again; `a_negative_black_floor_darkens_instead_of_lifting`
+/// pins the fraction at the end stop and
+/// `the_black_floor_darkens_the_sky_without_dimming_the_target` exercises both forms there,
+/// which is the position that was never covered before. Mirrored by `BLACK_FLOOR_LIMITS`.
+const MIN_BLACK_FLOOR: f32 = -NOMINAL_SKY_LEVEL;
 
 /// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
 /// lifting half is clamped in the same place as the darkening one.
@@ -160,6 +179,14 @@ fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
     }
 
     let d = &settings.denoise;
+    // Star Fields is looking for point sources against an empty sky and has no nebulosity
+    // to protect, so it leans harder on the finest scale and puts the star's peak back
+    // with a gain. See `render::STAR_FIELD_FINE_BOOST`.
+    let star_field = settings.stretch_aggressiveness == crate::render::StretchAggressiveness::Low;
+    let mut k = LumaDenoiseConfig::thresholds_for(d.star_protection(), d.coarse_denoise());
+    if star_field {
+        k[0] *= crate::render::STAR_FIELD_FINE_BOOST;
+    }
     DenoiseConfig {
         chroma: ChromaDenoiseConfig {
             enabled: d.chroma,
@@ -167,11 +194,16 @@ fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
             ..ChromaDenoiseConfig::default()
         },
         luma: LumaDenoiseConfig {
-            enabled: d.luma,
+            enabled: d.luma_enabled(),
             strength: d
                 .luma_strength
                 .clamp(0.0, crate::render::MAX_LUMA_STRENGTH),
-            k: LumaDenoiseConfig::thresholds_for_star_protection(d.star_protection),
+            k,
+            gain: if star_field {
+                crate::render::STAR_FIELD_GAIN
+            } else {
+                crate::render::UNIT_WAVELET_GAIN
+            },
         },
     }
 }
@@ -234,7 +266,11 @@ pub fn get_render_pipeline_config(
             !use_aggressive_stretch,
             settings.stretch_aggressiveness,
         )
-        .with_color_intensity(1.0 + settings.auto_stretch_intensity);
+        .with_color_intensity(1.0 + settings.auto_stretch_intensity)
+        // The expensive half of the Background Grain dial. It belongs here, with the
+        // profile, and not at `AutoStretchConfig::default()`: the default is what an
+        // export or a one-shot render uses, and those have no dial to read.
+        .with_grain_split(settings.denoise.grain_split());
         let saturation_config = settings.saturation_boost_config();
 
         // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle
@@ -320,6 +356,22 @@ mod tests {
     use crate::frame::Frame;
     use crate::server::state::SensorCorrectionSettings;
     use crate::stacking::StackingType;
+
+    /// `NOMINAL_SKY_LEVEL` is where the shipped curve puts the sky, and the darker-sky
+    /// slider's whole calibration hangs off it: a stale value scales every position of
+    /// the darkening half against a sky that is no longer there. It is a literal only
+    /// because the S-curve is not `const`.
+    #[test]
+    fn the_nominal_sky_level_matches_the_shipped_curve() {
+        let shipped = crate::render::output::ContrastConfig::default();
+        let actual = crate::render::sky_level_after_contrast(0.08, Some(&shipped));
+        assert!(
+            (NOMINAL_SKY_LEVEL - actual).abs() < 5e-4,
+            "NOMINAL_SKY_LEVEL is {NOMINAL_SKY_LEVEL}, but the shipped contrast curve \
+             puts an 0.08 sky at {actual} — the darker-sky slider is calibrated against \
+             a sky level the render no longer produces"
+        );
+    }
 
     #[test]
     fn test_get_render_pipeline_config_respects_toggles() {

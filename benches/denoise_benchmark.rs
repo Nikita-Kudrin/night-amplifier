@@ -21,14 +21,26 @@
 //!
 //! | Stage | 1440² | 1920x1080 |
 //! |---|---|---|
-//! | chroma guided filter | 7.0 ms | 6.8 ms |
-//! | luma à trous wavelets | 13.9 ms | 14.0 ms |
-//! | both | 16.8 ms | 16.7 ms |
+//! | chroma guided filter | 6.7 ms | 6.9 ms |
+//! | luma à trous wavelets, dial at or below the middle | 10.6 ms | 10.6 ms |
+//! | luma à trous wavelets, dial at the top (levels 5-6) | 13.8 ms | 14.0 ms |
+//! | both | 14.3 ms | 14.4 ms |
 //!
 //! The `both` row is well under the sum: the YCbCr split and merge are shared, and are
 //! roughly 3.7 ms of the 1440² figure on their own.
 //!
-//! The whole binary is ~17 s warm.
+//! **Compare one group at a time** (`cargo bench --bench denoise_benchmark -- --noplot
+//! 'denoise_both/1440'`) when measuring a change here, and never an A/B where one side
+//! ran alone and the other in the whole binary. A group's figures depend on what ran
+//! before it in the same process: measured, `denoise_both` reads 14.3 ms a call on its
+//! own and 27.2 ms with the chroma group ahead of it, and `denoise_luma_wavelet` 10.6 ms
+//! against 23.5. The chroma group is the one that poisons the rest — dropping it from the
+//! filter is enough to restore the isolated figures — and how badly is not the same for
+//! two builds, so a mixed A/B reversed the sign of a 20 % improvement before this note
+//! existed. Resetting the buffers outside the timer instead of cloning them per iteration
+//! was tried and changes none of it, so the cause is not the 274 MB of churn it removes.
+//!
+//! A single group is ~6 s; the whole binary is ~2 minutes for the same reason.
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode, Throughput};
 use night_amplifier::render::denoise::{
@@ -43,6 +55,7 @@ use std::time::Duration;
 /// interleaved RGB f32 buffer is 24.9 MB, which is what caps these.
 const CHROMA_CASES: [(usize, usize, usize); 2] = [(1440, 1440, 16), (1920, 1080, 16)];
 const LUMA_CASES: [(usize, usize, usize); 2] = [(1440, 1440, 11), (1920, 1080, 11)];
+const COARSE_CASES: [(usize, usize, usize); 2] = [(1440, 1440, 8), (1920, 1080, 8)];
 const BOTH_CASES: [(usize, usize, usize); 2] = [(1440, 1440, 8), (1920, 1080, 8)];
 
 /// Interleaved RGB f32 at stream resolution, with sky-level noise, a gradient and a few
@@ -123,6 +136,28 @@ fn bench_luma(c: &mut Criterion) {
     );
 }
 
+/// The **upper half of the Background Grain dial**, which `bench_luma` cannot see.
+///
+/// `LumaDenoiseConfig::default()` leaves the coarse thresholds at zero, and
+/// `denoise_luma_with` then breaks out of the transform after level 4 — so the default
+/// case never runs levels 5-6, never measures their noise and never reads the mask off
+/// their smoothed planes. That is the half the manual tells an observer to start at, and
+/// at 1440² it is the difference between 10.5 ms and 12.8 ms a frame.
+fn bench_luma_coarse(c: &mut Criterion) {
+    bench_case(
+        c,
+        "denoise_luma_wavelet_coarse",
+        COARSE_CASES,
+        DenoiseConfig {
+            luma: LumaDenoiseConfig {
+                k: LumaDenoiseConfig::thresholds_for(0.0, 1.0),
+                ..LumaDenoiseConfig::default()
+            },
+            chroma: ChromaDenoiseConfig::OFF,
+        },
+    );
+}
+
 fn bench_both(c: &mut Criterion) {
     bench_case(
         c,
@@ -135,5 +170,5 @@ fn bench_both(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_chroma, bench_luma, bench_both);
+criterion_group!(benches, bench_chroma, bench_luma, bench_luma_coarse, bench_both);
 criterion_main!(benches);

@@ -17,7 +17,11 @@ mod guided;
 mod wavelet;
 
 pub use guided::ChromaDenoiseConfig;
-pub use wavelet::{LumaDenoiseConfig, MAX_LEVEL1_K, MAX_STRENGTH as MAX_LUMA_STRENGTH};
+pub use wavelet::{
+    LumaDenoiseConfig, MAX_LEVELS as MAX_WAVELET_LEVELS, MAX_LEVEL1_K,
+    MAX_STRENGTH as MAX_LUMA_STRENGTH, STAR_FIELD_FINE_BOOST, STAR_FIELD_GAIN,
+    UNIT_GAIN as UNIT_WAVELET_GAIN,
+};
 
 /// Rec. 709 luma weights. The chroma planes are the plain differences
 /// `b - y` and `r - y`, which makes the inverse exact in f32 rather than

@@ -436,41 +436,53 @@ pub struct DenoiseSettings {
     /// How far the chroma planes move toward the filtered result, `0..=1`.
     #[serde(default = "default_denoise_strength")]
     pub chroma_strength: f32,
-    /// À trous wavelet denoising of the luminance plane.
+    /// How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
     ///
-    /// The half that can destroy signal: every denoiser has a setting at which
-    /// nebulae turn to plastic, and only an observer at the eyepiece can find
-    /// where that is. Hence a genuine off switch and a visible strength.
-    #[serde(default = "default_luma_denoise")]
-    pub luma: bool,
-    /// Scales every wavelet threshold, `0..=2`. `1.0` is the tuned default.
+    /// Three mechanisms, spent cheapest-first, and what makes that ordering real is which
+    /// *scales* each one reaches. An observer reads grain at 8-128 px, and on a 1440p
+    /// stream of a deep IMX533 stack the 16-32 and 32-64 px bands are the two largest.
     ///
-    /// Note what this can and cannot reach: it multiplies all four per-level
-    /// thresholds, and the level-1 threshold is zero unless `star_protection`
-    /// lowers it — so raising this alone leans harder on the *coarse* scales,
-    /// which is where faint nebulosity lives. It is the "the target still looks
-    /// too noisy" control, not the "the sky still looks grainy" one.
+    /// - **Below the middle**: the wavelet's finest scale
+    ///   (`LumaDenoiseConfig::thresholds_for`) and the tone curve's split
+    ///   (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT` and
+    ///   `DEFAULT_GRAIN_SPLIT`. This half trades brightness for *fine speckle*: measured,
+    ///   it moves 8-128 px noise by under 2 %.
+    /// - **Above the middle**: wavelet levels 5-6, the only mechanism that reaches
+    ///   16-64 px. Measured on six real sessions it takes 8-128 px noise down 12-15 % for
+    ///   3 % of target brightness, against the tone curve's 1:1.
+    ///
+    /// The curve's split **stops at `DEFAULT_GRAIN_SPLIT`** and no longer runs on to
+    /// `MAX_GRAIN_SPLIT`. Reaching 1/4 cost 38-43 % of target brightness for 37-39 % of
+    /// the grain, which is the 1:1 exchange it always was and is not a trade any position
+    /// of a user-facing control should offer. The coarse levels replace that range.
+    ///
+    /// `0.5` is the middle; see [`DEFAULT_BACKGROUND_GRAIN`] for what it is and is not.
+    #[serde(default = "default_background_grain")]
+    pub background_grain: f32,
+    /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
+    /// tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
+    ///
+    /// Note what this can and cannot reach: it leaves the finest level and the coarse
+    /// pair alone, so it is the "the target still looks too noisy" control, not the "the
+    /// sky still looks grainy" one — that is the Background Grain dial.
     #[serde(default = "default_denoise_strength")]
     pub luma_strength: f32,
-    /// How much of the finest scale is left alone, `0..=1`.
-    ///
-    /// The finest wavelet scale carries both the sky grain and the star cores,
-    /// and a B3 spline transform puts ~94 % of the noise variance there — so
-    /// this is the only setting that moves visible grain much. At `1.0` (the
-    /// default, and what shipped before it was a control) the scale is untouched
-    /// and stars are exactly as they were. Lowering it to zero takes measured
-    /// sky sigma on the IMX533 fixture from 4.71 output levels to 1.47, and on
-    /// the IMX464 fixture from 10.00 to 1.48, while integrated target flux moves
-    /// under 1.5 % — at the cost of softening the tightest stars.
-    #[serde(default = "default_star_protection")]
-    pub star_protection: f32,
 }
+
+/// The middle of the dial: the wavelet's finest scale fully spent, the tone curve at
+/// `DEFAULT_GRAIN_SPLIT`, the coarse levels off.
+///
+/// **Not** the render of any earlier build, and worth being exact about because the
+/// first version of this said it was. The build before the dial defaulted
+/// `star_protection` to `1.0` — the finest scale *untouched* — and its tone curve split
+/// to `1/4`. The dial's middle is neither: its equivalent of that protection is `0.0`
+/// and its split is `1/8`. Measured on the 106-sub IMX533 set, dial 0.0 renders the
+/// target core at 161 output levels against 141 at the middle, and fine (1-4 px) sky
+/// noise at 0.51/0.50 against 0.24/0.31. The middle is where it is because it is the
+/// tuned trade, not because it reproduces anything.
+pub const DEFAULT_BACKGROUND_GRAIN: f32 = 0.5;
 
 fn default_chroma_denoise() -> bool {
-    true
-}
-
-fn default_luma_denoise() -> bool {
     true
 }
 
@@ -478,8 +490,8 @@ fn default_denoise_strength() -> f32 {
     1.0
 }
 
-fn default_star_protection() -> f32 {
-    1.0
+fn default_background_grain() -> f32 {
+    DEFAULT_BACKGROUND_GRAIN
 }
 
 impl Default for DenoiseSettings {
@@ -487,12 +499,95 @@ impl Default for DenoiseSettings {
         Self {
             chroma: default_chroma_denoise(),
             chroma_strength: default_denoise_strength(),
-            luma: default_luma_denoise(),
+            background_grain: default_background_grain(),
             luma_strength: default_denoise_strength(),
-            star_protection: default_star_protection(),
         }
     }
 }
+
+impl DenoiseSettings {
+    /// Whether the wavelet runs at all.
+    ///
+    /// Only a zero `luma_strength` turns it off, which is the genuine off switch the
+    /// filter needs: every denoiser has a setting at which nebulae turn to plastic and
+    /// only an observer at the eyepiece can find it. The dial's bottom end does *not*
+    /// turn it off — it leaves the finest scale untouched, which is where the grain is,
+    /// and keeps the coarse scales that cost nothing visible.
+    pub fn luma_enabled(&self) -> bool {
+        self.luma_strength > 0.0
+    }
+
+    /// How much of the finest wavelet scale the dial leaves alone, `0..=1`.
+    ///
+    /// The finest scale carries both the sky grain and the star cores, and a B3 spline
+    /// transform puts ~94 % of the noise variance there — but that variance is 1-4 px
+    /// speckle, which at streaming resolution is close to invisible. It is spent first
+    /// because it is nearly free in target contrast, not because it is what an observer
+    /// notices: across the dial's whole lower half the 8-128 px bands move under 2 %.
+    ///
+    /// Fully spent by the middle and held there above it.
+    pub fn star_protection(&self) -> f32 {
+        let dial = self.dial();
+        (1.0 - dial / DEFAULT_BACKGROUND_GRAIN).clamp(0.0, 1.0)
+    }
+
+    /// The dial position, with the nonsense taken out.
+    ///
+    /// `f32::clamp` passes NaN straight through, and this value arrives over JSON — a NaN
+    /// reaches the wavelet's threshold table and the tone curve's exponent, where every
+    /// comparison it meets is false.
+    fn dial(&self) -> f32 {
+        if self.background_grain.is_finite() {
+            self.background_grain.clamp(0.0, 1.0)
+        } else {
+            DEFAULT_BACKGROUND_GRAIN
+        }
+    }
+
+    /// How hard the wavelet's coarse levels (5-6) run, `0..=1`.
+    ///
+    /// The dial's upper half, and the only lever it has that reaches the 16-64 px band.
+    /// Zero at and below the middle, so the default render is untouched and an observer
+    /// who wants brightness never pays for a pass they are not using.
+    pub fn coarse_denoise(&self) -> f32 {
+        let dial = self.dial();
+        ((dial - DEFAULT_BACKGROUND_GRAIN) / (1.0 - DEFAULT_BACKGROUND_GRAIN)).clamp(0.0, 1.0)
+    }
+
+    /// The share of the stack's depth the tone curve spends on the sky, for this dial
+    /// position. See [`crate::render::AutoStretchConfig::grain_split`].
+    ///
+    /// Flat at `MIN_GRAIN_SPLIT` over the bottom quarter, rising to `DEFAULT_GRAIN_SPLIT`
+    /// by the middle, and **flat again above it**. Three segments, because going *down*
+    /// from the default the expensive lever has to be given back first: the curve costs
+    /// target brightness 1:1, so taking it off is what buys brightness, and the wavelet's
+    /// finest scale — which costs almost nothing — is what the last quarter spends.
+    ///
+    /// A straight ramp over the whole lower half was tried and reported from the field:
+    /// at dial 15 % it left the curve 30 % of the way up and took 5-9 % of the target with
+    /// it (M27 core 148 -> 141 output levels, outer 99 -> 90 on the observer's own
+    /// render). The flat bottom quarter is what makes a low dial mean "brightness,
+    /// please" rather than "a bit of everything".
+    ///
+    /// Above the middle the curve is not asked for anything at all; that range belongs to
+    /// the coarse levels, which buy the same sky at about a fifteenth of the cost.
+    ///
+    /// The floor is `MIN_GRAIN_SPLIT`, not zero, and that is deliberate: see its own
+    /// documentation for the give-back this avoids on a long session.
+    pub fn grain_split(&self) -> f32 {
+        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
+        let dial = self.dial();
+        let t = ((dial - CURVE_HOLDS_BELOW) / (DEFAULT_BACKGROUND_GRAIN - CURVE_HOLDS_BELOW))
+            .clamp(0.0, 1.0);
+        MIN_GRAIN_SPLIT + (DEFAULT_GRAIN_SPLIT - MIN_GRAIN_SPLIT) * t
+    }
+}
+
+/// Dial position below which the tone curve stays at `MIN_GRAIN_SPLIT`.
+///
+/// The bottom quarter of the dial spends the wavelet's finest scale and nothing else, so
+/// every position in it costs the same (nothing) in target brightness.
+const CURVE_HOLDS_BELOW: f32 = 0.25;
 
 /// Settings specifically for the eyepiece view feature
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -870,6 +965,152 @@ impl CaptureSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the dial's middle actually is, stated in the three numbers it resolves to.
+    ///
+    /// It is **not** the render of the build before the dial, whatever an earlier version
+    /// of this test said: that one left the finest scale untouched (`star_protection`
+    /// defaulted to `1.0`) and split the tone curve at `1/4`. The middle spends the finest
+    /// scale in full and splits at `1/8`. Those are different pictures — 161 against 141
+    /// output levels of target core on the 106-sub IMX533 set — and the point of pinning
+    /// them here is that the next change to either lever has to say so out loud.
+    #[test]
+    fn the_dials_middle_is_the_tuned_trade() {
+        let d = DenoiseSettings::default();
+        assert_eq!(d.background_grain, DEFAULT_BACKGROUND_GRAIN);
+        assert_eq!(d.star_protection(), 0.0, "the finest scale is fully spent at the middle");
+        assert!((d.grain_split() - crate::render::DEFAULT_GRAIN_SPLIT).abs() < 1e-6);
+        assert_eq!(d.coarse_denoise(), 0.0, "the coarse levels are headroom above it, not the default");
+        assert!(d.luma_enabled());
+    }
+
+    /// Monotone in both directions, cheapest lever first, and nothing past the middle
+    /// touches the tone curve.
+    ///
+    /// A dial where a higher setting gave *more* grain somewhere in the middle would be
+    /// worse than the three controls it replaced.
+    #[test]
+    fn the_dial_is_monotone_and_spends_the_cheap_levers_first() {
+        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
+        let at = |dial: f32| DenoiseSettings {
+            background_grain: dial,
+            ..Default::default()
+        };
+
+        let mut previous = (f32::MAX, 0.0f32, 0.0f32);
+        for step in 0..=100 {
+            let d = at(step as f32 / 100.0);
+            let (protection, split, coarse) =
+                (d.star_protection(), d.grain_split(), d.coarse_denoise());
+            assert!(
+                protection <= previous.0 + 1e-6
+                    && split >= previous.1 - 1e-6
+                    && coarse >= previous.2 - 1e-6,
+                "dial {:.2}: ({protection}, {split}, {coarse}) is not monotone against \
+                 the step below ({}, {}, {})",
+                step as f32 / 100.0,
+                previous.0,
+                previous.1,
+                previous.2
+            );
+            assert!((MIN_GRAIN_SPLIT..=DEFAULT_GRAIN_SPLIT).contains(&split));
+            assert!((0.0..=1.0).contains(&protection) && (0.0..=1.0).contains(&coarse));
+            previous = (protection, split, coarse);
+        }
+
+        // The ends, and the shape between them.
+        assert_eq!(at(0.0).star_protection(), 1.0);
+        assert!((at(0.0).grain_split() - MIN_GRAIN_SPLIT).abs() < 1e-6);
+        assert_eq!(at(0.0).coarse_denoise(), 0.0);
+        assert_eq!(at(1.0).star_protection(), 0.0, "the free lever stays spent");
+        assert_eq!(at(1.0).coarse_denoise(), 1.0);
+
+        // The tone curve is the expensive lever, so the dial stops asking it for
+        // anything at the middle. Every position past that is the coarse levels, which
+        // buy the same sky at about a fifth of the target contrast.
+        for dial in [0.5f32, 0.6, 0.75, 0.9, 1.0] {
+            assert!(
+                (at(dial).grain_split() - DEFAULT_GRAIN_SPLIT).abs() < 1e-6,
+                "dial {dial} moved the tone curve past the default"
+            );
+        }
+        assert!(at(0.4).grain_split() < DEFAULT_GRAIN_SPLIT);
+        assert_eq!(at(0.4).coarse_denoise(), 0.0, "the coarse pass must not run early");
+    }
+
+    /// Out-of-range and non-finite values arrive over JSON, and both derived numbers feed
+    /// a tone curve and a threshold table.
+    #[test]
+    fn the_dial_clamps_whatever_it_is_handed() {
+        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
+        for dial in [-5.0f32, 0.0, 1.0, 7.0, f32::NAN] {
+            let d = DenoiseSettings { background_grain: dial, ..Default::default() };
+            let (protection, split, coarse) =
+                (d.star_protection(), d.grain_split(), d.coarse_denoise());
+            assert!(
+                (0.0..=1.0).contains(&protection),
+                "dial {dial} gave protection {protection}"
+            );
+            assert!(
+                (MIN_GRAIN_SPLIT..=DEFAULT_GRAIN_SPLIT).contains(&split),
+                "dial {dial} gave split {split}"
+            );
+            assert!((0.0..=1.0).contains(&coarse), "dial {dial} gave coarse {coarse}");
+        }
+    }
+
+    /// The dial is the only grain key there is, and a file missing it takes the middle.
+    ///
+    /// There is no migration behind this any more: the `luma` switch and the
+    /// `star_protection` slider it replaced are gone from the format, so a file carrying
+    /// them is a file from a build that no longer exists and its extra keys are ignored
+    /// like any other unknown field. What still has to hold is that a partial or absent
+    /// block lands on the defaults rather than on zero, since every one of these feeds a
+    /// tone curve or a threshold table.
+    #[test]
+    fn a_settings_file_without_the_dial_takes_the_default() {
+        let read = |json: serde_json::Value| -> DenoiseSettings {
+            serde_json::from_value(json).unwrap()
+        };
+
+        assert_eq!(read(serde_json::json!({})), DenoiseSettings::default());
+        assert_eq!(
+            read(serde_json::json!({ "chroma": false })),
+            DenoiseSettings { chroma: false, ..Default::default() },
+            "one key present must not zero the rest"
+        );
+
+        let written = read(serde_json::json!({
+            "chroma": true, "chroma_strength": 0.8,
+            "background_grain": 0.75, "luma_strength": 0.5,
+        }));
+        assert_eq!(written.background_grain, 0.75);
+        assert_eq!(written.luma_strength, 0.5);
+    }
+
+    /// The saved shape is the four keys the code reads and nothing else, and it reads
+    /// back as itself.
+    #[test]
+    fn the_denoise_block_round_trips() {
+        let settings = DenoiseSettings {
+            chroma: false,
+            chroma_strength: 0.25,
+            background_grain: 0.8,
+            luma_strength: 0.6,
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["background_grain", "chroma", "chroma_strength", "luma_strength"],
+            "the saved block must carry the keys the code reads and nothing else"
+        );
+        assert_eq!(
+            serde_json::from_value::<DenoiseSettings>(json).unwrap(),
+            settings
+        );
+    }
 
     #[test]
     fn each_stream_family_reads_its_own_resolution_setting() {

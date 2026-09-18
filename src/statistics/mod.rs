@@ -16,7 +16,7 @@ mod ops;
 pub use channel::ChannelStats;
 pub use config::StatsConfig;
 pub use image::ImageStats;
-pub use ops::fast_median;
+pub use ops::{fast_median, select_median, select_nth};
 
 use compute::compute_channel_stats;
 use ops::{compute_mad_in_place_simd, min_max_simd};
@@ -321,9 +321,53 @@ mod tests {
         }
     }
 
+    /// The cheap order statistic the per-frame estimators use instead of
+    /// [`fast_median`], which parallel-sorts from 4096 elements up. It has to agree with
+    /// the sorted answer exactly, or every threshold derived from it moves.
+    #[test]
+    fn selection_agrees_with_a_full_sort() {
+        for len in [1usize, 2, 3, 64, 4095, 4096, 8193] {
+            let data: Vec<f32> = (0..len)
+                .map(|i| ((i * 2_654_435_761usize) % 1_000_003) as f32 / 1e6)
+                .collect();
+            let mut sorted = data.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            for n in [0, len / 4, len / 2, len - 1] {
+                let mut scratch = data.clone();
+                assert_eq!(
+                    select_nth(&mut scratch, n),
+                    sorted[n],
+                    "len {len}, n {n}: selection disagrees with the sorted order"
+                );
+                assert_eq!(scratch.len(), len, "selection must not drop samples");
+            }
+
+            let mut scratch = data.clone();
+            assert_eq!(select_median(&mut scratch), sorted[len / 2]);
+        }
+    }
+
+    /// Out-of-range indices and an empty slice reach these from sample counts derived
+    /// from a frame's dimensions, so neither may panic.
+    #[test]
+    fn selection_survives_an_empty_slice_and_a_high_index() {
+        assert_eq!(select_nth(&mut [], 0), 0.0);
+        assert_eq!(select_median(&mut []), 0.0);
+        assert_eq!(select_nth(&mut [3.0, 1.0, 2.0], 99), 3.0);
+    }
+
     use proptest::prelude::*;
 
     proptest! {
+        #[test]
+        fn prop_select_nth_no_panic(
+            mut data in prop::collection::vec(proptest::num::f32::ANY, 0..1000),
+            n in 0usize..1500,
+        ) {
+            let _ = select_nth(&mut data, n);
+        }
+
         #[test]
         fn prop_fast_median_preserves_length(mut data in prop::collection::vec(proptest::num::f32::NORMAL, 0..100)) {
             let len = data.len();

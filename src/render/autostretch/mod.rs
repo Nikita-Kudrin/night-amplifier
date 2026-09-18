@@ -8,12 +8,15 @@ use crate::frame::Frame;
 use crate::statistics::compute_image_stats;
 
 mod config;
-mod logic;
+pub(crate) mod logic;
 pub mod solver;
 mod stats;
 
 pub use config::{AutoStretchConfig, StretchAggressiveness};
-pub use logic::{compute_auto_stretch, compute_auto_stretch_with_algorithm, depth_grain_gain};
+pub use logic::{
+    compute_auto_stretch, compute_auto_stretch_with_algorithm, depth_grain_gain,
+    DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT, MIN_GRAIN_SPLIT,
+};
 pub use solver::{solve_stretch_factor, solve_stretch_factor_newton};
 pub use stats::{estimate_signal_fraction, AutoStretchResult};
 

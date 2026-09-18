@@ -137,7 +137,7 @@ fn render_session_by_stage_for_blotch_diagnosis() {
             let mut s = settings.clone();
             s.background_subtraction = background;
             s.denoise.chroma = denoise;
-            s.denoise.luma = denoise;
+            s.denoise.luma_strength = if denoise { 1.0 } else { 0.0 };
             let (rgb8, w, h) = render(stack.clone(), &s, n as u32, tweak);
             image::save_buffer(format!("{out}/n{n:04}_{tag}.png"), &rgb8, w, h, image::ColorType::Rgb8).unwrap();
         }

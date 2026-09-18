@@ -17,7 +17,7 @@ mod white_balance;
 pub use autostretch::{
     auto_stretch_default, auto_stretch_frame, compute_auto_stretch, depth_grain_gain,
     solve_stretch_factor, solve_stretch_factor_newton, AutoStretchConfig, AutoStretchResult,
-    StretchAggressiveness,
+    StretchAggressiveness, DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT, MIN_GRAIN_SPLIT,
 };
 pub use black_point::{
     calculate_black_point, calculate_black_points, calculate_luminance_black_point,
@@ -26,6 +26,7 @@ pub use black_point::{
 };
 pub use denoise::{
     ChromaDenoiseConfig, DenoiseConfig, DenoiseScratch, LumaDenoiseConfig, MAX_LUMA_STRENGTH,
+    MAX_WAVELET_LEVELS, STAR_FIELD_FINE_BOOST, STAR_FIELD_GAIN, UNIT_WAVELET_GAIN,
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, apply_shadow_floor_frame, finalize_for_display,

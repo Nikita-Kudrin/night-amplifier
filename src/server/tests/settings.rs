@@ -727,9 +727,8 @@ async fn seed_managed_settings(app: &axum::Router) {
             "denoise": {
                 "chroma": false,
                 "chroma_strength": 0.25,
-                "luma": true,
+                "background_grain": 0.8,
                 "luma_strength": 0.75,
-                "star_protection": 0.4,
             },
         }),
     )
@@ -751,7 +750,7 @@ async fn test_focus_mode_disables_the_managed_settings() {
     assert_eq!(json["data"]["saturation_boost"], false);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
-    assert_eq!(json["data"]["denoise"]["luma"], false);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.0);
     assert_eq!(json["data"]["eyepiece"]["dither"], false);
 }
 
@@ -766,7 +765,8 @@ async fn test_focus_mode_leaves_unmanaged_settings_alone() {
     assert_eq!(json["data"]["sensor_correction"]["superpixel_debayer"], true);
     assert_eq!(json["data"]["sensor_correction"]["hot_pixel_sigma"], 7.5);
     assert_eq!(json["data"]["denoise"]["chroma_strength"], 0.25);
-    assert_eq!(json["data"]["denoise"]["star_protection"], 0.4);
+    // The dial moves the tone curve as well as the wavelet, so the mode leaves it be.
+    assert_eq!(json["data"]["denoise"]["background_grain"], 0.8);
 }
 
 #[tokio::test]
@@ -783,7 +783,7 @@ async fn test_focus_mode_round_trip_restores_the_managed_settings() {
     assert_eq!(json["data"]["background_subtraction"], true);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
-    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.75);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
 }
 
@@ -803,7 +803,7 @@ async fn test_focus_mode_enabled_twice_still_restores_the_originals() {
 
     assert_eq!(json["data"]["background_subtraction"], true);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
-    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.75);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
 }
 
@@ -844,9 +844,8 @@ async fn test_write_while_focus_mode_is_on_is_absorbed_into_the_snapshot() {
             "denoise": {
                 "chroma": true,
                 "chroma_strength": 0.9,
-                "luma": false,
+                "background_grain": 0.8,
                 "luma_strength": 0.75,
-                "star_protection": 0.4,
             },
         }),
     )
