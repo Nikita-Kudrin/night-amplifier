@@ -538,8 +538,53 @@ memory traffic. ~17ms combined at 1440² (20-core x86).
   (2-4.6x on real IMX533 stacks) — the "blotches" reported at the eyepiece. Swept over four
   sessions; fine chroma converges by `k=3`. Pinned by `sky_blotch_tests.rs` and
   `guided.rs::a_faint_star_keeps_its_colour_to_itself`.
-- `k[0]` (grain) is user-exposed as `star_protection`; off by default, ceiling reaches ~7x
-  noise reduction.
+- `k[0]` (grain) is driven by the Background Grain dial through
+  `DenoiseSettings::star_protection()`, fully spent at the default; ceiling reaches ~7x
+  noise reduction — but of *fine* noise, which is a small share of what an observer sees.
+  The dial has no off switch for the filter: a zero `luma_strength` is that, and it is the
+  one the manual points at when nebulae turn to plastic. Focus/Finder mode holds the filter
+  off by zeroing the strength, deliberately **not** by moving the dial, which would move
+  the tone curve with it.
+- **`strength` (Structure strength) scales only levels 2-4**, the mid scales it is named
+  for. It used to scale all of them, and that was a trap: an observer running it at 0.2 had
+  every position of the Background Grain dial quietly divided by five, and measured a 0.0 %
+  change in visible sky noise across the dial's whole lower half. Two controls, one
+  silently scaling the other, is not two controls.
+- **Levels 5-6 are the coarse pair and need their own shrinkage.** Their support is wider
+  than a star, so the smoothed plane carries a star's flux tens of pixels out and the
+  detail plane goes negative just outside it. Two things make them safe, and the guard is
+  `a_bright_star_keeps_no_ring`, which now runs at the top of the dial as well as the
+  default:
+  - **Non-negative garrote, not a soft threshold.** A soft threshold subtracts `t` from
+    every surviving coefficient including the star's large ones, and that constant shift
+    is what moves real light into a ring (measured: a -2.3 level trough at r=9-15 px with
+    every star in a +1.2 level pool). The garrote shrinks by `t^2/d`, so `d >> t` is left
+    almost untouched. It is continuous at `t`, so it does not bring back the blotches hard
+    thresholding was rejected for.
+  - **A mask read off the smoothed plane itself** (`MASK_SIGMAS`), not dilated out from a
+    map of star positions. The disc a coarse level would light *is* the region the
+    smoothing has carried flux into, so the smoothed plane already has it at the right
+    size for every star with no radius to guess. A dilated point mask was measured and
+    fails both ways: narrow it changes the ringing not at all, wide it protects a dense
+    field entirely and the coarse levels recover nothing. The rule is nearly "smooth what
+    is at or below the sky, never anything brighter".
+  `COARSE_K` is half what the best grain figure wanted: doubling it buys 2 % more grain and
+  takes the dense-field disc from +0.48 to +0.68 output levels, which is the whole of the
+  guard's margin.
+- **Three Star Fields ideas that measured well and looked wrong.** All three were caught
+  by rendering a crop and looking at it, after the score table had already approved them:
+  - *Crushing the coarse thresholds* (3 sigmas at every level, 5-6 on) scored best on every
+    number and put visible dark contour worms across a wide field's background — zeroing a
+    smooth gradient's detail coefficients leaves the reconstruction piecewise flat. The
+    win it appeared to deliver came from the finest threshold, which has no such problem.
+  - *Flattening the coarse gains* (0.8/0.5/0.4) to spread a globular's glow digs a -8
+    output level moat around every star, for the same reason a coarse threshold does.
+  - *Sharpening past ~1.15* rings, and the ceiling is set by the **shallowest** stack: 1.25
+    keeps a +1.4 level margin on a 1852-frame globular and rings outright on the 35-frame
+    CI fixture, where the profile turns back up 0.9 -> 1.9 at r=11 px.
+  The score table could not see any of them; `star_field_score`'s `moat` column exists
+  because of the second, and `a_bright_star_keeps_no_ring` now runs Star Fields for the
+  third. **Look at the picture.**
 - Skipped for `StackingType::Planetary` — lucky imaging needs the detail this removes.
 
 ### Denoising cost
@@ -555,6 +600,20 @@ without, 17.9ms with). Two structures stop that from multiplying:
   threads where thread-local would strand 75MB/thread.
 
 Both spans report under `--span-timings`.
+
+### The fused scale LUT's cache key is quantised *relatively*
+
+`LutCacheKey` keeps 13 of f32's 23 mantissa bits, a step of ~0.012 % of the value at any magnitude.
+It used to round `v * 10_000` — an absolute `1e-4` — and an MTF midtone on a deep-sky stack is around
+`1e-3`, so the key carried barely one significant figure there. The Nebulae and Deep Sky profiles
+solved to 0.001053 and 0.001085 on the 106-sub IMX533 set: 3 % apart, same key, so whichever
+rendered *second* silently reused the first profile's tone curve — target core 141 → 144 output
+levels and sky 18 → 19, decided by nothing but render order within the process. Live view changes
+stretch profile, eyepiece intensity and target background mid-session, and each of those is this
+collision. It also invalidated the first round of the 2026-09-18 brightness measurements, which is
+how it was found. The black point is still deliberately *out* of the key (subtracted per pixel, no
+effect on the table); the relative step is what absorbs the jitter the cache exists for.
+`the_lut_cache_separates_curves_it_can_tell_apart` sweeps four decades.
 
 ### The f32 -> 8-bit boundary (`render::output::quantize`)
 
@@ -575,20 +634,86 @@ because parallel 8-bit conversions have drifted by an LSB here before.
 
 `black_point_sigma` alone is scale-invariant: the MTF solve pins `mtf(k*sigma) = target_background`,
 so displayed grain is `T(1-T)/k` whatever sigma is and a 100-frame stack looks as grainy as one
-(4.2 output levels at 1 sub, 4.4 at 8). `autostretch::depth_grain_gain` scales `k` by `N^(1/4)`,
-splitting the stack's `sqrt(N)` evenly: grain falls as `N^(-1/4)`, faint-signal contrast rises as
-`N^(1/4)`. The stack depth reaches the solve through `AnalysisContext::stack_depth`, so **any**
-renderer of a stack has to pass it — `render_stacked_png` takes it from the context that holds the
-frame, never from `stacked_count`, and the live-vs-export parity test only catches a caller that
-forgets it entirely. The eyepiece slider still interpolates `black_point_sigma` *upward*, not down.
+(4.2 output levels at 1 sub, 4.4 at 8). `autostretch::depth_grain_gain` scales `k` by
+`N^s`, where `s` is `AutoStretchConfig::grain_split`: grain falls as `N^-s`, faint-signal contrast
+rises as `N^(1/2 - s)`. The stack depth reaches the solve through `AnalysisContext::stack_depth`,
+so **any** renderer of a stack has to pass it — `render_stacked_png` takes it from the context that
+holds the frame, never from `stacked_count`, and the live-vs-export parity test only catches a
+caller that forgets it entirely. The eyepiece slider still interpolates `black_point_sigma`
+*upward*, not down.
 
-- **`MAX_GAIN_DEPTH` is 64**, because the split is only affordable while the stack's own noise falls
-  as `sqrt(N)` — and it does not, deep into a real session. On the 106-sub IMX533 set sigma falls as
-  `N^0.41` to 32 subs and `N^0.19` from there; once that drops below the 0.25 the gain spends, the
-  target pays: at 256 the rendered target peaked at 32 subs and gave back 77 → 69 output levels by
-  106. At 64 the same sweep rises 42 → 94 with no give-back. `stack_depth_grain_tests` asserts in
-  levels, not percent — a 96 px block median quantises to whole levels, and a percentage bound loose
-  enough for one is loose enough for the defect (4.6 % slipped through).
+- **The grain split is a user-facing dial, defaulting to 1/8 rather than the 1/4 an even split
+  would give.** The tone curve buys a calmer sky at exactly 1:1 in target contrast, and the wavelet
+  buys the same sky for almost nothing — measured on three real sessions, target contrast is *flat*
+  across `star_protection`. So the curve should spend as little as will do. At 1/4 and 114 subs the
+  black point sat 2.83 sigmas wider and cost that same 2.83x: M27's core rendered 47 output levels
+  against 89. At 1/8 the three sessions give the target back 1.5-1.7x (M27 47 → 78, globular
+  98 → 150, M31 159 → 203) with sky grain within a few percent either way. Guarded by
+  `stack_depth_grain_tests`, which reads the exponent from `depth_grain_gain` rather than restating
+  it.
+- **One dial, `DenoiseSettings::background_grain`, spends three levers, and which *scales*
+  each reaches is what orders them.** It replaced a toggle and two sliders, one of which
+  (the curve's share) had no UI at all. An observer reads grain at **8-128 px**, and on a
+  1440p stream of a deep IMX533 stack the 16-32 and 32-64 px bands are the two largest —
+  so that is the band a lever has to reach to count.
+  - *Below the middle*, in two segments. The **bottom quarter** moves `star_protection()`
+    (wavelet level 1, 1-2 px) alone and holds the curve at `MIN_GRAIN_SPLIT`, so every
+    position in it costs the same — nothing — in target brightness. From 25 % to the
+    middle the curve rises to `DEFAULT_GRAIN_SPLIT` as well. Going *down* from the default
+    the expensive lever is given back first, which is what makes a low dial mean
+    "brightness, please". A straight ramp over the whole lower half was tried and reported
+    from the field: at dial 15 % it left the curve 30 % of the way up and took 5-9 % of the
+    target with it (M27 core 148 -> 141 output levels, outer 99 -> 90). Level 1 is nearly
+    free but it is **fine speckle**: the whole lower half moves 8-128 px noise under 2 %.
+  - *Above the middle*: `coarse_denoise()` drives wavelet levels 5-6, the only mechanism
+    that reaches 16-64 px. Across six real sessions it takes 8-128 px noise down 9-27 %
+    while the target dims 0-1.2 %.
+  - The curve's split **stops at `DEFAULT_GRAIN_SPLIT`** and no longer runs to
+    `MAX_GRAIN_SPLIT`. Reaching 1/4 cost 38-43 % of target brightness for 37-39 % of the
+    grain — the 1:1 exchange the curve always offers, and not a trade any position of a
+    user-facing control should make. The coarse levels took over that range at roughly
+    15:1.
+  `0.5` is the middle and reproduces the pre-dial render exactly; the coarse levels are
+  new headroom above it, not a change to the default. Old settings files migrate through
+  `DenoiseSettingsFile`: `star_protection` 0.0 and 1.0, the only two values anyone has,
+  land on 0.5 and 0.0 exactly.
+- **`MIN_GRAIN_SPLIT` is 1/12, not zero**: at zero the wavelet cannot take over (its
+  thresholds are noise-relative, so it removes a fraction of the noise and never pins
+  absolute grain), displayed sky grain then *rises* with depth (1.41 -> 2.30 output levels
+  over 106 subs) and target-to-grain peaks at 64 subs and falls back — `MAX_GAIN_DEPTH`'s
+  give-back failure from the other end.
+- **`MAX_GAIN_DEPTH` is 64.** At 1/4 this was load-bearing: the split is only affordable while the
+  stack's own noise falls as `sqrt(N)`, and on the 106-sub IMX533 set sigma falls as `N^0.41` to 32
+  subs and `N^0.19` from there, so past that the target paid (at a cap of 256 the rendered target
+  peaked at 32 subs and gave back 77 → 69 levels by 106). At 1/8 the gain stays under even that
+  tail, so the cap is no longer what protects the target; it is kept because a 3-5 hour session at
+  5 s reaches thousands of subs and nothing is gained by widening the black point across them.
+  `stack_depth_grain_tests` asserts in levels, not percent — a 96 px block median quantises to whole
+  levels, and a percentage bound loose enough for one is loose enough for the defect (4.6 % slipped
+  through).
+- **What does not work**: `sky_shadow` (`black_floor` negative) darkens the sky by a gain
+  read from a local mean, so it darkens *less* around every star — each one sits in a lit
+  disc, +2.3 output levels at r=21 px. Coarse wavelet levels (5-6) were rejected on the
+  same signature and have since been **made to work**, but only with the garrote and the
+  smoothed-plane mask the denoise section describes; a plain soft threshold at those
+  scales still digs a -2.3 level trough at r=9-15 px, and an interscale mask dilated out
+  from star positions still fails both ways. See the star radial profile and surround
+  method in `render_brightness_tests` before reaching for any of them again.
+- **Star Fields keeps `ToneMappingAlgorithm::Asinh`, and that is a product decision.**
+  The mode exists to show a field of stars; nebulosity and galaxy structure are explicitly
+  not its job. What asinh costs is measured and should not need re-deriving: it pins the
+  rendered star peak at ~160 output levels however it is tuned (MTF reaches 220). Raising
+  `target_background` lifts the star count only by lifting the sky with it (0.16 gives a
+  sky of 40 output levels); bounding `max_stretch` to keep highlights linear makes both
+  worse. A per-profile `ContrastConfig` cannot help — strength is already at its 1.0
+  ceiling everywhere.
+- **Star Fields denoises differently, and that is where its wins come from** — see
+  `STAR_FIELD_FINE_BOOST` and `STAR_FIELD_GAIN`. On a 181-frame 35 mm IMX464 field it
+  takes detected stars from 7809 to 15384 per megapixel above sky+20 and 3127 to 5909
+  above sky+60, with fine-scale noise down 45 %; on long-focal sets it is roughly neutral
+  (a 1852-frame globular loses 6 % of its faintest for 35 % less speckle). The mode now
+  beats Deep Sky on a wide field by 2.8x, which is the first time it has been the best
+  choice for anything.
 - The factor the solve really uses is `AutoStretchResult::adaptive_sigma`, not the setting: the
   signal-fraction gates scale it down and the depth gain up. A caller placing a black point of its
   own (`per_channel_black_point`) must use that, or it subtracts a different gap from the one the
@@ -618,7 +743,7 @@ darkens the sky (sky-relative). At `-5%`: sky 64 %/65 % darker, target excess *u
   fixed rows x 256 columns rendered first. Staging the image cost 10.3 ms against 4.3 plain; streamed, 6.0. Denoise
   on feeds its staged image in as a row source (whole-image guide planes were ~208 MB at 26 MP). Both are pinned to
   the test-only `apply_sky_shadow_interleaved` (`sky_shadow_streaming_matches_staged`, `..._after_denoise_...`).
-- Three gates: sign, auto-stretch on, and not `StackingType::Planetary`. Slider end stop -6 % = 90 % darker.
+- Three gates: sign, auto-stretch on, and not `StackingType::Planetary`. Slider end stop -5 % = 90 % darker (`sky_shadow::MAX_DARKENING`). The reach is calibrated to where that saturates, so it moved from -6 % when the S-curve strength went to 1.0 and lowered `NOMINAL_SKY_LEVEL`.
 
 ### Phase 2: Debayering (Demosaicing)
 
@@ -786,6 +911,21 @@ denoising** above.
 #### S-Curve Contrast (`ContrastConfig`)
 
 Luminance-preserving contrast adjustment using a parametric S-curve:
+
+**`strength` is 1.0 and `midpoint` 0.2, and the midpoint below the sky is what makes full strength
+affordable.** The sky lands on the curve's compressive half and the target on its expansive one, so
+the curve brightens the target and darkens the sky in one pass rather than trading one for the other.
+Measured against 0.8 on four sessions and all three stretch profiles: target +6-9 % everywhere, sky
+~2 output levels darker, octave-band sky noise within ±6 % (and mostly *down* on Deep Sky and Star
+Fields), star radial profile unchanged in shape. Contrast is the only free brightness lever here —
+the tone curve's own grain split costs target contrast 1:1. Lowering the midpoint below 0.2 was
+measured and **rejected**: it moves the sky onto the expansive half and washes the background out
+(sky 23 → 32 output levels, p1 11 → 16 at 0.1).
+
+`NOMINAL_SKY_LEVEL` in `stage_config.rs` is *derived* from this curve —
+`sky_level_after_contrast(0.08, default)`, 0.045 — and the darker-sky slider's whole calibration
+hangs off it, so it moved with the strength. `the_nominal_sky_level_matches_the_shipped_curve` makes
+the next change to the curve fail there instead of silently mis-scaling the slider.
 
 ## Logging
 

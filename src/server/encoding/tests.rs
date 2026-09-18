@@ -936,7 +936,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
         },
         crate::render::DenoiseConfig {
             luma: crate::render::LumaDenoiseConfig {
-                k: [0.0; 4],
+                k: [0.0; crate::render::MAX_WAVELET_LEVELS],
                 ..Default::default()
             },
             chroma: crate::render::ChromaDenoiseConfig {
@@ -970,7 +970,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
 fn denoising_reduces_sky_sigma_through_both_kernels() {
     let denoise = crate::render::DenoiseConfig {
         luma: crate::render::LumaDenoiseConfig {
-            k: [1.0, 3.0, 2.0, 1.0],
+            k: crate::render::LumaDenoiseConfig::thresholds_for_star_protection(0.0),
             ..Default::default()
         },
         chroma: crate::render::ChromaDenoiseConfig::default(),

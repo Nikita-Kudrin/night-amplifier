@@ -60,34 +60,66 @@ at the *coarse* scales would remove the most visible mottle, but coarse scales
 are also where faint nebulosity lives — the Dumbbell's outer lobes are coarse
 structure, and a filter tuned that way erases them along with the noise.
 
-By default the finest scale of all is left untouched, because that is where star
-cores sit. On the reference frame, with the colour filter also on, sky noise goes
-from 6.8 to 4.7 output levels while integrated target brightness moves by 0.4 %
-and the brightest star is unchanged.
+Each scale is measured against its own noise, not against the finest one's. That
+matters because a stack's noise is not white — aligning and combining frames
+correlates neighbouring pixels — so the broad mottle carries far more noise than
+the fine speckle would predict. Thresholds derived from the finest scale were too
+small to reach it.
 
-**Structure strength** scales the thresholds for the larger scales — the soft
-mottle across the target rather than the fine speckle. 100 % is the tuned
-default. Lower it if the target starts looking soft or plastic; raising it leans
-harder on faint nebulosity, so go carefully.
+**Background Grain** is one dial over three mechanisms, and what separates them is not
+just what they cost but *what size of grain they can reach*. The speckle you notice in a
+background is mostly broad and blotchy — tens of pixels across — not the fine pepper at
+the pixel level.
 
-**Star protection** is the one that actually moves the background. It decides how
-much of that finest scale is left alone — and since almost all the grain lives
-there, it is the only control that visibly changes how smooth the sky looks. At
-100 % nothing about the stars changes and the speckle stays; at 0 % sky noise on
-the reference frame falls from 4.7 to 1.5 output levels, a 4.6x reduction, with
-target brightness still within half a per cent.
+**Above 50 % is the half that works on what you notice.** It brings in two extra, coarser
+stages of the filter, the only ones that reach that broad mottle at all. They are close to
+free: measured across six sessions they take it down between 9 % and 27 % while the target
+dims by at most 1 %. If the background looks blotchy, this is the direction to go.
 
-The trade is real, so find it by eye: bring protection down until the tightest
-stars start to soften, then back off a step. On a camera whose frames arrive at
-close to their streaming resolution — an IMX464 streamed at 1440p, say — this
-control is doing nearly all the work, because there is no spare resolution for
-the resize to average away first.
+**Below 50 % you are buying brightness back**, and in two stages. From 50 % down to 25 %
+it eases off the tone curve, which is what actually brightens faint nebulosity and galaxy
+arms. Below 25 % the curve is already all the way back and the dial only returns the
+finest speckle, which is nearly invisible at normal viewing size — so the bottom quarter
+costs no brightness at all. On a deep session the target reads about 17 % brighter at 0 %
+than at 50 %, and essentially all of that is won between 50 % and 25 %.
+
+**50 %** is the tuned default and renders exactly as the app did before this dial existed.
+
+The dial deliberately stops short of the tone curve's full range. Pushing that lever all
+the way took 40 % of the target's brightness to buy 38 % of the grain — a straight
+one-for-one trade, and not one worth offering. The coarse stages replaced that end of the
+dial and buy the same smoothness about fifteen times more cheaply.
+
+Two things worth knowing. The dial does not reach a tone curve share of zero: there, the
+sky gets *grainier* the longer you integrate — the filter removes a fixed fraction of the
+noise rather than holding the sky at a level, so nothing stops a deep stack's remaining
+noise from showing. Measured over 106 frames, signal-to-noise peaked around 64 frames and
+then fell back. The bottom of the dial stops just above that, where displayed grain is
+flat with session length.
+
+And on a camera whose frames arrive close to their streaming resolution — an IMX464
+streamed at 1440p, say — the dial is doing nearly all the work, because there is no spare
+resolution for the resize to average away first.
+
+**Star Fields mode filters differently.** It is looking for points of light against an
+empty sky and has no nebulosity to protect, so it leans harder on the finest scale — where
+a star competes with single-pixel noise — and then sharpens the scales a star actually
+occupies to put its peak back. On a wide field this roughly doubles the number of stars
+you can see, and on a long focal length it trades a few of the very faintest for a
+noticeably cleaner background.
+
+**Structure strength** scales the thresholds for the mid scales — the soft mottle across
+the target, not the fine speckle and not the broad background blotches the dial above
+handles. **100 % is both the tuned value and the maximum.** Past it the filter stops
+helping and starts hurting: the mottle is not removed, it is pushed out to a scale the
+filter cannot reach, and stars grow a visible ring around them. Lower it if the target
+starts looking soft or plastic.
 
 ::: tip When to turn this one off
-This is the setting that can destroy signal. If the target starts looking
-smeared, waxy, or like a painting, turn Background Grain off before adjusting
-anything else — the difference is much easier to judge by switching it on and
-off than by nudging the strength.
+Structure strength is the setting that can destroy signal, and 0 % switches the
+brightness denoiser off altogether. If the target starts looking smeared, waxy, or
+like a painting, take it to 0 % before adjusting anything else — the difference is
+much easier to judge by switching it off and on than by nudging it.
 :::
 
 ## Processing Resolution

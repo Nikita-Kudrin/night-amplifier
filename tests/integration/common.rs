@@ -122,7 +122,14 @@ pub const DEBAYER_OUTPUT_DIR: &str = "debayer";
 
 /// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures
 /// must exceed. Do not apply to raw linear frames; see the note above.
-pub const MIN_CHROMA_SPREAD: f64 = 5.0;
+///
+/// A floor against channels collapsing, which is an all-or-nothing defect: reading the
+/// planar buffer as interleaved scores ~0, not a few percent low. It was 5.0, close enough
+/// to the real numbers that raising `ContrastConfig`'s strength to 1.0 tripped it at 4.97
+/// — the eyepiece view at full intensity puts more of the frame in the curve's toe, which
+/// costs a little chroma. 4.0 keeps an order of magnitude over the defect while leaving
+/// the threshold off the measurement it is meant to bracket.
+pub const MIN_CHROMA_SPREAD: f64 = 4.0;
 
 /// Mean per-pixel `|R-G| + |G-B|` over an interleaved RGB8 buffer, in 0-255 units.
 ///
@@ -198,6 +205,7 @@ pub fn mean_chroma_spread_frame(frame: &night_amplifier::Frame) -> f64 {
 
 /// Asserts a render kept its colour. `context` names the path under test.
 pub fn assert_has_chroma(spread: f64, context: &str) {
+    println!("    chroma spread {spread:.2} ({context})");
     assert!(
         spread > MIN_CHROMA_SPREAD,
         "{context}: chroma spread {spread:.2} <= {MIN_CHROMA_SPREAD:.2}. \

@@ -26,13 +26,16 @@ const FIXTURE_SET: &str = "250mm-dob-imx533-dumbbell-fits";
 /// The same target and rig, whole session: 106 subs cropped to 1024².
 const DEEP_SET: &str = "deep-stack-dumbbell-106";
 
-/// The grain ratio a stack of `frames` is expected to reach.
+/// The grain ratio a stack of `frames` is expected to reach, at the shipped split.
 ///
-/// Read off the curve itself rather than restated as `N^(-1/4)`: the exponent and the
-/// depth it stops at are the product's decision, and a copy here would go on asserting
-/// the old one after that decision changed.
+/// Read off the curve itself rather than restated as `N^(-1/8)`: the exponent and the
+/// depth it stops at are the product's decision — now the middle of a user-facing dial —
+/// and a copy here would go on asserting the old one after that decision changed.
 fn expected_grain_ratio(frames: usize) -> f64 {
-    1.0 / night_amplifier::render::depth_grain_gain(frames as u32) as f64
+    1.0 / night_amplifier::render::depth_grain_gain(
+        frames as u32,
+        night_amplifier::render::DEFAULT_GRAIN_SPLIT,
+    ) as f64
 }
 
 struct Measured {
@@ -68,11 +71,27 @@ fn measure(rgb8: &[u8], width: usize, sky: (usize, usize, usize, usize), target:
 }
 
 pub(crate) fn render(
+    frame: night_amplifier::Frame,
+    settings: &night_amplifier::server::state::CaptureSettings,
+    denoise: bool,
+    max: (u32, u32),
+    stack_depth: u32,
+) -> (Vec<u8>, usize, usize) {
+    render_with(frame, settings, denoise, max, stack_depth, |_| {})
+}
+
+/// [`render`], with a last look at the pipeline config before it is used.
+///
+/// The denoisers run in the encoder rather than the pipeline, so a caller can still
+/// change their configuration after the solve — which is what lets an experiment try a
+/// threshold ladder without a per-variant rebuild.
+pub(crate) fn render_with(
     mut frame: night_amplifier::Frame,
     settings: &night_amplifier::server::state::CaptureSettings,
     denoise: bool,
     max: (u32, u32),
     stack_depth: u32,
+    tweak: impl FnOnce(&mut night_amplifier::render::RenderPipelineConfig),
 ) -> (Vec<u8>, usize, usize) {
     use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
     // Through the analysis door, not `process_preview_frame`: the stretch spends the
@@ -92,6 +111,7 @@ pub(crate) fn render(
     if !denoise {
         pipeline_config.denoise = night_amplifier::render::DenoiseConfig::OFF;
     }
+    tweak(&mut pipeline_config);
     let ready = night_amplifier::server::state::RenderReadyFrame {
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
@@ -355,30 +375,60 @@ fn measure_real_session(label: &str, files: &[std::path::PathBuf], depths: &[usi
         let (n1, last) = &rows[rows.len() - 1];
         assert_eq!(*n0, 1, "the shallow end of the sweep must be a single frame");
 
-        // The headline: a deeper stack is rendered calmer. Loose bounds, because a real
-        // session's sigma does not fall as sqrt(N) — rejection, drift and a sky that
-        // changes all leave the curve less depth to spend than the ideal.
         let ratio = last.sky_grain / first.sky_grain;
         let expected = expected_grain_ratio(*n1);
-        assert!(
-            ratio < expected * 1.6,
-            "{label}: {n1} subs only reached {ratio:.2}x the single-sub grain, expected \
-             about {expected:.2}x"
-        );
-        assert!(
-            ratio > expected * 0.5,
-            "{label}: {n1} subs reached {ratio:.2}x the single-sub grain against an \
-             expected {expected:.2}x — the sky is being flattened harder than the depth \
-             pays for, which comes out of the target"
-        );
+        if !denoise {
+            // The tone curve alone, so the exponent is the curve's and this is its
+            // contract: a deeper stack is rendered calmer. Loose bounds, because a real
+            // session's sigma does not fall as sqrt(N) — rejection, drift and a sky
+            // that changes all leave the curve less depth to spend than the ideal.
+            assert!(
+                ratio < expected * 1.6,
+                "{label}: {n1} subs only reached {ratio:.2}x the single-sub grain, \
+                 expected about {expected:.2}x"
+            );
+            assert!(
+                ratio > expected * 0.5,
+                "{label}: {n1} subs reached {ratio:.2}x the single-sub grain against an \
+                 expected {expected:.2}x — the sky is being flattened harder than the \
+                 depth pays for, which comes out of the target"
+            );
 
-        // And still brighter against that grain, or the trade was a loss.
-        let snr_gain =
-            (last.target_contrast / last.sky_grain) / (first.target_contrast / first.sky_grain);
-        assert!(
-            snr_gain > 2.0,
-            "{label}: target-to-grain only rose {snr_gain:.1}x over {n1} subs"
-        );
+            // And still brighter against that grain, or the trade was a loss.
+            let snr_gain = (last.target_contrast / last.sky_grain)
+                / (first.target_contrast / first.sky_grain);
+            assert!(
+                snr_gain > 2.0,
+                "{label}: target-to-grain only rose {snr_gain:.1}x over {n1} subs"
+            );
+        } else {
+            // With the filters on, neither bound above means what it says. The wavelet
+            // holds the sky near its floor from the *first* sub — 1.41 output levels at
+            // N=1 on the 106-sub set against 5.70 with it off — so there is almost
+            // nothing left for depth to take, and what remains drifts *up* as the
+            // stack's residual noise migrates to the coarse scales a 4-level transform
+            // only partly reaches (1.41 -> 1.66 over 106 subs). Normalising against
+            // N=1 is misleading for the same reason: the ratio starts from the filter's
+            // best case.
+            //
+            // So this half asserts the absolute state instead, which is what an
+            // observer sees: the sky stays smooth at every depth, and the target grows.
+            assert!(
+                rows.iter().all(|(_, m)| m.sky_grain <= 2.5),
+                "{label}: sky grain reached {:.2} output levels with denoising on — the \
+                 filters are no longer holding the sky, and the curve is not going to \
+                 take it back",
+                rows.iter().map(|(_, m)| m.sky_grain).fold(0.0, f64::max)
+            );
+            assert!(
+                last.target_contrast > first.target_contrast * 2.0,
+                "{label}: the target only grew {:.1}x over {n1} subs ({:.0} -> {:.0} \
+                 levels) — depth is not reaching it",
+                last.target_contrast / first.target_contrast,
+                first.target_contrast,
+                last.target_contrast
+            );
+        }
 
         // The target is what the depth is *for*, so it must not be spent down to buy the
         // sky. The synthetic sweep asserts it rises outright; a real session gets a band,

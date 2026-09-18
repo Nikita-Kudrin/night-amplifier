@@ -40,6 +40,9 @@
 //! - `detection_tests` - Tests for star detection on real images
 //! - `display_output_tests` - Black floor, dithering, stream resolution and the two
 //!   denoisers, measured in output levels on real fixtures
+//! - `render_brightness_tests` - Octave-band sky noise, the star radial profile and
+//!   object brightness at three radii: the instruments any change to the
+//!   brightness-against-grain trade has to be judged on
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
 pub mod background_tests;
@@ -52,6 +55,7 @@ pub mod encoding_tests;
 pub mod fixture_processing;
 pub mod image_loading;
 pub mod prefetch;
+pub mod render_brightness_tests;
 pub mod sky_blotch_diagnostics;
 pub mod sky_blotch_tests;
 pub mod sky_estimate_tests;

@@ -13,8 +13,8 @@ import {reactive, watch} from 'vue'
 import {BaseToggle, BaseSlider, BaseInfoIcon} from './ui'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
+  BACKGROUND_GRAIN_LIMITS,
   DENOISE_LUMA_STRENGTH_LIMITS,
-  STAR_PROTECTION_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
   PREVIEW_RESOLUTION_OPTIONS,
   STREAMING_RESOLUTION_OPTIONS,
@@ -185,17 +185,21 @@ function applyValue(key, value) {
       />
     </div>
 
-    <div class="control-group">
-      <BaseToggle
-          v-model="local.denoise.luma"
+    <div class="control-group" style="margin-bottom: 1.5rem">
+      <BaseSlider
+          v-model="local.denoise.background_grain"
           label="Background Grain"
-          :help="HELP.denoise_luma"
-          :disabled="focusMode"
-          @update:model-value="apply('denoise')"
+          large-gap
+          :min="BACKGROUND_GRAIN_LIMITS.min"
+          :max="BACKGROUND_GRAIN_LIMITS.max"
+          :step="BACKGROUND_GRAIN_LIMITS.step"
+          :format-value="formatPercent"
+          :help="HELP.denoise_background_grain"
+          @change="apply('denoise')"
       />
     </div>
 
-    <div v-if="local.denoise.luma" class="control-group" style="margin-bottom: 1.5rem">
+    <div class="control-group" style="margin-bottom: 1.5rem">
       <BaseSlider
           v-model="local.denoise.luma_strength"
           label="Structure strength"
@@ -205,22 +209,10 @@ function applyValue(key, value) {
           :step="DENOISE_LUMA_STRENGTH_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.denoise_luma_strength"
+          :disabled="focusMode"
           @change="apply('denoise')"
       />
     </div>
 
-    <div v-if="local.denoise.luma" class="control-group" style="margin-bottom: 1.5rem">
-      <BaseSlider
-          v-model="local.denoise.star_protection"
-          label="Star protection"
-          large-gap
-          :min="STAR_PROTECTION_LIMITS.min"
-          :max="STAR_PROTECTION_LIMITS.max"
-          :step="STAR_PROTECTION_LIMITS.step"
-          :format-value="formatPercent"
-          :help="HELP.denoise_star_protection"
-          @change="apply('denoise')"
-      />
-    </div>
   </div>
 </template>

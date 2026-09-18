@@ -15,10 +15,10 @@ use super::capture_mode::CaptureMode;
 use super::settings::CaptureSettings;
 use super::types::CaptureState;
 
-/// The six booleans Focus/Finder mode forces off, as they were before it did.
+/// The six settings Focus/Finder mode forces off, as they were before it did.
 ///
 /// Stored rather than recomputed because there is nothing to recompute from:
-/// once the live values are `false` they no longer say what the observer chose.
+/// once the live values are off they no longer say what the observer chose.
 ///
 /// Every field is `#[serde(default)]` on purpose: a snapshot that fails to parse takes
 /// the whole `PersistedSettings` down with it and `load()` then returns `None`, resetting
@@ -26,7 +26,7 @@ use super::types::CaptureState;
 /// than `false`, so a field missing from an older file restores the correction rather
 /// than silently disabling it — five of the six are on by default. A file written while
 /// the mode also managed `hot_pixel_rejection` still carries that key; it is ignored.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FocusModeSnapshot {
     #[serde(default = "default_on")]
     pub background_subtraction: bool,
@@ -36,14 +36,30 @@ pub struct FocusModeSnapshot {
     pub fpn_removal: bool,
     #[serde(default = "default_on")]
     pub denoise_chroma: bool,
-    #[serde(default = "default_on")]
-    pub denoise_luma: bool,
+    /// The wavelet's strength, since that is now what turns it off — there is no
+    /// `luma` boolean any more. Kept as the strength rather than a boolean because
+    /// zeroing it is how the mode holds the filter off, so a boolean could not say
+    /// what to hand back.
+    #[serde(default = "default_luma_strength")]
+    pub denoise_luma_strength: f32,
+    /// The boolean this replaced, read only to migrate a file written by an older
+    /// build. Never written back — dropping it is what completes the migration.
+    ///
+    /// A separate field rather than a serde `alias`: an alias would try to read `true`
+    /// as an `f32` and fail, and a snapshot that fails to parse takes the whole
+    /// `PersistedSettings` with it, resetting every setting the observer has.
+    #[serde(default, skip_serializing)]
+    pub denoise_luma: Option<bool>,
     #[serde(default = "default_on")]
     pub dither: bool,
 }
 
 fn default_on() -> bool {
     true
+}
+
+fn default_luma_strength() -> f32 {
+    1.0
 }
 
 impl FocusModeSnapshot {
@@ -53,7 +69,8 @@ impl FocusModeSnapshot {
             saturation_boost: settings.saturation_boost,
             fpn_removal: settings.sensor_correction.fpn_removal,
             denoise_chroma: settings.denoise.chroma,
-            denoise_luma: settings.denoise.luma,
+            denoise_luma_strength: settings.denoise.luma_strength,
+            denoise_luma: None,
             dither: settings.eyepiece.dither,
         }
     }
@@ -66,7 +83,13 @@ impl FocusModeSnapshot {
         settings.saturation_boost = self.saturation_boost && saturation_boost_licensed();
         settings.sensor_correction.fpn_removal = self.fpn_removal;
         settings.denoise.chroma = self.denoise_chroma;
-        settings.denoise.luma = self.denoise_luma;
+        // An older snapshot only recorded *whether* the wavelet was on. Off is exact;
+        // on cannot say at what strength, so it restores the default — which is what
+        // that build's own "on" meant for everyone who never moved the slider.
+        settings.denoise.luma_strength = match self.denoise_luma {
+            Some(false) => 0.0,
+            _ => self.denoise_luma_strength,
+        };
         settings.eyepiece.dither = self.dither;
     }
 }
@@ -176,7 +199,10 @@ fn force_off(settings: &mut CaptureSettings) {
     settings.saturation_boost = false;
     settings.sensor_correction.fpn_removal = false;
     settings.denoise.chroma = false;
-    settings.denoise.luma = false;
+    // The strength, not the Background Grain dial: the dial also sets the tone curve's
+    // split, and this mode has no business moving the tone curve. Zeroing the strength
+    // is exactly what the old `luma` boolean did and nothing more.
+    settings.denoise.luma_strength = 0.0;
     settings.eyepiece.dither = false;
 }
 
@@ -230,7 +256,10 @@ pub fn reconcile(settings: &mut CaptureSettings) {
         &mut snapshot.fpn_removal,
     );
     absorb(&mut settings.denoise.chroma, &mut snapshot.denoise_chroma);
-    absorb(&mut settings.denoise.luma, &mut snapshot.denoise_luma);
+    if settings.denoise.luma_strength > 0.0 {
+        snapshot.denoise_luma_strength = settings.denoise.luma_strength;
+        settings.denoise.luma_strength = 0.0;
+    }
     absorb(&mut settings.eyepiece.dither, &mut snapshot.dither);
 }
 
@@ -253,7 +282,7 @@ mod tests {
         // blanket-forces it off fails.
         settings.sensor_correction.fpn_removal = true;
         settings.denoise.chroma = false;
-        settings.denoise.luma = true;
+        settings.denoise.luma_strength = 0.75;
         settings.eyepiece.dither = true;
         settings
     }
@@ -263,7 +292,7 @@ mod tests {
             && !settings.saturation_boost
             && !settings.sensor_correction.fpn_removal
             && !settings.denoise.chroma
-            && !settings.denoise.luma
+            && settings.denoise.luma_strength == 0.0
             && !settings.eyepiece.dither
     }
 
@@ -283,7 +312,7 @@ mod tests {
         settings.sensor_correction.superpixel_debayer = true;
         settings.sensor_correction.hot_pixel_sigma = 7.5;
         settings.denoise.chroma_strength = 0.25;
-        settings.denoise.star_protection = 0.4;
+        settings.denoise.background_grain = 0.8;
         settings.stacking = true;
 
         set(&mut settings, true);
@@ -291,7 +320,9 @@ mod tests {
         assert!(settings.sensor_correction.superpixel_debayer);
         assert_eq!(settings.sensor_correction.hot_pixel_sigma, 7.5);
         assert_eq!(settings.denoise.chroma_strength, 0.25);
-        assert_eq!(settings.denoise.star_protection, 0.4);
+        // The dial is unmanaged on purpose: it moves the tone curve as well as the
+        // wavelet, and the mode holds only the wavelet off.
+        assert_eq!(settings.denoise.background_grain, 0.8);
         assert!(settings.stacking);
     }
 
@@ -313,7 +344,7 @@ mod tests {
             settings.sensor_correction.fpn_removal,
             before.sensor_correction.fpn_removal
         );
-        assert_eq!(settings.denoise.luma, before.denoise.luma);
+        assert_eq!(settings.denoise.luma_strength, before.denoise.luma_strength);
         assert_eq!(settings.eyepiece.dither, before.eyepiece.dither);
     }
 
@@ -337,7 +368,7 @@ mod tests {
             before.sensor_correction.fpn_removal
         );
         assert_eq!(settings.denoise.chroma, before.denoise.chroma);
-        assert_eq!(settings.denoise.luma, before.denoise.luma);
+        assert_eq!(settings.denoise.luma_strength, before.denoise.luma_strength);
         assert_eq!(settings.eyepiece.dither, before.eyepiece.dither);
     }
 
@@ -353,7 +384,7 @@ mod tests {
             settings.background_subtraction,
             before.background_subtraction
         );
-        assert_eq!(settings.denoise.luma, before.denoise.luma);
+        assert_eq!(settings.denoise.luma_strength, before.denoise.luma_strength);
     }
 
     #[test]
@@ -523,7 +554,7 @@ mod tests {
             settings.sensor_correction.fpn_removal,
             before.sensor_correction.fpn_removal
         );
-        assert_eq!(settings.denoise.luma, before.denoise.luma);
+        assert_eq!(settings.denoise.luma_strength, before.denoise.luma_strength);
     }
 
     #[test]

@@ -116,13 +116,19 @@ stretch, so the target keeps its brightness. Measured on the reference frames:
 
 | Setting | Sky | Target contrast |
 |---|---|---|
-| 0 % | 11 and 17 levels | — |
-| −5 % | 4 and 6 levels (−64 to −65 %) | +32 % and 0 % |
-| −6 % (end stop) | 3 levels (−73 to −82 %) | +31 % and +14 % |
-| Black level at full | 7 and 8 levels (−50 %) | −62 % |
+| 0 % | 11 and 13 levels | — |
+| −3 % | 7 and 8 levels (−36 to −39 %) | +14 % and +12 % |
+| −4.5 % (end stop) | 4 levels (−64 to −69 %) | +25 % and +33 % |
+| Black level at full | About half the sky, and the target's contrast down by nearly two thirds |
 
 Those are code values. What reaches your eye falls further, because the panel
 applies its own gamma on top.
+
+The end stop is −4.5 %, and where it sits is calibrated rather than chosen: it is the
+point past which **Darker sky** would start clipping above the sky and eating the
+target instead of separating it from the background. It moved in from −6 % when the
+contrast curve was strengthened, which darkened the sky before the floor ever sees
+it — so the darkest background you can reach is unchanged.
 
 It works by dimming the sky, not by cutting it off: each pixel is darkened
 according to its small neighbourhood, so flat sky darkens evenly while stars and
