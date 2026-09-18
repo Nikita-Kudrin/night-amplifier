@@ -446,19 +446,37 @@ fn save_stacked_result(
     planetary_ctx: &Option<PlanetaryStackingContext>,
     rt: &tokio::runtime::Handle,
 ) {
-    let stacked_frame = stacking_ctx
+    // The depth travels with the frame, from the context that holds both. The saved PNG
+    // is tone-curved by it (`render::autostretch::depth_grain_gain`), so re-deriving it
+    // from the session's `stacked_count` would let the export and the live view disagree
+    // about the same stack — by the reference frame, and by anything a mid-session reset
+    // did to the counters.
+    let stacked = stacking_ctx
         .as_ref()
-        .and_then(|ctx| ctx.compute().ok())
-        .or_else(|| comet_ctx.as_ref().and_then(|ctx| ctx.compute().ok()))
-        .or_else(|| planetary_ctx.as_ref().and_then(|ctx| ctx.compute().ok()));
+        .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        .or_else(|| {
+            comet_ctx
+                .as_ref()
+                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        })
+        .or_else(|| {
+            planetary_ctx
+                .as_ref()
+                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        });
 
-    if let Some(frame) = stacked_frame {
+    if let Some((frame, depth)) = stacked {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
         let camera_info = rt.block_on(state.camera_in_role(CameraRole::Main));
         if let Some(info) = camera_info {
-            rt.block_on(storage::save_stacked_result(state, Some(frame), &info));
+            rt.block_on(storage::save_stacked_result(
+                state,
+                Some(frame),
+                depth as u32,
+                &info,
+            ));
         }
     }
 }

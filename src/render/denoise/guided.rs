@@ -8,6 +8,17 @@
 //! (`q = a*I + b` against the luminance guide) collapses smoothing exactly where the
 //! guide has structure and runs full-width elsewhere.
 //!
+//! What counts as "structure" is relative to the guide's own noise, measured per frame.
+//! The regularisation `epsilon` is the variance below which a window reads as flat; it
+//! used to be a constant `1e-4` in linear light, against a sky whose luma variance is
+//! ~1e-9 and a faint star's ~1e-8. Every window read as flat, the filter degenerated
+//! into a ~40 px box blur of chroma, and each star's colour spread into a halo that
+//! size: 32-64 px chroma noise 2-4.6x higher than with the filter off on real IMX533
+//! stacks (globular, M27), at exactly the scale a dark-adapted eye is most sensitive to.
+//! A fixed value cannot be right at every depth either — `1e-9` fixed the halos on a
+//! deep stack and let fine chroma noise back through on a single sub (0.44 -> 0.93
+//! output levels), because a single sub's guide noise is itself above it.
+//!
 //! Fast variant: coefficient solve and box means run on an `s`-times subsampled
 //! copy, only `a`/`b` upsampled back — costs `1/s²` of the full solve, visually
 //! indistinguishable since `a`/`b` are smooth by construction. Separable
@@ -27,8 +38,12 @@ pub struct ChromaDenoiseConfig {
     /// carried over from full resolution would cover a quarter of the intended
     /// area.
     pub radius: usize,
-    /// Regularization. Larger values smooth across weaker luminance edges.
-    pub epsilon: f32,
+    /// Edge threshold, in multiples of the guide's noise sigma on the subsampled grid.
+    ///
+    /// The filter's regularisation is `(noise_k * sigma)^2`, so a window whose
+    /// luminance varies by less than `noise_k` noise sigmas is smoothed across and
+    /// one with a star in it is not. Measured per frame, so it tracks stack depth.
+    pub noise_k: f32,
     /// Resolution divisor for the coefficient solve.
     pub subsample: usize,
     /// Blend between the original and filtered chroma, `0..=1`.
@@ -40,7 +55,7 @@ impl Default for ChromaDenoiseConfig {
         Self {
             enabled: true,
             radius: DEFAULT_RADIUS,
-            epsilon: DEFAULT_EPSILON,
+            noise_k: DEFAULT_NOISE_K,
             subsample: DEFAULT_SUBSAMPLE,
             strength: 1.0,
         }
@@ -50,16 +65,38 @@ impl Default for ChromaDenoiseConfig {
 /// ~8 display pixels: at 1.7 arcmin per pixel that is a quarter-degree window,
 /// which covers the mottle blobs without reaching across a star.
 pub const DEFAULT_RADIUS: usize = 8;
-/// Luminance is linear and sky-dominated here, so edges worth preserving are
-/// far above this.
-pub const DEFAULT_EPSILON: f32 = 1e-4;
+/// Swept 2026-09-17 over four real sessions (globular, both M27 sets, the 50 mm guide
+/// set) at 1, 8 and full depth, scoring fine chroma noise (2-4 px, what the filter is
+/// for) against coarse chroma (32-64 px, the halos) in output levels.
+///
+/// Fine chroma converges by 3: 0.9-1.5 at `k = 1`, 0.54-0.77 at 2, 0.48-0.67 at 3,
+/// and under 0.06 further down to `k = 8`. Coarse chroma is flat across the sweep and
+/// at or below the denoise-off figure everywhere, rising slightly past 5 as windows
+/// start reading stars as flat again.
+pub const DEFAULT_NOISE_K: f32 = 3.0;
+
+/// Regularisation floor, so a noiseless guide (synthetic frames, a flat test
+/// pattern) cannot divide by zero. Far below any real sky's guide variance.
+const MIN_EPSILON: f32 = 1e-14;
+
+/// Per-window regularisation floor, relative to the window's squared mean.
+///
+/// `var = E[I^2] - mean^2` in f32 leaves rounding residue of order `mean^2 * 1e-7`
+/// even on a perfectly flat window, and `cov` carries the same — which a noise-scaled
+/// epsilon on a noiseless guide no longer swamps, so the coefficient became the ratio
+/// of two rounding errors (0.34 for 0.30 across a clean colour edge). A real sky
+/// (mean 0.002, guide variance ~1e-10 after subsampling) sits well above this.
+const ROUNDING_FLOOR: f32 = 1e-6;
+
+/// Guide samples read for the noise estimate. The MAD converges long before this.
+const NOISE_SAMPLES: usize = 16_384;
 pub const DEFAULT_SUBSAMPLE: usize = 4;
 
 impl ChromaDenoiseConfig {
     pub const OFF: Self = Self {
         enabled: false,
         radius: DEFAULT_RADIUS,
-        epsilon: DEFAULT_EPSILON,
+        noise_k: DEFAULT_NOISE_K,
         subsample: DEFAULT_SUBSAMPLE,
         strength: 1.0,
     };
@@ -121,6 +158,7 @@ impl Guide {
         }
 
         let small = box_subsample(luma, width, height, subsample);
+        let epsilon = guide_epsilon(&small, sw, sh, config.noise_k);
         // The radius shrinks with the subsample so the window covers the same
         // area of the image. A window narrower than one sample would make the
         // filter an identity and defeat the stage.
@@ -147,7 +185,7 @@ impl Guide {
             height,
             subsample,
             radius,
-            epsilon: config.epsilon.max(0.0),
+            epsilon,
         })
     }
 
@@ -172,7 +210,10 @@ impl Guide {
         // `a` holds `corr_Ip` on the way in and the coefficient on the way out;
         // `b` holds the window mean of `I * p` and then the intercept.
         for k in 0..ns {
-            let coeff = (b[k] - self.mean_i[k] * mean_p[k]) / (self.var_i[k] + self.epsilon);
+            let epsilon = self
+                .epsilon
+                .max(self.mean_i[k] * self.mean_i[k] * ROUNDING_FLOOR);
+            let coeff = (b[k] - self.mean_i[k] * mean_p[k]) / (self.var_i[k] + epsilon);
             a[k] = coeff;
             b[k] = mean_p[k] - coeff * self.mean_i[k];
         }
@@ -224,6 +265,40 @@ impl Guide {
                     row_cr[x] += amount * (q_cr - row_cr[x]);
                 }
             });
+    }
+}
+
+/// The regularisation for a guide: `(noise_k * sigma)^2`, with sigma the guide's noise
+/// read from horizontally adjacent differences.
+///
+/// Differences rather than deviations from a mean so gradients, the target and the
+/// background model's residuals drop out; MAD so the stars that do land on a pair
+/// cannot drag it. Adjacent samples of the subsampled guide are box means of disjoint
+/// blocks, so their noise is close to independent and `diff / sqrt(2)` is the sigma.
+fn guide_epsilon(small: &[f32], sw: usize, sh: usize, noise_k: f32) -> f32 {
+    if sw < 2 || sh == 0 {
+        return MIN_EPSILON;
+    }
+    let pairs = (sw - 1) * sh;
+    let stride = (pairs / NOISE_SAMPLES).max(1);
+    let mut diffs: Vec<f32> = (0..pairs)
+        .step_by(stride)
+        .map(|i| {
+            let (y, x) = (i / (sw - 1), i % (sw - 1));
+            let row = &small[y * sw..][..sw];
+            (row[x + 1] - row[x]).abs()
+        })
+        .filter(|d| d.is_finite())
+        .collect();
+    if diffs.is_empty() {
+        return MIN_EPSILON;
+    }
+    let sigma = crate::statistics::fast_median(&mut diffs) * 1.4826 / std::f32::consts::SQRT_2;
+    let epsilon = (noise_k.max(0.0) * sigma).powi(2);
+    if epsilon.is_finite() {
+        epsilon.max(MIN_EPSILON)
+    } else {
+        MIN_EPSILON
     }
 }
 
@@ -418,6 +493,72 @@ mod tests {
                 original[y * w + 3 * w / 4]
             );
         }
+    }
+
+    /// A faint coloured star on a deep-stack sky: luma noise 3e-5, star peak 2e-3.
+    /// Both are far below the `1e-4` epsilon this filter used to hold constant, which
+    /// read every window as flat and spread the star's colour into a ~40 px halo.
+    fn faint_star_ring_bleed(noise_k: f32) -> (f32, f32) {
+        let (w, h) = (128, 128);
+        let (cx, cy) = (64.0f32, 64.0f32);
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut rng = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state >> 40) as f32 / 16777216.0) - 0.5
+        };
+        let mut luma = vec![0.0f32; w * h];
+        let mut cb = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let r2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
+                let star = 2e-3 * (-r2 / 4.0).exp();
+                // Uniform noise of this width has sigma 3e-5.
+                luma[y * w + x] = 0.002 + star + rng() * 1.04e-4;
+                cb[y * w + x] = 0.3 * star;
+            }
+        }
+        let mut cr = cb.clone();
+        let config = ChromaDenoiseConfig {
+            noise_k,
+            ..Default::default()
+        };
+        denoise_chroma(&luma, &mut cb, &mut cr, w, h, &config);
+
+        let core = cb[64 * w + 64];
+        let (mut sum, mut n) = (0.0f32, 0);
+        for y in 0..h {
+            for x in 0..w {
+                let r = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+                if (8.0..20.0).contains(&r) {
+                    sum += cb[y * w + x].abs();
+                    n += 1;
+                }
+            }
+        }
+        (core, sum / n as f32)
+    }
+
+    #[test]
+    fn a_faint_star_keeps_its_colour_to_itself() {
+        let (core, ring) = faint_star_ring_bleed(DEFAULT_NOISE_K);
+        assert!(core > 3e-4, "the star lost its colour: core cb {core}");
+        assert!(
+            ring < core * 0.005,
+            "star colour bled into the sky around it: ring {ring} against core {core}"
+        );
+    }
+
+    /// Guards the test above against passing vacuously: a regularisation far above the
+    /// star's own variance (the old constant) must show the halo it is looking for.
+    #[test]
+    fn an_oversized_regularisation_does_bleed_star_colour() {
+        let (core, ring) = faint_star_ring_bleed(1e4);
+        assert!(
+            ring > core * 0.01,
+            "expected the box-blur halo: ring {ring} against core {core}"
+        );
     }
 
     /// A constant chroma plane has nothing to remove, and the box means must not

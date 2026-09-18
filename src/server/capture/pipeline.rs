@@ -440,6 +440,10 @@ pub fn process_preview_frame_with_analysis(
     .entered();
 
     let mut pipeline_config = get_render_pipeline_config(settings, false);
+    // How deep the stack is decides how much of its noise reduction the stretch
+    // spends on a calmer sky (`render::autostretch::depth_grain_gain`). Set here
+    // rather than in `get_render_pipeline_config`, which only sees settings.
+    pipeline_config.stretch_config.stack_depth = ctx.stack_depth.max(1);
 
     let reused = analysis.begin_frame(
         ctx,

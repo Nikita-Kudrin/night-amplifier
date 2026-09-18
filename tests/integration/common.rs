@@ -392,6 +392,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "stack-depth-dumbbell",
         "https://drive.usercontent.google.com/download?id=1MKQqxU3QSqWqg2wjGuLXmRhTW-iTaCVm&export=download&confirm=t",
     ),
+    // The whole 106-sub M27 session (IMX533, 5 s, 250 mm Dob), cropped to 1024x1024 on an
+    // even origin around the nebula. The depth is the point and 16 subs cannot stand in
+    // for it: the tone curve's depth gain only stops paying once a real session's sigma
+    // stops falling as sqrt(N), which happens past ~32 frames (`stack_depth_grain_tests`).
+    (
+        "deep-stack-dumbbell-106",
+        "https://drive.usercontent.google.com/download?id=1WSXWaRnIxQ6zX3faFdXV3wZsrHOFIEMe&export=download&confirm=t",
+    ),
     // 12 subs of a globular (IMX533, 6 s) from the 2026-09-14 session that rendered blocky
     // at the eyepiece, cropped to 2048x2048 on an even origin around the cluster.
     // `eyepiece_globular_regression` (Pro) asserts the downsample lattice, black-floor
@@ -401,6 +409,33 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
     ),
 ];
+
+/// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.
+///
+/// The set is registered at the same time as the test that needs it, so the two cannot
+/// drift apart; replacing this in the URL is the only step left. A test reaching a
+/// pending set must fail — see [`missing_fixture_message`] — never skip.
+pub const PENDING_UPLOAD: &str = "PENDING_UPLOAD";
+
+fn is_pending_upload(url: &str) -> bool {
+    url.contains(PENDING_UPLOAD)
+}
+
+/// Why `name` is not on disk, said in a way that names the next action.
+pub fn missing_fixture_message(name: &str) -> String {
+    let pending = DEFAULT_FIXTURES
+        .iter()
+        .any(|(set, url)| *set == name && is_pending_upload(url));
+    if pending {
+        format!(
+            "fixture {name} is registered in DEFAULT_FIXTURES as {PENDING_UPLOAD}: the archive \
+             exists but has not been uploaded, so replace the placeholder id with the real \
+             download link"
+        )
+    } else {
+        format!("fixture {name} is missing or too short to stack")
+    }
+}
 
 /// Downloads and extracts test fixture datasets from Google Drive.
 ///
@@ -439,6 +474,14 @@ pub async fn ensure_fixtures(names: Option<&[&str]>) {
     for (name, url) in fixtures {
         let dir_path = fixtures_dir.join(name);
         if dir_path.exists() {
+            continue;
+        }
+        if is_pending_upload(url) {
+            // Registered, cut, not published yet. Nothing to fetch, and retrying three
+            // times to save Google Drive's error page as a zip helps nobody. The tests
+            // that want it fail on their own with a message naming this state — the one
+            // thing that must not happen is their passing without the data.
+            println!("Fixture {name} is registered but not published yet (PENDING_UPLOAD)");
             continue;
         }
 

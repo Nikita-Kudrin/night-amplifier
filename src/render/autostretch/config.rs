@@ -11,16 +11,33 @@ pub enum StretchAggressiveness {
     High,
 }
 
+/// A frame that is not a stack, which is what every non-live caller renders.
+fn default_stack_depth() -> u32 {
+    1
+}
+
 /// Configuration for the automatic stretch factor solver
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AutoStretchConfig {
     pub target_background: f32,
+    /// Sigmas below the sky to put the black point, *before* the solve scales it.
+    ///
+    /// `compute_auto_stretch_with_algorithm` adapts it down on a signal-heavy frame
+    /// and up with `logic::depth_grain_gain`, so the factor actually applied is not
+    /// this number: `with_black_point_sigma` bounds this at 5.0, and the product is
+    /// bounded separately. `AutoStretchResult::adaptive_sigma` is what was used.
     pub black_point_sigma: f32,
     pub min_stretch: f32,
     pub max_stretch: f32,
     pub tolerance: f32,
     pub max_iterations: u32,
     pub per_channel_black_point: bool,
+    /// Frames in the stack this solve is for, or 1 for a single frame.
+    ///
+    /// Sets how much of the stack's noise reduction is spent on a calmer sky rather
+    /// than on brighter faint signal; see `logic::depth_grain_gain`.
+    #[serde(default = "default_stack_depth")]
+    pub stack_depth: u32,
     pub tone_mapping: ToneMappingAlgorithm,
     pub color_intensity: f32,
 }
@@ -35,6 +52,7 @@ impl Default for AutoStretchConfig {
             tolerance: 0.001,
             max_iterations: 50,
             per_channel_black_point: false,
+            stack_depth: default_stack_depth(),
             tone_mapping: ToneMappingAlgorithm::default(),
             color_intensity: 1.0,
         }
@@ -63,6 +81,12 @@ impl AutoStretchConfig {
 
     pub fn with_max_stretch(mut self, max: f32) -> Self {
         self.max_stretch = max.max(self.min_stretch);
+        self
+    }
+
+    /// The stack depth this solve is for; see [`Self::stack_depth`].
+    pub fn with_stack_depth(mut self, frames: u32) -> Self {
+        self.stack_depth = frames.max(1);
         self
     }
 
@@ -108,6 +132,7 @@ impl AutoStretchConfig {
             tolerance: 0.001,
             max_iterations: 50,
             per_channel_black_point: false,
+            stack_depth: default_stack_depth(),
             tone_mapping: ToneMappingAlgorithm::Asinh,
             color_intensity: 1.0,
         }

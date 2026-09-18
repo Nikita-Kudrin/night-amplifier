@@ -66,20 +66,21 @@ How dark the background sky is pushed. Raising it darkens the sky and lifts the
 contrast of the target — and it also pushes more of the sky's noise below black,
 so the background looks smoother as well as darker.
 
-That last part is worth knowing about, because it is the *only* thing in the
-stretch that changes how grainy the sky looks. More frames in the stack will not
-do it: the auto-stretch solves for a fixed background level, so as stacking
-lowers the noise the stretch amplifies harder by exactly the compensating amount.
-Thirty-five frames look as grainy as one. Depth in the target is what stacking
-buys you; smoothness comes from this slider and from
-[Noise Reduction](/noise-reduction).
+This slider is not the only thing that calms the sky any more. A deeper stack
+does it too: the auto-stretch now spends part of what stacking buys on a quieter
+background and the rest on the target, instead of all of it on the target. Sixteen
+frames render about half the grain of one, sixty-four about a third, and the target
+keeps growing the whole time. It stops there: past sixty-four frames a real
+session's noise no longer falls fast enough to pay for both, so everything beyond
+that goes to the target.
 
-::: warning Changed direction
-This slider used to move the black point the *other* way, so pushing it up made
-the sky grainier and clipped more of it to pure black — the opposite of what it
-described. If you had it set high from an earlier version, expect a darker,
-smoother sky at the same setting now, and turn it down if the faint outskirts of
-your target have gone.
+::: warning Changed behaviour
+Two things moved here. The slider used to push the black point the *other* way,
+so raising it made the sky grainier and clipped more of it to pure black — the
+opposite of what it described. And deep stacks used to look exactly as grainy as
+single frames. If you kept this slider high to get a smooth sky out of an earlier
+version, expect a darker, smoother one at the same setting now, and turn it down
+if the faint outskirts of your target have gone.
 :::
 
 ## Black floor

@@ -8,7 +8,58 @@ use crate::statistics::ImageStats;
 
 /// Smallest sky-above-black gap the solver will be asked to stretch, keeping the
 /// stretch factor finite when the sky sits on the black point.
-const MIN_EFFECTIVE_MEDIAN: f32 = 1e-4;
+///
+/// A numerical guard and nothing more. It used to be `1e-4` — about 6.5 ADU of a
+/// 16-bit frame — which on an IMX533 deep-sky stack is larger than `k * sigma` from
+/// roughly 16 subs on, so past that depth the floor, not the solve, set the black
+/// point. That accident was the only reason a deeper stack ever looked smoother
+/// (grain 4.4 -> 1.5 output levels over 106 subs, falling as sigma once floored),
+/// and it arrived at whatever depth the camera's gain happened to put sigma below
+/// it. `depth_grain_gain` does that deliberately instead.
+///
+/// `1e-5` — 0.65 ADU — rather than smaller: `solve_stretch_factor_newton` treats a gap
+/// of `1e-6` or less as degenerate and returns an identity stretch, so the floor has to
+/// stay clear of it. Real gaps are far above either: ~2.9e-4 on a single IMX533 sub and
+/// ~1.6e-4 at 106 frames with the depth gain applied.
+const MIN_EFFECTIVE_MEDIAN: f32 = 1e-5;
+
+/// Stack depth past which the sky stops getting calmer.
+///
+/// The split below is only affordable while the stack's noise really is falling as
+/// `sqrt(N)`. It is not, deep into a real session — rejection, drift and a sky that
+/// changes all take from it. On the 106-sub IMX533 set sigma falls as `N^0.41` over
+/// the first 32 subs and as `N^0.19` from there to 106, and once that exponent drops
+/// below the 0.25 this spends, the target starts paying for the sky: rendered target
+/// contrast peaked at 32 subs and fell 77 -> 69 output levels by 106. Stopping at 64
+/// keeps the whole sweep inside what the stack delivers (`N^0.37` over 1-64) and hands
+/// everything past it to the target. Guarded by `stack_depth_grain_tests`.
+const MAX_GAIN_DEPTH: f32 = 64.0;
+
+/// Ceiling on the black point factor the solve may actually use.
+///
+/// `with_black_point_sigma` clamps to 5.0, and the depth gain then multiplies it, so
+/// the product is what has to be bounded — not the setting. 5.0 x `MAX_GAIN_DEPTH^0.25`,
+/// stated once rather than left to be discovered from two constants.
+const MAX_EFFECTIVE_SIGMA: f32 = 5.0 * 2.828_427;
+
+/// How much wider than `black_point_sigma` the black point sits, for a stack of
+/// `frames`.
+///
+/// Stacking `N` frames buys `sqrt(N)` in signal-to-noise. Under a scale-invariant
+/// tone curve all of it goes to faint-signal contrast and none to the sky: the MTF
+/// solve pins `mtf(k * sigma) = target_background`, so displayed sky grain is
+/// `T(1-T)/k` whatever sigma is, and the sky looks exactly as grainy at 100 subs as
+/// at one (measured: 4.2 output levels at 1 sub, 4.4 at 8).
+///
+/// This splits the gain evenly instead — `k` grows as `N^(1/4)`, so displayed grain
+/// falls as `N^(-1/4)` and faint-signal contrast rises as `N^(1/4)` for as long as the
+/// stack's own noise falls as `sqrt(N)`; see `MAX_GAIN_DEPTH` for where it stops. Their
+/// ratio is `sqrt(N)` either way; only the split is a choice. A wider black point
+/// clips nothing: it sits *further below* the sky, so the faintest signal is dimmer
+/// but still above black.
+pub fn depth_grain_gain(frames: u32) -> f32 {
+    (frames.max(1) as f32).min(MAX_GAIN_DEPTH).powf(0.25)
+}
 
 pub fn compute_auto_stretch(
     frame: &Frame,
@@ -30,13 +81,14 @@ pub fn compute_auto_stretch_with_algorithm(
 
     let signal_fraction = estimate_signal_fraction(&background.luminance_samples, mode, mean_sigma);
 
-    let adaptive_sigma = if signal_fraction > 0.4 {
+    let adaptive_sigma = (if signal_fraction > 0.4 {
         (config.black_point_sigma * 0.6).max(1.5)
     } else if signal_fraction > 0.2 {
         config.black_point_sigma * 0.8
     } else {
         config.black_point_sigma
-    };
+    } * depth_grain_gain(config.stack_depth))
+    .min(MAX_EFFECTIVE_SIGMA);
 
     // Floor the gap, then derive the black point from it.
     //
@@ -57,6 +109,7 @@ pub fn compute_auto_stretch_with_algorithm(
         mode,
         mean_sigma,
         signal_fraction,
+        stack_depth = config.stack_depth,
         adaptive_sigma,
         black_point,
         effective_median,
@@ -133,6 +186,7 @@ pub fn compute_auto_stretch_with_algorithm(
         target_background,
         midtones,
         black_point,
+        adaptive_sigma,
         original_median: mode,
         adjusted_median: effective_median,
         iterations: 0,
@@ -144,6 +198,124 @@ pub fn compute_auto_stretch_with_algorithm(
 mod tests {
     use super::*;
     use crate::statistics::compute_image_stats;
+
+    #[test]
+    fn depth_grain_gain_grows_as_the_fourth_root_and_stops() {
+        let ceiling = MAX_GAIN_DEPTH.powf(0.25);
+        assert!((depth_grain_gain(1) - 1.0).abs() < 1e-6);
+        assert!((depth_grain_gain(0) - 1.0).abs() < 1e-6, "an unknown depth is one frame");
+        assert!((depth_grain_gain(16) - 2.0).abs() < 1e-5);
+        assert!((depth_grain_gain(64) - ceiling).abs() < 1e-5);
+        assert!(
+            (depth_grain_gain(10_000) - ceiling).abs() < 1e-5,
+            "the gain must stop so a very deep stack keeps growing its target"
+        );
+    }
+
+    /// The setting is clamped, the gain multiplies it, and the *product* is what places
+    /// the black point — so that is what has to be bounded. Left unbounded the two
+    /// clamps have to be read together to know the real ceiling, which is how a factor
+    /// documented as 1.5-3.0 quietly became 20.
+    #[test]
+    fn the_black_point_factor_the_solve_uses_has_a_stated_ceiling() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        let config = AutoStretchConfig::new()
+            .with_tone_mapping(ToneMappingAlgorithm::Mtf)
+            .with_black_point_sigma(99.0)
+            .with_stack_depth(100_000);
+
+        let result =
+            compute_auto_stretch_with_algorithm(&frame, &stats, config, ToneMappingAlgorithm::Mtf);
+        assert!(
+            result.adaptive_sigma <= MAX_EFFECTIVE_SIGMA + 1e-4,
+            "the solve used {} sigmas, past the stated ceiling of {MAX_EFFECTIVE_SIGMA}",
+            result.adaptive_sigma
+        );
+        assert!(
+            (result.adaptive_sigma - 5.0 * depth_grain_gain(u32::MAX)).abs() < 1e-3,
+            "the ceiling must be exactly the two clamps multiplied, not a third number"
+        );
+    }
+
+    /// A per-channel black point is subtracted from the frame the curve is solved for,
+    /// so it has to be placed at the sigma the solve used — not at the raw setting,
+    /// which at depth differs by the whole gain.
+    #[test]
+    fn the_result_reports_the_sigma_its_black_point_was_placed_at() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        let config = AutoStretchConfig::new().with_tone_mapping(ToneMappingAlgorithm::Mtf);
+
+        for depth in [1u32, 16, 64] {
+            let r = compute_auto_stretch_with_algorithm(
+                &frame,
+                &stats,
+                config.with_stack_depth(depth),
+                ToneMappingAlgorithm::Mtf,
+            );
+            let gap = r.original_median - r.black_point;
+            assert!(
+                (gap - r.adaptive_sigma * stats.mean_sigma()).abs() < 1e-6,
+                "{depth} frames: the black point sits {gap} below the sky but the result \
+                 reports {} sigmas of {}",
+                r.adaptive_sigma,
+                stats.mean_sigma()
+            );
+        }
+    }
+
+    /// The same sky at two depths: the deeper one is stretched more gently, which is
+    /// what a calmer sky is made of. Nothing else about the frame changes.
+    #[test]
+    fn a_deeper_stack_lowers_the_black_point_and_softens_the_curve() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        let config = AutoStretchConfig::new().with_tone_mapping(ToneMappingAlgorithm::Mtf);
+
+        let shallow = compute_auto_stretch_with_algorithm(
+            &frame,
+            &stats,
+            config.with_stack_depth(1),
+            ToneMappingAlgorithm::Mtf,
+        );
+        let deep = compute_auto_stretch_with_algorithm(
+            &frame,
+            &stats,
+            config.with_stack_depth(16),
+            ToneMappingAlgorithm::Mtf,
+        );
+
+        let shallow_gap = shallow.original_median - shallow.black_point;
+        let deep_gap = deep.original_median - deep.black_point;
+        let ratio = deep_gap / shallow_gap;
+        assert!(
+            (ratio - 2.0).abs() < 0.05,
+            "16 frames should double the sky-to-black gap, got {ratio:.3}x"
+        );
+        assert!(
+            deep.midtones[0] > shallow.midtones[0],
+            "the deeper stack should take the gentler curve: midtone {} against {}",
+            deep.midtones[0],
+            shallow.midtones[0]
+        );
+    }
+
+    /// A sky with per-pixel noise, which the solver needs to have any statistics at all.
+    fn noisy_sky(size: usize, level: f32, sigma: f32) -> Frame {
+        let mut seed: u32 = 12345;
+        let mut frame = Frame::zeros(size, size, 3).unwrap();
+        for y in 0..size {
+            for x in 0..size {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * sigma * 3.46;
+                    frame.set_pixel(x, y, c, level + noise);
+                }
+            }
+        }
+        frame
+    }
 
     #[test]
     fn test_compute_auto_stretch_basic() {

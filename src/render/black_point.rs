@@ -211,13 +211,90 @@ pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
     // the value returned is refined, by re-binning the samples around the winner.
     let bin_width = 1.0 / (NUM_BINS - 1) as f32;
     let window_lo = (peak_bin as f32 - 1.5) * bin_width;
-    let mode = refine_peak(&luminance_samples, window_lo, WINDOW_BINS as f32 * bin_width)
+    let peak = refine_peak(&luminance_samples, window_lo, WINDOW_BINS as f32 * bin_width)
         .unwrap_or(peak_bin as f32 / (NUM_BINS - 1) as f32);
+
+    // Then take the level from the samples the peak points at, rather than from the
+    // peak itself. Both histogram passes pick a *bin*, and on a deep stack the sky is
+    // narrow enough that the winning sub-bin stops moving with the data: on a 106-sub
+    // IMX533 session the peak returned bit-identical values at 32, 64 and 106 frames
+    // and sat 1.2 ADU above the sky, having jumped 2.1 ADU between 16 and 32 while the
+    // sky itself moved 0.2. Displayed, that was the background dropping four output
+    // levels in one stack update — in a dark eyepiece, the whole field pumping. A
+    // median over a window is continuous in the samples, so it cannot snap.
+    let mode = clipped_centre(&luminance_samples, peak).unwrap_or(peak);
 
     BackgroundEstimate {
         mode,
         luminance_samples,
     }
+}
+
+/// Half-width of the window the sky level is taken from, in robust sigmas of the
+/// luminance samples. Wide enough to hold the sky's own distribution, tight enough to
+/// leave the stars and the target outside it.
+const CENTRE_WINDOW_SIGMAS: f32 = 2.5;
+
+/// Samples that must fall in that window before its median is trusted over the peak.
+const CENTRE_MIN_SAMPLES: usize = 64;
+
+/// Samples either median reads. The median of a sky converges long before this: 8 192
+/// samples place it to `1.25 * sigma / sqrt(n)`, 0.02 ADU on a deep stack. Above it
+/// the two selections cost more than the refinement they follow.
+const CENTRE_MAX_SAMPLES: usize = 8192;
+
+/// Median of the samples within `CENTRE_WINDOW_SIGMAS` of `peak`.
+///
+/// The spread comes from the samples **below** the peak only. A MAD over every sample
+/// is robust while what contaminates it is a minority, and a target filling the frame
+/// is not: the window then sizes itself around the *target's* spread, swallows it, and
+/// the median lands on the target. Measured on a halo covering 69 % of the frame the
+/// answer went 1.4 ADU off the sky to 7.3; on a 75 % ramp, 349. A target is brighter
+/// than the sky it sits on, so the sky's lower half is the half it cannot reach.
+///
+/// `select_nth_unstable`, not `statistics::fast_median`, which `par_sort_unstable`s
+/// anything above 4 096 — three of those per frame took `estimate_background_mode`
+/// from 0.50 ms to 1.62 ms, above the sort `refine_peak` exists to avoid.
+fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
+    if samples.len() < CENTRE_MIN_SAMPLES {
+        return None;
+    }
+    let stride = (samples.len() / CENTRE_MAX_SAMPLES).max(1);
+    let mut below: Vec<f32> = samples
+        .iter()
+        .step_by(stride)
+        .filter(|&&v| v <= peak)
+        .map(|&v| peak - v)
+        .collect();
+    if below.len() < CENTRE_MIN_SAMPLES {
+        return None;
+    }
+    let sigma = select_median(&mut below) * 1.4826;
+    if !(sigma > 0.0) || !sigma.is_finite() {
+        return None;
+    }
+
+    let window = CENTRE_WINDOW_SIGMAS * sigma;
+    let mut kept: Vec<f32> = samples
+        .iter()
+        .step_by(stride)
+        .copied()
+        .filter(|v| (v - peak).abs() <= window)
+        .collect();
+    if kept.len() < CENTRE_MIN_SAMPLES {
+        return None;
+    }
+    Some(select_median(&mut kept))
+}
+
+/// Median by selection, reordering `values`. Panics on an empty slice; both callers
+/// have already refused one shorter than `CENTRE_MIN_SAMPLES`.
+fn select_median(values: &mut [f32]) -> f32 {
+    let mid = values.len() / 2;
+    values.select_nth_unstable_by(mid, |a, b| {
+        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater)
+    });
+    values[mid]
 }
 
 /// Coarse bins spanned by the refinement window: the winning bin, one below, two above.

@@ -15,8 +15,9 @@ mod white_balance;
 
 // Re-export all public items from submodules
 pub use autostretch::{
-    auto_stretch_default, auto_stretch_frame, compute_auto_stretch, solve_stretch_factor,
-    solve_stretch_factor_newton, AutoStretchConfig, AutoStretchResult, StretchAggressiveness,
+    auto_stretch_default, auto_stretch_frame, compute_auto_stretch, depth_grain_gain,
+    solve_stretch_factor, solve_stretch_factor_newton, AutoStretchConfig, AutoStretchResult,
+    StretchAggressiveness,
 };
 pub use black_point::{
     calculate_black_point, calculate_black_points, calculate_luminance_black_point,

@@ -61,6 +61,17 @@ If you can't fix the test, don't try to simplify if by removing the idea of the 
 Tests might run a minute or two - you should wait for them to finish. Benches migth run even longer.
 **Do not run benchmarks at the same time with other tests and tasks - this may affect the performance metrics.**
 
+## Fixture sets (`tests/integration/common.rs`)
+
+Real-data sets live in `DEFAULT_FIXTURES` and download on demand; `tests/fixtures/` is gitignored.
+A test wanting one calls `stack_depth_grain_tests::managed_session`, which **panics** when it cannot
+be had — never `println!` + return, or the suite reports green with the assertion unrun.
+
+A set cut but not yet uploaded is registered with `PENDING_UPLOAD` in place of the Drive id: the
+download is skipped (three retries saving an HTML error page help nobody) and
+`missing_fixture_message` tells whoever hits it to paste the real link. Registering the set with the
+test that needs it is what stops the two drifting apart.
+
 ## Benchmark sizing
 
 Every case reports **≥~100ms** (below that, criterion overhead and thermal throttling dominate); every bench binary
@@ -520,6 +531,13 @@ memory traffic. ~17ms combined at 1440² (20-core x86).
 - Off fuses per-row; either filter on stages the whole image as f32 first (cross-row access).
 - Thresholds `k=[0,3,2,1]` get weaker at finer scale on purpose — coarse-heavy denoising erases
   real nebula structure.
+- The guided filter's regularisation is **`noise_k` sigmas of its own guide, measured per frame**,
+  not a constant. It was a fixed `1e-4` in linear light against a sky whose guide variance is
+  ~1e-9: every window read as flat, the filter degenerated into a ~40 px box blur of chroma, and
+  star colour bled into halos that raised 32-64 px chroma noise **above** the unfiltered sky
+  (2-4.6x on real IMX533 stacks) — the "blotches" reported at the eyepiece. Swept over four
+  sessions; fine chroma converges by `k=3`. Pinned by `sky_blotch_tests.rs` and
+  `guided.rs::a_faint_star_keeps_its_colour_to_itself`.
 - `k[0]` (grain) is user-exposed as `star_protection`; off by default, ceiling reaches ~7x
   noise reduction.
 - Skipped for `StackingType::Planetary` — lucky imaging needs the detail this removes.
@@ -548,10 +566,34 @@ because parallel 8-bit conversions have drifted by an LSB here before.
   0, which OLEDs show as speckle.
 - **`dither`**: sub-LSB ordered dither before rounding (replaced a post-round version with
   visible crosshatch). Indexed in **output**, not input, coordinates, or resampling would
-  average it away. Matrix is **8x8**: 4x4's ~7 arcmin period is still eye-resolvable.
+  average it away. Matrix is **8x8**: 4x4's ~7 arcmin period is still eye-resolvable. The tile
+  repeats every 8 px but its *energy* does not live there — measured, the dispersed-dot matrix
+  holds 93.8 % of its power in the top eighth of the spectrum and 0.3 % below half Nyquist,
+  where void-and-cluster blue noise of the same tile ran 61 % / 2.4 %. Blue noise was tried on
+  the theory that the 8 px repeat sat in the eye's best band and was **rejected** on that
+  measurement; `the_dither_keeps_its_energy_near_nyquist` is the guard any replacement must beat.
 
-`black_point_sigma` is scale-invariant (grain doesn't shrink with stack depth), so the eyepiece
-slider interpolates it *upward*, not down.
+`black_point_sigma` alone is scale-invariant: the MTF solve pins `mtf(k*sigma) = target_background`,
+so displayed grain is `T(1-T)/k` whatever sigma is and a 100-frame stack looks as grainy as one
+(4.2 output levels at 1 sub, 4.4 at 8). `autostretch::depth_grain_gain` scales `k` by `N^(1/4)`,
+splitting the stack's `sqrt(N)` evenly: grain falls as `N^(-1/4)`, faint-signal contrast rises as
+`N^(1/4)`. The stack depth reaches the solve through `AnalysisContext::stack_depth`, so **any**
+renderer of a stack has to pass it — `render_stacked_png` takes it from the context that holds the
+frame, never from `stacked_count`, and the live-vs-export parity test only catches a caller that
+forgets it entirely. The eyepiece slider still interpolates `black_point_sigma` *upward*, not down.
+
+- **`MAX_GAIN_DEPTH` is 64**, because the split is only affordable while the stack's own noise falls
+  as `sqrt(N)` — and it does not, deep into a real session. On the 106-sub IMX533 set sigma falls as
+  `N^0.41` to 32 subs and `N^0.19` from there; once that drops below the 0.25 the gain spends, the
+  target pays: at 256 the rendered target peaked at 32 subs and gave back 77 → 69 output levels by
+  106. At 64 the same sweep rises 42 → 94 with no give-back. `stack_depth_grain_tests` asserts in
+  levels, not percent — a 96 px block median quantises to whole levels, and a percentage bound loose
+  enough for one is loose enough for the defect (4.6 % slipped through).
+- The factor the solve really uses is `AutoStretchResult::adaptive_sigma`, not the setting: the
+  signal-fraction gates scale it down and the depth gain up. A caller placing a black point of its
+  own (`per_channel_black_point`) must use that, or it subtracts a different gap from the one the
+  curve was solved for. `MAX_EFFECTIVE_SIGMA` bounds the product, since two clamps multiplied are
+  not a stated ceiling.
 
 ### The darkening half of the black floor (`render::output::{sky_shadow, shadow_floor}`)
 
@@ -690,6 +732,28 @@ sigma (2e-5); two sample points found the quantisation but neither plateau posit
 The same depth trap hits anything derived from `sigma` (`estimate_signal_fraction` stopped binning too) and the solver's
 floor: floor the sky-above-black gap once and derive the black point from it — flooring only the solver's input had it
 stretch for a sky 1.75x brighter, growing with depth. Pinned in `black_point_tests.rs` and `autostretch/logic.rs`.
+
+Both histogram passes pick a *bin*, so the sky level is taken from the **samples** the refined peak
+points at (`clipped_centre`, a median within 2.5 robust sigmas). Without it the peak stops moving
+with the data once the sky is narrow: bit-identical at 32, 64 and 106 subs of one session, 1.2 ADU
+above the sky, after jumping 2.1 ADU between 16 and 32 while the sky moved 0.2 — four output levels
+of background step in one stack update, which at the eyepiece is the whole field pumping.
+
+That window's spread comes from the samples **below** the peak only, and its two medians are
+`select_nth_unstable`, not `statistics::fast_median`. Both are load-bearing:
+
+- A MAD over *every* sample is robust only while the contaminant is a minority, and a frame-filling
+  halo is not — the window then sizes itself around the target, swallows it, and the median lands
+  inside it (+7 ADU at 69 % cover, +349 on a 75 % ramp, against a peak 1.4 ADU off). A target is
+  brighter than its sky, so the sky's lower half is the half it cannot reach. Guarded synthetically
+  by `a_frame_filling_target_does_not_drag_the_sky_estimate` and on real sky by
+  `sky_estimate_tests` (real stack, synthetic target, so the answer is known).
+- `fast_median` `par_sort_unstable`s anything ≥ 4096. Three of those per frame over ~50k samples
+  took `estimate_background_mode` 0.50 → 1.62 ms — past the 1.40 ms sort `refine_peak` exists to
+  avoid. Selection plus a `CENTRE_MAX_SAMPLES` (8192) stride is back at 0.51 ms.
+`MIN_EFFECTIVE_MEDIAN` is `1e-5`, a numerical guard only: at `1e-4` it, not the solve, set the black
+point past ~16 subs on an IMX533, which is where the pre-`depth_grain_gain` "deep stacks look
+smoother" behaviour actually came from.
 
 ### Phase 10: Shadow Saturation Boost (Optional)
 

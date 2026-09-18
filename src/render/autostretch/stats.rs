@@ -11,6 +11,17 @@ pub struct AutoStretchResult {
     pub target_background: f32,
     pub midtones: [f32; 3],
     pub black_point: f32,
+    /// Sigmas below the sky the black point was placed at — `black_point_sigma` after
+    /// the signal-fraction adaptation and `logic::depth_grain_gain`.
+    ///
+    /// Reported because a caller that subtracts a black point of its own has to use
+    /// this one. `auto_stretch_frame`'s per-channel path built its own from the raw
+    /// setting, which at depth disagreed with the curve solved against this by the
+    /// whole depth gain — the "solved for a sky 1.75x brighter than the one it
+    /// rendered" failure that flooring `effective_median` alone once caused.
+    ///
+    /// `0.0` from `solver`'s own results, which place no black point.
+    pub adaptive_sigma: f32,
     pub original_median: f32,
     pub adjusted_median: f32,
     pub iterations: u32,
