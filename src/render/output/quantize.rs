@@ -348,6 +348,61 @@ mod tests {
         }
     }
 
+    /// Share of the dither's energy below `cycles` cycles per `side`-pixel tile, by
+    /// direct DFT.
+    ///
+    /// Measured 2026-09-17 while considering blue noise in this matrix's place, on the
+    /// theory that an 8-pixel repeat puts the pattern at ~4.7 cycles per degree on the
+    /// eyepiece screen, near the peak of a dark-adapted eye's contrast sensitivity. The
+    /// measurement says otherwise and is kept as the guard: a dispersed-dot ordered
+    /// matrix holds 93.8 % of its energy in the top eighth of the spectrum and 0.3 %
+    /// below half Nyquist, where void-and-cluster blue noise of the same tile size ran
+    /// 61 % and 2.4 %. The tile repeats every 8 px; its *energy* does not live there.
+    ///
+    /// Any replacement pattern has to beat this, not merely look more random.
+    fn low_frequency_share(pattern: &dyn Fn(usize, usize) -> f32, side: usize, cycles: usize) -> f64 {
+        let mut low = 0.0f64;
+        let mut total = 0.0f64;
+        for u in 0..side {
+            for v in 0..side {
+                if u == 0 && v == 0 {
+                    continue; // the mean, which the matrix holds at zero
+                }
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for y in 0..side {
+                    for x in 0..side {
+                        let phase = -2.0 * std::f64::consts::PI
+                            * ((u * x) as f64 + (v * y) as f64)
+                            / side as f64;
+                        let value = pattern(x, y) as f64;
+                        re += value * phase.cos();
+                        im += value * phase.sin();
+                    }
+                }
+                let power = re * re + im * im;
+                total += power;
+                // Frequencies are periodic in `side`, so fold the upper half down.
+                let fu = u.min(side - u);
+                let fv = v.min(side - v);
+                if fu * fu + fv * fv <= cycles * cycles {
+                    low += power;
+                }
+            }
+        }
+        low / total
+    }
+
+    #[test]
+    fn the_dither_keeps_its_energy_near_nyquist() {
+        const SIDE: usize = 32;
+        let share = low_frequency_share(&|x, y| dither_offset(x, y) / LSB, SIDE, SIDE / 4);
+        assert!(
+            share < 0.02,
+            "the dither must stay out of the band the eye is sharpest in: {share:.3} of \
+             its energy sits below half Nyquist"
+        );
+    }
+
     /// The dither must tile in output coordinates, so the same x within a row
     /// eight rows apart gets the same offset.
     #[test]

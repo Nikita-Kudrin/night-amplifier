@@ -473,7 +473,7 @@ mod tests {
         }
         let frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        let (rgb8, width, _height) = render_stacked_png(frame, &settings).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings, 1).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
@@ -523,11 +523,11 @@ mod tests {
 
         settings.denoise.chroma = true;
         settings.denoise.luma = true;
-        let (denoised, _, _) = render_stacked_png(noisy_frame(), &settings).unwrap();
+        let (denoised, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
 
         settings.denoise.chroma = false;
         settings.denoise.luma = false;
-        let (plain, _, _) = render_stacked_png(noisy_frame(), &settings).unwrap();
+        let (plain, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
 
         assert!(
             byte_sigma(&denoised) < byte_sigma(&plain) * 0.9,
@@ -586,9 +586,9 @@ mod tests {
         settings.denoise.luma = false;
 
         settings.background_subtraction = false;
-        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings).unwrap();
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
         settings.background_subtraction = true;
-        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings).unwrap();
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
 
         let kept = edge_difference(&kept, w as usize, h as usize).abs();
         let removed = edge_difference(&removed, w as usize, h as usize).abs();
@@ -622,7 +622,7 @@ mod tests {
         settings.denoise.chroma = true;
         settings.denoise.luma = true;
 
-        let (exported, _, _) = render_stacked_png(gradient_frame(), &settings).unwrap();
+        let (exported, _, _) = render_stacked_png(gradient_frame(), &settings, 40).unwrap();
 
         let mut live = gradient_frame();
         let (pipeline_config, stretch_result) = process_preview_frame_with_analysis(
@@ -650,12 +650,32 @@ mod tests {
 
         assert!(exported == streamed, "saved PNG bytes differ from the live render");
     }
+
+    /// The depth is a render input, not a caption. This is the half the parity test
+    /// above cannot check — it hands the same number to both sides, so it would pass
+    /// just as happily if the export took its depth from the session counters and they
+    /// disagreed with the stack by a frame or by a reset.
+    #[test]
+    fn the_saved_png_is_tone_curved_by_the_depth_it_is_given() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+        settings.denoise.chroma = false;
+        settings.denoise.luma = false;
+
+        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
+        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, 64).unwrap();
+
+        assert!(
+            shallow != deep,
+            "the same stack rendered identically at 1 and 64 frames — the export is not              passing its depth to the stretch"
+        );
+    }
 }
 
 /// Fully render a stacked frame for PNG export: the exact interleaved RGB8 bytes a
 /// live viewer at Native Streaming Resolution would see (background, stretch, saturation,
 /// contrast, spatial denoise, 8-bit quantization). Routes through
-/// `process_preview_frame` and `frame_to_rgb8_downsampled` — the render task's own
+/// `process_preview_frame_with_analysis` and `frame_to_rgb8_downsampled` — the render task's own
 /// per-frame calls, bounding box left unbounded — rather than calling
 /// `RenderPipeline::process` directly, which only knows the four *pipeline* stages;
 /// denoise and pedestal/dither live only in the streaming encoders (see AGENTS.md's
@@ -665,13 +685,26 @@ mod tests {
 fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
+    stack_depth: u32,
 ) -> crate::error::Result<(Vec<u8>, u32, u32)> {
-    use super::pipeline::process_preview_frame;
+    use super::analysis::{AnalysisContext, PreviewAnalysis};
+    use super::pipeline::process_preview_frame_with_analysis;
     use crate::error::StackError;
     use crate::server::encoding::frame_to_rgb8_downsampled;
     use crate::server::state::RenderReadyFrame;
 
-    let (pipeline_config, stretch_result) = process_preview_frame(&mut frame, settings)?;
+    // The depth is part of the render, not bookkeeping: the stretch spends it on how
+    // calm the sky is (`render::autostretch::depth_grain_gain`), so an export that left
+    // it at the default would tone-curve the same stack differently from the live view.
+    let (pipeline_config, stretch_result) = process_preview_frame_with_analysis(
+        &mut frame,
+        settings,
+        AnalysisContext {
+            showing_stack: true,
+            stack_depth,
+        },
+        &mut PreviewAnalysis::new(),
+    )?;
     let ready_frame = RenderReadyFrame {
         linear_frame: Arc::new(frame),
         pipeline_config,
@@ -686,6 +719,7 @@ fn render_stacked_png(
 pub async fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
+    stack_depth: u32,
     camera_info: &ConnectedCameraInfo,
 ) {
     use crate::fits::FitsMetadata;
@@ -742,7 +776,7 @@ pub async fn save_stacked_result(
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
-        match render_stacked_png(stacked_frame, &settings) {
+        match render_stacked_png(stacked_frame, &settings, stack_depth) {
             Ok((rgb8, width, height)) => {
                 if let Err(e) = state.disk_writer.queue_stacked_png(
                     Arc::new(rgb8),

@@ -13,7 +13,7 @@ pub mod solver;
 mod stats;
 
 pub use config::{AutoStretchConfig, StretchAggressiveness};
-pub use logic::{compute_auto_stretch, compute_auto_stretch_with_algorithm};
+pub use logic::{compute_auto_stretch, compute_auto_stretch_with_algorithm, depth_grain_gain};
 pub use solver::{solve_stretch_factor, solve_stretch_factor_newton};
 pub use stats::{estimate_signal_fraction, AutoStretchResult};
 
@@ -58,7 +58,10 @@ pub fn auto_stretch_frame(
     let mut floor_pending = !floor.is_none();
 
     if channels == 3 && config.per_channel_black_point {
-        let bp_config = BlackPointConfig::new(config.black_point_sigma);
+        // `result.adaptive_sigma`, not `config.black_point_sigma`: the curve above was
+        // solved against a gap of that many sigmas, and a subtraction using the raw
+        // setting removes a different one — by the whole depth gain on a deep stack.
+        let bp_config = BlackPointConfig::new(result.adaptive_sigma);
         let black_points = {
             let _span = tracing::info_span!("calculate_black_points").entered();
             calculate_black_points(frame, &stats, bp_config)?
@@ -189,7 +192,8 @@ pub fn prepare_auto_stretch_frame_with_stats(
     };
 
     if channels == 3 && config.per_channel_black_point {
-        let bp_config = BlackPointConfig::new(config.black_point_sigma);
+        // See `auto_stretch_frame`: the sigma the solve used, not the raw setting.
+        let bp_config = BlackPointConfig::new(result.adaptive_sigma);
         let black_points = {
             let _span = tracing::info_span!("calculate_black_points").entered();
             calculate_black_points(frame, stats, bp_config)?

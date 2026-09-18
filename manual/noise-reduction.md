@@ -39,6 +39,13 @@ On the reference IMX533 frame this alone takes visible sky noise from 6.8 to 5.7
 output levels, with integrated target brightness unchanged to within 0.2 %.
 Leave it on.
 
+What counts as an edge is measured against the noise of the frame in front of it,
+so the filter behaves the same on a single sub and on a hundred-frame stack. It
+used to use a fixed threshold, which on a deep stack was far above the frame's own
+noise: stars stopped registering as edges and their colour spread into soft
+patches across the background — the blotches you may remember on a globular
+cluster. If you ever see those again, that threshold is the first place to look.
+
 **Colour strength** controls how far the colour planes move toward the smoothed
 result. Lower it if faint colour in the target starts washing out.
 
