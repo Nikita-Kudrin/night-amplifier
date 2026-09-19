@@ -72,7 +72,7 @@ fn read_trimmed(path: impl AsRef<Path>) -> Option<String> {
 
 /// The first CPU-named thermal zone, else zone 0. `thermal_zone0` alone misleads: on a
 /// laptop it is often `acpitz`, a firmware stub that reads a constant 20 °C.
-fn cpu_temperature() -> Option<(String, f32)> {
+pub(crate) fn cpu_temperature() -> Option<(String, f32)> {
     let mut zones: Vec<(String, PathBuf)> = std::fs::read_dir("/sys/class/thermal")
         .ok()?
         .flatten()

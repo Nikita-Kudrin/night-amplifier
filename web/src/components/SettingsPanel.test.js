@@ -318,29 +318,118 @@ describe('SettingsPanel', () => {
 
             expect(wrapper.find('#preview-resolution-select').element.value).toBe('hd1080')
         })
+
+        const optionValues = (select) => select.findAll('option').map((o) => o.element.value)
+
+        it('offers every streaming resolution, defaulting to 1440p', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const select = wrapper.find('#streaming-resolution-select')
+            expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440', 'hd1080'])
+            expect(select.element.value).toBe('qhd1440')
+        })
+
+        it('sends the chosen streaming resolution as a bare value', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            await wrapper.find('#streaming-resolution-select').setValue('native')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({streaming_resolution: 'native'})
+        })
+
+        it('shows the streaming resolution the server reports', async () => {
+            const wrapper = mountSettingsPanel({settings: {streaming_resolution: 'uhd2160'}})
+            await flushPromises()
+
+            expect(wrapper.find('#streaming-resolution-select').element.value).toBe('uhd2160')
+        })
+
+        it('keeps the two resolution settings independent', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            await wrapper.find('#streaming-resolution-select').setValue('hd1080')
+            await flushPromises()
+
+            expect(updateSettings).not.toHaveBeenCalledWith(
+                expect.objectContaining({preview_resolution: expect.anything()})
+            )
+        })
+    })
+
+    describe('Eyepiece Streaming Resolution', () => {
+        const optionValues = (select) => select.findAll('option').map((o) => o.element.value)
+
+        it('starts at 1440p and offers no 1080p', async () => {
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+
+            const select = wrapper.find('#eyepiece-stream-resolution-select')
+            expect(optionValues(select)).toEqual(['native', 'uhd2160', 'qhd1440'])
+            expect(select.element.value).toBe('qhd1440')
+        })
+
+        it('sends the whole eyepiece object with the chosen resolution', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {eyepiece: {binoview: false, intensity: 0.5, stream_resolution: 'qhd1440'}},
+            })
+            await flushPromises()
+
+            await wrapper.find('#eyepiece-stream-resolution-select').setValue('native')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                eyepiece: expect.objectContaining({
+                    stream_resolution: 'native',
+                    binoview: false,
+                    intensity: 0.5,
+                }),
+            })
+            expect(updateSettings).not.toHaveBeenCalledWith(
+                expect.objectContaining({streaming_resolution: expect.anything()})
+            )
+        })
+
+        it('shows the resolution the server reports', async () => {
+            const wrapper = mountSettingsPanel({settings: {eyepiece: {stream_resolution: 'uhd2160'}}})
+            await flushPromises()
+
+            expect(wrapper.find('#eyepiece-stream-resolution-select').element.value).toBe('uhd2160')
+        })
+
+        // A server predating the setting sends an eyepiece object without it. The select
+        // must still show the default, and an edit must not post `undefined`.
+        it('falls back to 1440p when the server omits the field', async () => {
+            const wrapper = mountSettingsPanel({settings: {eyepiece: {binoview: true}}})
+            await flushPromises()
+
+            expect(wrapper.find('#eyepiece-stream-resolution-select').element.value).toBe('qhd1440')
+        })
     })
 
     describe('Noise Reduction Section', () => {
         it('sends the whole denoise object when a filter is toggled', async () => {
             const wrapper = mountSettingsPanel()
 
-            await findToggleByLabel(wrapper, 'Background Grain').setValue(false)
+            await findToggleByLabel(wrapper, 'Colour Mottle').setValue(false)
             await flushPromises()
 
             expect(updateSettings).toHaveBeenCalledWith({
-                denoise: expect.objectContaining({luma: false, chroma: true}),
+                denoise: expect.objectContaining({chroma: false, background_grain: 0.5}),
             })
         })
 
-        it('hides a filter\'s sliders while that filter is off', async () => {
+        it('hides the colour slider while colour mottle is off', async () => {
             const wrapper = mountSettingsPanel({
                 settings: {
                     denoise: {
-                        chroma: true,
+                        chroma: false,
                         chroma_strength: 1.0,
-                        luma: false,
+                        background_grain: 0.5,
                         luma_strength: 1.0,
-                        star_protection: 1.0,
                     },
                 },
             })
@@ -349,42 +438,70 @@ describe('SettingsPanel', () => {
             const labels = wrapper
                 .findAllComponents({name: 'BaseSlider'})
                 .map((s) => s.props('label'))
-            expect(labels).toContain('Colour strength')
-            expect(labels).not.toContain('Structure strength')
-            expect(labels).not.toContain('Star protection')
+            expect(labels).not.toContain('Colour strength')
+            expect(labels).toContain('Background Grain')
+            expect(labels).toContain('Structure strength')
         })
 
-        // The only control that moves sky grain much, and it was previously
-        // hardcoded at full protection with no way to reach it.
-        it('offers star protection, and sends it with the rest of the object', async () => {
+        // One dial over the wavelet's finest scale and the tone curve's split, because
+        // the two have opposite costs. It replaced a toggle and two sliders, one of which
+        // (the tone curve's share) had no UI at all — so turning "Background Grain" off
+        // used to leave every target dimmed by a mechanism nobody could see.
+        it('offers the background grain dial across its whole range', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
             const slider = wrapper
                 .findAllComponents({name: 'BaseSlider'})
-                .find((s) => s.props('label') === 'Star protection')
+                .find((s) => s.props('label') === 'Background Grain')
             expect(slider).toBeDefined()
+            expect(slider.props('min')).toBe(0.0)
             expect(slider.props('max')).toBe(1.0)
 
-            slider.vm.$emit('update:modelValue', 0.4)
+            slider.vm.$emit('update:modelValue', 0.25)
             slider.vm.$emit('change')
             await flushPromises()
 
             expect(updateSettings).toHaveBeenCalledWith({
-                denoise: expect.objectContaining({star_protection: 0.4}),
+                denoise: expect.objectContaining({background_grain: 0.25}),
             })
         })
 
-        // The manual tells the observer to raise this one; a slider that stopped
-        // at its own default could not be raised at all.
-        it('lets structure strength go above the tuned default', async () => {
+        // The dial is always available: unlike the toggle it replaced, there is no state
+        // in which the control that matters most is hidden.
+        it('always shows the grain dial and the structure slider', async () => {
+            const wrapper = mountSettingsPanel({
+                settings: {
+                    denoise: {
+                        chroma: false,
+                        chroma_strength: 1.0,
+                        background_grain: 0.0,
+                        luma_strength: 0.0,
+                    },
+                },
+            })
+            await flushPromises()
+
+            const labels = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .map((s) => s.props('label'))
+            expect(labels).toContain('Background Grain')
+            expect(labels).toContain('Structure strength')
+        })
+
+        // Zero is the wavelet's genuine off switch now that the toggle is gone, and 100%
+        // is both the tuned value and the ceiling: above it the mottle moves out to a
+        // scale the transform cannot reach and stars gain a ring, so the slider must not
+        // offer it.
+        it('lets structure strength go from off to the tuned value and no further', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
 
             const slider = wrapper
                 .findAllComponents({name: 'BaseSlider'})
                 .find((s) => s.props('label') === 'Structure strength')
-            expect(slider.props('max')).toBe(2.0)
+            expect(slider.props('min')).toBe(0.0)
+            expect(slider.props('max')).toBe(1.0)
         })
 
         it('falls back to defaults when the server sends no denoise settings', async () => {
@@ -392,7 +509,10 @@ describe('SettingsPanel', () => {
             await flushPromises()
 
             expect(findToggleByLabel(wrapper, 'Colour Mottle').element.checked).toBe(true)
-            expect(findToggleByLabel(wrapper, 'Background Grain').element.checked).toBe(true)
+            const grain = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Background Grain')
+            expect(grain.props('modelValue')).toBe(0.5)
         })
     })
 
@@ -502,7 +622,10 @@ describe('SettingsPanel', () => {
             const wrapper = mountSettingsPanel()
             const slider = blackFloorSlider(wrapper)
             expect(slider).toBeDefined()
-            expect(slider.props('min')).toBe(-0.075)
+            // The negative end is one nominal sky level, where the hard floor clips
+            // exactly at the sky; it is mirrored from `MIN_BLACK_FLOOR`, which the
+            // backend enforces, and it moves whenever the stretch is retuned.
+            expect(slider.props('min')).toBe(-0.045)
             expect(slider.props('max')).toBe(0.15)
         })
 
@@ -517,7 +640,7 @@ describe('SettingsPanel', () => {
 
         it('enables Darker sky once the floor goes negative', async () => {
             const wrapper = mountSettingsPanel({
-                settings: {eyepiece: {black_floor: -0.05, darker_sky: false}},
+                settings: {eyepiece: {black_floor: -0.04, darker_sky: false}},
             })
             await flushPromises()
 
@@ -526,7 +649,7 @@ describe('SettingsPanel', () => {
 
         it('sends the whole eyepiece object when Darker sky is toggled', async () => {
             const wrapper = mountSettingsPanel({
-                settings: {eyepiece: {black_floor: -0.05, darker_sky: false}},
+                settings: {eyepiece: {black_floor: -0.04, darker_sky: false}},
             })
             await flushPromises()
 
@@ -535,7 +658,7 @@ describe('SettingsPanel', () => {
 
             expect(updateSettings).toHaveBeenCalledWith({
                 eyepiece: expect.objectContaining({
-                    black_floor: -0.05,
+                    black_floor: -0.04,
                     darker_sky: true,
                 }),
             })
@@ -543,17 +666,40 @@ describe('SettingsPanel', () => {
     })
 
     describe('Focus/Finder mode', () => {
-        // The six the mode manages, by their label in this panel. Focus mode owns the
+        // The toggles the mode manages, by their label in this panel. Focus mode owns the
         // snapshot that restores them, so an edit here while it is on would either be
         // reverted on the next toggle or overwrite what the observer chose.
         const MANAGED = [
             'Row/Column Pattern Removal',
             'Colour Mottle',
-            'Background Grain',
             'Dithering',
             'Background Subtraction',
             'Shadow Saturation Boost',
         ]
+
+        // The sixth is a slider now: the wavelet's off switch is a zero strength, since
+        // the toggle it used to have became part of the Background Grain dial.
+        const grainSlider = (wrapper) =>
+            wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Structure strength')
+
+        it('holds the brightness denoiser read-only while the mode is on', () => {
+            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+
+            expect(grainSlider(wrapper).props('disabled')).toBe(true)
+        })
+
+        // The dial is deliberately *not* managed: it moves the tone curve's split as well
+        // as the wavelet, and this mode has no business moving the tone curve.
+        it('leaves the Background Grain dial editable while the mode is on', () => {
+            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+
+            const dial = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Background Grain')
+            expect(dial.props('disabled')).toBeFalsy()
+        })
 
         it.each(MANAGED)('holds "%s" read-only while the mode is on', (label) => {
             const wrapper = mountSettingsPanel({settings: {focus_mode: true}})

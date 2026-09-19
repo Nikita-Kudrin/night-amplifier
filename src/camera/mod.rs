@@ -66,9 +66,10 @@ pub use registry::{CameraEntry, CameraRegistry};
 pub use traits::{Camera, CameraProvider};
 pub use identity::{CameraLocator, DeviceIdentity};
 pub use types::{
-    BufferPool, CameraInfo, CameraStatus, CaptureConfig, DualSamplingMode, GainPresets,
-    ImageFormat, PooledBuffer, RawFrame, SensorMode, SensorType, FRAME_STALL_ALLOWANCE,
-    TRANSFER_FLOOR_BYTES_PER_SEC,
+    parse_usb_bandwidth_percent, usb_bandwidth_override, AcquisitionMode, BufferPool, CameraInfo,
+    CameraStatus, CaptureConfig, DualSamplingMode, GainPresets, ImageFormat, PooledBuffer,
+    RawFrame, SensorMode, SensorType, FRAME_STALL_ALLOWANCE, TRANSFER_FLOOR_BYTES_PER_SEC,
+    usb_bandwidth_within, USB_BANDWIDTH_ENV,
 };
 
 // Provider-specific re-exports

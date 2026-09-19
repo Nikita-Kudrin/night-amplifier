@@ -625,26 +625,40 @@ mod tests {
         assert_eq!(camera.current_index, 9);
     }
 
-    /// The served frame must be moved out of the cache, not copied: a
-    /// full-resolution frame is tens of megabytes and this runs per capture.
+    /// A capture must not add a full-frame allocation: tens of megabytes per frame.
+    ///
+    /// `capture` necessarily converts the cached f32 `Frame` into sensor bytes, so the
+    /// two copies that *can* be avoided are checked instead: the cached frame is moved
+    /// out rather than cloned, and the byte buffer comes back from the pool.
     #[test]
-    #[ignore = "RawFrame conversion copies data into a new Vec, pointer identity no longer holds"]
-    fn test_simulated_camera_moves_frame_out_of_cache() {
+    fn test_simulated_capture_moves_cached_frame_and_reuses_pooled_buffer() {
         let dir = tempdir().unwrap();
         write_frames(dir.path(), 4);
 
         let mut camera = SimulatedCamera::new(dir.path().to_path_buf()).unwrap();
-        let config = CaptureConfig::default().with_simulated_preload_images(3);
+        let lookahead = 3;
 
-        // Prime the cache and note where the next frame's pixels live.
-        let _ = camera.capture(&config).unwrap();
+        let _ = camera.load_current_frame(lookahead).unwrap();
         let queued_addr = camera.cache.front().unwrap().data().as_ptr() as usize;
-
-        let served = camera.capture(&config).unwrap();
+        let served = camera.load_current_frame(lookahead).unwrap();
         assert_eq!(
-            served.data.as_ptr() as usize,
+            served.data().as_ptr() as usize,
             queued_addr,
             "cached frame was copied on the way out instead of moved"
+        );
+
+        // Zero exposure so the simulated wait is skipped: two 1 s sleeps otherwise.
+        let config = CaptureConfig::default()
+            .with_exposure_us(0)
+            .with_simulated_preload_images(lookahead);
+        let first = camera.capture(&config).unwrap();
+        let first_addr = first.data.as_ptr() as usize;
+        drop(first);
+        let second = camera.capture(&config).unwrap();
+        assert_eq!(
+            second.data.as_ptr() as usize,
+            first_addr,
+            "capture allocated a new byte buffer instead of reusing the pooled one"
         );
     }
 

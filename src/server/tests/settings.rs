@@ -25,6 +25,41 @@ async fn test_get_settings_default() {
     assert_eq!(json["data"]["stacking"], true);
 }
 
+/// The wire names the settings panel relies on, and the defaults it promises.
+#[tokio::test]
+async fn test_streaming_resolutions_default_to_1440p() {
+    let app = create_test_router(create_test_state());
+
+    let (status, json) = get_json(&app, "/api/settings").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["preview_resolution"], "native");
+    assert_eq!(json["data"]["streaming_resolution"], "qhd1440");
+    assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+}
+
+/// Streaming Resolution accepts every option; a partial update leaves the eyepiece
+/// setting and Processing Resolution untouched.
+#[tokio::test]
+async fn test_update_streaming_resolution_leaves_the_other_resolutions_alone() {
+    let state = create_test_state();
+    let app = create_test_router(Arc::clone(&state));
+
+    for value in ["native", "uhd2160", "hd1080", "qhd1440"] {
+        let (status, json) =
+            post_json(&app, "/api/settings", json!({"streaming_resolution": value})).await;
+        assert_eq!(status, StatusCode::OK, "{value}: {json}");
+        assert_eq!(json["data"]["streaming_resolution"], value);
+        assert_eq!(json["data"]["eyepiece"]["stream_resolution"], "qhd1440");
+        assert_eq!(json["data"]["preview_resolution"], "native");
+    }
+
+    let (status, _) =
+        post_json(&app, "/api/settings", json!({"streaming_resolution": "8k"})).await;
+    assert!(status.is_client_error(), "an unknown resolution was accepted");
+    assert_eq!(state.settings.read().await.streaming_resolution, Resolution::Qhd1440);
+}
+
 #[tokio::test]
 async fn test_update_settings_single_field() {
     let state = create_test_state();
@@ -692,9 +727,8 @@ async fn seed_managed_settings(app: &axum::Router) {
             "denoise": {
                 "chroma": false,
                 "chroma_strength": 0.25,
-                "luma": true,
+                "background_grain": 0.8,
                 "luma_strength": 0.75,
-                "star_protection": 0.4,
             },
         }),
     )
@@ -716,7 +750,7 @@ async fn test_focus_mode_disables_the_managed_settings() {
     assert_eq!(json["data"]["saturation_boost"], false);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], false);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
-    assert_eq!(json["data"]["denoise"]["luma"], false);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.0);
     assert_eq!(json["data"]["eyepiece"]["dither"], false);
 }
 
@@ -731,7 +765,8 @@ async fn test_focus_mode_leaves_unmanaged_settings_alone() {
     assert_eq!(json["data"]["sensor_correction"]["superpixel_debayer"], true);
     assert_eq!(json["data"]["sensor_correction"]["hot_pixel_sigma"], 7.5);
     assert_eq!(json["data"]["denoise"]["chroma_strength"], 0.25);
-    assert_eq!(json["data"]["denoise"]["star_protection"], 0.4);
+    // The dial moves the tone curve as well as the wavelet, so the mode leaves it be.
+    assert_eq!(json["data"]["denoise"]["background_grain"], 0.8);
 }
 
 #[tokio::test]
@@ -748,7 +783,7 @@ async fn test_focus_mode_round_trip_restores_the_managed_settings() {
     assert_eq!(json["data"]["background_subtraction"], true);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
     assert_eq!(json["data"]["denoise"]["chroma"], false);
-    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.75);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
 }
 
@@ -768,7 +803,7 @@ async fn test_focus_mode_enabled_twice_still_restores_the_originals() {
 
     assert_eq!(json["data"]["background_subtraction"], true);
     assert_eq!(json["data"]["sensor_correction"]["fpn_removal"], true);
-    assert_eq!(json["data"]["denoise"]["luma"], true);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.75);
     assert_eq!(json["data"]["eyepiece"]["dither"], true);
 }
 
@@ -809,9 +844,8 @@ async fn test_write_while_focus_mode_is_on_is_absorbed_into_the_snapshot() {
             "denoise": {
                 "chroma": true,
                 "chroma_strength": 0.9,
-                "luma": false,
+                "background_grain": 0.8,
                 "luma_strength": 0.75,
-                "star_protection": 0.4,
             },
         }),
     )

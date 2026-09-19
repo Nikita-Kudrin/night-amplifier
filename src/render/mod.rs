@@ -15,8 +15,9 @@ mod white_balance;
 
 // Re-export all public items from submodules
 pub use autostretch::{
-    auto_stretch_default, auto_stretch_frame, compute_auto_stretch, solve_stretch_factor,
-    solve_stretch_factor_newton, AutoStretchConfig, AutoStretchResult, StretchAggressiveness,
+    auto_stretch_default, auto_stretch_frame, compute_auto_stretch, depth_grain_gain,
+    solve_stretch_factor, solve_stretch_factor_newton, AutoStretchConfig, AutoStretchResult,
+    StretchAggressiveness, DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT, MIN_GRAIN_SPLIT,
 };
 pub use black_point::{
     calculate_black_point, calculate_black_points, calculate_luminance_black_point,
@@ -25,12 +26,13 @@ pub use black_point::{
 };
 pub use denoise::{
     ChromaDenoiseConfig, DenoiseConfig, DenoiseScratch, LumaDenoiseConfig, MAX_LUMA_STRENGTH,
+    MAX_WAVELET_LEVELS, STAR_FIELD_FINE_BOOST, STAR_FIELD_GAIN, UNIT_WAVELET_GAIN,
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, apply_shadow_floor_frame, finalize_for_display,
     frame_to_rgb8, frame_to_rgb8_simple, frame_to_rgb8_with_contrast, sky_level_after_contrast,
-    ContrastConfig, DisplayOutput, OutputConfig, ShadowFloor, ShadowFloorRequest,
-    ShadowFloorTable,
+    ContrastConfig, DisplayOutput, OutputConfig, ResolvedShadow, ShadowFloor, ShadowFloorRequest,
+    ShadowFloorTable, SkyShadow,
 };
 pub use stretch::{
     apply_shadow_saturation_boost, apply_tone_mapping, asinh, asinh_stretch,

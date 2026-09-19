@@ -1,6 +1,7 @@
 use super::channel;
 use super::config_overrides::*;
 use super::drop_log::DropLog;
+use super::stall::{handle_stall, StallSite, StallTracker, StallVerdict};
 use super::watchdog::*;
 use crate::camera::{Camera, CameraError, CaptureConfig};
 use crate::frame::Frame;
@@ -384,7 +385,7 @@ pub async fn run_capture_loop(
         let _ = tokio::task::spawn_blocking(move || disk_writer.end_session()).await;
     }
 
-    // A plate solve runs on a detached task and can outlive the frame it was given
+    // A plate solve runs on the `push-to-solve` thread and can outlive this session
     // by minutes. Left alone it keeps the solve latch raised, so the *next* capture
     // session cannot solve either.
     super::solving::abandon_solve_on_shutdown(&state).await;
@@ -469,7 +470,7 @@ pub(crate) fn run_capture_task(
         .unwrap_or_else(Instant::now);
     let mut camera_ok = true;
     let mut storage_drops = DropLog::default();
-    let mut stalls = StallTracker::default();
+    let mut stalls = StallTracker::for_camera(&state, CameraRole::Main, &camera.info().name);
 
     loop {
         if state.is_cancelled() {
@@ -541,25 +542,16 @@ pub(crate) fn run_capture_task(
                 }
 
                 if let crate::camera::CameraError::ExposureTimeout(budget) = e {
-                    if stalls.stalled() == StallVerdict::Escalate {
-                        error!(
-                            camera_name = %camera.info().name,
-                            consecutive = STALL_ESCALATION,
-                            "Restarting the stream did not bring frames back; reopening the camera"
-                        );
-                        crate::server::camera_health::record_fault(
-                            &state,
-                            &camera.info().name,
-                            crate::server::camera_health::FaultKind::Timeout,
-                        );
+                    if let StallVerdict::Escalate(_) = handle_stall(
+                        &mut stalls,
+                        StallSite::Main,
+                        &state,
+                        &camera.info().name,
+                        budget,
+                    ) {
                         camera_ok = false;
                         break;
                     }
-                    warn!(
-                        camera_name = %camera.info().name,
-                        ?budget,
-                        "Frame stalled; restarting the stream in place"
-                    );
                     rt.block_on(state.frame_rejected(format!("Frame stalled after {budget:?}")));
                     continue;
                 }
@@ -676,7 +668,7 @@ fn capture_probe_frame(
     watchdog_timeout: Duration,
     state: &Arc<AppState>,
 ) -> CaptureOutcome {
-    let mut stalls = StallTracker::default();
+    let mut stalls = StallTracker::for_camera(state, CameraRole::Main, &camera.info().name);
     loop {
         let outcome = capture_frame_bounded(
             camera,
@@ -688,18 +680,22 @@ fn capture_probe_frame(
         );
         let (returned, budget) = match outcome {
             CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget))) => (returned, budget),
-            other => return other,
+            other => {
+                // A restart that brought the first frame back is evidence restarts work.
+                if matches!(other, CaptureOutcome::Completed(_, Ok(_))) {
+                    stalls.frame_delivered();
+                }
+                return other;
+            }
         };
-        let name = returned.info().name.clone();
-        if stalls.stalled() == StallVerdict::Escalate {
-            error!(camera_name = %name, consecutive = STALL_ESCALATION, "Restarting the stream did not bring the first frame; reopening the camera");
-            crate::server::camera_health::record_fault(state, &name, crate::server::camera_health::FaultKind::Timeout);
+        let verdict =
+            handle_stall(&mut stalls, StallSite::FirstFrame, state, &returned.info().name, budget);
+        if let StallVerdict::Escalate(_) = verdict {
             return CaptureOutcome::Completed(returned, Err(CameraError::ExposureTimeout(budget)));
         }
         if state.is_cancelled() {
             return CaptureOutcome::Completed(returned, Err(CameraError::Cancelled));
         }
-        warn!(camera_name = %name, ?budget, "First frame stalled; restarting the stream in place");
         camera = returned;
     }
 }

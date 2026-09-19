@@ -2,7 +2,7 @@
 //! one shape: a **row source** producing one interleaved RGB f32 row at output
 //! resolution, and a **tail** applying the tone curve, saturation, contrast and the
 //! 8-bit write. The sources differ (one expands a frame already fitting the
-//! bounding box, the other box-averages a larger one down) as separate traversals
+//! bounding box, the other area-averages a larger one down) as separate traversals
 //! with separate planar indexing — why `frame/layout_tests.rs` carries a row for each.
 //!
 //! Two drivers because the denoisers can't fuse: with denoising off, each row is
@@ -24,21 +24,23 @@ use crate::render::output::{
 };
 use crate::server::state::RenderReadyFrame;
 
+use super::axis_taps::AxisTaps;
+
 thread_local! {
-    /// One interleaved RGB row, reused across frames and tiers. The fused
+    /// One interleaved RGB row, reused across frames and payloads. The fused
     /// driver is the only user: the staged driver transforms rows of its own
     /// buffer in place.
     static ROW_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Convert a Frame to RGB8 data, box-averaging down to a bounding box if needed. No
+/// Convert a Frame to RGB8 data, area-averaging down to a bounding box if needed. No
 /// debayering here: a 1-channel frame reaching this function is genuine monochrome,
 /// never raw CFA — the stacking task demosaics colour sensors before the render path
 /// sees a frame, and nothing between there and here changes channel count. So mono
 /// channels are simply replicated across RGB. The old code instead ran
 /// `detect_cfa_pattern` (never errors on a 1-channel frame, confidence discarded)
 /// and debayered unconditionally — a full-resolution f32 RGB frame (3x the mono
-/// source, ~196MB on an ASI1600MM) per tier per frame, with colour fringing on grey
+/// source, ~196MB on an ASI1600MM) per payload per frame, with colour fringing on grey
 /// data.
 pub fn frame_to_rgb8_downsampled(
     ready_frame: &RenderReadyFrame,
@@ -86,7 +88,7 @@ pub fn frame_to_rgb8_downsampled_with(
         ));
     }
 
-    let rgb8 = box_downsample_to_rgb8_fused(ready_frame, target_width, target_height, scratch);
+    let rgb8 = area_downsample_to_rgb8_fused(ready_frame, target_width, target_height, scratch);
     Ok((rgb8, target_width as u32, target_height as u32))
 }
 
@@ -94,8 +96,8 @@ pub fn frame_to_rgb8_downsampled_with(
 /// a bounding box, without doing the conversion.
 ///
 /// The render task keys its per-frame conversion cache on this: two payloads
-/// whose clients asked for different boxes but that resolve to the same output
-/// size are the *same* conversion, and since tier 2 that conversion carries the
+/// whose resolutions are different boxes but resolve to the same output
+/// size are the *same* conversion, and that conversion carries the
 /// denoisers and costs several times the encode that follows it. Sharing it is
 /// only sound if the size is decided by exactly the arithmetic the conversion
 /// will use, which is why this is the one copy of that arithmetic.
@@ -152,18 +154,20 @@ pub(crate) fn expand_to_rgb8_fused(
     render_rgb8(&source, ready_frame, scratch)
 }
 
-/// Box-average `frame` to `target_width` x `target_height` in **linear light**, then
+/// Area-average `frame` to `target_width` x `target_height` in **linear light**, then
 /// apply the tone-curve stretch (+ saturation/contrast) to the averaged result.
 /// Stretch happens after downsampling, not before (the pre-fusion order): the
 /// stretch curves here (asinh, MTF) are concave, so Jensen's inequality guarantees
 /// `curve(average(pixels)) >= average(curve(pixels))` for any source box — this
-/// order can only preserve or brighten faint detail in a downsampled tier, never dim
+/// order can only preserve or brighten faint detail in a downsampled stream, never dim
 /// it (see `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample`).
+///
+/// The kernel is [`AxisTaps`], not a whole-pixel box: see there for why.
 ///
 /// `pub(crate)` for the same reason as [`expand_to_rgb8_fused`]: its `else` arm
 /// indexes `plane_size * 2` unconditionally, and [`frame_to_rgb8_downsampled`] is
 /// the guard.
-pub(crate) fn box_downsample_to_rgb8_fused(
+pub(crate) fn area_downsample_to_rgb8_fused(
     ready_frame: &RenderReadyFrame,
     target_width: usize,
     target_height: usize,
@@ -171,31 +175,17 @@ pub(crate) fn box_downsample_to_rgb8_fused(
 ) -> Vec<u8> {
     debug_assert!(
         matches!(ready_frame.linear_frame.channels(), 1 | 3),
-        "box_downsample_to_rgb8_fused requires 1 or 3 channels; frame_to_rgb8_downsampled is the guard"
+        "area_downsample_to_rgb8_fused requires 1 or 3 channels; frame_to_rgb8_downsampled is the guard"
     );
 
     let frame = &ready_frame.linear_frame;
-    let width = frame.width();
-    let height = frame.height();
-    let x_scale = width as f32 / target_width as f32;
-
-    let col_ranges: Vec<(usize, usize, f32)> = (0..target_width)
-        .map(|x| {
-            let src_x0 = (x as f32 * x_scale) as usize;
-            let src_x1 = (((x + 1) as f32 * x_scale) as usize).min(width);
-            (src_x0, src_x1, 1.0 / (src_x1 - src_x0).max(1) as f32)
-        })
-        .collect();
-
     let source = DownsampleSource {
-        width,
-        height,
+        width: frame.width(),
+        height: frame.height(),
         channels: frame.channels(),
         src: frame.data(),
-        target_width,
-        target_height,
-        y_scale: height as f32 / target_height as f32,
-        col_ranges,
+        columns: AxisTaps::cached(frame.width(), target_width),
+        rows: AxisTaps::cached(frame.height(), target_height),
     };
     render_rgb8(&source, ready_frame, scratch)
 }
@@ -205,7 +195,7 @@ pub(crate) fn box_downsample_to_rgb8_fused(
 /// Implementors own the planar → interleaved gather, which is the step
 /// `frame/layout_tests.rs` guards: `Frame` is plane-major and every 8-bit output
 /// format is interleaved, and crossing that boundary wrongly still compiles.
-trait RowSource: Sync {
+pub(super) trait RowSource: Sync {
     fn target_width(&self) -> usize;
     fn target_height(&self) -> usize;
     /// Fill `out` (`target_width * 3` samples) with output row `y`.
@@ -255,62 +245,90 @@ struct DownsampleSource<'a> {
     height: usize,
     channels: usize,
     src: &'a [f32],
-    target_width: usize,
-    target_height: usize,
-    y_scale: f32,
-    col_ranges: Vec<(usize, usize, f32)>,
+    columns: std::sync::Arc<AxisTaps>,
+    rows: std::sync::Arc<AxisTaps>,
+}
+
+thread_local! {
+    /// Source rows combined vertically, one per channel, before the horizontal pass.
+    static VERTICAL_BUF: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
 impl RowSource for DownsampleSource<'_> {
     fn target_width(&self) -> usize {
-        self.target_width
+        self.columns.start.len()
     }
 
     fn target_height(&self) -> usize {
-        self.target_height
+        self.rows.start.len()
     }
 
+    /// Separable: combine the tapped source rows per plane (contiguous, so the
+    /// inner loop vectorises), then tap columns out of that one combined row.
     fn gather_row(&self, y: usize, out: &mut [f32]) {
-        let plane_size = self.width * self.height;
-        let src_y0 = (y as f32 * self.y_scale) as usize;
-        let src_y1 = (((y + 1) as f32 * self.y_scale) as usize).min(self.height);
-        let row_inv_area = 1.0 / (src_y1 - src_y0).max(1) as f32;
-
-        for (tgt_x, &(src_x0, src_x1, col_inv_area)) in self.col_ranges.iter().enumerate() {
-            let inv_area = row_inv_area * col_inv_area;
-            let mut acc = [0.0f32; 3];
-
-            for src_y in src_y0..src_y1 {
-                let src_row = src_y * self.width;
-                for src_x in src_x0..src_x1 {
-                    if self.channels == 1 {
-                        acc[0] += self.src[src_row + src_x];
-                    } else {
-                        let idx = src_row + src_x;
-                        acc[0] += self.src[idx];
-                        acc[1] += self.src[plane_size + idx];
-                        acc[2] += self.src[plane_size * 2 + idx];
+        let (w, h) = (self.width, self.height);
+        let (first_row, row_weights) = self.rows.of(y);
+        VERTICAL_BUF.with(|cell| {
+            let mut combined = cell.borrow_mut();
+            combined.clear();
+            combined.resize(w * self.channels, 0.0);
+            for (c, plane_out) in combined.chunks_exact_mut(w).enumerate() {
+                let plane = &self.src[c * w * h..(c + 1) * w * h];
+                for (k, &wy) in row_weights.iter().enumerate() {
+                    if wy == 0.0 {
+                        continue;
+                    }
+                    let row = (first_row + k) * w;
+                    for (o, &v) in plane_out.iter_mut().zip(&plane[row..row + w]) {
+                        *o += wy * v;
                     }
                 }
             }
 
-            let out_idx = tgt_x * 3;
-            if self.channels == 1 {
-                let val = acc[0] * inv_area;
-                out[out_idx] = val;
-                out[out_idx + 1] = val;
-                out[out_idx + 2] = val;
-            } else {
-                out[out_idx] = acc[0] * inv_area;
-                out[out_idx + 1] = acc[1] * inv_area;
-                out[out_idx + 2] = acc[2] * inv_area;
+            for (x, pixel) in out.chunks_exact_mut(3).enumerate() {
+                let (first_col, col_weights) = self.columns.of(x);
+                let mut acc = [0.0f32; 3];
+                for (c, a) in acc.iter_mut().enumerate().take(self.channels) {
+                    let plane = &combined[c * w..(c + 1) * w];
+                    let taps = &plane[first_col..(first_col + col_weights.len()).min(w)];
+                    for (&wx, &v) in col_weights.iter().zip(taps) {
+                        *a += wx * v;
+                    }
+                }
+                if self.channels == 1 {
+                    pixel.fill(acc[0]);
+                } else {
+                    pixel.copy_from_slice(&acc);
+                }
             }
-        }
+        });
+    }
+}
+
+/// An already resampled (and denoised) interleaved image, read back row by row.
+struct StagedRows<'a> {
+    rgb: &'a [f32],
+    width: usize,
+    height: usize,
+}
+
+impl RowSource for StagedRows<'_> {
+    fn target_width(&self) -> usize {
+        self.width
+    }
+
+    fn target_height(&self) -> usize {
+        self.height
+    }
+
+    fn gather_row(&self, y: usize, out: &mut [f32]) {
+        let row_len = self.width * 3;
+        out.copy_from_slice(&self.rgb[y * row_len..(y + 1) * row_len]);
     }
 }
 
 /// The tone-curve half of both kernels, hoisted out of the per-row closure.
-struct RowTail<'a> {
+pub(super) struct RowTail<'a> {
     config: &'a crate::render::RenderPipelineConfig,
     has_stretch: bool,
     has_saturate: bool,
@@ -350,7 +368,7 @@ impl<'a> RowTail<'a> {
         }
     }
 
-    fn apply(&self, f32_row: &mut [f32]) {
+    pub(super) fn apply(&self, f32_row: &mut [f32]) {
         if self.has_stretch {
             crate::render::simd::apply_luminance_scale_lut_simd(
                 f32_row,
@@ -394,6 +412,14 @@ fn render_rgb8<S: RowSource>(
     let row_len = target_width * 3;
     let mut output = vec![0u8; row_len * target_height];
 
+    let sky_shadow = ready_frame
+        .stretch_result
+        .as_ref()
+        .and_then(|sr| sr.sky_shadow);
+    if let (false, Some(shadow)) = (denoise.is_enabled(), sky_shadow) {
+        super::sky_shadow_rows::render(source, &tail, display, shadow, &mut output);
+        return output;
+    }
     if !denoise.is_enabled() {
         output
             .par_chunks_mut(row_len)
@@ -411,17 +437,20 @@ fn render_rgb8<S: RowSource>(
         return output;
     }
 
-    stage_and_denoise(source, &tail, display, &denoise, &mut output, scratch);
+    stage_and_denoise(source, &tail, display, &denoise, sky_shadow, &mut output, scratch);
     output
 }
 
 /// The staged traversal: resample the whole frame to f32 at output resolution,
-/// denoise it, then run the tone curve and the 8-bit write per row.
+/// denoise it, then run the tone curve and the 8-bit write per row. A sky shadow
+/// streams the denoised rows through the same driver as the fused path: applied to
+/// the whole image it held two more full planes (~208 MB at 26 MP native).
 fn stage_and_denoise<S: RowSource>(
     source: &S,
     tail: &RowTail,
     display: DisplayOutput,
     denoise: &DenoiseConfig,
+    sky_shadow: Option<crate::render::SkyShadow>,
     output: &mut [u8],
     scratch: &mut DenoiseScratch,
 ) {
@@ -438,7 +467,7 @@ fn stage_and_denoise<S: RowSource>(
     // `resample` and `row_tail` are split because only the staged path can tell them
     // apart: the gather scales with *input* pixel count, the tail with *output*.
     // `frame_to_rgb8` reported 75ms as one number (39 from `denoise`, 36 unexplained
-    // between the two) — no way to predict what a smaller tier would save. The fused
+    // between the two) — no way to predict what a smaller resolution would save. The fused
     // path above has no equivalent split: it gathers, transforms and writes one row
     // in a single closure against a thread-local scratch row, which is why it's
     // cheaper — splitting would mean per-row spans, which AGENTS.md rules out as
@@ -464,6 +493,17 @@ fn stage_and_denoise<S: RowSource>(
         denoise,
         scratch,
     );
+
+    if let Some(shadow) = sky_shadow {
+        let rows = StagedRows {
+            rgb: staged,
+            width: target_width,
+            height: target_height,
+        };
+        super::sky_shadow_rows::render(&rows, tail, display, shadow, output);
+        scratch.staged = owned;
+        return;
+    }
 
     {
         let _span = tracing::info_span!("row_tail", samples = staged_len).entered();

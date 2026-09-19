@@ -66,7 +66,7 @@ const FIXTURES: [Fixture; 2] = [
 /// could not resolve any change smaller than one output level, which is most of
 /// them. The clip is what keeps stars and the target out of the variance; the
 /// standard deviation of what survives it is continuous.
-fn sky_sigma_levels(rgb8: &[u8], channel: usize) -> f64 {
+pub(crate) fn sky_sigma_levels(rgb8: &[u8], channel: usize) -> f64 {
     let mut samples: Vec<f64> = rgb8
         .iter()
         .skip(channel)
@@ -628,10 +628,14 @@ fn measure_setting(fixture: &Fixture, black_floor: f32, darker_sky: bool) -> Opt
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
-    /// Mid-travel on the darkening half: the floor lands at the sky's own level.
-    const SOFT: f32 = -0.05;
-    /// The slider's end stop, which has to stay usable rather than merely legal.
-    const DEEPEST: f32 = -0.09;
+    /// Mid-travel on the darkening half.
+    const SOFT: f32 = -0.03;
+    /// The slider's end stop, which has to stay usable rather than merely legal — and
+    /// where **both** forms are measured, since that is the position each one fails at
+    /// first: the soft form by saturating (every deeper position reads the same) and the
+    /// hard form by clipping above the sky. `MIN_BLACK_FLOOR` is one nominal sky level, so
+    /// assertions 4 and 5 are what keep that calibration honest when the stretch moves.
+    const DEEPEST: f32 = -0.045;
 
     println!("\n=== Black floor, darkening half ===");
     let mut measured = 0;
@@ -641,7 +645,9 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             measure_setting(fixture, 0.0, false),
             measure_setting(fixture, SOFT, false),
             measure_setting(fixture, DEEPEST, false),
-            measure_setting(fixture, SOFT, true),
+            // The hard form at the **end stop**, not mid-travel: clipping above the sky is
+            // what it fails by, and only the deepest position gets near that.
+            measure_setting(fixture, DEEPEST, true),
         ) else {
             println!("  {} not present. Skipping.", fixture.dir);
             continue;
@@ -651,9 +657,9 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
         println!("  {}", fixture.label);
         for (label, m) in [
             ("baseline (floor 0%)", &base),
-            ("soft floor -5%", &soft),
-            ("soft floor -9% (slider end)", &deep),
-            ("hard floor -5% (Darker sky)", &hard),
+            ("soft floor -3%", &soft),
+            ("soft floor -4.5% (slider end)", &deep),
+            ("hard floor -4.5% (Darker sky, end stop)", &hard),
         ] {
             println!(
                 "    {label:<31} sky {:>4.0} ({:>5.1}% darker)  sigma {:>4.1}  \
@@ -677,10 +683,11 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             base.sky
         );
 
-        // 1. The soft floor darkens the sky substantially. Measured 71 % and
-        //    65 %; the bound sits below both so a retune does not trip it.
+        // 1. The soft floor darkens the sky substantially, by mid-travel. Measured 36 %
+        //    and 40 % at -3 %; the bound sits above both so a retune does not trip it.
+        //    The deep end is assertion 4's business.
         assert!(
-            soft.sky <= base.sky * 0.4,
+            soft.sky <= base.sky * 0.75,
             "{}: soft floor left the sky at {:.0} levels, from {:.0}",
             fixture.label,
             soft.sky,
@@ -709,8 +716,8 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
         );
 
         // 3. And without putting a single sample on the panel's off state. The
-        //    curve approaches zero without arriving and the pedestal underneath
-        //    it is what makes that survive rounding.
+        //    gain never reaches zero and the pedestal underneath covers what the
+        //    black point already clamped.
         assert_eq!(
             soft.zeros, 0.0,
             "{}: soft floor put {:.2}% of samples on exactly 0 — that is the \
@@ -718,6 +725,37 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             fixture.label,
             soft.zeros * 100.0
         );
+
+        // 3b. Nor grainier: the knee this replaced flattened the lower half of the
+        //     sky noise and kept the upper, raising grain against the sky 1.7-2x —
+        //     dark clumps and bright specks at a pixel-resolving eyepiece
+        //     (2026-09-14 globular session). That shows up as grain holding station
+        //     while the sky drops, so the absolute bound is the one that always
+        //     means something.
+        assert!(
+            soft.sigma <= base.sigma,
+            "{}: darkening raised absolute sky grain from {:.1} to {:.1} output \
+             levels — it is flattening part of the noise and keeping the rest",
+            fixture.label,
+            base.sigma,
+            soft.sigma
+        );
+
+        //     The relative bound is the sharper of the two, but only while the
+        //     baseline has grain to speak of. With the wavelet measuring each scale
+        //     against its own noise the baseline sky now sits near 1 output level
+        //     (4.2 -> 1.4 on this fixture), and a ratio between two single-digit
+        //     integers is mostly 8-bit quantisation: darkening 1.4 to 0.9 while the
+        //     sky goes 13 to 5 "raises" it 1.6x with nothing wrong.
+        if base.sigma >= 2.0 {
+            assert!(
+                soft.sigma / soft.sky <= base.sigma / base.sky * 1.1,
+                "{}: darkening raised relative sky grain from {:.3} to {:.3}",
+                fixture.label,
+                base.sigma / base.sky,
+                soft.sigma / soft.sky
+            );
+        }
 
         // 4. The slider's end stop has to stay usable. It costs contrast — that
         //    is what the last of the travel is for — but an end position that
@@ -751,13 +789,32 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
             fixture.label,
             hard.zeros * 100.0
         );
+        // What "buys separation" means, and it is a ratio rather than a difference. The
+        // absolute sky-to-target gap used to *rise* under the hard floor (6.9 -> 7.3 output
+        // levels on the IMX533 fixture) because the clip rescales everything above it. At
+        // `ContrastConfig` strength 1.0 the S-curve has already spent that headroom, so the
+        // gap now lands within ±6 % either way (-3.9 % here, +5.6 % on the IMX464) — which
+        // on integers three levels wide is mostly quantisation, and asserting a rise would
+        // pin the measurement rather than the property. The ratio is the claim: the target
+        // stands far further clear of the sky than it did.
         assert!(
-            hard.excess >= base.excess,
-            "{}: the hard floor is supposed to buy separation, not spend it \
-             ({:.1} from {:.1})",
+            hard.excess >= base.excess * 0.9,
+            "{}: the hard floor spent {:.0}% of the sky-to-target gap ({:.1} from {:.1}) \
+             — it is dimming the target, not lowering the background",
             fixture.label,
+            (1.0 - hard.excess / base.excess) * 100.0,
             hard.excess,
             base.excess
+        );
+        let (base_ratio, hard_ratio) = (
+            (base.sky + base.excess) / base.sky.max(1.0),
+            (hard.sky + hard.excess) / hard.sky.max(1.0),
+        );
+        assert!(
+            hard_ratio >= base_ratio * 1.5,
+            "{}: the hard floor left the target only {hard_ratio:.2}x the sky against \
+             {base_ratio:.2}x — that is not the separation it exists to buy",
+            fixture.label
         );
 
         // 6. Colour, on the one fixture that has any. A floor applied per
@@ -892,13 +949,37 @@ fn a_negative_floor_without_auto_stretch_leaves_the_stream_alone() {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
+    /// Levels of disagreement between the two orders that count as a real difference
+    /// rather than a rounding step.
+    const FLOOR_PATH_TOLERANCE: i32 = 4;
+
+    /// Share of samples allowed past that, and the mean disagreement allowed over the
+    /// whole frame.
+    ///
+    /// Bounds on the body of the distribution rather than on its worst sample. The two
+    /// orders differ by tens of levels on a few dozen of 6.2 M samples — bright star
+    /// cores, where one path clips a step before the other — and that is true with the
+    /// floor off, with it on, and on the code this test was written against (33 levels
+    /// there, 39 here once the chroma denoiser stopped flattening star colour). It is
+    /// worth its own look, but it is not what this test is for: a floor applied in the
+    /// wrong place or order moves the *sky*, which is most of the frame, and that shows
+    /// up in these two numbers.
+    const FLOOR_PATH_MAX_SHARE: f64 = 0.001;
+    const FLOOR_PATH_MAX_MEAN: f64 = 0.1;
+
     let fixture = &FIXTURES[0];
 
-    let compare = |black_floor: f32| -> Option<(i32, f64)> {
+    // `(samples over the tolerance, mean disagreement, samples compared)` — the last
+    // so the share below is taken against the frame that was actually encoded, whatever
+    // shape the fixture is, rather than against a restated 1440x1440.
+    let compare = |black_floor: f32| -> Option<(usize, f64, usize)> {
         let prepare = |saturation: bool| {
             prepare_fixture_with(fixture, |settings| {
                 settings.eyepiece.intensity = 0.0;
                 settings.eyepiece.black_floor = black_floor;
+                // The clip is the pointwise form that can ride either path; the
+                // default spatial form rides neither and is checked below.
+                settings.eyepiece.darker_sky = true;
                 settings.saturation_boost = saturation;
             })
         };
@@ -921,14 +1002,24 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
 
         let (a, _, _) = encode(&fused, TIER_1440.0, TIER_1440.1);
         let (b, _, _) = encode(&deferred, TIER_1440.0, TIER_1440.1);
-        let mut worst = 0i32;
+
+        // Counted, not maxed. The two orders are only ever allowed to differ where a
+        // sample clips: one path reaches 255 a step earlier than the other, and a
+        // handful of star cores then differ by tens of levels on a frame where nothing
+        // else differs by one. A `max` over 6.2 M samples is a measurement of those
+        // three pixels — it moved from 34 to 50 when the chroma denoiser stopped
+        // flattening star colour, which is a change in how colourful stars are, not in
+        // where the floor is applied.
+        let mut over_a_few = 0usize;
         let mut total = 0i64;
         for (x, y) in a.iter().zip(b.iter()) {
             let d = (*x as i32 - *y as i32).abs();
-            worst = worst.max(d);
             total += d as i64;
+            if d > FLOOR_PATH_TOLERANCE {
+                over_a_few += 1;
+            }
         }
-        Some((worst, total as f64 / a.len() as f64))
+        Some((over_a_few, total as f64 / a.len() as f64, a.len()))
     };
 
     let (Some(control), Some(floored)) = (compare(0.0), compare(-0.05)) else {
@@ -938,27 +1029,41 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
 
     println!("\n=== Fused against deferred shadow floor ===");
     println!(
-        "  no floor:   worst {} levels, mean {:.4}",
+        "  no floor:   {} samples over {FLOOR_PATH_TOLERANCE} levels, mean {:.4}",
         control.0, control.1
     );
     println!(
-        "  floor -5%:  worst {} levels, mean {:.4}",
+        "  floor -5%:  {} samples over {FLOOR_PATH_TOLERANCE} levels, mean {:.4}",
         floored.0, floored.1
     );
 
+    for (label, (over, mean, samples)) in [("no floor", control), ("floor -5%", floored)] {
+        assert!(
+            (over as f64) < samples as f64 * FLOOR_PATH_MAX_SHARE,
+            "{label}: {over} samples disagree by over {FLOOR_PATH_TOLERANCE} levels, more \
+             than {:.1}% of the frame — the floor is being applied in a different place, \
+             or a different order, on one of the two paths",
+            FLOOR_PATH_MAX_SHARE * 100.0
+        );
+        assert!(
+            mean < FLOOR_PATH_MAX_MEAN,
+            "{label}: the two paths disagree by {mean:.4} levels on average"
+        );
+    }
+
     assert!(
-        floored.0 <= control.0,
-        "the floor made the two paths disagree by {} output levels where they \
-         already disagreed by {} — it is being applied in a different place, or \
-         a different order, on one of them",
+        floored.0 <= control.0 * 4 + 256,
+        "the floor made {} samples disagree by over {FLOOR_PATH_TOLERANCE} levels where \
+         {} did without it — it is being applied in a different place, or a different \
+         order, on one of them",
         floored.0,
         control.0
     );
     assert!(
-        // Measured 0.0028 without the floor and 0.0099 with it: a hundredth of
-        // an output level, which is the two tables' interpolation and nothing
-        // else. The bound leaves room for a stretch retune to move both.
-        floored.1 <= control.1 + 0.02,
+        // Measured 0.0026 without the floor and 0.0264 with the clip: three
+        // hundredths of an output level, the two tables interpolating across the
+        // clip's kink and nothing else. The bound leaves room for a retune.
+        floored.1 <= control.1 + 0.05,
         "the floor widened the average disagreement from {:.4} to {:.4}",
         control.1,
         floored.1

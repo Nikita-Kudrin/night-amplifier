@@ -108,9 +108,12 @@ pub struct StretchResult {
     /// follow (it always goes after contrast). One field, not a floor plus a
     /// `fused` flag: nothing downstream needs the floor that *was* fused, it's
     /// already in the table. Shared, not rebuilt per payload — same reason
-    /// `render_task::ConversionCache` exists: a session with lossless + two JPEG
-    /// tiers would otherwise resample and allocate the same curve four times a frame.
+    /// `stream_encoding::ConversionCache` exists: lossless + JPEG at different sizes
+    /// would otherwise resample and allocate the same curve twice a frame.
     pub deferred_shadow_floor: Option<std::sync::Arc<crate::render::ShadowFloorTable>>,
+    /// The soft darkening, applied by the encoder after the row tail: it reads a
+    /// 3x3 neighbourhood, so it can ride neither the LUT nor a per-row pass.
+    pub sky_shadow: Option<crate::render::SkyShadow>,
 }
 
 /// A frame ready to be rendered and encoded.

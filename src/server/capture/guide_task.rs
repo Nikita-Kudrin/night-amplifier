@@ -24,21 +24,19 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::render_task::{encode_jpeg_tiers, ConversionCache};
+use super::stream_encoding::{encode_jpeg, ConversionCache, FailureReports};
 use super::solving::{self, SolveSource};
 use super::stage_config;
 use super::storage;
-use super::watchdog::{
-    capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome, StallTracker, StallVerdict,
-    STALL_ESCALATION,
-};
+use super::stall::{handle_stall, StallSite, StallTracker, StallVerdict};
+use super::watchdog::{capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome};
 use crate::camera::Camera;
 use crate::disk_writer::{OpenSession, WritingSessionType};
 use crate::camera::CameraStatus;
 use crate::server::camera_session::ramp::RampState;
 use crate::server::state::{
     AppState, CameraCaptureProfile, CameraOp, CameraRole, CaptureMode, CaptureSettings,
-    ConnectedCameraInfo, RawSessionResume, RenderReadyFrame,
+    ConnectedCameraInfo, RawSessionResume, RenderReadyFrame, StreamKind,
 };
 
 /// How long the loop waits before retrying after a recoverable capture error, so a
@@ -186,6 +184,7 @@ pub(super) fn run(
     debug!(camera = %camera_info.info.name, "Guide task started");
 
     let mut conversions = ConversionCache::default();
+    let mut failures = FailureReports::default();
     // Outlives the loop for the same reason the render task's does: the background
     // model and image statistics describe the sky, not the frame.
     let mut analysis = PreviewAnalysis::new();
@@ -197,7 +196,7 @@ pub(super) fn run(
     let mut rejected_config: Option<String> = None;
     let mut cooler = GuideCooler::default();
     let mut sensor = SensorReadout::default();
-    let mut stalls = StallTracker::default();
+    let mut stalls = StallTracker::for_camera(state, CameraRole::Guide, &camera_info.info.name);
 
     while !cancel.load(Ordering::SeqCst) {
         let settings = rt.block_on(state.settings.read()).clone();
@@ -228,6 +227,7 @@ pub(super) fn run(
             &camera_info.info.name,
         );
         super::config_overrides::apply_sensor_mode_support_override(&mut config, &camera_info.info);
+        super::config_overrides::apply_guide_acquisition_override(&mut config);
 
         frame_number += 1;
         let watchdog_timeout = capture_watchdog_timeout(&config, &camera_info.info);
@@ -258,24 +258,12 @@ pub(super) fn run(
                     return None;
                 }
                 if let crate::camera::CameraError::ExposureTimeout(budget) = e {
-                    if stalls.stalled() == StallVerdict::Escalate {
-                        error!(
-                            camera = %camera_info.info.name,
-                            consecutive = STALL_ESCALATION,
-                            "Restarting the guide stream did not bring frames back; reopening the camera"
-                        );
-                        crate::server::camera_health::record_fault(
-                            state,
-                            &camera_info.info.name,
-                            crate::server::camera_health::FaultKind::Timeout,
-                        );
+                    let name = &camera_info.info.name;
+                    if let StallVerdict::Escalate(_) =
+                        handle_stall(&mut stalls, StallSite::Guide, state, name, budget)
+                    {
                         return None;
                     }
-                    warn!(
-                        camera = %camera_info.info.name,
-                        ?budget,
-                        "Guide frame stalled; restarting the stream in place"
-                    );
                     continue;
                 }
                 if let crate::camera::CameraError::InvalidParameter { .. } = e {
@@ -307,8 +295,7 @@ pub(super) fn run(
         // still saving subs if the user asked it to.
         disk.write(state, &settings, &raw_frame, frame_number, camera_info, rt);
 
-        let stream = Arc::clone(&state.guide_stream);
-        let watched = stream.has_viewers();
+        let watched = state.guide_stream.has_viewers();
         let solving_wanted = solving::plate_solve_available(state, SolveSource::Guide);
         if !watched && !solving_wanted {
             continue;
@@ -336,13 +323,7 @@ pub(super) fn run(
         };
 
         if solving_wanted {
-            rt.spawn({
-                let state = Arc::clone(state);
-                let frame = Arc::clone(&frame);
-                async move {
-                    solving::try_plate_solve(&state, frame, SolveSource::Guide).await;
-                }
-            });
+            solving::offer_plate_solve(state, rt, Arc::clone(&frame), SolveSource::Guide);
         }
 
         if !watched {
@@ -350,10 +331,11 @@ pub(super) fn run(
         }
 
         render_and_publish(
-            &stream,
+            state,
             frame,
             &settings,
             &mut conversions,
+            &mut failures,
             &mut analysis,
             rt,
         );
@@ -488,10 +470,11 @@ impl GuideCooler {
 ///
 /// Only reached with a viewer connected — see the module doc.
 fn render_and_publish(
-    stream: &Arc<crate::server::state::FrameStream>,
+    state: &AppState,
     frame: Arc<crate::frame::Frame>,
     settings: &CaptureSettings,
     conversions: &mut ConversionCache,
+    failures: &mut FailureReports,
     analysis: &mut PreviewAnalysis,
     rt: &tokio::runtime::Handle,
 ) {
@@ -519,26 +502,21 @@ fn render_and_publish(
         stretch_result,
     });
 
-    rt.block_on(stream.set_latest_raw_frame(Arc::clone(&ready)));
+    let stream = &state.guide_stream;
+    // The live resolution, not `settings`: that snapshot predates the exposure.
+    let resolution = rt.block_on(async {
+        stream.set_latest_raw_frame(Arc::clone(&ready)).await;
+        state.settings.read().await.stream_resolution(StreamKind::Jpeg)
+    });
     let counter = stream.begin_frame();
 
+    // JPEG only: `/eyepiece_quality`, the one lossless endpoint, always shows the
+    // imaging camera.
     conversions.begin_frame();
-    if stream.lossless_client_count() > 0 {
-        let (max_w, max_h) = stream.lossless_target_box();
-        match conversions.get(&ready, max_w, max_h) {
-            Some(rgb) => {
-                match crate::server::encoding::encode_rgb8_lz4_chunked_from_u8(
-                    &rgb.0, rgb.1, rgb.2, 1,
-                ) {
-                    Ok(encoded) => rt.block_on(stream.set_latest_frame(counter, encoded)),
-                    Err(e) => warn!(error = %e, "Guide LZ4 encoding failed"),
-                }
-            }
-            None => warn!("RGB8 conversion failed for the guide lossless stream"),
-        }
+    let result = encode_jpeg(stream, &ready, counter, conversions, resolution);
+    if let Some(e) = failures.to_report(StreamKind::Jpeg, result) {
+        warn!(error = %e, "Guide stream encoding failed");
     }
-
-    encode_jpeg_tiers(stream, &ready, counter, conversions);
     stream.publish_frame();
 }
 
@@ -652,7 +630,7 @@ mod tests {
         CameraInfo, CameraResult, CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
     };
     use crate::server::services::CaptureService;
-    use crate::server::state::{CaptureState, JpegTier, StreamKind, TierClientGuard};
+    use crate::server::state::{CaptureState, Resolution, StreamKind, ViewerGuard};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex as StdMutex;
 
@@ -673,6 +651,9 @@ mod tests {
         /// count; a real interval for the ones that stop a *free-running* loop, which
         /// otherwise spins as fast as the disk writer accepts frames.
         frame_delay: Duration,
+        /// Runs inside every exposure: stands in for an observer editing settings while
+        /// the camera is exposing.
+        during_exposure: Option<Box<dyn FnMut() + Send>>,
     }
 
     /// What the guide loop actually asked of the camera.
@@ -717,6 +698,7 @@ mod tests {
                     log: Arc::clone(&log),
                     temperature_c: 20.0,
                     frame_delay: Duration::ZERO,
+                    during_exposure: None,
                 },
                 captured,
                 log,
@@ -727,6 +709,17 @@ mod tests {
         /// not drive frame by frame.
         fn paced(mut self, delay: Duration) -> Self {
             self.frame_delay = delay;
+            self
+        }
+
+        fn sized(mut self, width: u32, height: u32) -> Self {
+            self.info.max_width = width;
+            self.info.max_height = height;
+            self
+        }
+
+        fn during_exposure(mut self, hook: impl FnMut() + Send + 'static) -> Self {
+            self.during_exposure = Some(Box::new(hook));
             self
         }
     }
@@ -765,6 +758,9 @@ mod tests {
             self.log.lock().unwrap().setpoints.push(config.target_temp_c);
             if !self.frame_delay.is_zero() {
                 std::thread::sleep(self.frame_delay);
+            }
+            if let Some(hook) = self.during_exposure.as_mut() {
+                hook();
             }
             let n = self.captured.fetch_add(1, Ordering::SeqCst) + 1;
             if n >= self.stop_after {
@@ -858,10 +854,10 @@ mod tests {
             state.guide_stream.get_latest_raw_frame().await.is_none(),
             "an unwatched guide stream published a rendered frame"
         );
-        for tier in JpegTier::all() {
+        for kind in StreamKind::all() {
             assert!(
-                state.guide_stream.get_tier_jpeg(tier, 1).is_none(),
-                "{tier:?} was encoded with nobody watching the guide stream"
+                state.guide_stream.payload(kind, 1).is_none(),
+                "{kind:?} was encoded with nobody watching the guide stream"
             );
         }
     }
@@ -873,11 +869,7 @@ mod tests {
         let (state, _dw) = AppState::new_for_testing();
         let state = Arc::new(state);
 
-        let _viewer = TierClientGuard::new(
-            Arc::clone(&state.guide_stream),
-            StreamKind::Jpeg,
-            JpegTier::Hd1080,
-        );
+        let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
 
         let captured = drive_guide_loop(&state, 3).await;
 
@@ -888,21 +880,59 @@ mod tests {
             "a watched guide stream must publish every frame it captures"
         );
         assert!(state.guide_stream.get_latest_raw_frame().await.is_some());
+        let payload = state
+            .guide_stream
+            .payload(StreamKind::Jpeg, 3)
+            .expect("a watched guide stream published no JPEG");
+        let height = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+        assert!(height <= 1440, "the guide JPEG ignored Streaming Resolution: height {height}");
+    }
+
+    /// The loop snapshots settings before it exposes, so a Streaming Resolution change made
+    /// during the exposure exists only in the live settings — and the frame that exposure
+    /// renders must already follow it.
+    #[tokio::test]
+    async fn a_resolution_change_during_an_exposure_applies_to_that_frame() {
+        let (state, _dw) = AppState::new_for_testing();
+        let state = Arc::new(state);
+        state.settings.write().await.streaming_resolution = Resolution::Native;
+        let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let editor = Arc::clone(&state);
+        let (camera, _captured) = CountingCamera::new(1, Arc::clone(&stop));
+        let camera = camera.sized(2400, 1600).during_exposure(move || {
+            editor.settings.blocking_write().streaming_resolution = Resolution::Hd1080;
+        });
+        let info = guide_camera_info();
+        let loop_state = Arc::clone(&state);
+        let rt = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            run(&loop_state, &info, Box::new(camera), &stop, None, &rt);
+        })
+        .await
+        .expect("guide loop panicked");
+
+        let payload = state
+            .guide_stream
+            .payload(StreamKind::Jpeg, 1)
+            .expect("a watched guide stream published no JPEG");
+        let size = (
+            u32::from_le_bytes(payload[4..8].try_into().unwrap()),
+            u32::from_le_bytes(payload[8..12].try_into().unwrap()),
+        );
+        assert_eq!(size, (1620, 1080), "the guide JPEG followed the exposure's snapshot");
     }
 
     /// A viewer on the guide stream must not make the *main* stream produce anything —
     /// the two are independent producers, and a guide frame advancing the main counter
-    /// would invalidate the imaging camera's cached tiers on every guide exposure.
+    /// would invalidate the imaging camera's payloads on every guide exposure.
     #[tokio::test]
     async fn the_guide_loop_never_touches_the_main_stream() {
         let (state, _dw) = AppState::new_for_testing();
         let state = Arc::new(state);
 
-        let _viewer = TierClientGuard::new(
-            Arc::clone(&state.guide_stream),
-            StreamKind::Jpeg,
-            JpegTier::Hd1080,
-        );
+        let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
         drive_guide_loop(&state, 2).await;
 
         assert_eq!(state.main_stream.frame_counter(), 0);

@@ -1,8 +1,10 @@
+mod axis_taps;
 pub mod format;
 pub mod fused;
 pub mod jpeg;
 pub mod lz4;
 pub mod png;
+mod sky_shadow_rows;
 
 #[cfg(test)]
 pub mod tests;

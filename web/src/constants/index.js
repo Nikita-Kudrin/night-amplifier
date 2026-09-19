@@ -75,15 +75,13 @@ export const BLACK_LEVEL_LIMITS = {
 }
 
 // The darkening half is anchored to the sky, so its reach is only meaningful against
-// where the sky actually renders. Shortened from -0.09 when the auto-stretch solver was
-// fixed to hit its own target background: that dropped the rendered sky from 14 to 11 of
-// 255, and the same floor fraction against a darker sky took 56% of the target's
-// contrast at the end stop instead of 37%. Mirrors `MIN_BLACK_FLOOR` in
+// where the sky actually renders. -6% is where the spatial darkening saturates (a tenth
+// of the sky left); further travel would do nothing. Mirrors `MIN_BLACK_FLOOR` in
 // `server/capture/stage_config.rs`, which clamps it server-side.
 export const BLACK_FLOOR_LIMITS = {
-    min: -0.075,
+    min: -0.045,
     max: 0.15,
-    step: 0.01,
+    step: 0.005,
     default: 0.04,
 }
 
@@ -96,23 +94,22 @@ export const DENOISE_CHROMA_STRENGTH_LIMITS = {
     default: 1.0,
 }
 
-// Multiplier on the wavelet thresholds. Ranges to 200% because the backend
-// clamps there (`render::MAX_LUMA_STRENGTH`) — a slider that stopped at the
-// default could not be "raised" the way the manual says to.
+// Multiplier on the wavelet thresholds for the mid scales. Stops at 100%, which is the
+// tuned value and also the point past which the filter stops helping: above it the
+// mottle moves out past the transform's reach instead of going away, and stars gain a
+// visible ring. Mirrors `render::MAX_LUMA_STRENGTH`, which clamps it server-side.
 export const DENOISE_LUMA_STRENGTH_LIMITS = {
-    min: 0.0,
-    max: 2.0,
-    step: 0.05,
-    default: 1.0,
-}
-
-// How much of the finest wavelet scale is left alone. 100% is the shipped
-// behaviour; lowering it is the only control that moves sky grain much.
-export const STAR_PROTECTION_LIMITS = {
     min: 0.0,
     max: 1.0,
     step: 0.05,
     default: 1.0,
+}
+
+export const BACKGROUND_GRAIN_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 0.5,
 }
 
 // How far above its brightest same-colour neighbour a sample must sit to be
@@ -185,6 +182,16 @@ export const PREVIEW_RESOLUTION_OPTIONS = [
     {value: 'qhd1440', label: '1440p'},
     {value: 'hd1080', label: '1080p'},
 ]
+
+// The one JPEG size every client of `/` and `/eyepiece` receives — see the Rust
+// `Resolution`. Same choices as Processing Resolution.
+export const STREAMING_RESOLUTION_OPTIONS = PREVIEW_RESOLUTION_OPTIONS
+
+// The one RGB8+LZ4 size every client of `/eyepiece_quality` receives. No 1080p: the
+// server's `EyepieceStreamResolution` refuses it.
+export const EYEPIECE_STREAM_RESOLUTION_OPTIONS = PREVIEW_RESOLUTION_OPTIONS.filter(
+    (opt) => opt.value !== 'hd1080'
+)
 
 // Telescope setup limits
 export const TELESCOPE_LIMITS = {
@@ -291,11 +298,11 @@ export const DEFAULT_SETTINGS = {
     denoise: {
         chroma: true,
         chroma_strength: 1.0,
-        luma: true,
+        background_grain: 0.5,
         luma_strength: 1.0,
-        star_protection: 1.0,
     },
     preview_resolution: 'native',
+    streaming_resolution: 'qhd1440',
     eyepiece: {
         binoview: true,
         screen_width: 140.0,
@@ -308,6 +315,7 @@ export const DEFAULT_SETTINGS = {
         black_floor: 0.04,
         darker_sky: false,
         dither: true,
+        stream_resolution: 'qhd1440',
     },
     dew_heater_enabled: true,
     dew_heater_power: 10,
@@ -342,7 +350,7 @@ export const HELP_TEXTS = {
     focus_mode:
         'Trades image quality for frame rate while you focus or hunt for a target. Holds off the six stages that cost time per frame and buy nothing at a focus mask: background subtraction, shadow saturation boost, row/column pattern removal, colour mottle, background grain and dithering. Hot pixel rejection keeps running - Push-To cannot plate-solve a frame full of them. Their Settings toggles are held while the mode is on and every one goes back to your value when you switch it off.',
     stretch_aggressiveness:
-        'Controls how strongly the dark areas are boosted. High is best for extremely faint nebulae, Low preserves star colors and contrast.',
+        'How hard the dark end of the image is boosted, and with it how bright the background sits.\n• Star Fields: the gentlest. Darkest background of the three and the cleanest, at the cost of some faint outer structure.\n• Deep Sky: the default, and the brightest on most targets.\n• Nebulae: lifts the background furthest, which brings out the faintest nebulosity and brings up its grain with it.\nAll three render stars the same way — the difference is what happens below them.',
     background_subtraction:
         'Removes gradients caused by light pollution or moonlight, resulting in a more even background across the image.',
     background_extraction_algorithm:
@@ -379,12 +387,14 @@ export const HELP_TEXTS = {
         'Splits the screen into two independent copies of the image based on physical screen dimensions and resolution.',
     eyepiece_screen_settings:
         'Configure physical screen dimensions and resolution to calculate accurate split for Binoview.',
+    eyepiece_stream_resolution:
+        'Image size for the lossless eyepiece view (/eyepiece_quality). Match your eyepiece screen: 1440p for a 1440 × 1440 panel. Larger than the screen and the browser has to shrink the image, which adds grain and shimmer you will see through the lens; Native sends every processed pixel. Changes apply from the next frame.',
     eyepiece_circular_view:
         'Crops the view to a circle, emulating the experience of looking through a real telescope eyepiece.',
     eyepiece_intensity:
         'Darkens the background sky for OLED screens and pulls up the contrast of objects. Higher values also push more of the sky\'s noise below black, so the background looks smoother.',
     eyepiece_black_floor:
-        'Sets where black sits.\n• Positive keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise it if the background shows hard black dots.\n• Negative pushes the sky itself toward black without dimming the target, which is what lowering Black level does instead. Around -5% puts the floor at the sky level and takes the background down by about two thirds; the far end takes it down by around 85%. The negative half needs a measured sky level, so it does nothing with Auto stretch off or in Planetary mode.',
+        'Sets where black sits.\n• Positive keeps the darkest pixels just above pure black. An OLED switches a black pixel fully off, so sky pixels the stretch clipped to zero read as black speckle at eyepiece magnification rather than as sky. Raise it if the background shows hard black dots.\n• Negative pushes the sky itself toward black without dimming the target, which is what lowering Black level does instead. Around -4.5% puts the floor at the sky level; the far end takes the background down by about 60%, or by around 80% with Darker sky on. The negative half needs a measured sky level, so it does nothing with Auto stretch off or in Planetary mode.',
     eyepiece_darker_sky:
         'Lets the darkening half of Black floor reach true black instead of rolling off into it. Buys the deepest possible sky and a little more separation between the target and the background, and costs the black speckle the positive half of Black floor exists to remove - around a third of the sky ends up fully off. No effect while Black floor is positive.',
     hot_pixel_sigma:
@@ -395,16 +405,16 @@ export const HELP_TEXTS = {
         'Turns each 2x2 sensor square into one colour pixel instead of interpolating. Halves the width and height, invents no colour noise, and keeps any surviving hot pixel to a single dot. Free on a large sensor that already oversamples your screen; a real loss of detail on a smaller one.',
     preview_resolution:
         'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
+    streaming_resolution:
+        'Image size sent to every screen viewing the live view and the eyepiece view. All of them get the same picture, so larger sizes cost bandwidth and server time for every viewer. It never goes above the Processing Resolution. On a screen smaller than the image the browser shrinks it, which looks grainier than choosing the smaller size here. Changes apply from the next frame.',
     denoise_chroma:
         'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
     denoise_chroma_strength:
         'How far the colour planes move toward the smoothed result. Lower it if faint colour in the target starts washing out.',
-    denoise_luma:
-        'Removes background grain by scale, leaving stars and the target\'s broad structure alone. Measured on a real frame it takes visible sky noise down by about a third. This is the setting that can turn nebulae to plastic if pushed — judge it at the eyepiece, and turn it off if the target starts looking smeared.',
+    denoise_background_grain:
+        'How hard to fight grain in the background. The two halves do different things, because the mechanisms available cost very different amounts.\n• Above 50% the picture gets smoother almost for free. This is the half that works on the coarse, blotchy grain you actually notice — measured across six sessions it takes it down 9-27% while the target dims by at most 1%. Start here.\n• 50% is the tuned default and what the app shipped with.\n• Below 50% you are buying brightness back with grain. It returns the finest speckle first, which is nearly invisible at normal viewing size, and then starts weakening the tone curve, which is what actually brightens faint nebulosity and galaxy arms — on a deep session the target reads about 17% brighter at 0% than at 50%.\nIf you are chasing smooth background, go up. If you are chasing faint detail, go down. Judge it at the eyepiece on the target you are actually looking at.',
     denoise_luma_strength:
-        'Scales the thresholds for the larger structures — the soft mottle across the target, not the fine speckle. 100% is the tuned default. Lower it if the target looks soft or plastic. Raising it leans harder on faint nebulosity, so go carefully.',
-    denoise_star_protection:
-        'How much of the finest detail is left untouched. That scale holds both the sky speckle and the cores of stars, and it is where almost all the grain lives — so this is the one control that visibly changes how smooth the background looks. At 100% stars are exactly as captured and the speckle stays. Lower it and the background smooths dramatically; the tightest stars soften first, so bring it down until you can see them change, then back off.',
+        'Scales the thresholds for the mid scales — the soft mottle across the target, not the fine speckle and not the broad background blotches the Background Grain dial handles. 100% is the tuned value and the maximum: past it the mottle does not go away, it moves out to a coarser scale, and stars start to show a ring. Lower it if the target looks soft or plastic; 0% turns the brightness denoiser off altogether, which is the setting to reach for if nebulae start looking like plastic.',
     eyepiece_dither:
         'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
     auto_stretch_intensity:

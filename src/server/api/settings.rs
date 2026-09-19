@@ -8,7 +8,8 @@ use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
 use super::super::events::ServerEvent;
 use super::super::services::PushToService;
 use super::super::state::{
-    focus_mode, AppState, CameraRole, CaptureMode, CaptureSettings, CaptureState, StackingType,
+    focus_mode, AppState, CameraRole, CaptureMode, CaptureSettings, CaptureState, Resolution,
+    StackingType,
 };
 
 /// Returns the profile key (`"{provider}/{model}"`) for the camera in `role`, if any.
@@ -19,6 +20,14 @@ async fn camera_profile_key_for(state: &Arc<AppState>, role: CameraRole) -> Opti
         .camera_in_role(role)
         .await
         .map(|info| camera_profile_key(&info.provider, &info.info.name, role))
+}
+
+/// Applies to every connected client from the next rendered frame on, which is what makes
+/// a size change in the field worth a line of its own.
+fn log_stream_resolution_change(message: &str, from: Resolution, to: Resolution) {
+    if from != to {
+        tracing::info!(from = from.label(), to = to.label(), "{message}");
+    }
 }
 
 /// GET /api/settings
@@ -266,11 +275,24 @@ pub async fn update_settings(
         if let Some(preview_resolution) = request.preview_resolution {
             settings.preview_resolution = preview_resolution;
         }
+        if let Some(streaming_resolution) = request.streaming_resolution {
+            log_stream_resolution_change(
+                "Streaming resolution changed",
+                settings.streaming_resolution,
+                streaming_resolution,
+            );
+            settings.streaming_resolution = streaming_resolution;
+        }
 
         if let Some(sensor_correction) = request.sensor_correction {
             settings.sensor_correction = sensor_correction.sanitized();
         }
         if let Some(eyepiece) = request.eyepiece {
+            log_stream_resolution_change(
+                "Eyepiece streaming resolution changed",
+                settings.eyepiece.stream_resolution.resolution(),
+                eyepiece.stream_resolution.resolution(),
+            );
             settings.eyepiece = eyepiece;
         }
         if let Some(telescope) = request.telescope {

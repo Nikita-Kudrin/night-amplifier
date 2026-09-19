@@ -221,6 +221,49 @@ fn sky_frame(width: usize, height: usize, level: f32, sigma: f32) -> Frame {
     Frame::from_f32_vec(data, width, height, 3).unwrap()
 }
 
+/// A stack deepening under a fixed sky must not move the estimate.
+///
+/// The other sweep moves the sky and holds the noise; this holds the sky and shrinks
+/// the noise, which is what a session actually does between stack updates. The
+/// histogram peak alone fails it: on a real 106-sub session it returned bit-identical
+/// values at 32, 64 and 106 frames, 1.2 ADU above the sky, having jumped 2.1 ADU
+/// between 16 and 32 subs while the sky moved 0.2 — four output levels of background
+/// step in one update, which at the eyepiece reads as the field pumping.
+#[test]
+fn the_sky_estimate_holds_still_as_a_stack_deepens() {
+    const LEVEL: f32 = 0.0023;
+    // 10 ADU down to 1.3, i.e. a single sub through to a ~60-frame stack.
+    const SIGMAS: [f32; 6] = [1.53e-4, 1.08e-4, 7.6e-5, 5.4e-5, 3.0e-5, 2.0e-5];
+
+    let mut estimates = Vec::new();
+    for sigma in SIGMAS {
+        estimates.push(estimate_background_mode(&sky_frame(192, 192, LEVEL, sigma)).mode);
+    }
+
+    let worst_step = estimates
+        .windows(2)
+        .map(|p| (p[1] - p[0]).abs())
+        .fold(0.0f32, f32::max);
+    let worst_err = estimates
+        .iter()
+        .map(|e| (e - LEVEL).abs())
+        .fold(0.0f32, f32::max);
+    println!(
+        "estimates (ADU): {:?}",
+        estimates.iter().map(|e| e * 65535.0).collect::<Vec<_>>()
+    );
+    assert!(
+        worst_step * 65535.0 < 0.7,
+        "the estimate moved {:.2} ADU between two depths of the same sky",
+        worst_step * 65535.0
+    );
+    assert!(
+        worst_err * 65535.0 < 1.0,
+        "the estimate sat {:.2} ADU off the sky it was given",
+        worst_err * 65535.0
+    );
+}
+
 /// The sky estimate must track a background far narrower than a histogram bin, at every
 /// level — not just at the two the first version of this test happened to sample.
 ///
@@ -280,4 +323,95 @@ fn background_mode_tracks_a_sky_narrower_than_a_histogram_bin() {
         backward, 0,
         "the estimate went backwards {backward} times while the sky rose monotonically"
     );
+}
+
+/// A sky with a broad target over `share` of its width, rising to `peak_excess` above
+/// sky at the far edge. Smooth, so its samples are continuous with the sky's — which is
+/// what makes it dangerous to a window sized by a MAD over everything.
+fn target_over_sky(width: usize, height: usize, sky: f32, sigma: f32, share: f32, peak_excess: f32) -> Frame {
+    let mut state = 0xA076_1D64_78BD_642Fu64;
+    let mut next = || {
+        let mut sum = 0.0f32;
+        for _ in 0..12 {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            sum += (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 40) as f32 / 16_777_216.0;
+        }
+        sum - 6.0
+    };
+    let cut = (width as f32 * (1.0 - share)) as usize;
+    let mut data = vec![0.0f32; width * height * 3];
+    let plane = width * height;
+    for c in 0..3 {
+        for y in 0..height {
+            for x in 0..width {
+                let level = if x < cut {
+                    sky
+                } else {
+                    sky + peak_excess * (x - cut) as f32 / (width - cut).max(1) as f32
+                };
+                data[c * plane + y * width + x] = (level + next() * sigma).max(0.0);
+            }
+        }
+    }
+    Frame::from_f32_vec(data, width, height, 3).unwrap()
+}
+
+/// A target filling most of the frame must not drag the sky estimate up with it.
+///
+/// The histogram passes already handle this — the sky is the densest bin whatever else
+/// is in frame. What does not is sizing the refinement window from a MAD over *every*
+/// sample: a MAD is robust while the contaminant is a minority, and a frame-filling
+/// halo is not, so the window swallows the target and its median lands inside it.
+/// Measured before the spread was taken from the samples below the peak: +7.25 ADU at
+/// 60 % and +349 ADU at 75 %, against a raw histogram peak 1.4 ADU off the sky.
+///
+/// Swept rather than sampled at one share, because the failure only appears once the
+/// target passes half the frame and then grows fast.
+#[test]
+fn a_frame_filling_target_does_not_drag_the_sky_estimate() {
+    const SKY: f32 = 0.0023;
+    const SIGMA: f32 = 3.0e-5;
+    // 7x sky at the far edge: bright enough to be a target, smooth enough that its
+    // samples run continuously out of the sky's own distribution.
+    const PEAK_EXCESS: f32 = 7.0 * SKY;
+
+    let mut worst = (0.0f32, 0.0f32);
+    for share in [0.0f32, 0.2, 0.35, 0.5, 0.6, 0.75] {
+        let frame = target_over_sky(256, 256, SKY, SIGMA, share, PEAK_EXCESS);
+        let err = estimate_background_mode(&frame).mode - SKY;
+        println!("target over {:.0}% of the frame: {:+.2} ADU", share * 100.0, err * 65535.0);
+        if err.abs() > worst.0.abs() {
+            worst = (err, share);
+        }
+    }
+
+    assert!(
+        worst.0.abs() * 65535.0 < 0.5,
+        "the sky estimate moved {:+.2} ADU with a target over {:.0}% of the frame — the \
+         refinement window is being sized by the target, not by the sky",
+        worst.0 * 65535.0,
+        worst.1 * 100.0
+    );
+}
+
+/// The window is sized from a one-sided spread, so the constant that turns it into a
+/// sigma has to be right: a half-normal's median is `0.6745 * sigma`, the same as a MAD.
+/// A sky with no target in it is where that is checkable against the sigma it was built
+/// with.
+#[test]
+fn the_window_is_scaled_to_one_sigma_of_the_sky_it_measures() {
+    const LEVEL: f32 = 0.0023;
+    for sigma in [1.0e-4f32, 3.0e-5, 1.5e-5] {
+        let frame = sky_frame(256, 256, LEVEL, sigma);
+        let err = (estimate_background_mode(&frame).mode - LEVEL).abs();
+        assert!(
+            err < 0.25 * sigma,
+            "sigma {:.2} ADU: estimate {:.2} ADU off the sky, {:.2} sigma",
+            sigma * 65535.0,
+            err * 65535.0,
+            err / sigma
+        );
+    }
 }

@@ -171,6 +171,7 @@ pub async fn connect(
     let opened = install::open_verified(state, role, camera_id, provider, index, &locator, use_simulated)
         .await
         .inspect_err(|e| error!(camera_id = %camera_id, error = %e, "Failed to open camera"))?;
+    crate::server::camera_health::forget_restart_history(state, role, &opened.camera.info().name);
     install::install_camera(state, camera_id, role, opened.provider, index, opened.camera, None).await
 }
 

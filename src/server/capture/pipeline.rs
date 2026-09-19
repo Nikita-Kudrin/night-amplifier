@@ -440,6 +440,10 @@ pub fn process_preview_frame_with_analysis(
     .entered();
 
     let mut pipeline_config = get_render_pipeline_config(settings, false);
+    // How deep the stack is decides how much of its noise reduction the stretch
+    // spends on a calmer sky (`render::autostretch::depth_grain_gain`). Set here
+    // rather than in `get_render_pipeline_config`, which only sees settings.
+    pipeline_config.stretch_config.stack_depth = ctx.stack_depth.max(1);
 
     let reused = analysis.begin_frame(
         ctx,
@@ -556,7 +560,7 @@ pub fn process_preview_frame_with_analysis(
                 let contrast_applied = (pipeline_config.contrast
                     && !pipeline_config.contrast_config.is_disabled())
                 .then_some(&pipeline_config.contrast_config);
-                let shadow_floor = pipeline_config.shadow_floor.resolve(
+                let shadow = pipeline_config.shadow_floor.resolve(
                     crate::render::sky_level_after_contrast(
                         res.target_background,
                         contrast_applied,
@@ -572,7 +576,7 @@ pub fn process_preview_frame_with_analysis(
                     // order is stretch -> saturation -> contrast -> floor either
                     // way.
                     if can_fuse_contrast {
-                        shadow_floor
+                        shadow.floor
                     } else {
                         crate::render::ShadowFloor::NONE
                     },
@@ -586,10 +590,11 @@ pub fn process_preview_frame_with_analysis(
                     black_point: res.black_point,
                     scale_lut,
                     color_intensity: pipeline_config.stretch_config.color_intensity,
-                    deferred_shadow_floor: (!can_fuse_contrast && !shadow_floor.is_none())
+                    deferred_shadow_floor: (!can_fuse_contrast && !shadow.floor.is_none())
                         .then(|| {
-                            std::sync::Arc::new(crate::render::ShadowFloorTable::new(shadow_floor))
+                            std::sync::Arc::new(crate::render::ShadowFloorTable::new(shadow.floor))
                         }),
+                    sky_shadow: shadow.sky,
                 })
             }
             Err(e) => {

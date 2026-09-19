@@ -108,14 +108,9 @@ pub fn record_disk_writer_queue_capacity(capacity: u64) {
 #[cfg(not(feature = "telemetry"))]
 pub fn record_disk_writer_queue_capacity(_capacity: u64) {}
 
-/// Record the catalog entry count and index sizes.
+/// Record the catalog entry count and search key counts.
 #[cfg(feature = "telemetry")]
-pub fn record_catalog_stats(
-    entries_count: u64,
-    designation_index_size: u64,
-    messier_index_size: u64,
-    alias_index_size: u64,
-) {
+pub fn record_catalog_stats(entries_count: u64, name_key_count: u64, identifier_key_count: u64) {
     if let Some(provider) = super::METER_PROVIDER.get() {
         let meter = provider.meter("night_amplifier.catalog");
 
@@ -128,26 +123,16 @@ pub fn record_catalog_stats(
 
         let index_gauge = meter
             .u64_gauge("catalog.index_size")
-            .with_description("Number of entries in catalog index")
-            .with_unit("{entries}")
+            .with_description("Number of search keys in catalog index")
+            .with_unit("{keys}")
             .build();
-        index_gauge.record(
-            designation_index_size,
-            &[KeyValue::new("index", "designation")],
-        );
-        index_gauge.record(messier_index_size, &[KeyValue::new("index", "messier")]);
-        index_gauge.record(alias_index_size, &[KeyValue::new("index", "alias")]);
+        index_gauge.record(name_key_count, &[KeyValue::new("index", "name")]);
+        index_gauge.record(identifier_key_count, &[KeyValue::new("index", "identifier")]);
     }
 }
 
 #[cfg(not(feature = "telemetry"))]
-pub fn record_catalog_stats(
-    _entries_count: u64,
-    _designation_index_size: u64,
-    _messier_index_size: u64,
-    _alias_index_size: u64,
-) {
-}
+pub fn record_catalog_stats(_entries_count: u64, _name_key_count: u64, _identifier_key_count: u64) {}
 
 /// Record the number of connected cameras.
 #[cfg(feature = "telemetry")]
@@ -183,9 +168,10 @@ pub fn record_event_subscribers(count: u64) {
 #[cfg(not(feature = "telemetry"))]
 pub fn record_event_subscribers(_count: u64) {}
 
-/// Record the latest frame size in bytes.
+/// Record the latest frame size in bytes for one payload family (`jpeg` or `lossless`).
+/// Labelled because both families publish every frame, at independently chosen sizes.
 #[cfg(feature = "telemetry")]
-pub fn record_latest_frame_size(bytes: u64) {
+pub fn record_latest_frame_size(format: &'static str, bytes: u64) {
     if let Some(provider) = super::METER_PROVIDER.get() {
         let meter = provider.meter("night_amplifier.server");
         let gauge = meter
@@ -193,12 +179,12 @@ pub fn record_latest_frame_size(bytes: u64) {
             .with_description("Size of latest rendered frame in bytes")
             .with_unit("By")
             .build();
-        gauge.record(bytes, &[]);
+        gauge.record(bytes, &[KeyValue::new("format", format)]);
     }
 }
 
 #[cfg(not(feature = "telemetry"))]
-pub fn record_latest_frame_size(_bytes: u64) {}
+pub fn record_latest_frame_size(_format: &'static str, _bytes: u64) {}
 
 // ============================================================================
 // Per-frame pipeline instrumentation
@@ -343,12 +329,12 @@ fn pipeline_histogram(
     Some(cell.get_or_init(|| histogram))
 }
 
-/// Record the JPEG encode time for one resolution tier.
+/// Record the JPEG encode time at the Streaming Resolution in effect.
 ///
-/// Separate from [`StageTimer`] because it carries a `tier` attribute — the
-/// render task encodes one payload per tier that has clients.
+/// Separate from [`StageTimer`] because it carries a `resolution` attribute: the setting
+/// changes the cost several-fold, so timings from different settings must not mix.
 #[cfg(feature = "telemetry")]
-pub fn record_jpeg_encode_ms(tier: &'static str, millis: f64) {
+pub fn record_jpeg_encode_ms(resolution: &'static str, millis: f64) {
     use opentelemetry::metrics::Histogram;
     use std::sync::OnceLock;
 
@@ -363,17 +349,17 @@ pub fn record_jpeg_encode_ms(tier: &'static str, millis: f64) {
             let built = provider
                 .meter("night_amplifier.pipeline")
                 .f64_histogram("frame.encode_jpeg_ms")
-                .with_description("Wall time spent encoding one JPEG resolution tier")
+                .with_description("Wall time spent encoding the JPEG stream payload")
                 .with_unit("ms")
                 .build();
             ENCODE_JPEG.get_or_init(|| built)
         }
     };
-    histogram.record(millis, &[KeyValue::new("tier", tier)]);
+    histogram.record(millis, &[KeyValue::new("resolution", resolution)]);
 }
 
 #[cfg(not(feature = "telemetry"))]
-pub fn record_jpeg_encode_ms(_tier: &'static str, _millis: f64) {}
+pub fn record_jpeg_encode_ms(_resolution: &'static str, _millis: f64) {}
 
 /// Count a frame published to stream clients. The rate of this counter is the
 /// delivered live-view frame rate.

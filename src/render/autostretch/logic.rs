@@ -8,7 +8,92 @@ use crate::statistics::ImageStats;
 
 /// Smallest sky-above-black gap the solver will be asked to stretch, keeping the
 /// stretch factor finite when the sky sits on the black point.
-const MIN_EFFECTIVE_MEDIAN: f32 = 1e-4;
+///
+/// A numerical guard and nothing more. It used to be `1e-4` — about 6.5 ADU of a
+/// 16-bit frame — which on an IMX533 deep-sky stack is larger than `k * sigma` from
+/// roughly 16 subs on, so past that depth the floor, not the solve, set the black
+/// point. That accident was the only reason a deeper stack ever looked smoother
+/// (grain 4.4 -> 1.5 output levels over 106 subs, falling as sigma once floored),
+/// and it arrived at whatever depth the camera's gain happened to put sigma below
+/// it. `depth_grain_gain` does that deliberately instead.
+///
+/// `1e-5` — 0.65 ADU — rather than smaller: `solve_stretch_factor_newton` treats a gap
+/// of `1e-6` or less as degenerate and returns an identity stretch, so the floor has to
+/// stay clear of it. Real gaps are far above either: ~2.9e-4 on a single IMX533 sub and
+/// ~1.6e-4 at 106 frames with the depth gain applied.
+const MIN_EFFECTIVE_MEDIAN: f32 = 1e-5;
+
+/// Stack depth past which the sky stops getting calmer.
+///
+/// The split below is only affordable while the stack's noise really is falling as
+/// `sqrt(N)`. It is not, deep into a real session — rejection, drift and a sky that
+/// changes all take from it. On the 106-sub IMX533 set sigma falls as `N^0.41` over
+/// the first 32 subs and as `N^0.19` from there to 106. At a 1/8 split the gain
+/// stays under even that tail, so this is no longer what stops the target paying for
+/// the sky; it is kept because a session of 3-5 hours at 5 s reaches thousands of subs
+/// and nothing is gained by letting the black point keep widening over them.
+/// Guarded by `stack_depth_grain_tests`.
+const MAX_GAIN_DEPTH: f32 = 64.0;
+
+/// Share of the stack's `sqrt(N)` spent on a calmer sky rather than a brighter target,
+/// at the middle of the Background Grain dial.
+///
+/// `1/4` — an even split — was measured against three real sessions and spends more
+/// than the stack delivers: at 114 subs it put the black point 2.83 sigmas wider,
+/// costing the same 2.83x in rendered target contrast (M27 core 89 -> 47 output
+/// levels) for grain the spatial filters reach more cheaply. `1/8` gives the target
+/// back 1.5-1.7x (M27 47 -> 78, globular 98 -> 150, M31 159 -> 203) while the sky
+/// stays within a few percent of where it was, because the wavelet — whose thresholds
+/// are relative to the frame's own noise, so they self-scale with depth — now carries
+/// that work.
+pub const DEFAULT_GRAIN_SPLIT: f32 = 0.125;
+
+/// Smallest split the dial can ask for, and it is deliberately **not zero**.
+///
+/// At `0` the wavelet cannot take over: its thresholds are noise-relative, so it removes
+/// a constant *fraction* of the noise and never pins absolute output grain. On the
+/// 106-sub IMX533 session with denoising on, displayed sky grain then *rises* with depth
+/// (1.41 -> 2.30 output levels from 1 to 106 subs) and target-to-grain peaks at 64 subs
+/// and falls back — the give-back failure `MAX_GAIN_DEPTH` exists to prevent, reappearing
+/// from the other end. At `1/12` grain is near flat with depth (1.41 -> 1.66), so the
+/// bottom of the dial is still a setting a long session does not regress on.
+pub const MIN_GRAIN_SPLIT: f32 = 1.0 / 12.0;
+
+/// Largest split the dial can ask for: the even split, kept as the top of the range
+/// because it is what the sky-first end of the trade actually means.
+pub const MAX_GRAIN_SPLIT: f32 = 0.25;
+
+/// Ceiling on the black point factor the solve may actually use.
+///
+/// `with_black_point_sigma` clamps to 5.0, and the depth gain then multiplies it, so
+/// the product is what has to be bounded — not the setting. Derived from the split in
+/// force rather than written out: with the split a user-facing dial, a literal here
+/// would bound the default's ceiling and silently let the top of the dial past it.
+fn max_effective_sigma(grain_split: f32) -> f32 {
+    5.0 * MAX_GAIN_DEPTH.powf(grain_split)
+}
+
+/// How much wider than `black_point_sigma` the black point sits, for a stack of
+/// `frames` at a given split.
+///
+/// Stacking `N` frames buys `sqrt(N)` in signal-to-noise. Under a scale-invariant
+/// tone curve all of it goes to faint-signal contrast and none to the sky: the MTF
+/// solve pins `mtf(k * sigma) = target_background`, so displayed sky grain is
+/// `T(1-T)/k` whatever sigma is, and the sky looks exactly as grainy at 100 subs as
+/// at one (measured: 4.2 output levels at 1 sub, 4.4 at 8).
+///
+/// This splits the gain instead — `k` grows as `N^grain_split`, so displayed grain
+/// falls as `N^-grain_split` and faint-signal contrast rises as `N^(1/2 - grain_split)`
+/// for as long as the stack's own noise falls as `sqrt(N)`; see `MAX_GAIN_DEPTH` for
+/// where it stops. Their ratio is `sqrt(N)` whatever the split; only the split is a
+/// choice, and `DEFAULT_GRAIN_SPLIT` says why its default is the one it is. A wider
+/// black point clips nothing: it sits *further below* the sky, so the faintest signal
+/// is dimmer but still above black.
+pub fn depth_grain_gain(frames: u32, grain_split: f32) -> f32 {
+    (frames.max(1) as f32)
+        .min(MAX_GAIN_DEPTH)
+        .powf(grain_split.clamp(0.0, MAX_GRAIN_SPLIT))
+}
 
 pub fn compute_auto_stretch(
     frame: &Frame,
@@ -30,13 +115,14 @@ pub fn compute_auto_stretch_with_algorithm(
 
     let signal_fraction = estimate_signal_fraction(&background.luminance_samples, mode, mean_sigma);
 
-    let adaptive_sigma = if signal_fraction > 0.4 {
+    let adaptive_sigma = (if signal_fraction > 0.4 {
         (config.black_point_sigma * 0.6).max(1.5)
     } else if signal_fraction > 0.2 {
         config.black_point_sigma * 0.8
     } else {
         config.black_point_sigma
-    };
+    } * depth_grain_gain(config.stack_depth, config.grain_split))
+    .min(max_effective_sigma(config.grain_split));
 
     // Floor the gap, then derive the black point from it.
     //
@@ -57,6 +143,8 @@ pub fn compute_auto_stretch_with_algorithm(
         mode,
         mean_sigma,
         signal_fraction,
+        stack_depth = config.stack_depth,
+        grain_split = config.grain_split,
         adaptive_sigma,
         black_point,
         effective_median,
@@ -133,6 +221,7 @@ pub fn compute_auto_stretch_with_algorithm(
         target_background,
         midtones,
         black_point,
+        adaptive_sigma,
         original_median: mode,
         adjusted_median: effective_median,
         iterations: 0,
@@ -144,6 +233,175 @@ pub fn compute_auto_stretch_with_algorithm(
 mod tests {
     use super::*;
     use crate::statistics::compute_image_stats;
+
+    /// Read off the split rather than restating it: the split is a product decision —
+    /// now a user-facing one — and a copy here would go on asserting an old value. What
+    /// is fixed is the *shape* — one at a single frame, rising with depth, and stopping.
+    ///
+    /// Swept across the dial's whole range, not only its default. Two of the three
+    /// rejected fixes in this area were only wrong away from the shipped value.
+    #[test]
+    fn depth_grain_gain_rises_with_depth_and_stops() {
+        for split in [MIN_GRAIN_SPLIT, DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT] {
+            let ceiling = MAX_GAIN_DEPTH.powf(split);
+            assert!((depth_grain_gain(1, split) - 1.0).abs() < 1e-6);
+            assert!(
+                (depth_grain_gain(0, split) - 1.0).abs() < 1e-6,
+                "an unknown depth is one frame"
+            );
+            assert!((depth_grain_gain(16, split) - 16f32.powf(split)).abs() < 1e-5);
+            assert!(
+                depth_grain_gain(16, split) > depth_grain_gain(4, split)
+                    && depth_grain_gain(4, split) > depth_grain_gain(1, split),
+                "a deeper stack must place the black point wider, not narrower"
+            );
+            assert!((depth_grain_gain(64, split) - ceiling).abs() < 1e-5);
+            assert!(
+                (depth_grain_gain(10_000, split) - ceiling).abs() < 1e-5,
+                "the gain must stop so a very deep stack keeps growing its target"
+            );
+        }
+
+        // The ceiling is what the target pays, and at the *default* it has to stay
+        // modest: that is the whole reason the split is 1/8 and not the even 1/4, which
+        // gives up more contrast than the spatial filters would cost to buy the same
+        // sky. The top of the dial reaches 2.83x, but only because someone asked.
+        let shipped = MAX_GAIN_DEPTH.powf(DEFAULT_GRAIN_SPLIT);
+        assert!(shipped < 1.8, "the shipped ceiling is {shipped:.2}x");
+    }
+
+    /// The dial's two ends are a real range and the right way round: asking for a calmer
+    /// sky must widen the black point, and asking for a brighter target must narrow it.
+    #[test]
+    fn a_wider_split_places_the_black_point_wider() {
+        assert!(MIN_GRAIN_SPLIT > 0.0, "the dial must not reach a zero split");
+        assert!(MIN_GRAIN_SPLIT < DEFAULT_GRAIN_SPLIT && DEFAULT_GRAIN_SPLIT < MAX_GRAIN_SPLIT);
+        let gains: Vec<f32> = [MIN_GRAIN_SPLIT, DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT]
+            .iter()
+            .map(|&s| depth_grain_gain(64, s))
+            .collect();
+        assert!(gains[0] < gains[1] && gains[1] < gains[2], "{gains:?} is not monotone");
+        assert!(
+            max_effective_sigma(MIN_GRAIN_SPLIT) < max_effective_sigma(MAX_GRAIN_SPLIT),
+            "the stated ceiling must follow the split it bounds, not sit at one value"
+        );
+    }
+
+    /// The setting is clamped, the gain multiplies it, and the *product* is what places
+    /// the black point — so that is what has to be bounded. Left unbounded the two
+    /// clamps have to be read together to know the real ceiling, which is how a factor
+    /// documented as 1.5-3.0 quietly became 20.
+    #[test]
+    fn the_black_point_factor_the_solve_uses_has_a_stated_ceiling() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        // At the top of the dial as well as its default: the ceiling is derived from the
+        // split, so a literal would bound one setting and let the other straight past.
+        for split in [DEFAULT_GRAIN_SPLIT, MAX_GRAIN_SPLIT] {
+            let config = AutoStretchConfig::new()
+                .with_tone_mapping(ToneMappingAlgorithm::Mtf)
+                .with_black_point_sigma(99.0)
+                .with_grain_split(split)
+                .with_stack_depth(100_000);
+
+            let result = compute_auto_stretch_with_algorithm(
+                &frame,
+                &stats,
+                config,
+                ToneMappingAlgorithm::Mtf,
+            );
+            let ceiling = max_effective_sigma(split);
+            assert!(
+                result.adaptive_sigma <= ceiling + 1e-4,
+                "the solve used {} sigmas, past the stated ceiling of {ceiling}",
+                result.adaptive_sigma
+            );
+            assert!(
+                (result.adaptive_sigma - 5.0 * depth_grain_gain(u32::MAX, split)).abs() < 1e-3,
+                "the ceiling must be exactly the two clamps multiplied, not a third number"
+            );
+        }
+    }
+
+    /// A per-channel black point is subtracted from the frame the curve is solved for,
+    /// so it has to be placed at the sigma the solve used — not at the raw setting,
+    /// which at depth differs by the whole gain.
+    #[test]
+    fn the_result_reports_the_sigma_its_black_point_was_placed_at() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        let config = AutoStretchConfig::new().with_tone_mapping(ToneMappingAlgorithm::Mtf);
+
+        for depth in [1u32, 16, 64] {
+            let r = compute_auto_stretch_with_algorithm(
+                &frame,
+                &stats,
+                config.with_stack_depth(depth),
+                ToneMappingAlgorithm::Mtf,
+            );
+            let gap = r.original_median - r.black_point;
+            assert!(
+                (gap - r.adaptive_sigma * stats.mean_sigma()).abs() < 1e-6,
+                "{depth} frames: the black point sits {gap} below the sky but the result \
+                 reports {} sigmas of {}",
+                r.adaptive_sigma,
+                stats.mean_sigma()
+            );
+        }
+    }
+
+    /// The same sky at two depths: the deeper one is stretched more gently, which is
+    /// what a calmer sky is made of. Nothing else about the frame changes.
+    #[test]
+    fn a_deeper_stack_lowers_the_black_point_and_softens_the_curve() {
+        let frame = noisy_sky(128, 0.05, 0.002);
+        let stats = compute_image_stats(&frame).unwrap();
+        let config = AutoStretchConfig::new().with_tone_mapping(ToneMappingAlgorithm::Mtf);
+
+        let shallow = compute_auto_stretch_with_algorithm(
+            &frame,
+            &stats,
+            config.with_stack_depth(1),
+            ToneMappingAlgorithm::Mtf,
+        );
+        let deep = compute_auto_stretch_with_algorithm(
+            &frame,
+            &stats,
+            config.with_stack_depth(16),
+            ToneMappingAlgorithm::Mtf,
+        );
+
+        let shallow_gap = shallow.original_median - shallow.black_point;
+        let deep_gap = deep.original_median - deep.black_point;
+        let ratio = deep_gap / shallow_gap;
+        let expected = depth_grain_gain(16, config.grain_split);
+        assert!(
+            (ratio - expected).abs() < 0.05,
+            "16 frames should widen the sky-to-black gap by {expected:.3}x, got {ratio:.3}x"
+        );
+        assert!(
+            deep.midtones[0] > shallow.midtones[0],
+            "the deeper stack should take the gentler curve: midtone {} against {}",
+            deep.midtones[0],
+            shallow.midtones[0]
+        );
+    }
+
+    /// A sky with per-pixel noise, which the solver needs to have any statistics at all.
+    fn noisy_sky(size: usize, level: f32, sigma: f32) -> Frame {
+        let mut seed: u32 = 12345;
+        let mut frame = Frame::zeros(size, size, 3).unwrap();
+        for y in 0..size {
+            for x in 0..size {
+                for c in 0..3 {
+                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * sigma * 3.46;
+                    frame.set_pixel(x, y, c, level + noise);
+                }
+            }
+        }
+        frame
+    }
 
     #[test]
     fn test_compute_auto_stretch_basic() {

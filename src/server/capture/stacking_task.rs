@@ -275,7 +275,7 @@ pub fn run_stacking_task(
         // task's `Arc::try_unwrap` fail and copy instead.
         //
         // Skipped along with the display copy on an iteration that made none: the solve
-        // wants the stack, not a single sub, and `try_plate_solve` is rate-limited by
+        // wants the stack, not a single sub, and `solve_frame` is rate-limited by
         // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
         // Declines outright while a guide camera is connected: that camera is the solve
         // source then, and it offers frames far more often than an imaging sub arrives.
@@ -283,13 +283,12 @@ pub fn run_stacking_task(
             solving::plate_solve_available(&state, solving::SolveSource::Main),
             display_frame.as_ref(),
         ) {
-            rt.spawn({
-                let state = Arc::clone(&state);
-                let solve_frame = Arc::clone(frame_to_solve);
-                async move {
-                    solving::try_plate_solve(&state, solve_frame, solving::SolveSource::Main).await;
-                }
-            });
+            solving::offer_plate_solve(
+                &state,
+                &rt,
+                Arc::clone(frame_to_solve),
+                solving::SolveSource::Main,
+            );
         }
 
         // Update frame counters. The reason rides on `frame_captured`, never on
@@ -447,19 +446,37 @@ fn save_stacked_result(
     planetary_ctx: &Option<PlanetaryStackingContext>,
     rt: &tokio::runtime::Handle,
 ) {
-    let stacked_frame = stacking_ctx
+    // The depth travels with the frame, from the context that holds both. The saved PNG
+    // is tone-curved by it (`render::autostretch::depth_grain_gain`), so re-deriving it
+    // from the session's `stacked_count` would let the export and the live view disagree
+    // about the same stack — by the reference frame, and by anything a mid-session reset
+    // did to the counters.
+    let stacked = stacking_ctx
         .as_ref()
-        .and_then(|ctx| ctx.compute().ok())
-        .or_else(|| comet_ctx.as_ref().and_then(|ctx| ctx.compute().ok()))
-        .or_else(|| planetary_ctx.as_ref().and_then(|ctx| ctx.compute().ok()));
+        .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        .or_else(|| {
+            comet_ctx
+                .as_ref()
+                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        })
+        .or_else(|| {
+            planetary_ctx
+                .as_ref()
+                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
+        });
 
-    if let Some(frame) = stacked_frame {
+    if let Some((frame, depth)) = stacked {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
         let camera_info = rt.block_on(state.camera_in_role(CameraRole::Main));
         if let Some(info) = camera_info {
-            rt.block_on(storage::save_stacked_result(state, Some(frame), &info));
+            rt.block_on(storage::save_stacked_result(
+                state,
+                Some(frame),
+                depth as u32,
+                &info,
+            ));
         }
     }
 }

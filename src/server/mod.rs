@@ -33,8 +33,7 @@ mod tests;
 
 pub use dto::*;
 pub use encoding::{
-    clamp_client_resolution, encode_rgb8_jpeg_bounded, encode_rgb8_jpeg_dynamic, encode_rgb8_lz4,
-    encode_rgb8_lz4_chunked, JPEG_MAGIC, JPEG_MAX_BOUNDING_BOX, JPEG_MIN_BOUNDING_BOX,
+    encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked, JPEG_MAGIC,
     RGB8_CHUNKED_MAGIC, RGB8_MAGIC,
 };
 pub use error::{ApiError, ApiResult, ServerError};
@@ -150,11 +149,7 @@ impl Server {
     fn build_router(&self) -> Router {
         let api_routes = api::create_router();
 
-        let ws_routes = Router::new()
-            .route("/eyepiece_quality", get(ws::eyepiece_quality_handler))
-            .route("/eyepiece", get(ws::stream_handler))
-            .route("/stream", get(ws::stream_handler))
-            .route("/events", get(ws::events_handler));
+        let ws_routes = ws::routes();
 
         let manual_routes = Router::new().fallback(get(embedded_manual::serve_manual));
 
@@ -228,7 +223,11 @@ impl Server {
 
         info!("Server listening on {}", self.config.bind_addr);
 
-        axum::serve(listener, app)
+        // Connect info lets the image streams log which client asked for which size.
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
             .await
             .map_err(|e| ServerError::ServeFailed(e.to_string()))?;
 

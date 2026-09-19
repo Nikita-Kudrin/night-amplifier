@@ -11,7 +11,7 @@ mod tests {
     use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
     use crate::server::state::{
         CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
-        FocusModeSnapshot, PreviewResolution, RawFrameSaving, SensorCorrectionSettings,
+        FocusModeSnapshot, Resolution, EyepieceStreamResolution, RawFrameSaving, SensorCorrectionSettings,
         TelescopeSettings,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
@@ -62,13 +62,13 @@ mod tests {
                 fpn_removal: false,
                 superpixel_debayer: true,
             },
-            preview_resolution: PreviewResolution::Qhd1440,
+            preview_resolution: Resolution::Qhd1440,
+            streaming_resolution: Resolution::Uhd2160,
             denoise: DenoiseSettings {
                 chroma: true,
                 chroma_strength: 0.8,
-                luma: false,
+                background_grain: 0.25,
                 luma_strength: 0.5,
-                star_protection: 0.25,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,
@@ -82,6 +82,7 @@ mod tests {
                 black_floor: 0.04,
                 darker_sky: false,
                 dither: true,
+                stream_resolution: EyepieceStreamResolution::Native,
             },
             telescope: TelescopeSettings {
                 focal_length_mm: Some(1000.0),
@@ -149,7 +150,8 @@ mod tests {
                 saturation_boost: false,
                 fpn_removal: false,
                 denoise_chroma: false,
-                denoise_luma: true,
+                denoise_luma_strength: 1.0,
+                denoise_luma: None,
                 dither: true,
             }),
         };
@@ -213,6 +215,9 @@ mod tests {
             settings.eyepiece.circular_view
         );
         assert_eq!(restored.eyepiece.intensity, settings.eyepiece.intensity);
+        assert_eq!(restored.eyepiece.stream_resolution, EyepieceStreamResolution::Native);
+        assert_eq!(restored.preview_resolution, Resolution::Qhd1440);
+        assert_eq!(restored.streaming_resolution, Resolution::Uhd2160);
         assert_eq!(restored.sensor_correction, settings.sensor_correction);
         assert_eq!(restored.denoise, settings.denoise);
         assert_eq!(
@@ -339,7 +344,7 @@ mod tests {
         assert_eq!(snapshot.background_subtraction, defaults.background_subtraction);
         assert_eq!(snapshot.fpn_removal, defaults.sensor_correction.fpn_removal);
         assert_eq!(snapshot.denoise_chroma, defaults.denoise.chroma);
-        assert_eq!(snapshot.denoise_luma, defaults.denoise.luma);
+        assert_eq!(snapshot.denoise_luma_strength, defaults.denoise.luma_strength);
         assert_eq!(snapshot.dither, defaults.eyepiece.dither);
         assert_eq!(snapshot.saturation_boost, defaults.saturation_boost);
     }
@@ -406,7 +411,8 @@ mod tests {
             planetary_multi_point_alignment: false,
             sensor_correction: SensorCorrectionSettings::default(),
             denoise: DenoiseSettings::default(),
-            preview_resolution: PreviewResolution::default(),
+            preview_resolution: Resolution::Native,
+            streaming_resolution: Resolution::Qhd1440,
             eyepiece: EyepieceSettings {
                 binoview: true,
                 screen_width: 140.0,
@@ -419,6 +425,7 @@ mod tests {
                 black_floor: 0.04,
                 darker_sky: false,
                 dither: true,
+                stream_resolution: EyepieceStreamResolution::Qhd1440,
             },
             telescope: TelescopeSettings::default(),
             camera_telescope_profiles: HashMap::new(),
@@ -668,6 +675,40 @@ mod tests {
             .load()
             .expect("settings containing a removed key must still load");
         assert_eq!(loaded.exposure_us, 1_234_567);
+    }
+
+    /// Files written before the streaming resolution settings existed carry neither key.
+    /// They must load with both at 1440p and every other value intact — falling back to
+    /// defaults would silently wipe the observer's configuration.
+    #[test]
+    fn a_file_without_streaming_resolutions_loads_them_at_1440p() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let persistence = SettingsPersistence::new(temp_file.path());
+        let mut settings = CaptureSettings::default();
+        settings.preview_resolution = Resolution::Hd1080;
+        settings.eyepiece.intensity = 0.7;
+        persistence.save(&settings).unwrap();
+
+        let mut json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(temp_file.path()).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("streaming_resolution");
+        json["eyepiece"].as_object_mut().unwrap().remove("stream_resolution");
+        std::fs::write(temp_file.path(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+
+        let loaded = persistence.load().expect("an older file must still load");
+        assert_eq!(loaded.streaming_resolution, Resolution::Qhd1440);
+        assert_eq!(loaded.eyepiece.stream_resolution, EyepieceStreamResolution::Qhd1440);
+        assert_eq!(loaded.preview_resolution, Resolution::Hd1080);
+        assert!((loaded.eyepiece.intensity - 0.7).abs() < f32::EPSILON);
+    }
+
+    /// The defaults the UI promises: processing native, both streams at 1440p.
+    #[test]
+    fn resolution_defaults() {
+        let settings = CaptureSettings::default();
+        assert_eq!(settings.preview_resolution, Resolution::Native);
+        assert_eq!(settings.streaming_resolution, Resolution::Qhd1440);
+        assert_eq!(settings.eyepiece.stream_resolution, EyepieceStreamResolution::Qhd1440);
     }
 
     /// Hot-pixel rejection lost its switch, and Focus/Finder mode stopped managing it. Every

@@ -25,8 +25,8 @@ on screen while you are navigating to a target.
 | Download | Saves the round eyepiece image: a square PNG, black outside the field stop — the view as you were looking at it. |
 | Download original | On the button's dropdown. The same picture uncropped — the full rectangular frame. |
 
-Both downloads come from the server at the frame's own resolution, not at
-whatever size your screen is streaming, so they are worth keeping. That render is
+Both downloads come from the server at the frame's own resolution, not at the
+[streaming resolution](/noise-reduction#streaming-resolution), so they are worth keeping. That render is
 big enough that only one runs at a time: if somebody on another device is already
 saving one, the button keeps spinning and retries for up to fifteen seconds before
 telling you the server is busy.
@@ -42,6 +42,9 @@ you once it is up:
 - It shows the **last rendered frame the moment it connects**, rather than waiting
   for the next exposure. At 60-second subs that used to be a minute of black, and a
   display opened after capture had stopped stayed black indefinitely.
+- Its size is **Settings → Eyepiece → Eyepiece Streaming Resolution**, not the
+  display's own: set it to match the panel — 1440p for a 1440×1440 screen (see
+  [Streaming Resolution](/noise-reduction#streaming-resolution)).
 
 Launch it in kiosk mode from your startup script, waiting for the server first —
 Chromium will not retry a page that failed to load:
@@ -63,20 +66,21 @@ How dark the background sky is pushed. Raising it darkens the sky and lifts the
 contrast of the target — and it also pushes more of the sky's noise below black,
 so the background looks smoother as well as darker.
 
-That last part is worth knowing about, because it is the *only* thing in the
-stretch that changes how grainy the sky looks. More frames in the stack will not
-do it: the auto-stretch solves for a fixed background level, so as stacking
-lowers the noise the stretch amplifies harder by exactly the compensating amount.
-Thirty-five frames look as grainy as one. Depth in the target is what stacking
-buys you; smoothness comes from this slider and from
-[Noise Reduction](/noise-reduction).
+This slider is not the only thing that calms the sky any more. A deeper stack
+does it too: the auto-stretch now spends part of what stacking buys on a quieter
+background and the rest on the target, instead of all of it on the target. Sixteen
+frames render about half the grain of one, sixty-four about a third, and the target
+keeps growing the whole time. It stops there: past sixty-four frames a real
+session's noise no longer falls fast enough to pay for both, so everything beyond
+that goes to the target.
 
-::: warning Changed direction
-This slider used to move the black point the *other* way, so pushing it up made
-the sky grainier and clipped more of it to pure black — the opposite of what it
-described. If you had it set high from an earlier version, expect a darker,
-smoother sky at the same setting now, and turn it down if the faint outskirts of
-your target have gone.
+::: warning Changed behaviour
+Two things moved here. The slider used to push the black point the *other* way,
+so raising it made the sky grainier and clipped more of it to pure black — the
+opposite of what it described. And deep stacks used to look exactly as grainy as
+single frames. If you kept this slider high to get a smooth sky out of an earlier
+version, expect a darker, smoother one at the same setting now, and turn it down
+if the faint outskirts of your target have gone.
 :::
 
 ## Black floor
@@ -112,35 +116,40 @@ stretch, so the target keeps its brightness. Measured on the reference frames:
 
 | Setting | Sky | Target contrast |
 |---|---|---|
-| 0 % | 14 and 17 levels | — |
-| −5 % | 4 and 6 levels (−65 to −71 %) | +9 % and +25 % |
-| −9 % | 2 levels (−86 to −88 %) | −38 % and −1 % |
-| Black level at full | 7 and 8 levels (−50 %) | −62 % |
+| 0 % | 11 and 13 levels | — |
+| −3 % | 7 and 8 levels (−36 to −39 %) | +14 % and +12 % |
+| −4.5 % (end stop) | 4 levels (−64 to −69 %) | +25 % and +33 % |
+| Black level at full | About half the sky, and the target's contrast down by nearly two thirds |
 
 Those are code values. What reaches your eye falls further, because the panel
-applies its own gamma on top: 14 levels down to 4 is a 72 to 94 % drop in
-emitted light depending on the screen.
+applies its own gamma on top.
 
-The setting is anchored to the sky it measures, not to full scale, so one
-position behaves the same on a bright target and a faint one. Around −5 % puts
-the floor level with the sky itself. Past that you are cutting into the sky's own
-noise, which is what makes the last of the travel cost some faint detail.
+The end stop is −4.5 %, and where it sits is calibrated rather than chosen: it is the
+point past which **Darker sky** would start clipping above the sky and eating the
+target instead of separating it from the background. It moved in from −6 % when the
+contrast curve was strengthened, which darkened the sky before the floor ever sees
+it — so the darkest background you can reach is unchanged.
 
-Because it is anchored to a measured sky level, the negative half needs something
-to measure. It does nothing with **Auto stretch** off, and nothing in **Planetary**
-mode — there the middle of the frame is the Moon or the planet rather than sky, so
-a floor set from it would darken the subject instead of the background.
+It works by dimming the sky, not by cutting it off: each pixel is darkened
+according to its small neighbourhood, so flat sky darkens evenly while stars and
+the faint glow of a nebula or globular cluster keep their level. The grain in the
+sky shrinks with it, instead of turning into dark clumps and bright specks.
+
+The setting follows the sky it measures, not full scale, so one position behaves
+the same on a bright target and a faint one. A large dark area in the frame — a roof,
+a tree, a dewed-over corner — is not mistaken for the sky. It does nothing with **Auto stretch**
+off, and nothing in **Planetary** mode — there the middle of the frame is the Moon
+or the planet rather than sky, so it would darken the subject instead.
 
 ### Darker sky
 
-The negative half rolls off into black rather than clipping, so no pixel is ever
-switched fully off. **Darker sky** removes that roll-off and lets the sky clip.
+The negative half never switches a pixel fully off. **Darker sky** replaces the
+dimming with a hard cut at the chosen level.
 
-It buys the deepest possible background and a little more separation between
-target and sky, and it costs the black speckle the positive half of this slider
-exists to remove — around a third of the sky ends up fully off. Worth trying on
-an LCD, or on a target bright enough that you do not care what happens to the
-background. It does nothing while Black floor is positive.
+It buys the deepest possible background, and it costs the black speckle the
+positive half of this slider exists to remove — a third to a half of the sky ends
+up fully off. Worth trying on an LCD, or on a target bright enough that you do not
+care what happens to the background. It does nothing while Black floor is positive.
 
 ## Dithering
 

@@ -292,7 +292,8 @@ pub async fn run(register_plugins: impl FnOnce()) {
         // top when given — CLI > env > default.
         let telemetry_config = if args.telemetry {
             let mut config = TelemetryConfig::from_env().with_enabled(true);
-            if let Some(endpoint) = args.otlp_endpoint {
+            // Cloned: `args` is borrowed again for the startup report below
+            if let Some(endpoint) = args.otlp_endpoint.clone() {
                 config = config.with_endpoint(endpoint);
             }
             Some(config)

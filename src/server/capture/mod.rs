@@ -6,6 +6,9 @@
 //! actual frame size. Each thread carries a `tokio::runtime::Handle` from the async
 //! orchestrator, for `handle.block_on()`/`handle.spawn()`.
 //!
+//! **Push-To** runs as two more thread tasks (solve, watch) fed by one-slot channels that
+//! drop an offer rather than queue it. See `push_to_tasks`.
+//!
 //! The guide camera bypasses all of that: **GuideTask** is one thread with no channels,
 //! because nothing it produces is stacked or queued. See `guide_task`.
 
@@ -16,11 +19,16 @@ mod drop_log;
 mod frame_gate;
 pub mod guide_task;
 pub mod pipeline;
+pub(crate) mod push_to_tasks;
 mod render_task;
+#[cfg(test)]
+pub(crate) use render_task::run_render_task;
 pub mod solving;
 mod stacking_task;
 mod stage_config;
+pub(crate) mod stall;
 pub mod storage;
+mod stream_encoding;
 
 pub mod config_overrides;
 pub mod task;

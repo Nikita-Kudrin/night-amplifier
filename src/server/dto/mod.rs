@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{
     CameraCaptureProfile, CameraRole, CaptureSession, CaptureSettings, DenoiseSettings,
-    EyepieceSettings, PreviewResolution, RawFrameSaving, SensorCorrectionSettings,
+    EyepieceSettings, Resolution, RawFrameSaving, SensorCorrectionSettings,
     TelescopeSettings,
 };
 use crate::background::BackgroundExtractionAlgorithm;
@@ -240,8 +240,10 @@ pub struct SettingsResponse {
     pub sensor_correction: SensorCorrectionSettings,
     #[serde(default)]
     pub denoise: DenoiseSettings,
-    #[serde(default)]
-    pub preview_resolution: PreviewResolution,
+    #[serde(default = "crate::server::state::default_preview_resolution")]
+    pub preview_resolution: Resolution,
+    #[serde(default = "crate::server::state::default_streaming_resolution")]
+    pub streaming_resolution: Resolution,
     pub eyepiece: EyepieceSettings,
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
@@ -323,6 +325,7 @@ impl From<&CaptureSettings> for SettingsResponse {
             sensor_correction: settings.sensor_correction.clone(),
             denoise: settings.denoise.clone(),
             preview_resolution: settings.preview_resolution,
+            streaming_resolution: settings.streaming_resolution,
             eyepiece: settings.eyepiece.clone(),
             telescope: settings.telescope.clone(),
             camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
@@ -507,7 +510,10 @@ pub struct UpdateSettingsRequest {
     pub denoise: Option<DenoiseSettings>,
 
     #[serde(default)]
-    pub preview_resolution: Option<PreviewResolution>,
+    pub preview_resolution: Option<Resolution>,
+
+    #[serde(default)]
+    pub streaming_resolution: Option<Resolution>,
 
     #[serde(default)]
     pub eyepiece: Option<EyepieceSettings>,

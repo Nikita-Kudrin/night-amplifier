@@ -284,35 +284,33 @@ async fn test_frame_rejected_broadcasts_event() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_latest_frame_storage() {
+async fn test_payload_storage_per_family() {
     let state = create_test_state();
-
-    // Initially no frame
-    assert!(state.main_stream.get_latest_frame().await.is_none());
-
-    // Store a frame
-    let frame_data = vec![1, 2, 3, 4, 5];
     let counter = state.main_stream.begin_frame();
-    state
-        .main_stream
-        .set_latest_frame(counter, frame_data.clone())
-        .await;
 
-    // Retrieve frame, tagged with the counter it was encoded from
-    let (tag, retrieved) = state.main_stream.get_latest_frame().await.unwrap();
-    assert_eq!(tag, counter);
-    assert_eq!(retrieved.as_ref(), &frame_data);
+    for kind in StreamKind::all() {
+        assert!(state.main_stream.payload(kind, counter).is_none());
+    }
+
+    state.main_stream.set_payload(StreamKind::Lossless, counter, vec![1, 2, 3, 4, 5]);
+    state.main_stream.set_payload(StreamKind::Jpeg, counter, vec![9]);
+
+    assert_eq!(
+        state.main_stream.payload(StreamKind::Lossless, counter).unwrap().as_ref(),
+        &[1, 2, 3, 4, 5]
+    );
+    assert_eq!(state.main_stream.payload(StreamKind::Jpeg, counter).unwrap().as_ref(), &[9]);
 }
 
 #[tokio::test]
-async fn test_latest_frame_overwrites_previous() {
+async fn test_payload_newer_frame_replaces_previous() {
     let state = create_test_state();
 
-    state.main_stream.set_latest_frame(1, vec![1, 2, 3]).await;
-    state.main_stream.set_latest_frame(2, vec![4, 5, 6]).await;
+    state.main_stream.set_payload(StreamKind::Lossless, 1, vec![1, 2, 3]);
+    state.main_stream.set_payload(StreamKind::Lossless, 2, vec![4, 5, 6]);
 
-    let (tag, retrieved) = state.main_stream.get_latest_frame().await.unwrap();
-    assert_eq!(tag, 2);
+    assert!(state.main_stream.payload(StreamKind::Lossless, 1).is_none());
+    let retrieved = state.main_stream.payload(StreamKind::Lossless, 2).unwrap();
     assert_eq!(retrieved.as_ref(), &[4, 5, 6]);
 }
 
@@ -325,7 +323,7 @@ async fn test_frame_counter_increments() {
         .frame_counter();
 
     let counter = state.main_stream.begin_frame();
-    state.main_stream.set_latest_frame(counter, vec![1]).await;
+    state.main_stream.set_payload(StreamKind::Jpeg, counter, vec![1]);
     state.main_stream.publish_frame();
     let after_first = state
         .main_stream
@@ -333,7 +331,7 @@ async fn test_frame_counter_increments() {
     assert_eq!(after_first, initial + 1);
 
     let counter = state.main_stream.begin_frame();
-    state.main_stream.set_latest_frame(counter, vec![2]).await;
+    state.main_stream.set_payload(StreamKind::Jpeg, counter, vec![2]);
     state.main_stream.publish_frame();
     let after_second = state
         .main_stream

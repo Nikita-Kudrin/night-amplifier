@@ -8,6 +8,8 @@ use crate::push_to::{PushToBlocker, PushToError, SolveOutcome};
 use crate::server::events::ServerEvent;
 use crate::server::state::AppState;
 
+use super::push_to_tasks::{self, Lane};
+
 /// Shortest gap between two frames being offered to the solver.
 ///
 /// Not a limit on how often a *solve* runs — that is the movement detector's job —
@@ -22,14 +24,6 @@ const MIN_SOLVE_ATTEMPT_INTERVAL: Duration = Duration::from_millis(1000);
 /// takes seconds. Every run costs a full sensitive detection over the whole sensor,
 /// and it competes with the ASTAP process it may be about to abandon.
 const MIN_WATCH_INTERVAL: Duration = Duration::from_millis(1500);
-
-/// Which slot this frame claimed, and therefore what it is allowed to do.
-enum Claim {
-    /// Nothing was running: this frame may start a solve and wait for it.
-    Solve(crate::server::services::SolveLatch),
-    /// A solve is running: this frame may only look, and must return promptly.
-    Watch(crate::server::services::WatchLatch),
-}
 
 /// The detector used for the movement check and for the stars handed to ASTAP.
 ///
@@ -72,12 +66,13 @@ impl SolveSource {
     }
 }
 
-/// Whether a plate solve could possibly run right now, from `source`.
+/// Whether a frame offered now from `source` would be taken.
 ///
 /// Callers check this *before* preparing a frame, so the common case — Community
-/// edition, or Pro with no target set — costs an atomic load instead of a
-/// full-frame copy. Only covers the checks that are cheap and synchronous; the
-/// rest still happen inside [`try_plate_solve`].
+/// edition, Pro with no target, or a Push-To task still busy with the last frame — costs
+/// an atomic load instead of a frame conversion or a second frame handle (which makes
+/// the render task's `Arc::try_unwrap` fail and copy). Advisory: the claims in
+/// [`solve_frame`] and [`watch_frame`] still decide.
 pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool {
     if !source.is_active(state.guide_holds_solving()) {
         return false;
@@ -87,54 +82,96 @@ pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool
         return false;
     }
 
-    // Check local state via try_read to avoid blocking the stacking pipeline.
-    // Without a target there is nothing to do, so the heavy tokio task and the extra
-    // frame handle are both skipped.
+    // `try_read`: this runs on the capture threads. A writer holds it for microseconds,
+    // and declining one frame then is cheaper than waiting.
     //
-    // A solve being in flight is deliberately *not* a reason to skip any more. It was,
-    // and the consequence was that the movement detector saw nothing for the whole
-    // length of a solve: a slew could not arm the gate, could not abandon a search
-    // already working on sky we had left, and could not update the status. See
-    // `PushToSolverPlugin::observe_frame` — the in-flight path is cheap and returns
-    // promptly, so it can afford to run.
-    if let Ok(guard) = state.push_to.try_read() {
-        if let Some(ref pt) = *guard {
-            if !pt.has_target {
-                return false;
-            }
-            if !pt.offer_is_due(
-                Instant::now(),
-                MIN_SOLVE_ATTEMPT_INTERVAL,
-                MIN_WATCH_INTERVAL,
-            ) {
-                return false;
-            }
-        }
-    }
-
-    true
+    // A solve in flight is deliberately *not* a reason to decline: the frame goes to the
+    // movement watch, which must see a slew to abandon a search working on sky we left.
+    let Ok(guard) = state.push_to.try_read() else {
+        return false;
+    };
+    let Some(pt) = guard.as_ref() else {
+        return false;
+    };
+    pt.has_target
+        && pt.offer_is_due(Instant::now(), MIN_SOLVE_ATTEMPT_INTERVAL, MIN_WATCH_INTERVAL)
+        && push_to_tasks::is_idle(state, Lane::for_solving(pt.is_solving()))
 }
 
-/// Try to plate solve if a target is set and solver is ready
+/// Hand `frame` to the Push-To task that can use it now — the solve task, or the
+/// movement watch while a solve runs — or drop it if that task is busy. Never queues.
+/// Call once [`plate_solve_available`] says the offer could do something.
+pub fn offer_plate_solve(
+    state: &Arc<AppState>,
+    rt: &tokio::runtime::Handle,
+    frame: Arc<Frame>,
+    source: SolveSource,
+) -> bool {
+    let lane = match state.push_to.try_read() {
+        Ok(guard) => match guard.as_ref() {
+            Some(pt) => Lane::for_solving(pt.is_solving()),
+            None => return false,
+        },
+        Err(_) => return false,
+    };
+    push_to_tasks::offer(state, rt, lane, frame, source)
+}
+
+/// Run the movement watch on `frame` while a solve is in flight: the Push-To watch task's
+/// job. Returns without looking if no solve is running, the watch ran too recently, or
+/// `source` stopped being the solve source.
 ///
-/// In the Community edition, this does nothing unless the Push-To plugin is installed
-/// (i.e. running Night Amplifier Pro). Takes an `Arc<Frame>` because the solve
-/// runs on a detached task: sharing the handle avoids copying a full-resolution
-/// frame on the stacking thread for a solve that usually will not happen.
+/// `source` is re-checked immediately before dispatch. Neither
+/// `PushToSolverPlugin::observe_frame` nor `process_new_frame` is told which camera
+/// produced its frame — `ProPushToPlugin::look()` scales and mutates the one shared
+/// `MovementDetector` for whatever arrives — so a frame from a camera that stopped being
+/// the source (a guide camera connected or disconnected since the offer) reads as the new
+/// rig's telescope having moved and can abort a solve that just started.
+pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
+    if !source.is_active(state.guide_holds_solving()) {
+        debug!(?source, "Plate solve watch skipped: no longer the active solve source");
+        return;
+    }
+    let Some(plugin) = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) else {
+        return;
+    };
+
+    let _watch = {
+        let push_to_guard = state.push_to.read().await;
+        let Some(ref pt) = *push_to_guard else {
+            return;
+        };
+        if !pt.is_solving() {
+            debug!("Plate solve watch skipped: the solve it was offered for has ended");
+            return;
+        }
+        match pt.try_begin_watch(Instant::now(), MIN_WATCH_INTERVAL) {
+            Some(watch) => watch,
+            None => return,
+        }
+    };
+
+    let wanderer_mode = state.settings.read().await.wanderer_mode;
+    if !source.is_active(state.guide_holds_solving()) {
+        debug!(?source, "Plate solve watch skipped: no longer the active solve source");
+        return;
+    }
+    match plugin
+        .observe_frame(&frame, solve_detector(), wanderer_mode)
+        .await
+    {
+        Ok(outcome) => announce_blocker(state, outcome.blocker).await,
+        Err(e) => debug!(error = %e, "Movement watch failed on this frame"),
+    }
+}
+
+/// Try to plate solve `frame` if a target is set and the solver is ready: the Push-To
+/// solve task's job. Returns once the solve (or the decision not to run one) is done.
 ///
-/// `source` is the camera `frame` was captured on — the caller already checked it was
-/// the active source via `plate_solve_available`, but that check and every dispatch
-/// below cross an `.await` or a `tokio::spawn`, and a guide camera connecting or
-/// disconnecting in one of those gaps flips which source is active. Neither
-/// `PushToSolverPlugin::observe_frame` nor `process_new_frame` are told which camera
-/// produced their frame — `ProPushToPlugin::look()` scales and mutates the one shared
-/// `MovementDetector` for whatever arrives — so a frame that goes stale in one of these
-/// gaps has to be caught here, before it ever reaches the plugin: fed to `look()` after
-/// the *other* camera has already reset and reseeded that detector, it reads as the
-/// new rig's telescope having moved and can abort a solve that just started. Checked
-/// again immediately before each dispatch rather than once at the top, since the solve
-/// path crosses further `.await` points of its own after the first check.
-pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
+/// In the Community edition this does nothing unless the Push-To plugin is installed.
+/// `source` is re-checked before each dispatch — see [`watch_frame`] — because the solve
+/// path crosses further `.await` points (`get_status`) of its own.
+pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
     if !source.is_active(state.guide_holds_solving()) {
         debug!(?source, "Plate solve skipped: no longer the active solve source");
         return;
@@ -145,61 +182,25 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: S
         None => return,
     };
 
-    // Claim a slot first. The claim is a compare-and-swap, so it doubles as the
-    // "already busy" check that used to be a separate read — two frames arriving
-    // together both passed that read and both went on to spawn.
-    //
-    // Which slot depends on whether a solve is already running: the solve path may
-    // block for the length of an ASTAP ladder, the watch path may not.
-    let claim = {
+    // The claim is a compare-and-swap, so it doubles as the "already busy" check: two
+    // frames arriving together cannot both start a solve. Held until this returns,
+    // however it returns — a stranded latch disables plate solving for good.
+    let _latch = {
         let push_to_guard = state.push_to.read().await;
         let Some(ref pt) = *push_to_guard else {
             debug!("Plate solving skipped: Push-To state not initialized in AppState");
             return;
         };
-        let now = Instant::now();
-        if pt.is_solving() {
-            match pt.try_begin_watch(now, MIN_WATCH_INTERVAL) {
-                Some(watch) => Claim::Watch(watch),
-                None => return,
-            }
-        } else {
-            match pt.try_begin_solve(now, MIN_SOLVE_ATTEMPT_INTERVAL) {
-                Some(latch) => Claim::Solve(latch),
-                None => {
-                    debug!("Plate solving skipped: offered too recently");
-                    return;
-                }
+        match pt.try_begin_solve(Instant::now(), MIN_SOLVE_ATTEMPT_INTERVAL) {
+            Some(latch) => latch,
+            None => {
+                debug!("Plate solving skipped: a solve is running or one was offered too recently");
+                return;
             }
         }
     };
 
-    let settings = state.settings.read().await.clone();
-    let wanderer_mode = settings.wanderer_mode;
-
-    // The watch path exists to notice a slew and abandon a solve that can no longer
-    // be right. It deliberately skips the target/readiness round-trip below: a solve
-    // is already running, so both were true a moment ago, and this path is on a clock
-    // that is competing with ASTAP for the machine.
-    if let Claim::Watch(watch) = claim {
-        let _watch = watch;
-        if !source.is_active(state.guide_holds_solving()) {
-            debug!(?source, "Plate solve watch skipped: no longer the active solve source");
-            return;
-        }
-        match plugin
-            .observe_frame(&frame, solve_detector(), wanderer_mode)
-            .await
-        {
-            Ok(outcome) => announce_blocker(state, outcome.blocker).await,
-            Err(e) => debug!(error = %e, "Movement watch failed on this frame"),
-        }
-        return;
-    }
-    let Claim::Solve(latch) = claim else {
-        unreachable!("the watch arm returns above")
-    };
-
+    let wanderer_mode = state.settings.read().await.wanderer_mode;
     let push_to_status = plugin.get_status().await;
 
     let has_target = push_to_status.current_target.is_some();
@@ -228,128 +229,116 @@ pub async fn try_plate_solve(state: &Arc<AppState>, frame: Arc<Frame>, source: S
         return;
     }
 
-    // Carried into the spawned task so a successful solve names the target it was
-    // solving for; the solve itself does not use it.
+    // Carried so a successful solve names the target it was solving for; the solve
+    // itself does not use it.
     let target_name = push_to_status
         .current_target
         .map(|t| t.name.unwrap_or(t.designation));
 
-    let state_clone = Arc::clone(state);
+    let _timer =
+        crate::telemetry::metrics::time_stage(crate::telemetry::metrics::FrameStage::PlateSolving);
 
-    tokio::spawn(async move {
-        // Moved in so the slot is released when this task ends, however it ends —
-        // including a panic inside the plugin. A stranded latch permanently disables
-        // plate solving for the rest of the process.
-        let _latch = latch;
-        let _timer = crate::telemetry::metrics::time_stage(
-            crate::telemetry::metrics::FrameStage::PlateSolving,
-        );
+    // The rig may have changed while `get_status` was awaited.
+    if !source.is_active(state.guide_holds_solving()) {
+        debug!(?source, "Plate solve dispatch skipped: no longer the active solve source");
+        return;
+    }
 
-        // The rig may have changed while this task waited on `get_status` above or to
-        // be scheduled here — see the note on `source` above `try_plate_solve`.
-        if !source.is_active(state_clone.guide_holds_solving()) {
-            debug!(?source, "Plate solve dispatch skipped: no longer the active solve source");
-            return;
-        }
+    let result = plugin
+        .process_new_frame(&frame, solve_detector(), wanderer_mode)
+        .await;
 
-        // Let the plugin do all the heavy lifting and math
-        let plugin = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).unwrap();
-        let result = plugin
-            .process_new_frame(&frame, solve_detector(), wanderer_mode)
-            .await;
-
-        match result {
-            Ok(outcome) => {
-                let fov_deg = outcome.position.as_ref().and_then(|p| {
-                    if p.fov_deg > 0.0 {
-                        Some(p.fov_deg)
-                    } else {
-                        None
-                    }
-                });
-
-                // Only a solve that actually ran is news. Announcing the cached
-                // position on every frame filled the log with ~1500 identical
-                // "Plate solve succeeded" lines in one session and overwrote any
-                // real failure in the UI on the following frame.
-                if outcome.outcome == SolveOutcome::Solved {
-                    if let Some(pos) = outcome.position {
-                        info!(
-                            ra = pos.ra_degrees,
-                            dec = pos.dec_degrees,
-                            stars = ?pos.stars_detected,
-                            target = target_name.as_deref().unwrap_or("-"),
-                            "Plate solve succeeded"
-                        );
-
-                        let _ = state_clone.events.send(ServerEvent::position_solved(
-                            pos.ra_degrees,
-                            pos.dec_degrees,
-                            pos.ra_string,
-                            pos.dec_string,
-                            pos.stars_detected,
-                            pos.confidence,
-                            pos.rotation_deg,
-                        ));
-
-                        // The solved FOV is not persisted here. Plate solving is a Pro
-                        // feature and the plugin keeps its own solver state, so this stays
-                        // out of the Community settings file — it also avoids rewriting
-                        // settings.json on every solved frame.
-                    }
+    match result {
+        Ok(outcome) => {
+            let fov_deg = outcome.position.as_ref().and_then(|p| {
+                if p.fov_deg > 0.0 {
+                    Some(p.fov_deg)
+                } else {
+                    None
                 }
+            });
 
-                // Say why nothing is happening — "telescope is moving", "waiting for
-                // the view to settle" — through the same de-duplication as every
-                // other blocker, so a state that holds for a hundred frames costs one
-                // event. A solve that ran clears it by reporting `None`.
-                announce_blocker(&state_clone, outcome.blocker).await;
+            // Only a solve that actually ran is news. Announcing the cached
+            // position on every frame filled the log with ~1500 identical
+            // "Plate solve succeeded" lines in one session and overwrote any
+            // real failure in the UI on the following frame.
+            if outcome.outcome == SolveOutcome::Solved {
+                if let Some(pos) = outcome.position {
+                    info!(
+                        ra = pos.ra_degrees,
+                        dec = pos.dec_degrees,
+                        stars = ?pos.stars_detected,
+                        target = target_name.as_deref().unwrap_or("-"),
+                        "Plate solve succeeded"
+                    );
 
-                if let Some(dir) = outcome.direction {
-                    // The direction is recomputed every frame but only changes when
-                    // the position or target does, so send it only when it is
-                    // actually different.
-                    let is_news = {
-                        let mut guard = state_clone.push_to.write().await;
-                        guard.as_mut().is_none_or(|pt| {
-                            pt.direction_is_news(dir.angle_deg, dir.distance_deg, dir.is_close)
-                        })
-                    };
+                    let _ = state.events.send(ServerEvent::position_solved(
+                        pos.ra_degrees,
+                        pos.dec_degrees,
+                        pos.ra_string,
+                        pos.dec_string,
+                        pos.stars_detected,
+                        pos.confidence,
+                        pos.rotation_deg,
+                    ));
 
-                    if is_news {
-                        info!(
-                            celestial_angle = dir.angle_deg,
-                            hint = dir.direction_hint,
-                            "Push direction calculated"
-                        );
-
-                        let _ = state_clone.events.send(ServerEvent::push_direction_updated(
-                            dir.angle_deg,
-                            dir.distance_deg,
-                            dir.direction_hint,
-                            dir.is_close,
-                            fov_deg,
-                        ));
-                    }
+                    // The solved FOV is not persisted here. Plate solving is a Pro
+                    // feature and the plugin keeps its own solver state, so this stays
+                    // out of the Community settings file — it also avoids rewriting
+                    // settings.json on every solved frame.
                 }
             }
-            Err(PushToError::Cancelled) => {
-                // Not a failure: the user asked for it. Reported as its own event so
-                // the UI stops the spinner without claiming the sky could not be
-                // matched and without discrediting the last known position.
-                info!("Plate solve cancelled");
-                let _ = state_clone
-                    .events
-                    .send(ServerEvent::plate_solving_cancelled());
-            }
-            Err(e) => {
-                warn!(error = %e, "Plate solve failed");
-                let _ = state_clone
-                    .events
-                    .send(ServerEvent::position_solve_failed(e.to_string()));
+
+            // Say why nothing is happening — "telescope is moving", "waiting for
+            // the view to settle" — through the same de-duplication as every
+            // other blocker, so a state that holds for a hundred frames costs one
+            // event. A solve that ran clears it by reporting `None`.
+            announce_blocker(state, outcome.blocker).await;
+
+            if let Some(dir) = outcome.direction {
+                // The direction is recomputed every frame but only changes when
+                // the position or target does, so send it only when it is
+                // actually different.
+                let is_news = {
+                    let mut guard = state.push_to.write().await;
+                    guard.as_mut().is_none_or(|pt| {
+                        pt.direction_is_news(dir.angle_deg, dir.distance_deg, dir.is_close)
+                    })
+                };
+
+                if is_news {
+                    info!(
+                        celestial_angle = dir.angle_deg,
+                        hint = dir.direction_hint,
+                        "Push direction calculated"
+                    );
+
+                    let _ = state.events.send(ServerEvent::push_direction_updated(
+                        dir.angle_deg,
+                        dir.distance_deg,
+                        dir.direction_hint,
+                        dir.is_close,
+                        fov_deg,
+                    ));
+                }
             }
         }
-    });
+        Err(PushToError::Cancelled) => {
+            // Not a failure: the user asked for it. Reported as its own event so
+            // the UI stops the spinner without claiming the sky could not be
+            // matched and without discrediting the last known position.
+            info!("Plate solve cancelled");
+            let _ = state
+                .events
+                .send(ServerEvent::plate_solving_cancelled());
+        }
+        Err(e) => {
+            warn!(error = %e, "Plate solve failed");
+            let _ = state
+                .events
+                .send(ServerEvent::position_solve_failed(e.to_string()));
+        }
+    }
 }
 
 /// Broadcast a change in why Push-To is idle, ignoring repeats.
@@ -464,7 +453,7 @@ mod tests {
 
     #[test]
     fn the_two_sources_are_never_both_active_at_once() {
-        // The invariant `try_plate_solve`'s re-checks lean on: whichever way
+        // The invariant the re-checks in `solve_frame` and `watch_frame` lean on: whichever way
         // `guide_loop_running` reads, at most one source may proceed to dispatch.
         for guide_loop_running in [false, true] {
             assert!(

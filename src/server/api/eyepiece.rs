@@ -119,10 +119,10 @@ fn snapshot_filename(circular: bool) -> String {
 
 /// Convert one rendered frame to PNG bytes.
 ///
-/// At the frame's own resolution, not a client's tier: a download is the copy the
-/// observer keeps, so it is not held to whatever box the screen asked the stream
-/// for. Passing the frame's own dimensions as the bounding box is what makes
-/// [`frame_to_rgb8_downsampled`] a straight conversion with no resampling.
+/// At the frame's own resolution, not the streaming resolution: a download is the copy
+/// the observer keeps, so it is not held to the box the stream is sent at. Passing the
+/// frame's own dimensions as the bounding box is what makes [`frame_to_rgb8_downsampled`]
+/// a straight conversion with no resampling.
 fn render_snapshot_png(frame: &RenderReadyFrame, circular: bool) -> Result<Vec<u8>, String> {
     let native_w = frame.linear_frame.width() as u32;
     let native_h = frame.linear_frame.height() as u32;
@@ -217,7 +217,7 @@ mod tests {
     }
 
     /// The download is the observer's copy, so it must come out at the frame's own
-    /// size — not the tier whatever screen is streaming happened to ask for.
+    /// size — not the streaming resolution.
     #[test]
     fn snapshot_keeps_the_frames_native_resolution() {
         let frame = ready_frame(37, 19);

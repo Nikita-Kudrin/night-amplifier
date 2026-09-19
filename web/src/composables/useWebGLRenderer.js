@@ -213,7 +213,11 @@ export function useWebGLRenderer() {
                 gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frameData
             )
         } else {
-            // Standard 8-bit texture upload — works identically on WebGL1 and WebGL2
+            // RGB rows are width*3 bytes, but WebGL assumes rows padded to UNPACK_ALIGNMENT
+            // (default 4). For any width not divisible by 4 (e.g. 2539 px) the unpadded
+            // buffer is "too short", texImage2D fails with INVALID_OPERATION and the
+            // previous frame stays on screen. Set per upload: it is context state.
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
             gl.texImage2D(
                 gl.TEXTURE_2D, 0, gl.RGB, width, height, 0,
                 gl.RGB, gl.UNSIGNED_BYTE, frameData

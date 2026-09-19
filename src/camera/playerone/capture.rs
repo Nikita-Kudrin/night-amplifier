@@ -258,6 +258,19 @@ pub fn run_capture(
         }
 
         if start.elapsed() > total_timeout {
+            // Read before the stop, which resets it: whether the SDK was receiving frames
+            // and dropping them, or receiving nothing, separates two different faults.
+            if is_continuous {
+                match catch_ffi_panic("PlayerOne::dropped_images_count", || {
+                    camera.dropped_images_count()
+                }) {
+                    Ok(Some(Ok(dropped))) => {
+                        warn!(dropped, budget = ?total_timeout, "Player One video stream stalled")
+                    }
+                    Ok(Some(Err(e))) => debug!(error = %e, "Could not read the dropped-frame count"),
+                    Ok(None) | Err(_) => {}
+                }
+            }
             let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
             if is_continuous {
                 *stream_running = false;

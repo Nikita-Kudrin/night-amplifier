@@ -20,7 +20,7 @@ mod camera_slot;
 mod capture_mode;
 pub mod focus_mode;
 mod frame_stream;
-mod jpeg_tiers;
+mod stream_viewers;
 mod session;
 mod settings;
 mod types;
@@ -33,14 +33,16 @@ pub use camera_slot::{
 pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
-pub use jpeg_tiers::{JpegTier, JpegTierCache, StreamKind, TierClientGuard};
+pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
 };
 pub use settings::{
-    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, PreviewResolution,
-    SensorCorrectionSettings, TelescopeSettings,
+    default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
+    CaptureSettings, DenoiseSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
+    SensorCorrectionSettings, TelescopeSettings, DEFAULT_PREVIEW_RESOLUTION,
+    DEFAULT_STREAMING_RESOLUTION,
 };
 pub use types::{CameraPhase, CameraRole, CaptureState, RenderReadyFrame, StretchResult};
 
@@ -59,7 +61,7 @@ pub struct AppState {
     /// The guide camera's rendered image stream — `/ws/stream?source=guide`.
     ///
     /// Separate from `main_stream` down to the frame counter: sharing one would make
-    /// each camera's frames invalidate the other's cached tiers. Its client census is
+    /// each camera's frames invalidate the other's payloads. Its client census is
     /// also the guide loop's render gate — see [`FrameStream::has_viewers`].
     pub guide_stream: Arc<FrameStream>,
     /// Cancellation flag for capture loop
@@ -70,6 +72,8 @@ pub struct AppState {
     pub disk_writer: DiskWriterHandle,
     /// Push-To navigation state
     pub push_to: RwLock<Option<PushToState>>,
+    /// Push-To's solve and watch consumer threads, started by the first frame offered.
+    pub(crate) push_to_tasks: std::sync::OnceLock<crate::server::capture::push_to_tasks::PushToTasks>,
     /// True while the guide loop is actually exposing, so the plate-solve source can be
     /// decided with an atomic load on the stacking thread rather than a lock — see
     /// `capture::solving::SolveSource`.
@@ -135,6 +139,11 @@ pub struct AppState {
     /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
     /// behind the occasional success. See `camera_health`.
     pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, (u32, Instant)>>,
+    /// Whether restarting a stalled stream in place has lately worked, per role and camera
+    /// name. Outlives the capture loop, whose next reopen it decides on. See
+    /// `camera_health::RestartHistory`.
+    pub(crate) restart_histories:
+        StdMutex<HashMap<(CameraRole, String), crate::server::camera_health::RestartHistory>>,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -210,6 +219,7 @@ impl AppState {
             events: events_tx,
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to),
+            push_to_tasks: std::sync::OnceLock::new(),
             guide_loop_running: AtomicBool::new(false),
             settings_persistence,
             dropped_frames: AtomicU64::new(0),
@@ -223,6 +233,7 @@ impl AppState {
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
             consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
+            restart_histories: StdMutex::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -634,7 +645,7 @@ impl AppState {
     /// Update the cached "plugin holds a target" flag. No-op without Push-To.
     ///
     /// A cache, not the source of truth — see [`PushToState`]. Written by the
-    /// target mutations in `PushToService` and re-synced from `try_plate_solve`,
+    /// target mutations in `PushToService` and re-synced from `solve_frame`,
     /// so that the stacking thread can gate plate solving synchronously.
     pub async fn set_push_to_has_target(&self, has_target: bool) {
         if let Some(ref mut pt) = *self.push_to.write().await {
@@ -802,106 +813,27 @@ mod tests {
         assert!(!state.is_cancelled());
     }
 
-    #[tokio::test]
-    async fn test_app_state_frame_storage() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-
-        assert!(state.main_stream.get_latest_frame().await.is_none());
-
-        state.main_stream.set_latest_frame(1, vec![1, 2, 3, 4]).await;
-        let (tag, frame) = state.main_stream.get_latest_frame().await.unwrap();
-        assert_eq!(tag, 1);
-        assert_eq!(frame.as_ref(), &[1, 2, 3, 4]);
-    }
-
-    /// Storing payloads must not advance the counter — only `begin_frame` does,
-    /// so clients cannot wake on a frame whose payloads are still being written.
-    #[tokio::test]
-    async fn test_begin_frame_owns_the_counter() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-
-        state.main_stream.set_latest_frame(1, vec![1]).await;
-        assert_eq!(state.main_stream.frame_counter(), 0);
-
-        assert_eq!(state.main_stream.begin_frame(), 1);
-        assert_eq!(state.main_stream.begin_frame(), 2);
-        assert_eq!(state.main_stream.frame_counter(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_tier_jpeg_publish_and_lookup() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-
-        assert!(state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 1).is_none());
-
-        state
-            .main_stream
-            .set_tier_jpeg(JpegTier::Hd1080, 1, vec![7, 8, 9]);
-        assert_eq!(
-            state
-                .main_stream
-                .get_tier_jpeg(JpegTier::Hd1080, 1)
-                .unwrap()
-                .as_ref(),
-            &[7, 8, 9]
-        );
-        assert!(state.main_stream.get_tier_jpeg(JpegTier::Hd1080, 2).is_none());
-    }
-
     /// The two streams are independent down to the counter. Sharing one would make each
-    /// camera's frames invalidate the other's cached tiers on every exposure.
+    /// camera's frames invalidate the other's payloads on every exposure.
     #[tokio::test]
-    async fn guide_and_main_streams_do_not_share_a_counter_or_cache() {
+    async fn guide_and_main_streams_do_not_share_a_counter_or_payloads() {
         let (state, _disk_writer) = AppState::new_for_testing();
 
         let main_counter = state.main_stream.begin_frame();
-        state
-            .main_stream
-            .set_tier_jpeg(JpegTier::Hd1080, main_counter, vec![1]);
+        state.main_stream.set_payload(StreamKind::Jpeg, main_counter, vec![1]);
 
-        // Three guide frames must leave the main stream's cached payload readable.
+        // Three guide frames must leave the main stream's payload readable.
         for _ in 0..3 {
             let guide_counter = state.guide_stream.begin_frame();
-            state
-                .guide_stream
-                .set_tier_jpeg(JpegTier::Hd1080, guide_counter, vec![2]);
+            state.guide_stream.set_payload(StreamKind::Jpeg, guide_counter, vec![2]);
         }
 
         assert_eq!(state.main_stream.frame_counter(), 1);
         assert_eq!(state.guide_stream.frame_counter(), 3);
         assert_eq!(
-            state
-                .main_stream
-                .get_tier_jpeg(JpegTier::Hd1080, main_counter)
-                .unwrap()
-                .as_ref(),
+            state.main_stream.payload(StreamKind::Jpeg, main_counter).unwrap().as_ref(),
             &[1]
         );
-    }
-
-    /// The guide loop's render gate. With nobody watching it must report no viewers, or
-    /// it would post-process and encode a stream no one can see.
-    #[tokio::test]
-    async fn has_viewers_tracks_tier_client_guards() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let stream = Arc::clone(&state.guide_stream);
-
-        assert!(!stream.has_viewers());
-
-        let guard = TierClientGuard::new(Arc::clone(&stream), StreamKind::Jpeg, JpegTier::Hd1080);
-        assert!(stream.has_viewers());
-
-        drop(guard);
-        assert!(!stream.has_viewers());
-
-        let lossless = TierClientGuard::new(
-            Arc::clone(&stream),
-            StreamKind::Lossless,
-            JpegTier::LOSSLESS_DEFAULT,
-        );
-        assert!(stream.has_viewers());
-        drop(lossless);
-        assert!(!stream.has_viewers());
     }
 
     #[tokio::test]
