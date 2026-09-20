@@ -147,6 +147,7 @@ fn expand_to_rgb8_fused_is_interleaved() {
     config.auto_stretch = false;
     config.saturation_boost = false;
     let ready = crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: config,
         stretch_result: None,
@@ -198,6 +199,7 @@ fn passthrough_ready(frame: Frame) -> crate::server::state::RenderReadyFrame {
     config.auto_stretch = false;
     config.saturation_boost = false;
     crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: config,
         stretch_result: None,

@@ -194,6 +194,7 @@ mod tests {
             }
         }
         RenderReadyFrame {
+            noise: None,
             linear_frame: std::sync::Arc::new(frame),
             pipeline_config: crate::render::RenderPipelineConfig::default(),
             stretch_result: None,

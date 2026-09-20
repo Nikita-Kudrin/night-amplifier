@@ -3,6 +3,7 @@ use crate::server::state::{EyepieceStreamResolution, ViewerGuard};
 
 fn ready_frame(width: usize, height: usize, channels: usize) -> RenderReadyFrame {
     RenderReadyFrame {
+        noise: None,
         linear_frame: Arc::new(crate::frame::Frame::filled(width, height, channels, 0.25).unwrap()),
         pipeline_config: crate::render::RenderPipelineConfig {
             contrast: false,

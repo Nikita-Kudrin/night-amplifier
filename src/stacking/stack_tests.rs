@@ -271,3 +271,226 @@ fn test_stack_compute_empty() {
     let result = stack.compute();
     assert!(result.is_err());
 }
+
+// ---------------------------------------------------------------------------
+// The per-pixel noise map (`NoiseField`) and the scale the plain mean now keeps.
+// ---------------------------------------------------------------------------
+
+/// Deterministic zero-mean noise, so a test can state the variance it stacked.
+///
+/// A hash-based sequence rather than a real RNG: the assertions below are on the
+/// *measured* spread of what was actually added, so the numbers have to be the same on
+/// every machine and every run.
+fn noisy_frames(
+    width: usize,
+    height: usize,
+    channels: usize,
+    level: f32,
+    sigma: f32,
+    count: usize,
+) -> Vec<Frame> {
+    (0..count)
+        .map(|n| {
+            let data: Vec<f32> = (0..width * height * channels)
+                .map(|i| {
+                    let mut h = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ (n as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    h ^= h >> 31;
+                    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+                    h ^= h >> 29;
+                    // 53 bits over 2^53 is [0, 1); uniform on [-1, 1) has variance
+                    // 1/3, so the `sqrt(3)` below scales it to `sigma`.
+                    let u = (h >> 11) as f32 / (1u64 << 53) as f32 * 2.0 - 1.0;
+                    level + u * sigma * 3f32.sqrt()
+                })
+                .collect();
+            Frame::from_f32_vec(data, width, height, channels).unwrap()
+        })
+        .collect()
+}
+
+/// The scale has to be maintained on the plain-mean path too, or the noise map is
+/// identically zero for every Community session and every test that stacks without the
+/// rejection plugin — which is every integration test in this repo.
+#[test]
+fn the_plain_mean_keeps_a_scale_too() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(16, 16, 1, config).unwrap();
+
+    let sigma = 0.01;
+    for frame in noisy_frames(16, 16, 1, 0.3, sigma, 64) {
+        stack.add_frame(&frame).unwrap();
+    }
+
+    let field = stack.noise_field();
+    assert!(field.is_usable(), "the plain mean left the noise map empty");
+
+    // `m2` is the single-sub variance; dividing by `count` is the error of the mean.
+    let expected = sigma * sigma / 64.0;
+    let centre = field.robust_centre();
+    assert!(
+        (centre / expected - 1.0).abs() < 0.25,
+        "noise map centre {centre:e} against an expected {expected:e}"
+    );
+}
+
+/// `m2 / count` is the variance of the stacked mean, so the map has to fall as `1/N`
+/// as the stack deepens.
+///
+/// Read slightly high at every depth, and knowably so: a deviation is measured against a
+/// running mean built from `n-1` samples, so it carries `sigma^2 * (1 + 1/(n-1))` rather
+/// than `sigma^2`. That is ~7 % at 64 frames and ~35 % at 8, which is why the absolute
+/// bound is only claimed at depth and the falloff is checked as a ratio, where the
+/// inflation largely divides out.
+#[test]
+fn the_noise_field_is_the_standard_error_of_the_mean() {
+    let sigma = 0.02;
+    let frames = noisy_frames(32, 32, 1, 0.25, sigma, 64);
+
+    let at = |depth: usize| {
+        let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+        let mut stack = MasterStack::new(32, 32, 1, config).unwrap();
+        for frame in frames.iter().take(depth) {
+            stack.add_frame(frame).unwrap();
+        }
+        stack.noise_field().robust_centre()
+    };
+
+    let deep = at(64);
+    let expected = sigma * sigma / 64.0;
+    assert!(
+        (deep / expected - 1.0).abs() < 0.2,
+        "at 64 frames the map reads {deep:e}, expected {expected:e}"
+    );
+
+    for (shallow_depth, deep_depth) in [(16usize, 32usize), (32, 64)] {
+        let ratio = at(shallow_depth) / at(deep_depth);
+        let wanted = deep_depth as f32 / shallow_depth as f32;
+        assert!(
+            (ratio / wanted - 1.0).abs() < 0.2,
+            "{shallow_depth} -> {deep_depth} frames moved the map by {ratio:.2}x, \
+             expected {wanted:.2}x"
+        );
+    }
+}
+
+/// The first offered sample has no mean to deviate from, so there is no spread to
+/// report below two — and the cell must say so rather than read as perfectly clean.
+#[test]
+fn warm_up_cells_are_marked_not_zeroed() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(8, 8, 1, config).unwrap();
+
+    stack.add_frame(&Frame::filled(8, 8, 1, 0.4).unwrap()).unwrap();
+
+    let field = stack.noise_field();
+    assert!(
+        field.variance().iter().all(|v| v.is_nan()),
+        "one frame in, the map must be unmeasured rather than zero: {:?}",
+        &field.variance()[..4]
+    );
+    assert!(!field.is_usable());
+}
+
+/// A block **median**, not a mean. One hot pixel's variance is real but it is not what
+/// a sky threshold is asking about, and a mean over 64 samples lets it set the block.
+#[test]
+fn a_star_does_not_set_its_block() {
+    // 8x8 is exactly one field cell, so the whole stack is the block under test.
+    let build = |spiked: usize| {
+        let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+        let mut stack = MasterStack::new(8, 8, 1, config).unwrap();
+        for (n, mut frame) in noisy_frames(8, 8, 1, 0.3, 0.001, 32).into_iter().enumerate() {
+            // Pixels swinging a hundred times wider than the field's own spread.
+            let swing = if n % 2 == 0 { 0.1 } else { -0.1 };
+            for i in 0..spiked {
+                frame.set_pixel(i % 8, i / 8, 0, 0.3 + swing);
+            }
+            stack.add_frame(&frame).unwrap();
+        }
+        stack.noise_field().variance()[0]
+    };
+
+    let quiet = build(0);
+    let one_spike = build(1);
+    let all_spiked = build(64);
+
+    assert!(
+        (one_spike / quiet - 1.0).abs() < 0.2,
+        "one wild pixel moved its block from {quiet:e} to {one_spike:e}; the median is \
+         what stops it, so this reads as the reduction having become a mean"
+    );
+
+    // The guard has to be able to refute the alternative or it is not guarding the
+    // choice: the same spike, everywhere in the block, moves the cell by ~4 orders of
+    // magnitude, so the value the mean would have been dragged toward is real and huge.
+    assert!(
+        all_spiked > quiet * 1000.0,
+        "the spike itself has to be large for this test to mean anything: quiet \
+         {quiet:e}, all-spiked {all_spiked:e}"
+    );
+}
+
+/// Fewer subs at the border means more noise there, by `N / count` in variance. This is
+/// the defect the whole map exists to let the denoiser see.
+#[test]
+fn the_field_tracks_coverage() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(64, 16, 1, config).unwrap();
+
+    // The left 16 columns are "border" on half the frames — the value the stack skips.
+    for (n, mut frame) in noisy_frames(64, 16, 1, 0.3, 0.01, 32).into_iter().enumerate() {
+        if n % 2 == 0 {
+            for y in 0..16 {
+                for x in 0..16 {
+                    frame.set_pixel(x, y, 0, 0.0);
+                }
+            }
+        }
+        stack.add_frame(&frame).unwrap();
+    }
+
+    let field = stack.noise_field();
+    let edge = field.sample(0, 4, 8);
+    let centre = field.sample(0, 48, 8);
+    let ratio = edge / centre;
+    assert!(
+        (ratio - 2.0).abs() < 0.5,
+        "half the coverage should read twice the variance; got {ratio:.2} \
+         (edge {edge:e}, centre {centre:e})"
+    );
+}
+
+/// The display copy and the map come from one read of the accumulator, so they must
+/// agree with the two separate passes they replace.
+#[test]
+fn compute_with_noise_matches_the_separate_passes() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(37, 23, 3, config).unwrap();
+    for frame in noisy_frames(37, 23, 3, 0.3, 0.01, 12) {
+        stack.add_frame(&frame).unwrap();
+    }
+
+    let (fused_frame, fused_field) = stack.compute_with_noise().unwrap();
+    let frame = stack.compute().unwrap();
+    let field = stack.noise_field();
+
+    assert_eq!(fused_frame.data(), frame.data(), "the means diverged");
+    assert_eq!(
+        (fused_field.width(), fused_field.height(), fused_field.channels()),
+        (field.width(), field.height(), field.channels())
+    );
+    for (a, b) in fused_field.variance().iter().zip(field.variance()) {
+        assert!(
+            (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-12,
+            "the noise maps diverged: {a:e} vs {b:e}"
+        );
+    }
+}
+
+#[test]
+fn compute_with_noise_refuses_an_empty_stack() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let stack = MasterStack::new(4, 4, 1, config).unwrap();
+    assert!(stack.compute_with_noise().is_err());
+}

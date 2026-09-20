@@ -6,6 +6,7 @@ fn to_ready_frame(
     config.auto_stretch = false;
     config.saturation_boost = false;
     night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: None,

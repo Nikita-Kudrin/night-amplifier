@@ -66,6 +66,7 @@ pub fn run_render_task(
             frame_number,
             settings,
             stack_depth,
+            mut noise,
         } = latest;
 
         let _iter_span =
@@ -96,7 +97,15 @@ pub fn run_render_task(
         if bin > 1 {
             let _span = tracing::info_span!("preview_bin", factor = bin).entered();
             match display_frame.downsample(bin) {
-                Ok(binned) => display_frame = Arc::new(binned),
+                Ok(binned) => {
+                    display_frame = Arc::new(binned);
+                    // The map describes the frame, so it follows every geometry change
+                    // the frame makes — in quadrature, since a box mean of `bin^2`
+                    // independent samples carries `1/bin^2` of their variance. Only
+                    // applied where the frame really was binned, so a failed downsample
+                    // cannot leave the two describing different grids.
+                    noise = noise.and_then(|field| field.binned(bin).ok());
+                }
                 // Not fatal: the pipeline is perfectly capable of running at sensor
                 // resolution, it is just slower. A failure here must not cost the frame.
                 Err(e) => warn!(error = %e, factor = bin, "Preview binning failed, rendering at full resolution"),
@@ -104,7 +113,7 @@ pub fn run_render_task(
         }
 
         // Process frame through unified render pipeline
-        let (pipeline_config, stretch_result) = {
+        let rendered = {
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Render);
             match pipeline::process_preview_frame_with_analysis(
                 Arc::make_mut(&mut display_frame),
@@ -128,10 +137,16 @@ pub fn run_render_task(
         // stack: a rejected frame still leaves the slow-moving stack on screen.
         let chunk_count = if showing_stack { 1 } else { max_chunks };
 
+        // Background neutralisation is the one stage between the accumulator and the
+        // encoders that multiplies, so the map follows it and nothing else: see
+        // `PreviewRender::linear_gain` for what that leaves out and why.
+        let noise = noise.map(|field| Arc::new(field.scaled(&rendered.linear_gain)));
+
         let ready_frame = Arc::new(crate::server::state::RenderReadyFrame {
             linear_frame: display_frame,
-            pipeline_config,
-            stretch_result,
+            pipeline_config: rendered.pipeline_config,
+            stretch_result: rendered.stretch_result,
+            noise,
         });
 
         let raw_frame = ready_frame;
@@ -433,8 +448,8 @@ mod tests {
         let mut full = frame.clone();
         let mut binned = frame.downsample(2).unwrap();
 
-        let (_, full_stretch) = process_preview_frame(&mut full, &settings).unwrap();
-        let (_, binned_stretch) = process_preview_frame(&mut binned, &settings).unwrap();
+        let full_stretch = process_preview_frame(&mut full, &settings).unwrap().stretch_result;
+        let binned_stretch = process_preview_frame(&mut binned, &settings).unwrap().stretch_result;
 
         let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
         let binned_lut = binned_stretch.expect("binned stretch").scale_lut;
@@ -528,6 +543,7 @@ mod tests {
         let settings = crate::server::state::CaptureSettings::default();
         let frame = crate::frame::Frame::zeros(4, 4, 3).unwrap();
         let msg = super::StackedFrame {
+            noise: None,
             display_frame: std::sync::Arc::new(frame),
             showing_stack: true,
             was_stacked: true,
@@ -549,6 +565,7 @@ mod tests {
 
         let settings = crate::server::state::CaptureSettings::default();
         let initial = super::StackedFrame {
+            noise: None,
             display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
             showing_stack: false,
             was_stacked: false,
@@ -560,6 +577,7 @@ mod tests {
         // Queue additional frames
         for n in 0..3 {
             let msg = super::StackedFrame {
+                noise: None,
                 display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
                 showing_stack: false,
                 was_stacked: false,
@@ -571,6 +589,7 @@ mod tests {
         }
         // Last frame is the "latest"
         let last = super::StackedFrame {
+            noise: None,
             display_frame: Arc::new(crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap()),
             showing_stack: true,
             was_stacked: true,

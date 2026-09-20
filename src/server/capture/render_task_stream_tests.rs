@@ -22,6 +22,7 @@ fn passthrough_settings() -> CaptureSettings {
 
 fn stacked_frame(frame: Arc<crate::frame::Frame>, settings: CaptureSettings) -> super::StackedFrame {
     super::StackedFrame {
+        noise: None,
         display_frame: frame,
         showing_stack: false,
         was_stacked: false,
@@ -230,11 +231,13 @@ async fn an_encode_failure_is_reported_once_and_is_not_a_camera_rejection() {
     };
 
     let unsupported = Arc::new(RenderReadyFrame {
+        noise: None,
         linear_frame: Arc::new(crate::frame::Frame::filled(64, 64, 2, 0.25).unwrap()),
         pipeline_config: crate::render::RenderPipelineConfig::default(),
         stretch_result: None,
     });
     let supported = Arc::new(RenderReadyFrame {
+        noise: None,
         linear_frame: Arc::new(crate::frame::Frame::filled(64, 64, 3, 0.25).unwrap()),
         pipeline_config: crate::render::RenderPipelineConfig {
             contrast: false,

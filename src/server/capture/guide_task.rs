@@ -481,7 +481,7 @@ fn render_and_publish(
     let _span = tracing::info_span!("guide_render").entered();
 
     let mut display_frame = frame;
-    let (pipeline_config, stretch_result) = match super::pipeline::process_preview_frame_with_analysis(
+    let rendered = match super::pipeline::process_preview_frame_with_analysis(
         Arc::make_mut(&mut display_frame),
         settings,
         // Every guide frame is a single sub — there is no stack behind it, which is the
@@ -498,8 +498,11 @@ fn render_and_publish(
 
     let ready = Arc::new(RenderReadyFrame {
         linear_frame: display_frame,
-        pipeline_config,
-        stretch_result,
+        pipeline_config: rendered.pipeline_config,
+        stretch_result: rendered.stretch_result,
+        // A guide frame is a single sub: nothing accumulated it, so there is no
+        // per-pixel noise to report.
+        noise: None,
     });
 
     let stream = &state.guide_stream;

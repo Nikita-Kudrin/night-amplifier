@@ -33,7 +33,11 @@ fn render(
     tweak: impl FnOnce(&mut night_amplifier::render::DenoiseConfig),
 ) -> (Vec<u8>, u32, u32) {
     use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
-    let (mut pipeline_config, stretch_result) =
+    let night_amplifier::server::capture::pipeline::PreviewRender {
+        mut pipeline_config,
+        stretch_result,
+        ..
+    } =
         night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
             &mut frame,
             settings,
@@ -46,6 +50,7 @@ fn render(
         .unwrap();
     tweak(&mut pipeline_config.denoise);
     let ready = night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,

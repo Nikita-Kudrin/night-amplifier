@@ -298,6 +298,13 @@ pub struct StackedFrame {
     /// The render task's analysis cache refreshes on proportional growth in this, not on
     /// elapsed frames, because the statistics it holds fall as `1/sqrt(N)`.
     pub stack_depth: u32,
+    /// Per-pixel noise of `display_frame` — see [`crate::frame::NoiseField`]. `None`
+    /// whenever no accumulator stands behind the frame.
+    ///
+    /// Not charged against the channel's memory budget: at 3008x3008x3 this is 1.7 MB
+    /// beside a 108 MB display frame, within the slack `pipeline_capacities` already
+    /// carries.
+    pub noise: Option<crate::frame::NoiseField>,
 }
 
 #[cfg(test)]

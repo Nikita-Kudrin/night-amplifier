@@ -174,11 +174,16 @@ fn prepare_fixture_with(
     settings.auto_stretch = true;
     configure(&mut settings);
 
-    let (pipeline_config, stretch_result) =
+    let night_amplifier::server::capture::pipeline::PreviewRender {
+        pipeline_config,
+        stretch_result,
+        ..
+    } =
         night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame, &settings)
             .ok()?;
 
     Some(night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,
