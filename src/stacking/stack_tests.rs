@@ -537,3 +537,34 @@ fn a_step_in_sky_level_does_not_set_the_scale() {
         "both estimates must be measurable for the ratio to mean anything"
     );
 }
+
+/// A pixel whose early samples were identical reads as *unmeasured*, and does not drag
+/// the block it sits in.
+///
+/// 0.95 % of pixels on 14-bit data start that way, and with the scale collapsed every
+/// later real sample sits more than eight sigmas out, so the guard drops them all and the
+/// scale never escapes. That is deliberate — see `observe_scale_guarded`. What has to
+/// hold is that such a pixel says "no measurement" rather than "no noise", and that the
+/// block median around it is unmoved.
+#[test]
+fn a_collapsed_pixel_reads_as_unmeasured_rather_than_clean() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(8, 8, 1, config).unwrap();
+
+    let sigma = 0.001;
+    // One pixel held perfectly still while the rest of the block carries real noise.
+    for mut frame in noisy_frames(8, 8, 1, 0.3, sigma, 48) {
+        frame.set_pixel(5, 5, 0, 0.3);
+        stack.add_frame(&frame).unwrap();
+    }
+
+    let field = stack.noise_field();
+    assert!(field.is_usable(), "the rest of the block still has a measurement");
+
+    let centre = field.robust_centre();
+    let expected = sigma * sigma / 48.0;
+    assert!(
+        (centre / expected - 1.0).abs() < 0.3,
+        "the still pixel dragged its block to {centre:e}, expected about {expected:e}"
+    );
+}
