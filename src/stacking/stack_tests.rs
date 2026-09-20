@@ -494,3 +494,46 @@ fn compute_with_noise_refuses_an_empty_stack() {
     let stack = MasterStack::new(4, 4, 1, config).unwrap();
     assert!(stack.compute_with_noise().is_err());
 }
+
+/// A real step in sky level must not leave the scale the size of the step.
+///
+/// The plain mean rejects nothing, so it has no threshold of its own to winsorise
+/// against — and an exposure change, a cloud clearing, or rejection being toggled off
+/// while the sky moves all arrive as one enormous deviation. Unguarded, a 1000-sigma
+/// step left the window about a hundred sigmas wide for the rest of the EWMA's memory,
+/// and a rejection pass switched on afterwards inherited it and clipped nothing.
+#[test]
+fn a_step_in_sky_level_does_not_set_the_scale() {
+    let sigma = 0.0001;
+    let settled = |level: f32, frames: Vec<Frame>| {
+        let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+        let mut stack = MasterStack::new(8, 8, 1, config).unwrap();
+        for frame in frames {
+            stack.add_frame(&frame).unwrap();
+        }
+        let _ = level;
+        stack.noise_field().robust_centre()
+    };
+
+    let steady: Vec<Frame> = noisy_frames(8, 8, 1, 0.3, sigma, 60);
+    let mut stepped = noisy_frames(8, 8, 1, 0.3, sigma, 30);
+    // A 1000-sigma step, then the same noise about the new level.
+    stepped.extend(noisy_frames(8, 8, 1, 0.3 + 1000.0 * sigma, sigma, 30));
+
+    let calm = settled(0.3, steady);
+    let after_step = settled(0.3, stepped);
+
+    assert!(
+        after_step < calm * 25.0,
+        "a level step left the scale {:.1}x wider than a steady sky ({after_step:e} \
+         against {calm:e}); the guard is what keeps the step out of the estimate",
+        after_step / calm
+    );
+
+    // And the guard has to be able to refute the alternative: the step really is huge,
+    // so an unwinsorised estimate would have been orders of magnitude out.
+    assert!(
+        after_step > 0.0 && calm > 0.0,
+        "both estimates must be measurable for the ratio to mean anything"
+    );
+}

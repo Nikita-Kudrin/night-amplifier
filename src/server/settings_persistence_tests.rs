@@ -65,6 +65,7 @@ mod tests {
             preview_resolution: Resolution::Qhd1440,
             streaming_resolution: Resolution::Uhd2160,
             denoise: DenoiseSettings {
+                enabled: true,
                 chroma: true,
                 chroma_strength: 0.8,
                 background_grain: 0.25,

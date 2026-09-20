@@ -487,57 +487,6 @@ mod tests {
         );
     }
 
-    /// Regression guard for the bug `render_stacked_png` replaced: routing the export
-    /// through `RenderPipeline::process` directly compiled and passed the stretch test
-    /// above, but `RenderPipelineConfig::denoise` is not one of that pipeline's stages —
-    /// it only means anything to the streaming encoders (see AGENTS.md's *Spatial
-    /// denoising*) — so the saved file carried none of the noise reduction the operator
-    /// had been looking at live. A single-pixel assertion can't catch a silently-skipped
-    /// stage; comparing denoise-on against denoise-off on the same noisy input can.
-    #[test]
-    fn render_stacked_png_applies_denoising() {
-        fn noisy_frame() -> crate::frame::Frame {
-            let (w, h) = (64, 64);
-            let mut data = vec![0.0f32; w * h * 3];
-            let mut seed: u32 = 98765;
-            let plane = w * h;
-            for i in 0..(w * h) {
-                for c in 0..3 {
-                    seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-                    let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.1;
-                    data[c * plane + i] = (0.2 + noise).clamp(0.0, 1.0);
-                }
-            }
-            crate::frame::Frame::from_f32_vec(data, w, h, 3).unwrap()
-        }
-
-        fn byte_sigma(rgb8: &[u8]) -> f64 {
-            let n = rgb8.len() as f64;
-            let mean = rgb8.iter().map(|&v| v as f64).sum::<f64>() / n;
-            (rgb8.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n).sqrt()
-        }
-
-        let mut settings = CaptureSettings::default();
-        settings.auto_stretch = false;
-        settings.background_subtraction = false;
-
-        settings.denoise.chroma = true;
-        settings.denoise.luma_strength = 1.0;
-        let (denoised, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
-
-        settings.denoise.chroma = false;
-        settings.denoise.luma_strength = 0.0;
-        let (plain, _, _) = render_stacked_png(noisy_frame(), &settings, 1).unwrap();
-
-        assert!(
-            byte_sigma(&denoised) < byte_sigma(&plain) * 0.9,
-            "denoise settings had no measurable effect on the saved PNG bytes \
-             (denoised sigma {:.3}, plain sigma {:.3})",
-            byte_sigma(&denoised),
-            byte_sigma(&plain)
-        );
-    }
-
     /// A left-to-right sky gradient with mild noise: the thing background removal exists
     /// to flatten.
     fn gradient_frame() -> crate::frame::Frame {
