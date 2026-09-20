@@ -36,6 +36,7 @@ pub(super) struct AxisTaps {
     taps: usize,
     pub(super) start: Vec<usize>,
     weights: Vec<f32>,
+    sum_sq: Vec<f32>,
 }
 
 impl AxisTaps {
@@ -90,15 +91,36 @@ impl AxisTaps {
             }
             start.push(first_in);
         }
+        let sum_sq = weights
+            .chunks_exact(taps)
+            .map(|row| row.iter().map(|w| w * w).sum())
+            .collect();
         Self {
             taps,
             start,
             weights,
+            sum_sq,
         }
     }
 
     pub(super) fn of(&self, i: usize) -> (usize, &[f32]) {
         (self.start[i], &self.weights[i * self.taps..(i + 1) * self.taps])
+    }
+
+    /// `sum(w^2)` per output index: the factor by which this axis scales the *variance*
+    /// of independent source samples.
+    ///
+    /// An output pixel is `sum(w_i * x_i)` with `sum(w_i) = 1`, so its variance is
+    /// `sum(w_i^2 * sigma_i^2)` — not `sigma^2`. Built here, beside the weights it is
+    /// derived from, so the two cannot drift apart: a noise field resampled with any
+    /// other kernel overstates output noise by roughly `sqrt(k)` for a `k`-fold
+    /// reduction, and every threshold built on it then comes out that much too
+    /// aggressive. Nothing downstream reports a number that would show it.
+    ///
+    /// The sharpen's negative lobes need no special case — `w^2` is positive either way,
+    /// and that sharpening *raises* output noise falls out correctly.
+    pub(super) fn sum_sq(&self) -> &[f32] {
+        &self.sum_sq
     }
 }
 

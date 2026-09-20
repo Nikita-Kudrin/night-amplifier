@@ -168,6 +168,7 @@ pub fn run_stacking_task(
         let stack_reset;
         let mut rejected_because;
         let mut stack_depth;
+        let noise;
         let mut display_frame = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,
@@ -212,6 +213,7 @@ pub fn run_stacking_task(
             stack_reset = outcome.stack_reset;
             rejected_because = outcome.rejected_because;
             stack_depth = outcome.stack_depth;
+            noise = outcome.noise;
             outcome.display_frame.map(Arc::new)
         } else {
             debug!(
@@ -225,6 +227,7 @@ pub fn run_stacking_task(
             stack_reset = false;
             rejected_because = None;
             stack_depth = 0;
+            noise = None;
             Some(Arc::clone(&frame))
         };
 
@@ -327,6 +330,9 @@ pub fn run_stacking_task(
             frame_number,
             settings,
             stack_depth,
+            // Wanderer mode's reset above swapped the stack for a raw sub, so a map
+            // measured on the stack no longer describes what is on screen.
+            noise: showing_stack.then_some(noise).flatten(),
         };
         // Publish the count *before* the message, undone on arms that didn't send.
         // `try_send` makes the frame visible instantly, so counting after leaves a

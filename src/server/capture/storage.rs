@@ -625,7 +625,7 @@ mod tests {
         let (exported, _, _) = render_stacked_png(gradient_frame(), &settings, 40).unwrap();
 
         let mut live = gradient_frame();
-        let (pipeline_config, stretch_result) = process_preview_frame_with_analysis(
+        let rendered = process_preview_frame_with_analysis(
             &mut live,
             &settings,
             AnalysisContext {
@@ -637,8 +637,9 @@ mod tests {
         .unwrap();
         let ready = RenderReadyFrame {
             linear_frame: Arc::new(live),
-            pipeline_config,
-            stretch_result,
+            noise: None,
+            pipeline_config: rendered.pipeline_config,
+            stretch_result: rendered.stretch_result,
         };
         let (streamed, _, _) = frame_to_rgb8_downsampled_with(
             &ready,
@@ -696,7 +697,7 @@ fn render_stacked_png(
     // The depth is part of the render, not bookkeeping: the stretch spends it on how
     // calm the sky is (`render::autostretch::depth_grain_gain`), so an export that left
     // it at the default would tone-curve the same stack differently from the live view.
-    let (pipeline_config, stretch_result) = process_preview_frame_with_analysis(
+    let rendered = process_preview_frame_with_analysis(
         &mut frame,
         settings,
         AnalysisContext {
@@ -707,8 +708,12 @@ fn render_stacked_png(
     )?;
     let ready_frame = RenderReadyFrame {
         linear_frame: Arc::new(frame),
-        pipeline_config,
-        stretch_result,
+        pipeline_config: rendered.pipeline_config,
+        stretch_result: rendered.stretch_result,
+        // The export renders the stacked frame it was handed, not the accumulator, so
+        // there is no map to carry. The exported PNG and the live view therefore take
+        // the denoiser's global estimates alike, which is what keeps them comparable.
+        noise: None,
     };
 
     frame_to_rgb8_downsampled(&ready_frame, u32::MAX, u32::MAX)

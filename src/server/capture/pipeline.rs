@@ -50,6 +50,14 @@ pub struct StackingOutcome {
     /// moved: they fall as `1/sqrt(N)`, so proportional growth in this number is what
     /// decides when they have to be measured again.
     pub stack_depth: u32,
+    /// Per-pixel noise of `display_frame`, when it is an accumulated stack that has one.
+    ///
+    /// Taken from the same read of the accumulator as the display copy, so it costs the
+    /// stacking thread one more write rather than another 434 MB pass. `None` wherever
+    /// `display_frame` is, and wherever the mode keeps no `IncrementalPixel`
+    /// accumulator — planetary, and comet, whose context is a Pro trait this does not
+    /// reach through.
+    pub noise: Option<crate::frame::NoiseField>,
 }
 
 impl StackingOutcome {
@@ -62,6 +70,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth: 0,
+            noise: None,
         }
     }
 
@@ -74,6 +83,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth,
+            noise: None,
         }
     }
 
@@ -90,6 +100,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth,
+            noise: None,
         }
     }
 }
@@ -184,10 +195,15 @@ pub async fn process_frame_with_stacking(
 
     // Return the current stacked result for display (raw, background subtraction applied in preview)
     let depth = ctx.frame_count() as u32;
-    match ctx.compute() {
-        Ok(stacked) => StackingOutcome {
+    // The display copy and the noise map come from one read of the 434 MB accumulator;
+    // see `MasterStack::compute_with_noise`.
+    match ctx.compute_with_noise() {
+        Ok((stacked, noise)) => StackingOutcome {
             stack_reset: admission.rebased,
             rejected_because: admission.rejected_because,
+            // A stack too shallow to have measured a spread reports nothing rather than
+            // a field of NaN the encoder would have to re-check per cell.
+            noise: noise.is_usable().then_some(noise),
             ..StackingOutcome::stacked(stacked, admission.added, depth)
         },
         Err(e) => {
@@ -387,6 +403,26 @@ pub async fn process_frame_with_planetary_stacking(
     }
 }
 
+/// What one pass of the preview pipeline decided about a frame.
+///
+/// A named type rather than a tuple because it has three meanings now: the stage config,
+/// the solved tone curve, and how the linear stages scaled the frame's noise.
+pub struct PreviewRender {
+    pub pipeline_config: crate::render::RenderPipelineConfig,
+    pub stretch_result: Option<crate::server::state::StretchResult>,
+    /// Per-channel multiplicative gain the linear stages applied, for anything tracking
+    /// how the frame's noise was scaled — the per-pixel noise map, which is measured on
+    /// the accumulator and has to follow the frame through to the denoiser.
+    ///
+    /// `[1.0; 3]` when background neutralisation did not run. Only *multiplicative*
+    /// stages appear here, and the list of what that leaves out is the point:
+    /// background subtraction and the black point are additive, the black point and the
+    /// tone curve are applied in the encoder tail after the denoiser has already run,
+    /// and SCNR restores `l_old / l_new` on all three channels, so it is
+    /// luminance-preserving by construction and moves no luminance noise.
+    pub linear_gain: [f32; 3],
+}
+
 /// Process a frame for preview display using the unified render pipeline.
 /// Now returns a RenderReadyFrame instead of applying the non-linear stretch,
 /// allowing the stretch to be fused into the downsampling pass.
@@ -397,10 +433,7 @@ pub async fn process_frame_with_planetary_stacking(
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
-) -> crate::error::Result<(
-    crate::render::RenderPipelineConfig,
-    Option<crate::server::state::StretchResult>,
-)> {
+) -> crate::error::Result<PreviewRender> {
     process_preview_frame_with_analysis(
         frame,
         settings,
@@ -423,10 +456,7 @@ pub fn process_preview_frame_with_analysis(
     settings: &CaptureSettings,
     ctx: AnalysisContext,
     analysis: &mut PreviewAnalysis,
-) -> crate::error::Result<(
-    crate::render::RenderPipelineConfig,
-    Option<crate::server::state::StretchResult>,
-)> {
+) -> crate::error::Result<PreviewRender> {
     use crate::background::BackgroundExtractor;
     use crate::render::autostretch::prepare_auto_stretch_frame_with_stats;
 
@@ -462,6 +492,7 @@ pub fn process_preview_frame_with_analysis(
     // scale with different things and only one of them is expensive: the grid reads the
     // frame to produce three numbers, the apply is one pass over every sample. A single
     // span here reported 97 ms with no way to tell which half owned it.
+    let mut linear_gain = [1.0f32; 3];
     if pipeline_config.background_subtraction && frame.channels() == 3 {
         let _span0 = tracing::info_span!("background_neutralization").entered();
         let multipliers = analysis.white_balance(|| {
@@ -478,6 +509,10 @@ pub fn process_preview_frame_with_analysis(
                 let _span = tracing::info_span!("wb_apply").entered();
                 if let Err(e) = crate::render::neutralize_background(frame, &multipliers) {
                     warn!(error = %e, "Background neutralization failed");
+                } else {
+                    // Recorded only once the multiply really happened: a reported gain
+                    // the frame never received would mis-scale the noise map by it.
+                    linear_gain = multipliers;
                 }
             }
             Err(e) => warn!(error = %e, "Failed to compute grid white balance"),
@@ -606,7 +641,11 @@ pub fn process_preview_frame_with_analysis(
         None
     };
 
-    Ok((pipeline_config, stretch_result))
+    Ok(PreviewRender {
+        pipeline_config,
+        stretch_result,
+        linear_gain,
+    })
 }
 
 #[cfg(test)]
@@ -806,7 +845,7 @@ mod tests {
         let mut frame = Frame::filled(10, 10, 3, 0.2).unwrap();
         let settings = CaptureSettings::default();
 
-        let (_, stretch) = process_preview_frame(&mut frame, &settings)
+        let stretch = process_preview_frame(&mut frame, &settings).map(|r| r.stretch_result)
             .expect("a frame too small to measure must still render");
         assert!(
             stretch.is_none(),

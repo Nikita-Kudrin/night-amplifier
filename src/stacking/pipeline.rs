@@ -377,4 +377,9 @@ impl StackingPipeline {
     pub fn coverage_map(&self) -> Frame {
         self.stacker.coverage_map()
     }
+
+    /// The stacked result and its per-pixel noise map, from one read of the accumulator.
+    pub fn compute_with_noise(&self) -> Result<(Frame, crate::frame::NoiseField)> {
+        self.stacker.compute_with_noise()
+    }
 }

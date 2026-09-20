@@ -12,6 +12,7 @@ fn to_ready_frame(frame: &Frame) -> crate::server::state::RenderReadyFrame {
     config.auto_stretch = false;
     config.saturation_boost = false;
     crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: None,
@@ -32,6 +33,7 @@ fn to_ready_frame_with_stretch(
     config.auto_stretch = true;
     config.saturation_boost = false;
     crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: Some(crate::server::state::StretchResult {
@@ -1330,4 +1332,186 @@ fn sky_shadow_after_denoise_matches_the_whole_image_reference() {
         }
         assert_eq!(encoded, expected, "{w}x{h}: denoised sky shadow disagrees with the reference");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The quadrature contract: how a noise map has to be resampled.
+//
+// This is the single easiest thing in the noise-map work to get wrong and the hardest
+// to see, because nothing downstream reports a number that would show it. Getting it
+// wrong makes every threshold built on the map too aggressive by roughly sqrt(k).
+// ---------------------------------------------------------------------------
+
+/// Independent Gaussian noise of unit sigma, deterministic across machines and runs.
+fn white_noise(len: usize, seed: u32) -> Vec<f32> {
+    let mut state = seed | 1;
+    let mut u = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / (1u32 << 24) as f32 + 1e-7
+    };
+    (0..len)
+        .map(|_| {
+            let (u1, u2) = (u(), u());
+            (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+        })
+        .collect()
+}
+
+/// Separable resample of an f32 plane through the production taps.
+fn resample_plane(
+    src: &[f32],
+    src_w: usize,
+    src_h: usize,
+    dst_w: usize,
+    dst_h: usize,
+) -> Vec<f32> {
+    use super::axis_taps::AxisTaps;
+    let columns = AxisTaps::cached(src_w, dst_w);
+    let rows = AxisTaps::cached(src_h, dst_h);
+    let mut out = vec![0.0f32; dst_w * dst_h];
+    for oy in 0..dst_h {
+        let (first_row, wy) = rows.of(oy);
+        for ox in 0..dst_w {
+            let (first_col, wx) = columns.of(ox);
+            let mut acc = 0.0f32;
+            for (j, &a) in wy.iter().enumerate() {
+                let row = (first_row + j).min(src_h - 1) * src_w;
+                for (i, &b) in wx.iter().enumerate() {
+                    acc += a * b * src[row + (first_col + i).min(src_w - 1)];
+                }
+            }
+            out[oy * dst_w + ox] = acc;
+        }
+    }
+    out
+}
+
+fn variance(values: &[f32]) -> f32 {
+    let mean = values.iter().sum::<f32>() / values.len() as f32;
+    values.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / values.len() as f32
+}
+
+/// `sum(w^2)` really is the factor by which the resample scales variance.
+#[test]
+fn quadrature_resample_predicts_measured_noise() {
+    use super::axis_taps::AxisTaps;
+    // The shipped eyepiece geometry: IMX533 to a 1440 box, a 2.089x non-integer ratio.
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x51de_5eed);
+    let out = resample_plane(&plane, src, src, dst, dst);
+
+    let measured = variance(&out);
+    let columns = AxisTaps::cached(src, dst);
+    let rows = AxisTaps::cached(src, dst);
+    // The source sigma is 1, so the prediction is the mean tap energy of both axes.
+    let mean_sum_sq = |t: &AxisTaps| t.sum_sq().iter().sum::<f32>() / t.sum_sq().len() as f32;
+    let predicted = variance(&plane) * mean_sum_sq(&columns) * mean_sum_sq(&rows);
+
+    assert!(
+        (measured / predicted - 1.0).abs() < 0.03,
+        "measured output variance {measured:e} against a predicted {predicted:e}"
+    );
+}
+
+/// And the guard has to be able to refute the alternative, or it is not guarding the
+/// choice: resampling the map like an image — averaging sigmas, which is what
+/// `sum(w) = 1` gives — leaves the source sigma untouched and so overstates the output.
+#[test]
+fn resampling_the_field_like_an_image_does_not() {
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x51de_5eed);
+    let out = resample_plane(&plane, src, src, dst, dst);
+
+    let measured = variance(&out);
+    // `sum(w) = 1`, so an image-like resample of a flat sigma field returns that sigma.
+    let image_like = variance(&plane);
+    let overstatement = (image_like / measured).sqrt();
+    assert!(
+        overstatement > 1.8,
+        "an image-like resample overstated output sigma by only {overstatement:.2}x; \
+         the trap this guards is worth ~sqrt(k), so either the ratio moved or the \
+         measurement is not seeing it"
+    );
+}
+
+/// End to end through the shipped type: a `NoiseField` carrying the source variance,
+/// resampled with the production taps, must land on what the resample actually produces.
+#[test]
+fn a_resampled_noise_field_matches_the_encoder_it_describes() {
+    use super::axis_taps::AxisTaps;
+    use crate::frame::{NoiseField, NOISE_REDUCTION};
+
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x0c0f_fee1);
+    let source_variance = variance(&plane);
+
+    let cells = src.div_ceil(NOISE_REDUCTION);
+    let field = NoiseField::new(
+        vec![source_variance; cells * cells],
+        cells,
+        cells,
+        1,
+        src,
+        src,
+    )
+    .unwrap();
+
+    let columns = AxisTaps::cached(src, dst);
+    let rows = AxisTaps::cached(src, dst);
+    let resampled = field
+        .resampled(dst, dst, columns.sum_sq(), rows.sum_sq())
+        .unwrap();
+
+    let measured = variance(&resample_plane(&plane, src, src, dst, dst));
+    let predicted = resampled.sample(0, dst / 2, dst / 2);
+    assert!(
+        (predicted / measured - 1.0).abs() < 0.05,
+        "the field predicts {predicted:e} where the encoder produces {measured:e}"
+    );
+}
+
+/// How much the tap energy varies across the output grid decides whether working in
+/// *relative* noise is enough on its own — a factor common to every output pixel
+/// cancels in a ratio, one that varies does not.
+///
+/// Two regimes, and they differ by more than the difference between them looks:
+///
+/// - **At the shipped eyepiece geometry** (3008 -> 1440, 2.089x) the interior varies
+///   1.037x in variance, i.e. 1.018x in sigma. There the sharpen is off entirely
+///   (`SHARPEN_NONE_FROM` is 1.9x) and the tent alone is very nearly phase-invariant,
+///   which is what makes a relative field a ~2 % approximation.
+/// - **Near unity** (1538 -> 1440, 1.068x) it reaches 1.28x in variance, 1.13x in sigma.
+///   That is the `[-a, 1+2a, -a]` sharpen: its negative lobes raise `sum(w^2)` sharply
+///   and by an amount that moves with the phase. A relative field is a ~13 %
+///   approximation there, not a ~2 % one, so anything reading the map *absolutely*
+///   matters more at IMX464's near-unity ratio than at IMX533's.
+///
+/// Both bounds are measured, not derived. The first output pixel is excluded: the frame
+/// edge renormalises its footprint after dropping out-of-range samples and reads 1.16x
+/// the interior on its own, which is real, carried correctly by the resample, and not
+/// where anybody reads sky noise.
+#[test]
+fn the_tap_phase_variation_is_small_where_the_sharpen_is_off() {
+    use super::axis_taps::AxisTaps;
+    let spread = |source: usize, target: usize| {
+        let taps = AxisTaps::cached(source, target);
+        let interior = &taps.sum_sq()[8..taps.sum_sq().len() - 8];
+        let lo = interior.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = interior.iter().copied().fold(0.0f32, f32::max);
+        hi / lo
+    };
+
+    let eyepiece = spread(3008, 1440);
+    assert!(
+        eyepiece < 1.05,
+        "at 2.089x the tent alone should be nearly phase-invariant; measured {eyepiece:.3}x"
+    );
+
+    let near_unity = spread(1538, 1440);
+    assert!(
+        (1.15..1.45).contains(&near_unity),
+        "at 1.068x the sharpen's negative lobes dominate `sum(w^2)`; measured \
+         {near_unity:.3}x, and moving out of this band changes how good an \
+         approximation a relative noise field is on IMX464"
+    );
 }

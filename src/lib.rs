@@ -64,7 +64,7 @@ pub use detection::{
     BackgroundStats, DetectionConfig, Star, StarDetector,
 };
 pub use error::{Result, StackError};
-pub use frame::{Frame, PixelFormat};
+pub use frame::{Frame, NoiseField, PixelFormat, NOISE_REDUCTION};
 pub use process::{ChildGuard, ExternalProcess};
 pub use registration::{
     register_frames, register_frames_adaptive, AdaptiveRegistration, AdaptiveRegistrationResult,

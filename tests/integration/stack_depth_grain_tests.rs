@@ -99,7 +99,11 @@ pub(crate) fn render_with(
     // Through the analysis door, not `process_preview_frame`: the stretch spends the
     // stack's depth on how calm the sky is, so a one-shot render would measure a
     // single-frame tone curve over a deep stack.
-    let (mut pipeline_config, stretch_result) =
+    let night_amplifier::server::capture::pipeline::PreviewRender {
+        mut pipeline_config,
+        stretch_result,
+        ..
+    } =
         night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
             &mut frame,
             settings,
@@ -115,6 +119,7 @@ pub(crate) fn render_with(
     }
     tweak(&mut pipeline_config);
     let ready = night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,

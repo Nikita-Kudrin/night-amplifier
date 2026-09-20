@@ -396,6 +396,41 @@ impl<'a> RowTail<'a> {
     }
 }
 
+/// The frame's noise map, resampled onto the output grid this conversion produces.
+///
+/// **In quadrature, with the same taps the pixels went through.** An output pixel is
+/// `sum(w_i * x_i)` with `sum(w_i) = 1`, so its variance is `sum(w_i^2 * sigma_i^2)`;
+/// resampling the map like an image instead overstates output noise by roughly `sqrt(k)`
+/// for a `k`-fold reduction, and every threshold built on it comes out that much too
+/// aggressive. Nothing downstream reports a number that would show it, which is why the
+/// factor is taken from `AxisTaps::sum_sq` on the *same cached instance* the pixels use
+/// rather than recomputed here.
+///
+/// `None` when there is no map, or when it has nothing measured to say.
+pub(super) fn output_noise_field(
+    ready_frame: &RenderReadyFrame,
+    target_width: usize,
+    target_height: usize,
+) -> Option<crate::frame::NoiseField> {
+    let field = ready_frame.noise.as_deref()?;
+    if !field.is_usable() {
+        return None;
+    }
+    let frame = &ready_frame.linear_frame;
+    let (width, height) = (frame.width(), frame.height());
+
+    let _span = tracing::info_span!("noise_resample", target_width, target_height).entered();
+    if (target_width, target_height) == (width, height) {
+        // Not resampled, so the taps are the identity and carry all of the variance.
+        return field.resampled(target_width, target_height, &[1.0], &[1.0]).ok();
+    }
+    let columns = AxisTaps::cached(width, target_width);
+    let rows = AxisTaps::cached(height, target_height);
+    field
+        .resampled(target_width, target_height, columns.sum_sq(), rows.sum_sq())
+        .ok()
+}
+
 /// Drive a row source to interleaved RGB8, staging the resampled image only when
 /// a denoiser needs to see across rows.
 fn render_rgb8<S: RowSource>(
