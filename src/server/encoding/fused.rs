@@ -472,7 +472,19 @@ fn render_rgb8<S: RowSource>(
         return output;
     }
 
-    stage_and_denoise(source, &tail, display, &denoise, sky_shadow, &mut output, scratch);
+    // Only built for the staged path: it is the only one with a filter to feed, and on
+    // the fused path the resample would be work with no reader.
+    let noise = output_noise_field(ready_frame, target_width, target_height);
+    stage_and_denoise(
+        source,
+        &tail,
+        display,
+        &denoise,
+        sky_shadow,
+        noise.as_ref(),
+        &mut output,
+        scratch,
+    );
     output
 }
 
@@ -480,12 +492,14 @@ fn render_rgb8<S: RowSource>(
 /// denoise it, then run the tone curve and the 8-bit write per row. A sky shadow
 /// streams the denoised rows through the same driver as the fused path: applied to
 /// the whole image it held two more full planes (~208 MB at 26 MP native).
+#[allow(clippy::too_many_arguments)]
 fn stage_and_denoise<S: RowSource>(
     source: &S,
     tail: &RowTail,
     display: DisplayOutput,
     denoise: &DenoiseConfig,
     sky_shadow: Option<crate::render::SkyShadow>,
+    noise: Option<&crate::frame::NoiseField>,
     output: &mut [u8],
     scratch: &mut DenoiseScratch,
 ) {
@@ -526,6 +540,7 @@ fn stage_and_denoise<S: RowSource>(
         target_width,
         target_height,
         denoise,
+        noise,
         scratch,
     );
 

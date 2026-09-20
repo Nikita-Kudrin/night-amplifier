@@ -22,6 +22,25 @@ pub const CLIPPED_SCALE_WINDOW: f32 = 8.0;
 /// [`IncrementalPixel::scale`].
 pub const SCALE_FLOOR: f32 = 1e-6;
 
+/// Offered samples before [`IncrementalPixel::observe_scale_guarded`] starts winsorising.
+///
+/// Below this the scale is still climbing out of [`SCALE_FLOOR`] and clamping against it
+/// would hold it down: every early deviation is thousands of times the floor, so each
+/// would be clipped to `8 * floor` and the estimate would take about seven samples to
+/// reach the real noise instead of two. The guard exists to reject a *step*, and there is
+/// no level to have stepped from until there is an estimate. The rejection plugin's own
+/// warm-up gate is the same figure for the same reason.
+pub const SCALE_GUARD_MIN_OBSERVATIONS: u16 = 3;
+
+/// How far a sample may sit from the running mean before
+/// [`IncrementalPixel::observe_scale_guarded`] winsorises it into the scale.
+///
+/// Loose on purpose — real noise does not reach eight sigmas, so a stable sky converges
+/// as it would with no guard at all. It exists for the one sample that is not noise: a
+/// step in sky level, which without it sets the scale to the size of the step. The same
+/// figure the rejection plugin's own warm-up guard uses, and for the same reason.
+pub const WARMUP_SIGMA_GUARD: f32 = 8.0;
+
 /// `1 + 1/count` for the first `MEAN_ERROR_TABLE_LEN` counts, 1.0 beyond.
 ///
 /// The running mean is itself an estimate from `count` samples, so the gap under test has
@@ -150,6 +169,42 @@ impl IncrementalPixel {
             alpha = alpha.max(1.0 / CLIPPED_SCALE_WINDOW);
         }
         self.m2 += alpha * (deviation * deviation - self.m2);
+    }
+
+    /// Folds one offered sample into the scale estimate, winsorising it here rather
+    /// than asking the caller to.
+    ///
+    /// For the plain-mean path, which rejects nothing and so has no threshold of its
+    /// own to clamp against. It still must not let one sample run away with the scale:
+    /// `m2` is the render's per-pixel noise estimate, and a legitimate step in sky level
+    /// — an exposure change, a cloud clearing, rejection being toggled off while the sky
+    /// moves — arrives as a single enormous deviation. Unwinsorised, one 1000-sigma step
+    /// left the window ~100 sigma wide for the rest of the EWMA's memory, which a
+    /// rejection pass turned on afterwards then inherited.
+    ///
+    /// [`WARMUP_SIGMA_GUARD`] is deliberately loose: real noise never reaches it, so a
+    /// stable sky converges exactly as it would unclamped, while a real step is clamped
+    /// and marked `clipped` — the short memory then widens the scale geometrically and
+    /// it adopts the new level within a few frames instead of being pinned to the old
+    /// one.
+    #[inline]
+    pub fn observe_scale_guarded(
+        &mut self,
+        deviation: f32,
+        alphas: &[f32; SCALE_WINDOW as usize + 1],
+    ) {
+        if self.offered <= SCALE_GUARD_MIN_OBSERVATIONS {
+            self.observe_scale_with(deviation, false, alphas);
+            return;
+        }
+        let limit = WARMUP_SIGMA_GUARD * self.scale();
+        let clipped = deviation.abs() > limit;
+        let deviation = if clipped {
+            deviation.signum() * limit
+        } else {
+            deviation
+        };
+        self.observe_scale_with(deviation, clipped, alphas);
     }
 
     /// Variance the rejector clips against, floored to stay positive.

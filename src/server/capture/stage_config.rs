@@ -166,46 +166,23 @@ const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
 /// is the whole point of the eyepiece view.
 const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
 
-/// Map the denoise settings onto the config the encoders read.
+/// The denoise config the encoders read, with the gates Community owns.
 ///
-/// Skipped for planetary the same way `cfa::fpn` is: lucky imaging exists to
-/// recover the fine detail these filters remove, and a lunar disc is exactly the
-/// low-contrast large-scale structure a wavelet threshold flattens.
+/// Planetary is refused here rather than in the plugin: it is a product rule, not
+/// tuning, and it sits beside the same asymmetry `cfa::fpn`, superpixel debayering and
+/// the black floor each state at their own site. Lucky imaging exists to recover the
+/// fine detail these filters remove, and a lunar disc is exactly the low-contrast
+/// large-scale structure a wavelet threshold flattens.
+///
+/// The observer's master switch is refused here too, so "off" means off whatever a
+/// plugin would have made of the rest of the settings.
 fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
-    use crate::render::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
-
-    if settings.stacking_type == crate::stacking::StackingType::Planetary {
-        return DenoiseConfig::OFF;
+    if settings.stacking_type == crate::stacking::StackingType::Planetary
+        || !settings.denoise.enabled
+    {
+        return crate::render::DenoiseConfig::OFF;
     }
-
-    let d = &settings.denoise;
-    // Star Fields is looking for point sources against an empty sky and has no nebulosity
-    // to protect, so it leans harder on the finest scale and puts the star's peak back
-    // with a gain. See `render::STAR_FIELD_FINE_BOOST`.
-    let star_field = settings.stretch_aggressiveness == crate::render::StretchAggressiveness::Low;
-    let mut k = LumaDenoiseConfig::thresholds_for(d.star_protection(), d.coarse_denoise());
-    if star_field {
-        k[0] *= crate::render::STAR_FIELD_FINE_BOOST;
-    }
-    DenoiseConfig {
-        chroma: ChromaDenoiseConfig {
-            enabled: d.chroma,
-            strength: d.chroma_strength.clamp(0.0, 1.0),
-            ..ChromaDenoiseConfig::default()
-        },
-        luma: LumaDenoiseConfig {
-            enabled: d.luma_enabled(),
-            strength: d
-                .luma_strength
-                .clamp(0.0, crate::render::MAX_LUMA_STRENGTH),
-            k,
-            gain: if star_field {
-                crate::render::STAR_FIELD_GAIN
-            } else {
-                crate::render::UNIT_WAVELET_GAIN
-            },
-        },
-    }
+    crate::render::denoise::config_for(&settings.denoise, settings.stretch_aggressiveness)
 }
 
 /// `black_floor` with the nonsense taken out: dead-banded at zero, clamped to
@@ -270,7 +247,7 @@ pub fn get_render_pipeline_config(
         // The expensive half of the Background Grain dial. It belongs here, with the
         // profile, and not at `AutoStretchConfig::default()`: the default is what an
         // export or a one-shot render uses, and those have no dial to read.
-        .with_grain_split(settings.denoise.grain_split());
+        .with_grain_split(crate::render::denoise::grain_split_for(&settings.denoise));
         let saturation_config = settings.saturation_boost_config();
 
         // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle

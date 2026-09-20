@@ -139,10 +139,6 @@ name = "cfa_benchmark"
 harness = false
 
 [[bench]]
-name = "denoise_benchmark"
-harness = false
-
-[[bench]]
 name = "debayer_benchmark"
 harness = false
 

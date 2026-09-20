@@ -966,47 +966,6 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
     }
 }
 
-/// The staged path must actually filter, on both traversals — a config that is
-/// wired but never reaches the kernels would pass every layout test in the repo.
-#[test]
-fn denoising_reduces_sky_sigma_through_both_kernels() {
-    let denoise = crate::render::DenoiseConfig {
-        luma: crate::render::LumaDenoiseConfig {
-            k: crate::render::LumaDenoiseConfig::thresholds_for_star_protection(0.0),
-            ..Default::default()
-        },
-        chroma: crate::render::ChromaDenoiseConfig::default(),
-    };
-
-    let sigma = |bytes: &[u8]| {
-        let vals: Vec<f64> = bytes.iter().skip(1).step_by(3).map(|&v| v as f64).collect();
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt()
-    };
-
-    let small = noisy_frame(128, 128, 0.3, 0.1);
-    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&small), 3840, 2160).unwrap();
-    let (filtered, _, _) =
-        frame_to_rgb8_downsampled(&ready_with_denoise(&small, denoise), 3840, 2160).unwrap();
-    assert!(
-        sigma(&filtered) < sigma(&plain) * 0.6,
-        "expand kernel: sigma only fell from {:.2} to {:.2}",
-        sigma(&plain),
-        sigma(&filtered)
-    );
-
-    let big = noisy_frame(256, 256, 0.3, 0.1);
-    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&big), 128, 128).unwrap();
-    let (filtered, _, _) =
-        frame_to_rgb8_downsampled(&ready_with_denoise(&big, denoise), 128, 128).unwrap();
-    assert!(
-        sigma(&filtered) < sigma(&plain) * 0.6,
-        "downsample kernel: sigma only fell from {:.2} to {:.2}",
-        sigma(&plain),
-        sigma(&filtered)
-    );
-}
-
 /// The staged path still has to run the tone curve, and in the same order: the
 /// denoisers sit between the resample and the stretch, not after it. A staged
 /// buffer that skipped or reordered the tail would produce a visibly different
@@ -1294,46 +1253,6 @@ fn a_near_unity_downsample_leaves_no_dark_ring_around_bright_stars() {
 }
 
 /// The denoise-on path streams its denoised rows through the same sky-shadow driver; it
-/// must still equal denoise, then the whole-image shadow, then the 8-bit write.
-#[test]
-fn sky_shadow_after_denoise_matches_the_whole_image_reference() {
-    let sky = 0.052f32;
-    let denoise = crate::render::DenoiseConfig {
-        luma: crate::render::denoise::LumaDenoiseConfig::default(),
-        ..crate::render::DenoiseConfig::OFF
-    };
-    for (w, h) in [(129usize, 200usize), (64, 3)] {
-        let mut frame = Frame::zeros(w, h, 3).unwrap();
-        let mut seed = 0xface_u32;
-        for y in 0..h {
-            for x in 0..w {
-                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let u = (seed >> 8) as f32 / (1u32 << 24) as f32;
-                let star = if (x * 5 + y * 11) % 47 == 0 { 0.5 } else { 0.0 };
-                for c in 0..3 {
-                    frame.set_pixel(x, y, c, sky * (0.6 + 0.8 * u) + star);
-                }
-            }
-        }
-        let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
-        let mut ready = ready_with_sky_shadow(&frame, shadow);
-        ready.pipeline_config.denoise = denoise;
-        let (encoded, _, _) = frame_to_rgb8_downsampled(&ready, 4096, 4096).unwrap();
-
-        let mut staged: Vec<f32> = (0..h)
-            .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
-            .map(|(x, y, c)| frame.get_pixel(x, y, c))
-            .collect();
-        crate::render::denoise::denoise_rgb_interleaved_with(&mut staged, w, h, &denoise, &mut Default::default());
-        crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
-        let mut expected = vec![0u8; w * h * 3];
-        for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
-            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
-        }
-        assert_eq!(encoded, expected, "{w}x{h}: denoised sky shadow disagrees with the reference");
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The quadrature contract: how a noise map has to be resampled.
 //

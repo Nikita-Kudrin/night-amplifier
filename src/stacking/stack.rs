@@ -199,11 +199,11 @@ impl MasterStack {
                     // that field read "perfectly clean" for every Community session and
                     // every test that stacks without the rejection plugin. Measured
                     // before the mean moves, or the deviation is taken against a mean
-                    // that already contains this sample. `clipped` is always false —
-                    // nothing here winsorises, so the short memory must not fire.
+                    // that already contains this sample. Winsorised by the observer
+                    // itself, since there is no rejection threshold here to clamp
+                    // against — see `observe_scale_guarded`.
                     pixel.offered = pixel.offered.saturating_add(1);
-                    let deviation = val - pixel.mean;
-                    pixel.observe_scale_with(deviation, false, &alphas);
+                    pixel.observe_scale_guarded(val - pixel.mean, &alphas);
 
                     // Blend into running average
                     pixel.blend(val, weight);
