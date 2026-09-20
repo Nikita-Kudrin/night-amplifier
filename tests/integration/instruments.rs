@@ -36,6 +36,56 @@ pub struct RawSub {
     pub is_bayer: bool,
 }
 
+/// Load one sub from disk: FITS, or one of the PNG/TIFF fixture sets.
+///
+/// The same readers `integration::image_loading` uses, minus everything about fixture
+/// discovery — a loader here may not name `crate::`, and a loader that disagrees with the
+/// application is not testing the application.
+pub fn load_sub(path: &Path) -> RawSub {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "fits" || ext == "fit" {
+        let frame = night_amplifier::fits::read_frame(path)
+            .unwrap_or_else(|e| panic!("failed to load FITS {path:?}: {e}"));
+        // Greyscale FITS from an astronomy camera is undebayered CFA data.
+        let is_bayer = frame.channels() == 1;
+        return RawSub { frame, is_bayer };
+    }
+
+    let img = image::open(path).unwrap_or_else(|e| panic!("failed to open {path:?}: {e}"));
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    let (bytes, format, channels, is_bayer) = match img {
+        image::DynamicImage::ImageLuma16(g) => (
+            g.as_raw().iter().flat_map(|&v| v.to_le_bytes()).collect::<Vec<u8>>(),
+            night_amplifier::PixelFormat::Bayer16,
+            1,
+            true,
+        ),
+        image::DynamicImage::ImageLuma8(g) => {
+            (g.into_raw(), night_amplifier::PixelFormat::Bayer8, 1, true)
+        }
+        image::DynamicImage::ImageRgb16(rgb) => (
+            rgb.as_raw().iter().flat_map(|&v| v.to_le_bytes()).collect::<Vec<u8>>(),
+            night_amplifier::PixelFormat::Rgb16,
+            3,
+            false,
+        ),
+        other => (
+            other.to_rgb8().into_raw(),
+            night_amplifier::PixelFormat::Rgb8,
+            3,
+            false,
+        ),
+    };
+    let frame = night_amplifier::Frame::from_raw(&bytes, width, height, channels, format)
+        .unwrap_or_else(|e| panic!("failed to build a frame from {path:?}: {e}"));
+    RawSub { frame, is_bayer }
+}
+
 // ---------------------------------------------------------------------------
 // Stacking a real session
 // ---------------------------------------------------------------------------

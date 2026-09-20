@@ -26,10 +26,10 @@ fn noise_row(field_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usiz
         let (x0, x1) = (bx * r, ((bx + 1) * r).min(width));
         for row in 0..rows_here {
             for pixel in &pixel_rows[row * width + x0..row * width + x1] {
-                // `observe_scale` ignores the first offered sample, so below two there
-                // is no spread to report. Skipped rather than folded in as zero, which
-                // would read downstream as a perfectly clean pixel.
-                if pixel.count >= 2 {
+                // Unmeasured cells are skipped rather than folded in at the floor,
+                // which would read downstream as a perfectly clean pixel — see
+                // `IncrementalPixel::has_measured_spread` for the two ways that happens.
+                if pixel.has_measured_spread() {
                     samples.push(pixel.variance() / pixel.count as f32);
                 }
             }

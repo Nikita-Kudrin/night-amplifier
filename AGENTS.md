@@ -833,10 +833,16 @@ clipping methods to the plugin and silently averages the rest.
 - **Non-finite samples are skipped like borders** — one NaN left a pixel NaN for the session. The plain mean checks
   `is_finite` (unmeasurable in `stacking_benchmark`); the clip folds it into `!(d^2 <= limit)`, since NaN/±Inf fail
   `<=` — a separate up-front `is_finite` cost 10 % of `blend_incremental`.
-- **The settings toggle lands mid-stack** (settings are re-applied every frame). The first switch to clipping starts the
-  warm-up from nothing (the plain mean keeps no scale), so frames 0-2 after it are ungated. Switching *back* on keeps
+- **The settings toggle lands mid-stack** (settings are re-applied every frame) and no longer opens a gap. The plain
+  mean maintains `m2` too — the render reads it as a per-pixel noise map — so a first switch to clipping inherits a warm
+  scale and is gated from frame 0; frames 0-2 are irreducible only at the *start of a session*. Switching back on keeps
   the old scale: no gap, but a sky that moved while it was off loses frames, as a real brightness step does under
   clipping: 10/15/19/24 frames at 30/100/300/1000 sigma. Pro's `master_stack_tests::robustness` pins both.
+- **The plain mean's scale update is not the rejector's.** `observe_scale_guarded` *drops* a sample past 8 sigmas
+  instead of winsorising it: `CLIPPED_SCALE_WINDOW`'s geometric widening is a collapse-escape for a path that rejects,
+  and with nothing rejecting it is positive feedback — a sustained 1000-sigma level step left the scale 238,000x too
+  wide. A scale that collapses there is deliberately not climbed out of: the map reports that pixel unmeasured and
+  takes a block median, and a later rejection pass brings its own escape.
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 
@@ -1006,10 +1012,11 @@ One production trace: both workers at 97%, 34.7% of captured frames dropped for 
 whole every frame — ~32GB/s at 26.7ms, already the memory ceiling (no arithmetic win left,
 only traffic).
 
-Two fixes are blocked on the same thing: dropping `m2` when rejection is off (halves to
-8B/sample), and struct-of-arrays (`compute()` becomes a memcpy, not a gather — 4x win).
-Blocker: `RejectionPlugin::blend_incremental`'s cross-crate `&mut [IncrementalPixel]`
-signature — either fix breaks Pro and needs both repos moved together.
+**`m2` is no longer droppable when rejection is off**: it is the render's per-pixel noise map
+(`MasterStack::noise_field`), maintained on both paths, so that idea is off the table on its
+merits rather than merely blocked. Struct-of-arrays (`compute()` becomes a memcpy, not a gather
+— 4x win) is still wanted and still blocked by `RejectionPlugin::blend_incremental`'s cross-crate
+`&mut [IncrementalPixel]` signature, which needs both repos moved together.
 
 ### Pipeline performance instrumentation
 

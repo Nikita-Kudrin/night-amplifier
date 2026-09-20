@@ -22,7 +22,14 @@ pub const CLIPPED_SCALE_WINDOW: f32 = 8.0;
 /// [`IncrementalPixel::scale`].
 pub const SCALE_FLOOR: f32 = 1e-6;
 
-/// Offered samples before [`IncrementalPixel::observe_scale_guarded`] starts winsorising.
+/// How far above [`SCALE_FLOOR`] a scale still counts as collapsed.
+///
+/// Read by [`IncrementalPixel::has_measured_spread`]: below this the estimate is
+/// degenerate rather than merely small, and reporting it as a variance would tell every
+/// downstream threshold the pixel is perfectly clean.
+pub const COLLAPSED_SCALE_MARGIN: f32 = 4.0;
+
+/// Offered samples before [`IncrementalPixel::observe_scale_guarded`] starts guarding.
 ///
 /// Below this the scale is still climbing out of [`SCALE_FLOOR`] and clamping against it
 /// would hold it down: every early deviation is thousands of times the floor, so each
@@ -171,22 +178,36 @@ impl IncrementalPixel {
         self.m2 += alpha * (deviation * deviation - self.m2);
     }
 
-    /// Folds one offered sample into the scale estimate, winsorising it here rather
-    /// than asking the caller to.
+    /// Folds one offered sample into the scale estimate on a path that rejects nothing.
     ///
-    /// For the plain-mean path, which rejects nothing and so has no threshold of its
-    /// own to clamp against. It still must not let one sample run away with the scale:
-    /// `m2` is the render's per-pixel noise estimate, and a legitimate step in sky level
-    /// — an exposure change, a cloud clearing, rejection being toggled off while the sky
-    /// moves — arrives as a single enormous deviation. Unwinsorised, one 1000-sigma step
-    /// left the window ~100 sigma wide for the rest of the EWMA's memory, which a
-    /// rejection pass turned on afterwards then inherited.
+    /// The plain mean has no threshold of its own, so it cannot use
+    /// [`Self::observe_scale_with`] directly: that one expects a caller who has already
+    /// winsorised at a rejection limit, and it answers a clipped sample by widening the
+    /// window *geometrically* (see [`CLIPPED_SCALE_WINDOW`]) so a collapsed scale can
+    /// escape. With nothing rejecting, that becomes positive feedback — each clipped
+    /// sample raises the scale, which raises the limit, which clips the next one less.
+    /// Measured against a sustained 1000-sigma step in sky level it left the scale
+    /// 238,000x too wide, and a rejection pass switched on afterwards inherited it and
+    /// clipped nothing.
     ///
-    /// [`WARMUP_SIGMA_GUARD`] is deliberately loose: real noise never reaches it, so a
-    /// stable sky converges exactly as it would unclamped, while a real step is clamped
-    /// and marked `clipped` — the short memory then widens the scale geometrically and
-    /// it adopts the new level within a few frames instead of being pinned to the old
-    /// one.
+    /// The rule here is therefore the opposite one: a sample further than
+    /// [`WARMUP_SIGMA_GUARD`] from the running mean **is not evidence about the noise**
+    /// and is dropped from the estimate. It is a step in sky level, an exposure change
+    /// or a cosmic ray, and the noise it would be read as is not the noise the frame
+    /// has. Nothing is rejected from the picture — the mean still takes every sample.
+    ///
+    /// One exception, the warm-up ([`SCALE_GUARD_MIN_OBSERVATIONS`]): below it there is
+    /// no estimate to be far from, and clamping against a scale still sitting on
+    /// [`SCALE_FLOOR`] would hold it there.
+    ///
+    /// **A scale that collapses here is not climbed back out of, deliberately.** Each
+    /// consumer already handles it better than this could: `MasterStack::noise_field`
+    /// reports such a pixel as unmeasured and takes a block median, so the ~1 % of
+    /// 14-bit pixels whose early samples are identical cannot drag a threshold; and a
+    /// rejection pass switched on later brings its own geometric escape, which widens a
+    /// collapsed window within about a dozen frames. Adding a third mechanism here would
+    /// have to tell "the scale is too small" from "this sample is an outlier", and one
+    /// sample does not carry that.
     #[inline]
     pub fn observe_scale_guarded(
         &mut self,
@@ -197,14 +218,23 @@ impl IncrementalPixel {
             self.observe_scale_with(deviation, false, alphas);
             return;
         }
-        let limit = WARMUP_SIGMA_GUARD * self.scale();
-        let clipped = deviation.abs() > limit;
-        let deviation = if clipped {
-            deviation.signum() * limit
-        } else {
-            deviation
-        };
-        self.observe_scale_with(deviation, clipped, alphas);
+        if deviation.abs() > WARMUP_SIGMA_GUARD * self.scale() {
+            return;
+        }
+        self.observe_scale_with(deviation, false, alphas);
+    }
+
+    /// Whether this pixel has a spread worth reporting as noise.
+    ///
+    /// Two samples at least — the first offered one is ignored, so below that there is
+    /// no deviation at all — and a scale that is genuinely small rather than degenerate.
+    /// A collapsed scale reads as [`SCALE_FLOOR`], and passing that on as a variance
+    /// would tell every downstream threshold the pixel is perfectly clean, which is the
+    /// one answer that is certainly wrong. `MasterStack::noise_field` reports these cells
+    /// as unmeasured instead.
+    #[inline]
+    pub fn has_measured_spread(&self) -> bool {
+        self.count >= 2 && self.scale() > SCALE_FLOOR * COLLAPSED_SCALE_MARGIN
     }
 
     /// Variance the rejector clips against, floored to stay positive.
