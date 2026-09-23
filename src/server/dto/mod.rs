@@ -53,6 +53,10 @@ pub struct DeepSkyCapabilities {
     pub advanced_rejection: bool,
     pub rbf_background: bool,
     pub saturation_boost: bool,
+    /// The spatial denoisers and every control over them — Denoise, Colour Mottle,
+    /// Background Grain, Structure strength. Without them the Noise Reduction section is
+    /// locked and the render is the plain one.
+    pub denoise: bool,
 }
 
 #[derive(Debug, Serialize)]

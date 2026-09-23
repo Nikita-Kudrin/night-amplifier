@@ -296,6 +296,7 @@ export const DEFAULT_SETTINGS = {
         superpixel_debayer: false,
     },
     denoise: {
+        enabled: true,
         chroma: true,
         chroma_strength: 1.0,
         background_grain: 0.5,
@@ -407,6 +408,8 @@ export const HELP_TEXTS = {
         'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
     streaming_resolution:
         'Image size sent to every screen viewing the live view and the eyepiece view. All of them get the same picture, so larger sizes cost bandwidth and server time for every viewer. It never goes above the Processing Resolution. On a screen smaller than the image the browser shrinks it, which looks grainier than choosing the smaller size here. Changes apply from the next frame.',
+    denoise_enabled:
+        'Turns every noise filter on or off at once. Off shows the stacked image exactly as it comes out of the pipeline — useful for judging what the filters are doing to a target, and the quickest way back if something looks plastic. Focus/Finder mode never touches this switch.',
     denoise_chroma:
         'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
     denoise_chroma_strength:
