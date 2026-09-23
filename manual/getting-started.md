@@ -68,8 +68,8 @@ focus mask.
 - Background Subtraction
 - Shadow Saturation Boost
 - Row/Column Pattern Removal
-- Colour Mottle
-- Background Grain
+- Colour Mottle *(Pro)*
+- Structure strength — the brightness denoiser *(Pro)*
 - Dithering
 
 On an IMX464-sized frame that halves the preview stage — 12.8 ms per frame down to

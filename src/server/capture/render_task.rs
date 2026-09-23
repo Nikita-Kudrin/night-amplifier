@@ -100,10 +100,9 @@ pub fn run_render_task(
                 Ok(binned) => {
                     display_frame = Arc::new(binned);
                     // The map describes the frame, so it follows every geometry change
-                    // the frame makes — in quadrature, since a box mean of `bin^2`
-                    // independent samples carries `1/bin^2` of their variance. Only
-                    // applied where the frame really was binned, so a failed downsample
-                    // cannot leave the two describing different grids.
+                    // the frame makes. Only applied where the frame really was binned,
+                    // so a failed downsample cannot leave the two describing different
+                    // grids.
                     noise = noise.and_then(|field| field.binned(bin).ok());
                 }
                 // Not fatal: the pipeline is perfectly capable of running at sensor
@@ -137,10 +136,9 @@ pub fn run_render_task(
         // stack: a rejected frame still leaves the slow-moving stack on screen.
         let chunk_count = if showing_stack { 1 } else { max_chunks };
 
-        // Background neutralisation is the one stage between the accumulator and the
-        // encoders that multiplies, so the map follows it and nothing else: see
-        // `PreviewRender::linear_gain` for what that leaves out and why.
-        let noise = noise.map(|field| Arc::new(field.scaled(&rendered.linear_gain)));
+        // Coverage is a share of the stack: no stage between the accumulator and the
+        // encoders changes it, so the map rides through untouched.
+        let noise = noise.map(Arc::new);
 
         let ready_frame = Arc::new(crate::server::state::RenderReadyFrame {
             linear_frame: display_frame,

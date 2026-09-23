@@ -50,11 +50,13 @@ pub struct StackingOutcome {
     /// moved: they fall as `1/sqrt(N)`, so proportional growth in this number is what
     /// decides when they have to be measured again.
     pub stack_depth: u32,
-    /// Per-pixel noise of `display_frame`, when it is an accumulated stack that has one.
+    /// The stack's coverage map, when `display_frame` is an accumulated stack its subs did
+    /// not all cover — see [`crate::frame::NoiseField`].
     ///
     /// Taken from the same read of the accumulator as the display copy, so it costs the
-    /// stacking thread one more write rather than another 434 MB pass. `None` wherever
-    /// `display_frame` is, and wherever the mode keeps no `IncrementalPixel`
+    /// stacking thread one plane's block medians rather than another 434 MB pass. `None`
+    /// wherever `display_frame` is, wherever every sub covered the whole frame (nothing
+    /// to say, the common case), and wherever the mode keeps no `IncrementalPixel`
     /// accumulator — planetary, and comet, whose context is a Pro trait this does not
     /// reach through.
     pub noise: Option<crate::frame::NoiseField>,
@@ -195,14 +197,14 @@ pub async fn process_frame_with_stacking(
 
     // Return the current stacked result for display (raw, background subtraction applied in preview)
     let depth = ctx.frame_count() as u32;
-    // The display copy and the noise map come from one read of the 434 MB accumulator;
-    // see `MasterStack::compute_with_noise`.
-    match ctx.compute_with_noise() {
+    // The display copy and the coverage map come from one read of the 434 MB
+    // accumulator; see `MasterStack::compute_with_coverage`.
+    match ctx.compute_with_coverage() {
         Ok((stacked, noise)) => StackingOutcome {
             stack_reset: admission.rebased,
             rejected_because: admission.rejected_because,
-            // A stack too shallow to have measured a spread reports nothing rather than
-            // a field of NaN the encoder would have to re-check per cell.
+            // A stack every sub covered completely has nothing to say — the common case —
+            // and is not carried at all, so it costs the encoders nothing.
             noise: noise.is_usable().then_some(noise),
             ..StackingOutcome::stacked(stacked, admission.added, depth)
         },
@@ -403,24 +405,12 @@ pub async fn process_frame_with_planetary_stacking(
     }
 }
 
-/// What one pass of the preview pipeline decided about a frame.
-///
-/// A named type rather than a tuple because it has three meanings now: the stage config,
-/// the solved tone curve, and how the linear stages scaled the frame's noise.
+/// What one pass of the preview pipeline decided about a frame: the stage config and the
+/// solved tone curve. A named type rather than a tuple so the four call sites say which
+/// half they read.
 pub struct PreviewRender {
     pub pipeline_config: crate::render::RenderPipelineConfig,
     pub stretch_result: Option<crate::server::state::StretchResult>,
-    /// Per-channel multiplicative gain the linear stages applied, for anything tracking
-    /// how the frame's noise was scaled — the per-pixel noise map, which is measured on
-    /// the accumulator and has to follow the frame through to the denoiser.
-    ///
-    /// `[1.0; 3]` when background neutralisation did not run. Only *multiplicative*
-    /// stages appear here, and the list of what that leaves out is the point:
-    /// background subtraction and the black point are additive, the black point and the
-    /// tone curve are applied in the encoder tail after the denoiser has already run,
-    /// and SCNR restores `l_old / l_new` on all three channels, so it is
-    /// luminance-preserving by construction and moves no luminance noise.
-    pub linear_gain: [f32; 3],
 }
 
 /// Process a frame for preview display using the unified render pipeline.
@@ -492,7 +482,6 @@ pub fn process_preview_frame_with_analysis(
     // scale with different things and only one of them is expensive: the grid reads the
     // frame to produce three numbers, the apply is one pass over every sample. A single
     // span here reported 97 ms with no way to tell which half owned it.
-    let mut linear_gain = [1.0f32; 3];
     if pipeline_config.background_subtraction && frame.channels() == 3 {
         let _span0 = tracing::info_span!("background_neutralization").entered();
         let multipliers = analysis.white_balance(|| {
@@ -509,10 +498,6 @@ pub fn process_preview_frame_with_analysis(
                 let _span = tracing::info_span!("wb_apply").entered();
                 if let Err(e) = crate::render::neutralize_background(frame, &multipliers) {
                     warn!(error = %e, "Background neutralization failed");
-                } else {
-                    // Recorded only once the multiply really happened: a reported gain
-                    // the frame never received would mis-scale the noise map by it.
-                    linear_gain = multipliers;
                 }
             }
             Err(e) => warn!(error = %e, "Failed to compute grid white balance"),
@@ -644,7 +629,6 @@ pub fn process_preview_frame_with_analysis(
     Ok(PreviewRender {
         pipeline_config,
         stretch_result,
-        linear_gain,
     })
 }
 

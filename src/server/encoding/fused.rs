@@ -396,9 +396,13 @@ impl<'a> RowTail<'a> {
     }
 }
 
-/// The frame's noise map, resampled onto the output grid this conversion produces.
+/// The frame's noise map, resampled onto the output grid this conversion produces:
+/// coverage by position, and a variance plane — when the field carries one — in
+/// quadrature.
 ///
-/// **In quadrature, with the same taps the pixels went through.** An output pixel is
+/// **Variance goes in quadrature, with the same taps the pixels went through.** The
+/// per-frame field carries coverage only, but the variance contract stands for any field
+/// that has one: an output pixel is
 /// `sum(w_i * x_i)` with `sum(w_i) = 1`, so its variance is `sum(w_i^2 * sigma_i^2)`;
 /// resampling the map like an image instead overstates output noise by roughly `sqrt(k)`
 /// for a `k`-fold reduction, and every threshold built on it comes out that much too
@@ -406,7 +410,7 @@ impl<'a> RowTail<'a> {
 /// factor is taken from `AxisTaps::sum_sq` on the *same cached instance* the pixels use
 /// rather than recomputed here.
 ///
-/// `None` when there is no map, or when it has nothing measured to say.
+/// `None` when there is no map, or when it has nothing to say.
 pub(super) fn output_noise_field(
     ready_frame: &RenderReadyFrame,
     target_width: usize,

@@ -385,9 +385,9 @@ fn warm_up_cells_are_marked_not_zeroed() {
 
     let field = stack.noise_field();
     assert!(
-        field.variance().iter().all(|v| v.is_nan()),
+        field.variance().unwrap().iter().all(|v| v.is_nan()),
         "one frame in, the map must be unmeasured rather than zero: {:?}",
-        &field.variance()[..4]
+        &field.variance().unwrap()[..4]
     );
     assert!(!field.is_usable());
 }
@@ -408,7 +408,7 @@ fn a_star_does_not_set_its_block() {
             }
             stack.add_frame(&frame).unwrap();
         }
-        stack.noise_field().variance()[0]
+        stack.noise_field().variance().unwrap()[0]
     };
 
     let quiet = build(0);
@@ -459,40 +459,62 @@ fn the_field_tracks_coverage() {
         "half the coverage should read twice the variance; got {ratio:.2} \
          (edge {edge:e}, centre {centre:e})"
     );
+
+    // And the coverage plane says so directly, without the brightness a variance also
+    // carries: half the subs at the edge, all of them in the middle.
+    let (edge_cover, centre_cover) = (field.sample_coverage(4, 8), field.sample_coverage(48, 8));
+    assert!((edge_cover - 0.5).abs() < 0.05, "edge coverage read {edge_cover}");
+    assert!((centre_cover - 1.0).abs() < 1e-6, "centre coverage read {centre_cover}");
 }
 
-/// The display copy and the map come from one read of the accumulator, so they must
-/// agree with the two separate passes they replace.
+/// The display copy and the coverage map come from one read of the accumulator, so they
+/// must agree with the separate passes they stand in for.
 #[test]
-fn compute_with_noise_matches_the_separate_passes() {
+fn compute_with_coverage_matches_the_separate_passes() {
     let config = StackingConfig::default().with_rejection(RejectionMethod::None);
     let mut stack = MasterStack::new(37, 23, 3, config).unwrap();
-    for frame in noisy_frames(37, 23, 3, 0.3, 0.01, 12) {
+    for (n, mut frame) in noisy_frames(37, 23, 3, 0.3, 0.01, 12).into_iter().enumerate() {
+        // Some coverage structure to agree about: the left columns miss a third of the subs.
+        if n % 3 == 0 {
+            for y in 0..23 {
+                for x in 0..9 {
+                    for c in 0..3 {
+                        frame.set_pixel(x, y, c, 0.0);
+                    }
+                }
+            }
+        }
         stack.add_frame(&frame).unwrap();
     }
 
-    let (fused_frame, fused_field) = stack.compute_with_noise().unwrap();
-    let frame = stack.compute().unwrap();
-    let field = stack.noise_field();
-
-    assert_eq!(fused_frame.data(), frame.data(), "the means diverged");
-    assert_eq!(
-        (fused_field.width(), fused_field.height(), fused_field.channels()),
-        (field.width(), field.height(), field.channels())
+    let (fused_frame, fused_field) = stack.compute_with_coverage().unwrap();
+    assert_eq!(fused_frame.data(), stack.compute().unwrap().data(), "the means diverged");
+    assert_eq!(fused_field.coverage(), stack.noise_field().coverage(), "the coverage diverged");
+    assert!(
+        fused_field.variance().is_none(),
+        "the per-frame path must not pay for the variance planes no filter reads"
     );
-    for (a, b) in fused_field.variance().iter().zip(field.variance()) {
-        assert!(
-            (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-12,
-            "the noise maps diverged: {a:e} vs {b:e}"
-        );
-    }
+    assert!(fused_field.is_usable(), "uneven coverage is something to say");
 }
 
 #[test]
-fn compute_with_noise_refuses_an_empty_stack() {
+fn compute_with_coverage_refuses_an_empty_stack() {
     let config = StackingConfig::default().with_rejection(RejectionMethod::None);
     let stack = MasterStack::new(4, 4, 1, config).unwrap();
-    assert!(stack.compute_with_noise().is_err());
+    assert!(stack.compute_with_coverage().is_err());
+}
+
+/// A stack every sub covered completely has nothing to say, and must not be carried: that
+/// is the common case, and it should cost the encoders nothing.
+#[test]
+fn a_fully_covered_stack_carries_no_map() {
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(32, 24, 3, config).unwrap();
+    for frame in noisy_frames(32, 24, 3, 0.3, 0.01, 8) {
+        stack.add_frame(&frame).unwrap();
+    }
+    let (_, field) = stack.compute_with_coverage().unwrap();
+    assert!(!field.is_usable(), "full coverage everywhere should read as nothing to say");
 }
 
 /// A real step in sky level must not leave the scale the size of the step.
@@ -567,4 +589,63 @@ fn a_collapsed_pixel_reads_as_unmeasured_rather_than_clean() {
         (centre / expected - 1.0).abs() < 0.3,
         "the still pixel dragged its block to {centre:e}, expected about {expected:e}"
     );
+}
+
+/// Each plane's noise must come from that plane's own pixels, at every height.
+///
+/// A block row is 8 image rows, and a height that is not a multiple of 8 leaves the last
+/// block row of each plane short. Traversing the whole buffer in 8-row stripes instead of
+/// plane by plane then straddles planes — the first cells of the second plane read the
+/// tail of the first, and where the stripe count and the field's row count diverge `zip`
+/// silently drops the last rows — while the two computing paths agree with each other
+/// because both are wrong. So this checks against the noise that was put in, per plane,
+/// at heights that leave 1, 4 and 7 rows over (17 is the one a median cannot mask: its
+/// stripe count differs from the field's row count outright), and at one that leaves none.
+#[test]
+fn every_plane_reads_its_own_noise_at_any_height() {
+    for h in [17usize, 20, 23, 24] {
+        every_plane_reads_its_own_noise_at(h);
+    }
+}
+
+fn every_plane_reads_its_own_noise_at(h: usize) {
+    let w = 40;
+    let sigmas = [0.002f32, 0.02, 0.006];
+    let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+    let mut stack = MasterStack::new(w, h, 3, config).unwrap();
+    for n in 0..48 {
+        let mut frame = Frame::filled(w, h, 3, 0.0).unwrap();
+        for (c, &sigma) in sigmas.iter().enumerate() {
+            let plane = noisy_frames(w, h, 1, 0.3, sigma, n + 1).pop().unwrap();
+            for y in 0..h {
+                for x in 0..w {
+                    frame.set_pixel(x, y, c, plane.get_pixel(x, y, 0));
+                }
+            }
+        }
+        stack.add_frame(&frame).unwrap();
+    }
+
+    let field = stack.noise_field();
+    assert_eq!(
+        field.coverage(),
+        stack.compute_with_coverage().unwrap().1.coverage(),
+        "height {h}: the two coverage paths disagree"
+    );
+    {
+        let (fw, fh) = (field.width(), field.height());
+        for (c, &sigma) in sigmas.iter().enumerate() {
+            let expected = sigma * sigma / 48.0;
+            for (i, &v) in field.variance().unwrap()[c * fw * fh..(c + 1) * fw * fh].iter().enumerate() {
+                assert!(
+                    (v / expected - 1.0).abs() < 0.5,
+                    "height {h}: plane {c} cell {i} (row {}) read {v:e}, expected {expected:e} \
+                     — a cell reading another plane's noise is off by 10-100x, and one the \
+                     traversal never reached is NaN",
+                    i / fw
+                );
+            }
+        }
+        assert!(field.coverage().iter().all(|&c| (c - 1.0).abs() < 1e-6));
+    }
 }

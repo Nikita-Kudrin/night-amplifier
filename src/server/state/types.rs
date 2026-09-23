@@ -124,13 +124,13 @@ pub struct RenderReadyFrame {
     pub linear_frame: std::sync::Arc<crate::frame::Frame>,
     pub pipeline_config: crate::render::RenderPipelineConfig,
     pub stretch_result: Option<StretchResult>,
-    /// Per-channel variance of this frame's own noise, on a coarse grid — see
-    /// [`crate::frame::NoiseField`]. Already scaled by `PreviewRender::linear_gain`, so
-    /// it describes the frame as the encoders receive it.
+    /// How much of the stack each place of this frame holds, on a coarse grid — see
+    /// [`crate::frame::NoiseField`]. The denoise plugin raises its thresholds where fewer
+    /// subs reached, since the mean there is noisier by `sqrt(N / count)`.
     ///
-    /// `None` whenever no accumulator stands behind the frame: live view, the guide
-    /// camera, planetary, comet, and a stack too shallow to have measured a spread.
-    /// That is the common case and the denoiser's own global estimates have to stay
-    /// first-class rather than becoming a degraded mode.
+    /// `None` whenever no accumulator stands behind the frame — live view, the guide
+    /// camera, planetary, comet — and whenever every sub covered the whole frame. That is
+    /// the common case, and the denoiser's own global estimates have to stay first-class
+    /// rather than becoming a degraded mode.
     pub noise: Option<std::sync::Arc<crate::frame::NoiseField>>,
 }

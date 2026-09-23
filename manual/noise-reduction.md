@@ -6,11 +6,31 @@ corrections they are a matter of taste — every denoiser has a setting at which
 nebulae start looking like plastic, and only your eye at the eyepiece can find
 where that is.
 
-Find them under **Settings → Noise Reduction**.
+Find them under **Settings → Noise Reduction**. Noise reduction is a **Night Amplifier
+Pro** feature: without Pro the section is shown locked, and the picture is the stacked
+image exactly as the pipeline produces it — the tone curve is the same one Pro uses at
+the default Background Grain setting, so the whole difference is the filters.
 
-Both are among the six that [Focus/Finder mode](/getting-started#focus-finder-mode)
-holds off while you focus; their switches grey out while it is on and come back to your
-values when you turn it off.
+**Denoise** at the top of the section turns every filter on or off at once. Off shows the
+stacked image untouched, which is the quickest way to judge what the filters are doing to
+a target, and the way back if something starts to look plastic.
+
+Colour Mottle and Structure strength are among the six that
+[Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
+controls grey out while it is on and come back to your values when you turn it off. The
+Denoise switch is yours alone — Focus/Finder mode never touches it.
+
+## The edges of the stack are denoised a little harder
+
+When the mount drifts during a session, the edges of the frame are covered by fewer subs
+than the middle, so they carry more noise. The filters know how much of the stack each part
+of the frame holds and smooth the thinly covered parts correspondingly harder, so a stack's
+border does not look grainier than its centre. Where every sub covered the frame the picture
+is exactly what it would be otherwise.
+
+This evens out *grain*, the fine speckle the filters can reach. It cannot remove a visible
+line where one sub's edge ends — that is a real step in the image, not noise; the fix for it is
+dithering or letting the stack grow past it.
 
 ## They run at the size you stream, not the size you capture
 
