@@ -260,8 +260,13 @@ fn quantile(values: &mut [f32], q: f32) -> f32 {
 /// Apply to a whole interleaved RGB f32 image (already stretched, contrast applied):
 /// the reference the encoder's streamed rows are pinned against. `luma` and `guide` are
 /// grown to `width * height`.
-#[cfg(test)]
-pub(crate) fn apply_sky_shadow_interleaved(
+///
+/// Compiled into the library rather than gated on `cfg(test)`: the denoised half of that
+/// pinning moved to the Pro repo with the filters, and a reference only one of the two
+/// callers can build is not a reference. Production never calls it — it stages the whole
+/// image, which held two more full planes (~208 MB at 26 MP), and
+/// `encoding::sky_shadow_rows` streams instead.
+pub fn apply_sky_shadow_interleaved(
     rgb: &mut [f32],
     width: usize,
     height: usize,

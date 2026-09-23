@@ -19,10 +19,19 @@ pub use shadow_floor::{
     ShadowFloor, ShadowFloorRequest, ShadowFloorTable,
 };
 pub use sky_shadow::{apply_sky_shadow_frame, SkyShadow};
-#[cfg(test)]
-pub(crate) use sky_shadow::apply_sky_shadow_interleaved;
+/// The whole-image reference the streaming path is pinned against.
+///
+/// `pub` rather than `pub(crate)` only so the Pro repo's denoise tests can reach it: the
+/// denoised half of that pinning (`..._after_denoise_...`) moved there with the filters,
+/// and a reference implementation that only one of the two callers can see stops being a
+/// reference. Production uses `encoding::sky_shadow_rows`, which streams; staging the
+/// whole image held two more full planes (~208 MB at 26 MP).
+pub use sky_shadow::apply_sky_shadow_interleaved;
 pub(crate) use sky_shadow::{guide_row, luma_row, sky_sample_rows, sky_sample_stride};
-pub(crate) use quantize::{write_pixel_rgb8, write_row_rgb8};
+/// `write_row_rgb8` is `pub` for the same reason: it is the f32 -> 8-bit boundary every
+/// such reference has to cross to compare bytes with the encoders.
+pub use quantize::write_row_rgb8;
+pub(crate) use quantize::write_pixel_rgb8;
 
 /// Configuration for the final output conversion
 #[derive(Debug, Clone, Copy)]

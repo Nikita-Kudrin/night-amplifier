@@ -58,45 +58,7 @@ const FIXTURES: [Fixture; 2] = [
     },
 ];
 
-/// Sky sigma of one channel of an interleaved RGB8 buffer, in 8-bit levels.
-///
-/// A MAD sets the clip and a clipped standard deviation is what gets reported.
-/// The MAD alone is what this used to return, and on byte samples it can only
-/// take integer values — so the figure snapped to multiples of 1.4826 levels and
-/// could not resolve any change smaller than one output level, which is most of
-/// them. The clip is what keeps stars and the target out of the variance; the
-/// standard deviation of what survives it is continuous.
-pub(crate) fn sky_sigma_levels(rgb8: &[u8], channel: usize) -> f64 {
-    let mut samples: Vec<f64> = rgb8
-        .iter()
-        .skip(channel)
-        .step_by(3)
-        .map(|&v| v as f64)
-        .collect();
-    if samples.len() < 2 {
-        return 0.0;
-    }
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = samples[samples.len() / 2];
-
-    let mut deviations: Vec<f64> = samples.iter().map(|v| (v - median).abs()).collect();
-    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mad_sigma = deviations[deviations.len() / 2] * 1.4826;
-
-    // A floor of one level, or a sky already smooth enough to have a zero MAD
-    // would clip away everything including its own noise.
-    let clip = (mad_sigma * 3.0).max(1.0);
-    let kept: Vec<f64> = samples
-        .iter()
-        .copied()
-        .filter(|v| (v - median).abs() <= clip)
-        .collect();
-    if kept.len() < 2 {
-        return mad_sigma;
-    }
-    let mean = kept.iter().sum::<f64>() / kept.len() as f64;
-    (kept.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / kept.len() as f64).sqrt()
-}
+pub(crate) use crate::integration::instruments::sky_sigma_levels;
 
 /// First frame of a fixture directory, as a linear `Frame`.
 ///
@@ -408,6 +370,40 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
         ready.pipeline_config.denoise = denoise;
         let (bytes, _, _) = encode(&ready, TIER_1440.0, TIER_1440.1);
         assert_eq!(baseline, bytes, "variant {i} did not reproduce the stream");
+    }
+}
+
+/// Without the plugin the Background Grain dial must not move the picture at all.
+///
+/// The dial spends three levers, and one of them — the tone curve's grain split — is
+/// Community code. With the filters in the Pro repo, Community pins that split at
+/// `DEFAULT_GRAIN_SPLIT` whatever the dial says, so its render is exactly the pre-split
+/// "denoise off" picture at the default tone curve: verified byte for byte against the
+/// build before the move. A change that wired the split back to the dial here would give
+/// Community users a control they cannot see moving their target brightness.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn without_the_plugin_the_dial_does_not_move_the_picture() {
+    assert!(
+        night_amplifier::license::pro_plugin(&night_amplifier::render::DENOISE_PLUGIN).is_none(),
+        "this is Community's guard and must run without the denoise plugin"
+    );
+    let render_at = |dial: f32| {
+        let ready = prepare_fixture_with(&FIXTURES[0], |settings| {
+            settings.denoise.background_grain = dial;
+        })
+        .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(FIXTURES[0].dir)));
+        encode(&ready, TIER_1440.0, TIER_1440.1).0
+    };
+
+    let middle = render_at(0.5);
+    for dial in [0.0f32, 0.25, 0.75, 1.0] {
+        assert_eq!(
+            render_at(dial),
+            middle,
+            "dial {dial} changed Community's render; without the filters it must not"
+        );
     }
 }
 

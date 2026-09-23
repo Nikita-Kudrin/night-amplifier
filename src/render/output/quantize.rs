@@ -122,7 +122,7 @@ fn quantize(value: f32, pedestal: f32, dither: f32) -> u8 {
 /// inject chroma noise into a grey sky rather than only breaking up the
 /// luminance quantization.
 #[inline]
-pub(crate) fn write_row_rgb8(row_out: &mut [u8], row_in: &[f32], y: usize, output: DisplayOutput) {
+pub fn write_row_rgb8(row_out: &mut [u8], row_in: &[f32], y: usize, output: DisplayOutput) {
     debug_assert_eq!(row_out.len(), row_in.len());
 
     if output.is_plain() {

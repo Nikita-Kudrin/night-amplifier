@@ -632,7 +632,11 @@ mod tests {
 /// *Spatial denoising*), so the direct path silently produced a PNG missing whatever
 /// noise reduction was visible live. Runs once per session, not per frame, so the
 /// plain (non-scratch-reusing) conversion is the right trade.
-fn render_stacked_png(
+///
+/// `pub` so the Pro repo can test it: the regression above only exists when a denoise
+/// plugin is registered, and the guard must call this function rather than a copy of
+/// what it does, since "the export took a different path from the live view" was the bug.
+pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
     stack_depth: u32,
