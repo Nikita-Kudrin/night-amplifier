@@ -70,6 +70,24 @@ fn plain_mean_benchmark(c: &mut Criterion) {
         })
     });
 
+    // The display copy with and without the coverage map. `compute_with_coverage` takes
+    // both from one read of the 434 MB accumulator, so what it adds over `compute` is one
+    // plane's block medians of counts — the whole of the per-frame noise-map cost.
+    group.bench_function(format!("compute_3008x3008x3_x{REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REPS {
+                black_box(stack.compute().expect("compute"));
+            }
+        })
+    });
+    group.bench_function(format!("compute_with_coverage_3008x3008x3_x{REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REPS {
+                black_box(stack.compute_with_coverage().expect("compute_with_coverage"));
+            }
+        })
+    });
+
     group.finish();
 }
 

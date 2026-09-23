@@ -117,19 +117,35 @@ pub fn stack_snapshots(
     with_stack(files, depths, load, |ctx| ctx.compute().unwrap())
 }
 
-/// [`stack_snapshots`], also handing back the accumulator's per-pixel noise map.
-///
-/// The map is only on the accumulator, not on the frame `compute` returns, so anything
-/// measuring it has to reach the `StackingContext` rather than a snapshot of its mean.
-pub fn stack_snapshots_with_noise(
+/// One depth of a stack, with everything the accumulator knows about it.
+pub struct AccumulatorSnapshot {
+    pub depth: usize,
+    pub frame: Frame,
+    /// What the render task carries: coverage only — see `MasterStack::compute_with_coverage`.
+    pub noise: night_amplifier::NoiseField,
+    /// The whole measurement, variance included, which only diagnostics ask for.
+    pub measured: night_amplifier::NoiseField,
+    /// `count / frame_count` per pixel: how much of the stack each pixel really holds.
+    pub coverage: Frame,
+}
+
+/// The accumulator at each requested depth: the display copy, the field the render task
+/// would carry, the full measurement and the per-pixel coverage.
+pub fn accumulator_snapshots(
     files: &[PathBuf],
     depths: &[usize],
     load: &dyn Fn(&Path) -> RawSub,
-) -> Vec<(usize, Frame, night_amplifier::NoiseField)> {
+) -> Vec<AccumulatorSnapshot> {
     let mut out = Vec::new();
     with_stack(files, depths, load, |ctx| {
-        let (frame, field) = ctx.compute_with_noise().unwrap();
-        out.push((ctx.frame_count(), frame.clone(), field));
+        let (frame, noise) = ctx.compute_with_coverage().unwrap();
+        out.push(AccumulatorSnapshot {
+            depth: ctx.frame_count(),
+            frame: frame.clone(),
+            noise,
+            measured: ctx.stacker.noise_field(),
+            coverage: ctx.stacker.coverage_map(),
+        });
         frame
     });
     out
@@ -227,7 +243,6 @@ pub fn render_with(
     let night_amplifier::server::capture::pipeline::PreviewRender {
         mut pipeline_config,
         stretch_result,
-        linear_gain,
     } = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
@@ -243,9 +258,7 @@ pub fn render_with(
     }
     tweak(&mut pipeline_config);
     let ready = night_amplifier::server::state::RenderReadyFrame {
-        // Scaled exactly as the render task scales it, or the map would describe the
-        // frame as it was before background neutralisation multiplied it.
-        noise: noise.map(|field| std::sync::Arc::new(field.scaled(&linear_gain))),
+        noise: noise.map(std::sync::Arc::new),
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,
@@ -253,6 +266,26 @@ pub fn render_with(
     let (bytes, w, h) =
         night_amplifier::server::encoding::frame_to_rgb8_downsampled(&ready, max.0, max.1).unwrap();
     (bytes, w as usize, h as usize)
+}
+
+/// Render an accumulator snapshot the way the render task does: with the stack's coverage
+/// map attached whenever it has something to say, as production passes it. A guard that
+/// renders the mean alone guards a picture no observer sees.
+pub fn render_snapshot(
+    snapshot: &AccumulatorSnapshot,
+    settings: &night_amplifier::server::state::CaptureSettings,
+    denoise: bool,
+    max: (u32, u32),
+) -> (Vec<u8>, usize, usize) {
+    render_with(
+        snapshot.frame.clone(),
+        settings,
+        denoise,
+        max,
+        snapshot.depth as u32,
+        snapshot.noise.is_usable().then(|| snapshot.noise.clone()),
+        |_| {},
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -913,7 +946,7 @@ fn cache_dir() -> PathBuf {
 }
 
 /// Every sub of a session, sorted, FITS or PNG.
-fn session_frames(dir: &Path) -> Option<Vec<PathBuf>> {
+pub fn session_frames(dir: &Path) -> Option<Vec<PathBuf>> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok().map(|e| e.path()))
@@ -1186,11 +1219,12 @@ pub fn measure_real_session(
             .try_init();
     }
     let settings = night_amplifier::server::state::CaptureSettings::default();
-    let snapshots = stack_snapshots(files, depths, load);
+    // The accumulator at every depth, so the filtered half renders with the noise map the
+    // render task would attach. With denoising off the map has nothing to act on.
+    let snapshots = accumulator_snapshots(files, depths, load);
 
     let deepest = snapshots.last().unwrap();
-    let (deep_rgb, w, h) =
-        render(deepest.1.clone(), &settings, false, (2560, 1440), deepest.0 as u32);
+    let (deep_rgb, w, h) = render(deepest.frame.clone(), &settings, false, (2560, 1440), deepest.depth as u32);
     let (sky, target) = locate_boxes(&deep_rgb, w, h);
 
     for &denoise in denoise_modes {
@@ -1200,9 +1234,10 @@ pub fn measure_real_session(
         );
         println!("   N   sigma(ADU)  sky lvl  grain(lvl)  target(lvl)  target/grain  N^-1/4");
         let mut rows = Vec::new();
-        for (n, stack) in &snapshots {
+        for snapshot in &snapshots {
+            let (n, stack) = (&snapshot.depth, &snapshot.frame);
             let stats = night_amplifier::statistics::compute_image_stats(stack).unwrap();
-            let (rgb8, w, _) = render(stack.clone(), &settings, denoise, (2560, 1440), *n as u32);
+            let (rgb8, w, _) = render_snapshot(snapshot, &settings, denoise, (2560, 1440));
             let m = measure_sky_and_target(&rgb8, w, sky, target);
             println!(
                 "{n:>4}   {:>9.2}   {:>6.1}   {:>9.2}   {:>10.1}   {:>11.2}   {:>7.2}",

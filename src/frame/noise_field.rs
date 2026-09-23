@@ -24,15 +24,31 @@ use crate::error::{Result, StackError};
 /// describe, is still resolved with room to spare.
 pub const NOISE_REDUCTION: usize = 8;
 
-/// Per-channel variance over a coarse grid, with the image geometry it describes.
+/// Per-channel variance and coverage over a coarse grid, with the image geometry they
+/// describe.
 ///
 /// Cells are plane-major like [`crate::frame::Frame`] (`idx = channel*w*h + y*w + x`).
-/// A cell is [`f32::NAN`] where there was nothing to measure — a stack too shallow to
-/// have a spread yet — rather than `0.0`, which would propagate silently through a
-/// divide and read as "perfectly clean".
+/// A variance cell is [`f32::NAN`] where there was nothing to measure — a stack too
+/// shallow to have a spread yet — rather than `0.0`, which would propagate silently
+/// through a divide and read as "perfectly clean".
+///
+/// **The variance plane is optional**, and absent on the per-frame path. The filters read
+/// coverage only (see the Pro repo's `denoise::noise_map` for the measurement that
+/// decided it), and reducing three variance planes on the stacking thread cost as much
+/// again as the display copy itself. [`crate::stacking::MasterStack::noise_field`]
+/// measures it on demand.
 #[derive(Debug, Clone)]
 pub struct NoiseField {
-    variance: Vec<f32>,
+    variance: Option<Vec<f32>>,
+    /// Share of the stack each cell holds, `count / frame_count`, one plane.
+    ///
+    /// Carried beside the variance, not folded into it, because the two terms of
+    /// `m2 / count` do different things to a threshold. The per-sub variance `m2` rises
+    /// with brightness — around every star and across a bright target — and a threshold
+    /// raised there moves a star's core light into its wings (measured: +1.3-1.9 output
+    /// levels at r=5-9 px on M27 and Andromeda). `1 / coverage` is the part that is
+    /// purely about how many subs a place holds, which is what a stack border is.
+    coverage: Vec<f32>,
     width: usize,
     height: usize,
     channels: usize,
@@ -68,7 +84,8 @@ impl NoiseField {
             )));
         }
         Ok(Self {
-            variance,
+            variance: Some(variance),
+            coverage: vec![1.0; width * height],
             width,
             height,
             channels,
@@ -77,8 +94,51 @@ impl NoiseField {
         })
     }
 
-    pub fn variance(&self) -> &[f32] {
-        &self.variance
+    /// A field that knows only coverage: `width * height` cells of `count / frame_count`
+    /// for an image of `channels` planes. What the per-frame path carries.
+    pub fn coverage_only(
+        coverage: Vec<f32>,
+        width: usize,
+        height: usize,
+        channels: usize,
+        source_width: usize,
+        source_height: usize,
+    ) -> Result<Self> {
+        let mut field = Self::new(
+            vec![f32::NAN; width * height * channels],
+            width,
+            height,
+            channels,
+            source_width,
+            source_height,
+        )?;
+        field.variance = None;
+        field.with_coverage(coverage)
+    }
+
+    /// This field with its coverage plane: `width * height` cells of `count /
+    /// frame_count`. Without one every cell reads as fully covered.
+    pub fn with_coverage(mut self, coverage: Vec<f32>) -> Result<Self> {
+        if coverage.len() != self.width * self.height {
+            return Err(StackError::InvalidConfiguration(format!(
+                "coverage has {} cells, expected {}x{}",
+                coverage.len(),
+                self.width,
+                self.height
+            )));
+        }
+        self.coverage = coverage;
+        Ok(self)
+    }
+
+    /// The variance plane, when it was measured — see the type's note on why it often is
+    /// not.
+    pub fn variance(&self) -> Option<&[f32]> {
+        self.variance.as_deref()
+    }
+
+    pub fn coverage(&self) -> &[f32] {
+        &self.coverage
     }
 
     pub fn width(&self) -> usize {
@@ -103,10 +163,17 @@ impl NoiseField {
         self.source_height
     }
 
-    /// Whether any cell carries a measurement. A field with none is the warm-up case and
-    /// callers should pass `None` downstream rather than a field of NaN.
+    /// Whether the field has anything to say: a measured variance cell, or coverage that
+    /// is not the same everywhere. A field that says nothing — the warm-up, or a stack
+    /// every sub covered completely, which is the common case — should not be carried
+    /// downstream at all.
     pub fn is_usable(&self) -> bool {
-        self.variance.iter().any(|v| v.is_finite() && *v > 0.0)
+        let variance = self
+            .variance
+            .as_deref()
+            .is_some_and(|v| v.iter().any(|v| v.is_finite() && *v > 0.0));
+        let first = self.coverage.first().copied().unwrap_or(1.0);
+        variance || self.coverage.iter().any(|&c| c != first)
     }
 
     /// The field's own robust centre: the median of its finite cells, per channel,
@@ -117,8 +184,10 @@ impl NoiseField {
     /// neutralisation, preview binning, and the unmeasured correlation a bilinear warp
     /// leaves between neighbouring stack pixels — cancel instead of needing a model.
     pub fn robust_centre(&self) -> f32 {
-        let mut finite: Vec<f32> = self
-            .variance
+        let Some(variance) = self.variance.as_deref() else {
+            return 0.0;
+        };
+        let mut finite: Vec<f32> = variance
             .iter()
             .copied()
             .filter(|v| v.is_finite() && *v > 0.0)
@@ -135,7 +204,20 @@ impl NoiseField {
     /// poison it, so a warm-up hole shrinks from its edges instead of spreading. Returns
     /// [`f32::NAN`] only where every neighbour is unmeasured.
     pub fn sample(&self, channel: usize, x: usize, y: usize) -> f32 {
+        let Some(variance) = self.variance.as_deref() else {
+            return f32::NAN;
+        };
         let channel = channel.min(self.channels - 1);
+        let plane = self.width * self.height;
+        self.interpolate(&variance[channel * plane..][..plane], x, y)
+    }
+
+    /// Bilinearly interpolated coverage at a pixel of the source image.
+    pub fn sample_coverage(&self, x: usize, y: usize) -> f32 {
+        self.interpolate(&self.coverage, x, y)
+    }
+
+    fn interpolate(&self, plane: &[f32], x: usize, y: usize) -> f32 {
         // Cell centres sit at (i + 0.5) * source/field along each axis, so a pixel's
         // position in cell coordinates is this, less the half-cell offset.
         let fx = self.cell_coord(x, self.source_width, self.width);
@@ -145,7 +227,6 @@ impl NoiseField {
         let x1 = (x0 + 1).min(self.width - 1);
         let y1 = (y0 + 1).min(self.height - 1);
 
-        let plane = &self.variance[channel * self.width * self.height..][..self.width * self.height];
         let mut sum = 0.0;
         let mut weight = 0.0;
         for (cy, wy) in [(y0, 1.0 - ty), (y1, ty)] {
@@ -170,31 +251,6 @@ impl NoiseField {
         }
         let scale = field_len as f32 / source_len as f32;
         (pixel as f32 + 0.5) * scale - 0.5
-    }
-
-    /// This field with a per-channel multiplicative gain applied to the image it
-    /// describes. Variance scales by the square of the gain.
-    ///
-    /// Background neutralisation is the one pipeline stage that reaches the denoiser as
-    /// a multiply; everything else between the accumulator and the filters is additive,
-    /// luminance-preserving or applied after them. See `PreviewRender::linear_gain`.
-    pub fn scaled(&self, gain: &[f32]) -> Self {
-        let plane = self.width * self.height;
-        let mut variance = self.variance.clone();
-        for (channel, cells) in variance.chunks_exact_mut(plane).enumerate() {
-            let g = gain.get(channel).copied().unwrap_or(1.0);
-            if g == 1.0 {
-                continue;
-            }
-            let g2 = g * g;
-            for cell in cells.iter_mut() {
-                *cell *= g2;
-            }
-        }
-        Self {
-            variance,
-            ..self.clone()
-        }
     }
 
     /// This field, after the image it describes was binned by `factor`.
@@ -241,8 +297,21 @@ impl NoiseField {
         let width = target_width.div_ceil(NOISE_REDUCTION).max(1);
         let height = target_height.div_ceil(NOISE_REDUCTION).max(1);
         let mut variance = vec![f32::NAN; width * height * self.channels];
+        // A fraction, not a variance: it follows the geometry and nothing else.
+        let mut coverage = vec![1.0f32; width * height];
+        for cy in 0..height {
+            let (oy0, oy1) = cell_span(cy, height, target_height);
+            let src_y = self.source_pixel(oy0, oy1, target_height, self.source_height);
+            for cx in 0..width {
+                let (ox0, ox1) = cell_span(cx, width, target_width);
+                let src_x = self.source_pixel(ox0, ox1, target_width, self.source_width);
+                let c = self.sample_coverage(src_x, src_y);
+                coverage[cy * width + cx] = if c.is_finite() { c } else { 1.0 };
+            }
+        }
 
-        for channel in 0..self.channels {
+        let channels = if self.variance.is_some() { self.channels } else { 0 };
+        for channel in 0..channels {
             let plane = &mut variance[channel * width * height..][..width * height];
             for cy in 0..height {
                 // The output pixels this cell covers, and the source pixel its centre
@@ -260,14 +329,12 @@ impl NoiseField {
             }
         }
 
-        Self::new(
-            variance,
-            width,
-            height,
-            self.channels,
-            target_width,
-            target_height,
-        )
+        let mut field = Self::new(variance, width, height, self.channels, target_width, target_height)?
+            .with_coverage(coverage)?;
+        if self.variance.is_none() {
+            field.variance = None;
+        }
+        Ok(field)
     }
 
     /// The source pixel an output span maps back to: its centre, clamped into range.
@@ -338,7 +405,7 @@ mod tests {
         // Four equal taps: sum(w) = 1, sum(w^2) = 4 * 0.25^2 = 0.25.
         let scale = vec![0.25f32; 8];
         let out = field.resampled(8, 8, &scale, &scale).unwrap();
-        for &v in out.variance() {
+        for &v in out.variance().unwrap() {
             assert!(
                 (v - 4.0 * 0.25 * 0.25).abs() < 1e-6,
                 "variance {v} should be scaled by both axes' tap energy"
@@ -346,11 +413,36 @@ mod tests {
         }
     }
 
+    /// Coverage is a fraction of the stack, not a variance: the resample carries it by
+    /// position and nothing else. Scaling it by tap energy the way the variance is scaled
+    /// would report a fully covered stack as a quarter covered after a 2x downsample.
+    #[test]
+    fn coverage_follows_the_geometry_but_not_the_tap_energy() {
+        // The left half of the source is half covered: a thin strip, like a stack border.
+        let coverage: Vec<f32> = (0..64).map(|i| if i % 8 < 4 { 0.5 } else { 1.0 }).collect();
+        let field = flat(4.0, 8, 8, 1, 64, 64).with_coverage(coverage).unwrap();
+        let out = field.resampled(32, 32, &[0.25; 32], &[0.25; 32]).unwrap();
+
+        let right = out.sample_coverage(28, 16);
+        let left = out.sample_coverage(3, 16);
+        assert!((right - 1.0).abs() < 1e-6, "the covered side read {right}");
+        assert!((left - 0.5).abs() < 0.05, "the thin side read {left}");
+        // The variance, by contrast, did take the tap energy.
+        assert!((out.sample(0, 28, 16) - 4.0 * 0.25 * 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_field_without_coverage_reads_as_fully_covered() {
+        let field = flat(4.0, 4, 4, 1, 32, 32);
+        assert!(field.coverage().iter().all(|&c| c == 1.0));
+        assert!(flat(4.0, 4, 4, 1, 32, 32).with_coverage(vec![1.0; 3]).is_err());
+    }
+
     #[test]
     fn an_unresampled_axis_takes_a_single_unit_scale() {
         let field = flat(9.0, 2, 2, 1, 16, 16);
         let out = field.resampled(16, 16, &[1.0], &[1.0]).unwrap();
-        assert!(out.variance().iter().all(|v| (v - 9.0).abs() < 1e-6));
+        assert!(out.variance().unwrap().iter().all(|v| (v - 9.0).abs() < 1e-6));
         assert_eq!((out.source_width(), out.source_height()), (16, 16));
     }
 

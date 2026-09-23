@@ -301,11 +301,11 @@ impl StackingContext {
             .map_err(|e| format!("Failed to compute stack: {}", e))
     }
 
-    /// The stacked result and its per-pixel noise map, from one read of the accumulator.
+    /// The stacked result and its coverage map, from one read of the accumulator.
     #[instrument(skip(self), fields(frame_count = self.frame_count()))]
-    pub fn compute_with_noise(&self) -> Result<(Frame, crate::frame::NoiseField), String> {
+    pub fn compute_with_coverage(&self) -> Result<(Frame, crate::frame::NoiseField), String> {
         self.stacker
-            .compute_with_noise()
+            .compute_with_coverage()
             .map_err(|e| format!("Failed to compute stack: {}", e))
     }
 

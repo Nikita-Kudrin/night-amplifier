@@ -10,24 +10,26 @@ use crate::telemetry::metrics as telemetry_metrics;
 use rayon::prelude::*;
 use tracing::{info_span, warn};
 
-/// One row of [`NoiseField`] cells, from the `r` accumulator rows they cover.
+use super::config::{FrameQuality, StackingConfig};
+use super::incremental_pixel::IncrementalPixel;
+use super::quality_baseline::QualityBaseline;
+use super::rejection::{RejectionMethod, REJECTION_PLUGIN};
+
+/// One row of variance cells from the `r` accumulator rows they cover.
 ///
-/// `pixel_rows` is `r * width` pixels of one plane (fewer on the last stripe), laid out
-/// row-major. Shared by [`MasterStack::noise_field`] and
-/// [`MasterStack::compute_with_noise`], which differ only in whether they also copy the
-/// mean out of the same read.
-fn noise_row(field_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usize, r: usize) {
+/// `pixel_rows` is `r * width` pixels of one plane (fewer on the last stripe), row-major.
+fn variance_row(field_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usize, r: usize) {
     let rows_here = pixel_rows.len() / width.max(1);
-    // One allocation per block row rather than per block: at 3008x3008x3 the inner loop
-    // runs 425k times a frame.
+    // One allocation per block row rather than per block: at 3008x3008x3 the inner loop runs
+    // 425k times.
     let mut samples = Vec::with_capacity(r * r);
     for (bx, cell) in field_row.iter_mut().enumerate() {
         samples.clear();
         let (x0, x1) = (bx * r, ((bx + 1) * r).min(width));
         for row in 0..rows_here {
             for pixel in &pixel_rows[row * width + x0..row * width + x1] {
-                // Unmeasured cells are skipped rather than folded in at the floor,
-                // which would read downstream as a perfectly clean pixel — see
+                // Unmeasured cells are skipped rather than folded in at the floor, which
+                // would read downstream as a perfectly clean pixel — see
                 // `IncrementalPixel::has_measured_spread` for the two ways that happens.
                 if pixel.has_measured_spread() {
                     samples.push(pixel.variance() / pixel.count as f32);
@@ -42,10 +44,27 @@ fn noise_row(field_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usiz
     }
 }
 
-use super::config::{FrameQuality, StackingConfig};
-use super::incremental_pixel::IncrementalPixel;
-use super::quality_baseline::QualityBaseline;
-use super::rejection::{RejectionMethod, REJECTION_PLUGIN};
+/// One row of coverage cells, `median(count) / frame_count`, from the same rows.
+///
+/// A median rather than one sample per cell so a rejection hole — a sigma-clipped
+/// satellite trail, a pixel skipped as non-finite — cannot read as a thin border.
+fn coverage_row(cover_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usize, r: usize, frame_count: usize) {
+    let rows_here = pixel_rows.len() / width.max(1);
+    let frames = frame_count.max(1) as f32;
+    let mut counts = Vec::with_capacity(r * r);
+    for (bx, cover) in cover_row.iter_mut().enumerate() {
+        counts.clear();
+        let (x0, x1) = (bx * r, ((bx + 1) * r).min(width));
+        for row in 0..rows_here {
+            counts.extend(pixel_rows[row * width + x0..row * width + x1].iter().map(|p| p.count as f32));
+        }
+        *cover = if counts.is_empty() {
+            0.0
+        } else {
+            crate::statistics::select_median(&mut counts) / frames
+        };
+    }
+}
 
 pub struct MasterStack {
     width: usize,
@@ -258,14 +277,15 @@ impl MasterStack {
         Frame::from_f32_vec(result, self.width, self.height, self.channels)
     }
 
-    /// [`Self::compute`] and [`Self::noise_field`] from one traversal of the accumulator.
+    /// [`Self::compute`], plus the stack's coverage map, from one read of the accumulator.
     ///
-    /// The two passes read the same 434 MB on a 3008x3008 colour stack, on the thread
-    /// that is dropping camera frames when it falls behind, so the display copy and the
-    /// noise map are taken together: block-row stripes, each pixel read once. Callers
-    /// wanting only the mean keep using `compute`, whose flat zip is the cheapest form
-    /// of that on its own.
-    pub fn compute_with_noise(&self) -> Result<(Frame, NoiseField)> {
+    /// The per-frame path: this is what the render task carries to the filters, which
+    /// read coverage and nothing else. The full per-pixel variance ([`Self::noise_field`])
+    /// is measured on demand instead — reducing its three planes here cost as much again
+    /// as the display copy itself, on the thread that drops camera frames when it falls
+    /// behind, for a quantity no filter reads. Coverage comes from the first plane only:
+    /// the border a sub leaves is the same in every channel.
+    pub fn compute_with_coverage(&self) -> Result<(Frame, NoiseField)> {
         if self.frame_count == 0 {
             return Err(StackError::EmptyStack);
         }
@@ -273,31 +293,39 @@ impl MasterStack {
         let (w, h, c) = (self.width, self.height, self.channels);
         let r = crate::frame::NOISE_REDUCTION;
         let (fw, fh) = (w.div_ceil(r).max(1), h.div_ceil(r).max(1));
+        let frames = self.frame_count;
 
         let mut mean = vec![0.0f32; w * h * c];
-        let mut variance = vec![f32::NAN; fw * fh * c];
+        let mut coverage = vec![0.0f32; fw * fh];
 
-        let _span = info_span!("compute_pixels", noise_field = true).entered();
+        let _span = info_span!("compute_pixels", coverage = true).entered();
 
-        mean.par_chunks_mut(w * h)
-            .zip(variance.par_chunks_mut(fw * fh))
-            .zip(self.pixels.par_chunks(w * h))
-            .for_each(|((mean_plane, field_plane), pixel_plane)| {
-                mean_plane
+        let (first_mean, other_mean) = mean.split_at_mut(w * h);
+        let (first_pixels, other_pixels) = self.pixels.split_at(w * h);
+        rayon::join(
+            || {
+                // The first plane's stripes yield its mean and its coverage from one read.
+                first_mean
                     .par_chunks_mut(r * w)
-                    .zip(field_plane.par_chunks_mut(fw))
-                    .zip(pixel_plane.par_chunks(r * w))
-                    .for_each(|((mean_rows, field_row), pixel_rows)| {
+                    .zip(coverage.par_chunks_mut(fw))
+                    .zip(first_pixels.par_chunks(r * w))
+                    .for_each(|((mean_rows, cover_row), pixel_rows)| {
                         for (out, pixel) in mean_rows.iter_mut().zip(pixel_rows.iter()) {
                             *out = pixel.mean;
                         }
-
-                        noise_row(field_row, pixel_rows, w, r);
+                        coverage_row(cover_row, pixel_rows, w, r, frames);
                     });
-            });
+            },
+            || {
+                other_mean
+                    .par_iter_mut()
+                    .zip(other_pixels.par_iter())
+                    .for_each(|(out, pixel)| *out = pixel.mean);
+            },
+        );
 
         let frame = Frame::from_f32_vec(mean, w, h, c)?;
-        let field = NoiseField::new(variance, fw, fh, c, w, h)?;
+        let field = NoiseField::coverage_only(coverage, fw, fh, c, w, h)?;
         Ok((frame, field))
     }
 
@@ -326,7 +354,10 @@ impl MasterStack {
         let r = crate::frame::NOISE_REDUCTION;
         let (fw, fh) = (w.div_ceil(r).max(1), h.div_ceil(r).max(1));
         let mut variance = vec![f32::NAN; fw * fh * c];
+        let mut coverage = vec![0.0f32; fw * fh];
 
+        // Plane by plane, then 8-row stripes within each: a stripe over the whole buffer
+        // straddles two planes whenever the height is not a multiple of 8.
         variance
             .par_chunks_mut(fw * fh)
             .zip(self.pixels.par_chunks(w * h))
@@ -334,12 +365,15 @@ impl MasterStack {
                 field_plane
                     .par_chunks_mut(fw)
                     .zip(pixel_plane.par_chunks(r * w))
-                    .for_each(|(field_row, pixel_rows)| {
-                        noise_row(field_row, pixel_rows, w, r);
-                    });
+                    .for_each(|(field_row, pixel_rows)| variance_row(field_row, pixel_rows, w, r));
             });
+        coverage
+            .par_chunks_mut(fw)
+            .zip(self.pixels[..w * h].par_chunks(r * w))
+            .for_each(|(cover_row, pixel_rows)| coverage_row(cover_row, pixel_rows, w, r, self.frame_count));
 
         NoiseField::new(variance, fw, fh, c, w, h)
+            .and_then(|field| field.with_coverage(coverage))
             .expect("noise field dimensions follow the stack's own")
     }
 

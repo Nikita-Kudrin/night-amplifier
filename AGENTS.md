@@ -50,7 +50,7 @@ When designing new features or refactoring, adhere to the following architectura
 - Asynchronous Communication: favor event-driven (Pub/Sub, queues) for long-running or cross-service work.
 - Design for Failure (Resilience).
 - Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`,
-  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`) so Community works standalone.
+  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`, `DENOISE_PLUGIN`) so Community works standalone.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.
@@ -66,6 +66,12 @@ Tests might run a minute or two - you should wait for them to finish. Benches mi
 Real-data sets live in `DEFAULT_FIXTURES` and download on demand; `tests/fixtures/` is gitignored.
 A test wanting one calls `stack_depth_grain_tests::managed_session`, which **panics** when it cannot
 be had — never `println!` + return, or the suite reports green with the assertion unrun.
+
+The measurement instruments (octave bands, the star radial profile, centre/edge and line
+coherence, stacking and rendering a session) live in `tests/integration/instruments.rs`, which
+the Pro repo includes by `#[path]`: **it may not name `crate::`**. Fixture discovery arrives as a
+loader parameter instead. One implementation serves both repos — a second copy measured against
+the first's reference numbers is not a measurement.
 
 A set cut but not yet uploaded is registered with `PENDING_UPLOAD` in place of the Drive id: the
 download is skipped (three retries saving an HTML error page help nobody) and
@@ -125,7 +131,7 @@ their own schedule.
 | `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
 | `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG + Superpixel                          |
 | `cfa/`                        | Raw-CFA stage run before demosaic: hot pixels, row/column FPN                        |
-| `render/denoise/`             | Guided-filter chroma + à trous wavelet luma, run at *stream* resolution              |
+| `render/denoise/`             | Denoise plugin boundary: config data, buffer pool, `DENOISE_PLUGIN` (filters in Pro) |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
@@ -165,7 +171,8 @@ drops the page's streams.
 ### Web Frontend (web/)
 
 Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, components in `src/components/`. Vite proxies
-`/api` and `/ws` to `localhost:9955` in dev.
+`/api` and `/ws` to `localhost:9955` in dev. Pro-only controls stay visible and locked (`BaseProLock`) on their
+`/api/capabilities` flag — Noise Reduction reads `deep_sky.denoise`.
 
 `useCatalogSearch` skips a programmatic query by *value* (`setQueryWithoutSearch`), never with a one-shot flag: clearing
 a 1-character query armed the flag, so typing "M" then "M4" never searched and M1–M9 were unfindable. It also drops
@@ -521,90 +528,54 @@ Rules: use `planes()`/`channel_data()`/`get_pixel()`, never `frame.data()` with 
 (16-bit truncates); dispatch per plane, never derive a channel from a flat rayon chunk index. `get_pixel` in a
 whole-frame loop is a review flag (120ms/frame in `white_balance::block_medians`, 27ms on `planes()` + rayon).
 
-### Spatial denoising (`render::denoise`) — runs in the encoder, not the pipeline
+### Spatial denoising — a Pro plugin behind `DENOISE_PLUGIN`
 
-Two filters in `server::encoding::fused`, not the pipeline: **guided** (chroma mottle,
-luma-guided) and **wavelet** (à trous B3, up to 6 levels, MAD-thresholded luma). Run at stream
-resolution, after resample/before tone curve — full-res then discarding 3/4 would be 4.5x the
-memory traffic. ~14ms combined at 1440² (20-core x86).
+The filters (guided chroma, à trous wavelet luma), every tuned number and the Background Grain
+dial's mapping live in the Pro repo (`plugins::denoise`; its AGENTS.md holds their history).
+Community owns the boundary: `DenoiseConfig` as data (every `Default` is `OFF`), `DenoiseScratch`,
+the encoder hook and the gates.
 
-- Off fuses per-row; either filter on stages the whole image as f32 first (cross-row access).
-- Thresholds `DEFAULT_K = [0,3,2,1,0,0]` get weaker at finer scale on purpose — coarse-heavy
-  denoising erases real nebula structure. The last two are the coarse pair, off at and below
-  the dial's middle; `k[0]` and they are what the dial moves.
-- The guided filter's regularisation is **`noise_k` sigmas of its own guide, measured per frame**,
-  not a constant. It was a fixed `1e-4` in linear light against a sky whose guide variance is
-  ~1e-9: every window read as flat, the filter degenerated into a ~40 px box blur of chroma, and
-  star colour bled into halos that raised 32-64 px chroma noise **above** the unfiltered sky
-  (2-4.6x on real IMX533 stacks) — the "blotches" reported at the eyepiece. Swept over four
-  sessions; fine chroma converges by `k=3`. Pinned by `sky_blotch_tests.rs` and
-  `guided.rs::a_faint_star_keeps_its_colour_to_itself`.
-- `k[0]` (grain) is driven by the Background Grain dial through
-  `DenoiseSettings::star_protection()`, fully spent at the default; ceiling reaches ~7x
-  noise reduction — but of *fine* noise, which is a small share of what an observer sees.
-  The dial has no off switch for the filter: a zero `luma_strength` is that, and it is the
-  one the manual points at when nebulae turn to plastic. Focus/Finder mode holds the filter
-  off by zeroing the strength, deliberately **not** by moving the dial, which would move
-  the tone curve with it.
-- **`strength` (Structure strength) scales only levels 2-4**, the mid scales it is named
-  for. It used to scale all of them, and that was a trap: an observer running it at 0.2 had
-  every position of the Background Grain dial quietly divided by five, and measured a 0.0 %
-  change in visible sky noise across the dial's whole lower half. Two controls, one
-  silently scaling the other, is not two controls.
-- **Levels 5-6 are the coarse pair and need their own shrinkage.** Their support is wider
-  than a star, so the smoothed plane carries a star's flux tens of pixels out and the
-  detail plane goes negative just outside it. Two things make them safe, and the guard is
-  `a_bright_star_keeps_no_ring`, which now runs at the top of the dial as well as the
-  default:
-  - **Non-negative garrote, not a soft threshold.** A soft threshold subtracts `t` from
-    every surviving coefficient including the star's large ones, and that constant shift
-    is what moves real light into a ring (measured: a -2.3 level trough at r=9-15 px with
-    every star in a +1.2 level pool). The garrote shrinks by `t^2/d`, so `d >> t` is left
-    almost untouched. It is continuous at `t`, so it does not bring back the blotches hard
-    thresholding was rejected for.
-  - **A mask read off the smoothed plane itself** (`MASK_SIGMAS`), not dilated out from a
-    map of star positions. The disc a coarse level would light *is* the region the
-    smoothing has carried flux into, so the smoothed plane already has it at the right
-    size for every star with no radius to guess. A dilated point mask was measured and
-    fails both ways: narrow it changes the ringing not at all, wide it protects a dense
-    field entirely and the coarse levels recover nothing. The rule is nearly "smooth what
-    is at or below the sky, never anything brighter".
-  `COARSE_K` is half what the best grain figure wanted: doubling it buys 2 % more grain and
-  takes the dense-field disc from +0.48 to +0.68 output levels, which is the whole of the
-  guard's margin.
-- **Three Star Fields ideas that measured well and looked wrong.** All three were caught
-  by rendering a crop and looking at it, after the score table had already approved them:
-  - *Crushing the coarse thresholds* (3 sigmas at every level, 5-6 on) scored best on every
-    number and put visible dark contour worms across a wide field's background — zeroing a
-    smooth gradient's detail coefficients leaves the reconstruction piecewise flat. The
-    win it appeared to deliver came from the finest threshold, which has no such problem.
-  - *Flattening the coarse gains* (0.8/0.5/0.4) to spread a globular's glow digs a -8
-    output level moat around every star, for the same reason a coarse threshold does.
-  - *Sharpening past ~1.15* rings, and the ceiling is set by the **shallowest** stack: 1.25
-    keeps a +1.4 level margin on a 1852-frame globular and rings outright on the 35-frame
-    CI fixture, where the profile turns back up 0.9 -> 1.9 at r=11 px.
-  The score table could not see any of them; `star_field_score`'s `moat` column exists
-  because of the second, and `a_bright_star_keeps_no_ring` now runs Star Fields for the
-  third. **Look at the picture.**
-- **Every per-level noise estimate goes through `statistics::select_median`, never
-  `fast_median`** (`MAX_SIGMA_SAMPLES`). Since the sigma became per-level it is drawn twice
-  a level — a dozen times a frame with the coarse pair on — and `fast_median`
-  `par_sort_unstable`s anything from 4096 up, so that was a dozen parallel full sorts
-  inside one pass. Selection plus a 16 384-sample cap took the 1440² pass from 14.2ms to
-  10.6 (coarse off) and 21.0 to 13.8 (coarse on), output unchanged to 0.1 output levels.
-  `black_point::clipped_centre` documents the same trap; it is the one to check first
-  whenever a per-frame estimator appears.
-- Skipped for `StackingType::Planetary` — lucky imaging needs the detail this removes, and
-  note the Background Grain dial still moves the *tone curve* there, where nothing in the
-  picture moves with it.
+- **No plugin, no filter**: the config is always `OFF` and the encoders take the fused per-row
+  path, byte-identical to the pre-denoise output. Verified against the pre-move build: every dial
+  position renders its "denoise off" bytes; `without_the_plugin_the_dial_does_not_move_the_picture`.
+- **The grain split is pinned** at `DEFAULT_GRAIN_SPLIT` without the plugin — the dial's own
+  middle — so Community's tone curve is exactly Pro's at the default and the difference is the
+  filters. On the curve alone deeper stacks still render calmer (`stack_depth_grain_tests`).
+- **Gates Community keeps**: Planetary is refused *before* the plugin is asked (product rule, not
+  tuning), and so is `DenoiseSettings::enabled == false`. The switch is unmanaged by Focus/Finder
+  mode — a denoise switch the mode forced false is how a saved file once lost the dial.
+- `DenoiseSettings` round-trips every field Community ignores (a Pro observer running Community
+  once keeps their dial) and is NaN-sanitised on `POST /api/settings`, so the plugin sees finite
+  values. The UI locks the section on `capabilities.deep_sky.denoise`.
+- Run at stream resolution, after resample and before the tone curve: full-res then discarding
+  3/4 would be 4.5x the memory traffic. Off fuses per-row; on stages the image as f32.
+
+### The stack's noise map (`frame::NoiseField`)
+
+`MasterStack` already knows each pixel's noise: `m2 / count` is the variance of the stacked mean.
+`NoiseField` carries it on a 1/8 grid — **variance, never sigma**, block **median** (a star cannot
+set its block), NaN where unmeasured (never 0, which reads as clean) — plus a **coverage** plane,
+`median(count) / frame_count`.
+
+- **The filters read coverage only, and the per-frame path carries only that**
+  (`compute_with_coverage`: +1.1 % over `compute`; the three variance planes cost +90 %). The
+  full variance map is `noise_field()`, on demand. Why coverage: the variance's brightness term
+  fattened every star (+1.3-1.9 levels at r=5-9 px) and made thin borders noisier — see the Pro
+  AGENTS.md. A fully covered stack carries no map at all (`is_usable`).
+- `m2` fits the shot-noise model `v·c·N = a + b·mean` straight (R² 0.92-1.00 on four sessions),
+  which is what makes it trustworthy; `noise_map_measurements` in Pro is that gate.
+- **Resampling**: coverage by position; variance in quadrature, `field · Σw²_col · Σw²_row` from
+  `AxisTaps::sum_sq` on the *same cached taps* — resampling it like an image overstates output
+  noise by ~√k. Guarded both ways in `encoding::tests`, incl. a test that refutes the image-like
+  resample. Tap energy varies 1.037x across the shipped 2.089x geometry, 1.28x near unity.
+- `m2` is load-bearing on **both** accumulator paths now: the plain mean maintains it through
+  `observe_scale_guarded` (see Phase 5). Per-pixel tests there are on squared quantities.
 
 ### Denoising cost
 
-Denoising is **several times the cost of the encode it sits in** (IMX533 @1440p, 20-core
-x86: 4.7ms without it; in `denoise_benchmark` the two filters measure 14.3ms a frame
-together at the shipped dial position, and the wavelet alone goes 10.6 -> 13.8ms when the
-dial's top half brings in levels 5-6 — **one group at a time**, which that file's note
-explains). Two structures stop that from multiplying:
+Denoising is **several times the cost of the encode it sits in** (IMX533 @1440p, 20-core x86: the
+encode is 4.7ms without it; Pro's `denoise_benchmark` has the filters at ~12-14ms a pass, +7 %
+with a coverage map covering 42 % of the frame thin). Two structures stop that from multiplying:
 
 - **`ConversionCache`** shares one RGB8 conversion per distinct output size, keyed on
   `output_dimensions`, so both families at the same streaming resolution denoise once.
@@ -666,7 +637,9 @@ caller that forgets it entirely. The eyepiece slider still interpolates `black_p
   `stack_depth_grain_tests`, which reads the exponent from `depth_grain_gain` rather than restating
   it.
 - **One dial, `DenoiseSettings::background_grain`, spends three levers, and which *scales*
-  each reaches is what orders them.** It replaced a toggle and two sliders, one of which
+  each reaches is what orders them.** A Pro control: its mapping (`star_protection()`,
+  `coarse_denoise()`, `grain_split()`) and the tests pinning it live in the Pro repo's
+  `plugins::denoise::dial`; Community pins the curve at the middle. It replaced a toggle and two sliders, one of which
   (the curve's share) had no UI at all. An observer reads grain at **8-128 px**, and on a
   1440p stream of a deep IMX533 stack the 16-32 and 32-64 px bands are the two largest —
   so that is the band a lever has to reach to count.
@@ -720,7 +693,7 @@ caller that forgets it entirely. The eyepiece slider still interpolates `black_p
   smoothed-plane mask the denoise section describes; a plain soft threshold at those
   scales still digs a -2.3 level trough at r=9-15 px, and an interscale mask dilated out
   from star positions still fails both ways. See the star radial profile and surround
-  method in `render_brightness_tests` before reaching for any of them again.
+  method in `tests/integration/instruments.rs` before reaching for any of them again.
 - **Star Fields keeps `ToneMappingAlgorithm::Asinh`, and that is a product decision.**
   The mode exists to show a field of stars; nebulosity and galaxy structure are explicitly
   not its job. What asinh costs is measured and should not need re-deriving: it pins the
@@ -730,7 +703,7 @@ caller that forgets it entirely. The eyepiece slider still interpolates `black_p
   worse. A per-profile `ContrastConfig` cannot help — strength is already at its 1.0
   ceiling everywhere.
 - **Star Fields denoises differently, and that is where its wins come from** — see
-  `STAR_FIELD_FINE_BOOST` and `STAR_FIELD_GAIN`. On a 181-frame 35 mm IMX464 field it
+  `STAR_FIELD_FINE_BOOST` and `STAR_FIELD_GAIN` in the Pro repo's `plugins::denoise`. On a 181-frame 35 mm IMX464 field it
   takes detected stars from 7809 to 15384 per megapixel above sky+20 and 3127 to 5909
   above sky+60, with fine-scale noise down 45 %; on long-focal sets it is roughly neutral
   (a 1852-frame globular loses 6 % of its faintest for 35 % less speckle). The mode now
