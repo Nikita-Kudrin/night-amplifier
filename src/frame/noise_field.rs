@@ -40,7 +40,8 @@ pub const NOISE_REDUCTION: usize = 8;
 #[derive(Debug, Clone)]
 pub struct NoiseField {
     variance: Option<Vec<f32>>,
-    /// Share of the stack each cell holds, `count / frame_count`, one plane.
+    /// Share of the stack's subs that reached each cell, `offered / frame_count`, one plane.
+    /// Reached, not kept: a sample the rejector clipped still covered its pixel.
     ///
     /// Carried beside the variance, not folded into it, because the two terms of
     /// `m2 / count` do different things to a threshold. The per-sub variance `m2` rises
@@ -67,34 +68,11 @@ impl NoiseField {
         source_width: usize,
         source_height: usize,
     ) -> Result<Self> {
-        if width == 0 || height == 0 || channels == 0 {
-            return Err(StackError::InvalidDimensions {
-                width,
-                height,
-                channels,
-            });
-        }
-        if variance.len() != width * height * channels {
-            return Err(StackError::InvalidConfiguration(format!(
-                "noise field has {} cells, expected {}x{}x{}",
-                variance.len(),
-                width,
-                height,
-                channels
-            )));
-        }
-        Ok(Self {
-            variance: Some(variance),
-            coverage: vec![1.0; width * height],
-            width,
-            height,
-            channels,
-            source_width,
-            source_height,
-        })
+        let coverage = vec![1.0; width * height];
+        Self::validated(Some(variance), coverage, width, height, channels, source_width, source_height)
     }
 
-    /// A field that knows only coverage: `width * height` cells of `count / frame_count`
+    /// A field that knows only coverage: `width * height` cells of `offered / frame_count`
     /// for an image of `channels` planes. What the per-frame path carries.
     pub fn coverage_only(
         coverage: Vec<f32>,
@@ -104,19 +82,50 @@ impl NoiseField {
         source_width: usize,
         source_height: usize,
     ) -> Result<Self> {
-        let mut field = Self::new(
-            vec![f32::NAN; width * height * channels],
+        Self::validated(None, coverage, width, height, channels, source_width, source_height)
+    }
+
+    /// Every constructor ends here, so a field's planes always match its grid.
+    fn validated(
+        variance: Option<Vec<f32>>,
+        coverage: Vec<f32>,
+        width: usize,
+        height: usize,
+        channels: usize,
+        source_width: usize,
+        source_height: usize,
+    ) -> Result<Self> {
+        if width == 0 || height == 0 || channels == 0 {
+            return Err(StackError::InvalidDimensions {
+                width,
+                height,
+                channels,
+            });
+        }
+        if let Some(variance) = &variance {
+            if variance.len() != width * height * channels {
+                return Err(StackError::InvalidConfiguration(format!(
+                    "noise field has {} cells, expected {}x{}x{}",
+                    variance.len(),
+                    width,
+                    height,
+                    channels
+                )));
+            }
+        }
+        Self {
+            variance,
+            coverage: Vec::new(),
             width,
             height,
             channels,
             source_width,
             source_height,
-        )?;
-        field.variance = None;
-        field.with_coverage(coverage)
+        }
+        .with_coverage(coverage)
     }
 
-    /// This field with its coverage plane: `width * height` cells of `count /
+    /// This field with its coverage plane: `width * height` cells of `offered /
     /// frame_count`. Without one every cell reads as fully covered.
     pub fn with_coverage(mut self, coverage: Vec<f32>) -> Result<Self> {
         if coverage.len() != self.width * self.height {
@@ -176,8 +185,8 @@ impl NoiseField {
         variance || self.coverage.iter().any(|&c| c != first)
     }
 
-    /// The field's own robust centre: the median of its finite cells, per channel,
-    /// averaged. Zero when there is nothing to measure.
+    /// The field's own robust centre: one median over the finite, positive variance cells
+    /// of every channel together. Zero when there is nothing to measure.
     ///
     /// Consumers that work in *relative* noise divide by this, which is what makes every
     /// spatially uniform gain between the accumulator and the denoiser — background
@@ -296,7 +305,6 @@ impl NoiseField {
     ) -> Result<Self> {
         let width = target_width.div_ceil(NOISE_REDUCTION).max(1);
         let height = target_height.div_ceil(NOISE_REDUCTION).max(1);
-        let mut variance = vec![f32::NAN; width * height * self.channels];
         // A fraction, not a variance: it follows the geometry and nothing else.
         let mut coverage = vec![1.0f32; width * height];
         for cy in 0..height {
@@ -310,31 +318,28 @@ impl NoiseField {
             }
         }
 
-        let channels = if self.variance.is_some() { self.channels } else { 0 };
-        for channel in 0..channels {
-            let plane = &mut variance[channel * width * height..][..width * height];
-            for cy in 0..height {
-                // The output pixels this cell covers, and the source pixel its centre
-                // corresponds to.
-                let (oy0, oy1) = cell_span(cy, height, target_height);
-                let src_y = self.source_pixel(oy0, oy1, target_height, self.source_height);
-                let ry = axis_mean(row_scale, oy0, oy1);
-                for cx in 0..width {
-                    let (ox0, ox1) = cell_span(cx, width, target_width);
-                    let src_x = self.source_pixel(ox0, ox1, target_width, self.source_width);
-                    let rx = axis_mean(column_scale, ox0, ox1);
-                    let v = self.sample(channel, src_x, src_y);
-                    plane[cy * width + cx] = if v.is_finite() { v * rx * ry } else { f32::NAN };
+        let variance = self.variance.as_ref().map(|_| {
+            let mut variance = vec![f32::NAN; width * height * self.channels];
+            for (channel, plane) in variance.chunks_exact_mut(width * height).enumerate() {
+                for cy in 0..height {
+                    // The output pixels this cell covers, and the source pixel its centre
+                    // corresponds to.
+                    let (oy0, oy1) = cell_span(cy, height, target_height);
+                    let src_y = self.source_pixel(oy0, oy1, target_height, self.source_height);
+                    let ry = axis_mean(row_scale, oy0, oy1);
+                    for cx in 0..width {
+                        let (ox0, ox1) = cell_span(cx, width, target_width);
+                        let src_x = self.source_pixel(ox0, ox1, target_width, self.source_width);
+                        let rx = axis_mean(column_scale, ox0, ox1);
+                        let v = self.sample(channel, src_x, src_y);
+                        plane[cy * width + cx] = if v.is_finite() { v * rx * ry } else { f32::NAN };
+                    }
                 }
             }
-        }
+            variance
+        });
 
-        let mut field = Self::new(variance, width, height, self.channels, target_width, target_height)?
-            .with_coverage(coverage)?;
-        if self.variance.is_none() {
-            field.variance = None;
-        }
-        Ok(field)
+        Self::validated(variance, coverage, width, height, self.channels, target_width, target_height)
     }
 
     /// The source pixel an output span maps back to: its centre, clamped into range.
@@ -429,6 +434,22 @@ mod tests {
         assert!((left - 0.5).abs() < 0.05, "the thin side read {left}");
         // The variance, by contrast, did take the tap energy.
         assert!((out.sample(0, 28, 16) - 4.0 * 0.25 * 0.25).abs() < 1e-6);
+    }
+
+    /// The per-frame field is coverage only, and every geometry change it goes through —
+    /// preview binning, the encoder's resample — has to keep it that way, not materialise
+    /// a plane of NaN per frame that nothing reads.
+    #[test]
+    fn a_coverage_only_field_stays_coverage_only() {
+        let coverage: Vec<f32> = (0..64).map(|i| if i % 8 < 2 { 0.5 } else { 1.0 }).collect();
+        let field = NoiseField::coverage_only(coverage, 8, 8, 3, 64, 64).unwrap();
+        for out in [field.binned(2).unwrap(), field.resampled(32, 32, &[0.25; 32], &[0.25; 32]).unwrap()] {
+            assert!(out.variance().is_none());
+            assert_eq!(out.channels(), 3);
+            assert!((out.sample_coverage(2, 16) - 0.5).abs() < 0.05);
+            assert_eq!(out.sample_coverage(28, 16), 1.0);
+        }
+        assert!(NoiseField::coverage_only(vec![1.0; 3], 8, 8, 3, 64, 64).is_err());
     }
 
     #[test]

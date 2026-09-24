@@ -270,7 +270,7 @@ pub async fn update_settings(
             settings.wanderer_mode = wanderer_mode;
         }
         if let Some(denoise) = request.denoise {
-            settings.denoise = denoise;
+            settings.denoise = denoise.sanitized();
         }
         if let Some(preview_resolution) = request.preview_resolution {
             settings.preview_resolution = preview_resolution;
@@ -293,7 +293,7 @@ pub async fn update_settings(
                 settings.eyepiece.stream_resolution.resolution(),
                 eyepiece.stream_resolution.resolution(),
             );
-            settings.eyepiece = eyepiece;
+            settings.eyepiece = eyepiece.sanitized();
         }
         if let Some(telescope) = request.telescope {
             settings.telescope = telescope;

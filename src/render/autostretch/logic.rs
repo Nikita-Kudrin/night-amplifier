@@ -122,6 +122,40 @@ fn unlinked_effective_median(gap: f32) -> f32 {
     }
 }
 
+/// Half-width of the band each signal-fraction gate blends across.
+///
+/// The gates were steps, and a stack deepening through one jumped: sigma falls with depth,
+/// so the share of samples above `mode + 2 sigma` climbs even under a static sky. Orion's
+/// crossed 0.2 at depth 7 and its core rendered 29 output levels brighter in one frame; a
+/// field sitting on a gate flipped between two curves every frame. Outside the bands the
+/// curve is exactly what the steps gave.
+const GATE_BLEND: f32 = 0.05;
+
+/// How far `signal_fraction` has crossed the gate at `threshold`: 0 below its band, 1
+/// above it, linear between — a smoothstep would be half as steep again mid-band.
+fn gate(signal_fraction: f32, threshold: f32) -> f32 {
+    ((signal_fraction - threshold + GATE_BLEND) / (2.0 * GATE_BLEND)).clamp(0.0, 1.0)
+}
+
+/// The black point factor and target background a frame's share of signal asks for,
+/// before the depth gain: a frame that is mostly signal gets its black point nearer the
+/// sky, and past 0.4 a brighter sky.
+fn signal_adapted(config: &AutoStretchConfig, signal_fraction: f32) -> (f32, f32) {
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let (above_low, above_high) = (gate(signal_fraction, 0.2), gate(signal_fraction, 0.4));
+    let sigma = lerp(
+        lerp(config.black_point_sigma, config.black_point_sigma * 0.8, above_low),
+        (config.black_point_sigma * 0.6).max(1.5),
+        above_high,
+    );
+    let target = lerp(
+        config.target_background,
+        (config.target_background * 1.3).min(0.20),
+        above_high,
+    );
+    (sigma, target)
+}
+
 pub fn compute_auto_stretch(
     frame: &Frame,
     stats: &ImageStats,
@@ -141,15 +175,10 @@ pub fn compute_auto_stretch_with_algorithm(
     let mean_sigma = stats.mean_sigma();
 
     let signal_fraction = estimate_signal_fraction(&background.luminance_samples, mode, mean_sigma);
+    let (signal_sigma, target_background) = signal_adapted(&config, signal_fraction);
 
-    let adaptive_sigma = (if signal_fraction > 0.4 {
-        (config.black_point_sigma * 0.6).max(1.5)
-    } else if signal_fraction > 0.2 {
-        config.black_point_sigma * 0.8
-    } else {
-        config.black_point_sigma
-    } * depth_grain_gain(config.stack_depth, config.grain_split))
-    .min(max_effective_sigma(config.grain_split));
+    let adaptive_sigma = (signal_sigma * depth_grain_gain(config.stack_depth, config.grain_split))
+        .min(max_effective_sigma(config.grain_split));
 
     // Floor the gap, then derive the black point from it.
     //
@@ -164,8 +193,8 @@ pub fn compute_auto_stretch_with_algorithm(
 
     // Everything the solve turns on, in one line. `signal_fraction` is measured
     // against `mode + 2 * mean_sigma`, so it moves with the *noise* as well as the
-    // signal — a deepening stack shrinks sigma and can walk this across the 0.2/0.4
-    // gates without the sky having changed at all.
+    // signal — a deepening stack shrinks sigma and walks it through the 0.2/0.4 gates
+    // without the sky having changed at all, which is why they are bands (`GATE_BLEND`).
     tracing::debug!(
         mode,
         mean_sigma,
@@ -177,12 +206,6 @@ pub fn compute_auto_stretch_with_algorithm(
         effective_median,
         "Auto-stretch inputs"
     );
-
-    let target_background = if signal_fraction > 0.4 {
-        (config.target_background * 1.3).min(0.20)
-    } else {
-        config.target_background
-    };
 
     let mut midtones = [0.5, 0.5, 0.5];
     let mut w = 0.0;
@@ -374,6 +397,72 @@ mod tests {
                 r.adaptive_sigma,
                 stats.mean_sigma()
             );
+        }
+    }
+
+    /// Every `black_point_sigma` and `target_background` a solve starts from: the three
+    /// deep-sky profiles, planetary, and the default the exports use.
+    fn gate_configs() -> Vec<AutoStretchConfig> {
+        use crate::render::autostretch::StretchAggressiveness::{High, Low, Medium};
+        let mut configs: Vec<_> = [Low, Medium, High]
+            .into_iter()
+            .map(|a| AutoStretchConfig::from_profile(false, a))
+            .collect();
+        configs.push(AutoStretchConfig::from_profile(true, Medium));
+        configs.push(AutoStretchConfig::default());
+        // The setting's floor, where the upper gate's `max(1.5)` makes it steepest.
+        configs.push(AutoStretchConfig::default().with_black_point_sigma(0.5));
+        configs
+    }
+
+    /// No share of signal is a cliff. The steps these replaced moved the black point by a
+    /// fifth of itself or more between two frames whose signal fraction differed in the
+    /// fourth decimal place — which every deepening stack that crosses 0.2 or 0.4 does.
+    #[test]
+    fn the_signal_gates_have_no_step() {
+        for config in gate_configs() {
+            let mut previous = signal_adapted(&config, 0.0);
+            for i in 1..=10_000 {
+                let fraction = i as f32 / 10_000.0;
+                let (sigma, target) = signal_adapted(&config, fraction);
+                assert!(
+                    (sigma / previous.0 - 1.0).abs() < 0.005,
+                    "black point factor {} -> {sigma} at signal fraction {fraction} \
+                     (setting {})",
+                    previous.0,
+                    config.black_point_sigma
+                );
+                assert!(
+                    (target / previous.1 - 1.0).abs() < 0.005,
+                    "target background {} -> {target} at signal fraction {fraction}",
+                    previous.1
+                );
+                previous = (sigma, target);
+            }
+        }
+    }
+
+    /// Away from the two thresholds nothing moved: a field clearly below, between or above
+    /// them renders exactly as the steps rendered it.
+    #[test]
+    fn away_from_the_gates_the_curve_is_the_old_steps() {
+        for config in gate_configs() {
+            let (b, t) = (config.black_point_sigma, config.target_background);
+            let above_both = ((b * 0.6).max(1.5), (t * 1.3).min(0.20));
+            for (fraction, expected) in [
+                (0.0, (b, t)),
+                (0.14, (b, t)),
+                (0.26, (b * 0.8, t)),
+                (0.34, (b * 0.8, t)),
+                (0.46, above_both),
+                (1.0, above_both),
+            ] {
+                let got = signal_adapted(&config, fraction);
+                assert!(
+                    (got.0 - expected.0).abs() < 1e-6 && (got.1 - expected.1).abs() < 1e-6,
+                    "signal fraction {fraction}: {got:?}, the steps gave {expected:?}"
+                );
+            }
         }
     }
 

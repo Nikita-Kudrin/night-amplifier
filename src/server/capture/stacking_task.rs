@@ -444,6 +444,53 @@ fn check_dimension_mismatch(
     false
 }
 
+/// The stack a session ends with, and what its export needs beside the pixels.
+struct FinalStack {
+    frame: Frame,
+    depth: usize,
+    /// The deep-sky stack's coverage map, when its subs did not all cover it.
+    coverage: Option<crate::frame::NoiseField>,
+}
+
+/// The session's stack, from whichever context holds one.
+///
+/// Depth and coverage travel with the frame, from the context that holds all three,
+/// because the saved PNG is rendered with both as the live view renders them: the tone
+/// curve spends the depth (`render::autostretch::depth_grain_gain`) and the filters read
+/// the coverage. Re-deriving the depth from the session's `stacked_count` would let the
+/// export and the live view disagree about the same stack — by the reference frame, and
+/// by anything a mid-session reset did to the counters.
+fn final_stack(
+    stacking_ctx: &Option<StackingContext>,
+    comet_ctx: &Option<Box<dyn CometContext>>,
+    planetary_ctx: &Option<PlanetaryStackingContext>,
+) -> Option<FinalStack> {
+    let without_map = |frame: Option<Frame>, depth: usize| {
+        frame.map(|frame| FinalStack { frame, depth, coverage: None })
+    };
+    stacking_ctx
+        .as_ref()
+        .and_then(|ctx| {
+            let (frame, coverage) = ctx.compute_with_coverage().ok()?;
+            Some(FinalStack {
+                frame,
+                depth: ctx.frame_count(),
+                // Filtered as `pipeline::process_frame_with_stacking` filters the live one.
+                coverage: coverage.is_usable().then_some(coverage),
+            })
+        })
+        .or_else(|| {
+            comet_ctx
+                .as_ref()
+                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
+        })
+        .or_else(|| {
+            planetary_ctx
+                .as_ref()
+                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
+        })
+}
+
 /// Save the final stacked result at the end of a capture session.
 fn save_stacked_result(
     state: &Arc<AppState>,
@@ -452,26 +499,7 @@ fn save_stacked_result(
     planetary_ctx: &Option<PlanetaryStackingContext>,
     rt: &tokio::runtime::Handle,
 ) {
-    // The depth travels with the frame, from the context that holds both. The saved PNG
-    // is tone-curved by it (`render::autostretch::depth_grain_gain`), so re-deriving it
-    // from the session's `stacked_count` would let the export and the live view disagree
-    // about the same stack — by the reference frame, and by anything a mid-session reset
-    // did to the counters.
-    let stacked = stacking_ctx
-        .as_ref()
-        .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        .or_else(|| {
-            comet_ctx
-                .as_ref()
-                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        })
-        .or_else(|| {
-            planetary_ctx
-                .as_ref()
-                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        });
-
-    if let Some((frame, depth)) = stacked {
+    if let Some(stack) = final_stack(stacking_ctx, comet_ctx, planetary_ctx) {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
@@ -479,8 +507,9 @@ fn save_stacked_result(
         if let Some(info) = camera_info {
             rt.block_on(storage::save_stacked_result(
                 state,
-                Some(frame),
-                depth as u32,
+                Some(stack.frame),
+                stack.depth as u32,
+                stack.coverage,
                 &info,
             ));
         }
@@ -525,6 +554,40 @@ mod tests {
     fn changing_the_stacking_type_restarts_a_running_stack() {
         assert!(must_reset_stack(true, true, true));
         assert!(!must_reset_stack(true, true, false));
+    }
+
+    /// The export renders the deep-sky stack with the coverage map the live view carries,
+    /// so the session's final stack has to hand it over: here a drifting session whose
+    /// left strip only the reference reached.
+    #[test]
+    fn the_final_deep_sky_stack_carries_its_coverage_map() {
+        use crate::frame::Frame;
+        use crate::registration::AffineTransform;
+
+        let settings = CaptureSettings::default();
+        let sky = || Frame::filled(32, 32, 1, 0.3).unwrap();
+        let mut drifted = sky();
+        for y in 0..32 {
+            for x in 0..8 {
+                drifted.set_pixel(x, y, 0, 0.0); // the warp border's value
+            }
+        }
+        let mut ctx = StackingContext::new(32, 32, 1, &settings).expect("context");
+        ctx.stacker.add_reference(&sky()).unwrap();
+        for _ in 0..3 {
+            ctx.stacker.add_frame(&drifted, &AffineTransform::identity()).unwrap();
+        }
+
+        let stack = super::final_stack(&Some(ctx), &None, &None).expect("a stack");
+        assert_eq!(stack.depth, 4);
+        let coverage = stack.coverage.expect("a thin strip is something to say");
+        let strip = coverage.sample_coverage(2, 16);
+        assert!((strip - 0.25).abs() < 1e-6, "the strip read {strip}");
+
+        // Every sub covered all of it: nothing to carry, as the live view carries nothing.
+        let mut even = StackingContext::new(32, 32, 1, &settings).expect("context");
+        even.stacker.add_reference(&sky()).unwrap();
+        assert!(super::final_stack(&Some(even), &None, &None).unwrap().coverage.is_none());
     }
 
     #[test]

@@ -473,7 +473,7 @@ mod tests {
         }
         let frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        let (rgb8, width, _height) = render_stacked_png(frame, &settings, 1).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings, 1, None).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
@@ -535,9 +535,9 @@ mod tests {
         settings.denoise.luma_strength = 0.0;
 
         settings.background_subtraction = false;
-        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
         settings.background_subtraction = true;
-        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
 
         let kept = edge_difference(&kept, w as usize, h as usize).abs();
         let removed = edge_difference(&removed, w as usize, h as usize).abs();
@@ -552,7 +552,9 @@ mod tests {
     /// The saved PNG is byte-for-byte what the render task streams for the same stack at
     /// sensor resolution, with every display stage on: background neutralization and
     /// removal, SCNR, stretch, saturation, contrast, eyepiece darkening, black floor,
-    /// dither, denoise. A stage added to the live path but not the export fails here.
+    /// dither, denoise — and the stack's coverage map, which both sides are handed. A stage
+    /// added to the live path but not the export fails here; the map only changes pixels
+    /// with the filters registered, so Pro's `denoise_encoding_tests` carries that half.
     #[test]
     fn render_stacked_png_matches_the_live_render_with_every_stage_on() {
         use crate::render::denoise::DenoiseScratch;
@@ -560,6 +562,11 @@ mod tests {
         use crate::server::capture::pipeline::process_preview_frame_with_analysis;
         use crate::server::encoding::frame_to_rgb8_downsampled_with;
         use crate::server::state::RenderReadyFrame;
+
+        // A drifting session: the left quarter holds half the stack.
+        let cells = 256 / crate::frame::NOISE_REDUCTION;
+        let cover = (0..cells * cells).map(|i| if i % cells < cells / 4 { 0.5 } else { 1.0 }).collect();
+        let coverage = crate::frame::NoiseField::coverage_only(cover, cells, cells, 3, 256, 256).unwrap();
 
         let mut settings = CaptureSettings::default();
         settings.background_subtraction = true;
@@ -571,7 +578,8 @@ mod tests {
         settings.denoise.chroma = true;
         settings.denoise.luma_strength = 1.0;
 
-        let (exported, _, _) = render_stacked_png(gradient_frame(), &settings, 40).unwrap();
+        let (exported, _, _) =
+            render_stacked_png(gradient_frame(), &settings, 40, Some(coverage.clone())).unwrap();
 
         let mut live = gradient_frame();
         let rendered = process_preview_frame_with_analysis(
@@ -586,7 +594,7 @@ mod tests {
         .unwrap();
         let ready = RenderReadyFrame {
             linear_frame: Arc::new(live),
-            noise: None,
+            noise: Some(Arc::new(coverage)),
             pipeline_config: rendered.pipeline_config,
             stretch_result: rendered.stretch_result,
         };
@@ -612,8 +620,8 @@ mod tests {
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
-        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, 1).unwrap();
-        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, 64).unwrap();
+        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
+        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, 64, None).unwrap();
 
         assert!(
             shallow != deep,
@@ -636,10 +644,16 @@ mod tests {
 /// `pub` so the Pro repo can test it: the regression above only exists when a denoise
 /// plugin is registered, and the guard must call this function rather than a copy of
 /// what it does, since "the export took a different path from the live view" was the bug.
+///
+/// `coverage` is the stack's coverage map, as the render task carries it to the filters:
+/// the live view raises their thresholds where fewer subs reached, so an export without
+/// it saved a thin border grainier than the observer saw (5.7 % of bytes differed with a
+/// thinly covered quarter). `None` wherever the live view has none either.
 pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
     stack_depth: u32,
+    coverage: Option<crate::frame::NoiseField>,
 ) -> crate::error::Result<(Vec<u8>, u32, u32)> {
     use super::analysis::{AnalysisContext, PreviewAnalysis};
     use super::pipeline::process_preview_frame_with_analysis;
@@ -663,21 +677,21 @@ pub fn render_stacked_png(
         linear_frame: Arc::new(frame),
         pipeline_config: rendered.pipeline_config,
         stretch_result: rendered.stretch_result,
-        // The export renders the stacked frame it was handed, not the accumulator, so
-        // there is no map to carry. The exported PNG and the live view therefore take
-        // the denoiser's global estimates alike, which is what keeps them comparable.
-        noise: None,
+        noise: coverage.map(Arc::new),
     };
 
     frame_to_rgb8_downsampled(&ready_frame, u32::MAX, u32::MAX)
         .map_err(StackError::InvalidConfiguration)
 }
 
-/// Save stacked result if stacking was enabled and we have frames
+/// Save stacked result if stacking was enabled and we have frames.
+///
+/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`].
 pub async fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
     stack_depth: u32,
+    coverage: Option<crate::frame::NoiseField>,
     camera_info: &ConnectedCameraInfo,
 ) {
     use crate::fits::FitsMetadata;
@@ -734,7 +748,7 @@ pub async fn save_stacked_result(
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
-        match render_stacked_png(stacked_frame, &settings, stack_depth) {
+        match render_stacked_png(stacked_frame, &settings, stack_depth, coverage) {
             Ok((rgb8, width, height)) => {
                 if let Err(e) = state.disk_writer.queue_stacked_png(
                     Arc::new(rgb8),

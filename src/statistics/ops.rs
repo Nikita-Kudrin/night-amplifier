@@ -150,6 +150,26 @@ pub fn select_median(values: &mut [f32]) -> f32 {
     select_nth(values, values.len() / 2)
 }
 
+/// [`fast_median`]'s value — the middle element, or the mean of the two middle elements
+/// for an even length — by selection rather than a sort.
+///
+/// For a per-frame estimator that has always reported [`fast_median`]'s definition, where
+/// [`select_median`]'s upper middle would move its output: the two agree bit for bit.
+/// `compute_image_stats` is that caller — it runs on every rendered frame.
+pub(crate) fn median_by_selection(values: &mut [f32]) -> f32 {
+    let len = values.len();
+    if len == 0 {
+        return 0.0;
+    }
+    let mid = len / 2;
+    let upper = select_nth(values, mid);
+    if len % 2 == 1 {
+        return upper;
+    }
+    let lower = values[..mid].iter().copied().fold(f32::MIN, f32::max);
+    (lower + upper) / 2.0
+}
+
 /// Fast median computation using partial sort or parallel full sort
 ///
 /// Uses `select_nth_unstable` for small arrays and Rayon's `par_sort_unstable_by`
@@ -157,35 +177,17 @@ pub fn select_median(values: &mut [f32]) -> f32 {
 #[inline]
 pub fn fast_median(values: &mut [f32]) -> f32 {
     let len = values.len();
-    if len == 0 {
-        return 0.0;
-    }
-    if len == 1 {
-        return values[0];
+    if len < 4096 {
+        return median_by_selection(values);
     }
 
     let mid = len / 2;
     let compare = |a: &f32, b: &f32| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Greater);
-
-    if len < 4096 {
-        if len % 2 == 1 {
-            // Odd length: return middle element
-            values.select_nth_unstable_by(mid, compare);
-            values[mid]
-        } else {
-            // Even length: return average of two middle elements
-            values.select_nth_unstable_by(mid, compare);
-            let upper = values[mid];
-            let lower = values[..mid].iter().copied().fold(f32::MIN, f32::max);
-            (lower + upper) / 2.0
-        }
+    // Parallel full sort for large arrays
+    values.par_sort_unstable_by(compare);
+    if len % 2 == 1 {
+        values[mid]
     } else {
-        // Parallel full sort for large arrays
-        values.par_sort_unstable_by(compare);
-        if len % 2 == 1 {
-            values[mid]
-        } else {
-            (values[mid - 1] + values[mid]) / 2.0
-        }
+        (values[mid - 1] + values[mid]) / 2.0
     }
 }
