@@ -168,15 +168,23 @@ care what happens to the background. It does nothing while Black floor is positi
 ## Dithering
 
 Breaks up the steps between brightness levels before the image is reduced to
-8 bits.
+8 bits. The pattern is blue noise: fine and random-looking, with no grid of its own
+for the eye to pick out of a smooth sky, which the regular 8×8 pattern it replaced
+left there.
 
 **You will probably see no difference, and that is the expected result.** A sky
 with visible grain already dithers itself — the noise is doing the job. This
 matters once the background is genuinely smooth, which is what
 [Noise Reduction](/noise-reduction) is for: a smoothed low-slope gradient
 quantised to 256 levels is exactly what shows banding, and this is what prevents
-it. It costs nothing to leave on, so leave it on and judge it after the
-denoisers, not before.
+it. Leave it on and judge it after the denoisers, not before.
+
+It arrives whole only on `/eyepiece_quality`, which sends the picture exactly as
+rendered — at the price of a few percent more data per frame. `/eyepiece` and the
+live view are JPEG, and JPEG takes back much of what the dither adds between two
+brightness levels; with Noise Reduction on they are compressed more gently for this
+reason, which keeps about half of it (see
+[Streaming Resolution](/noise-reduction#streaming-resolution)).
 
 ## What these do not fix
 

@@ -1,4 +1,4 @@
-//! Tests for the display output path: the black floor and ordered dither that
+//! Tests for the display output path: the black floor and dither that
 //! the fused encoders apply where a frame becomes 8-bit, and the resolution the
 //! lossless stream encodes into.
 //!

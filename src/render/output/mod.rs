@@ -7,6 +7,7 @@ use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use rayon::prelude::*;
 
+mod blue_noise;
 mod contrast;
 mod quantize;
 mod shadow_floor;

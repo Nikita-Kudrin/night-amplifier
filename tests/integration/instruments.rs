@@ -7,7 +7,7 @@
 //! parameter rather than by calling `common` — the instruments do not need to know how
 //! the frames got onto the disk.
 //!
-//! Four instruments, and each exists because a single number misled a real fix:
+//! Six instruments, and each exists because a single number misled a real fix:
 //!
 //! 1. **Octave-band sky noise** ([`octave_bands`]). One global grain figure misled three
 //!    consecutive changes; an observer reads grain at 8-128 px and the bands either side
@@ -20,6 +20,10 @@
 //! 4. **Line coherence** ([`line_coherence`]). A 1440-px row is 40 degrees long at this
 //!    eyepiece and the eye integrates along it, so residual banding outranks grain as the
 //!    visible defect at an amplitude far below the grain floor. No RMS can see it.
+//! 5. **Lattice lines** ([`lattice_lines`]). A repeating dither tile is a set of spectral
+//!    lines; a change of tile has to be shown to remove them, not to move them.
+//! 6. **Block-mean error** ([`block_mean_error`]). A dither's whole effect is a per-pixel
+//!    difference, so only local means can say whether an encoder kept what it carried.
 
 #![allow(dead_code)]
 
@@ -897,6 +901,155 @@ fn detrended_sigma(series: &[f64]) -> f64 {
         .map(|(i, &y)| y - (mean_y + slope * (i as f64 - mean_x)))
         .collect();
     clipped_sigma(&residuals)
+}
+
+// ---------------------------------------------------------------------------
+// Instrument 5: a repeating tile's lines in the 8-bit output
+// ---------------------------------------------------------------------------
+
+/// Power on a `period`-px tile's lattice in the output spectrum, as a ratio to the
+/// spectrum just beside each line: `1.0` is no periodic structure at that period.
+pub struct LatticeLines {
+    /// The tile's fundamental, `(±1, 0)`, `(0, ±1)` and `(±1, ±1)` cycles per tile.
+    pub fundamental: f64,
+    /// Every line of the lattice below half Nyquist (periods of 4 px and longer).
+    pub below_half_nyquist: f64,
+}
+
+/// [`LatticeLines`] on a square patch of `plane` centred near `centre`.
+///
+/// The patch side is an **odd** multiple of `period`, so this tile's lines land exactly on
+/// DFT bins while a tile of twice the period or more — the 64 px mask when asking about
+/// Bayer's 8 px — leaks into a continuum instead of lining up with them. Each line is
+/// judged against the median of the bins within three of it, off the lattice, so a sky's
+/// broadband grain and a star's smooth spectrum cancel out of the ratio.
+pub fn lattice_lines(
+    plane: &[f64],
+    width: usize,
+    height: usize,
+    centre: (usize, usize),
+    period: usize,
+) -> LatticeLines {
+    // Below 4 px no lattice line lies under half Nyquist, and `below_half_nyquist` would
+    // read 0 — "no lattice" — without measuring anything.
+    assert!(period >= 4, "a {period} px tile has no lines below half Nyquist to measure");
+    let limit = width.min(height).min(256);
+    assert!(limit >= period, "a {period} px tile does not fit a {width}x{height} plane");
+    let mut cycles = limit / period;
+    if cycles.is_multiple_of(2) {
+        cycles -= 1;
+    }
+    let side = cycles * period;
+    let x0 = centre.0.saturating_sub(side / 2).min(width - side);
+    let y0 = centre.1.saturating_sub(side / 2).min(height - side);
+    let mut patch: Vec<f64> = (0..side)
+        .flat_map(|y| plane[(y0 + y) * width + x0..][..side].iter().copied())
+        .collect();
+    let mean = patch.iter().sum::<f64>() / patch.len() as f64;
+    patch.iter_mut().for_each(|v| *v -= mean);
+
+    let twiddle: Vec<(f64, f64)> = (0..side)
+        .map(|k| {
+            let phase = -2.0 * std::f64::consts::PI * k as f64 / side as f64;
+            (phase.cos(), phase.sin())
+        })
+        .collect();
+    let wrap = |f: i64| f.rem_euclid(side as i64) as usize;
+    // Row transforms at one horizontal frequency, cached: every line and its
+    // neighbourhood reuse a handful of them.
+    let mut rows: std::collections::HashMap<usize, Vec<(f64, f64)>> = Default::default();
+    let mut power = |u: i64, v: i64| -> f64 {
+        let u = wrap(u);
+        let row = rows.entry(u).or_insert_with(|| {
+            (0..side)
+                .map(|y| {
+                    let line = &patch[y * side..][..side];
+                    line.iter().enumerate().fold((0.0, 0.0), |(re, im), (x, &p)| {
+                        let (c, s) = twiddle[(u * x) % side];
+                        (re + p * c, im + p * s)
+                    })
+                })
+                .collect()
+        });
+        let v = wrap(v);
+        let (re, im) = row.iter().enumerate().fold((0.0, 0.0), |(re, im), (y, &(r, i))| {
+            let (c, s) = twiddle[(v * y) % side];
+            (re + r * c - i * s, im + r * s + i * c)
+        });
+        re * re + im * im
+    };
+
+    let step = cycles as i64;
+    let on_lattice = |u: i64, v: i64| u.rem_euclid(step) == 0 && v.rem_euclid(step) == 0;
+    let mut line_ratio = |a: i64, b: i64| -> f64 {
+        let (u, v) = (a * step, b * step);
+        let mut beside = Vec::new();
+        for dv in -3i64..=3 {
+            for du in -3i64..=3 {
+                if !on_lattice(u + du, v + dv) {
+                    beside.push(power(u + du, v + dv));
+                }
+            }
+        }
+        beside.sort_by(|p, q| p.partial_cmp(q).unwrap());
+        // The median of an exponential is ln 2 of its mean, so this reads 1.0 on noise.
+        let reference = beside[beside.len() / 2] / std::f64::consts::LN_2;
+        power(u, v) / reference.max(1e-300)
+    };
+
+    let fundamental = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+    let fundamental =
+        fundamental.iter().map(|&(a, b)| line_ratio(a, b)).sum::<f64>() / fundamental.len() as f64;
+    // Half Nyquist is a quarter of the patch's bins; in lattice steps, `period / 4`.
+    let reach = (period / 4) as i64;
+    let mut sum = 0.0;
+    let mut count = 0;
+    for b in -reach..=reach {
+        for a in -reach..=reach {
+            if (a, b) != (0, 0) && a * a + b * b <= reach * reach {
+                sum += line_ratio(a, b);
+                count += 1;
+            }
+        }
+    }
+    LatticeLines { fundamental, below_half_nyquist: sum / count.max(1) as f64 }
+}
+
+// ---------------------------------------------------------------------------
+// Instrument 6: what an encoder keeps of the brightness between two levels
+// ---------------------------------------------------------------------------
+
+/// RMS difference of `block`-px block means between `plane` and `reference` over the
+/// blocks wholly inside `region` (`x0, y0, x1, y1`), in the planes' own units.
+///
+/// The eye averages a few pixels, so the brightness a dither puts between two 8-bit
+/// levels lives in local means — and JPEG, which zeroes the fine detail of each 8x8 block
+/// first, can take exactly that back: at q90 a flat sky's block means miss by as much as
+/// with no dither. `reference` is the true input on a synthetic sky, or the bytes before
+/// the encoder on a real one.
+pub fn block_mean_error(
+    plane: &[f64],
+    reference: &[f64],
+    width: usize,
+    (x0, y0, x1, y1): (usize, usize, usize, usize),
+    block: usize,
+) -> f64 {
+    let (mut sum, mut count) = (0.0, 0usize);
+    for by in (y0..y1).step_by(block).take_while(|&by| by + block <= y1) {
+        for bx in (x0..x1).step_by(block).take_while(|&bx| bx + block <= x1) {
+            let mut difference = 0.0;
+            for y in by..by + block {
+                let row = y * width;
+                for x in bx..bx + block {
+                    difference += plane[row + x] - reference[row + x];
+                }
+            }
+            sum += (difference / (block * block) as f64).powi(2);
+            count += 1;
+        }
+    }
+    assert!(count > 0, "no {block} px block fits inside {:?}", (x0, y0, x1, y1));
+    (sum / count as f64).sqrt()
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,19 @@ fn dimensions(payload: &[u8]) -> (u32, u32) {
     )
 }
 
+/// The DC step of an SA10 payload's first quantisation table, the luminance one.
+fn luma_dc_step(payload: &[u8]) -> u8 {
+    let jpeg = &payload[crate::server::encoding::SA10_HEADER_SIZE..];
+    let dqt = jpeg.windows(2).position(|m| m == [0xFF, 0xDB]).expect("no DQT marker");
+    // Marker, two length bytes, precision/table id, then the table in zigzag order.
+    jpeg[dqt + 5]
+}
+
+/// libjpeg's scaling of the standard luminance DC step (16) for `quality` of 50 and up.
+fn libjpeg_dc_step(quality: i32) -> u8 {
+    ((16 * (200 - 2 * quality) + 50) / 100).clamp(1, 255) as u8
+}
+
 fn encode_both(
     stream: &FrameStream,
     frame: &RenderReadyFrame,
@@ -196,4 +209,43 @@ fn a_repeated_failure_is_reported_once_until_it_changes_or_clears() {
 
     assert_eq!(failures.to_report(StreamKind::Jpeg, Ok(())), None);
     assert_eq!(failures.to_report(StreamKind::Jpeg, broken()).as_deref(), Some("conversion failed"));
+}
+
+/// The quality follows the denoisers on both ways a JPEG leaves the server — the render
+/// task's encode and a first-frame encode for a client joining an unwatched family — or
+/// two clients of one family would be sent different bytes.
+#[test]
+fn a_denoised_frame_is_streamed_at_the_denoised_quality_on_both_paths() {
+    let (box_w, box_h) = Resolution::Qhd1440.bounding_box();
+    assert_ne!(
+        libjpeg_dc_step(jpeg_quality_at_1440(false)),
+        libjpeg_dc_step(jpeg_quality_at_1440(true)),
+        "the two qualities must be told apart at 1440p, or this test checks nothing"
+    );
+    for denoised in [false, true] {
+        let mut frame = ready_frame(3008, 3008, 3);
+        if denoised {
+            frame.pipeline_config.denoise.chroma = crate::render::ChromaDenoiseConfig {
+                enabled: true,
+                radius: 8,
+                strength: 1.0,
+                ..crate::render::ChromaDenoiseConfig::OFF
+            };
+        }
+        assert_eq!(frame.pipeline_config.denoise.is_enabled(), denoised);
+        let stream = Arc::new(FrameStream::default());
+        let _jpeg = watch(&stream, StreamKind::Jpeg);
+        encode_jpeg(&stream, &frame, 1, &mut ConversionCache::default(), Resolution::Qhd1440).unwrap();
+        let streamed = stream.payload(StreamKind::Jpeg, 1).unwrap();
+        let on_demand = crate::server::encoding::encode_rgb8_jpeg_bounded(&frame, box_w, box_h).unwrap();
+
+        let expected = libjpeg_dc_step(jpeg_quality_at_1440(denoised));
+        assert_eq!(dimensions(&streamed), (1440, 1440));
+        assert_eq!(luma_dc_step(&streamed), expected, "render task, denoised {denoised}");
+        assert_eq!(luma_dc_step(&on_demand), expected, "first-frame encode, denoised {denoised}");
+    }
+}
+
+fn jpeg_quality_at_1440(denoised: bool) -> i32 {
+    crate::server::encoding::jpeg_quality(1440, 1440, denoised)
 }

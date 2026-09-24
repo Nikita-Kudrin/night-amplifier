@@ -605,7 +605,7 @@ pub struct EyepieceSettings {
     /// default; no effect while `black_floor` is positive.
     #[serde(default)]
     pub darker_sky: bool,
-    /// Ordered dithering at the 8-bit conversion, to keep smooth gradients from
+    /// Blue-noise dithering at the 8-bit conversion, to keep smooth gradients from
     /// banding once denoising removes the noise that currently masks the steps.
     #[serde(default = "default_dither")]
     pub dither: bool,

@@ -5,11 +5,18 @@ use crate::server::encoding::fused::frame_to_rgb8_downsampled;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, warn};
-pub(crate) fn calculate_dynamic_jpeg_quality(width: u32, height: u32) -> i32 {
-    let smallest_side = width.min(height);
-    // If resolution is lower than 2K (1440p), use 95% quality.
-    // Otherwise, default to 90% quality.
-    if smallest_side < 1440 {
+
+/// JPEG quality for an output of this size, and whether the denoisers ran on it.
+///
+/// 95 below 1440p and 90 from there up, where the payload is largest — except for a
+/// denoised frame, which is 95 at every size. Its sky is smooth to a fraction of a level
+/// and the dither carries what lies between levels; q90 quantises that away with the
+/// rest of each 8x8 block's fine detail, and block means then miss by 4-9x what they did
+/// before the encoder (`dither_tests`). On four denoised sessions q95 cuts that loss over
+/// the sky by 31-55 % (0.24-0.27 -> 0.12-0.17 levels) for 1.5-2x the payload: 2.5-4.2 Mb
+/// a 1440p frame (Pro `measure_the_jpeg_quality_on_denoised_sessions`).
+pub fn jpeg_quality(width: u32, height: u32, denoised: bool) -> i32 {
+    if denoised || width.min(height) < 1440 {
         95
     } else {
         90
@@ -36,8 +43,12 @@ fn configure_compressor(
         .map_err(|e| format!("TurboJPEG set_subsamp failed: {}", e))
 }
 
-fn compress_rgb8_to_jpeg(rgb8_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
-    let quality = calculate_dynamic_jpeg_quality(width, height);
+fn compress_rgb8_to_jpeg(
+    rgb8_data: &[u8],
+    width: u32,
+    height: u32,
+    quality: i32,
+) -> Result<Vec<u8>, String> {
     let image = turbojpeg::Image {
         pixels: rgb8_data,
         width: width as usize,
@@ -80,18 +91,21 @@ pub fn encode_rgb8_jpeg_bounded(
         frame_to_rgb8_downsampled(ready_frame, max_w, max_h)?
     };
 
-    encode_rgb8_jpeg_bounded_from_u8(&rgb8_data, width, height)
+    let quality = jpeg_quality(width, height, ready_frame.pipeline_config.denoise.is_enabled());
+    encode_rgb8_jpeg_bounded_from_u8(&rgb8_data, width, height, quality)
 }
 
-/// Encode already-converted RGB8 data as JPEG (SA10 format)
+/// Encode already-converted RGB8 data as JPEG (SA10 format) at `quality`, which a stream
+/// takes from [`jpeg_quality`].
 pub fn encode_rgb8_jpeg_bounded_from_u8(
     rgb8_data: &[u8],
     width: u32,
     height: u32,
+    quality: i32,
 ) -> Result<Vec<u8>, String> {
     let compressed = {
         let _span = tracing::info_span!("jpeg_compress").entered();
-        compress_rgb8_to_jpeg(rgb8_data, width, height)?
+        compress_rgb8_to_jpeg(rgb8_data, width, height, quality)?
     };
 
     let payload_size = compressed.len() as u32;

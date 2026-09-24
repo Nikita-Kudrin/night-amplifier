@@ -71,6 +71,14 @@ noise: stars stopped registering as edges and their colour spread into soft
 patches across the background — the blotches you may remember on a globular
 cluster. If you ever see those again, that threshold is the first place to look.
 
+A second, much wider smoothing — about two degrees across at the eyepiece, at the
+default 1440p streaming resolution — then evens out the larger colour patches the
+first one is too small to reach, but only across plain background: anywhere the first filter found a star or the edge of
+the target, the wide one stays out. How much it finds to do depends on the
+camera. On some the larger patches are simply the background's own tint showing
+more where the background is brighter; that is brightness mottle, not colour
+noise, and it goes when **Background Grain** smooths the brightness.
+
 **Colour strength** controls how far the colour planes move toward the smoothed
 result. Lower it if faint colour in the target starts washing out.
 
@@ -195,6 +203,10 @@ its own size.
   looks grainier and shimmers through an eyepiece lens.
 - **Bigger costs everyone.** Every screen on that view pays for the size in
   bandwidth, and the server in encoding time. A view nobody has open costs nothing.
+- **Noise reduction makes `/` and `/eyepiece` larger.** With it on they are compressed
+  at a higher quality, so the smoothed sky keeps its finest brightness steps — 1.5 to 2
+  times the data per frame, about 2.5–4 megabits at 1440p. On a slow network, lower
+  **Streaming Resolution** before turning noise reduction off.
 - **A change applies to the next frame** the server renders — including the frame
   of an exposure that was already running when you changed it.
 

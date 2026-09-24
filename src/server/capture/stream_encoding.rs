@@ -97,9 +97,11 @@ pub(super) fn encode_jpeg(
     resolution: Resolution,
 ) -> Result<(), String> {
     let _span = tracing::info_span!("encode_jpeg").entered();
+    let denoised = frame.pipeline_config.denoise.is_enabled();
     encode_family(stream, StreamKind::Jpeg, frame, counter, conversions, resolution, |rgb, w, h| {
         let started = std::time::Instant::now();
-        let result = crate::server::encoding::encode_rgb8_jpeg_bounded_from_u8(rgb, w, h);
+        let quality = crate::server::encoding::jpeg_quality(w, h, denoised);
+        let result = crate::server::encoding::encode_rgb8_jpeg_bounded_from_u8(rgb, w, h, quality);
         telemetry_metrics::record_jpeg_encode_ms(
             resolution.label(),
             started.elapsed().as_secs_f64() * 1000.0,

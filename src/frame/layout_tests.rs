@@ -734,7 +734,7 @@ fn production_fits_loader_round_trips_f32() {
     assert_frame_is_tricolour(&back, "write_fits -> production load_fits");
 }
 
-/// The display transform (black floor + ordered dither) rewrote the tail of
+/// The display transform (black floor + dither) rewrote the tail of
 /// every 8-bit conversion, so it has to be swept for layout too: a channel swap
 /// inside `write_row_rgb8` would be invisible to the transform's own unit tests,
 /// which use symmetric grey inputs.
@@ -837,7 +837,7 @@ fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
     );
 }
 
-/// Like [`assert_interleaved_rgb8`], but with a tolerance: ordered dithering
+/// Like [`assert_interleaved_rgb8`], but with a tolerance: dithering
 /// moves individual samples by up to one level by design, so an exact sweep
 /// would fail on a correct implementation.
 fn assert_interleaved_rgb8_within(
