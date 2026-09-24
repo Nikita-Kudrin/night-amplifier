@@ -2,7 +2,6 @@ use crate::frame::Frame;
 
 use crate::server::encoding::format::*;
 use crate::server::encoding::fused::*;
-use crate::server::encoding::jpeg::calculate_dynamic_jpeg_quality;
 use crate::server::encoding::jpeg::*;
 use crate::server::encoding::lz4::*;
 
@@ -283,18 +282,22 @@ fn test_sa09_matches_sa08_pixel_data() {
 }
 
 #[test]
-fn test_calculate_dynamic_jpeg_quality() {
-    // 1080p (smallest side 1080) -> < 1440, should be 95
-    assert_eq!(calculate_dynamic_jpeg_quality(1920, 1080), 95);
-    // Small (640x480) -> < 1440, should be 95
-    assert_eq!(calculate_dynamic_jpeg_quality(640, 480), 95);
-    // 1440p (2560x1440) -> >= 1440, should be 90
-    assert_eq!(calculate_dynamic_jpeg_quality(2560, 1440), 90);
-    // 4K (3840x2160) -> >= 1440, should be 90
-    assert_eq!(calculate_dynamic_jpeg_quality(3840, 2160), 90);
-    // Odd portrait orientation
-    assert_eq!(calculate_dynamic_jpeg_quality(1080, 1920), 95);
-    assert_eq!(calculate_dynamic_jpeg_quality(2160, 3840), 90);
+fn jpeg_quality_is_95_below_1440p_and_for_every_denoised_frame() {
+    // (width, height, denoised) -> quality; the smaller side decides the size rule.
+    let cases = [
+        (1920, 1080, false, 95),
+        (640, 480, false, 95),
+        (1080, 1920, false, 95),
+        (2560, 1440, false, 90),
+        (3840, 2160, false, 90),
+        (2160, 3840, false, 90),
+        (1920, 1080, true, 95),
+        (2560, 1440, true, 95),
+        (3840, 2160, true, 95),
+    ];
+    for (w, h, denoised, quality) in cases {
+        assert_eq!(jpeg_quality(w, h, denoised), quality, "{w}x{h}, denoised {denoised}");
+    }
 }
 
 #[test]
@@ -685,7 +688,7 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
 }
 
 // ---------------------------------------------------------------------------
-// Display transform (black floor + ordered dither) through the fused kernels
+// Display transform (black floor + dither) through the fused kernels
 // ---------------------------------------------------------------------------
 
 /// Ready frame carrying a display transform, with every render stage off so a
@@ -786,8 +789,8 @@ fn plain_display_transform_leaves_both_kernels_unchanged() {
 
 /// Dither must be indexed in *output* coordinates. If a kernel indexed the
 /// source pixel instead, the pattern would survive at the source's period
-/// rather than the output's — so assert the tile repeats every 8 output pixels
-/// after a downsample that is not a multiple of 8.
+/// rather than the output's — so assert the tile repeats every 64 output pixels
+/// after a downsample that is not a multiple of 64.
 #[test]
 fn dither_tiles_in_output_coordinates_after_downsampling() {
     let (width, height) = OVERSIZE;
@@ -800,14 +803,21 @@ fn dither_tiles_in_output_coordinates_after_downsampling() {
             .expect("encode failed");
 
     let row = &bytes[..w as usize * 3];
-    for x in 0..16usize {
+    for x in 0..128usize {
         assert_eq!(
             row[x * 3],
-            row[(x + 8) * 3],
+            row[(x + 64) * 3],
             "output column {x} and {} differ; dither is not tiling in output space",
-            x + 8
+            x + 64
         );
     }
+    // Down a column too: rows are written in parallel chunks, and a chunk-relative row
+    // index would restart the mask at every chunk instead of every 64 rows.
+    let column: Vec<u8> = bytes.chunks_exact(w as usize * 3).map(|r| r[0]).collect();
+    for y in 0..128usize {
+        assert_eq!(column[y], column[y + 64], "output rows {y} and {} differ in column 0", y + 64);
+    }
+    assert_ne!(column[..32], column[32..64], "the mask repeats every 32 rows, not 64");
     // A flat input between levels must produce more than one output level, or
     // the dither is not doing anything.
     let distinct: std::collections::HashSet<u8> = row.iter().step_by(3).copied().collect();
@@ -1103,8 +1113,22 @@ fn ready_with_sky_shadow(frame: &Frame, shadow: crate::render::SkyShadow) -> cra
 /// The denoise-off path streams the sky shadow chunk by chunk; the staged path applies
 /// it to the whole image. One setting must produce one image on both — the sky is
 /// measured on the same sample rows, each guide row from the same three rows.
+///
+/// With the dither on too: the stream writes 32-row chunks and the mask tiles every 64
+/// rows, so a chunk-relative row index would repeat the mask every 32 rows — invisible
+/// under the 8-row Bayer tile it replaced, and to this test with the dither off.
 #[test]
 fn sky_shadow_streaming_matches_staged() {
+    let displays = [
+        crate::render::DisplayOutput::default(),
+        crate::render::DisplayOutput::default().with_dither(true),
+    ];
+    for display in displays {
+        sky_shadow_streaming_matches_staged_with(display);
+    }
+}
+
+fn sky_shadow_streaming_matches_staged_with(display: crate::render::DisplayOutput) {
     let sky = 0.052f32;
     for (w, h) in [(71usize, 97usize), (40, 1), (33, 2), (129, 200)] {
         let mut frame = Frame::zeros(w, h, 3).unwrap();
@@ -1120,7 +1144,9 @@ fn sky_shadow_streaming_matches_staged() {
             }
         }
         let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
-        let (streamed, _, _) = frame_to_rgb8_downsampled(&ready_with_sky_shadow(&frame, shadow), 4096, 4096).unwrap();
+        let mut ready = ready_with_sky_shadow(&frame, shadow);
+        ready.pipeline_config.display = display;
+        let (streamed, _, _) = frame_to_rgb8_downsampled(&ready, 4096, 4096).unwrap();
 
         let mut staged: Vec<f32> = (0..h)
             .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
@@ -1129,9 +1155,9 @@ fn sky_shadow_streaming_matches_staged() {
         crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
         let mut expected = vec![0u8; w * h * 3];
         for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
-            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
+            crate::render::output::write_row_rgb8(out, row, y, display);
         }
-        assert_eq!(streamed, expected, "{w}x{h}: streaming and staged sky shadow disagree");
+        assert_eq!(streamed, expected, "{w}x{h} {display:?}: streaming and staged sky shadow disagree");
         assert_ne!(streamed, frame_to_rgb8_downsampled(&to_ready_frame(&frame), 4096, 4096).unwrap().0, "{w}x{h}: shadow did nothing");
     }
 }

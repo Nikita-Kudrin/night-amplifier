@@ -67,8 +67,8 @@ Real-data sets live in `DEFAULT_FIXTURES` and download on demand; `tests/fixture
 A test wanting one calls `stack_depth_grain_tests::managed_session`, which **panics** when it cannot
 be had — never `println!` + return, or the suite reports green with the assertion unrun.
 
-The measurement instruments (octave bands, the star radial profile, centre/edge and line
-coherence, stacking and rendering a session) live in `tests/integration/instruments.rs`, which
+The measurement instruments (octave bands, the star radial profile, centre/edge, line
+coherence, lattice lines and block-mean error, stacking and rendering a session) live in `tests/integration/instruments.rs`, which
 the Pro repo includes by `#[path]`: **it may not name `crate::`**. Fixture discovery arrives as a
 loader parameter instead. One implementation serves both repos — a second copy measured against
 the first's reference numbers is not a measurement.
@@ -417,6 +417,14 @@ comes from `CaptureMode::session_dir_suffix`; a same-second collision inserts a 
 
 Default format; TurboJPEG (SIMD) encodes in the render task, not the WebSocket handlers.
 
+**Quality follows the denoisers** (`encoding::jpeg_quality`): 95 below 1440p, 90 from there up,
+95 at every size once `pipeline_config.denoise` is on. q90 zeroes what the dither puts between
+two levels along with each 8x8 block's fine detail (block means miss by 4-9x their pre-encoder
+error); on denoised sessions q95 cuts that by 31-55 % over the sky for 1.5-2x the payload
+(2.5-4.2 Mb a 1440p frame). Both the render task and first-frame encodes derive it from the
+frame, or two clients of one family would get different bytes (pinned by
+`a_denoised_frame_is_streamed_at_the_denoised_quality_on_both_paths`).
+
 ```
 Magic "SA10" (4B, 0x53413130 LE) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
 ```
@@ -625,14 +633,18 @@ because parallel 8-bit conversions have drifted by an LSB here before.
 `DisplayOutput` (both off by default):
 - **`pedestal`**: maps `[0,1]`→`[pedestal,1]` — autostretch clamps ~0.8% of samples to exactly
   0, which OLEDs show as speckle.
-- **`dither`**: sub-LSB ordered dither before rounding (replaced a post-round version with
-  visible crosshatch). Indexed in **output**, not input, coordinates, or resampling would
-  average it away. Matrix is **8x8**: 4x4's ~7 arcmin period is still eye-resolvable. The tile
-  repeats every 8 px but its *energy* does not live there — measured, the dispersed-dot matrix
-  holds 93.8 % of its power in the top eighth of the spectrum and 0.3 % below half Nyquist,
-  where void-and-cluster blue noise of the same tile ran 61 % / 2.4 %. Blue noise was tried on
-  the theory that the 8 px repeat sat in the eye's best band and was **rejected** on that
-  measurement; `the_dither_keeps_its_energy_near_nyquist` is the guard any replacement must beat.
+- **`dither`**: a sub-LSB offset before rounding (replaced a post-round version with visible
+  crosshatch), indexed in **output** coordinates or resampling would average it away. The mask
+  is **64x64 void-and-cluster blue noise** (`output::blue_noise`; its test regenerates it), not
+  an ordered matrix: the 8x8 Bayer matrix quantised a smooth sky into a lattice. On a flat sky
+  with 0.3 levels of noise its lines stood 31-41x above the spectrum beside them (the mask
+  1.0-1.3x, as no dither); with the Pro denoisers Orion's sky read 36x (mask 5.1, none 5.8).
+  Blue noise was once **rejected** on the *mask's* spectrum of an 8x8 blue tile, too small to
+  be blue: at 64x64 it holds 0.16 % of its energy below half Nyquist, Bayer 1.45 %. Guards:
+  `dither_tests` (rebuilds Bayer as the refutation) and `the_dither_keeps_its_energy_near_nyquist`.
+  **Judge it after the encoder**: JPEG takes most of it back (see SA10's quality rule), so it
+  is whole only on `/eyepiece_quality` — where a 64 px tile gives LZ4 fewer matches than an
+  8 px one: +2-8 % payload against Bayer on denoised sessions, +9-26 % against no dither.
 
 `black_point_sigma` alone is scale-invariant: the MTF solve pins `mtf(k*sigma) = target_background`,
 so displayed grain is `T(1-T)/k` whatever sigma is and a 100-frame stack looks as grainy as one

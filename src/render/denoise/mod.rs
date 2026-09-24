@@ -79,6 +79,10 @@ pub struct ChromaDenoiseConfig {
     pub subsample: usize,
     /// Blend between the original and filtered chroma, `0..=1`.
     pub strength: f32,
+    /// Window of a coarse correction folded into the pass, in display pixels; `0` for
+    /// none. It reaches the half-degree colour blobs `radius` cannot, solving on the
+    /// pass's own grid halved.
+    pub wide_radius: usize,
 }
 
 impl ChromaDenoiseConfig {
@@ -88,6 +92,7 @@ impl ChromaDenoiseConfig {
         noise_k: 0.0,
         subsample: 1,
         strength: 0.0,
+        wide_radius: 0,
     };
 
     pub fn is_enabled(&self) -> bool {

@@ -419,7 +419,7 @@ export const HELP_TEXTS = {
     denoise_luma_strength:
         'Scales the thresholds for the mid scales — the soft mottle across the target, not the fine speckle and not the broad background blotches the Background Grain dial handles. 100% is the tuned value and the maximum: past it the mottle does not go away, it moves out to a coarser scale, and stars start to show a ring. Lower it if the target looks soft or plastic; 0% turns the brightness denoiser off altogether, which is the setting to reach for if nebulae start looking like plastic.',
     eyepiece_dither:
-        'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
+        'Adds a fine random-looking pattern, below one brightness step, before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth. It arrives whole only on /eyepiece_quality; the compressed views keep about half of it.',
     auto_stretch_intensity:
         'Intensifies the colors of the image while perfectly preserving the luminance/black level.',
     rejection_method:
