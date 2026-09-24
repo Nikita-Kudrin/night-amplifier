@@ -447,7 +447,7 @@ pub struct DenoiseSettings {
     #[serde(default = "default_chroma_denoise")]
     pub chroma: bool,
     /// How far the chroma planes move toward the filtered result, `0..=1`.
-    #[serde(default = "default_denoise_strength")]
+    #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
     pub chroma_strength: f32,
     /// How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
     ///
@@ -470,7 +470,7 @@ pub struct DenoiseSettings {
     /// of a user-facing control should offer. The coarse levels replace that range.
     ///
     /// `0.5` is the middle; see [`DEFAULT_BACKGROUND_GRAIN`] for what it is and is not.
-    #[serde(default = "default_background_grain")]
+    #[serde(default = "default_background_grain", deserialize_with = "nullable_f32")]
     pub background_grain: f32,
     /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
     /// tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
@@ -478,8 +478,26 @@ pub struct DenoiseSettings {
     /// Note what this can and cannot reach: it leaves the finest level and the coarse
     /// pair alone, so it is the "the target still looks too noisy" control, not the "the
     /// sky still looks grainy" one — that is the Background Grain dial.
-    #[serde(default = "default_denoise_strength")]
+    #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
     pub luma_strength: f32,
+}
+
+/// Reads JSON `null` as NaN instead of failing. serde_json writes a non-finite `f32` as
+/// `null` (and `1e39` over the API narrows to infinity), so one such value used to fail
+/// the whole of `settings.json` on the next start — every camera, telescope and eyepiece
+/// setting back to its default, made permanent by the next save. The block's
+/// `sanitized()` turns the NaN into that field's default.
+fn nullable_f32<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    use serde::Deserialize;
+    Ok(Option::<f32>::deserialize(deserializer)?.unwrap_or(f32::NAN))
+}
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
 }
 
 /// The middle of the dial: the wavelet's finest scale fully spent, the tone curve at
@@ -524,21 +542,20 @@ impl Default for DenoiseSettings {
 }
 
 impl DenoiseSettings {
-    /// These settings with the nonsense taken out, applied where they arrive.
+    /// These settings with the nonsense taken out: finite, and in `0..=1`.
     ///
-    /// `f32::clamp` passes NaN straight through, and these values come over JSON — a NaN
-    /// reaching the tone curve's exponent makes every comparison it meets false, and it
-    /// does so whether or not a plugin is loaded. Sanitised here so the plugin may
-    /// assume finite, in-range values.
+    /// Applied wherever the block enters or leaves — `POST /api/settings`, loading and
+    /// saving `settings.json` — so no reader ever sees a value `f32::clamp` would pass
+    /// straight through (NaN), and none is ever written as `null` ([`nullable_f32`]).
+    /// The plugin sanitises again for itself, since a test can hand it anything.
     pub fn sanitized(&self) -> Self {
-        let finite = |v: f32, fallback: f32| if v.is_finite() { v } else { fallback };
         Self {
             enabled: self.enabled,
             chroma: self.chroma,
-            chroma_strength: finite(self.chroma_strength, 1.0).clamp(0.0, 1.0),
-            background_grain: finite(self.background_grain, DEFAULT_BACKGROUND_GRAIN)
+            chroma_strength: finite_or(self.chroma_strength, 1.0).clamp(0.0, 1.0),
+            background_grain: finite_or(self.background_grain, DEFAULT_BACKGROUND_GRAIN)
                 .clamp(0.0, 1.0),
-            luma_strength: finite(self.luma_strength, 1.0).clamp(0.0, 1.0),
+            luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
         }
     }
 }
@@ -549,8 +566,10 @@ pub struct EyepieceSettings {
     /// Enable Binoview
     pub binoview: bool,
     /// Screen width
+    #[serde(deserialize_with = "nullable_f32")]
     pub screen_width: f32,
     /// Screen height
+    #[serde(deserialize_with = "nullable_f32")]
     pub screen_height: f32,
     /// Measurement unit (e.g. "mm", "inches")
     pub screen_measurement: String,
@@ -562,7 +581,7 @@ pub struct EyepieceSettings {
     #[serde(default = "default_circular_view")]
     pub circular_view: bool,
     /// Dark background enhancement intensity (0.0 to 1.0)
-    #[serde(default = "default_intensity")]
+    #[serde(default = "default_intensity", deserialize_with = "nullable_f32")]
     pub intensity: f32,
     /// Where black sits, as a signed fraction of full scale, in `[-0.09, 0.5]`.
     /// **Positive** lifts the output floor by this fraction — an OLED shows a zero
@@ -573,7 +592,7 @@ pub struct EyepieceSettings {
     /// one setting behaves the same on every target (the sky otherwise sits at
     /// 14-17 output levels, a visible grey — dimming it via the stretch would dim
     /// the target too, see [`intensity`](Self::intensity)).
-    #[serde(default = "default_black_floor")]
+    #[serde(default = "default_black_floor", deserialize_with = "nullable_f32")]
     pub black_floor: f32,
 
     /// Let the darkening half of `black_floor` clip to true black instead of
@@ -609,6 +628,22 @@ fn default_black_floor() -> f32 {
 
 fn default_dither() -> bool {
     true
+}
+
+impl EyepieceSettings {
+    /// These settings with every non-finite number replaced by its default, applied where
+    /// the block enters or leaves, as [`DenoiseSettings::sanitized`] is and for the same
+    /// `null` reason. Ranges stay the renderer's business — `stage_config` clamps
+    /// `intensity` and `black_floor` where it reads them — so only a value that could
+    /// not be saved is replaced here.
+    pub fn sanitized(mut self) -> Self {
+        let defaults = Self::default();
+        self.screen_width = finite_or(self.screen_width, defaults.screen_width);
+        self.screen_height = finite_or(self.screen_height, defaults.screen_height);
+        self.intensity = finite_or(self.intensity, defaults.intensity);
+        self.black_floor = finite_or(self.black_floor, defaults.black_floor);
+        self
+    }
 }
 
 impl Default for EyepieceSettings {

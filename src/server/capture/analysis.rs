@@ -15,6 +15,14 @@
 //! *relative* change in N (1->2 subs halves noise, 140->141 moves nothing).
 //! [`DEPTH_GROWTH`] refreshes on proportional growth; [`MAX_AGE_FRAMES`] caps reuse
 //! regardless, so a stalled stack still refreshes against a moving sky.
+//!
+//! **A reused MAD is carried to the frame's depth** ([`NoiseTrend`]). Held as measured,
+//! it met a tone curve whose depth gain advances every frame, and the render pulsed at
+//! each refresh: M27 at depth 24-30, target 99.2 → 98.1 output levels over five reused
+//! frames then 103.1, sky grain 2.54 → 2.32 then 2.45. Measuring every frame instead
+//! is worse: the fresh MAD reads a reused model's mismatch as noise, and a bright sub
+//! entering Andromeda's stack took its target from 164 to 136 levels until the next
+//! refresh. The snapshot stays one consistent set; only its noise is extrapolated.
 
 use crate::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel};
 use crate::error::Result;
@@ -31,9 +39,16 @@ const MAX_AGE_FRAMES: u32 = 8;
 /// Relative growth in stack depth that forces a refresh.
 ///
 /// 1.25 means the estimates are recomputed once the stack is a quarter deeper than when
-/// they were taken, which is a ~12 % change in MAD. Below that the black point moves by
-/// less than the dither already applied at the 8-bit boundary.
+/// they were taken, which is up to a ~12 % change in MAD — carried in between by
+/// [`NoiseTrend`], so a refresh only corrects what the trend got wrong.
 const DEPTH_GROWTH: f32 = 1.25;
+
+/// Steepest fall of the stack's noise with depth a trend may extrapolate.
+///
+/// `1/sqrt(N)` is pure averaging of independent subs, and nothing a stack does falls
+/// faster; real stacks fall slower (the 106-sub IMX533 set: `N^-0.41` to 32 subs, then
+/// `N^-0.19`) because sky structure under the MAD does not average away.
+const MAX_NOISE_EXPONENT: f32 = 0.5;
 
 /// What the frame being analysed is, from the pipeline's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +130,47 @@ struct Cached {
     stats: Option<ImageStats>,
 }
 
+/// How the stack's noise falls with depth, from its last two measurements.
+///
+/// Between refreshes a reused MAD is carried from the depth it was measured at to the
+/// frame's, as `sigma ∝ N^-exponent`: the curve then moves every frame as the stack does,
+/// and a refresh corrects only the trend's error. The exponent is clamped to
+/// `[0, MAX_NOISE_EXPONENT]` — a measurement that rose (a cloud, a bright sub) holds
+/// rather than predicting noise that grows with depth. Over the most a trend is carried,
+/// a quarter's growth, a clamped extreme moves the MAD at most 12 %.
+#[derive(Debug, Default, Clone, Copy)]
+struct NoiseTrend {
+    /// Depth and mean sigma of the latest measurement.
+    latest: Option<(u32, f32)>,
+    exponent: f32,
+}
+
+impl NoiseTrend {
+    fn observe(&mut self, depth: u32, sigma: f32) {
+        if depth == 0 || !sigma.is_finite() || sigma <= 0.0 {
+            return;
+        }
+        if let Some((previous_depth, previous_sigma)) = self.latest {
+            if depth > previous_depth {
+                let exponent =
+                    (previous_sigma / sigma).ln() / (depth as f32 / previous_depth as f32).ln();
+                self.exponent = exponent.clamp(0.0, MAX_NOISE_EXPONENT);
+            }
+        }
+        self.latest = Some((depth, sigma));
+    }
+
+    /// Factor carrying the latest measurement's noise to `depth`.
+    fn scale_to(&self, depth: u32) -> f32 {
+        match self.latest {
+            Some((measured_at, _)) if depth > measured_at => {
+                (measured_at as f32 / depth as f32).powf(self.exponent)
+            }
+            _ => 1.0,
+        }
+    }
+}
+
 /// The render thread's analysis cache.
 ///
 /// Owned by the render task for the life of the thread, the same way
@@ -126,6 +182,10 @@ pub struct PreviewAnalysis {
     cached: Option<Cached>,
     /// Whether the current frame may read from `cached`. Set by [`Self::begin_frame`].
     reuse: bool,
+    /// Stack depth of the current frame, which a reused MAD is carried to.
+    depth: u32,
+    /// Kept across refreshes of one stack, dropped with it.
+    trend: NoiseTrend,
 }
 
 impl PreviewAnalysis {
@@ -160,7 +220,12 @@ impl PreviewAnalysis {
             auto_stretch,
         );
 
-        self.reuse = ctx.showing_stack && self.can_reuse(&key, ctx);
+        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx);
+        if !same_stack {
+            self.trend = NoiseTrend::default();
+        }
+        self.reuse = same_stack && self.is_current(ctx);
+        self.depth = ctx.stack_depth;
 
         if self.reuse {
             if let Some(cached) = self.cached.as_mut() {
@@ -180,19 +245,21 @@ impl PreviewAnalysis {
         self.reuse
     }
 
-    fn can_reuse(&self, key: &AnalysisKey, ctx: AnalysisContext) -> bool {
-        let Some(cached) = self.cached.as_ref() else {
-            return false;
-        };
-        if cached.key != *key || cached.age >= MAX_AGE_FRAMES {
-            return false;
-        }
+    /// The stored estimates were taken from an earlier frame of this same stack.
+    fn continues_stack(&self, key: &AnalysisKey, ctx: AnalysisContext) -> bool {
         // A stack that has not been measured yet, or that restarted, has nothing to
         // compare against — `stack_depth` going *down* is a reset.
-        if cached.depth == 0 || ctx.stack_depth < cached.depth {
-            return false;
-        }
-        (ctx.stack_depth as f32) < cached.depth as f32 * DEPTH_GROWTH
+        self.cached.as_ref().is_some_and(|cached| {
+            cached.key == *key && cached.depth != 0 && ctx.stack_depth >= cached.depth
+        })
+    }
+
+    /// ...and recently enough to be reused.
+    fn is_current(&self, ctx: AnalysisContext) -> bool {
+        self.cached.as_ref().is_some_and(|cached| {
+            cached.age < MAX_AGE_FRAMES
+                && (ctx.stack_depth as f32) < cached.depth as f32 * DEPTH_GROWTH
+        })
     }
 
     /// White-balance multipliers, computing them if this frame cannot reuse the stored
@@ -246,18 +313,22 @@ impl PreviewAnalysis {
     }
 
     /// Per-channel statistics, computing them if this frame cannot reuse the stored set.
+    ///
+    /// A reused set comes back with its spread carried to this frame's depth along the
+    /// stack's `NoiseTrend`; its levels are served as measured.
     pub fn stats<F>(&mut self, compute: F) -> Result<ImageStats>
     where
         F: FnOnce() -> Result<ImageStats>,
     {
         if self.reuse {
-            if let Some(value) = self.cached.as_ref().and_then(|c| c.stats.clone()) {
-                return Ok(value);
+            if let Some(value) = self.cached.as_ref().and_then(|c| c.stats.as_ref()) {
+                return Ok(value.with_noise_scaled(self.trend.scale_to(self.depth)));
             }
         }
         let value = compute()?;
         if let Some(cached) = self.cached.as_mut() {
             cached.stats = Some(value.clone());
+            self.trend.observe(cached.depth, value.mean_sigma());
         }
         Ok(value)
     }
@@ -415,4 +486,111 @@ mod tests {
             .unwrap();
         assert_eq!(value, [2.0; 3]);
     }
+
+    /// Statistics with one sky level and one noise figure on every channel.
+    fn sky_stats(level: f32, sigma: f32) -> ImageStats {
+        let channel = crate::statistics::ChannelStats::new(level, sigma / 1.4826, 0.0, 1.0);
+        ImageStats {
+            channels: vec![channel; 3],
+            sample_count: 100_000,
+        }
+    }
+
+    /// The mean sigma [`sky_stats`] reports for `sigma`, through the same MAD round trip.
+    fn measured(sigma: f32) -> f32 {
+        sky_stats(0.05, sigma).mean_sigma()
+    }
+
+    /// Measure the stack at `depth`, as a refreshing frame does.
+    fn measure(a: &mut PreviewAnalysis, depth: u32, sigma: f32) {
+        assert!(!begin(a, stacked(depth), &config()), "depth {depth} must refresh");
+        a.stats(|| Ok(sky_stats(0.05, sigma))).unwrap();
+    }
+
+    /// Serve the stack at `depth` from the stored set.
+    fn reuse(a: &mut PreviewAnalysis, depth: u32) -> ImageStats {
+        assert!(begin(a, stacked(depth), &config()), "depth {depth} must reuse");
+        a.stats(|| panic!("a reusing frame must not measure")).unwrap()
+    }
+
+    /// Held as measured, the MAD met a depth gain that advances every frame, and the
+    /// render sagged between refreshes and jumped at each. Carried along the stack's own
+    /// fall, a reused frame reads what a fresh measurement would.
+    #[test]
+    fn a_reused_noise_figure_follows_the_stack_deeper() {
+        let mut a = PreviewAnalysis::new();
+        // Falling as N^-0.3 between the two measurements.
+        measure(&mut a, 16, 0.004);
+        measure(&mut a, 25, 0.004 * (16.0f32 / 25.0).powf(0.3));
+
+        let sigma_25 = measured(0.004 * (16.0f32 / 25.0).powf(0.3));
+        for depth in [26u32, 28, 30] {
+            let served = reuse(&mut a, depth).mean_sigma();
+            let expected = sigma_25 * (25.0 / depth as f32).powf(0.3);
+            assert!(
+                (served / expected - 1.0).abs() < 1e-4,
+                "depth {depth}: served {served}, the trend says {expected}"
+            );
+        }
+    }
+
+    /// Only the spread moves: the levels the black point and the unlinked channels are
+    /// measured from are the snapshot's.
+    #[test]
+    fn a_reused_set_keeps_its_levels() {
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        measure(&mut a, 25, 0.0032);
+        let served = reuse(&mut a, 30);
+        for channel in &served.channels {
+            assert_eq!(channel.median, 0.05);
+        }
+    }
+
+    /// A measurement that rose — a cloud, a bright sub joining the stack — is held, not
+    /// extrapolated into noise that grows with depth; and nothing falls faster than
+    /// averaging does, so a steeper drop is carried at `1/sqrt(N)`.
+    #[test]
+    fn the_trend_is_clamped_to_what_a_stack_can_do() {
+        let mut rising = PreviewAnalysis::new();
+        measure(&mut rising, 16, 0.004);
+        measure(&mut rising, 25, 0.005);
+        assert_eq!(reuse(&mut rising, 30).mean_sigma(), measured(0.005));
+
+        let mut steep = PreviewAnalysis::new();
+        measure(&mut steep, 16, 0.004);
+        measure(&mut steep, 25, 0.002);
+        let served = reuse(&mut steep, 30).mean_sigma();
+        let expected = measured(0.002) * (25.0f32 / 30.0).sqrt();
+        assert!((served / expected - 1.0).abs() < 1e-4, "{served} against {expected}");
+    }
+
+    /// A new stack owes nothing to the last one's trend: after a reset the first set is
+    /// served as measured until a second measurement gives it a trend of its own.
+    #[test]
+    fn a_new_stack_starts_without_a_trend() {
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        measure(&mut a, 25, 0.002);
+
+        // The stack restarted: depth went backwards.
+        measure(&mut a, 5, 0.006);
+        assert_eq!(reuse(&mut a, 6).mean_sigma(), measured(0.006));
+
+        // Live view in between counts as a reset too.
+        let mut b = PreviewAnalysis::new();
+        measure(&mut b, 16, 0.004);
+        let live = AnalysisContext {
+            showing_stack: false,
+            stack_depth: 0,
+        };
+        assert!(!begin(&mut b, live, &config()));
+        b.stats(|| Ok(sky_stats(0.05, 0.01))).unwrap();
+        measure(&mut b, 20, 0.003);
+        assert_eq!(reuse(&mut b, 22).mean_sigma(), measured(0.003));
+    }
 }
+
+#[cfg(test)]
+#[path = "analysis_stability_tests.rs"]
+mod stability_tests;

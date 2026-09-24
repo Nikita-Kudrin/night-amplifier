@@ -57,10 +57,11 @@ pub fn compute_image_stats_with_config(frame: &Frame, config: StatsConfig) -> Re
 
     tracing::Span::current().record("sample_count", sample_count);
 
-    // Sequential over channels: `compute_channel_stats` parallelises the sample range
-    // internally, which scales past the 3 cores a per-channel split can use. Nesting both
-    // levels only adds work-stealing overhead.
+    // Parallel over channels as well as inside them: the gather splits the sample range,
+    // but the median and MAD are single-threaded selections, so three channels in a row
+    // left all but one core idle through most of the call.
     let channel_stats: Vec<ChannelStats> = (0..channels)
+        .into_par_iter()
         .map(|channel| compute_channel_stats(frame, channel, step))
         .collect();
 

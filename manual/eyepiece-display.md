@@ -83,6 +83,20 @@ version, expect a darker, smoother one at the same setting now, and turn it down
 if the faint outskirts of your target have gone.
 :::
 
+### While a stack builds
+
+The picture changes only as fast as the stack does. Colour balance and the
+background model are re-measured every few frames rather than every frame — they
+are expensive and move slowly — and in between, the stack's noise figure used to
+be held still while the stack kept getting deeper. Faint signal faded a little for
+a few frames and then jumped back: on a short-exposure session, a pulse every few
+seconds. The noise figure now follows the stack's own rate of improvement in
+between, so faint structure brightens steadily.
+
+A target that fills a large part of the frame — a bright nebula, a big galaxy —
+also used to brighten in one jump at the moment the stack judged the frame mostly
+signal. That judgement is now gradual, spread over the frames where it happens.
+
 ## Black floor
 
 Sets where black sits. The slider runs both ways from zero, and the two

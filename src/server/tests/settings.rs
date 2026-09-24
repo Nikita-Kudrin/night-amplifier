@@ -704,6 +704,73 @@ async fn test_settings_update_with_no_camera_does_not_create_profile() {
     );
 }
 
+/// The denoise block arrives over JSON like `sensor_correction` and is sanitised on the way
+/// in like it. The plugin re-sanitises what it reads, but the settings file and every
+/// client of `/api/settings` would otherwise carry the raw values.
+#[tokio::test]
+async fn test_denoise_settings_are_sanitised_on_the_way_in() {
+    let app = create_test_router(create_test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "denoise": {
+            "enabled": true,
+            "chroma": true,
+            "chroma_strength": 3.0,
+            "background_grain": 7.0,
+            "luma_strength": -3.0,
+        }}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["denoise"]["chroma_strength"], 1.0);
+    assert_eq!(json["data"]["denoise"]["background_grain"], 1.0);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.0);
+}
+
+/// JSON has no NaN, but it does have numbers past `f32::MAX`: serde narrows `1e39` from
+/// f64 and lands on infinity, which is how a non-finite value reaches a settings struct.
+#[tokio::test]
+async fn test_an_overflowing_denoise_value_does_not_arrive_as_infinity() {
+    let app = create_test_router(create_test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "denoise": {
+            "enabled": true,
+            "chroma": true,
+            "chroma_strength": 1.0,
+            "background_grain": 1e39,
+            "luma_strength": 1.0,
+        }}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["denoise"]["background_grain"], 0.5, "{json}");
+}
+
+/// The eyepiece block is assigned whole like the denoise block, so it takes the same
+/// guard: a screen size typed as `1e39` must not become an infinity the file cannot hold.
+/// Only non-finite values are replaced — ranges stay the renderer's business.
+#[tokio::test]
+async fn test_an_overflowing_eyepiece_value_does_not_arrive_as_infinity() {
+    let app = create_test_router(create_test_state());
+    let mut eyepiece = serde_json::to_value(EyepieceSettings::default()).unwrap();
+    eyepiece["screen_width"] = json!(1e39);
+    eyepiece["black_floor"] = json!(-1e39);
+    eyepiece["screen_height"] = json!(80.0);
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "eyepiece": eyepiece })).await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let read = |key: &str| json["data"]["eyepiece"][key].as_f64().unwrap_or(f64::NAN);
+    assert_eq!(read("screen_width"), 140.0, "{json}");
+    assert!((read("black_floor") - 0.04).abs() < 1e-6, "{json}");
+    assert_eq!(read("screen_height"), 80.0, "a finite value is the observer's: {json}");
+}
+
 // --- Focus/Finder mode ---------------------------------------------------------
 //
 // The mode is a snapshot-and-restore over six settings, so what these cover is the

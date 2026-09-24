@@ -155,18 +155,19 @@ pub trait DenoisePlugin: Send + Sync {
     ///
     /// Without a plugin Community pins `DEFAULT_GRAIN_SPLIT`, which is what the dial's
     /// middle resolves to — so the tone curve renders identically either way and the
-    /// whole difference is the filters.
+    /// whole difference is the filters. Only asked while the Denoise switch is on; off,
+    /// Community pins the same value ([`grain_split_for`]).
     fn grain_split(&self, settings: &crate::server::state::DenoiseSettings) -> f32;
 
     /// Denoise one staged interleaved RGB f32 image in place, at output resolution, in
     /// linear light. `buf` is `width * height * 3` samples.
     ///
-    /// `noise` is per-channel variance already resampled onto *this image's* grid, in
-    /// quadrature, by the encoder that owns the resample kernel — see
-    /// [`crate::frame::NoiseField`]. `None` whenever no accumulator stands behind the
-    /// frame (live view, the guide camera, planetary, comet, a stack too shallow to
-    /// have measured a spread), which is the common case: the filters' own global
-    /// estimates have to stay first-class rather than becoming a degraded mode.
+    /// `noise` is the stack's coverage — the share of its subs that reached each place —
+    /// already resampled onto *this image's* grid by the encoder that owns the resample
+    /// kernel; see [`crate::frame::NoiseField`]. It carries no variance plane on this path.
+    /// `None` whenever no accumulator stands behind the frame (live view, the guide camera,
+    /// planetary, comet) or every sub covered all of it, which is the common case: the
+    /// filters' own global estimates have to stay first-class, not a degraded mode.
     fn denoise_rgb_interleaved(
         &self,
         buf: &mut [f32],
@@ -280,11 +281,16 @@ pub fn config_for(
 
 /// The tone curve's grain split for these settings.
 ///
-/// Without the plugin this is [`crate::render::DEFAULT_GRAIN_SPLIT`] — the value the
-/// dial's own middle resolves to, so Community's tone curve is not merely *a* choice but
-/// exactly the one a Pro observer gets at the default dial position. The difference
-/// between the two builds is the filters, and nothing else.
+/// [`crate::render::DEFAULT_GRAIN_SPLIT`] — the value the dial's own middle resolves to —
+/// without the plugin **and with the Denoise switch off**. So Community's tone curve is
+/// exactly the one a Pro observer gets at the default dial position, and switching Denoise
+/// off gives exactly Community's picture. The UI greys the Background Grain dial out with
+/// the filters; a dial that still moved the curve would be a control nobody can reach
+/// (measured before this gate: 1/12 at 0 %, 1/8 at the middle, switch off).
 pub fn grain_split_for(settings: &crate::server::state::DenoiseSettings) -> f32 {
+    if !settings.enabled {
+        return crate::render::DEFAULT_GRAIN_SPLIT;
+    }
     crate::license::pro_plugin(&DENOISE_PLUGIN)
         .map(|plugin| plugin.grain_split(settings))
         .unwrap_or(crate::render::DEFAULT_GRAIN_SPLIT)

@@ -7,10 +7,11 @@
 //! is how a stage reported at 13.3 ms of a 300 ms `render_iteration` in production traces
 //! stayed invisible to CI.
 //!
-//! Uncontended it is **3.3 ms**, near the 4.4 ms *minimum* the same traces recorded and
+//! Uncontended it was **3.3 ms**, near the 4.4 ms *minimum* the same traces recorded and
 //! well under their 13.3 ms mean. That gap is not this stage getting slower under load;
 //! it is the render and stacking threads sharing one rayon pool. Worth remembering before
-//! reading any single trace figure as the cost of the work.
+//! reading any single trace figure as the cost of the work. Two parallel sorts per channel
+//! were most of it: by selection, with the channels side by side, a pass is **0.74 ms**.
 //!
 //! A separate binary rather than a fifth group in `render_benchmark`: that file is
 //! already at ~28 s of the ~30 s budget with four groups, which is the same reason
@@ -74,12 +75,14 @@ fn create_sky_frame() -> Frame {
     frame
 }
 
-/// A sampled pass is ~3.3 ms, so 24 repeats clears the ~100 ms floor.
-const SAMPLED_REPS: usize = 24;
+/// The shipped pass is ~0.74 ms, so 144 repeats clear the ~100 ms floor.
+const DEFAULT_REPS: usize = 144;
 
-/// `full_precision` reads all 4.2 M pixels of all three planes at ~103 ms a pass, so a
-/// single one already clears the floor. Two would put this binary over the ~30 s budget.
-const FULL_REPS: usize = 1;
+/// A quarter of the samples is ~0.24 ms a pass.
+const QUARTER_REPS: usize = 432;
+
+/// `full_precision` reads all 4.2 M pixels of all three planes at ~20 ms a pass.
+const FULL_REPS: usize = 6;
 
 fn bench_image_stats(c: &mut Criterion) {
     let frame = create_sky_frame();
@@ -93,8 +96,8 @@ fn bench_image_stats(c: &mut Criterion) {
     let default = StatsConfig::default();
 
     for (name, config, reps) in [
-        ("default_100k", default, SAMPLED_REPS),
-        ("sampled_25k", default.with_max_samples(25_000), SAMPLED_REPS),
+        ("default_100k", default, DEFAULT_REPS),
+        ("sampled_25k", default.with_max_samples(25_000), QUARTER_REPS),
         (
             "full_precision",
             StatsConfig::default().full_precision(),

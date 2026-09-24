@@ -12,8 +12,11 @@ image exactly as the pipeline produces it — the tone curve is the same one Pro
 the default Background Grain setting, so the whole difference is the filters.
 
 **Denoise** at the top of the section turns every filter on or off at once. Off shows the
-stacked image untouched, which is the quickest way to judge what the filters are doing to
-a target, and the way back if something starts to look plastic.
+stacked image untouched — exactly what the Community edition renders — which is the quickest
+way to judge what the filters are doing to a target, and the way back if something starts to
+look plastic. Background Grain greys out with the filters, and its brightness trade goes with
+it: off, the tone curve is back at the dial's middle, so a target you brightened with a low
+dial will look a little dimmer. At the default dial position nothing but the filters changes.
 
 Colour Mottle and Structure strength are among the six that
 [Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
@@ -26,7 +29,9 @@ When the mount drifts during a session, the edges of the frame are covered by fe
 than the middle, so they carry more noise. The filters know how much of the stack each part
 of the frame holds and smooth the thinly covered parts correspondingly harder, so a stack's
 border does not look grainier than its centre. Where every sub covered the frame the picture
-is exactly what it would be otherwise.
+is exactly what it would be otherwise — outlier rejection throwing a satellite trail or a
+cosmic ray away does not count as a thin edge. A saved stacked PNG is smoothed the same way
+as the live view.
 
 This evens out *grain*, the fine speckle the filters can reach. It cannot remove a visible
 line where one sub's edge ends — that is a real step in the image, not noise; the fix for it is

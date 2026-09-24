@@ -44,10 +44,14 @@ fn variance_row(field_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: u
     }
 }
 
-/// One row of coverage cells, `median(count) / frame_count`, from the same rows.
+/// One row of coverage cells, `median(offered) / frame_count`, from the same rows.
 ///
-/// A median rather than one sample per cell so a rejection hole — a sigma-clipped
-/// satellite trail, a pixel skipped as non-finite — cannot read as a thin border.
+/// **Subs that reached a pixel, not subs it kept.** A sample the rejector clipped still
+/// reached it, and counting kept samples split fully covered cells by one sub wherever
+/// the clips per pixel crossed a Poisson median's boundary (169 of 256 at 70 subs under
+/// sigma clipping): the map then moved thresholds across a complete stack and the kernels
+/// left their plain loop everywhere. A median, so a pixel skipped as non-finite cannot
+/// read as a thin border either.
 fn coverage_row(cover_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: usize, r: usize, frame_count: usize) {
     let rows_here = pixel_rows.len() / width.max(1);
     let frames = frame_count.max(1) as f32;
@@ -56,7 +60,7 @@ fn coverage_row(cover_row: &mut [f32], pixel_rows: &[IncrementalPixel], width: u
         counts.clear();
         let (x0, x1) = (bx * r, ((bx + 1) * r).min(width));
         for row in 0..rows_here {
-            counts.extend(pixel_rows[row * width + x0..row * width + x1].iter().map(|p| p.count as f32));
+            counts.extend(pixel_rows[row * width + x0..row * width + x1].iter().map(|p| p.offered as f32));
         }
         *cover = if counts.is_empty() {
             0.0
@@ -212,15 +216,15 @@ impl MasterStack {
                         return;
                     }
 
-                    // The scale is maintained here too, though nothing on this path
-                    // clips against it: `m2` is the render's per-pixel noise estimate
-                    // (`MasterStack::noise_field`), and leaving it at zero would make
-                    // that field read "perfectly clean" for every Community session and
-                    // every test that stacks without the rejection plugin. Measured
-                    // before the mean moves, or the deviation is taken against a mean
-                    // that already contains this sample. Winsorised by the observer
-                    // itself, since there is no rejection threshold here to clamp
-                    // against — see `observe_scale_guarded`.
+                    // `offered` is what the coverage map reads. The scale is kept too,
+                    // though nothing here clips against it and the render never reads
+                    // it: rejection switched on mid-session inherits it warm, and
+                    // `noise_field` measures from it on demand. It costs nothing
+                    // measurable — the loop is memory-bound and the pixel is read and
+                    // written either way (117.2 vs 117.5 ms per eight 3008x3008x3 frames,
+                    // x86). Taken before the mean moves, or the deviation is measured
+                    // against a mean already holding this sample; outliers are dropped by
+                    // the observer itself — see `observe_scale_guarded`.
                     pixel.offered = pixel.offered.saturating_add(1);
                     pixel.observe_scale_guarded(val - pixel.mean, &alphas);
 
@@ -284,7 +288,8 @@ impl MasterStack {
     /// is measured on demand instead — reducing its three planes here cost as much again
     /// as the display copy itself, on the thread that drops camera frames when it falls
     /// behind, for a quantity no filter reads. Coverage comes from the first plane only:
-    /// the border a sub leaves is the same in every channel.
+    /// the border a sub leaves is the same in every channel. It counts subs that reached
+    /// each place, not subs kept there — see `coverage_row`.
     pub fn compute_with_coverage(&self) -> Result<(Frame, NoiseField)> {
         if self.frame_count == 0 {
             return Err(StackError::EmptyStack);
@@ -381,6 +386,11 @@ impl MasterStack {
         &self.config
     }
 
+    /// Per pixel, the share of the stack each sample *kept*: `count / frame_count`.
+    ///
+    /// Not the coverage the noise map carries, which counts subs that *reached* a pixel
+    /// (`coverage_row`): the two differ exactly by what the rejector clipped, and this one
+    /// is what the rejection tests read as "frames kept".
     pub fn coverage_map(&self) -> Frame {
         let max_count = self.frame_count as f32;
         let data: Vec<f32> = self
@@ -433,5 +443,39 @@ impl MasterStack {
             stack_id,
         );
         telemetry_metrics::record_master_stack_pixel_count(pixel_count, stack_id);
+    }
+}
+
+/// Needs the accumulator's private pixels: without the rejection plugin nothing in
+/// Community can make `count` and `offered` differ.
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    /// A clip is not a border. Every sub reached every pixel here and a scatter of samples
+    /// was not kept — most of one cell among them — so the map must read the stack as
+    /// complete, while `coverage_map` still reports what was kept.
+    #[test]
+    fn clipped_samples_still_count_as_coverage() {
+        let config = StackingConfig::default().with_rejection(RejectionMethod::None);
+        let mut stack = MasterStack::new(32, 32, 1, config).unwrap();
+        for _ in 0..10 {
+            stack.add_frame(&Frame::filled(32, 32, 1, 0.3).unwrap()).unwrap();
+        }
+        for (i, pixel) in stack.pixels.iter_mut().enumerate() {
+            let (x, y) = (i % 32, i / 32);
+            if (x < 8 && y < 8 && (x + y) % 3 != 0) || i % 7 == 0 {
+                pixel.count -= 1;
+            }
+        }
+
+        let (_, field) = stack.compute_with_coverage().unwrap();
+        assert!(
+            field.coverage().iter().all(|&c| c == 1.0),
+            "clipped samples read as thin coverage: {:?}",
+            &field.coverage()[..4]
+        );
+        assert!(!field.is_usable(), "a complete stack must carry no map");
+        assert!((stack.coverage_map().data()[1] - 0.9).abs() < 1e-6, "kept share lost the clip");
     }
 }

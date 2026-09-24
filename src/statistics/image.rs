@@ -31,6 +31,18 @@ impl ImageStats {
         self.channels.iter().map(|c| c.sigma).sum::<f32>() / self.channels.len() as f32
     }
 
+    /// The same statistics with every channel's spread (`mad`, `sigma`) scaled by
+    /// `factor`, levels untouched — what a measurement would read after the noise alone
+    /// changed.
+    pub fn with_noise_scaled(&self, factor: f32) -> Self {
+        let mut scaled = self.clone();
+        for channel in &mut scaled.channels {
+            channel.mad *= factor;
+            channel.sigma *= factor;
+        }
+        scaled
+    }
+
     /// Get the minimum of all channel minimums
     pub fn global_min(&self) -> f32 {
         self.channels.iter().map(|c| c.min).fold(f32::MAX, f32::min)

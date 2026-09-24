@@ -806,4 +806,54 @@ mod tests {
             "Pro solver state must not leak back into the Community settings file"
         );
     }
+
+    /// A settings block holding a non-finite value must not cost the observer the whole
+    /// file. serde_json writes infinity as `null`, which no `f32` reads back, and `load`
+    /// then answers "Using defaults" for every camera, telescope and eyepiece setting.
+    #[test]
+    fn a_non_finite_denoise_value_does_not_lose_the_settings_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let persistence = SettingsPersistence::new(temp_file.path());
+
+        let settings = CaptureSettings {
+            gain: 222,
+            denoise: DenoiseSettings {
+                background_grain: f32::INFINITY,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        persistence.save(&settings).unwrap();
+
+        let loaded = persistence
+            .load()
+            .expect("one non-finite dial reset every setting in the file to its default");
+        assert_eq!(loaded.gain, 222);
+    }
+
+    /// A file an earlier build already wrote with `null` in it — saved before anything
+    /// sanitised the value — loads with that field at its default and every other
+    /// setting intact, rather than the whole file falling back to defaults.
+    #[test]
+    fn a_null_already_in_the_file_costs_only_its_own_field() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let settings = CaptureSettings {
+            gain: 222,
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(PersistedSettings::from(&settings)).unwrap();
+        json["denoise"]["background_grain"] = serde_json::Value::Null;
+        json["eyepiece"]["black_floor"] = serde_json::Value::Null;
+        std::fs::write(temp_file.path(), json.to_string()).unwrap();
+
+        let loaded = SettingsPersistence::new(temp_file.path())
+            .load()
+            .expect("a null in one field reset every setting in the file");
+        assert_eq!(loaded.gain, 222);
+        assert_eq!(
+            loaded.denoise.background_grain,
+            crate::server::state::DEFAULT_BACKGROUND_GRAIN
+        );
+        assert_eq!(loaded.eyepiece.black_floor, EyepieceSettings::default().black_floor);
+    }
 }
