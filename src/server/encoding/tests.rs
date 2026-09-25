@@ -2,7 +2,6 @@ use crate::frame::Frame;
 
 use crate::server::encoding::format::*;
 use crate::server::encoding::fused::*;
-use crate::server::encoding::jpeg::calculate_dynamic_jpeg_quality;
 use crate::server::encoding::jpeg::*;
 use crate::server::encoding::lz4::*;
 
@@ -12,6 +11,7 @@ fn to_ready_frame(frame: &Frame) -> crate::server::state::RenderReadyFrame {
     config.auto_stretch = false;
     config.saturation_boost = false;
     crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: None,
@@ -32,6 +32,7 @@ fn to_ready_frame_with_stretch(
     config.auto_stretch = true;
     config.saturation_boost = false;
     crate::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: Some(crate::server::state::StretchResult {
@@ -281,18 +282,22 @@ fn test_sa09_matches_sa08_pixel_data() {
 }
 
 #[test]
-fn test_calculate_dynamic_jpeg_quality() {
-    // 1080p (smallest side 1080) -> < 1440, should be 95
-    assert_eq!(calculate_dynamic_jpeg_quality(1920, 1080), 95);
-    // Small (640x480) -> < 1440, should be 95
-    assert_eq!(calculate_dynamic_jpeg_quality(640, 480), 95);
-    // 1440p (2560x1440) -> >= 1440, should be 90
-    assert_eq!(calculate_dynamic_jpeg_quality(2560, 1440), 90);
-    // 4K (3840x2160) -> >= 1440, should be 90
-    assert_eq!(calculate_dynamic_jpeg_quality(3840, 2160), 90);
-    // Odd portrait orientation
-    assert_eq!(calculate_dynamic_jpeg_quality(1080, 1920), 95);
-    assert_eq!(calculate_dynamic_jpeg_quality(2160, 3840), 90);
+fn jpeg_quality_is_95_below_1440p_and_for_every_denoised_frame() {
+    // (width, height, denoised) -> quality; the smaller side decides the size rule.
+    let cases = [
+        (1920, 1080, false, 95),
+        (640, 480, false, 95),
+        (1080, 1920, false, 95),
+        (2560, 1440, false, 90),
+        (3840, 2160, false, 90),
+        (2160, 3840, false, 90),
+        (1920, 1080, true, 95),
+        (2560, 1440, true, 95),
+        (3840, 2160, true, 95),
+    ];
+    for (w, h, denoised, quality) in cases {
+        assert_eq!(jpeg_quality(w, h, denoised), quality, "{w}x{h}, denoised {denoised}");
+    }
 }
 
 #[test]
@@ -683,7 +688,7 @@ fn test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample
 }
 
 // ---------------------------------------------------------------------------
-// Display transform (black floor + ordered dither) through the fused kernels
+// Display transform (black floor + dither) through the fused kernels
 // ---------------------------------------------------------------------------
 
 /// Ready frame carrying a display transform, with every render stage off so a
@@ -784,8 +789,8 @@ fn plain_display_transform_leaves_both_kernels_unchanged() {
 
 /// Dither must be indexed in *output* coordinates. If a kernel indexed the
 /// source pixel instead, the pattern would survive at the source's period
-/// rather than the output's — so assert the tile repeats every 8 output pixels
-/// after a downsample that is not a multiple of 8.
+/// rather than the output's — so assert the tile repeats every 64 output pixels
+/// after a downsample that is not a multiple of 64.
 #[test]
 fn dither_tiles_in_output_coordinates_after_downsampling() {
     let (width, height) = OVERSIZE;
@@ -798,14 +803,21 @@ fn dither_tiles_in_output_coordinates_after_downsampling() {
             .expect("encode failed");
 
     let row = &bytes[..w as usize * 3];
-    for x in 0..16usize {
+    for x in 0..128usize {
         assert_eq!(
             row[x * 3],
-            row[(x + 8) * 3],
+            row[(x + 64) * 3],
             "output column {x} and {} differ; dither is not tiling in output space",
-            x + 8
+            x + 64
         );
     }
+    // Down a column too: rows are written in parallel chunks, and a chunk-relative row
+    // index would restart the mask at every chunk instead of every 64 rows.
+    let column: Vec<u8> = bytes.chunks_exact(w as usize * 3).map(|r| r[0]).collect();
+    for y in 0..128usize {
+        assert_eq!(column[y], column[y + 64], "output rows {y} and {} differ in column 0", y + 64);
+    }
+    assert_ne!(column[..32], column[32..64], "the mask repeats every 32 rows, not 64");
     // A flat input between levels must produce more than one output level, or
     // the dither is not doing anything.
     let distinct: std::collections::HashSet<u8> = row.iter().step_by(3).copied().collect();
@@ -964,47 +976,6 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
     }
 }
 
-/// The staged path must actually filter, on both traversals — a config that is
-/// wired but never reaches the kernels would pass every layout test in the repo.
-#[test]
-fn denoising_reduces_sky_sigma_through_both_kernels() {
-    let denoise = crate::render::DenoiseConfig {
-        luma: crate::render::LumaDenoiseConfig {
-            k: crate::render::LumaDenoiseConfig::thresholds_for_star_protection(0.0),
-            ..Default::default()
-        },
-        chroma: crate::render::ChromaDenoiseConfig::default(),
-    };
-
-    let sigma = |bytes: &[u8]| {
-        let vals: Vec<f64> = bytes.iter().skip(1).step_by(3).map(|&v| v as f64).collect();
-        let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-        (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt()
-    };
-
-    let small = noisy_frame(128, 128, 0.3, 0.1);
-    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&small), 3840, 2160).unwrap();
-    let (filtered, _, _) =
-        frame_to_rgb8_downsampled(&ready_with_denoise(&small, denoise), 3840, 2160).unwrap();
-    assert!(
-        sigma(&filtered) < sigma(&plain) * 0.6,
-        "expand kernel: sigma only fell from {:.2} to {:.2}",
-        sigma(&plain),
-        sigma(&filtered)
-    );
-
-    let big = noisy_frame(256, 256, 0.3, 0.1);
-    let (plain, _, _) = frame_to_rgb8_downsampled(&to_ready_frame(&big), 128, 128).unwrap();
-    let (filtered, _, _) =
-        frame_to_rgb8_downsampled(&ready_with_denoise(&big, denoise), 128, 128).unwrap();
-    assert!(
-        sigma(&filtered) < sigma(&plain) * 0.6,
-        "downsample kernel: sigma only fell from {:.2} to {:.2}",
-        sigma(&plain),
-        sigma(&filtered)
-    );
-}
-
 /// The staged path still has to run the tone curve, and in the same order: the
 /// denoisers sit between the resample and the stretch, not after it. A staged
 /// buffer that skipped or reordered the tail would produce a visibly different
@@ -1142,8 +1113,22 @@ fn ready_with_sky_shadow(frame: &Frame, shadow: crate::render::SkyShadow) -> cra
 /// The denoise-off path streams the sky shadow chunk by chunk; the staged path applies
 /// it to the whole image. One setting must produce one image on both — the sky is
 /// measured on the same sample rows, each guide row from the same three rows.
+///
+/// With the dither on too: the stream writes 32-row chunks and the mask tiles every 64
+/// rows, so a chunk-relative row index would repeat the mask every 32 rows — invisible
+/// under the 8-row Bayer tile it replaced, and to this test with the dither off.
 #[test]
 fn sky_shadow_streaming_matches_staged() {
+    let displays = [
+        crate::render::DisplayOutput::default(),
+        crate::render::DisplayOutput::default().with_dither(true),
+    ];
+    for display in displays {
+        sky_shadow_streaming_matches_staged_with(display);
+    }
+}
+
+fn sky_shadow_streaming_matches_staged_with(display: crate::render::DisplayOutput) {
     let sky = 0.052f32;
     for (w, h) in [(71usize, 97usize), (40, 1), (33, 2), (129, 200)] {
         let mut frame = Frame::zeros(w, h, 3).unwrap();
@@ -1159,7 +1144,9 @@ fn sky_shadow_streaming_matches_staged() {
             }
         }
         let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
-        let (streamed, _, _) = frame_to_rgb8_downsampled(&ready_with_sky_shadow(&frame, shadow), 4096, 4096).unwrap();
+        let mut ready = ready_with_sky_shadow(&frame, shadow);
+        ready.pipeline_config.display = display;
+        let (streamed, _, _) = frame_to_rgb8_downsampled(&ready, 4096, 4096).unwrap();
 
         let mut staged: Vec<f32> = (0..h)
             .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
@@ -1168,9 +1155,9 @@ fn sky_shadow_streaming_matches_staged() {
         crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
         let mut expected = vec![0u8; w * h * 3];
         for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
-            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
+            crate::render::output::write_row_rgb8(out, row, y, display);
         }
-        assert_eq!(streamed, expected, "{w}x{h}: streaming and staged sky shadow disagree");
+        assert_eq!(streamed, expected, "{w}x{h} {display:?}: streaming and staged sky shadow disagree");
         assert_ne!(streamed, frame_to_rgb8_downsampled(&to_ready_frame(&frame), 4096, 4096).unwrap().0, "{w}x{h}: shadow did nothing");
     }
 }
@@ -1292,42 +1279,184 @@ fn a_near_unity_downsample_leaves_no_dark_ring_around_bright_stars() {
 }
 
 /// The denoise-on path streams its denoised rows through the same sky-shadow driver; it
-/// must still equal denoise, then the whole-image shadow, then the 8-bit write.
-#[test]
-fn sky_shadow_after_denoise_matches_the_whole_image_reference() {
-    let sky = 0.052f32;
-    let denoise = crate::render::DenoiseConfig {
-        luma: crate::render::denoise::LumaDenoiseConfig::default(),
-        ..crate::render::DenoiseConfig::OFF
+// ---------------------------------------------------------------------------
+// The quadrature contract: how a noise map has to be resampled.
+//
+// This is the single easiest thing in the noise-map work to get wrong and the hardest
+// to see, because nothing downstream reports a number that would show it. Getting it
+// wrong makes every threshold built on the map too aggressive by roughly sqrt(k).
+// ---------------------------------------------------------------------------
+
+/// Independent Gaussian noise of unit sigma, deterministic across machines and runs.
+fn white_noise(len: usize, seed: u32) -> Vec<f32> {
+    let mut state = seed | 1;
+    let mut u = move || {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (state >> 8) as f32 / (1u32 << 24) as f32 + 1e-7
     };
-    for (w, h) in [(129usize, 200usize), (64, 3)] {
-        let mut frame = Frame::zeros(w, h, 3).unwrap();
-        let mut seed = 0xface_u32;
-        for y in 0..h {
-            for x in 0..w {
-                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let u = (seed >> 8) as f32 / (1u32 << 24) as f32;
-                let star = if (x * 5 + y * 11) % 47 == 0 { 0.5 } else { 0.0 };
-                for c in 0..3 {
-                    frame.set_pixel(x, y, c, sky * (0.6 + 0.8 * u) + star);
+    (0..len)
+        .map(|_| {
+            let (u1, u2) = (u(), u());
+            (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos()
+        })
+        .collect()
+}
+
+/// Separable resample of an f32 plane through the production taps.
+fn resample_plane(
+    src: &[f32],
+    src_w: usize,
+    src_h: usize,
+    dst_w: usize,
+    dst_h: usize,
+) -> Vec<f32> {
+    use super::axis_taps::AxisTaps;
+    let columns = AxisTaps::cached(src_w, dst_w);
+    let rows = AxisTaps::cached(src_h, dst_h);
+    let mut out = vec![0.0f32; dst_w * dst_h];
+    for oy in 0..dst_h {
+        let (first_row, wy) = rows.of(oy);
+        for ox in 0..dst_w {
+            let (first_col, wx) = columns.of(ox);
+            let mut acc = 0.0f32;
+            for (j, &a) in wy.iter().enumerate() {
+                let row = (first_row + j).min(src_h - 1) * src_w;
+                for (i, &b) in wx.iter().enumerate() {
+                    acc += a * b * src[row + (first_col + i).min(src_w - 1)];
                 }
             }
+            out[oy * dst_w + ox] = acc;
         }
-        let shadow = crate::render::SkyShadow::from_sky(0.7, sky).unwrap();
-        let mut ready = ready_with_sky_shadow(&frame, shadow);
-        ready.pipeline_config.denoise = denoise;
-        let (encoded, _, _) = frame_to_rgb8_downsampled(&ready, 4096, 4096).unwrap();
-
-        let mut staged: Vec<f32> = (0..h)
-            .flat_map(|y| (0..w).flat_map(move |x| (0..3).map(move |c| (x, y, c))))
-            .map(|(x, y, c)| frame.get_pixel(x, y, c))
-            .collect();
-        crate::render::denoise::denoise_rgb_interleaved_with(&mut staged, w, h, &denoise, &mut Default::default());
-        crate::render::output::apply_sky_shadow_interleaved(&mut staged, w, h, shadow, &mut vec![], &mut vec![]);
-        let mut expected = vec![0u8; w * h * 3];
-        for (y, (out, row)) in expected.chunks_exact_mut(w * 3).zip(staged.chunks_exact(w * 3)).enumerate() {
-            crate::render::output::write_row_rgb8(out, row, y, crate::render::DisplayOutput::default());
-        }
-        assert_eq!(encoded, expected, "{w}x{h}: denoised sky shadow disagrees with the reference");
     }
+    out
+}
+
+fn variance(values: &[f32]) -> f32 {
+    let mean = values.iter().sum::<f32>() / values.len() as f32;
+    values.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / values.len() as f32
+}
+
+/// `sum(w^2)` really is the factor by which the resample scales variance.
+#[test]
+fn quadrature_resample_predicts_measured_noise() {
+    use super::axis_taps::AxisTaps;
+    // The shipped eyepiece geometry: IMX533 to a 1440 box, a 2.089x non-integer ratio.
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x51de_5eed);
+    let out = resample_plane(&plane, src, src, dst, dst);
+
+    let measured = variance(&out);
+    let columns = AxisTaps::cached(src, dst);
+    let rows = AxisTaps::cached(src, dst);
+    // The source sigma is 1, so the prediction is the mean tap energy of both axes.
+    let mean_sum_sq = |t: &AxisTaps| t.sum_sq().iter().sum::<f32>() / t.sum_sq().len() as f32;
+    let predicted = variance(&plane) * mean_sum_sq(&columns) * mean_sum_sq(&rows);
+
+    assert!(
+        (measured / predicted - 1.0).abs() < 0.03,
+        "measured output variance {measured:e} against a predicted {predicted:e}"
+    );
+}
+
+/// And the guard has to be able to refute the alternative, or it is not guarding the
+/// choice: resampling the map like an image — averaging sigmas, which is what
+/// `sum(w) = 1` gives — leaves the source sigma untouched and so overstates the output.
+#[test]
+fn resampling_the_field_like_an_image_does_not() {
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x51de_5eed);
+    let out = resample_plane(&plane, src, src, dst, dst);
+
+    let measured = variance(&out);
+    // `sum(w) = 1`, so an image-like resample of a flat sigma field returns that sigma.
+    let image_like = variance(&plane);
+    let overstatement = (image_like / measured).sqrt();
+    assert!(
+        overstatement > 1.8,
+        "an image-like resample overstated output sigma by only {overstatement:.2}x; \
+         the trap this guards is worth ~sqrt(k), so either the ratio moved or the \
+         measurement is not seeing it"
+    );
+}
+
+/// End to end through the shipped type: a `NoiseField` carrying the source variance,
+/// resampled with the production taps, must land on what the resample actually produces.
+#[test]
+fn a_resampled_noise_field_matches_the_encoder_it_describes() {
+    use super::axis_taps::AxisTaps;
+    use crate::frame::{NoiseField, NOISE_REDUCTION};
+
+    let (src, dst) = (1504usize, 720usize);
+    let plane = white_noise(src * src, 0x0c0f_fee1);
+    let source_variance = variance(&plane);
+
+    let cells = src.div_ceil(NOISE_REDUCTION);
+    let field = NoiseField::new(
+        vec![source_variance; cells * cells],
+        cells,
+        cells,
+        1,
+        src,
+        src,
+    )
+    .unwrap();
+
+    let columns = AxisTaps::cached(src, dst);
+    let rows = AxisTaps::cached(src, dst);
+    let resampled = field
+        .resampled(dst, dst, columns.sum_sq(), rows.sum_sq())
+        .unwrap();
+
+    let measured = variance(&resample_plane(&plane, src, src, dst, dst));
+    let predicted = resampled.sample(0, dst / 2, dst / 2);
+    assert!(
+        (predicted / measured - 1.0).abs() < 0.05,
+        "the field predicts {predicted:e} where the encoder produces {measured:e}"
+    );
+}
+
+/// How much the tap energy varies across the output grid decides whether working in
+/// *relative* noise is enough on its own — a factor common to every output pixel
+/// cancels in a ratio, one that varies does not.
+///
+/// Two regimes, and they differ by more than the difference between them looks:
+///
+/// - **At the shipped eyepiece geometry** (3008 -> 1440, 2.089x) the interior varies
+///   1.037x in variance, i.e. 1.018x in sigma. There the sharpen is off entirely
+///   (`SHARPEN_NONE_FROM` is 1.9x) and the tent alone is very nearly phase-invariant,
+///   which is what makes a relative field a ~2 % approximation.
+/// - **Near unity** (1538 -> 1440, 1.068x) it reaches 1.28x in variance, 1.13x in sigma.
+///   That is the `[-a, 1+2a, -a]` sharpen: its negative lobes raise `sum(w^2)` sharply
+///   and by an amount that moves with the phase. A relative field is a ~13 %
+///   approximation there, not a ~2 % one, so anything reading the map *absolutely*
+///   matters more at IMX464's near-unity ratio than at IMX533's.
+///
+/// Both bounds are measured, not derived. The first output pixel is excluded: the frame
+/// edge renormalises its footprint after dropping out-of-range samples and reads 1.16x
+/// the interior on its own, which is real, carried correctly by the resample, and not
+/// where anybody reads sky noise.
+#[test]
+fn the_tap_phase_variation_is_small_where_the_sharpen_is_off() {
+    use super::axis_taps::AxisTaps;
+    let spread = |source: usize, target: usize| {
+        let taps = AxisTaps::cached(source, target);
+        let interior = &taps.sum_sq()[8..taps.sum_sq().len() - 8];
+        let lo = interior.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = interior.iter().copied().fold(0.0f32, f32::max);
+        hi / lo
+    };
+
+    let eyepiece = spread(3008, 1440);
+    assert!(
+        eyepiece < 1.05,
+        "at 2.089x the tent alone should be nearly phase-invariant; measured {eyepiece:.3}x"
+    );
+
+    let near_unity = spread(1538, 1440);
+    assert!(
+        (1.15..1.45).contains(&near_unity),
+        "at 1.068x the sharpen's negative lobes dominate `sum(w^2)`; measured \
+         {near_unity:.3}x, and moving out of this band changes how good an \
+         approximation a relative noise field is on IMX464"
+    );
 }

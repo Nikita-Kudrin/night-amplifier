@@ -129,6 +129,7 @@ impl TestServer {
 
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(StackedFrame {
+            noise: None,
             display_frame: Arc::new(frame),
             showing_stack: false,
             was_stacked: false,

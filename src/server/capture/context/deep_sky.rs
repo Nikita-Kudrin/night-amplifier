@@ -301,6 +301,14 @@ impl StackingContext {
             .map_err(|e| format!("Failed to compute stack: {}", e))
     }
 
+    /// The stacked result and its coverage map, from one read of the accumulator.
+    #[instrument(skip(self), fields(frame_count = self.frame_count()))]
+    pub fn compute_with_coverage(&self) -> Result<(Frame, crate::frame::NoiseField), String> {
+        self.stacker
+            .compute_with_coverage()
+            .map_err(|e| format!("Failed to compute stack: {}", e))
+    }
+
     pub fn frame_count(&self) -> usize {
         self.stacker.frame_count()
     }

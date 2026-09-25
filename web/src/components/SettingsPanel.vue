@@ -37,7 +37,7 @@ const simulatorEnabledRef = inject('simulatorEnabled')
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const capabilities = inject('capabilities', {
   has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false},
+  deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false, denoise: false},
   planetary: {advanced_stacking: false},
   push_to: {astap_solver: false},
 })
@@ -100,9 +100,7 @@ watch(
           sensor_correction: newSettings.sensor_correction
               ? {...newSettings.sensor_correction}
               : {...DEFAULT_SETTINGS.sensor_correction},
-          denoise: newSettings.denoise
-              ? {...newSettings.denoise}
-              : {...DEFAULT_SETTINGS.denoise},
+          denoise: {...DEFAULT_SETTINGS.denoise, ...newSettings.denoise},
           preview_resolution:
               newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
           streaming_resolution:
@@ -175,6 +173,7 @@ const HELP = HELP_TEXTS
         :preview-resolution="localSettings.preview_resolution"
         :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
+        :denoise-available="capabilities.deep_sky?.denoise ?? false"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
         @apply="applyGroup"

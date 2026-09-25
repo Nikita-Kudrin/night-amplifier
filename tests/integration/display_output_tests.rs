@@ -1,4 +1,4 @@
-//! Tests for the display output path: the black floor and ordered dither that
+//! Tests for the display output path: the black floor and dither that
 //! the fused encoders apply where a frame becomes 8-bit, and the resolution the
 //! lossless stream encodes into.
 //!
@@ -58,45 +58,7 @@ const FIXTURES: [Fixture; 2] = [
     },
 ];
 
-/// Sky sigma of one channel of an interleaved RGB8 buffer, in 8-bit levels.
-///
-/// A MAD sets the clip and a clipped standard deviation is what gets reported.
-/// The MAD alone is what this used to return, and on byte samples it can only
-/// take integer values — so the figure snapped to multiples of 1.4826 levels and
-/// could not resolve any change smaller than one output level, which is most of
-/// them. The clip is what keeps stars and the target out of the variance; the
-/// standard deviation of what survives it is continuous.
-pub(crate) fn sky_sigma_levels(rgb8: &[u8], channel: usize) -> f64 {
-    let mut samples: Vec<f64> = rgb8
-        .iter()
-        .skip(channel)
-        .step_by(3)
-        .map(|&v| v as f64)
-        .collect();
-    if samples.len() < 2 {
-        return 0.0;
-    }
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = samples[samples.len() / 2];
-
-    let mut deviations: Vec<f64> = samples.iter().map(|v| (v - median).abs()).collect();
-    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mad_sigma = deviations[deviations.len() / 2] * 1.4826;
-
-    // A floor of one level, or a sky already smooth enough to have a zero MAD
-    // would clip away everything including its own noise.
-    let clip = (mad_sigma * 3.0).max(1.0);
-    let kept: Vec<f64> = samples
-        .iter()
-        .copied()
-        .filter(|v| (v - median).abs() <= clip)
-        .collect();
-    if kept.len() < 2 {
-        return mad_sigma;
-    }
-    let mean = kept.iter().sum::<f64>() / kept.len() as f64;
-    (kept.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / kept.len() as f64).sqrt()
-}
+pub(crate) use crate::integration::instruments::sky_sigma_levels;
 
 /// First frame of a fixture directory, as a linear `Frame`.
 ///
@@ -174,11 +136,16 @@ fn prepare_fixture_with(
     settings.auto_stretch = true;
     configure(&mut settings);
 
-    let (pipeline_config, stretch_result) =
+    let night_amplifier::server::capture::pipeline::PreviewRender {
+        pipeline_config,
+        stretch_result,
+        ..
+    } =
         night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame, &settings)
             .ok()?;
 
     Some(night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,
@@ -353,141 +320,13 @@ fn eyepiece_intensity_reduces_visible_sky_grain() {
 // Tier 2: the denoisers, measured on the fixture
 // ---------------------------------------------------------------------------
 
-/// The two things a denoiser must be judged on together. Grain reduction alone
-/// is not a passing result — anything can smooth a sky.
-struct DenoiseMeasurement {
-    sky_sigma: f64,
-    nebula_flux: f64,
-    star_peak: u8,
-}
-
-fn measure(rgb8: &[u8], width: usize, target_box: (usize, usize, usize, usize)) -> DenoiseMeasurement {
-    let (x0, y0, x1, y1) = target_box;
-    let mut flux = 0.0;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            flux += rgb8[(y * width + x) * 3 + 1] as f64;
-        }
-    }
-
-    DenoiseMeasurement {
-        sky_sigma: sky_sigma_levels(rgb8, 1),
-        nebula_flux: flux,
-        star_peak: *rgb8.iter().skip(1).step_by(3).max().unwrap(),
-    }
-}
-
-fn encode_with(
-    fixture: &Fixture,
-    denoise: night_amplifier::render::DenoiseConfig,
-) -> Option<(Vec<u8>, usize)> {
-    let mut ready = prepare_fixture(fixture, 0.0)?;
-    ready.pipeline_config.denoise = denoise;
-    let (bytes, w, _) = encode(&ready, TIER_1440.0, TIER_1440.1);
-    Some((bytes, w))
-}
-
-/// The headline for Tier 2, reported rather than only bounded.
+/// Every spelling of "off" must reproduce the stream byte for byte, on the real
+/// fixture and through the real tone curve.
 ///
-/// Runs the shipped default, the chroma filter alone, and the two ends of the
-/// star-protection control — so the trade the level-1 threshold makes is visible
-/// as numbers on real data rather than as an argument.
-#[test]
-#[serial]
-#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
-fn denoisers_reduce_grain_without_eating_the_nebula() {
-    use night_amplifier::render::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
-
-    let cases: [(&str, DenoiseConfig); 3] = [
-        (
-            "chroma only",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig::OFF,
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-        (
-            "default (star protection 100 %)",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig {
-                    k: LumaDenoiseConfig::thresholds_for_star_protection(1.0),
-                    ..Default::default()
-                },
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-        (
-            "star protection 0 %",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig {
-                    k: LumaDenoiseConfig::thresholds_for_star_protection(0.0),
-                    ..Default::default()
-                },
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-    ];
-
-    println!("\n=== Tier 2 denoisers, 1440 tier ===");
-    let mut measured = 0;
-
-    for fixture in &FIXTURES {
-        let Some((plain, width)) = encode_with(fixture, DenoiseConfig::OFF) else {
-            println!("  {} not present. Skipping.", fixture.dir);
-            continue;
-        };
-        measured += 1;
-        let base = measure(&plain, width, fixture.target_box);
-
-        println!("  {}", fixture.label);
-        println!(
-            "    {:<32} sky sigma {:.2}, target flux {:.3e}, peak {}",
-            "off", base.sky_sigma, base.nebula_flux, base.star_peak
-        );
-
-        for (name, config) in cases {
-            let (bytes, w) = encode_with(fixture, config).unwrap();
-            let m = measure(&bytes, w, fixture.target_box);
-            println!(
-                "    {name:<32} sky sigma {:.2} ({:.2}x), target flux {:.3e} ({:+.2} %), peak {}",
-                m.sky_sigma,
-                base.sky_sigma / m.sky_sigma,
-                m.nebula_flux,
-                (m.nebula_flux / base.nebula_flux - 1.0) * 100.0,
-                m.star_peak
-            );
-
-            assert!(
-                m.sky_sigma <= base.sky_sigma + 0.01,
-                "{}/{name} made the sky noisier: {:.2} from {:.2}",
-                fixture.label,
-                m.sky_sigma,
-                base.sky_sigma
-            );
-            assert!(
-                (m.nebula_flux / base.nebula_flux - 1.0).abs() < 0.05,
-                "{}/{name} moved integrated target flux by {:.1} % — the filter is \
-                 eating signal",
-                fixture.label,
-                (m.nebula_flux / base.nebula_flux - 1.0) * 100.0
-            );
-            assert!(
-                m.star_peak >= base.star_peak.saturating_sub(2),
-                "{}/{name} clipped the brightest star from {} to {}",
-                fixture.label,
-                base.star_peak,
-                m.star_peak
-            );
-        }
-    }
-
-    assert!(measured > 0, "no fixture was available to measure");
-}
-
-/// Every spelling of "off" must reach the fused traversal, not a staged one that
-/// happens to agree. Byte equality against `DenoiseConfig::OFF` is what makes
-/// adding a stage to a path every client crosses a safe change — and it is
-/// asserted on the real tone curve rather than on a synthetic frame.
+/// This is Community's whole picture now that the filters are a Pro plugin, so it is
+/// also the guard on the claim that a Community build renders what it always did: the
+/// fused traversal is byte-identical to the pre-denoise output rather than merely
+/// equivalent, and `is_enabled` is what routes between the two.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -531,6 +370,40 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
         ready.pipeline_config.denoise = denoise;
         let (bytes, _, _) = encode(&ready, TIER_1440.0, TIER_1440.1);
         assert_eq!(baseline, bytes, "variant {i} did not reproduce the stream");
+    }
+}
+
+/// Without the plugin the Background Grain dial must not move the picture at all.
+///
+/// The dial spends three levers, and one of them — the tone curve's grain split — is
+/// Community code. With the filters in the Pro repo, Community pins that split at
+/// `DEFAULT_GRAIN_SPLIT` whatever the dial says, so its render is exactly the pre-split
+/// "denoise off" picture at the default tone curve: verified byte for byte against the
+/// build before the move. A change that wired the split back to the dial here would give
+/// Community users a control they cannot see moving their target brightness.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn without_the_plugin_the_dial_does_not_move_the_picture() {
+    assert!(
+        night_amplifier::license::pro_plugin(&night_amplifier::render::DENOISE_PLUGIN).is_none(),
+        "this is Community's guard and must run without the denoise plugin"
+    );
+    let render_at = |dial: f32| {
+        let ready = prepare_fixture_with(&FIXTURES[0], |settings| {
+            settings.denoise.background_grain = dial;
+        })
+        .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(FIXTURES[0].dir)));
+        encode(&ready, TIER_1440.0, TIER_1440.1).0
+    };
+
+    let middle = render_at(0.5);
+    for dial in [0.0f32, 0.25, 0.75, 1.0] {
+        assert_eq!(
+            render_at(dial),
+            middle,
+            "dial {dial} changed Community's render; without the filters it must not"
+        );
     }
 }
 

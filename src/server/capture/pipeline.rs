@@ -50,6 +50,16 @@ pub struct StackingOutcome {
     /// moved: they fall as `1/sqrt(N)`, so proportional growth in this number is what
     /// decides when they have to be measured again.
     pub stack_depth: u32,
+    /// The stack's coverage map, when `display_frame` is an accumulated stack its subs did
+    /// not all cover — see [`crate::frame::NoiseField`].
+    ///
+    /// Taken from the same read of the accumulator as the display copy, so it costs the
+    /// stacking thread one plane's block medians rather than another 434 MB pass. `None`
+    /// wherever `display_frame` is, wherever every sub covered the whole frame (nothing
+    /// to say, the common case), and wherever the mode keeps no `IncrementalPixel`
+    /// accumulator — planetary, and comet, whose context is a Pro trait this does not
+    /// reach through.
+    pub noise: Option<crate::frame::NoiseField>,
 }
 
 impl StackingOutcome {
@@ -62,6 +72,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth: 0,
+            noise: None,
         }
     }
 
@@ -74,6 +85,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth,
+            noise: None,
         }
     }
 
@@ -90,6 +102,7 @@ impl StackingOutcome {
             stack_reset: false,
             rejected_because: None,
             stack_depth,
+            noise: None,
         }
     }
 }
@@ -184,10 +197,15 @@ pub async fn process_frame_with_stacking(
 
     // Return the current stacked result for display (raw, background subtraction applied in preview)
     let depth = ctx.frame_count() as u32;
-    match ctx.compute() {
-        Ok(stacked) => StackingOutcome {
+    // The display copy and the coverage map come from one read of the 434 MB
+    // accumulator; see `MasterStack::compute_with_coverage`.
+    match ctx.compute_with_coverage() {
+        Ok((stacked, noise)) => StackingOutcome {
             stack_reset: admission.rebased,
             rejected_because: admission.rejected_because,
+            // A stack every sub covered completely has nothing to say — the common case —
+            // and is not carried at all, so it costs the encoders nothing.
+            noise: noise.is_usable().then_some(noise),
             ..StackingOutcome::stacked(stacked, admission.added, depth)
         },
         Err(e) => {
@@ -387,6 +405,14 @@ pub async fn process_frame_with_planetary_stacking(
     }
 }
 
+/// What one pass of the preview pipeline decided about a frame: the stage config and the
+/// solved tone curve. A named type rather than a tuple so the four call sites say which
+/// half they read.
+pub struct PreviewRender {
+    pub pipeline_config: crate::render::RenderPipelineConfig,
+    pub stretch_result: Option<crate::server::state::StretchResult>,
+}
+
 /// Process a frame for preview display using the unified render pipeline.
 /// Now returns a RenderReadyFrame instead of applying the non-linear stretch,
 /// allowing the stretch to be fused into the downsampling pass.
@@ -397,10 +423,7 @@ pub async fn process_frame_with_planetary_stacking(
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
-) -> crate::error::Result<(
-    crate::render::RenderPipelineConfig,
-    Option<crate::server::state::StretchResult>,
-)> {
+) -> crate::error::Result<PreviewRender> {
     process_preview_frame_with_analysis(
         frame,
         settings,
@@ -423,10 +446,7 @@ pub fn process_preview_frame_with_analysis(
     settings: &CaptureSettings,
     ctx: AnalysisContext,
     analysis: &mut PreviewAnalysis,
-) -> crate::error::Result<(
-    crate::render::RenderPipelineConfig,
-    Option<crate::server::state::StretchResult>,
-)> {
+) -> crate::error::Result<PreviewRender> {
     use crate::background::BackgroundExtractor;
     use crate::render::autostretch::prepare_auto_stretch_frame_with_stats;
 
@@ -606,7 +626,10 @@ pub fn process_preview_frame_with_analysis(
         None
     };
 
-    Ok((pipeline_config, stretch_result))
+    Ok(PreviewRender {
+        pipeline_config,
+        stretch_result,
+    })
 }
 
 #[cfg(test)]
@@ -806,7 +829,7 @@ mod tests {
         let mut frame = Frame::filled(10, 10, 3, 0.2).unwrap();
         let settings = CaptureSettings::default();
 
-        let (_, stretch) = process_preview_frame(&mut frame, &settings)
+        let stretch = process_preview_frame(&mut frame, &settings).map(|r| r.stretch_result)
             .expect("a frame too small to measure must still render");
         assert!(
             stretch.is_none(),

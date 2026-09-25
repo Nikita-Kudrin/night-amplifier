@@ -6,11 +6,37 @@ corrections they are a matter of taste — every denoiser has a setting at which
 nebulae start looking like plastic, and only your eye at the eyepiece can find
 where that is.
 
-Find them under **Settings → Noise Reduction**.
+Find them under **Settings → Noise Reduction**. Noise reduction is a **Night Amplifier
+Pro** feature: without Pro the section is shown locked, and the picture is the stacked
+image exactly as the pipeline produces it — the tone curve is the same one Pro uses at
+the default Background Grain setting, so the whole difference is the filters.
 
-Both are among the six that [Focus/Finder mode](/getting-started#focus-finder-mode)
-holds off while you focus; their switches grey out while it is on and come back to your
-values when you turn it off.
+**Denoise** at the top of the section turns every filter on or off at once. Off shows the
+stacked image untouched — exactly what the Community edition renders — which is the quickest
+way to judge what the filters are doing to a target, and the way back if something starts to
+look plastic. Background Grain greys out with the filters, and its brightness trade goes with
+it: off, the tone curve is back at the dial's middle, so a target you brightened with a low
+dial will look a little dimmer. At the default dial position nothing but the filters changes.
+
+Colour Mottle and Structure strength are among the six that
+[Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
+controls grey out while it is on and come back to your values when you turn it off.
+**Detail** greys out with them, since it works through the same filter, but keeps your
+value. The Denoise switch is yours alone — Focus/Finder mode never touches it.
+
+## The edges of the stack are denoised a little harder
+
+When the mount drifts during a session, the edges of the frame are covered by fewer subs
+than the middle, so they carry more noise. The filters know how much of the stack each part
+of the frame holds and smooth the thinly covered parts correspondingly harder, so a stack's
+border does not look grainier than its centre. Where every sub covered the frame the picture
+is exactly what it would be otherwise — outlier rejection throwing a satellite trail or a
+cosmic ray away does not count as a thin edge. A saved stacked PNG is smoothed the same way
+as the live view.
+
+This evens out *grain*, the fine speckle the filters can reach. It cannot remove a visible
+line where one sub's edge ends — that is a real step in the image, not noise; the fix for it is
+dithering or letting the stack grow past it.
 
 ## They run at the size you stream, not the size you capture
 
@@ -45,6 +71,14 @@ used to use a fixed threshold, which on a deep stack was far above the frame's o
 noise: stars stopped registering as edges and their colour spread into soft
 patches across the background — the blotches you may remember on a globular
 cluster. If you ever see those again, that threshold is the first place to look.
+
+A second, much wider smoothing — about two degrees across at the eyepiece, at the
+default 1440p streaming resolution — then evens out the larger colour patches the
+first one is too small to reach, but only across plain background: anywhere the first filter found a star or the edge of
+the target, the wide one stays out. How much it finds to do depends on the
+camera. On some the larger patches are simply the background's own tint showing
+more where the background is brighter; that is brightness mottle, not colour
+noise, and it goes when **Background Grain** smooths the brightness.
 
 **Colour strength** controls how far the colour planes move toward the smoothed
 result. Lower it if faint colour in the target starts washing out.
@@ -123,6 +157,46 @@ like a painting, take it to 0 % before adjusting anything else — the differenc
 much easier to judge by switching it off and on than by nudging it.
 :::
 
+## Detail
+
+The opposite of the filters above: it *raises* contrast inside the target — the lanes,
+knots and edges of a nebula, the dust lanes of a galaxy — at the scales between fine
+speckle and broad glow, roughly 3 to 30 arcminutes at the eyepiece. It reuses the
+brightness filter's own separation of the image into scales, so it costs little extra.
+
+Three things are deliberately left alone, which is what sets it apart from ordinary
+sharpening:
+
+- **The background.** Only structure standing above the sky is raised, so background
+  grain does not grow with it — measured unchanged in every grain band. The grain *on*
+  the target is a different matter: it sits in the same scales as the structure, so it
+  is raised with it.
+- **Stars, including stars sitting on the nebula.** Ordinary sharpening leaves a dark
+  ring round every star and fattens it; Detail predicts where that would happen and
+  holds back there.
+- **Anything already high-contrast**, such as the edge of a nebula against the sky, so it
+  does not grow a halo.
+
+**50 % is the default.** On a bright nebula like Orion it roughly doubles the visible
+structure in the core; on Andromeda it brings out the disk. On a nebula sitting in a
+dense star field — the Dumbbell — it raises the nebula between the stars and leaves the
+stars, which there are most of what you see, so the change is modest; on a globular
+cluster it does very little, by design. **0 %** shows the target as before this control
+existed. Towards **100 %**, a bright star on a bright galaxy disk can pick up a faint
+dark ring about a degree across at the eyepiece.
+
+If the target looks grainier with Detail on — most likely on a short stack or a faint
+galaxy disk, where the grain is a large part of what sits at those scales — lower it
+rather than raising the filters: they are already working on the same scales.
+
+Its star protection is tuned for stars as they appear at the usual streaming sizes. On a
+**Native** or 2160p stream from a camera that oversamples the seeing, and in the
+full-size eyepiece snapshot, stars are wider in pixels, and the widest can come out a
+little swollen or faintly ringed on a bright nebula; lower Detail there if you see it.
+
+Detail works through the brightness filter, so it does nothing while **Structure
+strength** is at 0 %, and its slider greys out.
+
 ## Processing Resolution
 
 Under **Settings → Preview**, and a different lever from the two filters above:
@@ -170,6 +244,10 @@ its own size.
   looks grainier and shimmers through an eyepiece lens.
 - **Bigger costs everyone.** Every screen on that view pays for the size in
   bandwidth, and the server in encoding time. A view nobody has open costs nothing.
+- **Noise reduction makes `/` and `/eyepiece` larger.** With it on they are compressed
+  at a higher quality, so the smoothed sky keeps its finest brightness steps — 1.5 to 2
+  times the data per frame, about 2.5–4 megabits at 1440p. On a slow network, lower
+  **Streaming Resolution** before turning noise reduction off.
 - **A change applies to the next frame** the server renders — including the frame
   of an exposure that was already running when you changed it.
 

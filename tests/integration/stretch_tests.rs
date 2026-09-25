@@ -188,12 +188,12 @@ fn test_eyepiece_intensity_metrics() {
             frame = night_amplifier::debayer_auto(&frame).unwrap().0;
         }
 
-        let (_config, stretch_res) =
-            night_amplifier::server::capture::pipeline::process_preview_frame(
-                &mut frame, &settings,
-            )
-            .unwrap();
-        let res = stretch_res.unwrap();
+        let res = night_amplifier::server::capture::pipeline::process_preview_frame(
+            &mut frame, &settings,
+        )
+        .unwrap()
+        .stretch_result
+        .unwrap();
 
         night_amplifier::render::stretch::apply_scale_lut_frame(
             &mut frame,

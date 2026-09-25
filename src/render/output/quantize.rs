@@ -1,4 +1,4 @@
-//! Final f32 -> 8-bit conversion for display: black floor, ordered dither, quantize.
+//! Final f32 -> 8-bit conversion for display: black floor, dither, quantize.
 //! Every displayed byte crosses this boundary exactly once, in the tail of the two
 //! fused streaming kernels (`server::encoding::fused`) and [`super::frame_to_rgb8`] —
 //! kept as one helper because parallel 8-bit conversions have drifted by an LSB here
@@ -9,33 +9,18 @@
 //! shows as black speckle at the eyepiece. Maps `[0,1]` to `[pedestal,1]` so nothing
 //! reaches off while white stays white.
 //!
-//! **Dither before rounding, not after**: ordered dithering biases the *rounding
-//! decision* with a sub-LSB offset, turning quantization error into a
-//! high-frequency pattern the eye integrates away. Adding a pattern to an
-//! already-rounded byte (the old ±8 LSB version) recovers no sub-LSB information —
-//! just visible noise.
+//! **Dither before rounding, not after**: a sub-LSB offset biases the *rounding
+//! decision*, turning quantization error into a high-frequency pattern the eye
+//! integrates away. Adding a pattern to an already-rounded byte (the old ±8 LSB
+//! version) recovers no sub-LSB information — just visible noise.
+//!
+//! **Blue noise, not an ordered matrix**: an 8x8 Bayer matrix quantises a smooth sky
+//! into a lattice — one dot per tile near a level, a crosshatch between — and the
+//! denoised sky is smooth enough to show it. See [`dither_offset`] for the numbers.
 
 use crate::frame::sample_to_u8;
 
-/// 8x8 ordered dither threshold matrix, values `0..=63`.
-///
-/// Eight rather than the conventional four because of the viewing geometry this
-/// exists for: on a 70 mm / 1440 px eyepiece screen behind a 100 mm lens each
-/// pixel subtends roughly 1.7 arcmin, which puts a 4x4 cell's ~7 arcmin period
-/// inside what the eye resolves — the pattern reads as crosshatch instead of
-/// disappearing. 8x8 halves the step between adjacent thresholds and pushes the
-/// fundamental to ~14 arcmin.
-#[rustfmt::skip]
-const BAYER_8X8: [[u8; 8]; 8] = [
-    [ 0, 32,  8, 40,  2, 34, 10, 42],
-    [48, 16, 56, 24, 50, 18, 58, 26],
-    [12, 44,  4, 36, 14, 46,  6, 38],
-    [60, 28, 52, 20, 62, 30, 54, 22],
-    [ 3, 35, 11, 43,  1, 33,  9, 41],
-    [51, 19, 59, 27, 49, 17, 57, 25],
-    [15, 47,  7, 39, 13, 45,  5, 37],
-    [63, 31, 55, 23, 61, 29, 53, 21],
-];
+use super::blue_noise::BLUE_NOISE_64;
 
 /// One 8-bit quantization step in normalized units.
 const LSB: f32 = 1.0 / 255.0;
@@ -49,7 +34,7 @@ pub struct DisplayOutput {
     /// `0.0` reproduces a plain conversion. Non-zero compresses the output into
     /// `[pedestal, 1]` so no pixel reaches an OLED's off state.
     pub pedestal: f32,
-    /// Apply ordered dithering before rounding to 8 bits.
+    /// Apply blue-noise dithering before rounding to 8 bits.
     pub dither: bool,
 }
 
@@ -98,10 +83,18 @@ impl DisplayOutput {
 /// Indexed in **output** pixel coordinates. A pattern applied before resampling
 /// would be averaged into mush by the downsample, so callers must pass the
 /// coordinate of the pixel being written, not the source pixel it came from.
+///
+/// The 64x64 void-and-cluster mask replaced the 8x8 Bayer matrix on 2026-09-24. On a
+/// flat sky with 0.3 output levels of noise the matrix left lattice lines at 31-41x
+/// the spectrum beside them below half Nyquist; the mask leaves 1.0-1.3x, as no dither
+/// does (`dither_tests`). With the Pro denoisers on, Orion's rendered sky read 36x
+/// against the mask's 5.1x and no dither's 5.8x. The mask also holds 0.16 % of its
+/// energy below half Nyquist against the matrix's 1.45 %. An earlier rejection of blue
+/// noise measured an 8x8 blue tile, too small to be blue.
 #[inline]
 fn dither_offset(x: usize, y: usize) -> f32 {
-    let cell = BAYER_8X8[y & 7][x & 7] as f32;
-    ((cell + 0.5) / 64.0 - 0.5) * LSB
+    let rank = BLUE_NOISE_64[y & 63][x & 63] as f32;
+    ((rank + 0.5) / 256.0 - 0.5) * LSB
 }
 
 /// Convert one sample, applying the pedestal and a caller-supplied dither offset.
@@ -118,11 +111,11 @@ fn quantize(value: f32, pedestal: f32, dither: f32) -> u8 {
 /// Convert one interleaved RGB f32 row to 8 bits.
 ///
 /// `y` and the row's position are in output coordinates. All three channels of a
-/// pixel share one dither cell, which is deliberate: a per-channel offset would
+/// pixel share one dither threshold, which is deliberate: a per-channel offset would
 /// inject chroma noise into a grey sky rather than only breaking up the
 /// luminance quantization.
 #[inline]
-pub(crate) fn write_row_rgb8(row_out: &mut [u8], row_in: &[f32], y: usize, output: DisplayOutput) {
+pub fn write_row_rgb8(row_out: &mut [u8], row_in: &[f32], y: usize, output: DisplayOutput) {
     debug_assert_eq!(row_out.len(), row_in.len());
 
     if output.is_plain() {
@@ -185,28 +178,14 @@ pub(crate) fn write_pixel_rgb8(
 mod tests {
     use super::*;
 
-    /// A duplicated or missing entry silently biases the dither toward one
-    /// threshold, which shows up as a faint tint rather than as a crash.
-    #[test]
-    fn bayer_matrix_is_a_permutation_of_0_to_63() {
-        let mut seen = [false; 64];
-        for row in BAYER_8X8 {
-            for cell in row {
-                assert!(!seen[cell as usize], "value {cell} appears twice");
-                seen[cell as usize] = true;
-            }
-        }
-        assert!(seen.iter().all(|&s| s), "matrix does not cover 0..=63");
-    }
-
     /// The offset must stay strictly inside ±half an LSB: larger and it is
     /// visible noise, smaller and it cannot flip a rounding decision.
     #[test]
     fn dither_offset_spans_just_under_half_an_lsb() {
         let mut min = f32::MAX;
         let mut max = f32::MIN;
-        for y in 0..8 {
-            for x in 0..8 {
+        for y in 0..64 {
+            for x in 0..64 {
                 let d = dither_offset(x, y);
                 min = min.min(d);
                 max = max.max(d);
@@ -223,41 +202,57 @@ mod tests {
     /// brightness instead of only redistributing rounding error.
     #[test]
     fn dither_offset_is_mean_zero_over_a_tile() {
-        let sum: f32 = (0..8)
-            .flat_map(|y| (0..8).map(move |x| dither_offset(x, y)))
+        let sum: f64 = (0..64)
+            .flat_map(|y| (0..64).map(move |x| dither_offset(x, y) as f64))
             .sum();
-        assert!(sum.abs() < 1e-6 * LSB, "tile mean is {sum}, expected 0");
+        assert!(sum.abs() < 1e-6 * LSB as f64, "tile sum is {sum}, expected 0");
     }
 
-    /// The property the whole change exists for: for an input between two
-    /// 8-bit levels, the local mean of the dithered output must track the input,
-    /// where an undithered conversion would snap every pixel to one level.
+    /// The property the dither exists for: for an input between two 8-bit levels, the
+    /// local mean of the output must track the input, where an undithered conversion
+    /// snaps every pixel to one level.
+    ///
+    /// Every 8x8 block, not only the whole tile: the eye averages locally. The mask's
+    /// worst block misses by 0.062 LSB; thresholds drawn as white noise miss by 0.19,
+    /// which is the clumping blue noise is built to avoid.
     #[test]
-    fn dithering_preserves_sub_lsb_levels_in_the_block_mean() {
+    fn dithering_preserves_sub_lsb_levels_in_every_block_mean() {
         let output = DisplayOutput {
             pedestal: 0.0,
             dither: true,
         };
 
-        for step in 0..8 {
-            // Sit 'step/8' of the way between output levels 40 and 41.
-            let value = (40.0 + step as f32 / 8.0) * LSB;
-            let mut total = 0u32;
-            for y in 0..8 {
-                let row_in = vec![value; 8 * 3];
-                let mut row_out = vec![0u8; 8 * 3];
-                write_row_rgb8(&mut row_out, &row_in, y, output);
-                total += row_out.iter().step_by(3).map(|&v| v as u32).sum::<u32>();
+        for step in 0..64 {
+            let expected = 40.0 + step as f32 / 64.0;
+            let value = expected * LSB;
+            let mut tile = vec![0u8; 64 * 64];
+            for y in 0..64 {
+                let mut row_out = vec![0u8; 64 * 3];
+                write_row_rgb8(&mut row_out, &vec![value; 64 * 3], y, output);
+                for (x, px) in row_out.chunks_exact(3).enumerate() {
+                    tile[y * 64 + x] = px[0];
+                }
             }
-            let mean = total as f32 / 64.0;
-            let expected = 40.0 + step as f32 / 8.0;
+            let mean = |x0: usize, y0: usize, side: usize| {
+                let sum: u32 = (y0..y0 + side)
+                    .flat_map(|y| (x0..x0 + side).map(move |x| (x, y)))
+                    .map(|(x, y)| tile[y * 64 + x] as u32)
+                    .sum();
+                sum as f32 / (side * side) as f32
+            };
             assert!(
-                (mean - expected).abs() < 0.2,
-                "block mean {mean} should track input {expected} within 0.2 LSB"
+                (mean(0, 0, 64) - expected).abs() < 0.01,
+                "tile mean {} should track input {expected}",
+                mean(0, 0, 64)
             );
+            for (bx, by) in (0..8).flat_map(|by| (0..8).map(move |bx| (bx * 8, by * 8))) {
+                let block = mean(bx, by, 8);
+                assert!(
+                    (block - expected).abs() < 0.1,
+                    "8x8 block at ({bx}, {by}) averages {block} for input {expected}"
+                );
+            }
 
-            // The undithered conversion is what this improves on: it collapses
-            // every one of these inputs onto a single byte.
             let mut plain = vec![0u8; 3];
             write_pixel_rgb8(&mut plain, value, value, value, 0, 0, DisplayOutput::PLAIN);
             assert_eq!(plain[0], sample_to_u8(value));
@@ -348,35 +343,29 @@ mod tests {
         }
     }
 
-    /// Share of the dither's energy below `cycles` cycles per `side`-pixel tile, by
+    /// Share of a pattern's energy below `cycles` cycles per `side`-pixel tile, by
     /// direct DFT.
-    ///
-    /// Measured 2026-09-17 while considering blue noise in this matrix's place, on the
-    /// theory that an 8-pixel repeat puts the pattern at ~4.7 cycles per degree on the
-    /// eyepiece screen, near the peak of a dark-adapted eye's contrast sensitivity. The
-    /// measurement says otherwise and is kept as the guard: a dispersed-dot ordered
-    /// matrix holds 93.8 % of its energy in the top eighth of the spectrum and 0.3 %
-    /// below half Nyquist, where void-and-cluster blue noise of the same tile size ran
-    /// 61 % and 2.4 %. The tile repeats every 8 px; its *energy* does not live there.
-    ///
-    /// Any replacement pattern has to beat this, not merely look more random.
     fn low_frequency_share(pattern: &dyn Fn(usize, usize) -> f32, side: usize, cycles: usize) -> f64 {
+        let twiddle: Vec<(f64, f64)> = (0..side)
+            .map(|k| {
+                let phase = -2.0 * std::f64::consts::PI * k as f64 / side as f64;
+                (phase.cos(), phase.sin())
+            })
+            .collect();
+        let values: Vec<f64> = (0..side * side).map(|i| pattern(i % side, i / side) as f64).collect();
         let mut low = 0.0f64;
         let mut total = 0.0f64;
         for u in 0..side {
             for v in 0..side {
                 if u == 0 && v == 0 {
-                    continue; // the mean, which the matrix holds at zero
+                    continue; // the mean, which the dither holds at zero
                 }
                 let (mut re, mut im) = (0.0f64, 0.0f64);
                 for y in 0..side {
                     for x in 0..side {
-                        let phase = -2.0 * std::f64::consts::PI
-                            * ((u * x) as f64 + (v * y) as f64)
-                            / side as f64;
-                        let value = pattern(x, y) as f64;
-                        re += value * phase.cos();
-                        im += value * phase.sin();
+                        let (c, s) = twiddle[(u * x + v * y) % side];
+                        re += values[y * side + x] * c;
+                        im += values[y * side + x] * s;
                     }
                 }
                 let power = re * re + im * im;
@@ -392,23 +381,39 @@ mod tests {
         low / total
     }
 
+    /// The 8x8 Bayer matrix the mask replaced, from its bit-interleave definition, as
+    /// the reference a dither has to beat.
+    fn bayer_offset(x: usize, y: usize) -> f32 {
+        let mut rank = 0;
+        for bit in 0..3 {
+            let (bx, by) = ((x >> bit) & 1, (y >> bit) & 1);
+            rank |= (((bx ^ by) << 1) | by) << (4 - 2 * bit);
+        }
+        (rank as f32 + 0.5) / 64.0 - 0.5
+    }
+
+    /// The dither's energy stays out of the band the eye resolves best. The mask holds
+    /// 0.16 % of it below half Nyquist, the Bayer matrix 1.45 %: the matrix parks most
+    /// of its energy at the (½, ½) corner, but its period-4 and period-8 levels are lines
+    /// below half Nyquist, and an 8x8 *blue* tile — measured 2026-09-17 — is too small
+    /// to push energy up at all (2.4 %).
     #[test]
     fn the_dither_keeps_its_energy_near_nyquist() {
-        const SIDE: usize = 32;
+        const SIDE: usize = 64;
         let share = low_frequency_share(&|x, y| dither_offset(x, y) / LSB, SIDE, SIDE / 4);
+        let bayer = low_frequency_share(&bayer_offset, SIDE, SIDE / 4);
         assert!(
-            share < 0.02,
-            "the dither must stay out of the band the eye is sharpest in: {share:.3} of \
-             its energy sits below half Nyquist"
+            share < 0.004 && share < bayer / 4.0,
+            "the dither must stay out of the band the eye is sharpest in: {share:.4} of \
+             its energy sits below half Nyquist, against the Bayer matrix's {bayer:.4}"
         );
     }
 
-    /// The dither must tile in output coordinates, so the same x within a row
-    /// eight rows apart gets the same offset.
+    /// The dither must tile in output coordinates, every 64 pixels.
     #[test]
-    fn dither_tiles_every_eight_pixels() {
-        assert_eq!(dither_offset(0, 0), dither_offset(8, 8));
-        assert_eq!(dither_offset(3, 5), dither_offset(11, 13));
+    fn dither_tiles_every_sixty_four_pixels() {
+        assert_eq!(dither_offset(0, 0), dither_offset(64, 64));
+        assert_eq!(dither_offset(3, 5), dither_offset(67, 133));
         assert_ne!(dither_offset(0, 0), dither_offset(1, 0));
     }
 }

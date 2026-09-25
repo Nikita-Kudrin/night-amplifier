@@ -7,7 +7,7 @@ use axum::response::IntoResponse;
 
 use crate::background::BACKGROUND_PLUGIN;
 use crate::push_to::PUSH_TO_PLUGIN;
-use crate::render::SATURATION_PLUGIN;
+use crate::render::{DENOISE_PLUGIN, SATURATION_PLUGIN};
 use crate::server::dto::{
     ApiResponse, CapabilitiesResponse, CometCapabilities, DeepSkyCapabilities,
     PlanetaryCapabilities, PushToCapabilities,
@@ -24,8 +24,14 @@ pub async fn get_capabilities() -> impl IntoResponse {
     let has_push_to = active && PUSH_TO_PLUGIN.get().is_some();
     let has_saturation = active && SATURATION_PLUGIN.get().is_some();
     let has_comet = active && COMET_PLUGIN.get().is_some();
+    let has_denoise = active && DENOISE_PLUGIN.get().is_some();
 
-    let has_pro = has_rejection || has_background || has_push_to || has_saturation || has_comet;
+    let has_pro = has_rejection
+        || has_background
+        || has_push_to
+        || has_saturation
+        || has_comet
+        || has_denoise;
 
     let response = CapabilitiesResponse {
         has_pro,
@@ -33,6 +39,7 @@ pub async fn get_capabilities() -> impl IntoResponse {
             advanced_rejection: has_rejection,
             rbf_background: has_background,
             saturation_boost: has_saturation,
+            denoise: has_denoise,
         },
         planetary: PlanetaryCapabilities {
             advanced_stacking: true,

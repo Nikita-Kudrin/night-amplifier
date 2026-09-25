@@ -57,7 +57,7 @@ describe('SettingsPanel', () => {
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
             capabilities: ref({
                 has_pro: false,
-                deep_sky: {advanced_rejection: false, rbf_background: false},
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: false},
                 planetary: {advanced_stacking: false},
                 push_to: {astap_solver: false},
                 ...overrides.capabilities,
@@ -411,8 +411,73 @@ describe('SettingsPanel', () => {
     })
 
     describe('Noise Reduction Section', () => {
-        it('sends the whole denoise object when a filter is toggled', async () => {
+        const WITH_DENOISE = {
+            capabilities: {deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true}},
+        }
+
+        const denoiseControls = (wrapper) => [
+            findToggleByLabel(wrapper, 'Colour Mottle').attributes('disabled'),
+            ...wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .filter((s) =>
+                    ['Colour strength', 'Background Grain', 'Structure strength', 'Detail'].includes(
+                        s.props('label')
+                    )
+                )
+                .map((s) => (s.props('disabled') ? '' : undefined)),
+        ]
+
+        // Denoising is a Pro feature: the filters live in the Pro plugin, and so does
+        // every control over them. The section stays visible, locked, so the build says
+        // what it does not do rather than silently missing a section.
+        it('locks every noise-reduction control without the denoise capability', () => {
             const wrapper = mountSettingsPanel()
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeDefined()
+            expect(denoiseControls(wrapper).every((d) => d !== undefined)).toBe(true)
+        })
+
+        it('turning Denoise off holds the filter controls but not the switch itself', async () => {
+            const wrapper = mountSettingsPanel({
+                ...WITH_DENOISE,
+                settings: {
+                    denoise: {
+                        enabled: false,
+                        chroma: true,
+                        chroma_strength: 1.0,
+                        background_grain: 0.5,
+                        luma_strength: 1.0,
+                    },
+                },
+            })
+            await flushPromises()
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeUndefined()
+            expect(denoiseControls(wrapper).every((d) => d !== undefined)).toBe(true)
+        })
+
+        it('sends the switch with the rest of the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
+
+            await findToggleByLabel(wrapper, 'Denoise').setValue(false)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({enabled: false, background_grain: 0.5}),
+            })
+        })
+
+        // The mode reaches "off" through the strengths it snapshots. A denoise switch the
+        // mode forced false is how a saved file once lost the Background Grain dial for
+        // good, so the observer's master switch is deliberately theirs.
+        it('Focus/Finder mode never holds the Denoise switch', () => {
+            const wrapper = mountSettingsPanel({...WITH_DENOISE, settings: {focus_mode: true}})
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeUndefined()
+        })
+
+        it('sends the whole denoise object when a filter is toggled', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
 
             await findToggleByLabel(wrapper, 'Colour Mottle').setValue(false)
             await flushPromises()
@@ -504,6 +569,44 @@ describe('SettingsPanel', () => {
             expect(slider.props('max')).toBe(1.0)
         })
 
+        // Local contrast ships on, at the setting the plugin's measurements passed on
+        // every target, and zero is the picture from before the control existed.
+        it('offers Detail from off to its top and sends it with the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('min')).toBe(0.0)
+            expect(slider.props('max')).toBe(1.0)
+            expect(slider.props('modelValue')).toBe(0.5)
+            expect(slider.props('disabled')).toBeFalsy()
+
+            slider.vm.$emit('update:modelValue', 0.8)
+            slider.vm.$emit('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({detail: 0.8, background_grain: 0.5}),
+            })
+        })
+
+        // Detail is a gain on the brightness denoiser's planes: with that at zero there is
+        // nothing for it to raise, and a live slider that moves nothing is a broken control.
+        it('holds Detail while the brightness denoiser is off', async () => {
+            const wrapper = mountSettingsPanel({
+                ...WITH_DENOISE,
+                settings: {denoise: {enabled: true, chroma: true, luma_strength: 0.0, detail: 0.5}},
+            })
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('disabled')).toBe(true)
+        })
+
         it('falls back to defaults when the server sends no denoise settings', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
@@ -513,6 +616,10 @@ describe('SettingsPanel', () => {
                 .findAllComponents({name: 'BaseSlider'})
                 .find((s) => s.props('label') === 'Background Grain')
             expect(grain.props('modelValue')).toBe(0.5)
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('modelValue')).toBe(0.5)
         })
     })
 
@@ -690,10 +797,27 @@ describe('SettingsPanel', () => {
             expect(grainSlider(wrapper).props('disabled')).toBe(true)
         })
 
+        // Held because the mode holds the denoiser it works through — not managed: the
+        // mode never snapshots or rewrites the observer's Detail value.
+        it('greys Detail out with the brightness denoiser while the mode is on', () => {
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: true},
+                capabilities: {deep_sky: {denoise: true}},
+            })
+
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('disabled')).toBe(true)
+        })
+
         // The dial is deliberately *not* managed: it moves the tone curve's split as well
         // as the wavelet, and this mode has no business moving the tone curve.
         it('leaves the Background Grain dial editable while the mode is on', () => {
-            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: true},
+                capabilities: {deep_sky: {denoise: true}},
+            })
 
             const dial = wrapper
                 .findAllComponents({name: 'BaseSlider'})
@@ -715,6 +839,7 @@ describe('SettingsPanel', () => {
                         advanced_rejection: false,
                         rbf_background: false,
                         saturation_boost: true,
+                        denoise: true,
                     },
                 },
             })

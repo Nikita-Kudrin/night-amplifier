@@ -19,11 +19,13 @@
 
 mod factory;
 mod format;
+mod noise_field;
 #[cfg(test)]
 mod layout_tests;
 mod ops;
 
 pub use format::PixelFormat;
+pub use noise_field::{NoiseField, NOISE_REDUCTION};
 pub(crate) use ops::sample_to_u8;
 
 /// A frame of image data stored as normalized f32 values in [0.0, 1.0]
