@@ -112,6 +112,16 @@ export const BACKGROUND_GRAIN_LIMITS = {
     default: 0.5,
 }
 
+// Local contrast on the target's own structure. 50% is the default the Pro plugin's
+// measurements passed on every test target; 100% is where the first faint ring shows.
+// Mirrors `DEFAULT_DETAIL` in src/server/state/settings.rs.
+export const DETAIL_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 0.5,
+}
+
 // How far above its brightest same-colour neighbour a sample must sit to be
 // treated as a hot pixel
 // Mirrors `HOT_PIXEL_SIGMA_RANGE` in src/server/state/settings.rs, which enforces it.
@@ -301,6 +311,7 @@ export const DEFAULT_SETTINGS = {
         chroma_strength: 1.0,
         background_grain: 0.5,
         luma_strength: 1.0,
+        detail: 0.5,
     },
     preview_resolution: 'native',
     streaming_resolution: 'qhd1440',
@@ -418,6 +429,8 @@ export const HELP_TEXTS = {
         'How hard to fight grain in the background. The two halves do different things, because the mechanisms available cost very different amounts.\n• Above 50% the picture gets smoother almost for free. This is the half that works on the coarse, blotchy grain you actually notice — measured across six sessions it takes it down 9-27% while the target dims by at most 1%. Start here.\n• 50% is the tuned default: the cheap mechanism fully spent, the expensive one no further than its own default.\n• Below 50% you are buying brightness back with grain. It returns the finest speckle first, which is nearly invisible at normal viewing size, and then starts weakening the tone curve, which is what actually brightens faint nebulosity and galaxy arms — on a deep session the target reads about 17% brighter at 0% than at 50%.\nIf you are chasing smooth background, go up. If you are chasing faint detail, go down. Judge it at the eyepiece on the target you are actually looking at.',
     denoise_luma_strength:
         'Scales the thresholds for the mid scales — the soft mottle across the target, not the fine speckle and not the broad background blotches the Background Grain dial handles. 100% is the tuned value and the maximum: past it the mottle does not go away, it moves out to a coarser scale, and stars start to show a ring. Lower it if the target looks soft or plastic; 0% turns the brightness denoiser off altogether, which is the setting to reach for if nebulae start looking like plastic.',
+    denoise_detail:
+        'Brings out the structure inside the target - the lanes, knots and edges of a nebula or a galaxy\'s arms - without touching the background or the stars. It raises contrast at the scales between fine speckle and broad glow, and only where the target stands above the sky, so the background grain does not grow with it. Stars are left alone, including stars sitting on the nebula, which is where ordinary sharpening leaves dark rings. The grain on the target sits at the same scales, so it rises too: if a short stack or a faint galaxy looks grainier, lower this. 0% shows the target as it was before this control existed. Towards 100% a bright star on a bright galaxy disk can pick up a faint dark ring. It works through the brightness denoiser, so it does nothing while Structure strength is at 0%.',
     eyepiece_dither:
         'Adds a fine random-looking pattern, below one brightness step, before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth. It arrives whole only on /eyepiece_quality; the compressed views keep about half of it.',
     auto_stretch_intensity:

@@ -68,7 +68,9 @@ A test wanting one calls `stack_depth_grain_tests::managed_session`, which **pan
 be had — never `println!` + return, or the suite reports green with the assertion unrun.
 
 The measurement instruments (octave bands, the star radial profile, centre/edge, line
-coherence, lattice lines and block-mean error, stacking and rendering a session) live in `tests/integration/instruments.rs`, which
+coherence, lattice lines, block-mean error, target structure, the response of stars injected on
+a target — pooled over offset grids, paired, clipped pixels dropped — the target's signal and
+noise from two half-stacks, stacking and rendering a session) live in `tests/integration/instruments.rs`, which
 the Pro repo includes by `#[path]`: **it may not name `crate::`**. Fixture discovery arrives as a
 loader parameter instead. One implementation serves both repos — a second copy measured against
 the first's reference numbers is not a measurement.
@@ -566,6 +568,14 @@ the encoder hook and the gates.
   (`nullable_f32`). The UI locks the section on `capabilities.deep_sky.denoise`.
 - Run at stream resolution, after resample and before the tone curve: full-res then discarding
   3/4 would be 4.5x the memory traffic. Off fuses per-row; on stages the image as f32.
+- **Detail** (`DenoiseSettings::detail` -> `LumaDenoiseConfig::detail`) is local contrast on the
+  luma wavelet's own levels 2-4, held off the sky and every star by the plugin (its design and
+  numbers: Pro AGENTS.md). Ships on at `DEFAULT_DETAIL`; `0` is the render before it existed.
+  It rides on the luma filter, so the UI greys it with Structure strength at 0 and in
+  Focus/Finder mode, which does not manage it (never snapshotted). It raises the grain riding
+  on the target with the target (never the sky's), and its star protection is calibrated for
+  stars up to ~3.5 px sigma at the render size — Native streams and the full-size snapshot can
+  put wider ones in front of it.
 
 ### The stack's noise map (`frame::NoiseField`)
 
@@ -607,7 +617,8 @@ with a coverage map covering 42 % of the frame thin). Two structures stop that f
 - **`DenoiseScratch`** is owned by the render thread, not allocated per pass — a 1440² pass
   would otherwise page-fault ~75MB (13 of the 20ms the filters add). Passed down explicitly
   rather than thread-local, since first-frame encodes run on pooled tokio blocking
-  threads where thread-local would strand 75MB/thread.
+  threads where thread-local would strand 75MB/thread. Its opaque `plugin` slot holds what the
+  plugin keeps between passes (Pro's Detail maps: per pass, 1,260 page faults a 1440² call).
 
 Both spans report under `--span-timings`.
 

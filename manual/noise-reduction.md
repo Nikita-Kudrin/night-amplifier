@@ -20,8 +20,9 @@ dial will look a little dimmer. At the default dial position nothing but the fil
 
 Colour Mottle and Structure strength are among the six that
 [Focus/Finder mode](/getting-started#focus-finder-mode) holds off while you focus; their
-controls grey out while it is on and come back to your values when you turn it off. The
-Denoise switch is yours alone — Focus/Finder mode never touches it.
+controls grey out while it is on and come back to your values when you turn it off.
+**Detail** greys out with them, since it works through the same filter, but keeps your
+value. The Denoise switch is yours alone — Focus/Finder mode never touches it.
 
 ## The edges of the stack are denoised a little harder
 
@@ -155,6 +156,46 @@ brightness denoiser off altogether. If the target starts looking smeared, waxy, 
 like a painting, take it to 0 % before adjusting anything else — the difference is
 much easier to judge by switching it off and on than by nudging it.
 :::
+
+## Detail
+
+The opposite of the filters above: it *raises* contrast inside the target — the lanes,
+knots and edges of a nebula, the dust lanes of a galaxy — at the scales between fine
+speckle and broad glow, roughly 3 to 30 arcminutes at the eyepiece. It reuses the
+brightness filter's own separation of the image into scales, so it costs little extra.
+
+Three things are deliberately left alone, which is what sets it apart from ordinary
+sharpening:
+
+- **The background.** Only structure standing above the sky is raised, so background
+  grain does not grow with it — measured unchanged in every grain band. The grain *on*
+  the target is a different matter: it sits in the same scales as the structure, so it
+  is raised with it.
+- **Stars, including stars sitting on the nebula.** Ordinary sharpening leaves a dark
+  ring round every star and fattens it; Detail predicts where that would happen and
+  holds back there.
+- **Anything already high-contrast**, such as the edge of a nebula against the sky, so it
+  does not grow a halo.
+
+**50 % is the default.** On a bright nebula like Orion it roughly doubles the visible
+structure in the core; on Andromeda it brings out the disk. On a nebula sitting in a
+dense star field — the Dumbbell — it raises the nebula between the stars and leaves the
+stars, which there are most of what you see, so the change is modest; on a globular
+cluster it does very little, by design. **0 %** shows the target as before this control
+existed. Towards **100 %**, a bright star on a bright galaxy disk can pick up a faint
+dark ring about a degree across at the eyepiece.
+
+If the target looks grainier with Detail on — most likely on a short stack or a faint
+galaxy disk, where the grain is a large part of what sits at those scales — lower it
+rather than raising the filters: they are already working on the same scales.
+
+Its star protection is tuned for stars as they appear at the usual streaming sizes. On a
+**Native** or 2160p stream from a camera that oversamples the seeing, and in the
+full-size eyepiece snapshot, stars are wider in pixels, and the widest can come out a
+little swollen or faintly ringed on a bright nebula; lower Detail there if you see it.
+
+Detail works through the brightness filter, so it does nothing while **Structure
+strength** is at 0 %, and its slider greys out.
 
 ## Processing Resolution
 

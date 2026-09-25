@@ -480,6 +480,14 @@ pub struct DenoiseSettings {
     /// sky still looks grainy" one — that is the Background Grain dial.
     #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
     pub luma_strength: f32,
+    /// How much the wavelet raises the target's own structure, `0..=1`. The "Detail"
+    /// control; `0` renders exactly as before it existed.
+    ///
+    /// A gain on the levels [`luma_strength`](Self::luma_strength) thresholds, applied to
+    /// what survived the threshold and held off the sky and every star by the plugin — so
+    /// it rides on the brightness denoiser and does nothing while that is off.
+    #[serde(default = "default_detail", deserialize_with = "nullable_f32")]
+    pub detail: f32,
 }
 
 /// Reads JSON `null` as NaN instead of failing. serde_json writes a non-finite `f32` as
@@ -513,6 +521,11 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// tuned trade, not because it reproduces anything.
 pub const DEFAULT_BACKGROUND_GRAIN: f32 = 0.5;
 
+/// The Detail control's default, not an off switch: stars injected on every test target
+/// stay within the plugin's guard here, where the top of the dial leaves a faint ring. See
+/// the Pro repo's `plugins::denoise::detail`.
+pub const DEFAULT_DETAIL: f32 = 0.5;
+
 fn default_denoise_enabled() -> bool {
     true
 }
@@ -529,6 +542,10 @@ fn default_background_grain() -> f32 {
     DEFAULT_BACKGROUND_GRAIN
 }
 
+fn default_detail() -> f32 {
+    DEFAULT_DETAIL
+}
+
 impl Default for DenoiseSettings {
     fn default() -> Self {
         Self {
@@ -537,6 +554,7 @@ impl Default for DenoiseSettings {
             chroma_strength: default_denoise_strength(),
             background_grain: default_background_grain(),
             luma_strength: default_denoise_strength(),
+            detail: default_detail(),
         }
     }
 }
@@ -556,6 +574,7 @@ impl DenoiseSettings {
             background_grain: finite_or(self.background_grain, DEFAULT_BACKGROUND_GRAIN)
                 .clamp(0.0, 1.0),
             luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
+            detail: finite_or(self.detail, DEFAULT_DETAIL).clamp(0.0, 1.0),
         }
     }
 }
@@ -968,6 +987,7 @@ mod tests {
             chroma_strength: 0.4,
             background_grain: 0.82,
             luma_strength: 0.3,
+            detail: 0.9,
         };
         let round_tripped: DenoiseSettings =
             serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
@@ -985,15 +1005,19 @@ mod tests {
             chroma_strength: f32::NAN,
             background_grain: 7.0,
             luma_strength: -3.0,
+            detail: f32::INFINITY,
         };
         let clean = wild.sanitized();
         assert_eq!(clean.chroma_strength, 1.0, "NaN must fall back, not propagate");
         assert_eq!(clean.background_grain, 1.0);
         assert_eq!(clean.luma_strength, 0.0);
+        assert_eq!(clean.detail, DEFAULT_DETAIL, "an infinite dial is no position at all");
         assert!(clean.sanitized() == clean, "sanitising must be idempotent");
 
         let nan_dial = DenoiseSettings { background_grain: f32::NAN, ..Default::default() };
         assert_eq!(nan_dial.sanitized().background_grain, DEFAULT_BACKGROUND_GRAIN);
+        let negative_detail = DenoiseSettings { detail: -0.5, ..Default::default() };
+        assert_eq!(negative_detail.sanitized().detail, 0.0);
     }
 
     /// The dial is the only grain key there is, and a file missing it takes the middle.
@@ -1023,9 +1047,17 @@ mod tests {
         }));
         assert_eq!(written.background_grain, 0.75);
         assert_eq!(written.luma_strength, 0.5);
+        assert_eq!(
+            written.detail, DEFAULT_DETAIL,
+            "a file from before the Detail control takes its default, not zero"
+        );
+        assert!(
+            read(serde_json::json!({ "detail": null })).detail.is_nan(),
+            "a null reads as NaN for `sanitized` to replace, never as a failed file"
+        );
     }
 
-    /// The saved shape is the four keys the code reads and nothing else, and it reads
+    /// The saved shape is the keys the code reads and nothing else, and it reads
     /// back as itself.
     #[test]
     fn the_denoise_block_round_trips() {
@@ -1035,13 +1067,14 @@ mod tests {
             chroma_strength: 0.25,
             background_grain: 0.8,
             luma_strength: 0.6,
+            detail: 0.3,
         };
         let json = serde_json::to_value(&settings).unwrap();
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["background_grain", "chroma", "chroma_strength", "enabled", "luma_strength"],
+            ["background_grain", "chroma", "chroma_strength", "detail", "enabled", "luma_strength"],
             "the saved block must carry the keys the code reads and nothing else"
         );
         assert_eq!(

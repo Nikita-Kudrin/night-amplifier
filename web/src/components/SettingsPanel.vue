@@ -100,9 +100,7 @@ watch(
           sensor_correction: newSettings.sensor_correction
               ? {...newSettings.sensor_correction}
               : {...DEFAULT_SETTINGS.sensor_correction},
-          denoise: newSettings.denoise
-              ? {...newSettings.denoise}
-              : {...DEFAULT_SETTINGS.denoise},
+          denoise: {...DEFAULT_SETTINGS.denoise, ...newSettings.denoise},
           preview_resolution:
               newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
           streaming_resolution:

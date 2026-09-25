@@ -41,7 +41,7 @@ pub use session::{
 pub use settings::{
     default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
     CaptureSettings, DenoiseSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
-    SensorCorrectionSettings, TelescopeSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_PREVIEW_RESOLUTION,
+    SensorCorrectionSettings, TelescopeSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL, DEFAULT_PREVIEW_RESOLUTION,
     DEFAULT_STREAMING_RESOLUTION,
 };
 pub use types::{CameraPhase, CameraRole, CaptureState, RenderReadyFrame, StretchResult};

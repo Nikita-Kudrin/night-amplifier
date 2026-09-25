@@ -15,6 +15,7 @@ import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
   BACKGROUND_GRAIN_LIMITS,
   DENOISE_LUMA_STRENGTH_LIMITS,
+  DETAIL_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
   PREVIEW_RESOLUTION_OPTIONS,
   STREAMING_RESOLUTION_OPTIONS,
@@ -60,6 +61,15 @@ const local = reactive({
  * file once lost the Background Grain dial for good.
  */
 const filtersLocked = computed(() => !props.denoiseAvailable || !local.denoise.enabled)
+
+/**
+ * Detail is a gain on the brightness denoiser's own planes, so it has nothing to work on
+ * while that is held off — by Focus/Finder mode or by a zero Structure strength. The
+ * mode does not manage it: the value is the observer's and is not snapshotted.
+ */
+const detailLocked = computed(
+    () => filtersLocked.value || props.focusMode || !(local.denoise.luma_strength > 0)
+)
 
 watch(
     () => [props.sensorCorrection, props.denoise, props.previewResolution, props.streamingResolution],
@@ -239,6 +249,21 @@ function applyValue(key, value) {
           :format-value="formatPercent"
           :help="HELP.denoise_luma_strength"
           :disabled="filtersLocked || focusMode"
+          @change="apply('denoise')"
+      />
+    </div>
+
+    <div class="control-group" style="margin-bottom: 1.5rem">
+      <BaseSlider
+          v-model="local.denoise.detail"
+          label="Detail"
+          large-gap
+          :min="DETAIL_LIMITS.min"
+          :max="DETAIL_LIMITS.max"
+          :step="DETAIL_LIMITS.step"
+          :format-value="formatPercent"
+          :help="HELP.denoise_detail"
+          :disabled="detailLocked"
           @change="apply('denoise')"
       />
     </div>

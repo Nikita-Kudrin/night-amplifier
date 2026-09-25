@@ -7,7 +7,7 @@
 //! parameter rather than by calling `common` — the instruments do not need to know how
 //! the frames got onto the disk.
 //!
-//! Six instruments, and each exists because a single number misled a real fix:
+//! Nine instruments, and each exists because a single number misled a real fix:
 //!
 //! 1. **Octave-band sky noise** ([`octave_bands`]). One global grain figure misled three
 //!    consecutive changes; an observer reads grain at 8-128 px and the bands either side
@@ -24,6 +24,12 @@
 //!    lines; a change of tile has to be shown to remove them, not to move them.
 //! 6. **Block-mean error** ([`block_mean_error`]). A dither's whole effect is a per-pixel
 //!    difference, so only local means can say whether an encoder kept what it carried.
+//! 7. **Target structure** ([`object_structure`]). Local contrast moves a target's texture,
+//!    not its brightness, and a median at three radii cannot see texture at all.
+//! 8. **Star response** ([`star_response`]). A star *on* the target rings where an
+//!    isolated one does not, and the radial profile only finds isolated stars.
+//! 9. **Target signal and noise** ([`signal_and_noise`]). Instrument 7 counts the grain
+//!    riding on a target as structure; two half-stacks tell them apart.
 
 #![allow(dead_code)]
 
@@ -387,6 +393,32 @@ pub fn octave_band_sigma(plane: &[f64], w: usize, h: usize) -> [f64; 7] {
         out[k] = mad_sigma(&band);
     }
     out
+}
+
+/// Half-width of the region octave bands are measured over, around a sky anchor.
+///
+/// **Not** the 96 px box the sky *level* is read from: a band cannot be measured on a
+/// region narrower than a few times its own scale, so a 96 px box makes the 32-64 and
+/// 64-128 px numbers — the two the eye weighs most — an artefact of the box. 192 gives a
+/// 384 px region, three times the coarsest band.
+pub const GRAIN_HALF_WIDTH: usize = 192;
+
+/// The octave-band region: `sky_box` grown about its own centre, clamped into the frame.
+pub fn grain_box(sky_box: (usize, usize, usize, usize), w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let (cx, cy) = ((sky_box.0 + sky_box.2) / 2, (sky_box.1 + sky_box.3) / 2);
+    let half = GRAIN_HALF_WIDTH.min(w / 2).min(h / 2);
+    let x0 = cx.saturating_sub(half).min(w - 2 * half);
+    let y0 = cy.saturating_sub(half).min(h - 2 * half);
+    (x0, y0, x0 + 2 * half, y0 + 2 * half)
+}
+
+/// Fine (1-8 px) and visible (8-128 px) octave bands apart, each as an RMS.
+///
+/// Keeping them apart is the point: a filter can halve the fine speckle and leave the
+/// mottle an observer complains about untouched, and a summary number hides which.
+pub fn fine_and_visible(bands: &[f64; 7]) -> (f64, f64) {
+    let rms = |xs: &[f64]| (xs.iter().map(|v| v * v).sum::<f64>() / xs.len() as f64).sqrt();
+    (rms(&bands[0..3]), rms(&bands[3..7]))
 }
 
 /// One line of octave bands, for a diagnostic's table.
@@ -1050,6 +1082,273 @@ pub fn block_mean_error(
     }
     assert!(count > 0, "no {block} px block fits inside {:?}", (x0, y0, x1, y1));
     (sum / count as f64).sqrt()
+}
+
+// ---------------------------------------------------------------------------
+// Instrument 7: the target's own structure
+// ---------------------------------------------------------------------------
+
+/// Robust sigma of the `lo..hi` px band-pass (difference of two box blurs) at the
+/// object's core, mid and outer annuli — the radii [`object_excess`] reads brightness at.
+///
+/// Pass a crop around the object: the blurs run over the whole plane. The brightness
+/// median cannot see a change in texture, which is all a local-contrast gain makes.
+pub fn object_structure(
+    plane: &[f64],
+    w: usize,
+    h: usize,
+    (cx, cy): (usize, usize),
+    span: usize,
+    (lo, hi): (usize, usize),
+) -> [f64; 3] {
+    let band = band_pass(plane, w, h, (lo, hi));
+    let bands = [(0.0, 0.25), (0.35, 0.60), (0.70, 1.00)];
+    std::array::from_fn(|i| {
+        let (l, u) = (bands[i].0 * span as f64, bands[i].1 * span as f64);
+        let reach = u.ceil() as i64;
+        let mut samples = Vec::new();
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (px, py) = (cx as i64 + dx, cy as i64 + dy);
+                let r = ((dx * dx + dy * dy) as f64).sqrt();
+                if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h && r >= l && r <= u {
+                    let at = py as usize * w + px as usize;
+                    samples.push(band[at]);
+                }
+            }
+        }
+        if samples.len() < 8 {
+            return 0.0;
+        }
+        mad_sigma(&samples)
+    })
+}
+
+/// The `lo..hi` px band-pass of `plane`: a box blur of radius `lo` less one of `hi`.
+pub fn band_pass(plane: &[f64], w: usize, h: usize, (lo, hi): (usize, usize)) -> Vec<f64> {
+    let (fine, coarse) = (box_blur(plane, w, h, lo), box_blur(plane, w, h, hi));
+    fine.iter().zip(&coarse).map(|(f, c)| f - c).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Instrument 8: a star's own response
+// ---------------------------------------------------------------------------
+
+/// Add a Gaussian star of `peak` and `sigma` (input pixels) at each of `at`, given in
+/// *output* pixels and mapped back by `scale` (input per output pixel), to every channel.
+pub fn add_stars(frame: &mut Frame, at: &[(f64, f64)], scale: f64, peak: f32, sigma: f64) {
+    let (w, h) = (frame.width(), frame.height());
+    let reach = (sigma * 5.0).ceil() as i64;
+    let (r, g, b) = frame.planes_mut();
+    for &(sx, sy) in at {
+        let (cx, cy) = (sx * scale, sy * scale);
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let (px, py) = (cx.round() as i64 + dx, cy.round() as i64 + dy);
+                if px < 0 || py < 0 || px as usize >= w || py as usize >= h {
+                    continue;
+                }
+                let (fx, fy) = (px as f64 - cx, py as f64 - cy);
+                let v = peak * (-(fx * fx + fy * fy) / (2.0 * sigma * sigma)).exp() as f32;
+                let i = py as usize * w + px as usize;
+                r[i] += v;
+                g[i] += v;
+                b[i] += v;
+            }
+        }
+    }
+}
+
+/// The median over `at` of each star's ring-median `with - without` at r = 0..=24 on the
+/// green plane, in output levels: what the star itself became in the render.
+///
+/// Stars are injected rather than found because the radial profile's stars must be
+/// isolated on the sky — the one place a filter that rings on a nebula can look perfect.
+/// The difference cancels the target around the star, though not a filter's reaction to
+/// it: protection switched on near a star leaves a disc of unraised texture, which reads
+/// here as an offset, not a ring — over a few sites it can read as a moat, so pool enough
+/// of them ([`response_rings`]) that the target's own texture averages out.
+pub fn star_response(with: &[u8], without: &[u8], w: usize, at: &[(f64, f64)]) -> [f64; 25] {
+    median_rings(&response_rings(with, without, w, at))
+}
+
+/// Each site's ring-median `with - without` at r = 0..=24, NaN where no pixel of the ring
+/// could be read: [`star_response`] before the median, so injection passes can be pooled.
+///
+/// A pixel white in `with` (green >= 250) is not read. A star clipped there cannot grow,
+/// so its difference is the filter's change to the target *under* it, negated: on Orion's
+/// core, which renders at ~230, every star from 20 to 500 sigma read +4 at r=0-2 for that
+/// reason alone. Dropping pixels rather than stars keeps a bright star's outer rings,
+/// which is where a moat would be.
+pub fn response_rings(with: &[u8], without: &[u8], w: usize, at: &[(f64, f64)]) -> Vec<[f64; 25]> {
+    rings_where(with, without, w, at, |i| with[i] < 250)
+}
+
+/// [`response_rings`] over the pixels `readable` accepts, by index into the RGB8 bytes.
+fn rings_where(
+    with: &[u8],
+    without: &[u8],
+    w: usize,
+    at: &[(f64, f64)],
+    readable: impl Fn(usize) -> bool,
+) -> Vec<[f64; 25]> {
+    let h = with.len() / (w * 3);
+    at.iter()
+        .map(|&(sx, sy)| {
+            let mut rings: Vec<Vec<f64>> = vec![Vec::new(); 25];
+            for dy in -25i64..=25 {
+                for dx in -25i64..=25 {
+                    let (px, py) = (sx.round() as i64 + dx, sy.round() as i64 + dy);
+                    if px < 0 || py < 0 || px as usize >= w || py as usize >= h {
+                        continue;
+                    }
+                    let r = (px as f64 - sx).hypot(py as f64 - sy).round() as usize;
+                    let i = (py as usize * w + px as usize) * 3 + 1;
+                    if r < 25 && readable(i) {
+                        rings[r].push(with[i] as f64 - without[i] as f64);
+                    }
+                }
+            }
+            std::array::from_fn(|r| if rings[r].is_empty() { f64::NAN } else { plane_median(&rings[r]) })
+        })
+        .collect()
+}
+
+/// Per radius, the median over sites of [`response_rings`], skipping the NaNs; 0 where none.
+pub fn median_rings(rings: &[[f64; 25]]) -> [f64; 25] {
+    std::array::from_fn(|r| {
+        let at: Vec<f64> = rings.iter().map(|site| site[r]).filter(|v| !v.is_nan()).collect();
+        if at.is_empty() { 0.0 } else { plane_median(&at) }
+    })
+}
+
+/// A stack through the pipeline, stopped where the encoder takes over: the linear frame,
+/// and what the encoder needs to render it. Split so a test can change the frame between
+/// the two — [`add_stars`] after the solve, so the stars cannot move the tone curve.
+pub fn preview_parts(
+    stack: &Frame,
+    settings: &night_amplifier::server::state::CaptureSettings,
+    stack_depth: u32,
+) -> (Frame, night_amplifier::render::RenderPipelineConfig, Option<night_amplifier::server::state::StretchResult>) {
+    use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
+    let mut frame = stack.clone();
+    let render = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
+        &mut frame,
+        settings,
+        AnalysisContext { showing_stack: stack_depth > 1, stack_depth },
+        &mut PreviewAnalysis::new(),
+    )
+    .unwrap();
+    (frame, render.pipeline_config, render.stretch_result)
+}
+
+/// Encode a frame from [`preview_parts`] at the stream size: RGB8 bytes, width, height.
+pub fn encode_preview(
+    frame: Frame,
+    pipeline_config: &night_amplifier::render::RenderPipelineConfig,
+    stretch_result: &Option<night_amplifier::server::state::StretchResult>,
+) -> (Vec<u8>, usize, usize) {
+    let ready = night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
+        linear_frame: std::sync::Arc::new(frame),
+        pipeline_config: pipeline_config.clone(),
+        stretch_result: stretch_result.clone(),
+    };
+    let (max_w, max_h) = stream();
+    let (bytes, w, h) =
+        night_amplifier::server::encoding::frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
+    (bytes, w as usize, h as usize)
+}
+
+/// A render of [`preview_parts`]: its pipeline configuration and stretch.
+pub type PreviewRender<'a> = (
+    &'a night_amplifier::render::RenderPipelineConfig,
+    &'a Option<night_amplifier::server::state::StretchResult>,
+);
+
+/// What render `b` does to stars of `peak` injected on `frame` against render `a`, pooled
+/// over four passes of `sites(offset)` at offsets of 0 and 22 px each way: `(a's
+/// [`star_response`], the median over stars of each one's own b-less-a response, stars
+/// read per radius)`.
+///
+/// Paired, star by star, and pooled, because a difference of two medians over a single
+/// 44 px grid (which keeps each star's r <= 24 rings clear of its neighbours) is noise on
+/// a textured target: the target's texture shifts every site by several levels where the
+/// profile is steep, and stars on Orion's outskirts that Detail left untouched to the
+/// level read -3 at r=3 that way — -5 over the two sites a single grid could read.
+pub fn pooled_star_response(
+    frame: &Frame,
+    [a, b]: [PreviewRender; 2],
+    sites: impl Fn((i64, i64)) -> Vec<(f64, f64)>,
+    (peak, star_sigma, scale): (f32, f64, f64),
+) -> ([f64; 25], [f64; 25], [usize; 25]) {
+    let (without_a, w, _) = encode_preview(frame.clone(), a.0, a.1);
+    let (without_b, _, _) = encode_preview(frame.clone(), b.0, b.1);
+    let (mut rings_a, mut change) = (Vec::new(), Vec::new());
+    for offset in [(0, 0), (22, 0), (0, 22), (22, 22)] {
+        let at = sites(offset);
+        let mut starred = frame.clone();
+        add_stars(&mut starred, &at, scale, peak, star_sigma);
+        let (with_a, _, _) = encode_preview(starred.clone(), a.0, a.1);
+        let (with_b, _, _) = encode_preview(starred, b.0, b.1);
+        // One set of pixels for both: masked apart, the two renders' rings took different
+        // pixels at a clipped core's edge.
+        let readable = |i: usize| with_a[i] < 250 && with_b[i] < 250;
+        let site_a = rings_where(&with_a, &without_a, w, &at, readable);
+        let site_b = rings_where(&with_b, &without_b, w, &at, readable);
+        change.extend(site_a.iter().zip(&site_b).map(|(a, b)| std::array::from_fn(|r| b[r] - a[r])));
+        rings_a.extend(site_a);
+    }
+    let read = std::array::from_fn(|r| change.iter().filter(|site: &&[f64; 25]| !site[r].is_nan()).count());
+    (median_rings(&rings_a), median_rings(&change), read)
+}
+
+// ---------------------------------------------------------------------------
+// Instrument 9: the target's signal and noise apart
+// ---------------------------------------------------------------------------
+
+/// Two independent stacks of one session, alternate subs each, sharing the first as
+/// their registration reference so they stay aligned: `[(depth, frame); 2]`.
+///
+/// The shared sub is one of each half's ~15-50 — a few percent of common noise, which
+/// reads as signal in [`signal_and_noise`]. Render both through **one** tone curve
+/// ([`preview_parts`] of the first, [`encode_preview`] of both): curves solved per half
+/// put a gain mismatch into their difference that scales with the signal.
+pub fn half_stacks(files: &[PathBuf], load: &dyn Fn(&Path) -> RawSub) -> [(usize, Frame); 2] {
+    let even: Vec<PathBuf> = files.iter().step_by(2).cloned().collect();
+    let odd: Vec<PathBuf> = files[..1].iter().chain(files.iter().skip(1).step_by(2)).cloned().collect();
+    [even, odd].map(|half| stack_snapshots(&half, &[], load).pop().expect("a stack"))
+}
+
+/// Pixels within 5 px of a compact source: over 6 MADs of the 1-6 px [`band_pass`].
+pub fn compact_sources(plane: &[f64], w: usize, h: usize) -> Vec<bool> {
+    let compact = band_pass(plane, w, h, (1, 6));
+    let limit = 6.0 * plane_median(&compact.iter().map(|v| v.abs()).collect::<Vec<_>>()) * 1.4826;
+    let mut mask = vec![false; w * h];
+    for (p, _) in compact.iter().enumerate().filter(|&(_, &v)| v > limit) {
+        let (x, y) = ((p % w) as i64, (p / w) as i64);
+        for dy in -5i64..=5 {
+            for dx in -5i64..=5 {
+                let (xx, yy) = (x + dx, y + dy);
+                if dx * dx + dy * dy <= 25 && xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h {
+                    mask[yy as usize * w + xx as usize] = true;
+                }
+            }
+        }
+    }
+    mask
+}
+
+/// `(signal, noise)` sigmas over `keep` from two renders of [`half_stacks`] — their
+/// band-passes, say: the covariance is what both hold, half the variance of their
+/// difference what each holds alone.
+pub fn signal_and_noise(a: &[f64], b: &[f64], keep: &[usize]) -> (f64, f64) {
+    let n = keep.len() as f64;
+    let mean = |v: &[f64]| keep.iter().map(|&i| v[i]).sum::<f64>() / n;
+    let (ma, mb) = (mean(a), mean(b));
+    let covariance = keep.iter().map(|&i| (a[i] - ma) * (b[i] - mb)).sum::<f64>() / n;
+    let difference = keep.iter().map(|&i| (a[i] - b[i] - (ma - mb)).powi(2)).sum::<f64>() / n;
+    (covariance.max(0.0).sqrt(), (difference / 2.0).sqrt())
 }
 
 // ---------------------------------------------------------------------------
