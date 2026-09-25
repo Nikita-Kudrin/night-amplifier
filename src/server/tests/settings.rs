@@ -719,6 +719,7 @@ async fn test_denoise_settings_are_sanitised_on_the_way_in() {
             "chroma_strength": 3.0,
             "background_grain": 7.0,
             "luma_strength": -3.0,
+            "detail": 5.0,
         }}),
     )
     .await;
@@ -727,6 +728,7 @@ async fn test_denoise_settings_are_sanitised_on_the_way_in() {
     assert_eq!(json["data"]["denoise"]["chroma_strength"], 1.0);
     assert_eq!(json["data"]["denoise"]["background_grain"], 1.0);
     assert_eq!(json["data"]["denoise"]["luma_strength"], 0.0);
+    assert_eq!(json["data"]["denoise"]["detail"], 1.0);
 }
 
 /// JSON has no NaN, but it does have numbers past `f32::MAX`: serde narrows `1e39` from

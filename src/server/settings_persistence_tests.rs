@@ -70,6 +70,7 @@ mod tests {
                 chroma_strength: 0.8,
                 background_grain: 0.25,
                 luma_strength: 0.5,
+                detail: 0.8,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,
@@ -843,6 +844,7 @@ mod tests {
         };
         let mut json = serde_json::to_value(PersistedSettings::from(&settings)).unwrap();
         json["denoise"]["background_grain"] = serde_json::Value::Null;
+        json["denoise"]["detail"] = serde_json::Value::Null;
         json["eyepiece"]["black_floor"] = serde_json::Value::Null;
         std::fs::write(temp_file.path(), json.to_string()).unwrap();
 
@@ -854,6 +856,7 @@ mod tests {
             loaded.denoise.background_grain,
             crate::server::state::DEFAULT_BACKGROUND_GRAIN
         );
+        assert_eq!(loaded.denoise.detail, crate::server::state::DEFAULT_DETAIL);
         assert_eq!(loaded.eyepiece.black_floor, EyepieceSettings::default().black_floor);
     }
 }

@@ -420,7 +420,7 @@ describe('SettingsPanel', () => {
             ...wrapper
                 .findAllComponents({name: 'BaseSlider'})
                 .filter((s) =>
-                    ['Colour strength', 'Background Grain', 'Structure strength'].includes(
+                    ['Colour strength', 'Background Grain', 'Structure strength', 'Detail'].includes(
                         s.props('label')
                     )
                 )
@@ -569,6 +569,44 @@ describe('SettingsPanel', () => {
             expect(slider.props('max')).toBe(1.0)
         })
 
+        // Local contrast ships on, at the setting the plugin's measurements passed on
+        // every target, and zero is the picture from before the control existed.
+        it('offers Detail from off to its top and sends it with the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('min')).toBe(0.0)
+            expect(slider.props('max')).toBe(1.0)
+            expect(slider.props('modelValue')).toBe(0.5)
+            expect(slider.props('disabled')).toBeFalsy()
+
+            slider.vm.$emit('update:modelValue', 0.8)
+            slider.vm.$emit('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({detail: 0.8, background_grain: 0.5}),
+            })
+        })
+
+        // Detail is a gain on the brightness denoiser's planes: with that at zero there is
+        // nothing for it to raise, and a live slider that moves nothing is a broken control.
+        it('holds Detail while the brightness denoiser is off', async () => {
+            const wrapper = mountSettingsPanel({
+                ...WITH_DENOISE,
+                settings: {denoise: {enabled: true, chroma: true, luma_strength: 0.0, detail: 0.5}},
+            })
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('disabled')).toBe(true)
+        })
+
         it('falls back to defaults when the server sends no denoise settings', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
@@ -578,6 +616,10 @@ describe('SettingsPanel', () => {
                 .findAllComponents({name: 'BaseSlider'})
                 .find((s) => s.props('label') === 'Background Grain')
             expect(grain.props('modelValue')).toBe(0.5)
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('modelValue')).toBe(0.5)
         })
     })
 
@@ -753,6 +795,20 @@ describe('SettingsPanel', () => {
             const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
 
             expect(grainSlider(wrapper).props('disabled')).toBe(true)
+        })
+
+        // Held because the mode holds the denoiser it works through — not managed: the
+        // mode never snapshots or rewrites the observer's Detail value.
+        it('greys Detail out with the brightness denoiser while the mode is on', () => {
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: true},
+                capabilities: {deep_sky: {denoise: true}},
+            })
+
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('disabled')).toBe(true)
         })
 
         // The dial is deliberately *not* managed: it moves the tone curve's split as well

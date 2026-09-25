@@ -31,7 +31,8 @@ pub const MAX_LEVELS: usize = 6;
 
 /// À trous wavelet denoising of the luminance plane.
 ///
-/// A data carrier: what `k` and `gain` mean is defined by the plugin that fills them.
+/// A data carrier: what `k`, `gain` and `detail` mean is defined by the plugin that fills
+/// them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LumaDenoiseConfig {
     /// Per-level gain applied to what survives the threshold, finest first.
@@ -41,6 +42,9 @@ pub struct LumaDenoiseConfig {
     pub k: [f32; MAX_LEVELS],
     /// Overall amount, scaling every threshold.
     pub strength: f32,
+    /// Local-contrast gain above unity on the target's structure; `0` for none. Unlike
+    /// `gain` it is not uniform: the plugin keeps it off the sky and every star.
+    pub detail: f32,
 }
 
 impl LumaDenoiseConfig {
@@ -49,6 +53,7 @@ impl LumaDenoiseConfig {
         enabled: false,
         k: [0.0; MAX_LEVELS],
         strength: 0.0,
+        detail: 0.0,
     };
 
     pub fn is_enabled(&self) -> bool {
@@ -208,6 +213,10 @@ pub struct DenoiseScratch {
     pub planes: [Vec<f32>; 3],
     /// Three more, for whatever the luma filter needs to ping-pong through.
     pub aux: [Vec<f32>; 3],
+    /// Whatever else the plugin keeps between passes, grown on demand; Community never
+    /// reads it. Pro's Detail control keeps its block maps here: allocated per pass they
+    /// were ~1,260 page faults a 1440² call and a third of what the control cost.
+    pub plugin: Option<Box<dyn std::any::Any + Send>>,
 }
 
 /// Grow `buf` to hold at least `len` samples and hand back exactly `len`.
