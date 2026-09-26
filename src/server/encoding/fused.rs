@@ -328,6 +328,7 @@ impl RowSource for StagedRows<'_> {
 }
 
 /// The tone-curve half of both kernels, hoisted out of the per-row closure.
+#[derive(Clone)]
 pub(super) struct RowTail<'a> {
     config: &'a crate::render::RenderPipelineConfig,
     has_stretch: bool,
@@ -369,14 +370,7 @@ impl<'a> RowTail<'a> {
     }
 
     pub(super) fn apply(&self, f32_row: &mut [f32]) {
-        if self.has_stretch {
-            crate::render::simd::apply_luminance_scale_lut_simd(
-                f32_row,
-                self.black_point,
-                &self.scale_lut,
-                self.config.stretch_config.color_intensity,
-            );
-        }
+        self.apply_tone(f32_row);
         if self.has_saturate {
             if let Some(plugin) =
                 crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN)
@@ -392,6 +386,26 @@ impl<'a> RowTail<'a> {
         // both paths.
         if let Some(table) = self.floor {
             apply_shadow_floor_slice(f32_row, table);
+        }
+    }
+
+    /// The stretch alone: the image the AI denoiser reads.
+    fn apply_tone(&self, f32_row: &mut [f32]) {
+        if self.has_stretch {
+            crate::render::simd::apply_luminance_scale_lut_simd(
+                f32_row,
+                self.black_point,
+                &self.scale_lut,
+                self.config.stretch_config.color_intensity,
+            );
+        }
+    }
+
+    /// This tail without its stretch, for rows the staged path has already toned.
+    fn after_tone(&self) -> Self {
+        Self {
+            has_stretch: false,
+            ..self.clone()
         }
     }
 }
@@ -476,9 +490,12 @@ fn render_rgb8<S: RowSource>(
         return output;
     }
 
-    // Only built for the staged path: it is the only one with a filter to feed, and on
-    // the fused path the resample would be work with no reader.
-    let noise = output_noise_field(ready_frame, target_width, target_height);
+    // Only built for the linear filters: they are its only reader, so on the fused path
+    // and for the network alone the resample would be work for nothing.
+    let noise = denoise
+        .linear_enabled()
+        .then(|| output_noise_field(ready_frame, target_width, target_height))
+        .flatten();
     stage_and_denoise(
         source,
         &tail,
@@ -496,6 +513,9 @@ fn render_rgb8<S: RowSource>(
 /// denoise it, then run the tone curve and the 8-bit write per row. A sky shadow
 /// streams the denoised rows through the same driver as the fused path: applied to
 /// the whole image it held two more full planes (~208 MB at 26 MP native).
+///
+/// The AI denoiser splits the tail: it reads the stretched image, so the stretch runs
+/// over the whole staged image first and the rest of the tail after the network.
 #[allow(clippy::too_many_arguments)]
 fn stage_and_denoise<S: RowSource>(
     source: &S,
@@ -547,6 +567,30 @@ fn stage_and_denoise<S: RowSource>(
         noise,
         scratch,
     );
+
+    // Without a stretch there is no display-referred image to hand the network, so the
+    // frame renders as the linear filters left it.
+    let toned;
+    let tail = if denoise.ai.is_enabled() && tail.has_stretch {
+        {
+            let _span = tracing::info_span!("tone", samples = staged_len).entered();
+            staged
+                .par_chunks_mut(row_len)
+                .with_min_len(32)
+                .for_each(|row| tail.apply_tone(row));
+        }
+        crate::render::denoise::ai::denoise_display_rgb_with(
+            staged,
+            target_width,
+            target_height,
+            &denoise.ai,
+            scratch,
+        );
+        toned = tail.after_tone();
+        &toned
+    } else {
+        tail
+    };
 
     if let Some(shadow) = sky_shadow {
         let rows = StagedRows {

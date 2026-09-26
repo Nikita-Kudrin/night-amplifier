@@ -39,6 +39,8 @@ const props = defineProps({
    * the build does not do rather than silently missing.
    */
   denoiseAvailable: {type: Boolean, default: false},
+  /** Whether the AI denoiser is present; its switch lives in Settings → Advanced. */
+  aiDenoiseAvailable: {type: Boolean, default: false},
   formatPercent: {type: Function, required: true},
   formatSigma: {type: Function, required: true},
 })
@@ -63,12 +65,27 @@ const local = reactive({
 const filtersLocked = computed(() => !props.denoiseAvailable || !local.denoise.enabled)
 
 /**
+ * While the network runs it has the fine and mid scales, so Structure strength and Detail
+ * grey out; Colour Mottle and Background Grain keep working. A switch saved on a build
+ * without the network, or held off by Focus/Finder mode, replaces nothing.
+ */
+const aiReplacing = computed(
+    () =>
+        props.aiDenoiseAvailable && !filtersLocked.value && !props.focusMode && Boolean(local.denoise.ai)
+)
+
+/**
  * Detail is a gain on the brightness denoiser's own planes, so it has nothing to work on
- * while that is held off — by Focus/Finder mode or by a zero Structure strength. The
- * mode does not manage it: the value is the observer's and is not snapshotted.
+ * while that is held off — by Focus/Finder mode, a zero Structure strength, or the network
+ * taking those scales. The mode does not manage it: the value is the observer's and is
+ * not snapshotted.
  */
 const detailLocked = computed(
-    () => filtersLocked.value || props.focusMode || !(local.denoise.luma_strength > 0)
+    () =>
+        filtersLocked.value ||
+        props.focusMode ||
+        !(local.denoise.luma_strength > 0) ||
+        aiReplacing.value
 )
 
 watch(
@@ -187,6 +204,9 @@ function applyValue(key, value) {
     </h3>
 
     <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+    <span v-if="aiReplacing" class="hint">
+      AI denoising (Settings → Advanced) replaces Structure strength and Detail while it runs.
+    </span>
 
     <div class="control-group" style="margin-top: 0.5rem">
       <BaseToggle
@@ -236,6 +256,9 @@ function applyValue(key, value) {
           :disabled="filtersLocked"
           @change="apply('denoise')"
       />
+      <span v-if="aiReplacing" class="hint">
+        Above 50% it also smooths the larger mottle the network cannot reach.
+      </span>
     </div>
 
     <div class="control-group" style="margin-bottom: 1.5rem">
@@ -248,7 +271,7 @@ function applyValue(key, value) {
           :step="DENOISE_LUMA_STRENGTH_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.denoise_luma_strength"
-          :disabled="filtersLocked || focusMode"
+          :disabled="filtersLocked || focusMode || aiReplacing"
           @change="apply('denoise')"
       />
     </div>

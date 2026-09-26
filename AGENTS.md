@@ -50,7 +50,8 @@ When designing new features or refactoring, adhere to the following architectura
 - Asynchronous Communication: favor event-driven (Pub/Sub, queues) for long-running or cross-service work.
 - Design for Failure (Resilience).
 - Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`,
-  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`, `DENOISE_PLUGIN`) so Community works standalone.
+  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`, `DENOISE_PLUGIN`,
+  `AI_DENOISE_PLUGIN`) so Community works standalone.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.
@@ -133,7 +134,7 @@ their own schedule.
 | `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
 | `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG + Superpixel                          |
 | `cfa/`                        | Raw-CFA stage run before demosaic: hot pixels, row/column FPN                        |
-| `render/denoise/`             | Denoise plugin boundary: config data, buffer pool, `DENOISE_PLUGIN` (filters in Pro) |
+| `render/denoise/`             | Denoise plugin boundary: config data, buffer pool, `DENOISE_PLUGIN` (filters in Pro), `AI_DENOISE_PLUGIN` (network in Pro) |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
@@ -335,7 +336,8 @@ re-snapshotting captures the forced `false`s and destroys the observer's values.
 `focus_mode == focus_mode_snapshot.is_some()` — drive it via `focus_mode::set`, never assignment; a persisted flag
 without a snapshot loads as off. `update_settings` applies it *after* every other field (the mode wins); with no toggle in the request,
 `reconcile` absorbs a stale client's write into the snapshot. `superpixel_debayer` is deliberately unmanaged (forcing
-the cheap debayer either way costs frame rate). Hot-pixel rejection is no longer a setting (see raw-CFA stage).
+the cheap debayer either way costs frame rate). Hot-pixel rejection is no longer a setting (see raw-CFA stage). The AI
+denoiser is held off by a gate, not the snapshot (`stage_config::requested_denoise`).
 
 **The mode and an accumulating stack are mutually exclusive**, every way in: `update_settings` answers 409 to
 `focus_mode: true` when the request's *resulting* mode `conflicts_with_capture`; `focus_mode::leave_if_conflicting`
@@ -576,6 +578,26 @@ the encoder hook and the gates.
   on the target with the target (never the sky's), and its star protection is calibrated for
   stars up to ~3.5 px sigma at the render size — Native streams and the full-size snapshot can
   put wider ones in front of it.
+
+### The AI denoiser — a Pro plugin behind `AI_DENOISE_PLUGIN`
+
+A small network (the model, engine and tuning are in Pro's `plugins::ai_denoise`), behind
+`DenoiseSettings::ai`, the "AI denoising" switch in Settings → Advanced. Community owns
+where it runs and the gates (`render::denoise::ai`).
+
+- **Display-referred, not linear**: after the stretch, before saturation, S-curve and
+  floor (trained on stretched RGB; after the S-curve it softened stars more, M27 r=5
+  +43 % vs +26 %). With it on the S-curve stays out of the fused scale LUT (like saturation
+  boost) and the staged path tones the image, runs the network, then the tail's rest
+  (`RowTail::after_tone`). `a_tail_split_for_the_network_renders_what_the_fused_tail_does`
+  pins the split byte-exact; `tests/ai_denoise_stage_test.rs` pins what the network is fed.
+- `DenoiseConfig::is_enabled` (stage the image) includes it; `linear_enabled` (call the
+  classic plugin, whose YCbCr round trip drifts) does not.
+- **Gates**: Planetary and the master switch (as for the filters), Focus/Finder mode as a
+  gate in `stage_config::requested_denoise` — never snapshotted, the switch stays the
+  observer's — and the guide stream (`guide_render_settings`). Live view runs it.
+- The classic plugin's `config` sees `settings.ai` true only while the network really
+  runs (`denoise::config_for`), and then hands it wavelet levels 1-4 and Detail.
 
 ### The stack's noise map (`frame::NoiseField`)
 

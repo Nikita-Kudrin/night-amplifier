@@ -560,11 +560,14 @@ pub fn process_preview_frame_with_analysis(
                 // auto_stretch_frame used in the old RenderPipeline::process path.
                 // This eliminates a separate per-pixel contrast pass in the encode
                 // kernels. When saturation boost is on, contrast must run as a
-                // separate pass because saturation sits between stretch and contrast.
+                // separate pass because saturation sits between stretch and contrast —
+                // and so does the AI denoiser, which reads the stretched image before
+                // either (`render::denoise::ai`).
                 let can_fuse_contrast = pipeline_config.contrast
                     && frame.channels() == 3
                     && !pipeline_config.contrast_config.is_disabled()
-                    && !pipeline_config.saturation_boost;
+                    && !pipeline_config.saturation_boost
+                    && !pipeline_config.denoise.ai.is_enabled();
 
                 let contrast_for_lut = if can_fuse_contrast {
                     Some(&pipeline_config.contrast_config)

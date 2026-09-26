@@ -83,6 +83,9 @@ Their switches under **Settings** grey out while the mode is on, because the mod
 remembers what each one was set to. Turn it off once you are focused and every one goes
 back to your value — including the ones you had already turned off yourself.
 
+**AI denoising** *(Pro)* is held off too, the costliest stage of all. The mode never
+changes its switch, so it is back in effect as soon as the mode ends.
+
 ## It is not available while you are stacking
 
 One of the six — Row/Column Pattern Removal — is not a display setting. It runs on the raw

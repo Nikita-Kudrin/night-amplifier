@@ -25,8 +25,9 @@ pub use black_point::{
     subtract_black_point_uniform, BackgroundEstimate, BlackPointConfig,
 };
 pub use denoise::{
-    ChromaDenoiseConfig, DenoiseConfig, DenoisePlugin, DenoiseScratch, LumaDenoiseConfig,
-    take, MAX_LEVELS as MAX_WAVELET_LEVELS, DENOISE_PLUGIN,
+    AiDenoiseConfig, AiDenoisePlugin, ChromaDenoiseConfig, DenoiseConfig, DenoisePlugin,
+    DenoiseScratch, LumaDenoiseConfig, take, MAX_LEVELS as MAX_WAVELET_LEVELS,
+    AI_DENOISE_PLUGIN, DENOISE_PLUGIN,
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, apply_shadow_floor_frame, finalize_for_display,

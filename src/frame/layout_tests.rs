@@ -803,6 +803,7 @@ fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
     let denoise = crate::render::DenoiseConfig {
         luma: crate::render::LumaDenoiseConfig::default(),
         chroma: crate::render::ChromaDenoiseConfig::default(),
+        ..crate::render::DenoiseConfig::OFF
     };
 
     // A constant frame has no detail at any scale and no chroma structure, so

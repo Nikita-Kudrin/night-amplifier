@@ -20,6 +20,13 @@
 //! The configs below carry numbers somebody tuned by looking at a picture. **Community
 //! never fills them in**: every `Default` here is off, and the values come from the
 //! plugin along with the code that earned them.
+//!
+//! The AI denoiser is the exception to "linear light": it runs after the stretch, from
+//! its own plugin — see [`ai`].
+
+pub mod ai;
+
+pub use ai::{AiDenoiseConfig, AiDenoisePlugin, AI_DENOISE_PLUGIN};
 
 use std::sync::OnceLock;
 
@@ -111,13 +118,15 @@ impl Default for ChromaDenoiseConfig {
     }
 }
 
-/// Both spatial denoisers, as the encoders see them.
+/// Every spatial denoiser, as the encoders see them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DenoiseConfig {
     /// À trous wavelet denoising of the luminance plane.
     pub luma: LumaDenoiseConfig,
     /// Guided-filter smoothing of the two chroma planes.
     pub chroma: ChromaDenoiseConfig,
+    /// The network, run after the stretch rather than in linear light — see [`ai`].
+    pub ai: AiDenoiseConfig,
 }
 
 impl Default for DenoiseConfig {
@@ -134,11 +143,18 @@ impl DenoiseConfig {
     pub const OFF: Self = Self {
         luma: LumaDenoiseConfig::OFF,
         chroma: ChromaDenoiseConfig::OFF,
+        ai: AiDenoiseConfig::OFF,
     };
 
     /// Whether anything at all would happen, which is what decides between the encoders'
     /// fused and staged traversals.
     pub fn is_enabled(&self) -> bool {
+        self.linear_enabled() || self.ai.is_enabled()
+    }
+
+    /// Whether either linear-light filter would run. The network alone must not reach
+    /// them: their colour transform is exact only to f32 rounding.
+    pub fn linear_enabled(&self) -> bool {
         self.luma.is_enabled() || self.chroma.is_enabled()
     }
 }
@@ -154,6 +170,11 @@ pub trait DenoisePlugin: Send + Sync {
     /// being asked for — a field of stars has no nebulosity to protect. The Planetary
     /// gate is applied by the caller before this is reached, so no plugin can get it
     /// wrong.
+    ///
+    /// `settings.ai` is true exactly when the network runs on this frame, not merely when
+    /// the observer asked for it ([`config_for`]): the filters hand it the scales it
+    /// covers, and must not give them up to a network that is not there. Leave the
+    /// returned `ai` off; Community fills it from [`AI_DENOISE_PLUGIN`].
     fn config(
         &self,
         settings: &crate::server::state::DenoiseSettings,
@@ -255,7 +276,8 @@ pub fn denoise_rgb_interleaved(
 /// A no-op without the plugin, which is also why the encoders check
 /// [`DenoiseConfig::is_enabled`] first: `OFF` is the only config Community can produce,
 /// so the staged traversal is never entered and the fused path stays byte-identical to
-/// what it was before denoising existed.
+/// what it was before denoising existed. Only the linear filters run here; the network
+/// is [`ai::denoise_display_rgb_with`], after the stretch.
 pub fn denoise_rgb_interleaved_with(
     buf: &mut [f32],
     width: usize,
@@ -265,7 +287,7 @@ pub fn denoise_rgb_interleaved_with(
     scratch: &mut DenoiseScratch,
 ) {
     let pixels = width * height;
-    if pixels == 0 || buf.len() < pixels * 3 || !config.is_enabled() {
+    if pixels == 0 || buf.len() < pixels * 3 || !config.linear_enabled() {
         return;
     }
     let Some(plugin) = crate::license::pro_plugin(&DENOISE_PLUGIN) else {
@@ -279,18 +301,27 @@ pub fn denoise_rgb_interleaved_with(
     plugin.denoise_rgb_interleaved(&mut buf[..pixels * 3], width, height, config, noise, scratch);
 }
 
-/// The denoise config for these settings, or [`DenoiseConfig::OFF`] without the plugin.
+/// The denoise config for these settings, or [`DenoiseConfig::OFF`] without the plugins.
 ///
 /// The Planetary gate lives at the call site in `server::capture::stage_config`, not
 /// here: it is a product rule rather than tuning, and it sits beside the same asymmetry
 /// `cfa::fpn`, superpixel debayering and the black floor each state at their own site.
+/// So does Focus/Finder mode's hold on the network.
 pub fn config_for(
     settings: &crate::server::state::DenoiseSettings,
     aggressiveness: crate::render::StretchAggressiveness,
 ) -> DenoiseConfig {
-    crate::license::pro_plugin(&DENOISE_PLUGIN)
-        .map(|plugin| plugin.config(settings, aggressiveness))
-        .unwrap_or(DenoiseConfig::OFF)
+    let ai = ai::config_for(settings);
+    // The classic filters give the network its scales only while it really runs: asked
+    // for without a plugin to answer, they must keep today's picture.
+    let classic_settings = crate::server::state::DenoiseSettings {
+        ai: ai.is_enabled(),
+        ..settings.clone()
+    };
+    let classic = crate::license::pro_plugin(&DENOISE_PLUGIN)
+        .map(|plugin| plugin.config(&classic_settings, aggressiveness))
+        .unwrap_or(DenoiseConfig::OFF);
+    DenoiseConfig { ai, ..classic }
 }
 
 /// The tone curve's grain split for these settings.
@@ -319,7 +350,24 @@ mod tests {
         assert!(!DenoiseConfig::default().is_enabled());
         assert!(!LumaDenoiseConfig::default().is_enabled());
         assert!(!ChromaDenoiseConfig::default().is_enabled());
+        assert!(!AiDenoiseConfig::default().is_enabled());
         assert_eq!(DenoiseConfig::default(), DenoiseConfig::OFF);
+    }
+
+    /// The network alone stages the image but must not reach the linear filters, whose
+    /// colour round trip would drift the picture for nothing.
+    #[test]
+    fn the_network_alone_stages_but_asks_nothing_of_the_linear_filters() {
+        let config = DenoiseConfig {
+            ai: AiDenoiseConfig {
+                enabled: true,
+                strength: 1.0,
+                highlight_floor: 0.2,
+            },
+            ..DenoiseConfig::OFF
+        };
+        assert!(config.is_enabled(), "the encoder must stage for the network");
+        assert!(!config.linear_enabled());
     }
 
     /// No plugin, no filter — and, crucially, no panic and no partial pass: the buffer
@@ -337,7 +385,7 @@ mod tests {
                 strength: 1.0,
                 ..LumaDenoiseConfig::OFF
             },
-            chroma: ChromaDenoiseConfig::OFF,
+            ..DenoiseConfig::OFF
         };
         assert!(config.is_enabled());
 
@@ -350,6 +398,14 @@ mod tests {
         let settings = crate::server::state::DenoiseSettings::default();
         assert_eq!(
             config_for(&settings, crate::render::StretchAggressiveness::Medium),
+            DenoiseConfig::OFF
+        );
+        let asking_for_the_network = crate::server::state::DenoiseSettings {
+            ai: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            config_for(&asking_for_the_network, crate::render::StretchAggressiveness::Medium),
             DenoiseConfig::OFF
         );
         assert_eq!(

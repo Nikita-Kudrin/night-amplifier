@@ -488,6 +488,15 @@ pub struct DenoiseSettings {
     /// it rides on the brightness denoiser and does nothing while that is off.
     #[serde(default = "default_detail", deserialize_with = "nullable_f32")]
     pub detail: f32,
+    /// The AI denoiser (Pro): a small network run after the stretch, taking over the
+    /// finest four wavelet levels and Detail while it runs. Off by default. Needs the
+    /// master switch on, like every filter here.
+    ///
+    /// Not managed by Focus/Finder mode either: the mode holds the network off where the
+    /// frame's config is built (`stage_config::requested_denoise`), so this stays the
+    /// observer's value — a switch the mode forced false once cost a saved file its dial.
+    #[serde(default)]
+    pub ai: bool,
 }
 
 /// Reads JSON `null` as NaN instead of failing. serde_json writes a non-finite `f32` as
@@ -555,6 +564,7 @@ impl Default for DenoiseSettings {
             background_grain: default_background_grain(),
             luma_strength: default_denoise_strength(),
             detail: default_detail(),
+            ai: false,
         }
     }
 }
@@ -575,6 +585,7 @@ impl DenoiseSettings {
                 .clamp(0.0, 1.0),
             luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
             detail: finite_or(self.detail, DEFAULT_DETAIL).clamp(0.0, 1.0),
+            ai: self.ai,
         }
     }
 }
@@ -988,6 +999,7 @@ mod tests {
             background_grain: 0.82,
             luma_strength: 0.3,
             detail: 0.9,
+            ai: true,
         };
         let round_tripped: DenoiseSettings =
             serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
@@ -1006,9 +1018,11 @@ mod tests {
             background_grain: 7.0,
             luma_strength: -3.0,
             detail: f32::INFINITY,
+            ai: true,
         };
         let clean = wild.sanitized();
         assert_eq!(clean.chroma_strength, 1.0, "NaN must fall back, not propagate");
+        assert!(clean.ai, "sanitising must not drop the network switch");
         assert_eq!(clean.background_grain, 1.0);
         assert_eq!(clean.luma_strength, 0.0);
         assert_eq!(clean.detail, DEFAULT_DETAIL, "an infinite dial is no position at all");
@@ -1051,6 +1065,7 @@ mod tests {
             written.detail, DEFAULT_DETAIL,
             "a file from before the Detail control takes its default, not zero"
         );
+        assert!(!written.ai, "a file from before the network leaves it off");
         assert!(
             read(serde_json::json!({ "detail": null })).detail.is_nan(),
             "a null reads as NaN for `sanitized` to replace, never as a failed file"
@@ -1068,13 +1083,14 @@ mod tests {
             background_grain: 0.8,
             luma_strength: 0.6,
             detail: 0.3,
+            ai: true,
         };
         let json = serde_json::to_value(&settings).unwrap();
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["background_grain", "chroma", "chroma_strength", "detail", "enabled", "luma_strength"],
+            ["ai", "background_grain", "chroma", "chroma_strength", "detail", "enabled", "luma_strength"],
             "the saved block must carry the keys the code reads and nothing else"
         );
         assert_eq!(
