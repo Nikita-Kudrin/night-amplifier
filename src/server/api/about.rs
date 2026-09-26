@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::license::{LicenseStatus, LICENSE_UPDATER, PRO_LICENSE_DATA};
 use crate::server::dto::ApiResponse;
+use crate::server::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateLicenseRequest {
@@ -42,17 +46,25 @@ pub async fn get_license() -> impl IntoResponse {
 
 /// POST /api/about/license
 pub async fn update_license(
+    State(state): State<Arc<AppState>>,
     axum::extract::Json(payload): axum::extract::Json<UpdateLicenseRequest>,
 ) -> impl IntoResponse {
     if let Some(updater) = LICENSE_UPDATER.get() {
         match updater(payload.token) {
-            Ok(details) => (
-                StatusCode::OK,
-                ApiResponse::ok(LicenseStatus {
-                    active: true,
-                    details: Some(details),
-                }),
-            ),
+            Ok(details) => {
+                // A licence activated after startup: the benchmark did not run then. Under a
+                // running capture it waits for the capture's end (`end_capture_state`).
+                if !super::ai_compute::capture_running(state.capture_state().await) {
+                    crate::render::denoise::ai::start_benchmark();
+                }
+                (
+                    StatusCode::OK,
+                    ApiResponse::ok(LicenseStatus {
+                        active: true,
+                        details: Some(details),
+                    }),
+                )
+            }
             Err(e) => (StatusCode::BAD_REQUEST, ApiResponse::<()>::err(&e)),
         }
     } else {

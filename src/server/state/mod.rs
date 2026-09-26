@@ -389,6 +389,7 @@ impl AppState {
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
+        crate::render::denoise::ai::start_benchmark();
         true
     }
 
@@ -423,6 +424,9 @@ impl AppState {
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
+        // A licence activated mid-session left the AI compute benchmark to here, when every
+        // capture thread has been joined. Idempotent, so any other end does nothing.
+        crate::render::denoise::ai::start_benchmark();
     }
 
     /// Increment frame count and broadcast event.

@@ -6,7 +6,7 @@ use super::StreamKind;
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
-use crate::render::{SaturationBoostConfig, StretchAggressiveness};
+use crate::render::{AiComputePreference, SaturationBoostConfig, StretchAggressiveness};
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
 /// Capture settings that can be modified during a session
@@ -497,6 +497,11 @@ pub struct DenoiseSettings {
     /// observer's value — a switch the mode forced false once cost a saved file its dial.
     #[serde(default)]
     pub ai: bool,
+    /// The "AI compute" choice (Pro): which unit runs the network. Auto takes the hardware
+    /// benchmark's pick; a forced rung this machine cannot use falls back to Auto. Unknown
+    /// values read as Auto ([`AiComputePreference`]'s own `Deserialize`).
+    #[serde(default)]
+    pub ai_compute: AiComputePreference,
 }
 
 /// Reads JSON `null` as NaN instead of failing. serde_json writes a non-finite `f32` as
@@ -565,6 +570,7 @@ impl Default for DenoiseSettings {
             luma_strength: default_denoise_strength(),
             detail: default_detail(),
             ai: false,
+            ai_compute: AiComputePreference::Auto,
         }
     }
 }
@@ -586,6 +592,7 @@ impl DenoiseSettings {
             luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
             detail: finite_or(self.detail, DEFAULT_DETAIL).clamp(0.0, 1.0),
             ai: self.ai,
+            ai_compute: self.ai_compute,
         }
     }
 }
@@ -1000,6 +1007,7 @@ mod tests {
             luma_strength: 0.3,
             detail: 0.9,
             ai: true,
+            ai_compute: AiComputePreference::IntegratedGpu,
         };
         let round_tripped: DenoiseSettings =
             serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
@@ -1019,10 +1027,12 @@ mod tests {
             luma_strength: -3.0,
             detail: f32::INFINITY,
             ai: true,
+            ai_compute: AiComputePreference::Npu,
         };
         let clean = wild.sanitized();
         assert_eq!(clean.chroma_strength, 1.0, "NaN must fall back, not propagate");
         assert!(clean.ai, "sanitising must not drop the network switch");
+        assert_eq!(clean.ai_compute, AiComputePreference::Npu, "nor the compute choice");
         assert_eq!(clean.background_grain, 1.0);
         assert_eq!(clean.luma_strength, 0.0);
         assert_eq!(clean.detail, DEFAULT_DETAIL, "an infinite dial is no position at all");
@@ -1084,18 +1094,42 @@ mod tests {
             luma_strength: 0.6,
             detail: 0.3,
             ai: true,
+            ai_compute: AiComputePreference::Cpu,
         };
         let json = serde_json::to_value(&settings).unwrap();
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["ai", "background_grain", "chroma", "chroma_strength", "detail", "enabled", "luma_strength"],
+            [
+                "ai",
+                "ai_compute",
+                "background_grain",
+                "chroma",
+                "chroma_strength",
+                "detail",
+                "enabled",
+                "luma_strength"
+            ],
             "the saved block must carry the keys the code reads and nothing else"
         );
         assert_eq!(
             serde_json::from_value::<DenoiseSettings>(json).unwrap(),
             settings
+        );
+    }
+
+    /// Files saved before the setting existed, and values this build does not know, load
+    /// as Auto rather than failing the whole file.
+    #[test]
+    fn a_missing_or_unknown_ai_compute_reads_as_auto() {
+        let read = |json: serde_json::Value| serde_json::from_value::<DenoiseSettings>(json).unwrap();
+        assert_eq!(read(serde_json::json!({})).ai_compute, AiComputePreference::Auto);
+        assert_eq!(read(serde_json::json!({ "ai_compute": "tpu" })).ai_compute, AiComputePreference::Auto);
+        assert_eq!(read(serde_json::json!({ "ai_compute": null })).ai_compute, AiComputePreference::Auto);
+        assert_eq!(
+            read(serde_json::json!({ "ai_compute": "discrete_gpu" })).ai_compute,
+            AiComputePreference::DiscreteGpu
         );
     }
 

@@ -22,18 +22,9 @@ Live stacking Web application for Electronically Assisted Astronomy - https://sk
 
 ## Camera SDK Support
 
-Camera SDKs are loaded at runtime and are **optional**: without one installed the binary still runs, with that brand
-disabled. They are not shipped with Night Amplifier — install each from its vendor (see Camera SDK Setup below). Every provider is a default Cargo feature (`playerone`, `zwo`, `qhy`, `touptek`, `svbony`, `indi`).
-
-| Provider   | SDK Required                                                         | Supported                                                 |
-|------------|----------------------------------------------------------------------|-----------------------------------------------------------|
-| Player One | [Player One SDK](https://player-one-astronomy.com/service/software/) | ✅                                                        |
-| ZWO (ASI)  | [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers) | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| ToupTek    | [ToupTek SDK](http://www.touptek.com/download/)                      | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| QHYCCD     | [QHYCCD SDK](https://www.qhyccd.com/download/)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| SVBony     | [SVBony SDK](https://www.svbony.com/downloads)                       | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| INDI       | [INDI server](https://indilib.org/download.html)                     | ![Testing](https://img.shields.io/badge/🚀_Testing-green) |
-| Simulated  | Loads PNG/TIFF/FITS/SER from directories                             | ✅                                                        |
+Player One, ZWO, ToupTek, QHYCCD, SVBony and INDI cameras, plus a simulator. Camera SDKs are optional and loaded at
+runtime; install the ones you need as described in [System dependencies](system-dependencies.md), which also lists what
+AI denoising needs to use a GPU or an NPU.
 
 ## Features
 
@@ -54,6 +45,7 @@ disabled. They are not shipped with Night Amplifier — install each from its ve
 > - **Comet Stacking** - aligns frames on the comet's nucleus ![Testing](https://img.shields.io/badge/🚀_Testing-green)
 > - **Advanced Outlier Rejection** - removes satellites, planes and hot pixels (Sigma clipping, Winsorized, Min-Max)
 > - **Advanced Background Extraction** - Radial Basis Function background model
+> - **AI Denoising** - a neural network on the fastest NPU or GPU found by a one-time hardware benchmark
 
 ## Frame Storage
 
@@ -174,62 +166,7 @@ cargo build --release       # or `cargo build` for a debug build
 cargo test
 ```
 
-#### Camera SDK Setup (Linux, optional)
-
-Each SDK is needed only to use its brand. Install udev rules (USB permissions) and the shared library as shown per
-vendor below, then **unplug and replug the camera**; `ldconfig -p | grep <library>` confirms the library is found.
-Player One, ZWO, QHYCCD and SVBony SDKs need **libusb-1.0**; Player One also lists **libclang** (bindgen):
-
-```bash
-sudo apt-get install libusb-1.0-0 libclang-dev   # Debian/Ubuntu/Raspberry Pi OS
-sudo dnf install libusb-1.0 clang-devel          # Fedora
-sudo pacman -S libusb clang                      # Arch Linux/Manjaro
-```
-
-#### Player One Setup
-
-From the extracted [Player One SDK](https://player-one-astronomy.com/service/software/):
-
-```bash
-sudo install 99-player_one_astronomy.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp libPlayerOneCamera.so /usr/local/lib/ && sudo ldconfig
-ldconfig -p | grep PlayerOne
-```
-
-#### ZWO Setup
-
-From the extracted [ZWO ASI SDK](https://astronomy-imaging-camera.com/software-drivers):
-
-```bash
-sudo install lib/asi.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp include/ASICamera2.h /usr/local/include/                   # header, required for building
-sudo cp lib/x64/libASICamera2.so /usr/local/lib/ && sudo ldconfig  # ARM (Raspberry Pi): lib/armv8/libASICamera2.so
-ldconfig -p | grep ASICamera
-```
-
-#### QHY Setup
-
-From the extracted [QHYCCD SDK](https://www.qhyccd.com/download/):
-
-```bash
-sudo install sdk/linux/mac/rules/85-qhyccd.rules /lib/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger
-sudo cp sdk/linux/mac/lib/libqhyccd.so* /usr/local/lib/ && sudo ldconfig
-ldconfig -p | grep qhyccd
-```
-
-#### ToupTek Setup
-
-Needs `libtoupcam.so` / `libtoupcam.dylib` / `toupcam.dll`: the Linux SDK from the
-[ToupTek Download Page](http://www.touptek.com/download/), or up-to-date binaries for all architectures from the
-[INDIGO repository](https://github.com/indigo-astronomy/indigo/tree/master/indigo_drivers/ccd_touptek/bin_externals/libtoupcam).
-Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera (often shipped by the
-manufacturer or INDI), then replug. Check: `ldconfig -p | grep toupcam`.
-
-#### SVBony Setup
-
-Needs `libSVBony.so` / `libSVBCameraSDK.dylib` / `SVBony.dll` from the [SVBony Downloads Page](https://www.svbony.com/downloads).
-Install it to a library path (e.g. `/usr/local/lib/`), add udev rules for your camera, then replug. Check:
-`ldconfig -p | grep SVBony`.
+Camera SDK installation and udev rules: see [System dependencies](system-dependencies.md#camera-sdks).
 
 ### Web Server
 

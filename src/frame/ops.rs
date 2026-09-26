@@ -7,7 +7,7 @@ use rayon::prelude::*;
 /// an equivalence test between a downsampled encode and [`Frame::to_rgb8_fast`]
 /// only means anything while both round identically.
 #[inline(always)]
-pub(crate) fn sample_to_u8(value: f32) -> u8 {
+pub fn sample_to_u8(value: f32) -> u8 {
     (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
 }
 

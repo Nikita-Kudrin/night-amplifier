@@ -86,7 +86,7 @@ impl PlayerOneSdk {
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
                     info!("PlayerOne SDK ({}) loaded successfully.", lib_name);
-                    use crate::camera::sdk_library::optional_symbol_lazy;
+                    use crate::native_library::optional_symbol_lazy;
                     let (dropped_images_count, config_attributes) = unsafe {
                         (
                             optional_symbol_lazy::<DroppedImagesCount>(

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 
 // Mock composables
@@ -33,6 +33,7 @@ vi.mock('./composables/useWebSocket.js', () => ({
 vi.mock('./composables/api.js', () => ({
   getAstapStatus: vi.fn().mockResolvedValue({ ready: true }),
   getCatalogStatus: vi.fn().mockResolvedValue({ installed: true }),
+  getAiCompute: vi.fn().mockResolvedValue({ state: 'unavailable', rungs: [] }),
 }))
 
 // We must mock App.vue import so that window.location is set BEFORE module is evaluated
@@ -113,5 +114,42 @@ describe('App.vue Routing', () => {
 
     expect(wrapper.findComponent({ name: 'EyepieceView' }).exists()).toBe(false)
     expect(wrapper.find('.app').exists()).toBe(true)
+  })
+
+  /** The one-time AI compute benchmark blocks the whole UI until it ends. */
+  it('makes the app inert and shows the benchmark overlay while benchmarking', async () => {
+    window.location = { ...originalLocation, pathname: '/' }
+    const api = await import('./composables/api.js')
+    api.getAiCompute.mockResolvedValueOnce({ state: 'benchmarking', rungs: [], progress: { done: 0, total: 2, testing: 'CPU — test' } })
+    const App = (await import('./App.vue')).default
+
+    const wrapper = mount(App, {
+      attachTo: document.body,
+      global: {
+        stubs: {
+          EyepieceView: true,
+          EulaModal: true,
+          StatusBar: true,
+          LiveView: true,
+          CameraPanel: true,
+          CaptureControls: true,
+          SettingsPanel: true,
+        }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.app').attributes('inert')).toBeDefined()
+    expect(document.querySelector('[data-test="benchmark-overlay"]')).not.toBeNull()
+    wrapper.unmount()
+  })
+
+  it('leaves the app interactive when there is no benchmark', async () => {
+    window.location = { ...originalLocation, pathname: '/' }
+    const App = (await import('./App.vue')).default
+    const wrapper = mount(App, { global: { stubs: { StatusBar: true, LiveView: true, CameraPanel: true, CaptureControls: true, SettingsPanel: true } } })
+    await flushPromises()
+    expect(wrapper.find('.app').attributes('inert')).toBeUndefined()
+    expect(wrapper.find('[data-test="benchmark-overlay"]').exists()).toBe(false)
   })
 })

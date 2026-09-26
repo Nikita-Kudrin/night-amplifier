@@ -2,7 +2,10 @@
 //!
 //! Events are serialized to JSON using serde with automatic snake_case naming.
 
+mod ai_compute;
 mod install;
+
+pub use ai_compute::spawn_ai_compute_watcher;
 
 use serde::Serialize;
 
@@ -108,6 +111,10 @@ pub enum ServerEvent {
     /// which needs the correction the mode holds off. Pressing Start stays silent — the
     /// observer asked for the stack, and `SettingsUpdated` moves the toggle.
     FocusModeLeft,
+
+    /// The AI compute report changed (benchmark progress, a result, a unit that failed at
+    /// runtime). Clients refetch `GET /api/ai-compute`, which resolves their preference.
+    AiComputeChanged,
 
     /// Error occurred
     Error { message: String },

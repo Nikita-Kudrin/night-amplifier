@@ -64,6 +64,24 @@ export async function getCapabilities() {
     return request('/capabilities')
 }
 
+/**
+ * The AI denoiser's hardware benchmark and where the network runs, resolved for the
+ * saved "AI compute" choice.
+ * @returns {Promise<object>}
+ */
+export async function getAiCompute() {
+    return request('/ai-compute')
+}
+
+/**
+ * Measure the hardware again: forget this computer's result and the units recorded as
+ * crashing. Refused (409) while a capture runs.
+ * @returns {Promise<object>} the report as it stands
+ */
+export async function remeasureAiCompute() {
+    return request('/ai-compute/benchmark', {method: 'POST'})
+}
+
 // ============================================================================
 // Eyepiece
 // ============================================================================

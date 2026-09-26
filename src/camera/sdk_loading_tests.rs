@@ -47,8 +47,8 @@ fn newly_offered_sdks_bind_eagerly() {
     for provider in ["qhy", "touptek", "svbony"] {
         let loader = fs::read_to_string(camera_dir.join(provider).join("sdk.rs")).unwrap();
         assert!(
-            loader.contains("sdk_library::load_eagerly"),
-            "{provider}/sdk.rs must open its library through sdk_library::load_eagerly"
+            loader.contains("native_library::load_eagerly"),
+            "{provider}/sdk.rs must open its library through native_library::load_eagerly"
         );
     }
 }
