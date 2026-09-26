@@ -20,7 +20,8 @@ export default defineConfig({
           { text: 'Live Stacking', link: '/stacking' },
           { text: 'Sensor Corrections', link: '/sensor-corrections' },
           { text: 'Noise Reduction', link: '/noise-reduction' },
-          { text: 'Eyepiece Display', link: '/eyepiece-display' }
+          { text: 'Eyepiece Display', link: '/eyepiece-display' },
+          { text: 'System Dependencies', link: '/system-dependencies' }
         ]
       }
     ],

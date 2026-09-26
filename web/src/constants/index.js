@@ -313,6 +313,7 @@ export const DEFAULT_SETTINGS = {
         luma_strength: 1.0,
         detail: 0.5,
         ai: false,
+        ai_compute: 'auto',
     },
     preview_resolution: 'native',
     streaming_resolution: 'qhd1440',
@@ -432,6 +433,8 @@ export const HELP_TEXTS = {
         'Scales the thresholds for the mid scales — the soft mottle across the target, not the fine speckle and not the broad background blotches the Background Grain dial handles. 100% is the tuned value and the maximum: past it the mottle does not go away, it moves out to a coarser scale, and stars start to show a ring. Lower it if the target looks soft or plastic; 0% turns the brightness denoiser off altogether, which is the setting to reach for if nebulae start looking like plastic.',
     denoise_ai:
         'Runs a small neural network over the stretched image to clean up the fine, pixel-scale grain. While it runs it replaces Structure strength and Detail; Colour Mottle and Background Grain keep working, and Background Grain above 50% also smooths the larger mottle the network cannot reach. It keeps a nebula\'s texture where the standard filters smooth it, but it removes less grain than they do and softens stars a little more: a different look, not a stronger filter. Needs Denoise on, and is held off in Focus/Finder mode and on the guide camera. It is the most expensive stage of a render, so expect a slower refresh on a small board. Model: astro_denoiser_N2N_N2S "train_13" by Andriy Melnykov (MIT licence).',
+    ai_compute:
+        'Which processor runs AI denoising. On first start Night Amplifier measures every NPU and GPU it can use on four IMX533 frames, once per computer, and Auto takes the fastest one that is not the CPU - during a session the CPU is busy capturing and stacking. Pick a rung to force it, for example the integrated GPU to spare a laptop battery. Options this computer lacks or cannot use are greyed out with the reason; missing drivers and runtimes are listed under System dependencies in the manual.',
     denoise_detail:
         'Brings out the structure inside the target - the lanes, knots and edges of a nebula or a galaxy\'s arms - without touching the background or the stars. It raises contrast at the scales between fine speckle and broad glow, and only where the target stands above the sky, so the background grain does not grow with it. Stars are left alone, including stars sitting on the nebula, which is where ordinary sharpening leaves dark rings. The grain on the target sits at the same scales, so it rises too: if a short stack or a faint galaxy looks grainier, lower this. 0% shows the target as it was before this control existed. Towards 100% a bright star on a bright galaxy disk can pick up a faint dark ring. It works through the brightness denoiser, so it does nothing while Structure strength is at 0%.',
     eyepiece_dither:

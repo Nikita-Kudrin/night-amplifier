@@ -7,9 +7,11 @@ import {DEFAULT_SETTINGS} from '../constants/index.js'
 // Mock the API module
 vi.mock('../composables/api.js', () => ({
     updateSettings: vi.fn(),
+    getAiCompute: vi.fn(),
 }))
 
-import {updateSettings} from '../composables/api.js'
+import {getAiCompute, updateSettings} from '../composables/api.js'
+import {resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
 
 /**
  * A toggle's checkbox, found by the label text next to it.
@@ -691,6 +693,103 @@ describe('SettingsPanel', () => {
 
             expect(slider(wrapper, 'Structure strength').props('disabled')).toBe(false)
             expect(slider(wrapper, 'Detail').props('disabled')).toBe(false)
+        })
+    })
+
+    describe('AI Compute', () => {
+        const WITH_AI = {
+            capabilities: {
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true, ai_denoise: true},
+            },
+        }
+
+        /** This laptop: Iris Xe measured, the NVIDIA card without a driver, no NPU. */
+        const LAPTOP = {
+            generation: 3,
+            state: 'ready',
+            auto: 'integrated_gpu',
+            effective: 'integrated_gpu',
+            notice: null,
+            rungs: [
+                {rung: 'npu', usable: false, device: null, reason: 'No supported NPU found'},
+                {
+                    rung: 'discrete_gpu',
+                    usable: false,
+                    device: 'NVIDIA [10de:25ba]',
+                    reason: 'present, but no Vulkan driver (kernel driver: nouveau)',
+                },
+                {rung: 'integrated_gpu', usable: true, device: 'Intel Iris Xe', api: 'Vulkan', precision: 'f32', ms_per_frame: 64.7},
+                {rung: 'cpu', usable: true, device: 'i9-12900H', api: 'engine', precision: 'f32', ms_per_frame: 219.3},
+            ],
+        }
+
+        const select = (wrapper) => wrapper.find('[data-test="ai-compute-select"]')
+
+        beforeEach(() => {
+            resetAiCompute()
+            getAiCompute.mockResolvedValue(LAPTOP)
+        })
+
+        it('offers every rung and greys out what this computer cannot use, with the reason', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel(WITH_AI)
+            await flushPromises()
+
+            const options = select(wrapper).findAll('option')
+            expect(options.map((o) => o.attributes('value'))).toEqual(['auto', 'npu', 'discrete_gpu', 'integrated_gpu', 'cpu'])
+            expect(options[0].text()).toBe('Auto — Integrated GPU · 65 ms')
+            expect(options[1].attributes('disabled')).toBeDefined()
+            expect(options[2].attributes('disabled')).toBeDefined()
+            expect(options[3].attributes('disabled')).toBeUndefined()
+            expect(select(wrapper).attributes('disabled')).toBeUndefined()
+
+            const reasons = wrapper.find('[data-test="ai-compute-reasons"]')
+            expect(reasons.text()).toContain('NVIDIA [10de:25ba] — present, but no Vulkan driver')
+            expect(reasons.find('a').attributes('href')).toBe('/night-amplifier/system-dependencies')
+            expect(wrapper.find('[data-test="ai-compute-hint"]').text()).toContain('Runs on the Integrated GPU: Intel Iris Xe')
+        })
+
+        it('saves the choice with the rest of the denoise object and refetches the report', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel(WITH_AI)
+            await flushPromises()
+
+            await select(wrapper).setValue('cpu')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({ai_compute: 'cpu', enabled: true, ai: false}),
+            })
+            expect(getAiCompute).toHaveBeenCalled()
+        })
+
+        it('shows the server’s notice when a forced rung is not available here', async () => {
+            const notice = 'NPU is not available on this computer; using Auto (Integrated GPU).'
+            useAiCompute().report.value = {...LAPTOP, notice}
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai_compute: 'npu'}}})
+            await flushPromises()
+            expect(wrapper.find('[data-test="ai-compute-hint"]').text()).toBe(notice)
+            expect(select(wrapper).element.value).toBe('npu')
+        })
+
+        it('waits for the benchmark, and stays usable while the AI switch is off', async () => {
+            useAiCompute().report.value = {state: 'benchmarking', rungs: []}
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai: false}}})
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeDefined()
+            expect(select(wrapper).find('option').text()).toBe('Auto (checking hardware…)')
+
+            useAiCompute().report.value = LAPTOP
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeUndefined()
+        })
+
+        it('is locked without the capability', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeDefined()
+            expect(wrapper.find('[data-test="ai-compute-reasons"]').exists()).toBe(false)
         })
     })
 

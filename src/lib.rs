@@ -30,6 +30,7 @@ pub mod frame;
 #[allow(dead_code)] // vendored INDI protocol surface, likewise
 pub mod indi;
 pub mod logging;
+pub mod native_library;
 pub mod parallel;
 pub mod planetary;
 pub mod process;

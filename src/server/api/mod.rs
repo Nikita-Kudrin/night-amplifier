@@ -4,6 +4,7 @@
 //! and provides a unified router assembly.
 
 pub mod about;
+pub mod ai_compute;
 pub mod cameras;
 pub mod capabilities;
 pub mod capture;
@@ -48,6 +49,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
         )
         // Capabilities
         .route("/capabilities", get(capabilities::get_capabilities))
+        .route("/ai-compute", get(ai_compute::get_ai_compute))
         // Capture
         .route("/capture/start", post(capture::start_capture))
         .route("/capture/stop", post(capture::stop_capture))

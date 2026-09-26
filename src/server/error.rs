@@ -103,6 +103,10 @@ pub enum ApiError {
     #[error("Failed to configure simulator: {0}")]
     SimulatorConfigFailed(String),
 
+    /// The one-time AI compute benchmark is measuring; captures wait for it.
+    #[error("Benchmarking hardware for AI denoising; start the capture when it finishes")]
+    HardwareBenchmarkRunning,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -134,6 +138,7 @@ impl ApiError {
             ApiError::CameraIdentityMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CameraRecovering { .. } => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::SimulatorConfigFailed(_) => StatusCode::BAD_REQUEST,
+            ApiError::HardwareBenchmarkRunning => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

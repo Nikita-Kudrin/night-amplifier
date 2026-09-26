@@ -13,6 +13,7 @@
 
 use std::sync::OnceLock;
 
+use super::ai_compute::{AiComputePreference, AiComputeReport, BenchmarkState};
 use super::DenoiseScratch;
 use crate::server::state::DenoiseSettings;
 
@@ -25,6 +26,8 @@ pub struct AiDenoiseConfig {
     /// Display luminance from which the pre-network pixels are blended back in, reaching
     /// all of them at full scale: the network softens star cores.
     pub highlight_floor: f32,
+    /// The observer's "AI compute" choice, carried to the plugin with each frame's config.
+    pub compute: AiComputePreference,
 }
 
 impl AiDenoiseConfig {
@@ -32,6 +35,7 @@ impl AiDenoiseConfig {
         enabled: false,
         strength: 0.0,
         highlight_floor: 0.0,
+        compute: AiComputePreference::Auto,
     };
 
     pub fn is_enabled(&self) -> bool {
@@ -62,6 +66,22 @@ pub trait AiDenoisePlugin: Send + Sync {
         config: &AiDenoiseConfig,
         scratch: &mut DenoiseScratch,
     );
+
+    /// Find the compute units, and measure them once per machine; later starts load the
+    /// stored result. Returns at once and is idempotent: Community calls it at startup and
+    /// again when a licence is activated.
+    fn start_benchmark(&self) {}
+
+    /// The benchmark's state and results, with the unit `preference` resolves to.
+    fn compute_report(&self, _preference: AiComputePreference) -> AiComputeReport {
+        AiComputeReport::unavailable()
+    }
+
+    /// [`AiComputeReport::generation`] without building a report, for the watcher that
+    /// announces changes.
+    fn compute_generation(&self) -> u64 {
+        0
+    }
 }
 
 /// Global registry for the AI denoise plugin.
@@ -76,6 +96,31 @@ pub fn config_for(settings: &DenoiseSettings) -> AiDenoiseConfig {
     crate::license::pro_plugin(&AI_DENOISE_PLUGIN)
         .map(|plugin| plugin.config(settings))
         .unwrap_or(AiDenoiseConfig::OFF)
+}
+
+/// See [`AiDenoisePlugin::start_benchmark`]. Nothing to do without the plugin.
+pub fn start_benchmark() {
+    if let Some(plugin) = crate::license::pro_plugin(&AI_DENOISE_PLUGIN) {
+        plugin.start_benchmark();
+    }
+}
+
+/// See [`AiDenoisePlugin::compute_report`]; unavailable without the plugin.
+pub fn compute_report(preference: AiComputePreference) -> AiComputeReport {
+    crate::license::pro_plugin(&AI_DENOISE_PLUGIN)
+        .map(|plugin| plugin.compute_report(preference))
+        .unwrap_or_else(AiComputeReport::unavailable)
+}
+
+/// See [`AiDenoisePlugin::compute_generation`].
+pub fn compute_generation() -> u64 {
+    crate::license::pro_plugin(&AI_DENOISE_PLUGIN).map_or(0, |plugin| plugin.compute_generation())
+}
+
+/// Whether the hardware benchmark is measuring right now. New captures wait for it: a
+/// session started mid-benchmark would skew the timings and could not use the result.
+pub fn benchmark_running() -> bool {
+    compute_report(AiComputePreference::Auto).state == BenchmarkState::Benchmarking
 }
 
 /// Run the network over a staged, already stretched image, in place. A no-op without
@@ -138,10 +183,22 @@ mod tests {
             enabled: true,
             strength: 1.0,
             highlight_floor: 0.2,
+            compute: Default::default(),
         };
         assert!(config.is_enabled());
 
         denoise_display_rgb_with(&mut buf, 16, 16, &config, &mut Default::default());
         assert_eq!(buf, before);
+    }
+
+    /// Community alone has no benchmark: nothing is reported, nothing blocks a capture.
+    #[test]
+    fn without_the_plugin_there_is_no_benchmark() {
+        start_benchmark();
+        for preference in [AiComputePreference::Auto, AiComputePreference::Npu] {
+            assert_eq!(compute_report(preference), AiComputeReport::unavailable());
+        }
+        assert_eq!(compute_generation(), 0);
+        assert!(!benchmark_running());
     }
 }

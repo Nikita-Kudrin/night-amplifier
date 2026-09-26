@@ -22,11 +22,17 @@
 //! plugin along with the code that earned them.
 //!
 //! The AI denoiser is the exception to "linear light": it runs after the stretch, from
-//! its own plugin — see [`ai`].
+//! its own plugin — see [`ai`]. Which unit runs it (NPU, GPU, CPU) is the plugin's
+//! hardware benchmark; [`ai_compute`] carries its report and the observer's choice.
 
 pub mod ai;
+pub mod ai_compute;
 
 pub use ai::{AiDenoiseConfig, AiDenoisePlugin, AI_DENOISE_PLUGIN};
+pub use ai_compute::{
+    AiComputePreference, AiComputeReport, BenchmarkProgress, BenchmarkState, ComputeRung,
+    RungReport,
+};
 
 use std::sync::OnceLock;
 
@@ -363,6 +369,7 @@ mod tests {
                 enabled: true,
                 strength: 1.0,
                 highlight_floor: 0.2,
+                compute: Default::default(),
             },
             ..DenoiseConfig::OFF
         };

@@ -31,6 +31,7 @@ impl AiDenoisePlugin for StandIn {
             enabled: true,
             strength: 1.0,
             highlight_floor: 0.2,
+            compute: Default::default(),
         }
     }
 

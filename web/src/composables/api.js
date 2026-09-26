@@ -64,6 +64,15 @@ export async function getCapabilities() {
     return request('/capabilities')
 }
 
+/**
+ * The AI denoiser's hardware benchmark and where the network runs, resolved for the
+ * saved "AI compute" choice.
+ * @returns {Promise<object>}
+ */
+export async function getAiCompute() {
+    return request('/ai-compute')
+}
+
 // ============================================================================
 // Eyepiece
 // ============================================================================

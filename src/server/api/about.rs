@@ -46,13 +46,17 @@ pub async fn update_license(
 ) -> impl IntoResponse {
     if let Some(updater) = LICENSE_UPDATER.get() {
         match updater(payload.token) {
-            Ok(details) => (
-                StatusCode::OK,
-                ApiResponse::ok(LicenseStatus {
-                    active: true,
-                    details: Some(details),
-                }),
-            ),
+            Ok(details) => {
+                // A licence activated after startup: the benchmark did not run then.
+                crate::render::denoise::ai::start_benchmark();
+                (
+                    StatusCode::OK,
+                    ApiResponse::ok(LicenseStatus {
+                        active: true,
+                        details: Some(details),
+                    }),
+                )
+            }
             Err(e) => (StatusCode::BAD_REQUEST, ApiResponse::<()>::err(&e)),
         }
     } else {

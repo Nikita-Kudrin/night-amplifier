@@ -2,6 +2,8 @@
 import {ref, inject, watch, computed, unref} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
+import {useAiCompute} from '../composables/useAiCompute.js'
+import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute.js'
 import {
   BasePanel,
   BaseToggle,
@@ -79,6 +81,22 @@ const aiDenoiseHeldOff = computed(() => {
   if (focusMode.value) return 'Held off by Focus/Finder mode.'
   return ''
 })
+
+/**
+ * Where the network runs, from the server's one-time benchmark. A hardware choice, not a
+ * picture control: it stays usable while the AI switch is off, so the observer can pick
+ * before switching it on.
+ */
+const {report: aiComputeReport, refresh: refreshAiCompute} = useAiCompute()
+const aiComputeOptionList = computed(() => aiComputeOptions(aiComputeReport.value))
+const aiComputeHint = computed(() => aiComputeSummary(aiComputeReport.value))
+const aiComputeUnusable = computed(() => unusableRungs(aiComputeReport.value))
+const aiComputeLocked = computed(() => !aiDenoiseAvailable.value || !isReady(aiComputeReport.value))
+
+async function applyAiCompute(value) {
+  await applyGroup('denoise', {...localSettings.value.denoise, ai_compute: value})
+  refreshAiCompute()
+}
 
 watch(
     settings,
@@ -684,6 +702,42 @@ const HELP = HELP_TEXTS
         <span v-if="aiDenoiseHeldOff" class="hint">{{ aiDenoiseHeldOff }}</span>
       </div>
 
+      <div class="control-group" data-test="ai-compute">
+        <div class="control-row">
+          <label class="control-label" for="ai-compute-select" style="margin-bottom: 0; flex: 1">
+            AI compute
+            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
+            <BaseInfoIcon :message="HELP.ai_compute"/>
+          </label>
+          <select
+              id="ai-compute-select"
+              v-model="localSettings.denoise.ai_compute"
+              class="select ai-compute-select"
+              data-test="ai-compute-select"
+              :disabled="aiComputeLocked"
+              @change="applyAiCompute($event.target.value)"
+          >
+            <option
+                v-for="opt in aiComputeOptionList"
+                :key="opt.value"
+                :value="opt.value"
+                :disabled="opt.disabled"
+                :title="opt.reason || undefined"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        <span v-if="aiDenoiseAvailable && aiComputeHint" class="hint" data-test="ai-compute-hint">{{ aiComputeHint }}</span>
+        <ul v-if="aiDenoiseAvailable && aiComputeUnusable.length" class="hint ai-compute-reasons" data-test="ai-compute-reasons">
+          <li v-for="rung in aiComputeUnusable" :key="rung.rung">
+            <strong>{{ rung.label }}:</strong>
+            {{ rung.device ? `${rung.device} — ` : '' }}{{ rung.reason }}
+            <a v-if="rung.installable" :href="SYSTEM_DEPENDENCIES_URL" target="_blank" rel="noopener">How to install</a>
+          </li>
+        </ul>
+      </div>
+
       <div class="control-group">
         <BaseToggle
             v-model="simulatorEnabled"
@@ -752,5 +806,20 @@ const HELP = HELP_TEXTS
 .storage-mode-toggle {
   margin-left: 0.75rem;
   margin-top: 0.25rem;
+}
+
+.ai-compute-select {
+  width: 190px;
+  padding: 0.25rem 2rem 0.25rem 0.5rem;
+  height: 32px;
+}
+
+.ai-compute-reasons {
+  margin: 0.375rem 0 0;
+  padding-left: 1rem;
+}
+
+.ai-compute-reasons a {
+  color: var(--primary);
 }
 </style>

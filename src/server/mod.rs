@@ -145,8 +145,9 @@ impl Server {
         Arc::clone(&self.state)
     }
 
-    /// Build the router with all routes
-    fn build_router(&self) -> Router {
+    /// Build the router with all routes. Public so an external test binary can drive the
+    /// real routes against its own plugin registry (`tests/ai_compute_api_test.rs`).
+    pub fn build_router(&self) -> Router {
         let api_routes = api::create_router();
 
         let ws_routes = ws::routes();
@@ -215,6 +216,11 @@ impl Server {
         }
 
         self.propagate_telescope_settings().await;
+
+        // Before the listener: a stored result makes the first report already `Ready`,
+        // and a fresh machine shows the benchmark overlay from the first page load.
+        crate::render::denoise::ai::start_benchmark();
+        crate::server::events::spawn_ai_compute_watcher(self.state.events.clone());
 
         let app = self.build_router();
         let listener = tokio::net::TcpListener::bind(self.config.bind_addr)

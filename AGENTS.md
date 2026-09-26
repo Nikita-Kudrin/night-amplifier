@@ -134,7 +134,7 @@ their own schedule.
 | `fits/`                       | FITS read (`read_frame`) and write; `interpret_shape` for NAXIS layout               |
 | `debayer/`                    | RGGB/BGGR/GRBG/GBRG debayering; Bilinear + VNG + Superpixel                          |
 | `cfa/`                        | Raw-CFA stage run before demosaic: hot pixels, row/column FPN                        |
-| `render/denoise/`             | Denoise plugin boundary: config data, buffer pool, `DENOISE_PLUGIN` (filters in Pro), `AI_DENOISE_PLUGIN` (network in Pro) |
+| `render/denoise/`             | Denoise plugin boundary: config data, buffer pool, `DENOISE_PLUGIN` (filters in Pro), `AI_DENOISE_PLUGIN` (network in Pro), `ai_compute` (where it runs, as data) |
 | `calibration/`                | Master dark / flat: `(raw - dark) / flat`                                            |
 | `detection/`                  | Star detection with CoM sub-pixel centroiding, FWHM/SNR                              |
 | `registration/`               | Triangle matching + RANSAC → `AffineTransform`                                       |
@@ -152,6 +152,7 @@ their own schedule.
 | `app.rs`                      | Shared `app::run()` entry point for Community and Pro binaries                       |
 | `parallel.rs`                 | `balanced_chunk_len` — rayon work partitioning, shared with Pro                      |
 | `ffi_safety.rs`               | `catch_ffi_panic`, buffer/dimension validation                                       |
+| `native_library.rs`           | Eager dlopen of vendor libraries (camera SDKs, Pro's AI runtimes), missing vs. broken |
 | `logging.rs` / `telemetry.rs` | `tracing` + optional OpenTelemetry (OTLP)                                            |
 
 ### Server (src/server/)
@@ -159,6 +160,9 @@ their own schedule.
 Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG at Streaming Resolution, `?source=guide` for the guide
 camera), `/ws/eyepiece_quality` (lossless LZ4 at Eyepiece Streaming Resolution), `/ws/events` (JSON). State: `Arc<RwLock<_>>` in `AppState`; exact endpoints,
 DTOs and events in source.
+
+`GET /api/ai-compute` is the AI compute report (see *The AI denoiser*). `Server::build_router` is public so an external
+test binary can drive the real routes against its own plugin registry.
 
 `GET /api/eyepiece/snapshot?circular=` is the only REST route returning image bytes: RGB8 PNG of `latest_raw_frame`
 at its *own* size, on `spawn_blocking`. `circular=true` returns the **centre square** (the view is `100cqmin` +
@@ -176,6 +180,10 @@ drops the page's streams.
 Vue 3 SPA, mobile-first, dark theme. Composables in `src/composables/`, components in `src/components/`. Vite proxies
 `/api` and `/ws` to `localhost:9955` in dev. Pro-only controls stay visible and locked (`BaseProLock`) on their
 `/api/capabilities` flag — Noise Reduction reads `deep_sky.denoise`.
+
+`useAiCompute` is one shared report for `HardwareBenchmarkOverlay` (App marks everything else `inert` while the server
+benchmarks) and the Settings → Advanced "AI compute" selector; it polls only while `checking`/`benchmarking`, and a
+failed request never leaves the UI blocked. The selector links greyed-out reasons to the manual's System dependencies.
 
 `useCatalogSearch` skips a programmatic query by *value* (`setQueryWithoutSearch`), never with a one-shot flag: clearing
 a 1-character query armed the flag, so typing "M" then "M4" never searched and M1–M9 were unfindable. It also drops
@@ -205,8 +213,9 @@ responses from superseded searches, or a slow reply reopens the dropdown after a
 - **Vendor SDKs are dlopen'd, never linked or shipped** (`dlopen2::Container::load` in each provider's `sdk.rs`).
   rustc passes `-l` even for an unused `#[link]` block, so one breaks every build without that SDK. QHY publishes no
   redistribution grant, and the binary has no RUNPATH to find a copy beside it. Enforced by
-  `camera::sdk_loading_tests` and the shared-library check in `scripts/build-dist.sh`.
-- **QHY, ToupTek and SVBony bind eagerly** (`camera::sdk_library::load_eagerly`, `RTLD_NOW`): a lazily bound SDK with an
+  `camera::sdk_loading_tests` and the shared-library check in `scripts/build-dist.sh`. What users install is in
+  `system-dependencies.md` (shipped in every release; the manual's System Dependencies page includes it).
+- **QHY, ToupTek and SVBony bind eagerly** (`native_library::load_eagerly`, `RTLD_NOW`): a lazily bound SDK with an
   unresolvable symbol kills the process at its first call. The Linux SVBony SDK uses libusb without declaring it, so
   `preload_libusb` loads it `RTLD_GLOBAL` first. ZWO and Player One still load lazily (not yet hardware-checked).
   A symbol only some SDK versions export goes through `optional_symbol` (QHY's `EnableQHYCCDMessage`), never the
@@ -539,7 +548,8 @@ seam; not wired in yet. Timed at `info_span!`: ~7ms + ~7.2ms/frame on IMX533/Pi.
 stays planar.
 
 Rules: use `planes()`/`channel_data()`/`get_pixel()`, never `frame.data()` with `* channels` math; build fixtures with
-`set_pixel`, covered by `layout_tests` per format and traversal; 8-bit conversion always rounds via `sample_to_u8`
+`set_pixel`, covered by `layout_tests` per format and traversal; 8-bit conversion always rounds via `sample_to_u8` (public:
+Pro's AI compute quality check judges on the same bytes)
 (16-bit truncates); dispatch per plane, never derive a channel from a flat rayon chunk index. `get_pixel` in a
 whole-frame loop is a review flag (120ms/frame in `white_balance::block_medians`, 27ms on `planes()` + rayon).
 
@@ -598,6 +608,14 @@ where it runs and the gates (`render::denoise::ai`).
   observer's — and the guide stream (`guide_render_settings`). Live view runs it.
 - The classic plugin's `config` sees `settings.ai` true only while the network really
   runs (`denoise::config_for`), and then hands it wavelet levels 1-4 and Detail.
+- **Where it runs is Pro's** (a one-time hardware benchmark; see Pro AGENTS.md "AI compute").
+  Community carries it as data: `ai_compute` (report DTOs, `AiComputePreference`), the
+  `DenoiseSettings::ai_compute` choice (unknown values read as Auto), `AiDenoiseConfig::compute`
+  handing it to the plugin per frame, and three default trait methods (`start_benchmark` at
+  startup and on licence activation, `compute_report`, `compute_generation`).
+- While the report says `Benchmarking`, `CaptureService::start_capture` answers 503 +
+  `Retry-After` (`HardwareBenchmarkRunning`); `GET /api/ai-compute` serves the report for the
+  saved choice, and a watcher announces generation changes as `ai_compute_changed`.
 
 ### The stack's noise map (`frame::NoiseField`)
 

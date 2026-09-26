@@ -103,6 +103,10 @@ impl CaptureService {
         state: &Arc<AppState>,
         camera_id: Option<String>,
     ) -> ApiResult<String> {
+        if crate::render::denoise::ai::benchmark_running() {
+            return Err(ApiError::HardwareBenchmarkRunning);
+        }
+
         // Check if already capturing. A capture paused for recovery is still running.
         let current_state = state.capture_state().await;
         if matches!(
