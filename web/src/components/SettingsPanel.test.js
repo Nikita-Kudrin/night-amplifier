@@ -623,6 +623,77 @@ describe('SettingsPanel', () => {
         })
     })
 
+    describe('AI Denoising', () => {
+        const WITH_AI = {
+            capabilities: {
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true, ai_denoise: true},
+            },
+        }
+
+        const slider = (wrapper, label) =>
+            wrapper.findAllComponents({name: 'BaseSlider'}).find((s) => s.props('label') === label)
+
+        it('lives in the Advanced section, locked without the capability', () => {
+            const wrapper = mountSettingsPanel()
+
+            const advanced = wrapper
+                .findAll('.settings-section')
+                .find((section) => section.find('.section-title').text() === 'Advanced')
+            expect(advanced.text()).toContain('AI denoising')
+            expect(findToggleByLabel(wrapper, 'AI denoising').attributes('disabled')).toBeDefined()
+        })
+
+        it('sends the switch with the rest of the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_AI)
+
+            await findToggleByLabel(wrapper, 'AI denoising').setValue(true)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({ai: true, enabled: true, background_grain: 0.5}),
+            })
+        })
+
+        // Focus/Finder mode holds the network off without touching the switch, so the
+        // observer's choice is there again when the mode ends.
+        it('is held, keeping its value, while Denoise is off and in Focus/Finder mode', async () => {
+            for (const settings of [
+                {denoise: {enabled: false, ai: true}},
+                {focus_mode: true, denoise: {ai: true}},
+            ]) {
+                const wrapper = mountSettingsPanel({...WITH_AI, settings})
+                await flushPromises()
+
+                const toggle = findToggleByLabel(wrapper, 'AI denoising')
+                expect(toggle.attributes('disabled')).toBeDefined()
+                expect(toggle.element.checked).toBe(true)
+                expect(wrapper.text()).toContain('Held off')
+            }
+        })
+
+        it('replaces Structure strength and Detail while it runs, and nothing else', async () => {
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai: true}}})
+            await flushPromises()
+
+            expect(slider(wrapper, 'Structure strength').props('disabled')).toBe(true)
+            expect(slider(wrapper, 'Detail').props('disabled')).toBe(true)
+            expect(slider(wrapper, 'Background Grain').props('disabled')).toBe(false)
+            expect(findToggleByLabel(wrapper, 'Colour Mottle').attributes('disabled')).toBeUndefined()
+            expect(wrapper.text()).toContain('replaces Structure strength and Detail')
+        })
+
+        it('replaces nothing on a build without the network', async () => {
+            const wrapper = mountSettingsPanel({
+                capabilities: {deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true}},
+                settings: {denoise: {ai: true}},
+            })
+            await flushPromises()
+
+            expect(slider(wrapper, 'Structure strength').props('disabled')).toBe(false)
+            expect(slider(wrapper, 'Detail').props('disabled')).toBe(false)
+        })
+    })
+
     describe('Storage Section', () => {
         // Raw frames can now be saved in any mode, so the section is no longer gated on
         // being in Stacking - only the stacked-image switch still is.

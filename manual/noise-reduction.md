@@ -1,6 +1,6 @@
 # Noise Reduction
 
-These two filters smooth the image you are looking at. They are the last thing
+These filters smooth the image you are looking at. They are the last thing
 that touches a frame before it reaches your screen, and unlike the sensor
 corrections they are a matter of taste — every denoiser has a setting at which
 nebulae start looking like plastic, and only your eye at the eyepiece can find
@@ -197,6 +197,34 @@ little swollen or faintly ringed on a bright nebula; lower Detail there if you s
 Detail works through the brightness filter, so it does nothing while **Structure
 strength** is at 0 %, and its slider greys out.
 
+## AI denoising
+
+A small neural network that cleans up the fine, pixel-scale grain. Switch it on under
+**Settings → Advanced → AI denoising** *(Pro)*; it needs **Denoise** on. While it runs it
+takes over from **Structure strength** and **Detail**, which grey out. **Colour Mottle**
+and **Background Grain** keep working, and they still matter: the network sees about ten
+pixels around each pixel, so it cannot reach the larger mottle. Raise Background Grain
+above 50 % for that.
+
+It runs on the stretched picture, before the contrast curve, at your streaming
+resolution: that is what it was trained on, stretched and background-corrected colour
+images from an IMX533 at bin 2, close to a 1440p stream from that camera. It changes only
+brightness, never colour, and leaves bright stars and cores as they were: left alone it
+would soften them and wash out their colour.
+
+It is a different look rather than a stronger filter. On the reference stacks it removed
+40-78 % of the fine sky grain where the standard filters remove 55-83 %, and softened
+stars a little more, but it keeps a nebula's own texture where they smooth it. Try both
+on your target.
+
+It is the most expensive stage of a render, several times the cost of everything else in
+it, so on a small board the view refreshes less often while it is on. It is held off in [Focus/Finder mode](/getting-started#focus-finder-mode), on the
+guide camera and for planetary targets. The saved stack's PNG and the full-size eyepiece
+snapshot run it at their own size, which takes a while.
+
+The model is "train_13" from Andriy Melnykov's
+[Astro Denoiser](https://github.com/andriymelnykov/astro_denoiser_N2N_N2S), MIT licence.
+
 ## Processing Resolution
 
 Under **Settings → Preview**, and a different lever from the two filters above:
@@ -258,9 +286,9 @@ receives 1440p until you raise **Streaming Resolution**.
 
 ## Not applied to planetary targets
 
-Both filters are skipped automatically for **Planetary** stacking. Lucky imaging
-exists to recover exactly the fine detail a denoiser removes, so smoothing the
-result would undo the whole point of the mode.
+Both filters, and AI denoising, are skipped automatically for **Planetary** stacking.
+Lucky imaging exists to recover exactly the fine detail a denoiser removes, so smoothing
+the result would undo the whole point of the mode.
 
 ## What this does not fix
 

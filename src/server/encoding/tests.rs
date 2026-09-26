@@ -935,6 +935,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
                 enabled: false,
                 ..Default::default()
             },
+            ..crate::render::DenoiseConfig::OFF
         },
         crate::render::DenoiseConfig {
             luma: crate::render::LumaDenoiseConfig {
@@ -945,6 +946,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
                 strength: 0.0,
                 ..Default::default()
             },
+            ..crate::render::DenoiseConfig::OFF
         },
         crate::render::DenoiseConfig {
             luma: crate::render::LumaDenoiseConfig {
@@ -955,6 +957,23 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
                 radius: 0,
                 ..Default::default()
             },
+            ..crate::render::DenoiseConfig::OFF
+        },
+        crate::render::DenoiseConfig {
+            ai: crate::render::AiDenoiseConfig {
+                enabled: false,
+                strength: 1.0,
+                highlight_floor: 0.2,
+            },
+            ..crate::render::DenoiseConfig::OFF
+        },
+        crate::render::DenoiseConfig {
+            ai: crate::render::AiDenoiseConfig {
+                enabled: true,
+                strength: 0.0,
+                highlight_floor: 0.2,
+            },
+            ..crate::render::DenoiseConfig::OFF
         },
     ];
 
@@ -992,6 +1011,7 @@ fn the_staged_path_still_applies_the_stretch_before_quantizing() {
     ready.pipeline_config.denoise = crate::render::DenoiseConfig {
         luma: crate::render::LumaDenoiseConfig::default(),
         chroma: crate::render::ChromaDenoiseConfig::default(),
+        ..crate::render::DenoiseConfig::OFF
     };
     let (staged, _, _) = frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
 
@@ -1005,6 +1025,44 @@ fn the_staged_path_still_applies_the_stretch_before_quantizing() {
         unfiltered.iter().any(|&b| b > 26),
         "stretch did not run: 0.1 should be lifted well above its linear byte"
     );
+}
+
+/// The network splits the tail — the stretch over the whole staged image, the rest after
+/// it — so an enabled network config with no plugin to run it must render every byte the
+/// fused tail does: through both kernels, with contrast on, and with a sky shadow.
+#[test]
+fn a_tail_split_for_the_network_renders_what_the_fused_tail_does() {
+    let lut: std::sync::Arc<Vec<f32>> =
+        std::sync::Arc::new((0..1024).map(|i| 1.0 + i as f32 / 1024.0 * 4.0).collect());
+    let network = crate::render::DenoiseConfig {
+        ai: crate::render::AiDenoiseConfig {
+            enabled: true,
+            strength: 1.0,
+            highlight_floor: 0.2,
+        },
+        ..crate::render::DenoiseConfig::OFF
+    };
+    for (frame, (max_w, max_h)) in [
+        (noisy_frame(96, 72, 0.2, 0.05), (3840, 2160)),
+        (noisy_frame(200, 150, 0.2, 0.05), (100, 75)),
+    ] {
+        for shadow in [None, crate::render::SkyShadow::from_sky(0.7, 0.05)] {
+            let mut ready = to_ready_frame_with_stretch(&frame, 0.02, std::sync::Arc::clone(&lut));
+            ready.pipeline_config.contrast = true;
+            ready.pipeline_config.display = crate::render::DisplayOutput::default().with_dither(true);
+            ready.stretch_result.as_mut().unwrap().sky_shadow = shadow;
+            let (fused, _, _) = frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
+
+            ready.pipeline_config.denoise = network;
+            let (split, _, _) = frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
+            assert_eq!(
+                fused,
+                split,
+                "{max_w}x{max_h}, sky shadow {}: splitting the tail changed the picture",
+                shadow.is_some()
+            );
+        }
+    }
 }
 
 /// A non-integer box downsample must average the same source area into every output

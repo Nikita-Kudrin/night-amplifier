@@ -1,5 +1,5 @@
 <script setup>
-import {ref, inject, watch, computed} from 'vue'
+import {ref, inject, watch, computed, unref} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
 import {
@@ -37,7 +37,13 @@ const simulatorEnabledRef = inject('simulatorEnabled')
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const capabilities = inject('capabilities', {
   has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false, denoise: false},
+  deep_sky: {
+    advanced_rejection: false,
+    rbf_background: false,
+    saturation_boost: false,
+    denoise: false,
+    ai_denoise: false,
+  },
   planetary: {advanced_stacking: false},
   push_to: {astap_solver: false},
 })
@@ -58,6 +64,21 @@ const simulatorEnabled = computed({
 })
 
 const localSettings = ref(defaultSettings())
+
+/**
+ * The network is Pro, needs the Denoise switch, and Focus/Finder mode holds it off. The
+ * mode never changes the switch itself: it stays the observer's for when the mode ends.
+ */
+const aiDenoiseAvailable = computed(() => unref(capabilities)?.deep_sky?.ai_denoise ?? false)
+const aiDenoiseLocked = computed(
+    () => !aiDenoiseAvailable.value || !localSettings.value.denoise.enabled || focusMode.value
+)
+const aiDenoiseHeldOff = computed(() => {
+  if (!aiDenoiseAvailable.value || !localSettings.value.denoise.ai) return ''
+  if (!localSettings.value.denoise.enabled) return 'Held off while Denoise is off.'
+  if (focusMode.value) return 'Held off by Focus/Finder mode.'
+  return ''
+})
 
 watch(
     settings,
@@ -174,6 +195,7 @@ const HELP = HELP_TEXTS
         :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
         :denoise-available="capabilities.deep_sky?.denoise ?? false"
+        :ai-denoise-available="aiDenoiseAvailable"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
         @apply="applyGroup"
@@ -644,6 +666,22 @@ const HELP = HELP_TEXTS
               @update:model-value="applySetting('bin', $event)"
           />
         </div>
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
+            v-model="localSettings.denoise.ai"
+            label="AI denoising"
+            data-test="ai-denoise-toggle"
+            :help="HELP.denoise_ai"
+            :disabled="aiDenoiseLocked"
+            @update:model-value="applyGroup('denoise', {...localSettings.denoise, ai: $event})"
+        >
+          <template #label-extra>
+            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
+          </template>
+        </BaseToggle>
+        <span v-if="aiDenoiseHeldOff" class="hint">{{ aiDenoiseHeldOff }}</span>
       </div>
 
       <div class="control-group">

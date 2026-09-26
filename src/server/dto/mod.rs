@@ -57,6 +57,8 @@ pub struct DeepSkyCapabilities {
     /// Background Grain, Structure strength. Without them the Noise Reduction section is
     /// locked and the render is the plain one.
     pub denoise: bool,
+    /// The AI denoiser behind the "AI denoising" switch; locked without it.
+    pub ai_denoise: bool,
 }
 
 #[derive(Debug, Serialize)]

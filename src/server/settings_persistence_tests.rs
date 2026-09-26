@@ -71,6 +71,7 @@ mod tests {
                 background_grain: 0.25,
                 luma_strength: 0.5,
                 detail: 0.8,
+                ai: true,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,

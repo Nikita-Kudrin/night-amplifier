@@ -353,6 +353,7 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
                 enabled: false,
                 ..Default::default()
             },
+            ..DenoiseConfig::OFF
         },
         DenoiseConfig {
             luma: LumaDenoiseConfig {
@@ -363,6 +364,7 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
                 strength: 0.0,
                 ..Default::default()
             },
+            ..DenoiseConfig::OFF
         },
     ];
 

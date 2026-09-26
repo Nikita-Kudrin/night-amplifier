@@ -263,6 +263,8 @@ fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_in
             "saturation",
             crate::render::SATURATION_PLUGIN.get().is_some(),
         ),
+        ("denoise", crate::render::DENOISE_PLUGIN.get().is_some()),
+        ("ai_denoise", crate::render::AI_DENOISE_PLUGIN.get().is_some()),
     ];
     crate::system_info::AppContext {
         port: args.port,

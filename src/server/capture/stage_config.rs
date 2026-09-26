@@ -182,7 +182,28 @@ fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
     {
         return crate::render::DenoiseConfig::OFF;
     }
-    crate::render::denoise::config_for(&settings.denoise, settings.stretch_aggressiveness)
+    crate::render::denoise::config_for(&requested_denoise(settings), settings.stretch_aggressiveness)
+}
+
+/// The observer's denoise settings as this frame may use them.
+///
+/// Focus/Finder mode holds the network off here, at the frame's config, rather than by
+/// forcing `DenoiseSettings::ai` false: framing wants frame rate and the network is the
+/// costliest stage of a render, but the switch stays the observer's for when the mode
+/// ends. The classic filters then keep the scales they would have handed it.
+pub(crate) fn requested_denoise(settings: &CaptureSettings) -> crate::server::state::DenoiseSettings {
+    crate::server::state::DenoiseSettings {
+        ai: settings.denoise.ai && !settings.focus_mode,
+        ..settings.denoise.clone()
+    }
+}
+
+/// The settings the guide camera's stream renders with: the observer's, less the AI
+/// denoiser. Nothing stacks there, a frame arrives every second or two, and each pass
+/// would take its cores from the imaging camera's stacking.
+pub(crate) fn guide_render_settings(mut settings: CaptureSettings) -> CaptureSettings {
+    settings.denoise.ai = false;
+    settings
 }
 
 /// `black_floor` with the nonsense taken out: dead-banded at zero, clamped to
@@ -570,6 +591,41 @@ mod tests {
         settings.auto_stretch = true;
         let config = get_render_pipeline_config(&settings, false);
         assert!(!config.shadow_floor.is_none());
+    }
+
+    /// Focus/Finder mode holds the network off at the frame's config, and leaves the
+    /// observer's switch alone on the way in and on the way out.
+    #[test]
+    fn focus_mode_holds_the_network_off_without_touching_its_switch() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        assert!(requested_denoise(&settings).ai);
+
+        crate::server::state::focus_mode::set(&mut settings, true);
+        assert!(!requested_denoise(&settings).ai, "framing must not pay for the network");
+        assert!(settings.denoise.ai, "the mode changed the observer's switch");
+
+        crate::server::state::focus_mode::set(&mut settings, false);
+        assert!(requested_denoise(&settings).ai);
+    }
+
+    /// The guide stream never asks for the network, whatever the imaging settings say;
+    /// every other denoise setting reaches it unchanged.
+    #[test]
+    fn the_guide_stream_renders_without_the_network() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        settings.denoise.background_grain = 0.8;
+
+        let guide = guide_render_settings(settings.clone());
+        assert!(!requested_denoise(&guide).ai);
+        assert_eq!(
+            guide.denoise,
+            crate::server::state::DenoiseSettings {
+                ai: false,
+                ..settings.denoise
+            }
+        );
     }
 
     /// A lunar disc is most of its own frame, so the median the floor anchors to
