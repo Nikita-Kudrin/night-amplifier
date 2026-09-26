@@ -222,6 +222,36 @@ it, so on a small board the view refreshes less often while it is on. It is held
 guide camera and for planetary targets. The saved stack's PNG and the full-size eyepiece
 snapshot run it at their own size, which takes a while.
 
+### Where it runs: AI compute
+
+On its first start on a computer, Night Amplifier Pro shows **Benchmarking hardware…** and
+measures every processor that can run the network — an NPU, a dedicated or integrated GPU,
+the CPU — on four IMX533 frames. This takes a few seconds on a laptop and up to a minute on a
+Raspberry Pi; captures can start once it ends. The result is remembered for that computer and
+measured again only when the hardware, a driver or a runtime changes. A licence activated
+during a capture runs the benchmark when that capture ends.
+
+**Auto** then runs the network on the fastest unit that is **not the CPU**: during a session
+the CPU is busy capturing and stacking, which a benchmark on an idle machine cannot show. It
+runs on the CPU only when nothing else can. **Settings → Advanced → AI compute** shows each
+option with its time per frame, and lets you force one — the integrated GPU to spare a laptop
+battery, or the CPU on a Raspberry Pi 5, whose GPU is slower than its CPU. Options this
+computer lacks or cannot use are greyed out with the reason. The chosen processor is woken
+only while AI denoising runs, and released a few minutes after it stops, so a laptop's
+dedicated GPU can sleep through a session that never uses it.
+
+**Measure again**, under the selector, runs the benchmark afresh: after installing a driver,
+or to give another try to a processor that crashed Night Amplifier — such a processor is
+skipped at every later start until you do. It is refused while a capture runs.
+
+Every unit passes the same quality check before it may run: its picture must match the CPU's
+within one output level. Nothing runs below 16-bit precision. If a unit fails during a session,
+that frame is denoised on the CPU and the next goes to the next fastest unit. A full-size
+snapshot or the saved stack's PNG is given time in proportion to its size, and a live frame
+that arrives while one is running is denoised on the CPU rather than waiting for it.
+
+What each NPU and GPU needs installed is in [System dependencies](/system-dependencies).
+
 The model is "train_13" from Andriy Melnykov's
 [Astro Denoiser](https://github.com/andriymelnykov/astro_denoiser_N2N_N2S), MIT licence.
 

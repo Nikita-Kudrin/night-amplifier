@@ -72,6 +72,7 @@ mod tests {
                 luma_strength: 0.5,
                 detail: 0.8,
                 ai: true,
+                ai_compute: crate::render::AiComputePreference::IntegratedGpu,
             },
             eyepiece: EyepieceSettings {
                 binoview: true,

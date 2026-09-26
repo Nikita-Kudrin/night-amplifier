@@ -2,6 +2,7 @@
 import {ref, provide, onMounted, watch} from 'vue'
 import {useEventStream} from './composables/useWebSocket.js'
 import {useAppState} from './composables/useAppState.js'
+import {useAiCompute} from './composables/useAiCompute.js'
 import {getAstapStatus, getCatalogStatus} from './composables/api.js'
 
 import CameraPanel from './components/CameraPanel.vue'
@@ -14,6 +15,7 @@ import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
+import HardwareBenchmarkOverlay from './components/HardwareBenchmarkOverlay.vue'
 import { BaseSpinner } from './components/ui'
 
 // Routing
@@ -51,6 +53,10 @@ const showAbout = ref(false)
 
 // Event stream for real-time updates
 const eventStream = useEventStream()
+
+// The one-time AI compute benchmark blocks the whole UI while it measures.
+const aiCompute = useAiCompute()
+const benchmarking = aiCompute.benchmarking
 
 // Provide state to children (for backwards compatibility during migration)
 provide('settings', _settingsRef)
@@ -135,6 +141,7 @@ watch(
       if (event?.type === 'camera_discovered') {
         addDiscoveredCamera(event.camera)
       }
+      aiCompute.handleEvent(event)
     }
 )
 
@@ -145,19 +152,21 @@ function handleEulaAccepted() {
 // Initialize on mount
 onMounted(() => {
   initializeState()
+  aiCompute.refresh()
 })
 </script>
 
 <template>
-  <EyepieceView v-if="isEyepieceRoute"/>
+  <EyepieceView v-if="isEyepieceRoute" :inert="benchmarking"/>
 
   <!-- EULA gate - blocks entire app until accepted -->
   <EulaModal
     v-else-if="!loading && !error && settings?.eula_accepted === false"
+    :inert="benchmarking"
     @accepted="handleEulaAccepted"
   />
 
-  <div v-else class="app">
+  <div v-else class="app" :inert="benchmarking">
     <!-- Header -->
     <header class="header">
       <h1 class="logo">NightAmplifier</h1>
@@ -264,6 +273,8 @@ onMounted(() => {
         @close="showAbout = false" 
     />
   </div>
+
+  <HardwareBenchmarkOverlay/>
 </template>
 
 <style scoped>

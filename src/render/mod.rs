@@ -25,7 +25,8 @@ pub use black_point::{
     subtract_black_point_uniform, BackgroundEstimate, BlackPointConfig,
 };
 pub use denoise::{
-    AiDenoiseConfig, AiDenoisePlugin, ChromaDenoiseConfig, DenoiseConfig, DenoisePlugin,
+    AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin, BenchmarkProgress,
+    BenchmarkState, ChromaDenoiseConfig, ComputeRung, DenoiseConfig, DenoisePlugin, RungReport,
     DenoiseScratch, LumaDenoiseConfig, take, MAX_LEVELS as MAX_WAVELET_LEVELS,
     AI_DENOISE_PLUGIN, DENOISE_PLUGIN,
 };

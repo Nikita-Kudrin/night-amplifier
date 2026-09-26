@@ -246,6 +246,8 @@ mkdir -p "${DIST_DIR}"
 cp "${BINARY_PATH}" "${DIST_DIR}/${OUT_BINARY_NAME}"
 cp "${PROJECT_ROOT}/LICENSE" "${DIST_DIR}/"
 cp "${PROJECT_ROOT}/README.md" "${DIST_DIR}/"
+# What cameras and AI compute units need installed; one copy, in this repo, for both builds.
+cp "${SCRIPT_DIR}/../system-dependencies.md" "${DIST_DIR}/"
 
 # Vendor camera SDKs are dlopen'd from the user's own install, never shipped: QHY grants no
 # redistribution right, and the binary has no RUNPATH to find a copy next to it anyway.

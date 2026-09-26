@@ -964,6 +964,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
                 enabled: false,
                 strength: 1.0,
                 highlight_floor: 0.2,
+                compute: Default::default(),
             },
             ..crate::render::DenoiseConfig::OFF
         },
@@ -972,6 +973,7 @@ fn every_disabled_denoise_config_is_byte_identical_through_both_kernels() {
                 enabled: true,
                 strength: 0.0,
                 highlight_floor: 0.2,
+                compute: Default::default(),
             },
             ..crate::render::DenoiseConfig::OFF
         },
@@ -1039,6 +1041,7 @@ fn a_tail_split_for_the_network_renders_what_the_fused_tail_does() {
             enabled: true,
             strength: 1.0,
             highlight_floor: 0.2,
+            compute: Default::default(),
         },
         ..crate::render::DenoiseConfig::OFF
     };

@@ -1,6 +1,10 @@
 //! Capture control API handlers
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::IntoResponse,
+};
 use std::sync::Arc;
 
 use super::super::dto::{
@@ -32,10 +36,18 @@ pub async fn start_capture(
                 },
                 camera_id: Some(camera_id),
             }),
-        ),
-        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
+        )
+            .into_response(),
+        Err(e) => {
+            let retry_after = matches!(e, ApiError::HardwareBenchmarkRunning)
+                .then_some([(header::RETRY_AFTER, BENCHMARK_RETRY_AFTER_SECS)]);
+            (e.status_code(), retry_after, ApiResponse::err::<()>(e.to_string())).into_response()
+        }
     }
 }
+
+/// A first-start benchmark takes seconds on a laptop and up to a minute on a Pi.
+const BENCHMARK_RETRY_AFTER_SECS: &str = "5";
 
 /// POST /api/capture/stop
 ///

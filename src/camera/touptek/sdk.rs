@@ -130,7 +130,7 @@ impl TouptekSdk {
                 "libtoupcam.so"
             };
 
-            match unsafe { crate::camera::sdk_library::load_eagerly::<TouptekSdkApi>(lib_name) } {
+            match unsafe { crate::native_library::load_eagerly::<TouptekSdkApi>(lib_name) } {
                 Ok(api) => {
                     info!("ToupTek SDK ({}) loaded successfully.", lib_name);
                     Some(TouptekSdk { api })

@@ -20,11 +20,6 @@ mod device_lost;
 mod error;
 pub mod identity;
 mod registry;
-#[cfg_attr(
-    not(any(feature = "qhy", feature = "touptek", feature = "svbony")),
-    allow(dead_code)
-)]
-mod sdk_library;
 mod simulated;
 mod traits;
 mod types;

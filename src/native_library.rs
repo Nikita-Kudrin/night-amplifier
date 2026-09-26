@@ -1,8 +1,10 @@
-//! Opening a vendor SDK with eager binding (`RTLD_NOW`): a library with an unresolvable
-//! symbol then fails to load, and its provider reports unavailable, instead of killing the
-//! whole process at its first call. 2026-09-14: the Linux SVBony SDK leaves 22 `libusb_*`
-//! symbols undefined without declaring libusb, and discovery aborted the server with
-//! "symbol lookup error" (exit 127).
+//! Opening a vendor library (camera SDKs; Pro's AI runtimes) with eager binding
+//! (`RTLD_NOW`): a library with an unresolvable symbol then fails to load, and its provider
+//! reports unavailable, instead of killing the whole process at its first call. 2026-09-14:
+//! the Linux SVBony SDK leaves 22 `libusb_*` symbols undefined without declaring libusb, and
+//! discovery aborted the server with "symbol lookup error" (exit 127).
+//!
+//! Vendor libraries are only ever loaded from the user's install, never linked or shipped.
 
 use dlopen2::wrapper::{Container, WrapperApi};
 
@@ -13,7 +15,7 @@ const EAGER: Option<i32> = None;
 
 /// # Safety
 /// Loading runs the library's initializers, and `T` must match its exported signatures.
-pub(crate) unsafe fn load_eagerly<T: WrapperApi>(name: &str) -> Result<Container<T>, dlopen2::Error> {
+pub unsafe fn load_eagerly<T: WrapperApi>(name: &str) -> Result<Container<T>, dlopen2::Error> {
     Container::load_with_flags(name, EAGER)
 }
 
@@ -23,7 +25,7 @@ pub(crate) unsafe fn load_eagerly<T: WrapperApi>(name: &str) -> Result<Container
 /// # Safety
 /// `T` must match the symbol's type, and the pointer stays valid only while the SDK's own
 /// `Container` keeps the library loaded.
-pub(crate) unsafe fn optional_symbol<T>(library: &str, symbol: &str) -> Option<T> {
+pub unsafe fn optional_symbol<T>(library: &str, symbol: &str) -> Option<T> {
     let handle = dlopen2::raw::Library::open_with_flags(library, EAGER).ok()?;
     handle.symbol::<T>(symbol).ok()
 }
@@ -43,7 +45,7 @@ pub(crate) unsafe fn optional_symbol_lazy<T>(library: &str, symbol: &str) -> Opt
 /// Whether a failed load means the file is not there, as opposed to a library that exists
 /// but cannot load (an unresolvable symbol, the wrong architecture). The platform's message
 /// is all there is to go by.
-pub(crate) fn is_missing_file(error: &dlopen2::Error) -> bool {
+pub fn is_missing_file(error: &dlopen2::Error) -> bool {
     let message = error.to_string().to_lowercase();
     ["no such file", "could not be found", "cannot find"]
         .iter()
@@ -54,6 +56,7 @@ pub(crate) fn is_missing_file(error: &dlopen2::Error) -> bool {
 /// Linux SVBony SDK). Kept loaded for the life of the process; a missing libusb surfaces as
 /// the eager SDK load's own error.
 #[cfg(target_os = "linux")]
+#[cfg_attr(not(feature = "svbony"), allow(dead_code))]
 pub(crate) fn preload_libusb() {
     let flags = Some(libc::RTLD_NOW | libc::RTLD_GLOBAL);
     if let Ok(libusb) = dlopen2::raw::Library::open_with_flags("libusb-1.0.so.0", flags) {
@@ -62,6 +65,7 @@ pub(crate) fn preload_libusb() {
 }
 
 #[cfg(not(target_os = "linux"))]
+#[cfg_attr(not(feature = "svbony"), allow(dead_code))]
 pub(crate) fn preload_libusb() {}
 
 #[cfg(test)]

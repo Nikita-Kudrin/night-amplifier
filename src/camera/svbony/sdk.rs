@@ -135,10 +135,10 @@ static SDK: OnceLock<Option<SvbonySdk>> = OnceLock::new();
 impl SvbonySdk {
     pub fn try_load() -> Option<&'static SvbonySdk> {
         SDK.get_or_init(|| {
-            crate::camera::sdk_library::preload_libusb();
+            crate::native_library::preload_libusb();
             let mut failures = Vec::new();
             for &name in library_candidates(std::env::consts::OS) {
-                match unsafe { crate::camera::sdk_library::load_eagerly::<SvbonyApi>(name) } {
+                match unsafe { crate::native_library::load_eagerly::<SvbonyApi>(name) } {
                     Ok(container) => {
                         info!("SVBony SDK ({}) loaded successfully.", name);
                         return Some(SvbonySdk { api: container });
@@ -149,7 +149,7 @@ impl SvbonySdk {
 
             if failures
                 .iter()
-                .all(|(_, e)| crate::camera::sdk_library::is_missing_file(e))
+                .all(|(_, e)| crate::native_library::is_missing_file(e))
             {
                 info!("SVBony SDK not installed. SVBony cameras disabled.");
             } else {
