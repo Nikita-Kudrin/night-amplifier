@@ -120,6 +120,12 @@ serial_test = "4.0.1" # Run integration tests sequentially
 proptest = "1.11.0"
 insta = "1.48.0"
 
+# Tests render real 3008² frames. On Pro's 12 heaviest: 496 s at opt-level 0, 70 s here and 54 s
+# at 2 — for 2.1x / 3.5x the compile. Debug assertions and overflow checks stay on. Pro builds
+# use Pro's own profile, which matches.
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 opt-level = 3
 lto = true
