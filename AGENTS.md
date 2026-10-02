@@ -99,6 +99,9 @@ stays **≤~30s**. Budget: `sample_size(10)`, ~500ms warm-up, 1–2s `measuremen
 
 **System prerequisite:** `nasm` (required by `turbojpeg-sys` for libjpeg-turbo SIMD).
 
+The `dev` profile is `opt-level = 1` in both repos (debug assertions still on): image tests on real frames ran ~7x
+slower at 0, and Pro's CI integration job outgrew its 30 min. Expect optimised-out locals in a debugger.
+
 ```bash
 cargo build --release
 cargo test                                                          # fast unit tests
