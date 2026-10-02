@@ -4,7 +4,7 @@
 //! reorder the list in between — the three things the 2026-09-07 session did to the
 //! real one.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -62,6 +62,14 @@ struct FakeCatalog {
     lost: Arc<AtomicUsize>,
     /// Run once from inside `install_camera`, when it applies the dew heater.
     during_install: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
+    /// Cameras this bus opens have a cooler.
+    cooled: AtomicBool,
+    /// How long every `status()` takes, in milliseconds.
+    status_delay_ms: Arc<AtomicU64>,
+    /// How long every exposure takes, in milliseconds; cut short by `cancel`.
+    exposure_ms: Arc<AtomicU64>,
+    /// `status()` calls still to panic, across every camera this bus opens.
+    status_panics: Arc<AtomicUsize>,
 }
 
 impl FakeCatalog {
@@ -151,9 +159,14 @@ impl DeviceCatalog for FakeCatalog {
         }
         let device = self.impostor.lock().unwrap().clone().unwrap_or(listed);
         self.opened.lock().unwrap().push(device.name);
+        let mut info = Self::info_for(&device);
+        info.has_cooler = self.cooled.load(Ordering::SeqCst);
         Ok(OpenedCamera {
             camera: Box::new(FakeCamera {
-                info: Self::info_for(&device),
+                info,
+                status_delay_ms: Arc::clone(&self.status_delay_ms),
+                exposure_ms: Arc::clone(&self.exposure_ms),
+                status_panics: Arc::clone(&self.status_panics),
                 cancel_flag: Arc::new(AtomicBool::new(false)),
                 released: Arc::clone(&self.released),
                 stalls: Arc::clone(&self.stalls),
@@ -168,6 +181,9 @@ impl DeviceCatalog for FakeCatalog {
 
 struct FakeCamera {
     info: CameraInfo,
+    status_delay_ms: Arc<AtomicU64>,
+    exposure_ms: Arc<AtomicU64>,
+    status_panics: Arc<AtomicUsize>,
     cancel_flag: Arc<AtomicBool>,
     released: Arc<AtomicUsize>,
     stalls: Arc<AtomicUsize>,
@@ -190,6 +206,10 @@ impl Camera for FakeCamera {
         Ok(GainPresets::default())
     }
     fn status(&self) -> CameraResult<CameraStatus> {
+        std::thread::sleep(Duration::from_millis(self.status_delay_ms.load(Ordering::SeqCst)));
+        if take_one(&self.status_panics) {
+            panic!("scripted panic in status()");
+        }
         Ok(CameraStatus::default())
     }
     fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
@@ -207,6 +227,12 @@ impl Camera for FakeCamera {
     }
     fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
         std::thread::sleep(Duration::from_millis(20));
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_millis(self.exposure_ms.load(Ordering::SeqCst))
+            && !self.cancel_flag.load(Ordering::SeqCst)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         if self.cancel_flag.swap(false, Ordering::SeqCst) {
             return Err(CameraError::Cancelled);
         }
@@ -568,7 +594,7 @@ async fn disconnecting_during_recovery_stops_it_quietly() {
     catalog.set(&[]);
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
     let mut events = state.subscribe_events();
-    lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await.unwrap();
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     catalog.set(&[NEPTUNE]);
 
     assert!(
@@ -737,7 +763,7 @@ async fn a_disconnect_during_a_reopen_is_not_undone() {
         eventually(|| catalog.open_calls.load(Ordering::SeqCst) > opens_before, Duration::from_secs(3)).await,
         "the supervisor never started reopening"
     );
-    lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await.unwrap();
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     catalog.hold(None);
 
     assert!(
@@ -960,7 +986,7 @@ async fn a_late_fault_for_a_replaced_camera_leaves_the_replacement_alone() {
     let catalog = FakeCatalog::with(&[NEPTUNE, ARES]);
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
-    lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await.unwrap();
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     connect(&state, &ARES, CameraRole::Main).await;
 
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
@@ -1083,7 +1109,7 @@ async fn a_disconnect_waiting_on_a_successful_reopen_still_disconnects() {
     assert!(eventually(|| catalog.open_calls.load(Ordering::SeqCst) > opens_before, Duration::from_secs(3)).await);
     let disconnect = tokio::spawn({
         let state = Arc::clone(&state);
-        async move { lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await }
+        async move { lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await }
     });
     tokio::time::sleep(reconnect::OPEN_TIMEOUT / 4).await;
     catalog.hold(None);
@@ -1348,7 +1374,7 @@ async fn disconnecting_the_camera_of_a_paused_capture_ends_the_capture() {
     start_capture_plan(&state, &NEPTUNE).await;
     state.set_capture_state(CaptureState::Recovering).await;
 
-    let answer = lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await;
+    let answer = lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await;
     let capture = state.capture_state().await;
     let plan_left = state.session_resume_plan.read().await.is_some();
     teardown(&state).await;
@@ -1444,10 +1470,237 @@ async fn a_manual_reconnect_forgets_restarts_that_did_not_work() {
     }
     assert!(distrusted_restarts(&state, CameraRole::Guide, NEPTUNE.name).is_some(), "precondition");
 
-    lifecycle::disconnect(&state, &id_of(&NEPTUNE)).await.expect("disconnect");
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await.expect("disconnect");
     connect(&state, &NEPTUNE, CameraRole::Guide).await;
     let distrusted = distrusted_restarts(&state, CameraRole::Guide, NEPTUNE.name);
     teardown(&state).await;
 
     assert_eq!(distrusted, None, "a reconnect the observer asked for starts with a clean record");
+}
+
+
+// --- Disconnect as a must, and the 2026-09-20 reopen ----------------------------------
+
+async fn wait_idle(state: &Arc<AppState>) -> bool {
+    eventually(
+        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        Duration::from_secs(10),
+    )
+    .await
+}
+
+/// Disconnect during a capture used to be refused. It stops the capture — the pipeline
+/// winds down and hands its handle back — and then disconnects.
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnecting_a_capturing_camera_stops_the_capture_and_disconnects() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(
+        eventually(|| state.delivered_frames.load(Ordering::SeqCst) >= 2, Duration::from_secs(5)).await,
+        "the capture never got going"
+    );
+
+    let outcome = lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .expect("disconnect during a capture");
+
+    assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
+    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert!(state.camera_in_role(CameraRole::Main).await.is_none());
+    assert_eq!(phase_of(&state, CameraRole::Main).await, CameraPhase::Disconnected);
+}
+
+/// The 14:05 sequence on a cooled camera: three stalls escalate to a reopen, the reopened
+/// handle's first status read is slow and reports nothing usable, the monitor seeds its
+/// cooling ramp from it while the resumed capture waits for the handle. The capture must
+/// get it and run. On 2026-09-20 it never did, and the camera could be neither started
+/// nor disconnected afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status() {
+    use crate::server::capture::stall::STALL_ESCALATION;
+
+    let catalog = FakeCatalog::with(&[ARES]);
+    catalog.cooled.store(true, Ordering::SeqCst);
+    let state = rig(&catalog);
+    {
+        let mut settings = state.settings.write().await;
+        settings.cooler_enabled = true;
+        settings.target_temp_c = Some(0.0);
+    }
+    connect(&state, &ARES, CameraRole::Main).await;
+    // Under the scaled-down OPEN_TIMEOUT, so the reopen's own probe still passes.
+    catalog.status_delay_ms.store(150, Ordering::SeqCst);
+    catalog.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let delivered_before = state.delivered_frames.load(Ordering::SeqCst);
+    let resumed = eventually(
+        || {
+            state.delivered_frames.load(Ordering::SeqCst) >= delivered_before + 2
+                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+        },
+        Duration::from_secs(8),
+    )
+    .await;
+    let phase = phase_of(&state, CameraRole::Main).await;
+
+    CaptureService::stop_capture(&state).await;
+    let stopped = wait_idle(&state).await;
+    let disconnected = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
+    teardown(&state).await;
+
+    assert!(resumed, "the capture never ran again after the reopen");
+    assert_eq!(phase, CameraPhase::Capturing);
+    assert!(stopped);
+    assert_eq!(disconnected.ok(), Some(lifecycle::DisconnectOutcome::Disconnected));
+}
+
+
+// --- Review of 6abd7de -----------------------------------------------------------------
+
+/// The deep-sky case: a cooled camera on long subs. Stop lets the sub in flight finish, so
+/// a Disconnect that only asks the capture to stop outwaits `CAPTURE_STOP_WAIT`, finds the
+/// handle still out, takes that for "no handle to command" and disconnects without a
+/// warm-up; the capture closes the handle, cooler still on, when the sub finally ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
+    let catalog = FakeCatalog::with(&[ARES]);
+    catalog.cooled.store(true, Ordering::SeqCst);
+    let state = rig(&catalog);
+    {
+        let mut settings = state.settings.write().await;
+        settings.cooler_enabled = true;
+        settings.target_temp_c = Some(-10.0);
+    }
+    connect(&state, &ARES, CameraRole::Main).await;
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(
+        eventually(|| state.delivered_frames.load(Ordering::SeqCst) >= 2, Duration::from_secs(5)).await,
+        "the capture never got going"
+    );
+    // Every sub from here on is a minute long, and the watchdog knows it.
+    state.settings.write().await.exposure_us = 60_000_000;
+    catalog.exposure_ms.store(60_000, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let started = std::time::Instant::now();
+    let outcome = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .expect("disconnect during a capture");
+    let took = started.elapsed();
+
+    // Let a sub still running end now, so the test does not wait it out.
+    catalog.exposure_ms.store(0, Ordering::SeqCst);
+    let _ = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
+    wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(
+        matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }),
+        "a cooled, answering camera was disconnected without a warm-up after {took:?}: {outcome:?}"
+    );
+}
+
+
+/// A Disconnect landing while the first frame of a long-exposure capture runs: before the
+/// capture had a token to cut it with, or during the probe. Neither may wait the exposure
+/// out, nor tell the observer the first frame failed.
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnecting_during_the_first_long_exposure_neither_waits_it_out_nor_reports_it() {
+    let catalog = FakeCatalog::with(&[ARES]);
+    catalog.cooled.store(true, Ordering::SeqCst);
+    let state = rig(&catalog);
+    {
+        let mut settings = state.settings.write().await;
+        settings.cooler_enabled = true;
+        settings.target_temp_c = Some(-10.0);
+        settings.exposure_us = 60_000_000;
+    }
+    connect(&state, &ARES, CameraRole::Main).await;
+    catalog.exposure_ms.store(60_000, Ordering::SeqCst);
+    let mut events = state.subscribe_events();
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let started = std::time::Instant::now();
+    let outcome = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .expect("disconnect while the capture starts");
+    let took = started.elapsed();
+
+    catalog.exposure_ms.store(0, Ordering::SeqCst);
+    let _ = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
+    wait_idle(&state).await;
+    teardown(&state).await;
+    let errors: Vec<_> = drain(&mut events)
+        .into_iter()
+        .filter(|event| matches!(event, ServerEvent::Error { .. }))
+        .collect();
+
+    assert!(
+        matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }),
+        "{outcome:?} after {took:?}"
+    );
+    assert!(took < lifecycle::CAPTURE_STOP_WAIT, "the stop waited out the first exposure: {took:?}");
+    assert!(errors.is_empty(), "a requested stop was reported as a failure: {errors:?}");
+}
+
+/// The capture loop's own hand-off finds the handle gone with nothing holding it. It hands
+/// back nothing, like a capture that lost the handle mid-run: the capture pauses, the
+/// camera is reopened, and the capture resumes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capture_started_on_a_lost_handle_is_recovered_and_resumed() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    let lost = lifecycle::take_camera(&state, CameraRole::Main).await.expect("a handle to lose");
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let resumed = eventually(
+        || {
+            state.delivered_frames.load(Ordering::SeqCst) >= 2
+                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+        },
+        Duration::from_secs(15),
+    )
+    .await;
+    let opens = catalog.open_calls.load(Ordering::SeqCst);
+
+    CaptureService::stop_capture(&state).await;
+    wait_idle(&state).await;
+    teardown(&state).await;
+    drop(lost);
+
+    assert!(resumed, "the capture never ran on the reopened camera");
+    assert_eq!(opens, 2, "the camera was not reopened exactly once");
+}
+
+/// A panic on the guide loop's own thread used to end it still registered, the slot
+/// `Guiding` with no handle, for good. It is a lost handle like any other: the camera is
+/// reopened and its loop runs again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_guide_loop_that_panics_is_reopened_and_runs_again() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    assert!(eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await);
+    let opens = catalog.open_calls.load(Ordering::SeqCst);
+
+    catalog.status_panics.store(1, Ordering::SeqCst);
+    let back = eventually(
+        || {
+            catalog.open_calls.load(Ordering::SeqCst) > opens
+                && state.guide_loop_running()
+                && !state.slot(CameraRole::Guide).is_recovering()
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let phase = phase_of(&state, CameraRole::Guide).await;
+    teardown(&state).await;
+
+    assert_eq!(catalog.status_panics.load(Ordering::SeqCst), 0, "the loop never sampled the sensor");
+    assert!(back, "the guide loop did not come back after its panic");
+    assert_eq!(phase, CameraPhase::Guiding);
 }

@@ -104,6 +104,14 @@ pub async fn run_capture_loop(
             state.end_capture_state().await;
             return;
         }
+        // Recovered like a handle a running capture lost: the capture pauses for the reopen,
+        // which resumes it, and recovery decides what the observer hears.
+        Err(e @ ApiError::CameraHandleLost { .. }) => {
+            warn!(camera_id = %camera_id, error = %e, "No camera handle to start the capture with");
+            lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
+            state.end_capture_state().await;
+            return;
+        }
         Err(e) => {
             error!(camera_id = %camera_id, error = %e, "Failed to take camera handle for capture");
             state.send_error(format!("Failed to take camera handle: {}", e));
@@ -116,6 +124,16 @@ pub async fn run_capture_loop(
     state
         .set_camera_token(CameraRole::Main, camera.cancel_token())
         .await;
+
+    // A Stop or Disconnect that landed during startup found no token to cut the probe
+    // exposure with; without this the first frame would run its whole length.
+    if state.is_cancelled() {
+        debug!(camera_id = %camera_id, "Capture stopped before its first frame");
+        state.clear_camera_token(CameraRole::Main).await;
+        lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
+        state.end_capture_state().await;
+        return;
+    }
 
     // New session: force a full CaptureConfig reapply on the very next
     // capture() regardless of any out-of-band mutation (cooler/target-temp)
@@ -165,6 +183,11 @@ pub async fn run_capture_loop(
                 Some(Err(e)) if !e.is_sdk_disconnected() && !matches!(e, CameraError::ExposureTimeout(_))
             );
             match camera {
+                // Cut short by a Stop or Disconnect: what was asked for, not a failure.
+                Some(cam) if !faulted && state.is_cancelled() => {
+                    debug!(reason = %reason, "Probe frame cancelled by a stop");
+                    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(cam)).await
+                }
                 Some(cam) if !faulted => {
                     error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
                     state.send_error(format!("Failed to capture initial frame: {}", reason));

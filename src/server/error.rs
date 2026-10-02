@@ -44,9 +44,6 @@ pub enum ApiError {
     #[error("There is no paused capture to resume")]
     CaptureNotPaused,
 
-    #[error("Cannot disconnect camera while capturing")]
-    CameraInUse,
-
     #[error("The {role} camera slot is taken by '{camera}', which is busy. Stop it first.")]
     CameraRoleBusy {
         role: &'static str,
@@ -75,9 +72,6 @@ pub enum ApiError {
     #[error("No guide camera is connected. Connect one before starting it.")]
     NoGuideCameraConnected,
 
-    #[error("The guide camera is already running")]
-    GuideAlreadyRunning,
-
     #[error("Cannot change stacking type while capturing")]
     StackingTypeChangeNotAllowed,
 
@@ -99,6 +93,11 @@ pub enum ApiError {
     /// hand out until it has.
     #[error("'{camera}' is being reconnected")]
     CameraRecovering { camera: String },
+
+    /// A hand-off found the handle gone with nothing holding it. The caller hands back
+    /// `None` like any capture that lost its handle; `return_from_capture` recovers it.
+    #[error("'{camera}' lost its camera handle")]
+    CameraHandleLost { camera: String },
 
     #[error("Failed to configure simulator: {0}")]
     SimulatorConfigFailed(String),
@@ -129,18 +128,17 @@ impl ApiError {
             ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
             ApiError::CaptureInProgress => StatusCode::CONFLICT,
             ApiError::CaptureNotPaused => StatusCode::CONFLICT,
-            ApiError::CameraInUse => StatusCode::CONFLICT,
             ApiError::CameraRoleBusy { .. } => StatusCode::CONFLICT,
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CaptureCameraIsNotMain { .. } => StatusCode::CONFLICT,
             ApiError::NoGuideCameraConnected => StatusCode::BAD_REQUEST,
-            ApiError::GuideAlreadyRunning => StatusCode::CONFLICT,
             ApiError::StackingTypeChangeNotAllowed => StatusCode::CONFLICT,
             ApiError::InvalidCameraIdFormat => StatusCode::BAD_REQUEST,
             ApiError::InvalidCameraIndex => StatusCode::BAD_REQUEST,
             ApiError::CameraOpenFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::CameraIdentityMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CameraRecovering { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::CameraHandleLost { .. } => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::SimulatorConfigFailed(_) => StatusCode::BAD_REQUEST,
             ApiError::HardwareBenchmarkRunning => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::BenchmarkDuringCapture => StatusCode::CONFLICT,

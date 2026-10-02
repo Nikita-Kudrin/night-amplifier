@@ -9,6 +9,7 @@ pub mod cameras;
 pub mod capabilities;
 pub mod capture;
 pub mod eyepiece;
+mod failure_log;
 pub mod indi;
 pub mod install;
 pub mod optional_body;
@@ -105,4 +106,5 @@ pub fn create_router() -> Router<Arc<AppState>> {
         .route("/astap/install", post(install::install_astap))
         .route("/catalog/status", get(install::get_catalog_status))
         .route("/catalog/install", post(install::install_catalog))
+        .layer(axum::middleware::from_fn(failure_log::log_failures))
 }

@@ -32,7 +32,7 @@ pub async fn start_capture(
             ApiResponse::ok(MessageResponse {
                 message: match role {
                     CameraRole::Main => "Capture started".to_string(),
-                    CameraRole::Guide => "Guide camera started".to_string(),
+                    CameraRole::Guide => "Guide camera running".to_string(),
                 },
                 camera_id: Some(camera_id),
             }),

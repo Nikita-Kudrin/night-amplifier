@@ -4,7 +4,7 @@
 //! different code paths, so a fault alternating between them is still one fault.
 //!
 //! Everything deciding "persistently unresponsive" lives here: the threshold, the
-//! per-camera streak (`AppState.consecutive_watchdog_timeouts`), and the escalation
+//! per-camera streak (`AppState.consecutive_watchdog_timeouts`, keyed by role and name), and the escalation
 //! event. A counter per call site instead would need each site to independently
 //! reach the threshold, letting a camera failing every other poll stay "healthy".
 //! So does the per-camera record of whether restarting a stalled stream in place still
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, warn};
 
 use crate::server::events::ServerEvent;
-use crate::server::state::AppState;
+use crate::server::state::{AppState, CameraRole};
 
 /// Consecutive faults against one camera before escalating from an ordinary
 /// disconnect to a distinct "persistently unresponsive" signal
@@ -42,17 +42,31 @@ pub(crate) enum FaultKind {
     /// The SDK answered, but said the device is gone — see
     /// `CameraError::is_sdk_disconnected`.
     DeviceLost,
+    /// The slot's handle is gone with nothing holding it — abandoned to a stuck call, or
+    /// lost on a path nobody logged. Nothing can command the camera until it is reopened.
+    HandleLost,
 }
 
 /// Clear a camera's fault streak. Called whenever any SDK call returns within
 /// its budget and without a device-lost error, since that proves the camera is
 /// currently responding regardless of which call site observed it.
-pub(crate) fn clear_fault_streak(state: &Arc<AppState>, camera_name: &str) {
+pub(crate) fn clear_fault_streak(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
     let mut counts = state
         .consecutive_watchdog_timeouts
         .lock()
         .expect("consecutive_watchdog_timeouts mutex poisoned");
-    counts.remove(camera_name);
+    counts.remove(&(role, camera_name.to_string()));
+}
+
+/// Whether `camera_name`'s last calls failed, inside `FAULT_STREAK_TTL`. A camera in that
+/// state is not one to hold a five-minute warm-up on: the next call is likely to fail too.
+pub(crate) fn has_recent_fault(state: &AppState, role: CameraRole, camera_name: &str) -> bool {
+    state
+        .consecutive_watchdog_timeouts
+        .lock()
+        .expect("consecutive_watchdog_timeouts mutex poisoned")
+        .get(&(role, camera_name.to_string()))
+        .is_some_and(|(count, at)| *count > 0 && at.elapsed() <= FAULT_STREAK_TTL)
 }
 
 /// Record one fault against `camera_name` and report the resulting streak.
@@ -60,8 +74,13 @@ pub(crate) fn clear_fault_streak(state: &Arc<AppState>, camera_name: &str) {
 /// Escalates with `ServerEvent::CameraPersistentlyUnresponsive` on reaching
 /// `PERSISTENT_FAULT_THRESHOLD`. A single incident sends the user nothing: whether it
 /// is worth a message is decided by `camera_session::recovery`.
-pub(crate) fn record_fault(state: &Arc<AppState>, camera_name: &str, kind: FaultKind) -> u32 {
-    let consecutive = state.bump_fault_streak(camera_name, FAULT_STREAK_TTL);
+pub(crate) fn record_fault(
+    state: &Arc<AppState>,
+    role: CameraRole,
+    camera_name: &str,
+    kind: FaultKind,
+) -> u32 {
+    let consecutive = state.bump_fault_streak(role, camera_name, FAULT_STREAK_TTL);
 
     warn!(
         camera_name = %camera_name,
@@ -143,7 +162,7 @@ impl RestartHistory {
 /// on two cables — twins once ended each other's recovery through a per-name phase.
 pub(crate) fn record_restart_outcome(
     state: &AppState,
-    role: crate::server::state::CameraRole,
+    role: CameraRole,
     camera_name: &str,
     recovered: bool,
 ) {
@@ -164,7 +183,7 @@ pub(crate) fn record_restart_outcome(
 /// carry the record past the tracker it rebuilds.
 pub(crate) fn forget_restart_history(
     state: &AppState,
-    role: crate::server::state::CameraRole,
+    role: CameraRole,
     camera_name: &str,
 ) {
     state
@@ -178,7 +197,7 @@ pub(crate) fn forget_restart_history(
 /// in place is still worth a stall budget for this camera.
 pub(crate) fn distrusted_restarts(
     state: &AppState,
-    role: crate::server::state::CameraRole,
+    role: CameraRole,
     camera_name: &str,
 ) -> Option<u32> {
     state

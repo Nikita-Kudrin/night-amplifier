@@ -365,6 +365,13 @@ pub struct CameraListEntry {
     /// Which position this camera occupies, or `None` if it is not connected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<CameraRole>,
+    /// Lifecycle phase of a connected camera. The client's phase map is otherwise built
+    /// from `camera_phase_changed` events alone, which a page opened later never saw.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<crate::server::events::CameraPhaseDto>,
+    /// Seconds until a warm-up in progress is cut short, at the latest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warmup_remaining_s: Option<u64>,
     pub info: CameraInfoResponse,
 }
 
@@ -376,6 +383,26 @@ pub struct CameraListEntry {
 pub struct ConnectCameraRequest {
     #[serde(default)]
     pub role: Option<CameraRole>,
+}
+
+/// Body of `POST /api/cameras/{id}/disconnect`. Absent means an ordinary Disconnect.
+#[derive(Debug, Default, Deserialize)]
+pub struct DisconnectCameraRequest {
+    /// Close at once instead of warming a cooled camera up first.
+    #[serde(default)]
+    pub skip_warmup: bool,
+}
+
+/// Answer to a Disconnect.
+#[derive(Debug, Serialize)]
+pub struct DisconnectResponse {
+    pub message: String,
+    pub camera_id: String,
+    /// The camera is warming up and disconnects on its own once warm.
+    pub warming_up: bool,
+    /// Seconds until a warm-up is cut short, at the latest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warmup_remaining_s: Option<u64>,
 }
 
 /// Simple message response

@@ -754,6 +754,11 @@ impl CaptureConfig {
     }
 }
 
+/// Sensor temperatures outside this band are a glitch, not a reading: a just-reopened
+/// Ares-C PRO reported -300 °C on 2026-09-20, and a cooling ramp seeded from it would have
+/// commanded the TEC to its floor. Wide enough for any TEC and a sensor in the sun.
+pub const PLAUSIBLE_SENSOR_TEMP_C: std::ops::RangeInclusive<f64> = -80.0..=90.0;
+
 /// Camera status information
 #[derive(Debug, Clone, Default)]
 pub struct CameraStatus {
@@ -773,6 +778,14 @@ pub struct CameraStatus {
     pub current_exposure_us: u64,
     /// Whether anti-dew heater is currently active
     pub dew_heater_on: bool,
+}
+
+impl CameraStatus {
+    /// Whether `temperature_c` can be a real sensor temperature. See
+    /// [`PLAUSIBLE_SENSOR_TEMP_C`].
+    pub fn has_plausible_temperature(&self) -> bool {
+        PLAUSIBLE_SENSOR_TEMP_C.contains(&self.temperature_c)
+    }
 }
 
 #[cfg(test)]

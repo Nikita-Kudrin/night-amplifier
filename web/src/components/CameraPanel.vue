@@ -1,5 +1,5 @@
 <script setup>
-import {ref, inject, computed, onMounted} from 'vue'
+import {ref, inject, computed, watch, onMounted, onUnmounted} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -8,7 +8,7 @@ import {
   removeSimulatedCamera,
 } from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
+import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
 import {isCaptureRunning} from '../constants'
 
 const cameras = inject('cameras')
@@ -18,6 +18,7 @@ const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const cameraStatus = inject('cameraStatus', {value: {}})
 const cameraPhase = inject('cameraPhase', {value: {}})
+const warmupEndsAt = inject('warmupEndsAt', ref({}))
 const settings = inject('settings', ref(null))
 
 const {error, clearError, withErrorHandling} = useError()
@@ -85,10 +86,84 @@ async function handleConnect(cameraId, role = 'main') {
   connecting.value = null
 }
 
-async function handleDisconnect(cameraId) {
+/**
+ * A Disconnect the user has to confirm first: one that stops a running capture, or one
+ * that cuts a warm-up short. `null` when no confirmation is open.
+ */
+const pendingDisconnect = ref(null)
+
+/** Only the imaging camera captures; a guide camera disconnects whatever the capture does. */
+function capturesOn(cam) {
+  return cam?.role !== 'guide' && isCapturing.value
+}
+
+/**
+ * Disconnect is always available — the server ends any session in bounded time — but two
+ * cases cost something the user should agree to first.
+ */
+function requestDisconnect(cam) {
+  if (isWarmingUp(cam)) {
+    pendingDisconnect.value = {camera: cam, kind: 'skip_warmup'}
+    return
+  }
+  if (capturesOn(cam)) {
+    pendingDisconnect.value = {camera: cam, kind: 'capture'}
+    return
+  }
+  handleDisconnect(cam.id)
+}
+
+async function confirmDisconnect() {
+  const pending = pendingDisconnect.value
+  pendingDisconnect.value = null
+  if (!pending) return
+  await handleDisconnect(pending.camera.id, {skipWarmup: pending.kind === 'skip_warmup'})
+}
+
+/**
+ * Whether the confirmation still describes the camera: it may have finished warming up
+ * and gone, or its capture ended, while the dialog was open. Confirming then answered
+ * "not connected", or asked about a cost that no longer applied.
+ */
+function pendingStillApplies(pending) {
+  const cam = cameras.value.find((c) => c.id === pending.camera.id && c.connected)
+  if (!cam) return false
+  return pending.kind === 'skip_warmup' ? isWarmingUp(cam) : capturesOn(cam)
+}
+
+watch(
+    () => pendingDisconnect.value && pendingStillApplies(pendingDisconnect.value),
+    (applies) => {
+      if (pendingDisconnect.value && !applies) pendingDisconnect.value = null
+    }
+)
+
+const pendingDisconnectCopy = computed(() => {
+  const pending = pendingDisconnect.value
+  if (!pending) return null
+  const name = pending.camera.name
+  if (pending.kind === 'capture') {
+    return {
+      title: 'Stop the capture and disconnect?',
+      body: `The capture running on ${name} stops first and its stack is saved, as on Stop. The sub being exposed is discarded.`,
+      confirm: 'Stop and disconnect',
+    }
+  }
+  return {
+    title: 'Disconnect without warming up?',
+    body: `${name} is warming up slowly so its sensor is not shocked by a sudden temperature change. Disconnecting now switches the cooler off at once.`,
+    confirm: 'Disconnect now',
+  }
+})
+
+async function handleDisconnect(cameraId, {skipWarmup = false} = {}) {
   connecting.value = cameraId
   await withErrorHandling(async () => {
-    await disconnectCamera(cameraId)
+    if (skipWarmup) {
+      await disconnectCamera(cameraId, {skipWarmup: true})
+    } else {
+      await disconnectCamera(cameraId)
+    }
     await refreshCameras()
     if (selectedCamera.value === cameraId) {
       selectedCamera.value = connectedCameras.value[0]?.id || null
@@ -122,10 +197,34 @@ function isWarmingUp(cam) {
   return phaseOf(cam) === 'warming_up'
 }
 
+// Minute resolution is enough for a countdown of a few minutes; ticks only while a
+// warm-up has a known deadline.
+const now = ref(Date.now())
+let clock = null
+watch(
+    () => Object.keys(warmupEndsAt.value ?? {}).length > 0,
+    (counting) => {
+      clearInterval(clock)
+      clock = counting ? setInterval(() => (now.value = Date.now()), 15000) : null
+    },
+    {immediate: true}
+)
+onUnmounted(() => clearInterval(clock))
+
+/** "up to N min" until the server cuts the warm-up short, when it said when. */
+function warmupLeft(cam) {
+  const endsAt = warmupEndsAt.value?.[cam?.name]
+  if (!endsAt) return null
+  return `up to ${Math.max(1, Math.ceil((endsAt - now.value) / 60000))} min`
+}
+
 function phaseLabel(cam) {
   const phase = phaseOf(cam)
   if (phase === 'precooling') return 'Precooling'
-  if (phase === 'warming_up') return 'Warming up'
+  if (phase === 'warming_up') {
+    const left = warmupLeft(cam)
+    return left ? `Warming up, ${left}` : 'Warming up'
+  }
   // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
   // and the green role badge next to it already says so.
   return null
@@ -317,7 +416,10 @@ const HELP = {
                 <span v-if="roleLabel(cam)" class="role-pill" :class="`role-${cam.role}`">{{
                     roleLabel(cam)
                   }}</span>
-                <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
+                <span v-if="phaseLabel(cam)" class="phase-pill">
+                  <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
+                  {{ phaseLabel(cam) }}
+                </span>
                 <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
                     sensorModePill(cam)
                   }}</span>
@@ -329,16 +431,15 @@ const HELP = {
             <div class="camera-actions">
               <button
                   class="btn btn-sm btn-danger"
-                  :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
-                  :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
-                  @click.stop="handleDisconnect(cam.id)"
+                  :disabled="connecting === cam.id"
+                  :title="isWarmingUp(cam) ? 'Disconnect without finishing the warm-up' : 'Disconnect'"
+                  @click.stop="requestDisconnect(cam)"
               >
-                <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
                 <span>{{
                     connecting === cam.id
                         ? '...'
                         : isWarmingUp(cam)
-                            ? 'Warming up…'
+                            ? 'Disconnect now'
                             : 'Disconnect'
                   }}</span>
               </button>
@@ -412,6 +513,23 @@ const HELP = {
         <button class="btn btn-sm" @click="refreshCameras">Scan</button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <BaseModal
+          v-if="pendingDisconnectCopy"
+          :title="pendingDisconnectCopy.title"
+          max-width="420px"
+          @close="pendingDisconnect = null"
+      >
+        <p class="confirm-text">{{ pendingDisconnectCopy.body }}</p>
+        <template #footer>
+          <button class="btn btn-sm btn-secondary confirm-cancel" @click="pendingDisconnect = null">Cancel</button>
+          <button class="btn btn-sm btn-danger confirm-disconnect" @click="confirmDisconnect">
+            {{ pendingDisconnectCopy.confirm }}
+          </button>
+        </template>
+      </BaseModal>
+    </Teleport>
 
     <div v-if="camerasCollapsed && currentCamera" class="collapsed-summary">
       <span class="camera-name">{{ currentCamera.name }}</span>
@@ -518,11 +636,18 @@ const HELP = {
 }
 
 .phase-pill {
+  display: inline-flex;
+  align-items: center;
   background: rgba(234, 179, 8, 0.18);
   color: #eab308;
   padding: 0.05rem 0.375rem;
   border-radius: 999px;
   font-weight: 500;
+}
+
+.confirm-text {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .sensor-mode-pill {
@@ -556,7 +681,7 @@ const HELP = {
 }
 
 .warmup-spinner {
-  margin-right: 0.35rem;
+  margin-right: 0.25rem;
 }
 
 .btn-icon {

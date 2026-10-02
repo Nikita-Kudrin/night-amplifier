@@ -66,8 +66,13 @@ impl CaptureService {
             }
         }
 
-        if state.guide_loop_running() {
-            return Err(ApiError::GuideAlreadyRunning);
+        // Already running is the state the observer asked for, not an error. The client
+        // that pressed Start was showing a stopped loop because it had missed the event that
+        // said otherwise — a phone waking up, a reloaded page — and a 409 told it nothing
+        // it could act on (2026-09-20).
+        if Self::guide_loop_active(state) {
+            info!(camera_id = %camera.id, "Start requested for a guide camera that is already running");
+            return Ok(camera.id);
         }
 
         info!(camera_id = %camera.id, "Starting the guide camera");
@@ -75,9 +80,15 @@ impl CaptureService {
         Ok(camera.id)
     }
 
+    /// A guide loop is registered — starting, exposing, or winding down on its own.
+    /// `guide_loop_running` alone misses one still taking its handle.
+    fn guide_loop_active(state: &AppState) -> bool {
+        state.guide_loops.is_registered() || state.guide_loop_running()
+    }
+
     /// Stop the guide camera's loop, which also stops its raw-frame saving.
     async fn stop_guide(state: &Arc<AppState>) -> bool {
-        if !state.guide_loop_running() {
+        if !Self::guide_loop_active(state) {
             return false;
         }
         info!("Stopping the guide camera");

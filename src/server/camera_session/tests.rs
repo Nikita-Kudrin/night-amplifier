@@ -297,7 +297,7 @@ async fn warmup_finishes_and_disconnects() {
     let mut rx = state.subscribe_events();
 
     // Trigger warmup (as if user clicked Disconnect with cooler on).
-    let result = lifecycle::disconnect(&state, "mock_0").await;
+    let result = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await;
     assert!(result.is_ok());
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
 
@@ -332,7 +332,7 @@ async fn disconnect_with_cooler_off_is_synchronous() {
     install_mock_camera(&state, 5.0, false, 20.0).await;
 
     // Cooler was never on → synchronous close, no warmup.
-    let result = lifecycle::disconnect(&state, "mock_0").await;
+    let result = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await;
     assert!(result.is_ok());
 
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
@@ -391,7 +391,7 @@ async fn capture_during_warmup_cancels_warmup() {
     let name = install_mock_camera(&state, 1.0, true, -10.0).await;
 
     // User clicks Disconnect → warmup begins.
-    lifecycle::disconnect(&state, "mock_0").await.unwrap();
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
 
     // User immediately starts capture → warmup cancelled, phase → Capturing.
@@ -1012,7 +1012,7 @@ async fn warmup_keeps_cooler_on_during_ramp() {
     install_mock_camera(&state, 1.0, true, -10.0).await;
 
     // Kick off warmup.
-    lifecycle::disconnect(&state, "mock_0").await.unwrap();
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
 
     // Within the first tick window, cooler must still be ON (ramped warmup,
@@ -1133,7 +1133,7 @@ async fn fast_mode_warmup_disables_cooler_immediately() {
     }
     install_mock_camera(&state, 5.0, true, -10.0).await;
 
-    lifecycle::disconnect(&state, "mock_0").await.unwrap();
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
 
     // StartWarmup with fast=true should flip the cooler off right away.
@@ -1674,14 +1674,14 @@ async fn one_incident_counts_once() {
 
     for expected in 1..=PERSISTENT_FAULT_THRESHOLD {
         assert_eq!(
-            record_fault(&state, name, FaultKind::DeviceLost),
+            record_fault(&state, CameraRole::Main, name, FaultKind::DeviceLost),
             expected,
             "each fault should advance the streak by exactly one"
         );
     }
 
-    clear_fault_streak(&state, name);
-    assert_eq!(record_fault(&state, name, FaultKind::Timeout), 1);
+    clear_fault_streak(&state, CameraRole::Main, name);
+    assert_eq!(record_fault(&state, CameraRole::Main, name, FaultKind::Timeout), 1);
 }
 
 /// A camera that fails every other poll must still escalate. The previous rule
@@ -1697,7 +1697,7 @@ async fn an_intermittent_fault_still_escalates() {
 
     let mut last = 0;
     for _ in 0..PERSISTENT_FAULT_THRESHOLD {
-        last = record_fault(&state, name, FaultKind::DeviceLost);
+        last = record_fault(&state, CameraRole::Main, name, FaultKind::DeviceLost);
         // A poll in between that happened to work, but not long enough ago to
         // age the streak out.
     }
@@ -2026,7 +2026,7 @@ async fn a_guide_warmup_hands_plate_solving_back_to_the_imaging_camera() {
     install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
     state.settings.write().await.guide_camera.cooler_enabled = true;
 
-    lifecycle::disconnect(&state, "mock_1")
+    lifecycle::disconnect(&state, "mock_1", lifecycle::WarmupPolicy::WhenPossible)
         .await
         .expect("guide disconnect should be accepted");
 
@@ -2111,4 +2111,521 @@ async fn a_late_handback_is_refused_and_the_handle_closed() {
         !state.slot(CameraRole::Guide).holds_handle(),
         "a live handle was parked in a slot with no registered camera"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Hand-off failures and Disconnect as a must (2026-09-20 field log)
+// ---------------------------------------------------------------------------
+
+/// Cooling on, target -10 °C, and a cooled mock camera connected and at temperature.
+async fn cooled_rig() -> (Arc<AppState>, String) {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    {
+        let mut s = state.settings.write().await;
+        s.cooler_enabled = true;
+        s.target_temp_c = Some(-10.0);
+    }
+    let name = install_mock_camera(&state, 15.0, true, -10.0).await;
+    (state, name)
+}
+
+/// Take the handle out of the slot behind everyone's back, waiting out a monitor poll
+/// that has it checked out.
+async fn remove_handle(state: &Arc<AppState>, role: CameraRole) -> Box<dyn crate::camera::Camera> {
+    match lifecycle::take_camera(state, role).await {
+        Some(handle) => handle,
+        None => panic!("the slot should hold a handle"),
+    }
+}
+
+async fn camera_gone(state: &Arc<AppState>, budget: Duration) -> bool {
+    eventually(
+        || state.cameras.try_read().map(|c| c.is_empty()).unwrap_or(false),
+        budget,
+    )
+    .await
+}
+
+/// The 14:07 wedge: Start during a warm-up cancelled it, the take failed, and nothing
+/// resumed the monitor or the warm-up — every later Disconnect answered "already warming
+/// up" and did nothing. A take that fails while the monitor is busy must leave both running.
+#[tokio::test]
+async fn a_hand_off_the_monitor_is_still_holding_resumes_the_monitor_and_the_warmup() {
+    let (state, name) = cooled_rig().await;
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    // With the cooler switched off in settings the Start sends the monitor no cooler
+    // target, whose sensor read would itself clear the call this test stands in for.
+    state.settings.write().await.cooler_enabled = false;
+
+    // The monitor is inside a status call that has not come back. Paused first, and given
+    // a moment to finish the tick it is in, for the same reason.
+    let slot = state.slot(CameraRole::Main);
+    send_monitor_cmd_for_test(&state, MonitorCmd::HandOffToCapture);
+    let handle = remove_handle(&state, CameraRole::Main).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    slot.set_monitor_call(Some(std::time::Instant::now()));
+
+    let err = lifecycle::take_for_capture(&state, CameraRole::Main, &name)
+        .await
+        .err()
+        .expect("nothing could hand the handle over");
+    assert!(err.to_string().contains("busy"), "{err}");
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert!(slot.warmup().is_some(), "the cancelled warm-up must be timed again");
+
+    // The call returns; a resumed monitor finishes the warm-up and the disconnect.
+    *slot.handle.lock().unwrap() = Some(handle);
+    slot.set_monitor_call(None);
+    assert!(
+        camera_gone(&state, Duration::from_secs(20)).await,
+        "the warm-up never finished: the monitor was left paused"
+    );
+}
+
+/// The same Start during a warm-up, with the handle gone for good: the camera goes to
+/// recovery instead of sitting in `WarmingUp` with nothing driving it, and the Disconnect
+/// that follows completes at once.
+#[tokio::test]
+async fn a_start_during_a_warmup_with_the_handle_lost_leaves_nothing_wedged() {
+    let (state, name) = cooled_rig().await;
+    state.settings.write().await.auto_reconnect = true;
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    send_monitor_cmd_for_test(&state, MonitorCmd::HandOffToCapture);
+    remove_handle(&state, CameraRole::Main).await;
+
+    let err = lifecycle::take_for_capture(&state, CameraRole::Main, &name)
+        .await
+        .err()
+        .expect("there is no handle to take");
+    assert!(
+        matches!(err, crate::server::error::ApiError::CameraHandleLost { .. }),
+        "{err:?}"
+    );
+    // What the capture loop does with that answer.
+    lifecycle::return_from_capture(&state, CameraRole::Main, &name, None).await;
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Recovering);
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
+    assert!(state.cameras.read().await.is_empty());
+}
+
+/// The handle is gone and nothing holds it — what the Ares-C PRO's capture found after
+/// its 14:06 reopen. That is a lost handle, recovered like a device fault once the caller
+/// hands back `None`, not a busy monitor to blame and retry forever.
+#[tokio::test]
+async fn a_hand_off_with_the_handle_lost_reopens_the_camera() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = true;
+    let name = install_mock_camera(&state, 5.0, false, 20.0).await;
+    remove_handle(&state, CameraRole::Main).await;
+
+    let err = lifecycle::take_for_capture(&state, CameraRole::Main, &name)
+        .await
+        .err()
+        .expect("there is no handle to take");
+
+    assert!(
+        matches!(err, crate::server::error::ApiError::CameraHandleLost { .. }),
+        "{err:?}"
+    );
+    assert!(
+        !state.slot(CameraRole::Main).is_recovering(),
+        "the take tore the camera down itself; that is the caller's hand-back"
+    );
+    lifecycle::return_from_capture(&state, CameraRole::Main, &name, None).await;
+    assert!(state.slot(CameraRole::Main).is_recovering());
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Recovering);
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
+}
+
+/// A capture still winding down holds the handle legitimately. Reopening the camera under
+/// it would be a false recovery; the second Start is told to wait instead.
+#[tokio::test]
+async fn a_handle_another_capture_holds_is_busy_not_lost() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = true;
+    let name = install_mock_camera(&state, 5.0, false, 20.0).await;
+    let held = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
+
+    let err = lifecycle::take_for_capture(&state, CameraRole::Main, &name)
+        .await
+        .err()
+        .expect("the first capture still has it");
+
+    assert!(err.to_string().contains("still held"), "{err}");
+    assert!(!state.slot(CameraRole::Main).is_recovering());
+    lifecycle::return_from_capture(&state, CameraRole::Main, &name, Some(held)).await;
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
+}
+
+/// A warm-up whose monitor can no longer drive it — wedged, paused, or polling a camera
+/// that never answers — still ends, at the deadline, with the camera disconnected.
+#[tokio::test]
+async fn a_stalled_warmup_disconnects_at_its_deadline() {
+    let (state, _name) = cooled_rig().await;
+    lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    send_monitor_cmd_for_test(&state, MonitorCmd::HandOffToCapture);
+
+    state.slot(CameraRole::Main).expire_warmup();
+
+    assert!(camera_gone(&state, Duration::from_secs(3)).await, "the deadline did not end the warm-up");
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+    assert!(!state.slot(CameraRole::Main).holds_handle());
+}
+
+/// "Disconnect now": the observer accepts the thermal shock rather than wait out a ramp.
+#[tokio::test]
+async fn skipping_the_warmup_disconnects_a_warming_camera_at_once() {
+    let (state, _name) = cooled_rig().await;
+    let first = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert!(matches!(first, lifecycle::DisconnectOutcome::WarmingUp { remaining: Some(_) }));
+
+    let again = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert!(
+        matches!(again, lifecycle::DisconnectOutcome::WarmingUp { .. }),
+        "an ordinary second press reports the warm-up, it does not cut it short"
+    );
+
+    let forced = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::Skip)
+        .await
+        .unwrap();
+    assert_eq!(forced, lifecycle::DisconnectOutcome::Disconnected);
+    assert!(state.cameras.read().await.is_empty());
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+}
+
+/// Nothing can command the TEC of a camera with no handle, so there is no warm-up to wait
+/// for — the camera unplugged mid-session that could never be disconnected.
+#[tokio::test]
+async fn a_cooled_camera_without_a_handle_disconnects_without_a_warmup() {
+    let (state, _name) = cooled_rig().await;
+    send_monitor_cmd_for_test(&state, MonitorCmd::HandOffToCapture);
+    remove_handle(&state, CameraRole::Main).await;
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
+    assert!(state.cameras.read().await.is_empty());
+}
+
+/// A camera whose last calls failed would fail every ramp step for minutes.
+#[tokio::test]
+async fn a_recently_faulted_camera_disconnects_without_a_warmup() {
+    let (state, name) = cooled_rig().await;
+    crate::server::camera_health::record_fault(
+        &state,
+        CameraRole::Main,
+        &name,
+        crate::server::camera_health::FaultKind::DeviceLost,
+    );
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
+}
+
+/// A camera unplugged while warming up has nothing left to warm. The first device-lost
+/// answer ends it, rather than the three a running session needs.
+#[tokio::test]
+async fn a_device_lost_during_warmup_ends_it_at_once() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    {
+        let mut s = state.settings.write().await;
+        s.auto_reconnect = true;
+        s.cooler_enabled = true;
+        s.target_temp_c = Some(-10.0);
+    }
+    let (_name, dead, _closes) = install_dead_camera(&state).await;
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }));
+
+    dead.store(true, Ordering::SeqCst);
+
+    assert!(
+        camera_gone(&state, PHASE_POLL_INTERVAL * 2 + Duration::from_secs(1)).await,
+        "an unplugged camera kept warming up"
+    );
+    assert!(!state.slot(CameraRole::Main).reconnect_in_flight.load(Ordering::SeqCst));
+}
+
+/// An unpaused monitor finding the slot empty, poll after poll, is the only witness to a
+/// handle lost on a path nobody logged. It reopens the camera — here, with reconnect off,
+/// it ends the session — instead of polling an empty slot for the rest of the night.
+#[tokio::test]
+async fn a_handle_missing_from_under_the_monitor_is_given_up() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = false;
+    install_mock_camera(&state, 5.0, false, 20.0).await;
+
+    remove_handle(&state, CameraRole::Main).await;
+
+    assert!(
+        camera_gone(&state, PHASE_POLL_INTERVAL * 4 + Duration::from_secs(1)).await,
+        "the monitor polled an empty slot forever"
+    );
+}
+
+/// One empty poll is a race with a capture taking the handle, not a loss.
+#[tokio::test]
+async fn one_empty_poll_is_not_a_lost_handle() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = false;
+    let name = install_mock_camera(&state, 5.0, false, 20.0).await;
+
+    let handle = remove_handle(&state, CameraRole::Main).await;
+    tokio::time::sleep(PHASE_POLL_INTERVAL + Duration::from_millis(300)).await;
+    *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(handle);
+    tokio::time::sleep(PHASE_POLL_INTERVAL * 3).await;
+
+    assert!(!state.cameras.read().await.is_empty(), "a single empty poll ended the session");
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
+}
+
+// ---------------------------------------------------------------------------
+// Review of 6abd7de: the guide loop's own failures
+// ---------------------------------------------------------------------------
+
+/// A guide loop whose hand-off finds the handle lost hands the camera to the teardown,
+/// which stops "the guide loop" — the very loop asking, still registered and holding its
+/// stop switch. `guide_task::stop` then waits out its whole budget on itself before the
+/// camera is torn down or recovered. The take alone is `HANDLE_WAIT_TIMEOUT` (3.5 s).
+#[tokio::test]
+async fn a_guide_loop_that_finds_its_handle_lost_is_not_waited_on_by_its_own_teardown() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = false;
+    install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
+    state.set_guide_loop_running(false);
+    let info = state.camera_in_role(CameraRole::Guide).await.unwrap();
+    // Gone, and nothing holds it: the reopened Ares-C PRO of 2026-09-20.
+    state.slot(CameraRole::Guide).handle.lock().unwrap().take();
+
+    let started = std::time::Instant::now();
+    assert!(crate::server::capture::guide_task::start(&state, &info));
+    let gone = camera_gone(&state, Duration::from_secs(12)).await;
+    let took = started.elapsed();
+
+    assert!(gone, "the lost guide camera was never torn down");
+    assert!(
+        took < Duration::from_secs(5),
+        "the teardown waited on the loop that asked for it: {took:?}"
+    );
+}
+
+/// A camera whose `status()` panics: the guide loop calls it on its own thread, outside
+/// any watchdog, so a panic there ends the thread mid-loop.
+struct PanickingStatusCamera {
+    inner: MockCamera,
+    panic: Arc<AtomicBool>,
+}
+
+impl Camera for PanickingStatusCamera {
+    fn info(&self) -> &CameraInfo {
+        self.inner.info()
+    }
+    fn gain_presets(&self) -> CameraResult<GainPresets> {
+        self.inner.gain_presets()
+    }
+    fn status(&self) -> CameraResult<CameraStatus> {
+        if self.panic.load(Ordering::SeqCst) {
+            panic!("status() panicked inside the guide loop");
+        }
+        self.inner.status()
+    }
+    fn set_target_temperature(&mut self, temp_c: f64) -> CameraResult<()> {
+        self.inner.set_target_temperature(temp_c)
+    }
+    fn set_cooler(&mut self, enabled: bool) -> CameraResult<()> {
+        self.inner.set_cooler(enabled)
+    }
+    fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()> {
+        self.inner.set_dew_heater(enabled, power)
+    }
+    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<crate::camera::RawFrame> {
+        std::thread::sleep(Duration::from_millis(20));
+        self.inner.capture(config)
+    }
+    fn cancel(&self) {
+        self.inner.cancel()
+    }
+    fn cancel_token(&self) -> Arc<AtomicBool> {
+        self.inner.cancel_token()
+    }
+    fn close(&mut self) -> CameraResult<()> {
+        self.inner.close()
+    }
+    fn provider_name(&self) -> &'static str {
+        "Mock"
+    }
+}
+
+/// A guide loop that dies mid-loop keeps its registration and its "running" flag, and the
+/// slot stays `Guiding` with no handle. Start then answers "running" for a loop that does
+/// not exist (and keeps the imaging camera from solving), and after Stop no new loop can
+/// take the handle: `abandon_hand_off` blames "the guide loop" for ever.
+#[tokio::test]
+async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.write().await.auto_reconnect = false;
+    let (inner, _cooler) = MockCamera::new(false, 1.0);
+    let panic = Arc::new(AtomicBool::new(false));
+    let camera = PanickingStatusCamera { inner, panic: Arc::clone(&panic) };
+    let info = ConnectedCameraInfo {
+        id: "mock_1".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role: CameraRole::Guide,
+        info: camera.info().clone(),
+    };
+    state.cameras.write().await.insert("mock_1".to_string(), info.clone());
+    *state.slot(CameraRole::Guide).handle.lock().unwrap() = Some(Box::new(camera));
+    state
+        .set_camera_phase(CameraRole::Guide, &info.info.name, CameraPhase::Idle)
+        .await;
+
+    assert!(crate::server::capture::guide_task::start(&state, &info));
+    assert!(
+        eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await,
+        "the loop never started"
+    );
+    panic.store(true, Ordering::SeqCst);
+
+    let released = eventually(
+        || !state.guide_loops.is_registered() && !state.guide_loop_running(),
+        Duration::from_secs(5),
+    )
+    .await;
+    let phase = state.camera_phase(CameraRole::Guide).await;
+
+    assert!(released, "a dead loop is still registered as running");
+    assert_ne!(phase, CameraPhase::Guiding, "the slot still names a dead loop as its owner");
+}
+
+/// Two bodies of one model share a name, and the fault streak is keyed by name. A stall
+/// on the guide twin must not cost the cooled imaging twin its warm-up.
+#[tokio::test]
+async fn a_fault_on_the_guide_twin_does_not_skip_the_imaging_twins_warmup() {
+    let (state, name) = cooled_rig().await;
+    install_camera(&state, CameraRole::Guide, "mock_1", &name, CameraPhase::Idle).await;
+    // Keep the imaging monitor from clearing the streak with a successful poll first.
+    send_monitor_cmd_for_test(&state, MonitorCmd::HandOffToCapture);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    crate::server::camera_health::record_fault(
+        &state,
+        CameraRole::Guide,
+        &name,
+        crate::server::camera_health::FaultKind::Timeout,
+    );
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    let _ = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::Skip).await;
+
+    assert!(
+        matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }),
+        "the guide twin's stall skipped the imaging camera's warm-up: {outcome:?}"
+    );
+}
+
+
+// ---------------------------------------------------------------------------
+// A Disconnect that outlasts the capture's wind-down
+// ---------------------------------------------------------------------------
+
+/// Stands in for a capture pipeline whose wind-down — the final stack save on a large
+/// sensor — outlasts `CAPTURE_STOP_WAIT`, then hands back what it holds.
+fn slow_pipeline(
+    state: &Arc<AppState>,
+    name: &str,
+    handle: Option<Box<dyn Camera>>,
+) -> tokio::task::JoinHandle<()> {
+    let state = Arc::clone(state);
+    let name = name.to_string();
+    tokio::spawn(async move {
+        while state.capture_state().await != CaptureState::Stopping {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(lifecycle::CAPTURE_STOP_WAIT + Duration::from_secs(1)).await;
+        lifecycle::return_from_capture(&state, CameraRole::Main, &name, handle).await;
+        state.end_capture_state().await;
+    })
+}
+
+/// A capture still saving its stack holds the handle and will give it back: that is not
+/// "no handle to command". The warm-up waits for the hand-back, then runs.
+#[tokio::test]
+async fn a_capture_slow_to_wind_down_hands_its_camera_to_the_warmup() {
+    let (state, name) = cooled_rig().await;
+    state.set_capture_state(CaptureState::Capturing).await;
+    let handle = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
+    let pipeline = slow_pipeline(&state, &name, Some(handle));
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+
+    assert!(
+        matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { remaining: Some(_) }),
+        "{outcome:?}"
+    );
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert!(
+        state.cameras.read().await.contains_key("mock_0"),
+        "disconnected before the capture handed the camera back"
+    );
+    pipeline.await.unwrap();
+    assert!(
+        camera_gone(&state, Duration::from_secs(20)).await,
+        "the warm-up never ran once the handle came back"
+    );
+}
+
+/// The handle never comes back: the camera the observer is disconnecting ends there, and
+/// is not reopened as if it had dropped out.
+#[tokio::test]
+async fn a_handle_lost_while_its_warmup_waits_is_not_reopened() {
+    let (state, name) = cooled_rig().await;
+    state.settings.write().await.auto_reconnect = true;
+    state.set_capture_state(CaptureState::Capturing).await;
+    let _abandoned = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
+    let pipeline = slow_pipeline(&state, &name, None);
+
+    let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .unwrap();
+    assert!(matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }), "{outcome:?}");
+    pipeline.await.unwrap();
+
+    assert!(state.cameras.read().await.is_empty());
+    assert!(!state.slot(CameraRole::Main).is_recovering());
+    assert!(!state.slot(CameraRole::Main).reconnect_in_flight.load(Ordering::SeqCst));
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
 }
