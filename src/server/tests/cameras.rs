@@ -310,18 +310,32 @@ async fn test_disconnect_camera_not_connected() {
     assert!(json["error"].as_str().unwrap().contains("not connected"));
 }
 
+/// Disconnect is a request the observer must be able to make at any moment: a capture
+/// running on the camera is stopped first, the way Stop would, rather than refused.
 #[tokio::test]
-async fn test_disconnect_camera_while_capturing() {
+async fn disconnecting_a_capturing_camera_stops_the_capture_first() {
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
     state.set_capture_state(CaptureState::Capturing).await;
-    let app = create_test_router(state);
+    // Stands in for the capture pipeline: it winds down once asked to stop.
+    let pipeline = {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            while state.capture_state().await != CaptureState::Stopping {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            state.end_capture_state().await;
+        })
+    };
+    let app = create_test_router(Arc::clone(&state));
 
     let (status, json) = post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
+    pipeline.await.unwrap();
 
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(json["success"], false);
-    assert!(json["error"].as_str().unwrap().contains("while capturing"));
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["warming_up"], false);
+    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert!(!state.cameras.read().await.contains_key("mock_0"));
 }
 
 #[tokio::test]
@@ -392,4 +406,65 @@ fn test_connected_camera_info_clone() {
     assert_eq!(cloned.provider, "Test");
     assert_eq!(cloned.index, 0);
     assert_eq!(cloned.info.name, "Test Camera");
+}
+
+
+/// Start a warm-up on the mock camera without a monitor, the state a Disconnect leaves it in.
+async fn warming_up(state: &Arc<AppState>) {
+    state
+        .set_camera_phase(CameraRole::Main, "Test Camera", CameraPhase::WarmingUp)
+        .await;
+    state
+        .slot(CameraRole::Main)
+        .begin_warmup(std::time::Instant::now() + std::time::Duration::from_secs(120));
+}
+
+/// The list carries each connected camera's phase, so a page opened mid-session knows a
+/// camera is warming up without having seen the event that said so.
+#[tokio::test]
+async fn the_camera_list_reports_phase_and_warmup_time() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    warming_up(&state).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, json) = get_json(&app, "/api/cameras").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entry = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|camera| camera["id"] == "mock_0")
+        .expect("the connected camera is listed");
+    assert_eq!(entry["phase"], "warming_up");
+    let remaining = entry["warmup_remaining_s"].as_u64().expect("time left is reported");
+    assert!((110..=120).contains(&remaining), "{remaining}");
+}
+
+/// A second ordinary Disconnect reports the warm-up rather than cutting it short;
+/// `skip_warmup` ends it now.
+#[tokio::test]
+async fn disconnect_during_a_warmup_reports_it_unless_told_to_skip_it() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    warming_up(&state).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, json) = post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["warming_up"], true);
+    assert!(json["data"]["warmup_remaining_s"].as_u64().is_some());
+    assert!(state.cameras.read().await.contains_key("mock_0"));
+
+    let (status, json) = post_json(
+        &app,
+        "/api/cameras/mock_0/disconnect",
+        json!({"skip_warmup": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["warming_up"], false);
+    assert!(!state.cameras.read().await.contains_key("mock_0"));
+    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
 }

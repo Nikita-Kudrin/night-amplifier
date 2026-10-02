@@ -264,6 +264,17 @@ describe('API Client', () => {
             })
             expect(result).toEqual(response)
         })
+
+        it('disconnectCamera asks to skip the warm-up only when told to', async () => {
+            fetchMock.mockReturnValue(mockSuccess({message: 'Camera disconnected', warming_up: false}))
+
+            await disconnectCamera('playerone_0', {skipWarmup: true})
+
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/api/cameras/playerone_0/disconnect',
+                expect.objectContaining({body: JSON.stringify({skip_warmup: true})})
+            )
+        })
     })
 
     describe('Error Handling', () => {

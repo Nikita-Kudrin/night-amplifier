@@ -11,7 +11,7 @@ use crate::camera::identity::{self, DeviceIdentity};
 use crate::camera::CameraEntry;
 use crate::server::camera_session::lifecycle;
 use crate::server::error::{ApiError, ApiResult};
-use crate::server::state::{AppState, CameraRole, ConnectedCameraInfo};
+use crate::server::state::{AppState, CameraPhase, CameraRole, ConnectedCameraInfo};
 
 /// Service for managing camera operations
 pub struct CameraService;
@@ -25,6 +25,7 @@ impl CameraService {
         {
             let connected = state.cameras.read().await;
             for (id, cam_info) in connected.iter() {
+                let slot = state.slot(cam_info.role);
                 cameras_list.push(CameraListItem {
                     id: id.clone(),
                     name: cam_info.info.name.clone(),
@@ -32,6 +33,8 @@ impl CameraService {
                     provider: Some(cam_info.provider.clone()),
                     index: Some(cam_info.index),
                     role: Some(cam_info.role),
+                    phase: Some(*slot.phase.read().await),
+                    warmup_remaining: slot.warmup_remaining(),
                     info: cam_info.info.clone(),
                 });
             }
@@ -57,6 +60,8 @@ impl CameraService {
                 provider: Some(entry.provider),
                 index: Some(entry.index),
                 role: None,
+                phase: None,
+                warmup_remaining: None,
                 info: entry.info,
             });
         }
@@ -93,6 +98,8 @@ impl CameraService {
                             provider: Some(provider_name.to_string()),
                             index: Some(cam.id as usize),
                             role: None,
+                            phase: None,
+                            warmup_remaining_s: None,
                             info: crate::server::dto::CameraInfoResponse::from_info(&cam, &id),
                         };
                         let _ = event_sender
@@ -186,10 +193,14 @@ impl CameraService {
         lifecycle::connect(state, camera_id, role).await
     }
 
-    /// Disconnect from a camera (delegates to lifecycle — triggers warmup
-    /// asynchronously if the cooler was running).
-    pub async fn disconnect_camera(state: &Arc<AppState>, camera_id: &str) -> ApiResult<String> {
-        lifecycle::disconnect(state, camera_id).await
+    /// Disconnect from a camera (delegates to lifecycle — stops a running capture, and
+    /// warms a cooled camera up first unless `warmup` says to skip it).
+    pub async fn disconnect_camera(
+        state: &Arc<AppState>,
+        camera_id: &str,
+        warmup: lifecycle::WarmupPolicy,
+    ) -> ApiResult<lifecycle::DisconnectOutcome> {
+        lifecycle::disconnect(state, camera_id, warmup).await
     }
 }
 
@@ -222,5 +233,9 @@ pub struct CameraListItem {
     pub index: Option<usize>,
     /// The position this camera occupies, or `None` while it is merely discovered.
     pub role: Option<CameraRole>,
+    /// The connected camera's lifecycle phase.
+    pub phase: Option<CameraPhase>,
+    /// Time until a warm-up in progress is cut short, at the latest.
+    pub warmup_remaining: Option<std::time::Duration>,
     pub info: crate::camera::CameraInfo,
 }

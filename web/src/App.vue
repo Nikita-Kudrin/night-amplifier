@@ -32,12 +32,14 @@ const {
   initializeState,
   updateCameraStatus,
   updateCameraPhase,
+  replaceCameraPhases,
   addDiscoveredCamera,
   _settingsRef,
   _camerasRef,
   _selectedCameraIdRef,
   _cameraStatusRef,
   _cameraPhaseRef,
+  _warmupEndsAtRef,
   capabilities,
   mainCamera,
   guideCamera,
@@ -69,6 +71,7 @@ provide('refreshCameras', refreshCameras)
 provide('capabilities', capabilities)
 provide('cameraStatus', _cameraStatusRef)
 provide('cameraPhase', _cameraPhaseRef)
+provide('warmupEndsAt', _warmupEndsAtRef)
 provide('mainCamera', mainCamera)
 provide('guideCamera', guideCamera)
 provide('hasGuideCamera', hasGuideCamera)
@@ -132,7 +135,14 @@ watch(
         })
       }
       if (event?.type === 'camera_phase_changed') {
-        updateCameraPhase(event.name, event.phase)
+        updateCameraPhase(event.name, event.phase, event.warmup_remaining_s)
+      }
+      if (event?.type === 'camera_phases') {
+        replaceCameraPhases(event.cameras)
+        // Sent on (re)connect: a camera connected or disconnected while this page was
+        // away has no other way to reach the list. Not during the first load, which is
+        // fetching the list already.
+        if (!loading.value && !sameCameraNames(event.cameras, _camerasRef.value)) refreshCameras()
       }
       if (event?.type === 'camera_disconnected') {
         updateCameraPhase(event.name, 'disconnected')
@@ -144,6 +154,13 @@ watch(
       aiCompute.handleEvent(event)
     }
 )
+
+/** Whether the snapshot names exactly the cameras the list holds as connected. */
+function sameCameraNames(snapshot, list) {
+  const named = new Set((snapshot ?? []).map((camera) => camera.name))
+  const connected = list.filter((camera) => camera.connected)
+  return named.size === connected.length && connected.every((camera) => named.has(camera.name))
+}
 
 function handleEulaAccepted() {
   refreshSettings()

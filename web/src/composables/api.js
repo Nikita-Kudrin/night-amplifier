@@ -262,12 +262,16 @@ export async function connectCamera(cameraId, role = 'main') {
 }
 
 /**
- * Disconnect from a camera
+ * Disconnect a camera. A capture running on it is stopped first, and a cooled camera
+ * warms up before it closes unless `skipWarmup` says to close it now.
  * @param {string} cameraId - Camera ID
+ * @param {{skipWarmup?: boolean}} [options]
+ * @returns {Promise<{message: string, camera_id: string, warming_up: boolean, warmup_remaining_s?: number}>}
  */
-export async function disconnectCamera(cameraId) {
+export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
     return request(`/cameras/${encodeURIComponent(cameraId)}/disconnect`, {
         method: 'POST',
+        ...(skipWarmup ? {body: {skip_warmup: true}} : {}),
     })
 }
 

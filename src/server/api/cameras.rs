@@ -8,12 +8,14 @@ use axum::{
 };
 use std::sync::Arc;
 
+use super::super::camera_session::lifecycle::{DisconnectOutcome, WarmupPolicy};
 use super::super::dto::{
-    ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, MessageResponse,
+    ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, DisconnectCameraRequest,
+    DisconnectResponse, MessageResponse,
 };
-use super::super::error::ApiError;
 use super::super::services::CameraService;
 use super::super::state::{AppState, CameraRole};
+use super::optional_body::OptionalBody;
 
 /// GET /api/cameras
 ///
@@ -30,6 +32,8 @@ pub async fn list_cameras(State(state): State<Arc<AppState>>) -> impl IntoRespon
             provider: cam.provider,
             index: cam.index,
             role: cam.role,
+            phase: cam.phase.map(Into::into),
+            warmup_remaining_s: cam.warmup_remaining.map(|left| left.as_secs()),
             info: CameraInfoResponse::from_info(&cam.info, &cam.id),
         })
         .collect();
@@ -96,19 +100,40 @@ pub async fn connect_camera(
 
 /// POST /api/cameras/:camera_id/disconnect
 ///
-/// Disconnect from a camera
+/// Disconnect a camera: stops a capture running on it, and warms a cooled camera up first.
+/// The optional body `{"skip_warmup": true}` closes it at once instead, including one
+/// already warming up.
 pub async fn disconnect_camera(
     State(state): State<Arc<AppState>>,
     Path(camera_id): Path<String>,
+    OptionalBody(request): OptionalBody<DisconnectCameraRequest>,
 ) -> impl IntoResponse {
-    match CameraService::disconnect_camera(&state, &camera_id).await {
-        Ok(_camera_name) => (
-            StatusCode::OK,
-            ApiResponse::ok(MessageResponse {
-                message: "Camera disconnected".to_string(),
-                camera_id: Some(camera_id),
-            }),
-        ),
-        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
+    let warmup = if request.skip_warmup {
+        WarmupPolicy::Skip
+    } else {
+        WarmupPolicy::WhenPossible
+    };
+    match CameraService::disconnect_camera(&state, &camera_id, warmup).await {
+        Ok(outcome) => {
+            let (message, warming_up, remaining) = match outcome {
+                DisconnectOutcome::Disconnected => ("Camera disconnected", false, None),
+                DisconnectOutcome::WarmingUp { remaining } => (
+                    "Camera warming up; it disconnects once warm",
+                    true,
+                    remaining,
+                ),
+            };
+            (
+                StatusCode::OK,
+                ApiResponse::ok(DisconnectResponse {
+                    message: message.to_string(),
+                    camera_id,
+                    warming_up,
+                    warmup_remaining_s: remaining.map(|left| left.as_secs()),
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (e.status_code(), ApiResponse::err::<()>(e.to_string())).into_response(),
     }
 }

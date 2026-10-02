@@ -573,9 +573,11 @@ async fn the_name_lookup_answers_only_for_connected_cameras() {
 // disconnecting it.
 
 /// `register_camera` leaves the guide loop marked running, which is what a connected
-/// guide camera looks like: it starts on connect.
+/// guide camera looks like: it starts on connect. Start is then the state already reached,
+/// not a conflict — the client asking was showing a stopped loop because it had missed the
+/// event saying otherwise (2026-09-20), and a 409 gave it nothing to act on.
 #[tokio::test]
-async fn starting_a_guide_camera_that_is_already_running_is_refused() {
+async fn starting_a_guide_camera_that_is_already_running_succeeds() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
     let app = create_test_router(Arc::clone(&state));
@@ -587,11 +589,12 @@ async fn starting_a_guide_camera_that_is_already_running_is_refused() {
     )
     .await;
 
-    assert_eq!(status, axum::http::StatusCode::CONFLICT);
-    assert!(body["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("already running"));
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["camera_id"], "mock_1");
+    assert!(
+        !state.guide_loops.is_registered(),
+        "a second loop was started beside the running one"
+    );
 }
 
 /// Distinct from "no imaging camera is connected": the two answer different requests,

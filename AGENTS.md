@@ -161,6 +161,13 @@ Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG at Streaming Resolut
 camera), `/ws/eyepiece_quality` (lossless LZ4 at Eyepiece Streaming Resolution), `/ws/events` (JSON). State: `Arc<RwLock<_>>` in `AppState`; exact endpoints,
 DTOs and events in source.
 
+`/ws/events` opens with `state_changed` + `camera_phases` (every connected camera's phase) and resends both after a
+`Lagged` client; `GET /api/cameras` carries `phase` and `warmup_remaining_s` too, as does a `warming_up`
+`camera_phase_changed` (every client's countdown, not only the one that pressed Disconnect). Phases otherwise arrive only as
+changes, and on 2026-09-20 a page that missed one offered "Start guide" for a running loop (409). Every non-2xx `/api`
+answer is logged with its error by `api::failure_log` (handlers log nothing themselves), and `logging` routes panics
+of the `std::thread` workers into the log file.
+
 `GET /api/ai-compute` is the AI compute report, `POST /api/ai-compute/benchmark` Measure again (see *The AI
 denoiser*). `Server::build_router` is public so an external test binary can drive the real routes against its own
 plugin registry.
@@ -187,6 +194,10 @@ benchmarks) and the Settings → Advanced "AI compute" selector; it polls only w
 failed request never leaves the UI blocked. The selector links greyed-out reasons to the manual's System dependencies,
 and says "checking hardware…" only while the server is — `unavailable` (Community, no licence) never resolves.
 
+`useAppState.cameraPhase` is seeded by the camera list and replaced by the `camera_phases` snapshot; a list response
+never overwrites a phase an event delivered after the request left (`phaseEventAt`). App refetches the list when a
+snapshot names different cameras (a page that was away missed connects and disconnects).
+
 `useCatalogSearch` skips a programmatic query by *value* (`setQueryWithoutSearch`), never with a one-shot flag: clearing
 a 1-character query armed the flag, so typing "M" then "M4" never searched and M1–M9 were unfindable. It also drops
 responses from superseded searches, or a slow reply reopens the dropdown after a target was picked.
@@ -199,6 +210,14 @@ responses from superseded searches, or a slow reply reopens the dropdown after a
 - **Cooler lifecycle** (`AppState.slot(role).handle`), `CameraPhase`: `Precooling → Idle → Capturing | Guiding → WarmingUp`. Ramp
   ≤5°C/min (`camera_session::ramp`; stepped by the monitor for a parked handle, by `guide_task` for its own). Warm-up
   ramps to 20°C and closes at sensor ≥10°C + duty ≤5% (or 5 min). `cooler_fast_mode` bypasses the ramp (UI warns).
+- **Disconnect is a must** (`lifecycle::disconnect`): the imaging camera's capture is stopped first, its sub in flight
+  cut short (stack saved, ≤15 s wait — Stop alone let a 300 s sub outlast it and the cooled camera closed cold). A
+  capture still winding down after the wait holds the handle, not "no handle": `track_warmup` starts the deadline and
+  `return_from_capture` the warm-up on hand-back. A cooled camera warms up only while it answers and has a handle
+  (`warmup_impossible`: recent fault, no reachable handle → close at once); `WarmupPolicy::Skip` (`{"skip_warmup": true}`, UI "Disconnect now") switches the
+  cooler off and closes on a bounded thread. A lifecycle-owned watchdog ends every warm-up by `WARMUP_DEADLINE`
+  (`WARMUP_TIMEOUT` + 30 s), whatever the monitor does — on 2026-09-20 a wedged warm-up had no end and every
+  Disconnect answered "already warming up" until the board was power-cycled. A device lost mid-warm-up ends it at once.
 - **Live cooler edits**: `Idle` → `apply_cooler_settings`; `Capturing`/`Guiding` → per-frame path; `WarmingUp` →
   cooler held off. The dew heater has no `CaptureConfig` field, so under `Guiding` it is a queued `CameraOp`.
 - **Per-camera profiles**: keyed `"{provider}/{model}"` (+ `#guide`, so two bodies of one model don't collide).
@@ -232,6 +251,11 @@ responses from superseded searches, or a slow reply reopens the dropdown after a
 
 - **One thread, not the pipeline** (`capture::guide_task`): nothing stacked or queued. Started by `connect`, not Start
   Capture — solving and preview are wanted *while* framing.
+- **One loop at a time, tracked by id** (`state::GuideLoops`): `start` registers before spawning (none while one is
+  registered), the loop marks itself running and unregisters by id, `stop` takes the registration. A loop `stop` gave
+  up on that ended after its successor started used to clear the successor's flag and stop switch. Start while a loop
+  is registered answers OK — it is the state asked for. The thread catches a panic as a lost handle (`return_from_capture(None)`):
+  uncaught, it stayed registered and `Guiding` with no handle, and no later loop could take the camera.
 - **Render gate**: post-processing/encoding run only while `guide_stream.has_viewers()`; solving and raw saving sit
   **above** both early exits. `guide_task::tests` assert unrendered frames were really exposed — keep that if it moves.
 - **Two `FrameStream`s, two counters**: a payload is served only while its counter matches, so a shared
@@ -300,9 +324,9 @@ unsupported parameter falls back while a lost device still propagates instead of
 
 ### Fault detection and recovery
 
-One detector (`server::camera_health`), threshold and streak (`consecutive_watchdog_timeouts`) serve all three
-watchdog/monitor sites, so alternating faults still escalate; the streak ages out (`FAULT_STREAK_TTL`), never resets on
-success. Recovery is a ladder — each rung runs only if the previous failed; the user hears nothing before
+One detector (`server::camera_health`), threshold and streak (`consecutive_watchdog_timeouts`, keyed by role + name: a
+guide twin's stall skipped the imaging twin's warm-up) serve all three watchdog/monitor sites, so alternating faults
+still escalate; the streak ages out (`FAULT_STREAK_TTL`). Recovery is a ladder — each rung runs only if the previous failed; the user hears nothing before
 `reconnect::NOTICE_AFTER` (20 s):
 
 1. **Stream restart.** Shims wait `CaptureConfig::stall_budget` (exposure + 3 s + transfer at 10 MB/s) from *entering*
@@ -322,6 +346,18 @@ success. Recovery is a ladder — each rung runs only if the previous failed; th
    the slot; a timed-out open blocks further opens (`pending_opens`). Connect joins recovery; Disconnect/Stop ends it.
 4. **Give-up** → `DisconnectCause::RecoveryFailed`: full teardown, then the first message.
 
+- **A failed hand-off always resumes the monitor** (`lifecycle::abandon_hand_off`): left paused it never polled again,
+  and a warm-up the Start cancelled stayed `WarmingUp` forever. Then it names the holder: a `Capturing`/`Guiding`
+  owner or a monitor mid-call (`CameraSlot::monitor_call_age`, marked before the handle leaves the slot) is *busy*;
+  nobody is a **lost handle** — `CameraHandleLost`, which the caller hands back as `None` like any capture that lost
+  it. Never torn down inside the take: the guide's teardown then waited `guide_task::stop`'s 5 s on the very loop
+  asking. An unpaused monitor finding the slot
+  empty `MISSING_HANDLE_TICKS` (3) polls in a row gives up the same way (`FaultKind::HandleLost`) — an empty slot used
+  to read as "not yet conclusive" forever. On 2026-09-20 an Ares-C PRO's reopened handle vanished unlogged and
+  nothing noticed; where it went is still unexplained (`a_cooled_camera_resumes_after_a_stall_reopen…` doesn't
+  reproduce it), so every close of a handle a status call brought back now logs why.
+- Sensor temperatures outside `PLAUSIBLE_SENSOR_TEMP_C` (-80..90 °C) are dropped from the status cache and never seed
+  a ramp: the same reopened Ares-C PRO read -300 °C.
 - **`CameraSlot::recovery` (`None → Suspended → Installing → None`) is the only recovery record**, never the phase.
   A fault while `Installing` belongs to the *new* handle (acted on when install ends); `reconnect::release_flight`
   re-arms one that arrived mid-flight. Phase is per slot, not per model name (twins ended each other's recovery);

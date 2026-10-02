@@ -6,9 +6,9 @@
 //! device, and every consumer addresses a slot rather than "the camera".
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{Notify, RwLock};
 
 use super::{CameraPhase, MonitorCmd};
@@ -73,6 +73,24 @@ pub struct CameraSlot {
     pub raw_session: RwLock<Option<RawSessionResume>>,
     /// Hardware calls waiting for the handle's owner to run them. See [`CameraOp`].
     pending_ops: StdMutex<Vec<CameraOp>>,
+    /// When the monitor checked the handle out for the call it is in, if it is in one.
+    /// Lets a failed hand-off tell "busy for a moment" from "lost": on 2026-09-20 both
+    /// read as an empty slot, and the capture blamed a monitor that held nothing.
+    monitor_call_since: StdMutex<Option<Instant>>,
+    /// The warm-up a Disconnect started, if one is running. See [`Warmup`].
+    warmup: StdMutex<Option<Warmup>>,
+    warmup_epochs: AtomicU64,
+}
+
+/// One warm-up, as the Disconnect that started it knows it.
+///
+/// The epoch lets the deadline watchdog tell its own warm-up from a later one: a Start
+/// cancels a warm-up and a second Disconnect begins another, and the first watchdog must
+/// not cut that one short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Warmup {
+    pub epoch: u64,
+    pub deadline: Instant,
 }
 
 /// Where a slot is in quiet recovery (`camera_session::recovery`).
@@ -137,6 +155,9 @@ impl Default for CameraSlot {
             pending_opens: Arc::new(InFlightCalls::default()),
             raw_session: RwLock::new(None),
             pending_ops: StdMutex::new(Vec::new()),
+            monitor_call_since: StdMutex::new(None),
+            warmup: StdMutex::new(None),
+            warmup_epochs: AtomicU64::new(0),
         }
     }
 }
@@ -154,6 +175,53 @@ impl CameraSlot {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some()
+    }
+
+    /// Record that the monitor has the handle out for a call (`Some`) or is done with it.
+    pub fn set_monitor_call(&self, since: Option<Instant>) {
+        *self.monitor_call_since.lock().unwrap_or_else(|e| e.into_inner()) = since;
+    }
+
+    /// How long the monitor has held the handle for its current call, if it holds it.
+    pub fn monitor_call_age(&self) -> Option<Duration> {
+        self.monitor_call_since
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|since| since.elapsed())
+    }
+
+    /// Start tracking a warm-up that must be over by `deadline`, replacing any earlier one.
+    pub fn begin_warmup(&self, deadline: Instant) -> Warmup {
+        let warmup = Warmup {
+            epoch: self.warmup_epochs.fetch_add(1, Ordering::SeqCst) + 1,
+            deadline,
+        };
+        *self.warmup.lock().unwrap_or_else(|e| e.into_inner()) = Some(warmup);
+        warmup
+    }
+
+    /// Stop tracking the warm-up: it was cancelled, or the camera is gone.
+    pub fn end_warmup(&self) {
+        *self.warmup.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The warm-up being tracked, if any.
+    pub fn warmup(&self) -> Option<Warmup> {
+        *self.warmup.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Time left before the tracked warm-up is cut short, if one is running.
+    pub fn warmup_remaining(&self) -> Option<Duration> {
+        self.warmup()
+            .map(|warmup| warmup.deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// Move the tracked warm-up's deadline to now, so its watchdog acts on its next look.
+    #[cfg(test)]
+    pub fn expire_warmup(&self) {
+        if let Some(warmup) = self.warmup.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            warmup.deadline = Instant::now();
+        }
     }
 
     /// Send a command to this slot's monitor thread, if one is running.

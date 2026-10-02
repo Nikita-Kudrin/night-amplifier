@@ -109,7 +109,7 @@ pub(crate) fn poll_camera_status_bounded(
             // A response arrived within budget — whatever it says, the camera
             // is currently communicating, so any prior timeout streak no
             // longer indicates an active fault.
-            camera_health::clear_fault_streak(state, &camera_name);
+            camera_health::clear_fault_streak(state, role, &camera_name);
 
             if elapsed > Duration::from_millis(500) {
                 warn!(
@@ -132,7 +132,7 @@ pub(crate) fn poll_camera_status_bounded(
                 timeout = ?STATUS_POLL_TIMEOUT,
                 "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            camera_health::record_fault(state, role, &camera_name, FaultKind::Timeout);
             StatusPollOutcome::TimedOut
         }
     }
@@ -244,9 +244,9 @@ pub(crate) fn capture_frame_bounded(
             // streak — it extends it.
             match &result {
                 Err(e) if e.is_sdk_disconnected() => {
-                    camera_health::record_fault(state, &camera_name, FaultKind::DeviceLost);
+                    camera_health::record_fault(state, role, &camera_name, FaultKind::DeviceLost);
                 }
-                _ => camera_health::clear_fault_streak(state, &camera_name),
+                _ => camera_health::clear_fault_streak(state, role, &camera_name),
             }
             CaptureOutcome::Completed(camera, result)
         }
@@ -256,7 +256,7 @@ pub(crate) fn capture_frame_bounded(
                 timeout = ?watchdog_timeout,
                 "camera.capture() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            camera_health::record_fault(state, role, &camera_name, FaultKind::Timeout);
             CaptureOutcome::TimedOut
         }
     }

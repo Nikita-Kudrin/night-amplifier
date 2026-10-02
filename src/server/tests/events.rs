@@ -87,3 +87,52 @@ async fn test_event_to_json_all_variants() {
         serde_json::from_str(&ServerEvent::FocusModeLeft.to_json()).unwrap();
     assert_eq!(json, serde_json::json!({ "type": "focus_mode_left" }));
 }
+
+
+/// A client that connects later — a reloaded page, a phone waking up — gets every camera's
+/// phase straight away. Phases otherwise arrive only as changes, and on 2026-09-20 a page
+/// that had missed one offered "Start guide" for a loop that was running.
+#[tokio::test]
+async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let server = super::image_stream_clients::start_server().await;
+    server.state.cameras.write().await.insert(
+        "mock_1".to_string(),
+        crate::server::state::ConnectedCameraInfo {
+            id: "mock_1".to_string(),
+            provider: "Mock".to_string(),
+            index: 0,
+            role: CameraRole::Guide,
+            info: crate::camera::CameraInfo {
+                name: "Guiding".to_string(),
+                ..Default::default()
+            },
+        },
+    );
+    server
+        .state
+        .set_camera_phase(CameraRole::Guide, "Guiding", crate::server::state::CameraPhase::Guiding)
+        .await;
+
+    let mut client = server.connect("/ws/events").await;
+    let mut events = Vec::new();
+    for _ in 0..2 {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                events.push(serde_json::from_str::<serde_json::Value>(&text).unwrap())
+            }
+            other => panic!("expected a JSON event, got {other:?}"),
+        }
+    }
+
+    let (state, phases) = (&events[0], &events[1]);
+    assert_eq!(state["type"], "state_changed");
+    assert_eq!(state["state"], "Idle");
+    assert_eq!(phases["type"], "camera_phases");
+    assert_eq!(
+        phases["cameras"],
+        serde_json::json!([{"name": "Guiding", "role": "guide", "phase": "guiding"}])
+    );
+}

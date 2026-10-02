@@ -347,11 +347,42 @@ pub fn init_logging(config: LogConfig) -> Result<LogGuard, LoggingError> {
             .map_err(|e| LoggingError::InitFailed(e.to_string()))?;
     }
 
+    install_panic_hook();
+
     Ok(LogGuard {
         _guards: guards,
         #[cfg(feature = "telemetry")]
         telemetry_provider,
     })
+}
+
+/// Send panics to the log as well as stderr. The camera monitor, the guide loop and the SDK
+/// worker threads are plain `std::thread`s whose panics otherwise reach only stderr — a
+/// journal nobody reads in the field, and never the log file field reports come from.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let location = info
+            .location()
+            .map(|at| format!("{}:{}", at.file(), at.line()))
+            .unwrap_or_default();
+        tracing::error!(
+            thread = thread.name().unwrap_or("unnamed"),
+            location,
+            message = panic_message(info.payload()),
+            "Thread panicked"
+        );
+        previous(info);
+    }));
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string panic payload")
 }
 
 /// Initialize logging with default configuration.
@@ -504,5 +535,16 @@ mod tests {
         );
         assert!(!file_text.contains('\x1b'), "{file_text:?}");
         assert!(console.text().contains('\x1b'));
+    }
+
+    /// `panic!("{x}")` carries a `String`, `panic!("literal")` a `&str`; both must reach the log.
+    #[test]
+    fn a_panic_message_is_read_from_either_payload() {
+        let formatted = std::panic::catch_unwind(|| panic!("{} failed", "status")).unwrap_err();
+        let literal = std::panic::catch_unwind(|| panic!("literal")).unwrap_err();
+        let other = std::panic::catch_unwind(|| std::panic::panic_any(7_u8)).unwrap_err();
+        assert_eq!(panic_message(formatted.as_ref()), "status failed");
+        assert_eq!(panic_message(literal.as_ref()), "literal");
+        assert_eq!(panic_message(other.as_ref()), "non-string panic payload");
     }
 }

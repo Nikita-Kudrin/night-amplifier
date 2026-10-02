@@ -441,7 +441,7 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Step>, extra_frames
         .consecutive_watchdog_timeouts
         .lock()
         .unwrap()
-        .get(&name)
+        .get(&(CameraRole::Main, name.clone()))
         .map(|(count, _)| *count);
     MainLoopRun {
         returned_handle: returned.is_some(),
