@@ -247,17 +247,14 @@ impl StarDetector {
             return None;
         }
 
-        // FWHM from the area above half maximum. `None` means "not measurable in this
-        // window" — left without a FWHM rather than a made-up one, since downstream
-        // weighting treats a wrong number worse than a missing one.
+        // FWHM from the area above half maximum; `None` means "not measurable in this
+        // window" — left unset rather than made up, since downstream weighting treats a
+        // wrong number worse than a missing one.
         //
-        // Threshold derives from this star's OWN pixel, not the `peak_value`
-        // accumulated above — that's the brightest raw pixel anywhere in the whole
-        // `centroid_radius` window, which a brighter neighbour outside `search_radius`
-        // can dominate without disqualifying this star's own peak from
-        // `is_local_maximum`. Using the window-wide max would raise this star's
-        // threshold above its own true half level, poisoning the flood fill and
-        // returning `None` for a perfectly measurable star.
+        // Threshold derives from this star's OWN pixel, not `peak_value` (the brightest
+        // raw pixel anywhere in the whole `centroid_radius` window) — a brighter neighbour
+        // outside `search_radius` can dominate `peak_value` without disqualifying this
+        // star's own peak, raising the threshold above its true half level and poisoning the flood fill.
         let own_peak_value = data[peak_y * width + peak_x];
         match self.compute_fwhm(data, width, height, peak_x, peak_y, own_peak_value) {
             Some(fwhm) => Some(Star::with_fwhm(
@@ -278,22 +275,14 @@ impl StarDetector {
         }
     }
 
-    /// Computes FWHM from the area above half peak intensity: for a Gaussian, the
-    /// half-max contour is a circle of radius `σ·√(2ln2)` enclosing `A = 2π·ln2·σ²`
-    /// pixels, so `FWHM = 2√(A/π)` — exact in the continuum, needing only a pixel count.
+    /// Computes FWHM from the area above half peak intensity: a Gaussian's half-max
+    /// contour has radius `σ·√(2ln2)` enclosing `A = 2π·ln2·σ²` pixels, so `FWHM =
+    /// 2√(A/π)` — exact in the continuum, needing only a pixel count.
     ///
-    /// Replaced a second moment over the whole window, which weights each pixel by
-    /// `r²·I` — corner noise dominates for anything but a bright, tight star, and the
-    /// result saturates at `2.3548·√(2·Σd²/(2r+1))` (10.53px at `centroid_radius = 5`,
-    /// independent of the actual star). Real frames pinned against that ceiling,
-    /// silently disabling FWHM-based weighting in `QualityBaseline` and firing the
-    /// Pro solver's bloat detection on every frame.
-    ///
-    /// Half maximum uses a **local** background from the window's outer ring, not the
-    /// frame-wide median — inside nebulosity the two differ enough to run the fill to
-    /// the window edge and discard the star (cost 92% of stars on one fixture).
-    /// Returns `None` when unmeasurable (nothing clears half-max, or the region hits
-    /// the window border); callers must treat that as missing, not zero.
+    /// Replaces a whole-window second moment (`r²·I` weights): corner noise dominated
+    /// anything but a tight star, saturating at `2.3548·√(2·Σd²/(2r+1))` = 10.53px at
+    /// `centroid_radius = 5`. Half-max instead uses a **local** background (outer ring,
+    /// not frame-wide median): nebulosity cost 92% of stars on one fixture otherwise.
     fn compute_fwhm(
         &self,
         data: &[f32],
@@ -698,17 +687,13 @@ mod tests {
     #[test]
     fn fwhm_is_not_poisoned_by_a_brighter_neighbour_outside_search_radius() {
         // Regression: `compute_fwhm`'s half-max threshold used to derive from
-        // `peak_value`, the brightest pixel anywhere in the `centroid_radius` window
-        // (5px), a larger radius than `search_radius` (3px) used for local-maximum
-        // candidacy — so a brighter neighbour outside `search_radius` never
-        // disqualified this star's peak, but leaked into its FWHM threshold anyway,
-        // raising it above the dim star's true half-max and returning `None` for a
-        // perfectly measurable star.
+        // `peak_value`, the brightest pixel in the `centroid_radius` window (5px) —
+        // larger than `search_radius` (3px) used for local-maximum candidacy. A brighter
+        // neighbour outside `search_radius` never disqualified this star's peak, but
+        // leaked into its FWHM threshold anyway, raising it above the dim star's true
+        // half-max and returning `None` for a perfectly measurable star.
         //
-        // The "neighbour" is a bare pixel, not a second Gaussian star, isolating this
-        // from ordinary flux blending; the star under test is identified by total
-        // flux, since the dim star's Gaussian body carries more of it than the
-        // pixel's single-point spike ever can.
+        // The "neighbour" is a bare pixel, not a second Gaussian star, so it can't blend flux; the star under test is identified by total flux, since its Gaussian body dominates the pixel's spike.
         let isolated = detect_single_gaussian(1.5, 0.30)
             .fwhm
             .expect("isolated control should be measurable");

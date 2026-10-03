@@ -1,12 +1,9 @@
-//! Push-To Navigation System (Pro Feature)
+//! Push-To Navigation System (Pro feature). Plugin interfaces only, so Community
+//! compiles safely while the functionality itself is gated.
 //!
-//! Push-To navigation is a professional feature available only in Night Amplifier Pro.
-//! This module provides the plugin interfaces to allow safe compilation of the Community version
-//! while gating the functionality.
-//!
-//! The plugin is split into three focused sub-traits following the Interface Segregation Principle:
-//! - [`PushToSolverPlugin`] — plate solving, position tracking, and direction calculation
-//! - [`PushToCatalogPlugin`] — catalog search, target selection, and database loading
+//! Split into three sub-traits (Interface Segregation):
+//! - [`PushToSolverPlugin`] — plate solving, position tracking, direction calculation
+//! - [`PushToCatalogPlugin`] — catalog search, target selection, database loading
 //! - [`PushToInstallerPlugin`] — ASTAP and catalog installation management
 
 pub mod error;
@@ -225,30 +222,22 @@ pub trait PushToSolverPlugin: Send + Sync {
 
     /// Name the camera now producing frames, or `None` when none is connected.
     ///
-    /// The solver remembers a field of view per optical configuration to make the next
-    /// cold start fast, and that memory is keyed on optics — focal length, pixel size,
-    /// sensor height, Barlow — which cannot tell two cameras sharing a sensor format
-    /// apart, nor notice a swap the user has not re-profiled. A stale FOV is not a
-    /// small error: it *fails* an otherwise good hinted attempt outright, which is
-    /// exactly what forces the slow full-sky fallback. So the camera is named here and
-    /// a remembered FOV that came from a different one is discarded when it would
-    /// otherwise be used.
-    ///
-    /// Default no-op: only the solver has any use for this.
+    /// The solver remembers a field of view per optical configuration (keyed on focal
+    /// length, pixel size, sensor height, Barlow) for a fast cold start — but that key
+    /// can't tell two cameras sharing a sensor format apart, nor notice an unprofiled
+    /// swap. A stale FOV *fails* an otherwise good hinted attempt, forcing the slow
+    /// full-sky fallback, so the camera is named here and a remembered FOV from a
+    /// different one is discarded before use. Default no-op: only the solver uses this.
     async fn set_active_camera(&self, _camera: Option<String>) {}
 
     /// Offer a frame while a solve is already running.
     ///
-    /// Separate from [`PushToSolverPlugin::process_new_frame`] because the two answer
-    /// different questions and must have different costs: that one may block for the
-    /// length of an ASTAP ladder, this one may not. Without it the movement detector
-    /// went blind for exactly as long as a solve took — the 2026-09-01 log has a
-    /// full-sky search grinding for 223 s on a frame whose sky the user had already
-    /// pushed away from, with every frame in between skipped unread, which is what
-    /// "it doesn't search when I move the scope" looks like from the outside.
+    /// Separate from [`PushToSolverPlugin::process_new_frame`]: that one may block for
+    /// a whole ASTAP ladder, this one may not — without it the movement detector went
+    /// blind for as long as a solve took (2026-09-01 log: a full-sky search ground for
+    /// 223s on a frame whose sky the user had already pushed away from, every frame in between skipped unread — "it doesn't search when I move the scope").
     ///
-    /// Returning [`FrameOutcome::cached`] with a blocker is the normal case; the real
-    /// work is noticing a slew and abandoning a solve that can no longer be right.
+    /// Returning [`FrameOutcome::cached`] with a blocker is normal; the real work is noticing a slew and abandoning a solve that can no longer be right.
     async fn observe_frame(
         &self,
         frame: &Frame,
@@ -288,19 +277,12 @@ pub trait PushToSolverPlugin: Send + Sync {
 
     /// Name the camera *and* the optics it is looking through, as one change.
     ///
-    /// The pair is the solver's rig identity, and applying half of it is a state that
-    /// never physically existed: a new camera behind the previous camera's focal
-    /// length. That is not merely transient. Resolving the remembered FOV is a
-    /// *mutating* read — an entry whose recorded camera contradicts the one asked
-    /// about is discarded, not skipped — so resolving against a mismatched pair can
-    /// permanently delete a hard-won measurement belonging to the rig that is being
-    /// replaced.
-    ///
-    /// The default body applies them in the order that is at least harmless: optics
-    /// first, so the only resolve that sees an inconsistent pair sees the *old* camera
-    /// against the *new* optics, whose rig key has no entry yet and so has nothing to
-    /// discard. Implementations that can apply both before resolving should override
-    /// this and do exactly that.
+    /// The pair is the solver's rig identity — applying half of it (a new camera behind
+    /// the old focal length) never physically existed. Resolving the FOV is a
+    /// *mutating* read: an entry whose recorded camera contradicts the one asked about
+    /// is discarded, not skipped, so a mismatched pair can permanently delete a
+    /// hard-won measurement for the rig being replaced.
+    /// Default body applies optics first (least harmful): the only resolve seeing an inconsistent pair sees the *old* camera against *new* optics, which has nothing to discard yet — override to apply both before resolving if possible.
     async fn set_rig(&self, camera: Option<String>, telescope: TelescopeSettings) {
         let _ = self.set_telescope_settings(telescope).await;
         self.set_active_camera(camera).await;

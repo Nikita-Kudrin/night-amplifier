@@ -216,15 +216,14 @@ impl MasterStack {
                         return;
                     }
 
-                    // `offered` is what the coverage map reads. The scale is kept too,
-                    // though nothing here clips against it and the render never reads
-                    // it: rejection switched on mid-session inherits it warm, and
-                    // `noise_field` measures from it on demand. It costs nothing
-                    // measurable — the loop is memory-bound and the pixel is read and
-                    // written either way (117.2 vs 117.5 ms per eight 3008x3008x3 frames,
-                    // x86). Taken before the mean moves, or the deviation is measured
-                    // against a mean already holding this sample; outliers are dropped by
-                    // the observer itself — see `observe_scale_guarded`.
+                    // `offered` feeds the coverage map. The scale (`m2`) is kept too though
+                    // nothing here clips against it: rejection switched on mid-session
+                    // inherits it warm, and `noise_field` measures it on demand — free,
+                    // since the loop is memory-bound and the pixel is read/written either
+                    // way (117.2 vs 117.5 ms per eight 3008x3008x3 frames, x86). Taken
+                    // before the mean moves, or the deviation would be measured against a
+                    // mean already holding this sample; outliers are dropped by the
+                    // observer itself — see `observe_scale_guarded`.
                     pixel.offered = pixel.offered.saturating_add(1);
                     pixel.observe_scale_guarded(val - pixel.mean, &alphas);
 
@@ -283,13 +282,12 @@ impl MasterStack {
 
     /// [`Self::compute`], plus the stack's coverage map, from one read of the accumulator.
     ///
-    /// The per-frame path: this is what the render task carries to the filters, which
-    /// read coverage and nothing else. The full per-pixel variance ([`Self::noise_field`])
-    /// is measured on demand instead — reducing its three planes here cost as much again
-    /// as the display copy itself, on the thread that drops camera frames when it falls
-    /// behind, for a quantity no filter reads. Coverage comes from the first plane only:
-    /// the border a sub leaves is the same in every channel. It counts subs that reached
-    /// each place, not subs kept there — see `coverage_row`.
+    /// The per-frame path: the render task carries this to filters that read only
+    /// coverage. Full per-pixel variance ([`Self::noise_field`]) is measured on
+    /// demand instead — reducing its three planes here cost as much again as the
+    /// display copy itself, on the thread that drops camera frames when it falls
+    /// behind, for a quantity no filter reads. Coverage comes from the first
+    /// plane only (every channel's border is the same); it counts subs that reached each place, not subs kept there — see `coverage_row`.
     pub fn compute_with_coverage(&self) -> Result<(Frame, NoiseField)> {
         if self.frame_count == 0 {
             return Err(StackError::EmptyStack);
@@ -335,25 +333,13 @@ impl MasterStack {
     }
 
     /// Per-pixel variance of the stacked mean, block-reduced — see [`NoiseField`].
-    ///
-    /// `m2` is an exponentially weighted mean of squared deviation over *offered*
-    /// samples, i.e. the current single-sub variance; dividing by `count` turns it into
-    /// the error of the mean this stack reports. Three approximations ride on that and
-    /// each is small enough to name rather than correct:
-    ///
-    /// - The mean is weighted, so exactly `SE^2 = sigma^2 * sum(w^2)/sum(w)^2`. The
-    ///   accumulator does not keep `sum(w^2)` and must not grow to; with near-equal
-    ///   quality weights that reduces to the form used here.
-    /// - Clipped samples enter `m2` winsorised at the threshold, so a pixel that clips
-    ///   often reads slightly low. That is the right bias: a cosmic ray is not noise the
-    ///   denoiser has to survive.
-    /// - `m2` remembers about `SCALE_WINDOW` samples while `count` remembers all of
-    ///   them, so after a real change in sky brightness the ratio is wrong for roughly
-    ///   that many frames.
-    ///
-    /// A block **median**, not a mean: a star's shot noise and its registration jitter
-    /// are real per-pixel variance but not what a sky threshold is asking about, and a
-    /// mean over 64 samples lets one of them set the block.
+    /// `m2` is an EWMA of squared deviation over *offered* samples; `/count`
+    /// approximates the mean's error via three shortcuts: near-equal weights
+    /// stand in for the exact `SE^2 = sigma^2*sum(w^2)/sum(w)^2` (no `sum(w^2)`
+    /// kept); winsorised clips bias `m2` low on purpose (a cosmic ray isn't real
+    /// noise); and `m2`'s `SCALE_WINDOW`-frame memory vs `count`'s all-time one
+    /// lags after a real sky change. Block **median**, not mean — one of 64
+    /// samples' shot noise/jitter would otherwise set the block.
     pub fn noise_field(&self) -> NoiseField {
         let (w, h, c) = (self.width, self.height, self.channels);
         let r = crate::frame::NOISE_REDUCTION;

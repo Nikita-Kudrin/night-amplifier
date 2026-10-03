@@ -6,15 +6,11 @@ export const FIT_SETTLE_MS = 500
 
 /**
  * Fits the view once the layout has settled after the viewport changed shape.
- *
- * Leaving fullscreen and rotating land before the browser has laid the container
- * out, so a fit on the event — or a fixed delay after it — can measure the size
- * being left. `requestFit` arms instead: while armed, every real change of the
- * container's size fits. If none arrives (the container kept its size, or its
- * reshape was reported before the event), one fit runs when the window closes.
- *
- * Unarmed reshapes are ignored: a sidebar drag must not throw away the user's
- * framing. Listeners stay the caller's to register, as with `useFullscreen`.
+ * Leaving fullscreen and rotating land before the browser re-lays the container,
+ * so fitting on the event risks measuring the size being left. `requestFit` arms
+ * instead: any real size change while armed fits, or one fit runs when the window
+ * closes. Unarmed reshapes are ignored (sidebar drags keep the user's framing);
+ * listeners stay the caller's to register, as with `useFullscreen`.
  */
 export function useAutoFit({fit, settleMs = FIT_SETTLE_MS}) {
     let settleTimer = null

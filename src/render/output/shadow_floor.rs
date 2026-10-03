@@ -70,15 +70,14 @@ impl ShadowFloor {
     }
 }
 
-/// [`ShadowFloor::apply`] resampled onto a table, for the per-pixel path. The curve
-/// costs a `ln` and an `exp` — fused into the scale LUT (paid 8192 times per slider
-/// position, never again) the common path is free; run directly over a 1440² frame
-/// it would be six million of each, per frame. Used by the encoder's row tail when
-/// saturation boost has pushed the floor out of that LUT.
+/// [`ShadowFloor::apply`] resampled onto a table, for the per-pixel path. The curve costs
+/// a `ln` and an `exp`; fused into the scale LUT (paid 8192 times per slider position,
+/// never again) the common path is free, but run directly over a 1440² frame it would be
+/// six million of each, per frame. Used by the encoder's row tail when saturation boost has pushed the floor out of that LUT.
 ///
-/// 4096 entries, linear interpolation — matching the scale LUT's sizing rationale:
-/// the curve's shape lives below `depth` (~0.05), so a coarser table would still
-/// resolve the clip with a handful of samples.
+/// 4096 entries, linear interpolation — matching the scale LUT's sizing rationale: the
+/// curve's shape lives below `depth` (~0.05), so a coarser table would still resolve the
+/// clip with a handful of samples.
 pub struct ShadowFloorTable {
     entries: Vec<f32>,
 }

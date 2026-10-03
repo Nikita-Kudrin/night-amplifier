@@ -1,13 +1,11 @@
 //! Push-To as pipeline tasks, like storage and render: dedicated threads fed by one-slot
 //! channels. Frames for plate solving are never queued, and the plugin's synchronous work
-//! (star detection, the FITS write) runs on these threads rather than holding a server
-//! runtime worker.
-//!
-//! Two consumers because the plugin has two claims that run at once: a solve can wait on
-//! ASTAP for minutes, and the movement watch must keep seeing frames meanwhile to notice a
-//! slew. A producer hands a frame only to an idle consumer (`QueueDepth::try_claim_idle`,
-//! the render gate's rule) and drops it otherwise. Spawning a task per offer instead kept
-//! 27 of 32 frames alive, the oldest 5.7 s stale, whenever solve and watch were both busy.
+//! (star detection, the FITS write) runs on these threads rather than a server runtime
+//! worker. Two consumers because the plugin has two claims running at once: a solve can
+//! wait on ASTAP for minutes, and the movement watch must keep seeing frames meanwhile to
+//! notice a slew. A producer hands a frame only to an idle consumer
+//! (`QueueDepth::try_claim_idle`, the render gate's rule) and drops it otherwise —
+//! spawning a task per offer instead kept 27 of 32 frames alive, the oldest 5.7 s stale.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};

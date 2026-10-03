@@ -1,12 +1,10 @@
-//! Debayering (demosaicing): converts single-channel Bayer CFA data from colour
-//! astronomy cameras into full RGB, since each sensor pixel has only one colour
-//! filter. The four 2x2 patterns (named by top-left arrangement): RGGB (most common
-//! in astro cameras), BGGR, GRBG, GBRG.
+//! Debayering (demosaicing): converts single-channel Bayer CFA data to full RGB, since
+//! each sensor pixel has only one colour filter. The four 2x2 patterns (named by
+//! top-left arrangement): RGGB (most common in astro cameras), BGGR, GRBG, GBRG.
 //!
-//! Algorithms: **Bilinear** (fast neighbour averaging, for live stacking), **VNG**
-//! (edge-aware, better for final output), **Superpixel** (one RGB pixel per 2x2 quad,
-//! no interpolation, half resolution). Submodules: `pattern`, `detection` (auto
-//! pattern detection), `algorithms`.
+//! Algorithms: **Bilinear** (fast, for live stacking), **VNG** (edge-aware, better for
+//! final output), **Superpixel** (one RGB pixel per 2x2 quad, half resolution).
+//! Submodules: `pattern`, `detection` (auto pattern detection), `algorithms`.
 
 mod algorithms;
 mod detection;
@@ -147,13 +145,10 @@ pub fn debayer_with_config(frame: &Frame, config: DebayerConfig) -> Result<Frame
 /// skipping the intermediate f32 `Frame`.
 ///
 /// # Errors
-/// `ChannelMismatch` unless the frame is single-channel — not redundant with
-/// [`Debayerer::debayer`]'s check, since this bypasses `Debayerer` entirely and a
-/// 3-channel frame would otherwise be silently demosaiced out of its red plane with
-/// nothing faulting (`frame.data()` starts at plane 0, a Bayer walk over `width *
-/// height` stays in bounds). No in-tree production caller as of 2026-08 (the
-/// streaming encoder debayers at capture instead); kept as public API and because
-/// `layout_tests` uses it for interleaved-write coverage its f32 sibling lacks.
+/// `ChannelMismatch` unless single-channel — bypasses `Debayerer` entirely, so without this
+/// check a 3-channel frame demosaics silently from its red plane (`frame.data()` starts at
+/// plane 0, stays in bounds over `width * height`). No in-tree caller as of 2026-08; kept
+/// for `layout_tests`'s interleaved-write coverage the f32 sibling lacks.
 pub fn debayer_bilinear_to_rgb8_fast(frame: &Frame, pattern: CfaPattern) -> Result<Vec<u8>> {
     if frame.channels() != 1 {
         return Err(StackError::ChannelMismatch {

@@ -80,12 +80,10 @@ pub struct AppState {
     /// exposing, and its stop switch. "Exposing" decides the plate-solve source with an
     /// atomic load on the stacking thread — see `capture::solving::SolveSource`.
     ///
-    /// Deliberately not "a guide camera is connected". The two diverge in both
-    /// directions: a cooled guide camera stays registered for the whole of its warm-up
-    /// with its loop already stopped, and `connect` can return before a loop that then
-    /// fails to start. Either way presence answered "the guide camera is solving" when
-    /// nothing was, and the imaging camera stood down for nothing. Only `guide_task`
-    /// registers and unregisters loops.
+    /// Deliberately not "a guide camera is connected": a cooled guide camera stays
+    /// registered through its whole warm-up with its loop already stopped, and
+    /// `connect` can return before a loop that then fails to start — either way,
+    /// presence once answered "solving" when nothing was. Only `guide_task` (un)registers loops.
     pub guide_loops: guide_loop::GuideLoops,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
@@ -376,13 +374,12 @@ impl AppState {
 
     /// End a capture pipeline: `Idle`, unless it has been paused for recovery.
     ///
-    /// A pipeline that ended on a device fault has already been suspended by the time it
-    /// stops, and marking it `Idle` would tell the UI the session was over. So has one that
-    /// never got going because its camera failed again between a reopen and the resume —
-    /// the slot is recovering and the plan is still there — and ending that one discarded
-    /// the plan the recovery under way would have resumed. Any other end is final, so the
-    /// resume plan and the parked stack go with it: left behind, the next quiet recovery of
-    /// the idle camera restarted a capture the observer saw end.
+    /// A pipeline ended by a device fault is already suspended, and marking it `Idle`
+    /// would tell the UI the session was over — same for one that never got going
+    /// because its camera failed again between reopen and resume (slot recovering,
+    /// plan still there); ending that would discard the plan recovery needs. Any other
+    /// end is final, so the resume plan and parked stack go with it: left behind, the
+    /// next quiet recovery of the idle camera restarted a capture the observer saw end.
     pub async fn end_capture_state(&self) {
         let recovering = self.slot(CameraRole::Main).is_recovering()
             && self.session_resume_plan.read().await.is_some();

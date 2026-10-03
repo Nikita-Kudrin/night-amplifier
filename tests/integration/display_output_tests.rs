@@ -1,18 +1,11 @@
-//! Tests for the display output path: the black floor and dither that
-//! the fused encoders apply where a frame becomes 8-bit, and the resolution the
-//! lossless stream encodes into.
+//! Tests for the display output path: the black floor and dither the fused encoders apply
+//! at the 8-bit boundary, and the resolution the lossless stream encodes into.
 //!
-//! These measure the quantity that actually predicts what an observer sees at
-//! the eyepiece — sky sigma expressed in **output 8-bit levels**, taken from the
-//! bytes that reach the browser rather than from the linear frame. Every other
-//! measurement in this repo is taken before the stretch, where it says nothing
-//! about visible grain.
-//!
-//! Both fixtures are measured, not just the square one. They are the two ends of
-//! the case: an IMX533 at 3008² arrives at a 1440 screen with a 2.1x downsample
-//! of free averaging available, an IMX464 at 2712x1538 with essentially none —
-//! so a change that only helps because of the resample shows up as helping one
-//! and not the other.
+//! Measures sky sigma in **output 8-bit levels** from the bytes reaching the browser, not
+//! the linear frame (every other measurement here is pre-stretch and says nothing about
+//! visible grain). Both fixtures run: IMX533 at 3008² gets a 2.1x downsample to a 1440
+//! screen (free averaging), IMX464 at 2712x1538 gets essentially none — so a resample-only
+//! win shows on one and not the other.
 
 use std::path::Path;
 
@@ -165,17 +158,14 @@ fn encode(
     (bytes, w as usize, h as usize)
 }
 
-/// The headline number for Tier 0, reported rather than only bounded so a
-/// regression is legible instead of just red.
+/// The headline number for Tier 0, reported rather than only bounded so a regression is
+/// legible instead of just red.
 ///
-/// Encoding into the viewport the eyepiece actually displays is an area average;
-/// leaving the browser to minify a near-native frame is a four-tap bilinear
-/// filter that discards most of that averaging as aliasing.
-///
-/// Denoising is switched off here on purpose: this measures what the *resample*
-/// is worth, and leaving the filters on made the printed figures a mixture of
-/// the two — which is how the numbers quoted in `AGENTS.md` came to describe a
-/// configuration the test no longer ran.
+/// Encoding into the viewport is an area average; leaving the browser to minify a
+/// near-native frame is a four-tap bilinear filter that discards most of that averaging as
+/// aliasing. Denoising is off on purpose: this measures what the *resample* alone is worth
+/// — filters on mixed the two, which is how `AGENTS.md`'s numbers came to describe a config
+/// this test no longer runs.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -491,14 +481,11 @@ fn measure_setting(fixture: &Fixture, black_floor: f32, darker_sky: bool) -> Opt
 
 /// The darkening half of the black floor, measured end to end on real frames.
 ///
-/// Headline figures are printed as well as bounded, because "the sky got 70 %
-/// darker and the target kept its contrast" is the whole claim and a red test
-/// that does not say which half moved is not much use at three in the morning.
-///
-/// The bounds are deliberately loose against the measured values — the point is
-/// to catch the curve being wired up wrongly or drifting out from under the
-/// settings, not to pin numbers that legitimately move when the stretch is
-/// retuned.
+/// Headline figures are printed as well as bounded: "the sky got 70% darker and the target
+/// kept its contrast" is the whole claim, and a red test that doesn't say which half moved
+/// isn't much use at three in the morning. Bounds are deliberately loose against measured
+/// values, to catch the curve wired up wrongly or drifting from the settings — not to pin
+/// numbers that legitimately move when the stretch is retuned.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -801,25 +788,14 @@ fn a_negative_floor_without_auto_stretch_leaves_the_stream_alone() {
     );
 }
 
-/// The floor rides the scale LUT when contrast does, and follows contrast out
-/// into the encoder's row tail when saturation boost pushes it out. Two code
-/// paths, one setting — so they have to agree, or the slider means one thing in
-/// Community and another in Pro.
+/// The floor follows contrast's path: fused into the LUT or the encoder's deferred row tail.
+/// One setting, two code paths that must agree, or the slider means different things in
+/// Community and Pro — reachable here since the split follows the saturation *flag*, not the
+/// plugin, so the floor still takes the deferred path even when the boost itself is a no-op.
 ///
-/// Reachable from here because the split is decided by the saturation *flag*,
-/// not by the plugin: with the flag set and no Pro plugin registered, the boost
-/// itself is a no-op while the floor still takes the deferred path.
-///
-/// # Why this is measured against a control rather than against zero
-///
-/// Fusing contrast into the scale LUT already disagrees with running it as its
-/// own pass, on highlights where a channel clips: one path clamps once at the
-/// end, the other clamps between the two stages, and a star whose red channel
-/// saturates comes out with a different green. `probe_fused_render_clamp_
-/// difference` calls that accepted divergence, and it is worth 34 output levels
-/// on the brightest handful of pixels here *with no floor configured at all*.
-/// So the question this test can answer is not "do the two paths agree" — they
-/// already did not — but "does adding the floor make them agree any less".
+/// Measured against a control, not zero: `probe_fused_render_clamp_difference` already shows
+/// fused and deferred contrast disagreeing by 34 levels on clipping highlights with the floor
+/// off — so this only asks whether adding the floor makes that disagreement worse.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -828,17 +804,14 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
     /// rather than a rounding step.
     const FLOOR_PATH_TOLERANCE: i32 = 4;
 
-    /// Share of samples allowed past that, and the mean disagreement allowed over the
-    /// whole frame.
+    /// Share of samples allowed past that, and the mean disagreement allowed over the whole
+    /// frame.
     ///
-    /// Bounds on the body of the distribution rather than on its worst sample. The two
-    /// orders differ by tens of levels on a few dozen of 6.2 M samples — bright star
-    /// cores, where one path clips a step before the other — and that is true with the
-    /// floor off, with it on, and on the code this test was written against (33 levels
-    /// there, 39 here once the chroma denoiser stopped flattening star colour). It is
-    /// worth its own look, but it is not what this test is for: a floor applied in the
-    /// wrong place or order moves the *sky*, which is most of the frame, and that shows
-    /// up in these two numbers.
+    /// Bounds the body of the distribution, not the worst sample: the two orders differ by
+    /// tens of levels on a few dozen of 6.2 M samples (bright star cores where one path clips
+    /// a step before the other) — true with the floor off, on, and at 33 levels when written
+    /// (39 now that the chroma denoiser stopped flattening star colour). A floor in the wrong
+    /// place/order moves the *sky* instead, which is what these two numbers catch.
     const FLOOR_PATH_MAX_SHARE: f64 = 0.001;
     const FLOOR_PATH_MAX_MEAN: f64 = 0.1;
 

@@ -119,14 +119,12 @@ pub fn offer_plate_solve(
 
 /// Run the movement watch on `frame` while a solve is in flight: the Push-To watch task's
 /// job. Returns without looking if no solve is running, the watch ran too recently, or
-/// `source` stopped being the solve source.
-///
-/// `source` is re-checked immediately before dispatch. Neither
-/// `PushToSolverPlugin::observe_frame` nor `process_new_frame` is told which camera
-/// produced its frame — `ProPushToPlugin::look()` scales and mutates the one shared
-/// `MovementDetector` for whatever arrives — so a frame from a camera that stopped being
-/// the source (a guide camera connected or disconnected since the offer) reads as the new
-/// rig's telescope having moved and can abort a solve that just started.
+/// `source` stopped being the solve source. Re-checked immediately before dispatch:
+/// neither `PushToSolverPlugin::observe_frame` nor `process_new_frame` is told which
+/// camera produced its frame — `ProPushToPlugin::look()` scales and mutates the one
+/// shared `MovementDetector` for whatever arrives — so a frame from a camera that
+/// stopped being the source (a guide camera connected or disconnected since the offer)
+/// reads as the new rig's telescope having moved and can abort a solve that just started.
 pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: SolveSource) {
     if !source.is_active(state.guide_holds_solving()) {
         debug!(?source, "Plate solve watch skipped: no longer the active solve source");

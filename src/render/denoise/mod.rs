@@ -1,29 +1,11 @@
-//! Spatial denoising: the boundary, not the filters.
-//!
-//! The filters themselves are a Pro feature and live in `night-amplifier-pro`'s
-//! `plugins::denoise`. What stays here is what Community has to own either way: the
-//! config the encoders read, the buffer pool the render thread lends the filters, the
-//! trait they arrive through, and the gates that decide whether they run at all.
-//! Without the plugin `DenoiseConfig` is always [`DenoiseConfig::OFF`] and the encoders
-//! take their fused per-row path, which is byte-identical to the pre-denoise output
-//! rather than merely equivalent.
-//!
-//! The filters run at **stream resolution** inside the encoders, not in the render
-//! pipeline: the pipeline's frame is sensor resolution (9MP on IMX533) against a 1440²
-//! eyepiece, so denoising and then discarding 3/4 of it is 4.5x the DRAM traffic for
-//! nothing (576MB/frame vs ~128MB at display size), and the encoder's downsample is
-//! itself a 2x noise reduction that eases their job. They sit between downsample and
-//! tone curve (staged by `server::encoding::fused`), in linear light because the
-//! stretch has not run yet — post-tone-curve the same noise spans wildly different
-//! amplitudes by brightness and one threshold could not describe it.
-//!
-//! The configs below carry numbers somebody tuned by looking at a picture. **Community
-//! never fills them in**: every `Default` here is off, and the values come from the
-//! plugin along with the code that earned them.
-//!
-//! The AI denoiser is the exception to "linear light": it runs after the stretch, from
-//! its own plugin — see [`ai`]. Which unit runs it (NPU, GPU, CPU) is the plugin's
-//! hardware benchmark; [`ai_compute`] carries its report and the observer's choice.
+//! Spatial denoising: the boundary, not the filters. Filters live in Pro's
+//! `plugins::denoise`; Community owns the config, buffer pool, trait and gates — without
+//! the plugin, `DenoiseConfig` is always [`DenoiseConfig::OFF`] (byte-identical fused
+//! path). Filters run at **stream resolution**, not pipeline resolution: sensor is 9MP
+//! (IMX533) vs a 1440² eyepiece, so denoising then discarding 3/4 costs 4.5x the DRAM
+//! traffic (576MB/frame vs ~128MB); pre-stretch, in linear light, since post-stretch the
+//! same noise spans wildly different amplitudes by brightness. AI denoising alone runs
+//! post-stretch via its own plugin ([`ai`]); [`ai_compute`] carries its NPU/GPU/CPU pick.
 
 pub mod ai;
 pub mod ai_compute;
@@ -170,17 +152,13 @@ impl DenoiseConfig {
 /// Both halves are here because both are tuning: which thresholds a dial position means
 /// is no more a Community decision than what the filter does with them.
 pub trait DenoisePlugin: Send + Sync {
-    /// Map the observer's controls onto the config the encoders read.
-    ///
-    /// `aggressiveness` is the stretch profile, which changes what the luma filter is
-    /// being asked for — a field of stars has no nebulosity to protect. The Planetary
-    /// gate is applied by the caller before this is reached, so no plugin can get it
-    /// wrong.
-    ///
-    /// `settings.ai` is true exactly when the network runs on this frame, not merely when
-    /// the observer asked for it ([`config_for`]): the filters hand it the scales it
-    /// covers, and must not give them up to a network that is not there. Leave the
-    /// returned `ai` off; Community fills it from [`AI_DENOISE_PLUGIN`].
+    /// Map the observer's controls onto the config the encoders read. `aggressiveness` is
+    /// the stretch profile, changing what the luma filter is asked for — a field of stars
+    /// has no nebulosity to protect, and the Planetary gate is applied by the caller before
+    /// this is reached, so no plugin can get it wrong. `settings.ai` is true exactly when
+    /// the network runs this frame, not merely when asked ([`config_for`]): filters hand it
+    /// the scales it covers and must not give them up to a network that isn't there. Leave
+    /// the returned `ai` off; Community fills it from [`AI_DENOISE_PLUGIN`].
     fn config(
         &self,
         settings: &crate::server::state::DenoiseSettings,
@@ -197,14 +175,13 @@ pub trait DenoisePlugin: Send + Sync {
     fn grain_split(&self, settings: &crate::server::state::DenoiseSettings) -> f32;
 
     /// Denoise one staged interleaved RGB f32 image in place, at output resolution, in
-    /// linear light. `buf` is `width * height * 3` samples.
-    ///
-    /// `noise` is the stack's coverage — the share of its subs that reached each place —
-    /// already resampled onto *this image's* grid by the encoder that owns the resample
-    /// kernel; see [`crate::frame::NoiseField`]. It carries no variance plane on this path.
-    /// `None` whenever no accumulator stands behind the frame (live view, the guide camera,
-    /// planetary, comet) or every sub covered all of it, which is the common case: the
-    /// filters' own global estimates have to stay first-class, not a degraded mode.
+    /// linear light. `buf` is `width * height * 3` samples. `noise` is the stack's
+    /// coverage — the share of subs that reached each place — already resampled onto
+    /// *this image's* grid by the encoder owning the resample kernel; see
+    /// [`crate::frame::NoiseField`]. It carries no variance plane here. `None` whenever no
+    /// accumulator stands behind the frame (live view, guide camera, planetary, comet) or
+    /// every sub covered all of it — the common case, where the filters' own global
+    /// estimates stay first-class, not a degraded mode.
     fn denoise_rgb_interleaved(
         &self,
         buf: &mut [f32],
@@ -222,14 +199,11 @@ pub static DENOISE_PLUGIN: OnceLock<Box<dyn DenoisePlugin>> = OnceLock::new();
 /// Reusable working buffers for one denoise pass. At 1440² a pass touches ~75MB
 /// (staged interleaved RGB, three planar channels, three more for the transform),
 /// freshly zero-initialised and dropped per payload per frame — measured 13ms of the
-/// 20ms denoising adds to an encode (page faults, not arithmetic).
-///
-/// Owned by the render task's thread and passed down, not thread-local: the inline
-/// encode priming a newly-connected client runs on a pooled tokio blocking thread, where
-/// a thread-local would strand 75MB per thread the pool ever grows to.
-///
-/// Memory ownership rather than logic, so it stays in Community even though only the
-/// plugin reads most of it. The `planes` + `aux` shape is part of the trait contract.
+/// 20ms denoising adds to an encode (page faults, not arithmetic). Owned by the render
+/// task's thread and passed down, not thread-local: a thread-local would strand 75MB
+/// per thread the pool ever grows to, since the inline encode priming a newly-connected
+/// client runs on a pooled tokio blocking thread. Memory ownership, not logic, keeps it
+/// in Community though only the plugin reads most of it; `planes`+`aux` is the trait contract.
 #[derive(Default)]
 pub struct DenoiseScratch {
     /// Interleaved RGB at output resolution, between the resample and the tone curve.

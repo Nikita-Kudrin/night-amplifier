@@ -1,13 +1,11 @@
 <script setup>
 /**
- * Sensor corrections and noise reduction: raw-mosaic corrections (pre-demosaic)
- * and the spatial filters the encoders run at view resolution — the two groups
- * that decide image cleanliness before anything cosmetic. Extracted from
- * `SettingsPanel.vue`, which had grown past the point its sections were findable.
+ * Sensor corrections and noise reduction: raw-mosaic corrections (pre-demosaic) and the
+ * spatial filters run at view resolution — the two groups deciding image cleanliness
+ * before anything cosmetic. Extracted from `SettingsPanel.vue` once its sections grew hard to find.
  *
- * Edits a local mirror, not the props, and emits `apply(key, value)` when a
- * control commits (a toggle immediately, a slider at drag end) — the parent
- * stays the single owner of the settings object and persistence.
+ * Edits a local mirror, emitting `apply(key, value)` on commit (toggle immediately,
+ * slider at drag end) — the parent stays sole owner of the settings.
  */
 import {computed, reactive, watch} from 'vue'
 import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'

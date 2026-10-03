@@ -1,12 +1,11 @@
 //! The sky shadow, without a whole-image luminance and guide plane.
 //!
-//! The shadow reads a 3x3 neighbourhood of the *tail's* output, which is why it used to
-//! force the staged traversal: a 1440² frame as f32 plus two guide planes, ~40 MB, and
-//! +2.5 ms per encode on x86 with denoise off. Here each parallel chunk renders its rows
-//! plus one context row either side, so a worker holds ~34 rows. The denoised path feeds
-//! its staged image in as a row source too. The sky is measured on the same fixed sample
-//! rows as `apply_sky_shadow_interleaved`, the whole-image reference, so the bytes agree
-//! (`sky_shadow_streaming_matches_staged`, `sky_shadow_after_denoise_matches_the_whole_image_reference`).
+//! Reads a 3x3 neighbourhood of the *tail's* output — why it used to force the staged
+//! traversal (a 1440² frame as f32 plus two guide planes, ~40 MB, +2.5 ms per encode on
+//! x86 with denoise off). Each parallel chunk now renders its rows plus one context row
+//! either side, so a worker holds ~34 rows; the denoised path feeds its staged image in
+//! as a row source too. Measured on the same fixed sample rows as
+//! `apply_sky_shadow_interleaved` so the bytes agree with the whole-image reference.
 
 use std::cell::RefCell;
 

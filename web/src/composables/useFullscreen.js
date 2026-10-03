@@ -1,22 +1,12 @@
 import {ref} from 'vue'
 
 /**
- * Fullscreen state for one element.
- *
- * `isFullscreen` follows the `fullscreenchange` event rather than the click that
- * asked for it: `requestFullscreen()` can be refused, and the browser leaves
- * fullscreen on its own (Esc, a gesture, another element taking over), so the
- * request is not the state. It is also what makes the transitions observable —
- * `onChange` fires on the false -> true and true -> false edges only.
- *
- * `onChange` runs after the browser confirms, which is the point: the viewport
- * is still the old size until then, so a fit-all driven from the click would fit
- * to the window it just left. Leaving fullscreen shrinks the viewport the same
- * way, so it needs the same fit.
- *
- * The `fullscreenchange` listener stays the caller's to register — the two views
- * using this already own a `document` listener each, and a composable-owned hook
- * would not survive `usePanZoom()` being called outside a component in its tests.
+ * Fullscreen state for one element. `isFullscreen` tracks `fullscreenchange`, not the click:
+ * `requestFullscreen()` can be refused, and the browser can exit on its own (Esc, gesture, takeover).
+ * `onChange` fires only on those resulting edges, after the browser confirms — so callers
+ * that fit to the viewport must wait for it, since the size is still the old one until then.
+ * The listener stays the caller's to register: both views here already own a `document` listener,
+ * and a composable-owned hook wouldn't survive `usePanZoom()` running outside a component in tests.
  */
 export function useFullscreen({onChange} = {}) {
     const isFullscreen = ref(false)

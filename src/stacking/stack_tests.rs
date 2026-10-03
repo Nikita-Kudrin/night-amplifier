@@ -592,15 +592,13 @@ fn a_collapsed_pixel_reads_as_unmeasured_rather_than_clean() {
 }
 
 /// Each plane's noise must come from that plane's own pixels, at every height.
-///
-/// A block row is 8 image rows, and a height that is not a multiple of 8 leaves the last
-/// block row of each plane short. Traversing the whole buffer in 8-row stripes instead of
-/// plane by plane then straddles planes — the first cells of the second plane read the
-/// tail of the first, and where the stripe count and the field's row count diverge `zip`
-/// silently drops the last rows — while the two computing paths agree with each other
-/// because both are wrong. So this checks against the noise that was put in, per plane,
-/// at heights that leave 1, 4 and 7 rows over (17 is the one a median cannot mask: its
-/// stripe count differs from the field's row count outright), and at one that leaves none.
+/// A block row is 8 image rows; a height not a multiple of 8 leaves the last
+/// block row short. Traversing in 8-row stripes instead of plane-by-plane
+/// straddles planes — stripe 2's first cells read plane 1's tail, and where
+/// stripe/row counts diverge `zip` silently drops the last rows — while both
+/// paths agree because both are wrong. Checked against the noise put in, per
+/// plane, at heights leaving 1, 4, 7 rows over (17 differs outright in
+/// stripe vs row count) and one leaving none.
 #[test]
 fn every_plane_reads_its_own_noise_at_any_height() {
     for h in [17usize, 20, 23, 24] {

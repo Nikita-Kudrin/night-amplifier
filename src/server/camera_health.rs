@@ -1,14 +1,11 @@
-//! One fault detector for the whole server. Three places can discover a camera has
-//! stopped answering — the capture loop's frame and status-poll watchdogs, and the
-//! camera-session monitor's cooler poll — seeing the same hardware through
-//! different code paths, so a fault alternating between them is still one fault.
+//! One fault detector for the whole server: the capture loop's frame and status-poll
+//! watchdogs, and the camera-session monitor's cooler poll, see the same hardware
+//! through different paths, so a fault alternating between them is still one fault.
 //!
 //! Everything deciding "persistently unresponsive" lives here: the threshold, the
-//! per-camera streak (`AppState.consecutive_watchdog_timeouts`, keyed by role and name), and the escalation
-//! event. A counter per call site instead would need each site to independently
-//! reach the threshold, letting a camera failing every other poll stay "healthy".
-//! So does the per-camera record of whether restarting a stalled stream in place still
-//! works (`RestartHistory`), which decides how soon a stall reopens the camera.
+//! per-camera streak (`AppState.consecutive_watchdog_timeouts`, keyed by role+name), and
+//! the escalation event — a counter per call site would let a camera failing every other
+//! poll stay "healthy". Also the per-camera `RestartHistory` of whether an in-place restart still works, deciding how soon a stall reopens the camera.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

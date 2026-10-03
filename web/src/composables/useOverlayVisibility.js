@@ -22,26 +22,20 @@ const CONTROL_SELECTOR = 'button, a, input, select, [data-overlay-control]'
 /**
  * How long after a touch to disown the mouse events that follow it.
  *
- * A browser replays every touch as a compatibility `mousedown`/`mouseup` pair
- * unless the touch handler calls `preventDefault()` — which the live view cannot,
- * since its touch listeners are passive. Both views bind touch *and* mouse, so one
- * tap arrived as two presses and the toggle undid itself: the controls never moved
- * on a phone, the one device the whole fade exists for. 700ms covers the ~300ms
- * click delay a non-`touch-action`-managed page can still impose, with margin.
+ * A browser replays every touch as a `mousedown`/`mouseup` pair unless
+ * `preventDefault()` is called — which the live view can't, since its touch
+ * listeners are passive. Both views bind touch *and* mouse, so one tap became two
+ * presses and undid the toggle; 700ms covers the ~300ms click delay a page can still impose.
  */
 const GHOST_MOUSE_MS = 700
 
 /**
  * Visibility of the controls layered over a streamed image.
  *
- * The image is the point of these views, so the buttons and readouts fade out
- * `idleMs` after the last interaction. A tap on the image brings them back, and a
- * second tap puts them away again — the toggle decides from the visibility at
- * *press* time, not release, because the press itself may have shown them.
- *
- * Presses that land on a control, and gestures still in flight, only refresh the
- * countdown. Hiding the controls out from under the finger using them is the one
- * thing this must not do.
+ * The image is the point, so buttons/readouts fade `idleMs` after the last interaction;
+ * a tap brings them back, a second hides them again. The toggle reads visibility at
+ * *press* time, not release, since the press may have shown them — a press on a
+ * control, or a gesture still in flight, only refreshes the countdown, never hiding them.
  */
 export function useOverlayVisibility({idleMs = IDLE_HIDE_MS} = {}) {
     const visible = ref(true)

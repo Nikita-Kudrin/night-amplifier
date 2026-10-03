@@ -173,14 +173,12 @@ fn luminance(r: f32, g: f32, b: f32) -> f32 {
 
 /// # Rounding
 ///
-/// Uses [`crate::frame::sample_to_u8`], the same conversion PNG, JPEG (SA10) and
-/// LZ4 (SA08/SA09) go through, so one frame produces the same 8-bit samples whichever
-/// output it is written to. This truncated instead (`* 255.0 as u8`), which put every
-/// SER sample up to one LSB below the same frame's PNG.
-///
-/// [`encode_16bit`] deliberately keeps its own truncating conversion: it agrees with
-/// `write_fits_u16`, so the two 16-bit writers match each other. Aligning it with the
-/// 8-bit rounding would move SER and FITS apart rather than together.
+/// Uses [`crate::frame::sample_to_u8`], the same conversion PNG, JPEG (SA10) and LZ4
+/// (SA08/SA09) go through, so one frame produces the same 8-bit samples everywhere —
+/// this used to truncate (`* 255.0 as u8`), putting every SER sample up to one LSB
+/// below the same frame's PNG. [`encode_16bit`] keeps its own truncating conversion
+/// instead, matching `write_fits_u16` so the two 16-bit writers agree with each
+/// other.
 fn encode_8bit(frame: &Frame, header: &SerHeader) -> Vec<u8> {
     use crate::frame::sample_to_u8 as to_u8;
 

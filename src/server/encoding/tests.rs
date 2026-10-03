@@ -1476,26 +1476,14 @@ fn a_resampled_noise_field_matches_the_encoder_it_describes() {
     );
 }
 
-/// How much the tap energy varies across the output grid decides whether working in
-/// *relative* noise is enough on its own — a factor common to every output pixel
-/// cancels in a ratio, one that varies does not.
-///
-/// Two regimes, and they differ by more than the difference between them looks:
-///
-/// - **At the shipped eyepiece geometry** (3008 -> 1440, 2.089x) the interior varies
-///   1.037x in variance, i.e. 1.018x in sigma. There the sharpen is off entirely
-///   (`SHARPEN_NONE_FROM` is 1.9x) and the tent alone is very nearly phase-invariant,
-///   which is what makes a relative field a ~2 % approximation.
-/// - **Near unity** (1538 -> 1440, 1.068x) it reaches 1.28x in variance, 1.13x in sigma.
-///   That is the `[-a, 1+2a, -a]` sharpen: its negative lobes raise `sum(w^2)` sharply
-///   and by an amount that moves with the phase. A relative field is a ~13 %
-///   approximation there, not a ~2 % one, so anything reading the map *absolutely*
-///   matters more at IMX464's near-unity ratio than at IMX533's.
-///
-/// Both bounds are measured, not derived. The first output pixel is excluded: the frame
-/// edge renormalises its footprint after dropping out-of-range samples and reads 1.16x
-/// the interior on its own, which is real, carried correctly by the resample, and not
-/// where anybody reads sky noise.
+/// Tap-energy variation across the output grid decides whether *relative* noise alone
+/// is enough — a factor common to every pixel cancels in a ratio, one that varies does
+/// not. Measured, not derived: at the shipped eyepiece geometry (3008->1440, 2.089x)
+/// variance varies 1.037x (1.018x sigma) with sharpen off (`SHARPEN_NONE_FROM` 1.9x), so
+/// relative is a ~2% approximation; near unity (1538->1440, 1.068x) it reaches 1.28x
+/// (1.13x sigma) under the `[-a,1+2a,-a]` sharpen's phase-dependent `sum(w^2)`, ~13% off —
+/// worse at IMX464's near-unity ratio than IMX533's. First pixel excluded: edge
+/// renormalization reads 1.16x the interior, real but not where sky noise is read.
 #[test]
 fn the_tap_phase_variation_is_small_where_the_sharpen_is_off() {
     use super::axis_taps::AxisTaps;

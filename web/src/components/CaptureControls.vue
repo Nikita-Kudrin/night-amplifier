@@ -257,14 +257,10 @@ const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: s
 /**
  * Whether entering Focus/Finder mode would damage a stack already being integrated.
  *
- * One of the six settings it drops (row/column pattern removal) runs before demosaic, so
- * the frames the accumulator integrates lose their banding correction — and averaging is
- * exactly what cannot take that back out. The backend refuses this with a 409; the toggle
- * is disabled so nobody has to read the error to find out.
- *
- * Mirrors the backend's exemptions: live view accumulates nothing, planetary never runs
- * that correction, and a stopping capture takes no new frames (`mainCapturing` excludes
- * it). Leaving is never blocked, hence the `!focusMode` term.
+ * Row/column pattern removal (one of six dropped settings) runs before demosaic, so
+ * integrated frames lose banding correction that averaging can't undo. Backend refuses
+ * with 409; disabling the toggle spares the user that error. Mirrors backend exemptions —
+ * live view, planetary, and a stopping capture — leaving is never blocked (`!focusMode`).
  */
 const focusModeBlocked = computed(
     () =>

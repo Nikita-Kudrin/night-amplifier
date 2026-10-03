@@ -1,28 +1,11 @@
-//! Cross-frame reuse of the preview pipeline's estimates. `process_preview_frame`
-//! computes three *statistical descriptions of the stack*, not the frame itself:
-//! white-balance multipliers, the background model, and the per-channel median/MAD
-//! the stretch solves against. The frame they describe moves by only 1/N between
-//! renders (a running mean over N subs), so recomputing all three every frame is
-//! most of the render thread's linear cost — 6.4ms of `process_preview_frame`'s
-//! 11.2ms on an IMX464-shaped frame with Community's bilinear background (Pro's RBF
-//! costs several times more). Everything touching pixels stays uncached —
-//! neutralisation, model subtraction, black point all still run every frame.
-//!
-//! Invalidated by: **live view** (`showing_stack` false, nothing to reuse), **a
-//! settings change** ([`AnalysisKey`] fingerprints every setting read, as bit
-//! patterns so NaN can't pin the cache open), **a shape change** (binning/ROI/
-//! superpixel), and **stack growth** — MAD falls as `1/sqrt(N)`, so what matters is
-//! *relative* change in N (1->2 subs halves noise, 140->141 moves nothing).
-//! [`DEPTH_GROWTH`] refreshes on proportional growth; [`MAX_AGE_FRAMES`] caps reuse
-//! regardless, so a stalled stack still refreshes against a moving sky.
-//!
-//! **A reused MAD is carried to the frame's depth** ([`NoiseTrend`]). Held as measured,
-//! it met a tone curve whose depth gain advances every frame, and the render pulsed at
-//! each refresh: M27 at depth 24-30, target 99.2 → 98.1 output levels over five reused
-//! frames then 103.1, sky grain 2.54 → 2.32 then 2.45. Measuring every frame instead
-//! is worse: the fresh MAD reads a reused model's mismatch as noise, and a bright sub
-//! entering Andromeda's stack took its target from 164 to 136 levels until the next
-//! refresh. The snapshot stays one consistent set; only its noise is extrapolated.
+//! Cross-frame reuse of three *stack-level* estimates (white balance, background
+//! model, median/MAD) that move only 1/N per render; recomputing them costs 6.4ms of
+//! 11.2ms render time on an IMX464 frame with bilinear background (Pro's RBF costs
+//! more; pixel work like neutralisation/subtraction/black-point stays uncached).
+//! Invalidated by live view, a settings change ([`AnalysisKey`], NaN-safe bit
+//! fingerprint), a shape change, or stack growth (MAD falls as `1/sqrt(N)`: 1->2
+//! subs halves noise, 140->141 nothing) — bounded by [`DEPTH_GROWTH`]/[`MAX_AGE_FRAMES`].
+//! A reused MAD is carried to frame depth ([`NoiseTrend`]) rather than measured fresh, which once pulsed the tone curve each refresh (M27 depth 24-30, grain 2.54→2.32→2.45).
 
 use crate::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel};
 use crate::error::Result;

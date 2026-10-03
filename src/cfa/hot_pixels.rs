@@ -1,29 +1,11 @@
-//! Hot-pixel rejection on the raw mosaic. The IMX533 fixture carries 5,189 pixels
-//! persistently above 20 sigma, 2,191 above 50 — stacking can't touch them (same spot
-//! every sub) and debayering spreads each into a coloured 3x3 cross, so this must run
-//! pre-demosaic.
+//! Hot-pixel rejection on the raw mosaic, pre-demosaic (debayering spreads each into a coloured
+//! 3x3 cross). IMX533 fixture: 5,189 pixels persistently >20 sigma, 2,191 >50.
 //!
-//! The obvious test, `|centre - median(3x3)| > tau`, fires on every star core (a tight
-//! star legitimately sits >5 sigma above its neighbours). Fixed two ways: **one-sided**
-//! (only a *brighter* sample is a candidate — a dark defect needs a master dark
-//! instead), and **isolation-gated multiplicatively** (`centre - max(neighbours) > tau`
-//! alone still clips a bright star's core, since 38% of a 200-sigma peak is 76 sigma —
-//! testing the *fraction* above background makes the gate independent of brightness).
-//!
-//! Uses eight [`f32::max`] rather than a median-of-9 (a 19-comparator network): the
-//! brightest neighbour *is* the second-brightest of the 3x3 whenever the centre is
-//! brightest, the only case this filter acts on, and vectorizes better on NEON for
-//! ~1/3 the work. Skips the usual de-interleave into planar buffers too — two 36MB
-//! copies/frame is real DRAM traffic on a Pi 5 against a pipeline already at
-//! ~833MB/frame; strided reads across row triples touch the same cache lines without
-//! the copies.
-//!
-//! The background and noise it thresholds against are re-measured on every frame. They
-//! used to be cached for 32 frames, but a gain or exposure change moves both at once:
-//! guide subs going from 5 s/g376 to 0.5 s/g123 had 1 sample corrected instead of 165
-//! and stopped plate-solving, and the reverse clipped ~70k noise samples a frame. A
-//! 4,096-sample estimate chose 92-100% of the same corrections as 32,768 on guide, lens
-//! and 250 mm frames, at a small fraction of the cost.
+//! `|centre - median(3x3)| > tau` fires on star cores too, so it's **one-sided** and
+//! **isolation-gated multiplicatively**: 38% of a 200-sigma peak is 76 sigma, so the gate
+//! tests the *fraction* above background instead. Uses eight [`f32::max`] over median-of-9 —
+//! ~1/3 the work on NEON — skips de-interleaving to save DRAM (2x36MB/frame on a Pi 5 at
+//! ~833MB/frame already), and re-measures every frame at 4,096 samples (92-100% of 32,768's).
 
 use rayon::prelude::*;
 
@@ -135,19 +117,14 @@ pub fn reject_hot_pixels(cfa: &mut CfaFrame, config: &HotPixelConfig) -> Result<
         .collect();
     stats.sites_skipped = thresholds.iter().filter(|t| t.is_none()).count();
 
-    // One sweep per row parity, not per colour site: the four Bayer sites are two
-    // pairs sharing a row parity — `(0,0)`/`(1,0)` and `(0,1)`/`(1,1)` read the same
-    // three rows — so a loop over `origins()` walks the 36MB mosaic four times instead
-    // of two, each pass using only half of every cache line it reads. Grouping by row
-    // parity makes each row triple one DRAM fetch serving both x parities.
+    // One sweep per row parity, not per colour site: the four Bayer sites are two pairs sharing a
+    // row parity (`(0,0)`/`(1,0)` and `(0,1)`/`(1,1)` read the same three rows), so grouping this
+    // way makes each row triple one DRAM fetch instead of walking the 36MB mosaic four times.
     //
-    // **Worth nothing on x86, as expected**: 112.8ms vs 112.3ms at 3008x3008, inside
-    // the noise — with 20 cores the stage is compute-bound (8 `max` + 3 compares per
-    // sample), not bandwidth-bound. Kept for the same reason `render::simd` keeps NEON
-    // kernels on x86 evidence it doesn't trust: a Pi 5 has a fifth of the cores and
-    // bandwidth, which flips that balance. Detection still reads the frame before
-    // replacements apply, so a corrected sample never feeds its neighbours' test,
-    // regardless of how rayon split the rows.
+    // **Worth nothing on x86, as expected**: 112.8ms vs 112.3ms at 3008x3008, inside the noise —
+    // with 20 cores the stage is compute-bound (8 `max` + 3 compares/sample), not bandwidth-bound.
+    // Kept because a Pi 5 has a fifth of the cores and bandwidth, flipping that balance. Detection
+    // still reads the frame before replacements apply, so corrections never feed neighbours' tests.
     let corrections: Vec<(usize, f32)> = {
         let data = cfa.frame().data();
         let scan_rows: Vec<(usize, usize)> = (0..step)

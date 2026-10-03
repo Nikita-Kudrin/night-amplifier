@@ -1,12 +1,10 @@
-//! Tests for the raw-CFA stage: hot-pixel rejection, row/column FPN removal and
-//! superpixel debayering, measured on the fixtures they were designed against.
+//! Tests for the raw-CFA stage: hot-pixel rejection, row/column FPN removal and superpixel
+//! debayering, measured on the fixtures they were designed against.
 //!
-//! The two corrections here target defects **stacking cannot remove**: a hot
-//! pixel and a readout offset land in the same place in every sub, so averaging
-//! frames leaves them exactly where they were. Sky sigma therefore says almost
-//! nothing about whether they worked, which is why these tests measure the
-//! defects directly — line-median excess for FPN, and star count and FWHM from
-//! the real detector for the hot-pixel filter.
+//! The two corrections target defects **stacking cannot remove**: a hot pixel and a readout
+//! offset land in the same place in every sub, so averaging leaves them exactly where they
+//! were. Sky sigma says almost nothing about whether they worked, so these tests measure the
+//! defects directly — line-median excess for FPN, star count and FWHM for the hot-pixel filter.
 
 use std::path::Path;
 
@@ -149,17 +147,14 @@ fn line_spread(frame: &Frame, origin: (usize, usize), horizontal: bool) -> LineS
     }
 }
 
-/// T1.3's acceptance test: the measured row and column excess must fall to the
-/// pure-noise prediction.
+/// T1.3's acceptance test: the row and column excess must fall to the pure-noise prediction.
 ///
-/// Both figures are reported because they say different things. The *total*
-/// excess is what the plan's fixture table measured (5.9 ADU per row, 6.7 per
-/// column on this sensor) and this reproduces it — but on this fixture nearly
-/// all of the column figure turns out to be smooth structure across the frame
-/// rather than per-column readout offsets: the high-frequency part of it
-/// measures at the noise floor, while a quarter of the row figure survives that
-/// test. The correction removes both, which is why it is skipped for planetary
-/// targets, where a bright disc fills enough of each line to move its level.
+/// Both figures are reported because they differ: the *total* excess reproduces the plan's
+/// fixture table (5.9 ADU/row, 6.7/column on this sensor), but nearly all of the column
+/// figure here is smooth structure across the frame, not per-column readout offset — its
+/// high-frequency part sits at the noise floor, while a quarter of the row figure survives
+/// that test. The correction removes both, so it's skipped for planetary targets, where a
+/// bright disc fills enough of each line to move its level.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]

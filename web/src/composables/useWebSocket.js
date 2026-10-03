@@ -145,12 +145,10 @@ export function useWebSocket(path, options = {}) {
     /**
      * Schedule a reconnection attempt. Never gives up.
      *
-     * The attempt count used to be capped, which meant a client that could not reach the
-     * server for thirty seconds stayed dead until someone reloaded the page. On the
-     * kiosk display that runs `/eyepiece_quality` there is no keyboard to reload with, so
-     * a restarted server left a black screen at the telescope for the rest of the night.
-     * The backoff ceiling, not a cap, is what keeps a server that is down until morning
-     * from being polled every second.
+     * The attempt count used to be capped: a client unreachable for thirty seconds stayed
+     * dead until reloaded — no keyboard to do that on the kiosk running `/eyepiece_quality`,
+     * so a restarted server left it black till morning. The backoff ceiling (not a cap) is
+     * what keeps a server down till morning from being polled every second instead.
      */
     function scheduleReconnect() {
         clearTimeout(reconnectTimer)
@@ -596,11 +594,8 @@ export function useEventStream() {
 
 /**
  * WebSocket composable for the image streams: receives JPEG (SA10) or RGB8+LZ4 (SA09)
- * frames, exposing `frameData` and `dimensions`.
- *
- * The server decides the size from the Streaming Resolution settings and sends every
- * client of an endpoint the same frame, so there is nothing to negotiate here.
- *
+ * frames, exposing `frameData`/`dimensions`. The server decides size from the Streaming
+ * Resolution settings and sends every client of an endpoint the same frame — nothing to negotiate here.
  * @param {object} options - Stream options
  * @param {string} options.endpoint - WebSocket endpoint (default: '/ws/stream')
  * @returns {object} Image stream state and methods

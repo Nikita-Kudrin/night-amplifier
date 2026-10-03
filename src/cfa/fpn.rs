@@ -1,15 +1,11 @@
-//! Row and column fixed-pattern noise removal on the raw mosaic: sensor readout gives
-//! every row and column a small offset (5.9/6.7 ADU per row/column on IMX533, 39/31 on
-//! IMX464) that does **not** average down with stacking — after 35 subs random noise
-//! is 14 ADU, the pattern still 6, ~40% of what's left. Nothing downstream removes it:
-//! background extraction models a smooth gradient, a wavelet denoiser only smears it.
+//! Row/column fixed-pattern noise removal on the raw mosaic: readout gives every row/column a
+//! small offset (5.9/6.7 ADU on IMX533, 39/31 on IMX464) that doesn't average down with stacking
+//! — after 35 subs random noise is 14 ADU, the pattern still 6, ~40% of what's left. Nothing
+//! downstream removes it (background models a smooth gradient; a wavelet denoiser only smears it).
 //!
-//! Correction: per colour site, high-pass each row's median and subtract, then the
-//! same by column on the row-corrected data. **The high-pass is load-bearing** —
-//! subtracting against a whole-site reference (the first version) removed real
-//! low-frequency structure too, draining 5.2% of the Dumbbell's flux; high-passed, the
-//! same measurement moves 0.008%. Sites are corrected independently — the four Bayer
-//! sites sit at different levels.
+//! Correction: per colour site, high-pass each row's median and subtract, then the same by
+//! column. **High-pass is load-bearing** — a whole-site reference drained 5.2% of the Dumbbell's
+//! flux removing real low-frequency structure too; high-passed, the same measurement moves 0.008%.
 
 use rayon::prelude::*;
 
@@ -198,13 +194,11 @@ fn axis_offsets(medians: &[[f32; MAX_STEP]], step: usize) -> Vec<[f32; MAX_STEP]
 /// How far line `k` sits above its own neighbourhood: `x[k]` minus a centred moving
 /// average of even order `2 * radius`, shrinking symmetrically at the borders.
 ///
-/// The even order is the point, not an implementation detail — it annihilates a
-/// period-2 component exactly, and odd/even line readout (the classic CMOS defect) is
-/// period 2. A median filter is worse than useless: an odd-width median has a strict
-/// alternation as a *root*, reproducing the pattern with zero residual; an odd-width
-/// mean leaves about half of it behind. Summed as differences from `x[k]`, not as
-/// `x[k] - mean(window)`, so an already-level line yields exactly zero rather than an
-/// ULP of it — keeping the correction a genuine no-op where there's no pattern.
+/// The even order is the point: it annihilates a period-2 component exactly, and odd/even
+/// line readout (the classic CMOS defect) is period 2. A median filter is worse than useless
+/// — an odd-width median has a strict alternation as a *root*, reproducing the pattern with
+/// zero residual, and an odd-width mean leaves about half of it behind. Summed as differences
+/// from `x[k]`, so an already-level line yields exactly zero rather than an ULP of it.
 fn line_excess(sequence: &[f32], k: usize, radius: usize) -> f32 {
     let radius = radius.min(k).min(sequence.len() - 1 - k);
     if radius == 0 {
@@ -301,13 +295,10 @@ mod tests {
         frame
     }
 
-    /// Spread of the *differences between adjacent lines of one colour site* —
-    /// fixed-pattern noise proper, what this filter exists to remove. Two things are
-    /// load-bearing: it's per **site** (a whole-row median mixes the two x-parities,
-    /// whose differing offsets would read as residual no per-site correction could
-    /// remove), and it's the line-to-line half, not the total (the correction is a
-    /// high-pass, so asserting on the total means asserting real gradients get
-    /// flattened too — the behaviour that drained 5% of the Dumbbell's flux).
+    /// Spread of the *differences between adjacent lines of one colour site* — fixed-pattern noise
+    /// proper, what this filter exists to remove. Per **site** (a whole-row median mixes the two
+    /// x-parities' differing offsets as residual), and the line-to-line half, not the total
+    /// (asserting on the total also flattens real gradients — drained 5% of the Dumbbell's flux).
     ///
     /// Doesn't go to zero: the column pass runs on the row-corrected frame and
     /// perturbs the row medians in turn, so roughly seven-fold is what both passes

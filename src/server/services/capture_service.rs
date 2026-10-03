@@ -186,13 +186,12 @@ impl CaptureService {
 
     /// Leave Focus/Finder mode if the capture about to run would stack under it.
     ///
-    /// The mode drops a raw-mosaic correction, and a stack integrated without it can never
-    /// be cleaned again — so a stacking session must never begin under it. `update_settings`
-    /// refuses to *enter* the mode while stacking; this closes the other order, where the
-    /// observer was already focusing and then pressed Start. Live view keeps the mode.
-    ///
-    /// Silent by design: it restores the observer's own values at the moment they start
-    /// mattering, and the `SettingsUpdated` broadcast moves the toggle in every client.
+    /// The mode drops a raw-mosaic correction, and a stack integrated without it can
+    /// never be cleaned again. `update_settings` refuses to *enter* the mode while
+    /// stacking; this closes the other order, where the observer was already focusing
+    /// and then pressed Start (live view keeps the mode). Silent by design: it restores
+    /// the observer's own values at the moment they start mattering, and the
+    /// `SettingsUpdated` broadcast moves the toggle in every client.
     async fn leave_focus_mode_for_capture(state: &Arc<AppState>) {
         // Both callers have just moved the state to `Starting`; a resume has already
         // restored the plan's stacking mode (`reconnect::restore_settings`).
@@ -204,15 +203,13 @@ impl CaptureService {
         }
     }
 
-    /// Restart the capture a device fault interrupted, in the mode it was
-    /// running in and on top of the stack it had already accumulated.
+    /// Restart the capture a device fault interrupted, in the mode it was running in
+    /// and on top of the stack it had already accumulated.
     ///
-    /// Deliberately not `start_capture`: that resets the session counters and
-    /// opens a new raw-frame directory, which for a live-stacking session means
-    /// throwing away the whole point of the last hour.
-    ///
+    /// Deliberately not `start_capture`: that resets the session counters and opens a
+    /// new raw-frame directory, throwing away a live-stacking session's last hour.
     /// Only a capture paused for recovery resumes, and it leaves the pause with one
-    /// compare-and-set: a Stop or a Disconnect that ends the pause first makes this
+    /// compare-and-set: a Stop or Disconnect that ends the pause first makes this
     /// `CaptureNotPaused` instead of a capture restarted behind the observer's back.
     pub async fn resume_capture(state: &Arc<AppState>, plan: &SessionResumePlan) -> ApiResult<()> {
         {

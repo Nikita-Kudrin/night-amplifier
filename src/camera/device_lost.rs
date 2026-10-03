@@ -1,15 +1,11 @@
-//! One canonical signal for "the vendor SDK says this device is gone". The decision
-//! has to be made inside the shim, where the vendor's error is still an enum/`i32` —
-//! by the time it reaches [`CameraError`](crate::camera::CameraError) it's a rendered
-//! string, and providers don't render alike (PlayerOne prints its enum symbolically,
-//! ZWO/SVBony/QHY/ToupTek print a bare number), so matching substrings after the fact
-//! worked for exactly one provider.
+//! One canonical signal for "the vendor SDK says this device is gone". The decision must be made
+//! inside the shim, while the vendor error is still an enum/`i32` — by the time it reaches
+//! [`CameraError`](crate::camera::CameraError) it's a rendered string, and providers render unalike
+//! (PlayerOne's enum is symbolic, others print a bare number), so substring matching worked for exactly one provider.
 //!
-//! Each shim instead classifies its own code and, for device-loss, prepends [`MARKER`]
-//! — a token this codebase writes and reads, with no vendor vocabulary.
-//! `is_sdk_disconnected` looks for that token plus the typed variants. A provider with
-//! no distinct device-loss code (QHY's generic `QHYCCD_ERROR`) never marks; those
-//! faults are still caught one layer up by the watchdog timeouts.
+//! Each shim instead classifies its own code and, for device-loss, prepends [`MARKER`] — a token
+//! this codebase writes and reads, no vendor vocabulary. `is_sdk_disconnected` checks for that
+//! token plus the typed variants; QHY's generic `QHYCCD_ERROR` never marks, but watchdog timeouts still catch it.
 
 use std::fmt::Display;
 

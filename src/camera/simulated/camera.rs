@@ -524,16 +524,14 @@ mod tests {
         writer.write_image_data(&pixels).unwrap();
     }
 
-    /// A colour source must reach `RawFrame` interleaved, and the mono formats must
-    /// carry the luminance of each pixel's own channels.
+    /// A colour source must reach `RawFrame` interleaved, and the mono formats must carry
+    /// the luminance of each pixel's own channels.
     ///
-    /// `Frame` is planar, so `frame.data().chunks(channels)` — what this path used
-    /// before — hands back three horizontally-neighbouring samples of *one* plane
-    /// instead of one pixel's RGB. With a constant-colour source that turns the Raw16
-    /// luminance into a copy of R for the first third of the buffer, then G, then B,
-    /// and makes the Rgb24 buffer plane-major while it is tagged interleaved. Every
-    /// bundled fixture is 1-channel, where the two layouts coincide, so nothing else
-    /// covers this.
+    /// `Frame` is planar, so `frame.data().chunks(channels)` — what this path used before —
+    /// hands back three horizontally-neighbouring samples of *one* plane, not one pixel's
+    /// RGB. With a constant-colour source that turns Raw16 luminance into a copy of R for
+    /// the first third of the buffer, then G, then B, and leaves the Rgb24 buffer
+    /// plane-major while tagged interleaved. Every bundled fixture is 1-channel, where the two layouts coincide, so nothing else covers this.
     #[test]
     fn colour_source_capture_is_interleaved_and_luma_is_per_pixel() {
         let (w, h) = (8u32, 4u32);

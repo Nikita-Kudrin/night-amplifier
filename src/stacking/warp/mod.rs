@@ -59,16 +59,14 @@ pub fn warp_frame_into(
     warp_planes(frame, transform, output, border_value)
 }
 
-/// The plane dispatch both public entry points share — one place, so the dimension
-/// guard below can't end up missing from one copy. `warp_frame` and `warp_frame_into`
-/// differ only in where the destination comes from.
-///
-/// Sub-2px frames are rejected, not clamped: row kernels derive their upper bound as
-/// `width - 2` (bilinear reads `(x0,y0)` through `(x0+1,y0+1)`), which underflows on
-/// `usize` for `width < 2` — a debug build panics, a release build wraps to ~1.8e19
-/// and sends `bilinear_interpolate_direct_1ch` past the plane's end. Saturating to
-/// zero instead would silently return an all-border frame; there's no meaningful
-/// bilinear result on a frame with no interior, so the caller should hear about it.
+/// The plane dispatch both public entry points share — one place, so the
+/// dimension guard below can't be missing from one copy (`warp_frame` and
+/// `warp_frame_into` differ only in where the destination comes from).
+/// Sub-2px frames are rejected, not clamped: row kernels derive their upper
+/// bound as `width - 2` (bilinear reads `(x0,y0)` through `(x0+1,y0+1)`),
+/// underflowing `usize` below `width < 2` — panics in debug, wraps to ~1.8e19
+/// in release, and sends `bilinear_interpolate_direct_1ch` past the plane's
+/// end. Saturating to zero would silently return an all-border frame with no interior to interpolate — the caller should hear about it instead.
 fn warp_planes(
     frame: &Frame,
     transform: &AffineTransform,

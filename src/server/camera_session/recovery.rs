@@ -1,15 +1,11 @@
 //! Quiet recovery: a camera that drops out is suspended, not disconnected.
 //!
-//! Every dropout on 2026-09-07 was back within seconds, yet each one tore the session
-//! down — camera removed, selection cleared, guide stream blanked, solver re-pointed,
-//! "Disconnected" on screen — and then waited a fixed 5 s. Twice the observer clicked
-//! Connect in that window, which cancelled the recovery outright.
-//!
-//! Suspending keeps everything the UI and the solver are looking at, drops only the
-//! dead handle, and lets the supervisor (`reconnect`) reopen the device under the same
-//! entry. The ladder from there: nothing reaches the user unless the reconnect takes
-//! longer than `reconnect::NOTICE_AFTER`, and a full teardown happens only when it
-//! gives up. The slot's [`Recovery`] state is the single record of where this stands.
+//! Every dropout on 2026-09-07 was back within seconds, yet each tore the session down
+//! (handle removed, guide blanked, solver re-pointed) after a fixed 5 s wait — twice
+//! the observer's Connect click landed in that window and cancelled recovery outright.
+//! Suspending keeps the UI/solver's view intact and lets `reconnect` reopen the device
+//! under the same entry; nothing reaches the user unless that exceeds
+//! `reconnect::NOTICE_AFTER`. The slot's [`Recovery`] state records where this stands.
 
 use std::sync::Arc;
 
@@ -147,13 +143,11 @@ pub(super) async fn give_up(
 /// Reopen the camera `recorded` describes, for the reconnect supervisor.
 ///
 /// Never by position alone: the device list is re-enumerated, only devices that can be
-/// this camera are tried (see `identity::recovery_candidates`), and the opened handle
-/// must match before it replaces the suspended entry. An index reopen is how, on
-/// 2026-09-07, the imaging camera came back as the guide camera.
+/// this camera are tried (`identity::recovery_candidates`), and the opened handle must
+/// match before it replaces the suspended entry — an index reopen is how the imaging camera came back as the guide camera on 2026-09-07.
 ///
-/// Holds the connect lock from open to install, and re-checks the slot once the open
-/// returns: `disconnect` waits on that lock, so an observer's Disconnect can no longer
-/// land mid-open and be undone by the install.
+/// Holds the connect lock from open to install and re-checks the slot after open
+/// returns, so an observer's Disconnect can't land mid-open and be undone by install.
 pub(super) async fn reopen_for_recovery(
     state: &Arc<AppState>,
     recorded: &ConnectedCameraInfo,

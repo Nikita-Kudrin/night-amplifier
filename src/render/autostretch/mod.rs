@@ -162,16 +162,13 @@ pub fn prepare_auto_stretch_frame(
     prepare_auto_stretch_frame_with_stats(frame, config, &stats)
 }
 
-/// [`prepare_auto_stretch_frame`] against statistics the caller already holds.
+/// [`prepare_auto_stretch_frame`] against statistics the caller already holds. Splitting
+/// measurement from the solve lets the render task reuse one set of statistics across
+/// several frames of the same stack; see `server::capture::analysis` for when that's sound.
 ///
-/// Splitting the measurement from the solve is what lets the render task reuse one set
-/// of statistics across several frames of the same stack; see
-/// `server::capture::analysis` for when that is sound.
-///
-/// **The statistics must describe the frame as it is now** — after neutralisation,
-/// background subtraction and SCNR — because the black point they yield is subtracted
-/// from it. Handing in statistics measured before those stages would remove a pedestal
-/// the frame no longer has.
+/// **Statistics must describe the frame as it is now** — after neutralisation, background
+/// subtraction and SCNR — since the black point they yield is subtracted from it;
+/// measuring before those stages would remove a pedestal the frame no longer has.
 pub fn prepare_auto_stretch_frame_with_stats(
     frame: &mut Frame,
     config: AutoStretchConfig,

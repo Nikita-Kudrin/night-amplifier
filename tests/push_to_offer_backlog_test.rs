@@ -1,13 +1,11 @@
 //! Frames offered to Push-To must never queue, and a long solve must not starve the watch.
 //!
 //! Review of a2f89e5 (2026-09-16): offers were spawned as tasks on a two-worker runtime,
-//! and the cadence floors are stamped only when an offer runs `try_begin_*`. With a solve
-//! and a watch both inside synchronous detection, every offer past a floor queued with a
-//! full frame — 2026-09-14's guide frames are ~50 MB — 27 of 32 alive at once, the oldest
-//! reaching the plugin 5.7 s stale. `push_to_tasks` hands a frame only to an idle consumer.
-//!
-//! One test in its own binary: it registers into the process-global `PUSH_TO_PLUGIN`, as
-//! `push_to_runtime_isolation_test` does.
+//! and cadence floors stamped only when an offer ran `try_begin_*`. With a solve and a
+//! watch both inside synchronous detection, every offer past a floor queued with a full
+//! frame — 2026-09-14's guide frames are ~50 MB — 27 of 32 alive at once, the oldest 5.7s
+//! stale by the time it reached the plugin. `push_to_tasks` now hands a frame only to an
+//! idle consumer. One test, in its own binary, mirrors `push_to_runtime_isolation_test`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};

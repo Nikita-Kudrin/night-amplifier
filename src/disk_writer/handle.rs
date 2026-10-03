@@ -373,14 +373,12 @@ impl DiskWriterHandle {
 
 /// A session path under `raw_dir` that no earlier session is already using.
 ///
-/// The timestamp has one-second resolution, and a session can be rolled far faster than
-/// that — flipping capture mode twice inside a second used to land back on the first
-/// folder. `create_dir_all` succeeds silently on an existing directory, so the two
-/// segments merged, and for a planetary session `SerWriter::create` truncated the
-/// `capture.ser` the first one had written.
+/// The timestamp has one-second resolution and a session can roll faster than
+/// that — flipping capture mode twice inside a second used to land back on the
+/// first folder. `create_dir_all` succeeds silently on an existing directory, so
+/// the two sessions merged, and for planetary `SerWriter::create` truncated the first one's `capture.ser`.
 ///
-/// The counter goes *before* the suffix so the name still ends with the mode it names —
-/// `CaptureMode::from_session_dir_name` reads it with `ends_with`.
+/// The counter goes *before* the suffix so the name still ends with the mode it names — `CaptureMode::from_session_dir_name` reads it with `ends_with`.
 fn unused_session_path(raw_dir: &Path, timestamp: &str, name_suffix: &str) -> PathBuf {
     let first = raw_dir.join(format!("{}{}", timestamp, name_suffix));
     if !first.exists() {

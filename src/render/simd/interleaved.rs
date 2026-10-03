@@ -9,13 +9,12 @@ use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
 ///
-/// Fuses black point subtraction, luminance calculation, and tone mapping/contrast scaling
-/// into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a scale factor
-/// and hold at least two entries; `scale_lut[0]` must be the `L → 0` limit of the curve's
-/// scale factor, not zero, or the faintest signal is crushed to pure black.
+/// Fuses black point subtraction, luminance calculation, and tone mapping/contrast
+/// scaling into a single pass. The `scale_lut` must map input luminance `[0, 1]` to a
+/// scale factor and hold at least two entries; `scale_lut[0]` must be the `L → 0` limit
+/// of the curve's scale factor, not zero, or the faintest signal crushes to pure black.
 ///
-/// This operates on whatever slice it is given, so callers are expected to drive it over
-/// `par_chunks_mut` of whole rows — see `apply_fused_stretch_frame`.
+/// Operates on whatever slice it is given — callers drive it over `par_chunks_mut` of whole rows; see `apply_fused_stretch_frame`.
 #[inline]
 pub fn apply_luminance_scale_lut_simd(
     data: &mut [f32],

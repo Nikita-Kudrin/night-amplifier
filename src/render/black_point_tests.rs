@@ -264,21 +264,14 @@ fn the_sky_estimate_holds_still_as_a_stack_deepens() {
     );
 }
 
-/// The sky estimate must track a background far narrower than a histogram bin, at every
-/// level — not just at the two the first version of this test happened to sample.
+/// The sky estimate must track a background far narrower than a histogram bin, at
+/// every level — not just the two points the first version of this test sampled.
 ///
-/// A 71-frame stack has a sky sigma around 3.4e-5 of full scale (2.2 ADU of a 16-bit
-/// frame) against 2.4e-4 bins (16 ADU). Two failure modes live in here and only a sweep
-/// finds both:
-///
-/// * reporting the bin centre makes the mode a step function of stack depth, so the black
-///   point (`mode - k * sigma`) jumps 16 ADU against a target only 30 ADU above sky;
-/// * the five-wide smoothing turns that narrow sky into a plateau, and taking its first
-///   strict maximum puts `peak_bin` two bins low — which the refinement cannot recover
-///   from, because its window no longer contains the samples.
-///
-/// The second only shows at the sky levels where the distribution sits wholly inside one
-/// bin, which is 2 positions in 21. Sweeping a whole bin in tenths is what catches it.
+/// A 71-frame stack's sky sigma is ~3.4e-5 of full scale (2.2 ADU) against 2.4e-4 bins
+/// (16 ADU). Two failure modes, found only by sweeping: the bin-centre report makes
+/// mode a step function of depth, jumping the black point 16 ADU against a target only
+/// 30 ADU above sky; and five-wide smoothing plateaus the narrow sky, putting the first
+/// strict-max `peak_bin` two bins low, past what the refinement window can recover.
 #[test]
 fn background_mode_tracks_a_sky_narrower_than_a_histogram_bin() {
     // 2.0e-5 is 1.3 ADU, the sky sigma measured on a 71-frame stack. The value matters:
@@ -358,17 +351,14 @@ fn target_over_sky(width: usize, height: usize, sky: f32, sigma: f32, share: f32
     Frame::from_f32_vec(data, width, height, 3).unwrap()
 }
 
-/// A target filling most of the frame must not drag the sky estimate up with it.
-///
-/// The histogram passes already handle this — the sky is the densest bin whatever else
-/// is in frame. What does not is sizing the refinement window from a MAD over *every*
-/// sample: a MAD is robust while the contaminant is a minority, and a frame-filling
-/// halo is not, so the window swallows the target and its median lands inside it.
-/// Measured before the spread was taken from the samples below the peak: +7.25 ADU at
-/// 60 % and +349 ADU at 75 %, against a raw histogram peak 1.4 ADU off the sky.
-///
-/// Swept rather than sampled at one share, because the failure only appears once the
-/// target passes half the frame and then grows fast.
+/// A target filling most of the frame must not drag the sky estimate up with it. The
+/// histogram passes handle this already (the sky is always the densest bin), but sizing
+/// the refinement window from a MAD over *every* sample doesn't: a MAD is robust only
+/// while the contaminant is a minority, so a frame-filling halo gets swallowed into the
+/// window and drags its median with it. Before the spread was taken from samples below
+/// the peak: +7.25 ADU at 60%, +349 ADU at 75% target coverage, against a raw histogram
+/// peak only 1.4 ADU off sky. Swept rather than sampled at one share, since the failure
+/// only appears once the target passes half the frame, then grows fast.
 #[test]
 fn a_frame_filling_target_does_not_drag_the_sky_estimate() {
     const SKY: f32 = 0.0023;
@@ -396,18 +386,14 @@ fn a_frame_filling_target_does_not_drag_the_sky_estimate() {
     );
 }
 
-/// The window is sized from a one-sided spread, so the constant that turns it into a
-/// sigma has to be right: a half-normal's quartile is `0.3186 * sigma` (its median,
-/// `0.6745`, is the MAD constant). A sky with no target in it is where that is
-/// checkable against the sigma it was built with.
-///
-/// Swept across the whole range of sky widths a real frame reaches, in histogram bins
-/// (a bin is 1/4095 of full scale, ~16 ADU): a 106-sub IMX533 stack sits near 0.06
-/// bins, a single sub on a high-gain camera at 3-4, and the estimator has to be as
-/// accurate at both. A fixed cap on the window was the other candidate fix for
-/// `a_population_darker_than_the_sky_does_not_drag_the_estimate` and is what this
-/// sweep rejects: capping at the refinement window's own four bins reads 12.75 ADU low
-/// at the wide end, where the quartile reads 0.85 low.
+/// The window is sized from a one-sided spread, so the constant turning it into sigma
+/// must be right: a half-normal's quartile is `0.3186 * sigma` (its median, `0.6745`,
+/// is the MAD constant) — checkable on a sky with no target, against the sigma it was
+/// built with. Swept across the sky widths a real frame reaches, in histogram bins (1
+/// bin = 1/4095 of full scale, ~16 ADU): a 106-sub IMX533 stack sits near 0.06 bins, a
+/// single high-gain sub at 3-4. The alternate fix — a fixed cap on the window, tried for
+/// `a_population_darker_than_the_sky_does_not_drag_the_estimate` — reads 12.75 ADU low
+/// at the wide end instead, where the quartile reads 0.85 low.
 #[test]
 fn the_window_is_scaled_to_one_sigma_of_the_sky_it_measures() {
     const LEVEL: f32 = 0.0023;
@@ -462,18 +448,14 @@ fn sky_under_a_clipped_floor(width: usize, height: usize, sky: f32, sigma: f32, 
     Frame::from_f32_vec(data, width, height, 3).unwrap()
 }
 
-/// The other half of `a_frame_filling_target_does_not_drag_the_sky_estimate`, and the
-/// one the one-sided spread is *not* automatically safe against.
-///
-/// A target is brighter than its sky, so the samples below the peak cannot see it. A
-/// clipped or vignetted region is darker, so they see nothing else: it piles up at the
-/// far end of the one-sided spread and takes the window with it. Measured with the
-/// spread as a median: -1.43 ADU at 40 % of the frame, -4.95 at 50 %, and -150.73 at
-/// 60 % — the whole sky, the window having grown wide enough to put its own median
-/// among the zeros. The quartile (`CENTRE_SPREAD_QUANTILE`) survives to 60 %.
-///
-/// Swept, like its sibling, because the failure only appears once the contaminant
-/// passes half of what the spread reads and then collapses at once.
+/// Inverse of `a_frame_filling_target_does_not_drag_the_sky_estimate`: a target is
+/// brighter than sky, so the one-sided spread's samples below the peak never see it —
+/// but a clipped or vignetted region is darker, so they see nothing else. It piles up
+/// at the spread's far end and takes the window with it. Measured with the spread as a
+/// median: -1.43 ADU at 40% of frame, -4.95 at 50%, -150.73 at 60% (whole sky, window
+/// wide enough to put its own median among the zeros). The quartile
+/// (`CENTRE_SPREAD_QUANTILE`) survives to 60%; swept, since the failure appears only
+/// once the contaminant passes half the spread, then collapses.
 #[test]
 fn a_population_darker_than_the_sky_does_not_drag_the_estimate() {
     const SKY: f32 = 0.0023;

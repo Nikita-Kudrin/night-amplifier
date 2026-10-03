@@ -452,15 +452,12 @@ pub struct Star {
 
 /// The `count` brightest isolated, point-like stars, found on `plane`.
 ///
-/// Positions are found once on the *un-denoised* render and reused for every variant, so
-/// a profile difference is the render's and not the finder's.
-///
-/// Three rejections, all of which were needed before the profile looked like a star at
-/// all on M27's dense field: a maximum must stand clear of its own 34-46 px surround
-/// (not sit on nebulosity, which is most of the frame's bright local maxima), it must
-/// actually be point-like by r=9, and nothing else accepted may sit inside the keep-out.
-/// Point-likeness is judged on this render, which has no spatial filter applied — so it
-/// selects genuine point sources without pre-selecting the shape under test.
+/// Positions are found once on the *un-denoised* render and reused for every variant, so a
+/// profile difference is the render's and not the finder's. Three rejections were needed
+/// before the profile looked like a star at all on M27's dense field: a maximum must stand
+/// clear of its own 34-46 px surround (not sit on nebulosity, most of the frame's bright
+/// local maxima), it must be point-like by r=9, and nothing else accepted may sit inside the
+/// keep-out — judged on this render, which has no spatial filter applied, so it selects genuine point sources without pre-selecting the shape under test.
 pub fn find_isolated_stars(plane: &[f64], w: usize, h: usize, count: usize) -> Vec<Star> {
     let margin = SKY_ANNULUS.1 as usize + 2;
     if w < 2 * margin || h < 2 * margin {
@@ -869,14 +866,12 @@ impl CentreAndEdge {
 
 /// How much coherent row/column structure a sky carries, in output levels.
 ///
-/// Per-row and per-column means with stars excluded by an upper threshold, then the
-/// robust sigma of *those means* after removing a low-order fit. Isotropic noise of sigma
-/// `s` over `W` columns contributes `s/sqrt(W)` to this (the `floor` returned alongside);
-/// anything meaningfully above that floor is coherent banding.
-///
-/// **A grain metric cannot see this quantity at all**, and the eye is disproportionately
-/// good at it: a 1440-px row is 40 degrees long at this eyepiece and the eye integrates
-/// along it, so banding well below the grain floor is still visible.
+/// Per-row and per-column means with stars excluded by an upper threshold, then the robust
+/// sigma of *those means* after removing a low-order fit. Isotropic noise of sigma `s` over
+/// `W` columns contributes `s/sqrt(W)` to this (the `floor` returned alongside); anything
+/// meaningfully above that floor is coherent banding. **A grain metric cannot see this at
+/// all**: a 1440-px row is 40 degrees long at this eyepiece, and the eye integrates along it,
+/// so banding well below the grain floor is still visible.
 pub struct LineCoherence {
     pub rows: f64,
     pub columns: f64,
@@ -1162,12 +1157,11 @@ pub fn add_stars(frame: &mut Frame, at: &[(f64, f64)], scale: f64, peak: f32, si
 /// The median over `at` of each star's ring-median `with - without` at r = 0..=24 on the
 /// green plane, in output levels: what the star itself became in the render.
 ///
-/// Stars are injected rather than found because the radial profile's stars must be
-/// isolated on the sky — the one place a filter that rings on a nebula can look perfect.
-/// The difference cancels the target around the star, though not a filter's reaction to
-/// it: protection switched on near a star leaves a disc of unraised texture, which reads
-/// here as an offset, not a ring — over a few sites it can read as a moat, so pool enough
-/// of them ([`response_rings`]) that the target's own texture averages out.
+/// Stars are injected rather than found because the radial profile's stars must be isolated
+/// on the sky — the one place a filter that rings on a nebula can look perfect. The
+/// difference cancels the target around the star, but not a filter's reaction to it:
+/// protection switched on near a star leaves a disc of unraised texture, reading here as an
+/// offset, not a ring — over a few sites it can read as a moat, so pool enough of them ([`response_rings`]) that the target's own texture averages out.
 pub fn star_response(with: &[u8], without: &[u8], w: usize, at: &[(f64, f64)]) -> [f64; 25] {
     median_rings(&response_rings(with, without, w, at))
 }
@@ -1268,14 +1262,12 @@ pub type PreviewRender<'a> = (
 
 /// What render `b` does to stars of `peak` injected on `frame` against render `a`, pooled
 /// over four passes of `sites(offset)` at offsets of 0 and 22 px each way: `(a's
-/// [`star_response`], the median over stars of each one's own b-less-a response, stars
-/// read per radius)`.
+/// [`star_response`], the median over stars of each one's own b-less-a response, stars read per radius)`.
 ///
-/// Paired, star by star, and pooled, because a difference of two medians over a single
-/// 44 px grid (which keeps each star's r <= 24 rings clear of its neighbours) is noise on
-/// a textured target: the target's texture shifts every site by several levels where the
-/// profile is steep, and stars on Orion's outskirts that Detail left untouched to the
-/// level read -3 at r=3 that way — -5 over the two sites a single grid could read.
+/// Paired and pooled star by star: a difference of two medians over a single 44 px grid
+/// (which keeps each star's r <= 24 rings clear of its neighbours) is noise on a textured
+/// target — texture shifts every site by several levels where the profile is steep, and
+/// stars on Orion's outskirts that Detail left untouched read -3 at r=3 that way, -5 over the two sites a single grid could read.
 pub fn pooled_star_response(
     frame: &Frame,
     [a, b]: [PreviewRender; 2],
@@ -1374,15 +1366,14 @@ pub fn stream() -> (u32, u32) {
 // Diagnostics over the four out-of-repo sessions
 // ---------------------------------------------------------------------------
 
-/// The four sessions the render's brightness was tuned against. They fail differently:
-/// M27's dense field is the worst case for anything spatial, Andromeda for anything
-/// touching extended low-contrast structure, Orion is another sensor and a much
-/// shallower stack.
+/// The four sessions the render's brightness was tuned against. They fail differently: M27's
+/// dense field is the worst case for anything spatial, Andromeda for extended low-contrast
+/// structure, Orion is another sensor and a much shallower stack.
 ///
 /// Out of the repo, so these are diagnostics rather than guards, driven by
 /// `RENDER_BRIGHTNESS_SETS` (a comma-separated subset) and cached as stacked FITS under
-/// `RENDER_BRIGHTNESS_CACHE` — stacking 266 subs takes far longer than rendering them,
-/// and the same stacks are measured under a dozen settings.
+/// `RENDER_BRIGHTNESS_CACHE` — stacking 266 subs takes far longer than rendering them, and
+/// the same stacks are measured under a dozen settings.
 const SESSIONS: &[(&str, &str)] = &[
     ("m27", "/home/neon/Documents/Night_Amplifier/data/dumbbell-250mm-dob-imx533-100-subs"),
     ("globular", "/home/neon/Documents/Night_Amplifier/data/globular-cluster"),
@@ -1734,17 +1725,14 @@ pub fn measure_real_session(
                 "{label}: target-to-grain only rose {snr_gain:.1}x over {n1} subs"
             );
         } else {
-            // With the filters on, neither bound above means what it says. The wavelet
-            // holds the sky near its floor from the *first* sub — 1.41 output levels at
-            // N=1 on the 106-sub set against 5.70 with it off — so there is almost
-            // nothing left for depth to take, and what remains drifts *up* as the
-            // stack's residual noise migrates to the coarse scales a 4-level transform
-            // only partly reaches (1.41 -> 1.66 over 106 subs). Normalising against
-            // N=1 is misleading for the same reason: the ratio starts from the filter's
-            // best case.
+            // With the filters on, neither bound above means what it says. The wavelet holds
+            // the sky near its floor from the *first* sub — 1.41 output levels at N=1 on the
+            // 106-sub set against 5.70 with it off — so there is almost nothing left for
+            // depth to take, and what remains drifts *up* as residual noise migrates to
+            // coarse scales a 4-level transform only partly reaches (1.41 -> 1.66 over 106
+            // subs). Normalising against N=1 is misleading since the ratio starts from the filter's best case.
             //
-            // So this half asserts the absolute state instead, which is what an
-            // observer sees: the sky stays smooth at every depth, and the target grows.
+            // This half asserts the absolute state instead: the sky stays smooth at every depth and the target grows.
             assert!(
                 rows.iter().all(|(_, m)| m.sky_grain <= 2.5),
                 "{label}: sky grain reached {:.2} output levels with denoising on — the \
@@ -1762,23 +1750,13 @@ pub fn measure_real_session(
             );
         }
 
-        // The target is what the depth is *for*, so it must not be spent down to buy the
-        // sky. The synthetic sweep asserts it rises outright; a real session gets a band,
-        // because its sigma does not fall as sqrt(N) and the measurement is a median of a
-        // 96 px block quantised to whole output levels.
-        //
-        // This is what the gain running past the depth a session pays for looks like: at
-        // `MAX_GAIN_DEPTH` 256 the 106-sub set peaked at 32 subs and gave back 77 -> 69
-        // levels, 10 %, by the end.
-        // Against the best *so far*, not against the sweep's maximum: while contrast is
-        // still climbing every earlier depth is below the last one, which is the whole
-        // point. What must not happen is a depth giving back what a shallower one had.
-        //
-        // In levels rather than as a share: a median of a 96 px block is quantised to
-        // whole output levels, which is 1-2 % of the numbers here, so a percentage
-        // bound wide enough to absorb one level is also wide enough to absorb the
-        // defect. `MAX_GAIN_DEPTH` at 256 gives back 4 levels on this set (10 % on the
-        // uncropped session); the cap at 64 gives back none on either.
+        // The target is what the depth is for, so it must not be spent down to buy the sky. The
+        // synthetic sweep asserts it rises outright; a real session gets a band, since its sigma
+        // doesn't fall as sqrt(N) and the measurement is a 96 px block median quantised to whole
+        // output levels (1-2 % of the numbers here) — against the best *so far*, not the sweep's
+        // maximum, since contrast keeps climbing and only a giveback below an earlier depth is a
+        // defect. `MAX_GAIN_DEPTH` at 256: the 106-sub set peaked at 32 subs and gave back 77 ->
+        // 69 levels (10 %) by the end; the cap at 64 gives back none on either set.
         let mut best = 0.0f64;
         let mut worst_n = 0usize;
         let mut worst_drop = 0.0f64;

@@ -1,15 +1,11 @@
 //! The dither at the 8-bit boundary, judged on what it leaves in the output bytes.
 //!
-//! A dither's own threshold spectrum is only half the story: what the eye sees is the
-//! *quantised* output, and on a flat field an ordered matrix quantises into a lattice —
-//! one dot per tile at the extreme levels, a crosshatch in between. The blue-noise mask
-//! replaced the 8x8 Bayer matrix on exactly that measurement (see
-//! `render::output::quantize`), so the guard here rebuilds the matrix it replaced and
-//! requires the instrument to see its lines: a guard that is only quiet proves nothing.
-//!
-//! What reaches `/eyepiece` is a JPEG of those bytes, which can take back what the dither
-//! put between two levels; the second guard is why a denoised frame is encoded at a higher
-//! quality (`server::encoding::jpeg_quality`).
+//! A dither's own spectrum is only half the story: the eye sees the *quantised* output, and
+//! on a flat field an ordered matrix quantises into a lattice. The blue-noise mask replaced
+//! the 8x8 Bayer matrix on that measurement (`render::output::quantize`); this guard rebuilds
+//! the matrix it replaced and requires the instrument to see its lines — quiet alone proves
+//! nothing. The second guard covers JPEG, which can take back what the dither put between
+//! levels, hence a denoised frame's higher encode quality (`jpeg_quality`).
 
 use serial_test::serial;
 
@@ -147,12 +143,10 @@ fn through_jpeg(plane: &[f64], quality: i32) -> (Vec<f64>, usize) {
 /// JPEG zeroes the fine detail of each 8x8 block first, and at q90 that is everything the
 /// dither puts between two levels: after decode the sky's 8x8 block means miss the input by
 /// 4-9x what they did before the encoder. `jpeg_quality` gives a denoised frame 95, which
-/// keeps most of it, and this is the measurement that has to go on holding for the extra
-/// payload to buy anything.
+/// keeps most of it — the measurement this test holds to.
 ///
-/// The lattice guard's sky (0.3 output levels of noise), flat at two levels and ramped
-/// across four; a 512 px patch stands for a 1440p frame, since JPEG quantises each block on
-/// its own.
+/// The lattice guard's sky (0.3 output levels of noise), flat at two levels and ramped across
+/// four; a 512 px patch stands for a 1440p frame, since JPEG quantises each block on its own.
 #[test]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn the_denoised_jpeg_quality_keeps_what_the_dither_carries() {

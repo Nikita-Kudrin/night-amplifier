@@ -1,13 +1,11 @@
 //! One independent image stream: the payloads, the counter that versions them, and the
-//! viewer census that decides which of them are worth producing.
+//! viewer census deciding which are worth producing. One per camera role — two
+//! producers sharing a counter is a correctness bug, not just inefficiency: a payload
+//! is served only while its tag matches the published counter, so guide frames
+//! advancing the main counter would invalidate every main-stream payload and wake both
+//! sets of clients every frame.
 //!
-//! There is one per camera role. Two producers sharing a counter is not a small
-//! inefficiency but a correctness bug: a payload is served only while its tag matches the
-//! published counter, so guide frames advancing the main counter would invalidate every
-//! main-stream payload (and vice versa) and wake both sets of clients on every frame.
-//!
-//! Each family ([`StreamKind`]) keeps exactly one payload: every client of a family gets
-//! the same bytes, at the size its streaming-resolution setting chose.
+//! Each family ([`StreamKind`]) keeps one payload: every client gets the same bytes, sized by its streaming-resolution setting.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};

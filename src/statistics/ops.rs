@@ -122,15 +122,12 @@ pub(crate) fn compute_mad_in_place_simd(values: &mut [f32], median: f32) {
 
 /// The `n`-th smallest value, by selection, reordering `values`.
 ///
-/// The counterpart to [`fast_median`] for the per-frame estimators, which want one
-/// order statistic and nothing else. [`fast_median`] `par_sort_unstable`s anything from
-/// 4096 elements up, and a render stage calling it a dozen times a frame pays for a
-/// dozen full parallel sorts: measured at 65 536 samples, 0.30 ms against 0.075 ms for
-/// selection, and 0.010 ms at 16 384. Both `denoise::wavelet` and `render::black_point`
-/// are that shape, and the wavelet's 1440² pass is 14.2 ms with `fast_median` against
-/// 10.6 ms with this.
-///
-/// Returns `0.0` for an empty slice, and clamps `n` into range.
+/// The counterpart to [`fast_median`] for per-frame estimators wanting one order
+/// statistic. [`fast_median`] `par_sort_unstable`s anything from 4096 elements up; a
+/// render stage calling it a dozen times a frame pays for a dozen full sorts — measured
+/// at 65 536 samples, 0.30 ms vs 0.075 ms here (0.010 ms at 16 384). `denoise::wavelet`
+/// and `render::black_point` are that shape: wavelet's 1440² pass is 14.2 ms with
+/// `fast_median` vs 10.6 ms with this. Returns `0.0` for an empty slice, clamps `n`.
 #[inline]
 pub fn select_nth(values: &mut [f32], n: usize) -> f32 {
     if values.is_empty() {

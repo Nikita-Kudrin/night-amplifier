@@ -1,22 +1,11 @@
-//! Final f32 -> 8-bit conversion for display: black floor, dither, quantize.
-//! Every displayed byte crosses this boundary exactly once, in the tail of the two
-//! fused streaming kernels (`server::encoding::fused`) and [`super::frame_to_rgb8`] —
-//! kept as one helper because parallel 8-bit conversions have drifted by an LSB here
-//! before.
-//!
-//! **Pedestal**: the autostretch black point (`mode - black_point_sigma * sigma`,
-//! clamped at zero) puts a few percent of sky pixels at exactly 0, which an OLED
-//! shows as black speckle at the eyepiece. Maps `[0,1]` to `[pedestal,1]` so nothing
-//! reaches off while white stays white.
-//!
-//! **Dither before rounding, not after**: a sub-LSB offset biases the *rounding
-//! decision*, turning quantization error into a high-frequency pattern the eye
-//! integrates away. Adding a pattern to an already-rounded byte (the old ±8 LSB
-//! version) recovers no sub-LSB information — just visible noise.
-//!
-//! **Blue noise, not an ordered matrix**: an 8x8 Bayer matrix quantises a smooth sky
-//! into a lattice — one dot per tile near a level, a crosshatch between — and the
-//! denoised sky is smooth enough to show it. See [`dither_offset`] for the numbers.
+//! Final f32 -> 8-bit conversion for display: black floor, dither, quantize — one helper
+//! for both fused kernels and [`super::frame_to_rgb8`] (parallel conversions drifted by an LSB here before).
+//! **Pedestal** maps `[0,1]` to `[pedestal,1]`: the autostretch black point (`mode -
+//! black_point_sigma * sigma`, clamped at zero) puts a few percent of sky pixels at 0,
+//! seen as OLED black speckle. **Dither before rounding**: biasing the rounding decision
+//! turns quantization error into a pattern the eye integrates away — an already-rounded
+//! byte (old ±8 LSB version) recovers nothing. **Blue noise, not Bayer**: an 8x8 matrix
+//! lattices a smooth sky; see [`dither_offset`] for the numbers.
 
 use crate::frame::sample_to_u8;
 
@@ -77,20 +66,14 @@ impl DisplayOutput {
     }
 }
 
-/// Sub-LSB dither offset for a pixel, in normalized units, spanning
-/// `(-0.5, +0.5)` of one 8-bit step.
+/// Sub-LSB dither offset for a pixel, normalized, spanning `(-0.5, +0.5)` of one 8-bit step.
+/// Indexed in **output** coordinates: a pattern applied before resampling would average into
+/// mush, so callers pass the written pixel's coordinate, not its source pixel's.
 ///
-/// Indexed in **output** pixel coordinates. A pattern applied before resampling
-/// would be averaged into mush by the downsample, so callers must pass the
-/// coordinate of the pixel being written, not the source pixel it came from.
-///
-/// The 64x64 void-and-cluster mask replaced the 8x8 Bayer matrix on 2026-09-24. On a
-/// flat sky with 0.3 output levels of noise the matrix left lattice lines at 31-41x
-/// the spectrum beside them below half Nyquist; the mask leaves 1.0-1.3x, as no dither
-/// does (`dither_tests`). With the Pro denoisers on, Orion's rendered sky read 36x
-/// against the mask's 5.1x and no dither's 5.8x. The mask also holds 0.16 % of its
-/// energy below half Nyquist against the matrix's 1.45 %. An earlier rejection of blue
-/// noise measured an 8x8 blue tile, too small to be blue.
+/// The 64x64 void-and-cluster mask replaced the 8x8 Bayer matrix on 2026-09-24: on a flat sky
+/// (0.3 output levels of noise) Bayer left lattice lines at 31-41x the spectrum below half
+/// Nyquist vs the mask's 1.0-1.3x (same as no dither). With Pro denoisers on, Orion's sky read
+/// 36x vs the mask's 5.1x and no dither's 5.8x.
 #[inline]
 fn dither_offset(x: usize, y: usize) -> f32 {
     let rank = BLUE_NOISE_64[y & 63][x & 63] as f32;

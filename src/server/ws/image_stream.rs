@@ -174,10 +174,9 @@ async fn describe_output(stream: &FrameStream, resolution: Resolution) -> String
 /// resolution, stored for every other client.
 ///
 /// The producer skips a family nobody watches, so without this the first client stays
-/// black until the next exposure — a minute at 60 s subs, and forever once capture has
-/// stopped. On-demand encodes of a family are serialised: clients arriving together wait
-/// for the first encode and reuse it, rather than each converting the frame (and
-/// allocating its denoise buffers).
+/// black until the next exposure — a minute at 60 s subs, forever once capture has
+/// stopped. On-demand encodes of a family are serialised: clients arriving together
+/// wait for the first encode and reuse it, rather than each paying for its own conversion.
 pub(super) async fn payload_for_client(
     state: &AppState,
     stream: &Arc<FrameStream>,

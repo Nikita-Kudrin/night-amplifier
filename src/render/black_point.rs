@@ -170,14 +170,12 @@ pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
 
     // Skip the very first bins (potential sensor artifacts/hot pixels).
     //
-    // Ties break on the raw histogram, and that is load-bearing rather than tidy: the
-    // five-wide box above turns a single-bin spike into a five-bin *plateau*, so taking
-    // the first strict maximum lands two bins below the sky. A deep stack is exactly that
-    // spike — sigma 1.3 ADU inside a 16 ADU bin — and two bins is far enough that
-    // `refine_peak`'s window misses the samples entirely and falls back to the bin value
-    // it exists to replace, 43 ADU low. On a plateau the raw counts are unambiguous: the
-    // true bin holds every sample and its neighbours hold none. Swept across a bin in
-    // tenths this takes the worst error from 43.21 ADU to 0.07.
+    // Ties break on the raw histogram — load-bearing, not tidy: the five-wide box
+    // above turns a spike into a five-bin *plateau*, so the first strict maximum
+    // lands two bins below the sky. A deep stack's sky spike (sigma 1.3 ADU in a
+    // 16 ADU bin) is narrow enough that `refine_peak` then misses it, falling back
+    // to the bin value it exists to replace — 43 ADU low. Raw counts break the tie
+    // unambiguously; swept in tenths this cuts the worst error from 43.21 to 0.07 ADU.
     for (i, &count) in smoothed.iter().enumerate().skip(5).take(search_limit) {
         if count > max_count || (count == max_count && histogram[i] > histogram[peak_bin]) {
             max_count = count;
@@ -202,13 +200,12 @@ pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
 
     // Refine the binned peak against the samples themselves.
     //
-    // A bin is 1/4095 of full scale — 16 ADU of a 16-bit frame — while a 71-frame
-    // stack's sky sigma is 2.2 ADU. The whole sky distribution fits in a fifth of a
-    // bin, so the binned peak is a step function of stack depth: it sat on bin 10 for
-    // 50 frames and snapped to bin 11 at 71, moving the black point (`mode - k*sigma`)
-    // by 16 ADU against a target only 30 ADU above sky. Half the nebula went below
-    // black in one frame. Bin selection stays (it is what rejects nebulosity); only
-    // the value returned is refined, by re-binning the samples around the winner.
+    // A bin is 16 ADU (1/4095 of full scale) while a 71-frame stack's sky sigma is
+    // 2.2 ADU, so the whole sky fits in a fifth of a bin — the binned peak becomes a
+    // step function of stack depth: it sat on bin 10 for 50 frames, snapped to bin 11
+    // at 71, and moved the black point (`mode - k*sigma`) 16 ADU against a target
+    // only 30 ADU above sky, putting half the nebula below black in one frame. Bin
+    // selection stays (it rejects nebulosity); only the value is refined.
     let bin_width = 1.0 / (NUM_BINS - 1) as f32;
     let window_lo = (peak_bin as f32 - 1.5) * bin_width;
     let peak = refine_peak(&luminance_samples, window_lo, WINDOW_BINS as f32 * bin_width)
@@ -245,20 +242,12 @@ const CENTRE_MAX_SAMPLES: usize = 8192;
 
 /// Quantile of the one-sided spread the window is scaled from.
 ///
-/// The **lower quartile**, not the median, and that is what makes the window robust in
-/// both directions. The samples below the peak are ordered by how far below they sit,
-/// so a population darker than the sky — a corner the background model over-subtracted
-/// and clamped to zero, a vignette, a partly illuminated frame — piles up at the *far*
-/// end of that list. A median only survives while such a population is under half of
-/// it: measured on a sky with a share of the frame clipped to zero, the estimate went
-/// -1.43 ADU off at 40 %, -4.95 at 50 % and -150.73 at 60 % — the sky level itself, the
-/// window having grown wide enough to swallow the zeros and put its median among them.
-/// The quartile survives to 60 % and costs nothing where there is no contaminant:
-/// swept over sky sigmas from 0.06 to 8.2 histogram bins the estimate stays within
-/// 0.01 sigma of the sky, the same as the median gave.
-///
-/// A half-normal's quartile is `0.3186 * sigma` (its median is `0.6745`, the MAD
-/// constant), hence [`CENTRE_QUARTILE_TO_SIGMA`].
+/// **Lower quartile**, not median — robust in both directions: samples below the peak
+/// are ordered by distance, so population darker than the sky (over-subtracted corner,
+/// vignette, partial illumination) piles up at the far end, where a median breaks once
+/// it passes half the samples. With a frame share clipped to zero: error -1.43 ADU at
+/// 40 %, -4.95 at 50 %, -150.73 (sky level) at 60 %; quartile survives to 60 %, holds
+/// within 0.01 sigma over sky sigmas 0.06-8.2 bins.
 const CENTRE_SPREAD_QUANTILE: f32 = 0.25;
 
 /// Turns that quartile into a sigma: `1 / 0.31864`.
@@ -266,19 +255,12 @@ const CENTRE_QUARTILE_TO_SIGMA: f32 = 3.1383;
 
 /// Median of the samples within `CENTRE_WINDOW_SIGMAS` of `peak`.
 ///
-/// The spread comes from the samples **below** the peak only. A spread over every
-/// sample is robust while what contaminates it is a minority, and a target filling the
-/// frame is not: the window then sizes itself around the *target's* spread, swallows
-/// it, and the median lands on the target. Measured on a halo covering 69 % of the
-/// frame the answer went 1.4 ADU off the sky to 7.3; on a 75 % ramp, 349. A target is
-/// brighter than the sky it sits on, so the sky's lower half is the half it cannot
-/// reach. What *can* reach it is a population darker than the sky — see
-/// [`CENTRE_SPREAD_QUANTILE`], which is why the spread is a quartile rather than a
-/// median.
-///
-/// Selection, not `statistics::fast_median`, which `par_sort_unstable`s anything above
-/// 4 096 — three of those per frame took `estimate_background_mode` from 0.50 ms to
-/// 1.62 ms, above the sort `refine_peak` exists to avoid.
+/// Spread comes from samples **below** the peak only — a target filling the frame
+/// would otherwise size the window around its own spread. Measured: a 69% halo took
+/// the answer from 1.4 ADU off sky to 7.3; a 75% ramp, to 349. The sky's lower half is
+/// what a brighter target can't reach, hence the quartile not median (see
+/// [`CENTRE_SPREAD_QUANTILE`]). Custom selection, not `fast_median`, which
+/// `par_sort_unstable`s above 4 096 — that cost 0.50→1.62 ms/frame (`estimate_background_mode`).
 fn clipped_centre(samples: &[f32], peak: f32) -> Option<f32> {
     if samples.len() < CENTRE_MIN_SAMPLES {
         return None;
@@ -326,14 +308,12 @@ const REFINE_MIN_SAMPLES: u32 = 64;
 
 /// Mode of the samples falling in `[lo, lo + width)`, to sub-bin precision.
 ///
-/// A second histogram rather than a sort: sorting the ~50 000 samples that land in one
-/// coarse bin and taking their half-sample mode gave the same answer but measured
-/// 1.40 ms against 0.39 ms for the binned original (`black_point_benchmark`), and this
-/// runs on every preview frame. Re-binning is one pass and a fixed 512-entry scan.
-///
-/// The peak is smoothed over five sub-bins and interpolated parabolically, so the result
-/// moves continuously with the sky rather than snapping — which is the entire point of
-/// the refinement.
+/// A second histogram rather than a sort: sorting the ~50,000 samples in one coarse bin
+/// and taking their half-sample mode gave the same answer but measured 1.40 ms against
+/// 0.39 ms for the binned original (`black_point_benchmark`), and this runs on every
+/// preview frame. Re-binning is one pass and a fixed 512-entry scan. The peak is
+/// smoothed over five sub-bins and interpolated parabolically, so the result moves
+/// continuously with the sky rather than snapping.
 fn refine_peak(samples: &[f32], lo: f32, width: f32) -> Option<f32> {
     if width <= 0.0 {
         return None;

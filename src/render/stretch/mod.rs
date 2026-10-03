@@ -73,23 +73,14 @@ struct LutCacheKey {
     floor_depth: u32,
 }
 
-/// `v` with its low mantissa bits cleared, so the quantisation is **relative**.
-///
-/// The cache exists to absorb the solver's frame-to-frame jitter, which is a fraction of
-/// the value — not an absolute amount. This used to round `v * 10_000`, an absolute step
-/// of `1e-4`, and an MTF midtone on a deep-sky stack is around `1e-3`: barely one
-/// significant figure. Two stretch profiles whose curves differed by 3 % (0.001053 against
-/// 0.001085 on a 106-sub IMX533 stack) landed on the same key, so whichever rendered
-/// second silently reused the first's tone curve — target core 141 -> 144 output levels
-/// and sky 18 -> 19, decided by nothing but which profile happened to render first in the
-/// process. Live view changes stretch profile, eyepiece intensity and target background
-/// mid-session, and each of those is exactly this collision.
-///
-/// Keeping 13 of f32's 23 mantissa bits leaves a step of `2^-13`, about 0.012 % of the
-/// value at any magnitude — well inside the solver's own `tolerance` of 1e-3, and ~250
-/// steps clear of the collision above. Masking bits rather than scaling also gives zero,
-/// negatives, infinities and NaN distinct keys for free, where a sentinel could collide
-/// with a real one.
+/// `v` with its low mantissa bits cleared, so quantisation is **relative** to the
+/// value — needed since the solver's frame-to-frame jitter is a fraction of the
+/// value, not an absolute amount. Rounding `v * 10_000` (`1e-4` step) once let two
+/// stretch profiles 3% apart (0.001053 vs 0.001085, 106-sub IMX533 stack) collide:
+/// whichever rendered second silently reused the first's curve (core 141->144, sky
+/// 18->19). Keeping 13 of f32's 23 mantissa bits gives a `2^-13` step (~0.012% of
+/// value), inside the solver's `tolerance` of 1e-3 and ~250 steps clear of that
+/// collision; masking (vs scaling) also gives zero/negative/inf/NaN distinct keys.
 fn quantize_relative(v: f32) -> u32 {
     const KEPT_MANTISSA_BITS: u32 = 13;
     v.to_bits() & !((1u32 << (23 - KEPT_MANTISSA_BITS)) - 1)
@@ -143,16 +134,14 @@ thread_local! {
     static LUT_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Limit of `curve(L) / L` as `L → 0`, used to seed `scale_lut[0]`. Both tone curves
-/// pass linearly through the origin, so the ratio converges — but derived
-/// analytically, not by evaluating near zero: `asinh(x) = ln(x + sqrt(x² + 1))`, and
-/// in f32 the `1.0 +` swallows most of the significand for tiny `x`, giving a limit
-/// several percent wrong.
+/// Limit of `curve(L) / L` as `L → 0`, used to seed `scale_lut[0]`. Both tone curves pass
+/// linearly through the origin, so the ratio converges — but derived analytically, not by
+/// evaluating near zero: `asinh(x) = ln(x + sqrt(x² + 1))`, and in f32 the `1.0 +` swallows
+/// most of the significand for tiny `x`, giving a limit several percent wrong.
 ///
-/// Only fixes the *value* at entry 0 — when the solver bottoms out at its clamp
-/// floor (`m ≈ 1e-4`, near-black frame) the first bin spans over half the output
-/// range and no table this size can represent it (the 65536-entry table this
-/// replaced had the same limitation).
+/// Only fixes the *value* at entry 0 — when the solver bottoms out at its clamp floor (`m
+/// ≈ 1e-4`, near-black frame) the first bin spans over half the output range, which no
+/// table this size can represent (the 65536-entry table this replaced had the same limit).
 fn scale_limit_at_zero(
     algorithm: ToneMappingAlgorithm,
     strength: f32,
@@ -243,16 +232,14 @@ pub fn cached_scale_lut(
     })
 }
 
-/// Fused stretch and contrast function
+/// Fused stretch and contrast: builds (or reuses) a LUT combining the tone mapping and
+/// contrast curves, then applies black point subtraction, tone mapping and contrast in a
+/// single pass — replacing three separate full-frame passes
+/// (`subtract_black_point_uniform`, `mtf_stretch_frame`/`asinh_stretch_frame`,
+/// `apply_contrast_frame`).
 ///
-/// Builds (or reuses) a LUT combining the tone mapping and contrast curves, then applies
-/// black point subtraction, tone mapping and contrast to the frame in a single pass.
-///
-/// Replaces three separate full-frame passes (`subtract_black_point_uniform`,
-/// `mtf_stretch_frame`/`asinh_stretch_frame`, `apply_contrast_frame`). All three were
-/// rayon-parallel, so this one must be too or the fusion is a net loss — a serial fused
-/// pass measures ~3x slower than the three parallel passes it replaces, and makes
-/// `benches/render_benchmark.rs` `auto_stretch_frame` 67 % slower end to end.
+/// All three were rayon-parallel, so this one must be too, or the fusion is a net loss: a
+/// serial fused pass measures ~3x slower and makes `auto_stretch_frame` 67% slower overall.
 pub fn apply_fused_stretch_frame(
     frame: &mut Frame,
     black_point: f32,

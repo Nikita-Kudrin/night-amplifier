@@ -1,11 +1,9 @@
 /**
  * Database of popular astronomy cameras for FOV calculation.
  *
- * Each entry contains brand, model, sensor chip name, pixel size (um),
- * and native resolution (without binning).
- *
- * Users can search by brand, model, or sensor name, or fall back to
- * manual pixel-size entry / auto-fill from the connected camera.
+ * Each entry has brand, model, sensor chip name, pixel size (um), and native
+ * resolution (unbinned). Users can search by brand/model/sensor, or fall back
+ * to manual pixel-size entry / auto-fill from the connected camera.
  */
 export const CAMERA_DATABASE = [
     // ── ZWO ──────────────────────────────────────────────────────────

@@ -1,13 +1,11 @@
 //! Deciding whether a frame is worth stacking. `AdaptiveRegistration` returns the
 //! first transform any preset can fit (`robust`'s `max_residual` is 10px), so
-//! "registration succeeded" alone admits transforms built from a handful of
-//! coincidental correspondences — averaging those in smears the stack, so the
-//! diagnostics registration already computes are judged here first.
-//!
-//! Every limit derives from the session's own frames, not a fixed constant: mount,
-//! seeing and focal length move the numbers too much (the 250mm dob fixture
-//! registers at ~0.5px median residual, the 250mm Orion set at ~5.5px, both normal).
-//! A frame is an outlier relative to its neighbours, or not an outlier at all.
+//! "registration succeeded" alone admits coincidental correspondences that smear the
+//! stack — judged here against diagnostics registration already computes. Every
+//! limit derives from the session's own frames, not a fixed constant: mount, seeing,
+//! and focal length move the numbers too much (250mm dob ~0.5px vs Orion ~5.5px
+//! median residual, both normal), so a frame is an outlier only relative to its
+//! neighbours.
 
 use std::collections::VecDeque;
 
@@ -23,17 +21,14 @@ const RESIDUAL_FLOOR_PX: f32 = 1.5;
 /// transform is treated as a bad fit rather than ordinary scatter.
 const RESIDUAL_K: f32 = 3.0;
 
-/// Second floor for the residual gate, as a fraction of the session's median star
-/// size. `RESIDUAL_K * median_residual` alone is scale-multiplicative and gets it
-/// backwards: the better a rig tracks, the tighter its own gate becomes — on the
-/// 250mm dumbbell fixture (0.6px median residual, 5.4px stars) that rule set a
-/// 1.8px limit and threw away 9 of 34 frames whose residuals (1.9-3.3px) were well
-/// inside a single star's width, while the 4x-worse-tracking Orion fixture rejected
-/// nothing. Misalignment only matters relative to the PSF it smears, so the floor
-/// follows the stars: measured on the dumbbell fixture, adding half a star width
-/// recovers 31 of 35 frames at 6.077px stacked FWHM (vs 26 frames/5.863px with no
-/// floor, 34/6.180px ungated) — keeping most of the sharpening and most of the
-/// integration.
+/// Second floor for the residual gate, as a fraction of median star size.
+/// `RESIDUAL_K * median_residual` alone is scale-multiplicative and backwards: the
+/// better a rig tracks, the tighter its gate — on the dumbbell fixture (0.6px
+/// residual, 5.4px stars) that rule set a 1.8px limit and threw away 9/34 frames
+/// at 1.9-3.3px, well inside a star's width, while the 4x-worse-tracking Orion
+/// fixture rejected nothing. The floor follows the stars instead: adding half a
+/// star width recovers 31/35 frames at 6.077px stacked FWHM (vs 26/5.863px with no
+/// floor, 34/6.180px ungated) — most of the sharpening and most of the integration.
 const RESIDUAL_FWHM_K: f32 = 0.5;
 
 /// Fraction of the smaller star list that must correspond for a fit to be
@@ -64,14 +59,13 @@ const HISTORY_LEN: usize = 50;
 const REBASE_WINDOW: usize = 10;
 
 /// How much sharper a candidate must be to justify discarding the integration
-/// built so far, as a fraction of the incumbent's FWHM.
+/// built so far, as a fraction of the incumbent's FWHM. Held clear of the same
+/// quantisation that bounds [`FWHM_K`]: at 0.85 the Orion fixture re-based on its
+/// first frame — 2.52px against a 2.99px reference, one step of the area-based
+/// estimator in a set that measures 2.26-2.99px throughout.
 ///
-/// Held clear of the same quantisation that bounds [`FWHM_K`]. At 0.85 the Orion
-/// fixture re-based on its first frame — 2.52 px against a 2.99 px reference,
-/// one step of the area-based estimator, in a set whose every frame measures
-/// between 2.26 and 2.99 px. A re-base costs the integration built so far *and*
-/// drops the preview back to a single sub, so it has to be paid for by more than
-/// the estimator's own resolution.
+/// A re-base costs the integration built so far *and* drops the preview to a
+/// single sub, so it must be paid for by more than the estimator's own resolution.
 const REBASE_MARGIN: f32 = 0.75;
 
 /// Below this fraction of the running median FWHM, an implausibly "sharp" frame
@@ -120,13 +114,12 @@ impl RejectionReason {
 
     /// Whether a frame carrying this verdict still measured the sky well enough to
     /// belong in the running medians. [`RejectionReason::ResidualTooHigh`] and
-    /// [`RejectionReason::StarsTooLarge`] do — their numbers come from a fit over
-    /// most of the star field, and dropping them would make the baseline
-    /// self-referential (see [`QualityHistory`]). [`TooFewCorrespondences`] doesn't:
-    /// its residual is a mean over the handful of pairs the fit selected for itself,
-    /// on an unrelated scale (observed: 6 of 200 stars at 8.46px against neighbours'
-    /// 1.3-2.0px) — with a 50-frame window, 26 such frames would drag the median low
-    /// enough to latch the gate shut against every good frame after.
+    /// [`RejectionReason::StarsTooLarge`] do — their fit covers most of the star
+    /// field; dropping them would make the baseline self-referential (see
+    /// [`QualityHistory`]). [`TooFewCorrespondences`] doesn't: its residual is a mean
+    /// over the handful of pairs the fit picked for itself, on an unrelated scale
+    /// (6 of 200 stars at 8.46px vs. neighbours' 1.3-2.0px) — with a 50-frame window,
+    /// 26 such frames would drag the median low enough to latch the gate shut.
     fn measures_the_sky(&self) -> bool {
         matches!(self, Self::ResidualTooHigh | Self::StarsTooLarge)
     }
@@ -193,12 +186,11 @@ impl FrameAdmission {
 /// Rolling medians of the registration residual and star size seen this session.
 ///
 /// Every frame that yields a measurement is recorded, including ones the gate
-/// then rejects. Recording only accepted frames would make the baseline
-/// self-referential: if focus drifted or tracking degraded past the threshold,
-/// nothing would be accepted, so nothing would update the median, and the gate
-/// would reject every remaining frame of the night. Medians tolerate up to half
-/// the window being outliers, so a burst of bad frames barely moves the limit
-/// while a sustained change in conditions correctly becomes the new normal.
+/// rejects — recording only accepted frames would be self-referential: once
+/// focus or tracking degrades past the threshold, nothing is accepted, nothing
+/// updates the median, and the gate rejects every remaining frame of the night.
+/// Medians tolerate up to half the window as outliers, so bad bursts barely move
+/// the limit while a sustained change becomes the new normal.
 #[derive(Default)]
 struct QualityHistory {
     residuals: VecDeque<f32>,
@@ -274,14 +266,12 @@ impl FrameGate {
         self.frames_seen
     }
 
-    /// Judges a frame and folds its measurements into the baseline, in that
-    /// order.
+    /// Judges a frame and folds its measurements into the baseline, in that order.
     ///
-    /// Both halves live here because both orderings are wrong in a different
-    /// way. Recording first lets a frame help define the yardstick it is
-    /// measured against; recording nothing lets a sustained change in conditions
-    /// latch the gate shut for the rest of the night. What is recorded is
-    /// everything the frame actually measured — see
+    /// Both halves live here because both orderings are wrong in a different way:
+    /// recording first lets a frame define the yardstick it's measured against;
+    /// recording nothing lets a sustained change latch the gate shut for the rest of
+    /// the night. What's recorded is everything the frame actually measured — see
     /// [`RejectionReason::measures_the_sky`].
     pub fn admit(
         &mut self,
@@ -352,12 +342,11 @@ impl FrameGate {
     /// Whether this frame is sharp enough, and early enough, to become the new
     /// reference.
     ///
-    /// The reference sets a hard sharpness floor on everything stacked onto it
-    /// and frame one is picked blind, so a sharper frame arriving early is worth
-    /// more than the few frames of integration restarting costs.
-    ///
-    /// Only ever called for frames that already passed [`Self::judge`], which is
-    /// what keeps a bogus FWHM from a noise-latched detection out.
+    /// The reference sets a hard sharpness floor on everything stacked onto it, and
+    /// frame one is picked blind, so a sharper frame arriving early is worth more
+    /// than the few frames of integration restarting costs. Only ever called for
+    /// frames that already passed [`Self::judge`], which keeps a bogus FWHM from a
+    /// noise-latched detection out.
     pub fn should_rebase(&self, fwhm: Option<f32>) -> bool {
         if self.frames_seen > REBASE_WINDOW {
             return false;

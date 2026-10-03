@@ -13,13 +13,12 @@ use crate::telemetry::metrics as telemetry_metrics;
 
 /// Recreate a captures directory if it has gone missing since the writer started.
 ///
-/// `stacked_dir` is created once, at server startup; a session's `raw` directory is
-/// created once, at session start. Either can still vanish under an observer's feet —
-/// an unmounted USB drive, a network share dropping, a tidy-up script — and every
-/// following write would otherwise fail with ENOENT for the rest of the process's
-/// life. The call is idempotent and cheap (one syscall once the directory is back),
-/// so paying it before every write is simpler than tracking "have we already seen
-/// this directory disappear".
+/// `stacked_dir` is created once at server startup; a session's `raw` directory once
+/// at session start. Either can vanish under an observer's feet — an unmounted USB
+/// drive, a dropped network share, a tidy-up script — and every following write
+/// would otherwise fail with ENOENT for the rest of the process's life. The call is
+/// idempotent and cheap (one syscall once the directory is back), so paying it
+/// before every write beats tracking "have we already seen this disappear".
 fn ensure_dir(path: &Path) -> Result<(), DiskWriterError> {
     std::fs::create_dir_all(path).map_err(|e| {
         DiskWriterError::DirectoryCreationFailed(format!("{}: {}", path.display(), e))

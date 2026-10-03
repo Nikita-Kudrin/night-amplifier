@@ -101,15 +101,14 @@ pub struct StretchResult {
     pub black_point: f32,
     pub scale_lut: std::sync::Arc<Vec<f32>>,
     pub color_intensity: f32,
-    /// The shadow floor the row tail still has to apply, resolved against this
-    /// solve's sky level and already resampled onto its table. `None` in the common
-    /// case, since the floor was fused into `scale_lut` with contrast — set only
-    /// when saturation boost kept contrast out of that table and the floor had to
-    /// follow (it always goes after contrast). One field, not a floor plus a
-    /// `fused` flag: nothing downstream needs the floor that *was* fused, it's
-    /// already in the table. Shared, not rebuilt per payload — same reason
-    /// `stream_encoding::ConversionCache` exists: lossless + JPEG at different sizes
-    /// would otherwise resample and allocate the same curve twice a frame.
+    /// The shadow floor the row tail still has to apply, resolved against this solve's
+    /// sky level and already resampled onto its table. `None` in the common case,
+    /// since the floor was fused into `scale_lut` with contrast — set only when
+    /// saturation boost kept contrast out of that table, so the floor must follow
+    /// (always after contrast). One field, not a floor plus a `fused` flag: nothing
+    /// downstream needs a floor that's already in the table. Shared, not rebuilt per
+    /// payload, for the same reason `stream_encoding::ConversionCache` exists:
+    /// lossless + JPEG at different sizes would otherwise resample it twice a frame.
     pub deferred_shadow_floor: Option<std::sync::Arc<crate::render::ShadowFloorTable>>,
     /// The soft darkening, applied by the encoder after the row tail: it reads a
     /// 3x3 neighbourhood, so it can ride neither the LUT nor a per-row pass.

@@ -1,10 +1,8 @@
 //! Superpixel debayering: one RGB pixel per 2x2 CFA quad, no interpolation — red/blue
-//! samples are their own channel, the two greens are averaged. Output is half width
-//! and height. Three properties matter for an eyepiece view: **no interpolated
-//! chroma** (bilinear/VNG synthesise 2 of 3 colour samples from neighbours,
-//! correlating noise into colour mottle — nothing to correlate here), **a defect
-//! stays one pixel** (vs. spread into a coloured 3x3 cross), and **the green average
-//! is a free 1.4x SNR** on the channel carrying most luminance.
+//! samples are their own channel, the two greens are averaged, output half width and
+//! height. Matters for an eyepiece view: no interpolated chroma (bilinear/VNG
+//! synthesise 2 of 3 colour samples, correlating noise into colour mottle — nothing to
+//! correlate here), a defect stays one pixel (vs. a coloured 3x3 cross), and the green average is a free 1.4x SNR on the channel carrying most luminance.
 //!
 //! Costs resolution, hence opt-in: IMX533's 3008² -> 1504² stays above a 1440²
 //! eyepiece, but IMX464's 2712x1538 -> 1356x769 falls below it.

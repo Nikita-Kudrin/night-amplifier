@@ -288,15 +288,14 @@ impl PlanetaryStacker {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // The buffers are gathered once rather than re-resolved per pixel, and the
-        // scratch `Vec` is reused across every pixel in a rayon task. Collecting a fresh
-        // `Vec` per output sample cost one heap allocation per sample — 12.5 million per
-        // stack at IMX464 resolution — which is the same allocation-per-pixel pathology
-        // `apply_offset` was fixed for, sitting in the function that consumes its output.
+        // The buffers are gathered once and the scratch `Vec` reused across every pixel in
+        // a rayon task — collecting a fresh `Vec` per sample cost one heap allocation per
+        // sample (12.5 million per stack at IMX464 resolution), the same allocation-per-pixel
+        // pathology `apply_offset` was fixed for, sitting in the function consuming its output.
         //
-        // `select_nth_unstable_by` rather than a full sort: only one order statistic is
-        // wanted, so this is O(n) instead of O(n log n), and it does not panic on a NaN
-        // the way `partial_cmp(..).unwrap()` did.
+        // `select_nth_unstable_by` rather than a full sort: one order statistic is wanted, so
+        // this is O(n) instead of O(n log n), and it doesn't panic on NaN like
+        // `partial_cmp(..).unwrap()` did.
         let planes: Vec<&[f32]> = aligned_frames.iter().map(|f| f.data()).collect();
         let chunk = crate::parallel::balanced_chunk_len(pixel_count);
 

@@ -264,13 +264,11 @@ pub struct TelescopeSettings {
 
 /// Corrections that run on the raw CFA mosaic, before demosaic.
 ///
-/// These target the defects stacking cannot remove: a hot pixel and a readout
-/// offset are in the same place in every sub, so averaging frames leaves them
-/// exactly where they were. Both are only well defined on the mosaic — after
-/// demosaic a hot site has already been smeared into a coloured 3x3 cross, and
-/// neighbouring sensor rows have been mixed together.
+/// These target defects stacking cannot remove: a hot pixel and a readout offset sit
+/// in the same place in every sub, so averaging leaves them untouched. Both are only
+/// well defined on the mosaic — after demosaic a hot site is smeared into a coloured 3x3 cross, and neighbouring sensor rows are mixed together.
 ///
-/// Hot-pixel rejection has no switch: it always runs, and `hot_pixel_sigma` is its only
+/// Hot-pixel rejection has no switch: it always runs, `hot_pixel_sigma` is its only
 /// tuning. See `stage_config::build_cfa_pipeline` for why.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SensorCorrectionSettings {
@@ -428,17 +426,14 @@ impl EyepieceStreamResolution {
 /// recover is exactly what a denoiser removes.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DenoiseSettings {
-    /// The master switch, and a Pro control like the rest of this block.
-    ///
-    /// Off gives `DenoiseConfig::OFF`, which the encoders guarantee is *byte-identical*
-    /// to the pre-denoise output rather than merely equivalent — so the toggle costs
-    /// nothing and means exactly one thing.
+    /// The master switch, and a Pro control like the rest of this block. Off gives
+    /// `DenoiseConfig::OFF`, which the encoders guarantee is *byte-identical* to the
+    /// pre-denoise output rather than merely equivalent, so the toggle costs nothing.
     ///
     /// Deliberately **not** managed by Focus/Finder mode, unlike `chroma` and
-    /// `luma_strength`. The mode already reaches the off state through those, and a
-    /// denoise switch the mode forces false is what once made a saved file migrate the
-    /// Background Grain dial to `0.0` with nothing to put it back. The observer's master
-    /// switch stays theirs.
+    /// `luma_strength` (the mode already reaches off through those): forcing this one
+    /// false once made a saved file migrate the Background Grain dial to `0.0` with
+    /// nothing to put it back. The observer's master switch stays theirs.
     #[serde(default = "default_denoise_enabled")]
     pub enabled: bool,
     /// Guided-filter smoothing of the chroma planes, against luminance as the
@@ -451,25 +446,21 @@ pub struct DenoiseSettings {
     pub chroma_strength: f32,
     /// How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
     ///
-    /// Three mechanisms, spent cheapest-first, and what makes that ordering real is which
-    /// *scales* each one reaches. An observer reads grain at 8-128 px, and on a 1440p
-    /// stream of a deep IMX533 stack the 16-32 and 32-64 px bands are the two largest.
+    /// Three mechanisms, spent cheapest-first by *scale* reached. On a 1440p IMX533
+    /// stack the 16-32 and 32-64 px bands dominate perceived grain.
     ///
-    /// - **Below the middle**: the wavelet's finest scale
-    ///   (`LumaDenoiseConfig::thresholds_for`) and the tone curve's split
-    ///   (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT` and
-    ///   `DEFAULT_GRAIN_SPLIT`. This half trades brightness for *fine speckle*: measured,
-    ///   it moves 8-128 px noise by under 2 %.
-    /// - **Above the middle**: wavelet levels 5-6, the only mechanism that reaches
-    ///   16-64 px. Measured on six real sessions it takes 8-128 px noise down 12-15 % for
-    ///   3 % of target brightness, against the tone curve's 1:1.
+    /// - **Below the middle**: wavelet finest scale (`LumaDenoiseConfig::thresholds_for`)
+    ///   + tone curve split (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT`
+    ///   and `DEFAULT_GRAIN_SPLIT`. Trades brightness for fine speckle: moves 8-128 px
+    ///   noise under 2%.
+    /// - **Above the middle**: wavelet levels 5-6, the only mechanism reaching 16-64 px.
+    ///   Six-session measurement: 8-128 px noise down 12-15% for 3% of target
+    ///   brightness, vs. the curve's 1:1.
     ///
-    /// The curve's split **stops at `DEFAULT_GRAIN_SPLIT`** and no longer runs on to
-    /// `MAX_GRAIN_SPLIT`. Reaching 1/4 cost 38-43 % of target brightness for 37-39 % of
-    /// the grain, which is the 1:1 exchange it always was and is not a trade any position
-    /// of a user-facing control should offer. The coarse levels replace that range.
-    ///
-    /// `0.5` is the middle; see [`DEFAULT_BACKGROUND_GRAIN`] for what it is and is not.
+    /// Split stops at `DEFAULT_GRAIN_SPLIT`, never `MAX_GRAIN_SPLIT`: reaching 1/4 cost
+    /// 38-43% of brightness for 37-39% of grain, the same 1:1 exchange — not a trade a
+    /// user control should offer. Coarse levels replace that range. `0.5` is the middle;
+    /// see [`DEFAULT_BACKGROUND_GRAIN`].
     #[serde(default = "default_background_grain", deserialize_with = "nullable_f32")]
     pub background_grain: f32,
     /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
@@ -525,14 +516,11 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 /// The middle of the dial: the wavelet's finest scale fully spent, the tone curve at
 /// `DEFAULT_GRAIN_SPLIT`, the coarse levels off.
 ///
-/// **Not** the render of any earlier build, and worth being exact about because the
-/// first version of this said it was. The build before the dial defaulted
-/// `star_protection` to `1.0` — the finest scale *untouched* — and its tone curve split
-/// to `1/4`. The dial's middle is neither: its equivalent of that protection is `0.0`
-/// and its split is `1/8`. Measured on the 106-sub IMX533 set, dial 0.0 renders the
-/// target core at 161 output levels against 141 at the middle, and fine (1-4 px) sky
-/// noise at 0.51/0.50 against 0.24/0.31. The middle is where it is because it is the
-/// tuned trade, not because it reproduces anything.
+/// **Not** the render of any earlier build, despite a first draft claiming so: the
+/// pre-dial build defaulted `star_protection` to `1.0` (finest scale *untouched*) and
+/// its split to `1/4`; the dial's middle is neither (`0.0` / `1/8`). On the 106-sub
+/// IMX533 set, dial 0.0 renders the target core at 161 output levels vs. 141 at the
+/// middle, and fine (1-4 px) sky noise at 0.51/0.50 vs. 0.24/0.31 — the middle is a tuned trade, not a reproduction of anything.
 pub const DEFAULT_BACKGROUND_GRAIN: f32 = 0.5;
 
 /// The Detail control's default, not an off switch: stars injected on every test target
@@ -621,14 +609,13 @@ pub struct EyepieceSettings {
     #[serde(default = "default_intensity", deserialize_with = "nullable_f32")]
     pub intensity: f32,
     /// Where black sits, as a signed fraction of full scale, in `[-0.09, 0.5]`.
-    /// **Positive** lifts the output floor by this fraction — an OLED shows a zero
-    /// pixel fully off, and the autostretch black point clamps a few percent of sky
-    /// pixels to zero, reading as black speckle at the eyepiece. **Negative** pushes
-    /// the sky toward black instead, anchored to the sky rather than full scale:
-    /// `-0.052` puts the floor at sky level whether the sky is nominal or bright, so
-    /// one setting behaves the same on every target (the sky otherwise sits at
-    /// 14-17 output levels, a visible grey — dimming it via the stretch would dim
-    /// the target too, see [`intensity`](Self::intensity)).
+    /// **Positive** lifts the output floor — an OLED shows a zero pixel fully off, and
+    /// the autostretch black point clamps a few percent of sky pixels to zero, reading
+    /// as black speckle at the eyepiece. **Negative** pushes the sky toward black
+    /// instead, anchored to the sky rather than full scale: `-0.052` puts the floor at
+    /// sky level whether the sky is nominal or bright, so one setting behaves the same
+    /// on every target (sky otherwise sits at 14-17 output levels, a visible grey —
+    /// dimming via the stretch would dim the target too; see [`intensity`](Self::intensity)).
     #[serde(default = "default_black_floor", deserialize_with = "nullable_f32")]
     pub black_floor: f32,
 
@@ -875,21 +862,14 @@ impl CaptureSettings {
         profile: &CameraCaptureProfile,
         role: super::CameraRole,
     ) -> CaptureConfig {
-        // "Low Noise" dual-sampling trades frame rate for read noise, so it's
-        // only worth selecting while frames are actually being integrated —
-        // not during a raw live-view feed under a stacking-capable target
-        // type. `stacking` alone covers both the "Stacking" and "Wanderer"
-        // UI modes: the frontend always sets `stacking: true` whenever it
-        // sets `wanderer_mode: true` (see `CaptureControls.vue`'s
-        // `applyStackingMode`), so there's no case Wanderer needs to add here
-        // — and OR-ing `wanderer_mode` in directly would be wrong for the
-        // orthogonal-misuse case of `stacking: false, wanderer_mode: true`
-        // (no frames integrated there either).
-        //
-        // The stacking flags describe the *imaging* session, so they say nothing about a
-        // guide camera: nothing it produces is ever integrated, and starting a Deep Sky
-        // stack used to flip the guide camera to `LowReadoutNoise` — buying read noise
-        // it does not need with the frame rate it does.
+        // "Low Noise" dual-sampling trades frame rate for read noise, so it's only
+        // worth selecting while frames are actually integrated, not during live view.
+        // `stacking` alone covers both "Stacking" and "Wanderer" UI modes (frontend
+        // always sets `stacking: true` with `wanderer_mode: true`, see
+        // `CaptureControls.vue`'s `applyStackingMode`); OR-ing `wanderer_mode` in
+        // directly would wrongly fire on `stacking: false, wanderer_mode: true`. The
+        // flags describe the *imaging* session only — applying this to the guide
+        // camera once flipped it to `LowReadoutNoise`, buying read noise it never needed.
         let is_actively_stacking = role == super::CameraRole::Main
             && self.stacking
             && self.stacking_type.supports_stacking();
@@ -928,27 +908,14 @@ impl CaptureSettings {
             .unwrap_or_else(|| self.telescope.clone())
     }
 
-    /// Give a newly connected camera a telescope profile of its own, from what the
-    /// camera itself reports. Returns whether one was written.
-    ///
-    /// Without this, `solver_telescope` answers for an unprofiled camera with the flat
-    /// block — which describes whichever camera the user last configured. Two cameras
-    /// then produce the same Push-To rig key and share one remembered field of view.
-    /// On 2026-09-07 that handed the guide camera the main camera's 0.5152 deg for a
-    /// rig imaging 1.4516 deg, and a 2.8x-wrong FOV *fails* a plate solve rather than
-    /// slowing it: 19 minutes with no solve at all, on frames that solve in 0.1 s.
-    ///
-    /// Only the sensor is seeded, because only the sensor is something the camera can
-    /// state. Focal length and Barlow are carried over from the flat block just when
-    /// that block is already describing this sensor — otherwise it belongs to the other
-    /// camera and would attach one scope's focal length to the other's body.
-    ///
-    /// Never overwrites an existing profile: the equipment UI's values are the user's,
-    /// and this is only filling in a camera they have not configured.
-    ///
-    /// A camera that reports no pixel size (the simulator reports zero) is left alone —
-    /// there is nothing to tell it apart with, and `identifies_optics` already treats
-    /// that key as a wildcard rather than an identity.
+    /// Give a newly connected camera its own telescope profile, from what it reports.
+    /// Without this, unprofiled cameras share the flat block's FOV — on 2026-09-07
+    /// that gave the guide camera the main camera's 0.5152 deg for a rig imaging
+    /// 1.4516 deg, and the 2.8x-wrong FOV *failed* the solve outright (19 min with no
+    /// solve, vs. 0.1 s normally). Only the sensor is seeded (all the camera states);
+    /// focal length/Barlow carry over from the flat block only when it already
+    /// describes this sensor. Never overwrites an existing profile; no pixel size
+    /// (simulator: zero) leaves it alone.
     pub fn ensure_camera_telescope_profile(
         &mut self,
         camera_name: &str,

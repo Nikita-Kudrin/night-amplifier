@@ -1,22 +1,11 @@
-//! Whether a plate-solve dispatch survives a rig switch that happens after
-//! `plate_solve_available` already approved the frame.
+//! Whether a plate-solve dispatch survives a rig switch after `plate_solve_available` approved the frame.
 //!
-//! Found in code review of `656e367`/`1c8fa0e` (2026-09-05): `PushToSolverPlugin::
-//! observe_frame`/`process_new_frame` are told nothing about which camera captured
-//! their frame, so `ProPushToPlugin::look()` scales and mutates the one shared
-//! `MovementDetector` for whichever frame reaches it. A frame from the outgoing camera
-//! that is still in flight when a guide camera connects or disconnects — offered
-//! before the switch, dispatched after it — used to reach the plugin anyway, reading
-//! as the *new* rig's telescope having moved and aborting a solve that had just
-//! started. `solve_frame` and `watch_frame` now re-check `SolveSource::is_active`
-//! immediately before every dispatch, not only once at the `plate_solve_available`
-//! gate the caller checks first.
-//!
-//! One test function, deliberately: it registers a fake plugin into the
-//! process-global `PUSH_TO_PLUGIN` and flips the process-global `PRO_LICENSE_ACTIVE`
-//! — both one-shot/global state that every other test in the crate assumes untouched.
-//! A dedicated top-level binary keeps that off the shared `cargo test --lib` process;
-//! one test keeps it off this binary's own parallel test scheduling.
+//! Review of `656e367`/`1c8fa0e` (2026-09-05): the shared `MovementDetector` doesn't
+//! know which camera's frame it's scoring, so a frame in flight during a guide
+//! connect/disconnect read as the new rig having moved, aborting a fresh solve.
+//! `solve_frame`/`watch_frame` now re-check `SolveSource::is_active` before dispatch,
+//! not just once at the gate — one test, in its own binary, mutating global
+//! `PUSH_TO_PLUGIN`/`PRO_LICENSE_ACTIVE` state other tests assume untouched.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

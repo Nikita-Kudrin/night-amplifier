@@ -88,17 +88,13 @@ pub fn neutralize_background_auto(frame: &mut Frame) -> Result<[f32; 3]> {
 }
 
 /// How much of each grid block [`compute_white_balance_grid_with_config`] reads. A
-/// block median is a *background estimate*, so reading all ~65,000 pixels for one
-/// number over-samples the same way [`crate::statistics::StatsConfig`] already caps
-/// for whole-frame stats. Measured at grid 16, 20 cores: [`Self::exact`] 28ms,
-/// `sampled(4096)` 1.7ms (vs the old `get_pixel`-per-sample predecessor's 120ms) —
-/// exact alone is a 4.4x win, sampling a further 16x.
-///
-/// Budget is per block, so it adapts: a small frame or fine grid takes the exact
-/// path on its own. Default is [`Self::exact`] deliberately — sampling moves the
-/// coefficients (~1e-3 on noise, more on structure), so a call site opts in via
-/// [`Self::preview`] (live preview) rather than inheriting the trade; offline FITS
-/// export (`server::capture::storage`) stays exact since it runs once per session.
+/// block median is a *background estimate*, so reading all ~65,000 pixels over-samples
+/// it, same reasoning as [`crate::statistics::StatsConfig`]'s whole-frame cap. Measured
+/// at grid 16, 20 cores: [`Self::exact`] 28ms, `sampled(4096)` 1.7ms (old `get_pixel`
+/// predecessor: 120ms) — exact alone a 4.4x win, sampling a further 16x. Budget is per
+/// block, so a small frame/fine grid takes the exact path on its own. Default is
+/// [`Self::exact`]: sampling moves coefficients (~1e-3 noise, more on structure), so
+/// callers opt in via [`Self::preview`]; FITS export stays exact (runs once/session).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WhiteBalanceConfig {
     /// Upper bound on samples read per block, per channel.
@@ -130,18 +126,14 @@ impl WhiteBalanceConfig {
         }
     }
 
-    /// What the live preview path uses. Reading every pixel was the single most
-    /// expensive thing in the preview pipeline: 97ms of a 300ms render iteration on a
-    /// 3008x3008 frame (production traces), against 41ms for the whole RBF background
-    /// model and 27ms for the JPEG encode — `render_benchmark` puts the gap at 28.5ms
-    /// vs 2.1ms per call (13.9x) on an IMX464-shaped frame.
-    ///
-    /// 4096 is the first power of two that forces a stride at these resolutions (stride
-    /// 2 at 2712x1538, stride 3 at 3008x3008). Drift is bounded and measured
+    /// What the live preview path uses. Reading every pixel was the single most expensive
+    /// thing in the preview pipeline: 97ms of a 300ms render iteration on a 3008x3008
+    /// frame (production traces), vs 41ms for the whole RBF background model and 27ms for
+    /// the JPEG encode — `render_benchmark` puts the gap at 28.5ms vs 2.1ms/call (13.9x) on
+    /// an IMX464-shaped frame. 4096 is the first power of two forcing a stride at these
+    /// resolutions (stride 2 at 2712x1538, stride 3 at 3008x3008). Drift is bounded
     /// (`sampling_moves_the_coefficients_by_under_one_percent` pins it under ~1e-3), and
-    /// coefficients are clamped to [0.5, 2.0] downstream regardless — a block median is
-    /// a *background* estimate, so reading all 35,000 pixels was never buying accuracy
-    /// proportional to its cost.
+    /// coefficients clamp to [0.5, 2.0] regardless — never buying accuracy proportional to cost.
     pub const fn preview() -> Self {
         Self::sampled(4096)
     }
@@ -181,16 +173,13 @@ pub fn compute_white_balance_grid(
 }
 
 /// [`compute_white_balance_grid`] with control over how much of each block is read.
-/// Parallel per block, not a nested scan: the predecessor walked `grid_size^2`
-/// blocks in sequence via `Frame::get_pixel`, allocating three `Vec`s per block —
-/// 768 allocations and 12.5M bounds-checked index computations for a sensor-shaped
-/// frame, measured at 120ms against 15ms for the rest of the preview pipeline
-/// combined.
-///
-/// Planar layout makes the fix free: a block's row is a contiguous run inside its
-/// plane, so the gather is `extend_from_slice`, not per-sample, and independent
-/// blocks become one rayon dispatch. `map_init` keeps one scratch buffer per worker
-/// instead of one allocation per block.
+/// Parallel per block, not a nested scan: the predecessor walked `grid_size^2` blocks
+/// via `Frame::get_pixel`, allocating three `Vec`s per block — 768 allocations and
+/// 12.5M bounds-checked index computations, measured at 120ms against 15ms for the
+/// rest of the preview pipeline combined. Planar layout makes the fix free: a block's
+/// row is a contiguous run inside its plane, so the gather is `extend_from_slice`, not
+/// per-sample, and independent blocks become one rayon dispatch; `map_init` keeps one
+/// scratch buffer per worker instead of one allocation per block.
 pub fn compute_white_balance_grid_with_config(
     frame: &Frame,
     grid_size: usize,
@@ -500,13 +489,12 @@ mod tests {
 
     /// The drift [`WhiteBalanceConfig::preview`] trades 13.9x of its cost for.
     ///
-    /// Grid 8 over 640x640 rather than the production grid 16 over a sensor-shaped
-    /// frame: what matters is that the block (80x80 = 6400) is larger than the 4096
-    /// budget, so a real stride is forced. A frame small enough for `set_pixel` to
-    /// build quickly cannot have both a fine grid and blocks over the budget.
+    /// Grid 8 over 640x640 rather than the production grid 16 over a sensor-shaped frame:
+    /// what matters is the block (80x80 = 6400) being larger than the 4096 budget, forcing
+    /// a real stride. A frame small enough for `set_pixel` to build quickly can't have both
+    /// a fine grid and blocks over budget.
     ///
-    /// The assertion is on relative movement, not absolute, because that is the claim
-    /// the doc comment on `preview` makes and the coefficients are ratios.
+    /// Assertion is on relative movement, not absolute — that's the claim `preview`'s doc comment makes, and the coefficients are ratios.
     #[test]
     fn sampling_moves_the_coefficients_by_under_one_percent() {
         let frame = cast_gradient_frame(640, 640);

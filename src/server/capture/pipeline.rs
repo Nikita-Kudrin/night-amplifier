@@ -51,14 +51,13 @@ pub struct StackingOutcome {
     /// decides when they have to be measured again.
     pub stack_depth: u32,
     /// The stack's coverage map, when `display_frame` is an accumulated stack its subs did
-    /// not all cover — see [`crate::frame::NoiseField`].
+    /// not all cover — see [`crate::frame::NoiseField`]. Taken from the same accumulator
+    /// read as the display copy, so it costs one plane's block medians rather than
+    /// another 434 MB pass.
     ///
-    /// Taken from the same read of the accumulator as the display copy, so it costs the
-    /// stacking thread one plane's block medians rather than another 434 MB pass. `None`
-    /// wherever `display_frame` is, wherever every sub covered the whole frame (nothing
-    /// to say, the common case), and wherever the mode keeps no `IncrementalPixel`
-    /// accumulator — planetary, and comet, whose context is a Pro trait this does not
-    /// reach through.
+    /// `None` wherever `display_frame` is, wherever every sub covered the whole frame
+    /// (the common case), and wherever the mode keeps no `IncrementalPixel` accumulator
+    /// — planetary, and comet, whose context is a Pro trait this does not reach through.
     pub noise: Option<crate::frame::NoiseField>,
 }
 
@@ -433,14 +432,11 @@ pub fn process_preview_frame(
 }
 
 /// [`process_preview_frame`] reusing the estimates a previous frame of the same stack
-/// already produced.
-///
-/// The three estimates — white balance, background model, image statistics — describe
-/// the stack rather than this frame, and a stack moves by 1/N per render. `analysis`
-/// decides per frame whether the stored set still applies; see
-/// [`super::analysis`] for the four things that invalidate it.
-///
-/// Everything that touches pixels still runs every frame. Only the measuring is reused.
+/// already produced: white balance, background model, image statistics. These
+/// describe the stack rather than this frame, and a stack moves by 1/N per render.
+/// `analysis` decides per frame whether the stored set still applies; see
+/// [`super::analysis`] for the four things that invalidate it. Everything that
+/// touches pixels still runs every frame — only the measuring is reused.
 pub fn process_preview_frame_with_analysis(
     frame: &mut Frame,
     settings: &CaptureSettings,

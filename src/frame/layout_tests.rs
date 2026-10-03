@@ -1,14 +1,11 @@
-//! Cross-encoder colour-identity tests for the planar [`Frame`] layout. `Frame` is
-//! planar; every 8-bit output format is interleaved. Each test pushes a frame with
-//! three constant, *distinct* channels through one output path and asserts the order
-//! — a path reading planar as interleaved produces three adjacent samples of one
-//! channel per output pixel, which every assertion here rejects.
+//! Cross-encoder colour-identity tests for the planar [`Frame`] layout. `Frame` is planar;
+//! every 8-bit output format is interleaved. Each test pushes a frame with three constant,
+//! *distinct* channels through one output path and asserts the order — a path reading
+//! planar as interleaved produces three adjacent samples of one channel per output pixel,
+//! which every assertion here rejects.
 //!
-//! Kept as one table of paths on purpose: the failure is systemic, so a new output
-//! format means a new row here. Covers `to_rgb8`/`to_rgb8_fast`/`write_rgb8_into`,
-//! `render::frame_to_rgb8`, `render_to_rgb8`, the fused encoder (and its downsampling
-//! sibling), JPEG/LZ4/PNG, SER `Rgb`/`Bgr`/`Mono`, FITS (both directions),
-//! `Frame::downsample`, `warp_frame_into`, and both debayer traversals.
+//! Kept as one table of paths on purpose: the failure is systemic, so a new output format
+//! means a new row here, covering every encoder — JPEG/LZ4/PNG/FITS/SER, the fused and downsampling paths, `Frame::downsample`, `warp_frame_into`, and both debayer traversals.
 
 use super::Frame;
 use crate::frame::PixelFormat;
@@ -163,15 +160,14 @@ fn expand_to_rgb8_fused_is_interleaved() {
     );
 }
 
-/// The *downsampling* half of the streaming encoder — the Hd1080 and Qhd1440 tiers,
-/// i.e. what most clients actually receive.
+/// The *downsampling* half of the streaming encoder — the Hd1080 and Qhd1440 tiers, i.e.
+/// what most clients actually receive.
 ///
-/// `expand_to_rgb8_fused_is_interleaved` above only reaches `expand_to_rgb8_fused`,
-/// because its fixture already fits the bounding box. `area_downsample_to_rgb8_fused`
-/// is a separate traversal with its own planar indexing (`plane_size + idx`), and the
-/// only integration test that touched it asserted on a uniform grey frame, which is
-/// layout-invariant by construction. A source larger than the box is what makes the
-/// downsampling branch run at all.
+/// `expand_to_rgb8_fused_is_interleaved` above only reaches `expand_to_rgb8_fused`, since
+/// its fixture already fits the bounding box. `area_downsample_to_rgb8_fused` is a separate
+/// traversal with its own planar indexing (`plane_size + idx`), and the only integration test
+/// that touched it asserted on a uniform grey frame — layout-invariant by construction. A
+/// source larger than the box is what makes the downsampling branch run at all.
 #[test]
 fn area_downsample_to_rgb8_fused_is_interleaved() {
     let ready = passthrough_ready(tricolour_frame(64, 32));

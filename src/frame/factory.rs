@@ -10,11 +10,9 @@ use tracing::instrument;
 /// traversal instead of repeating the channel ladder three times.
 ///
 /// One pass over the source, not one per plane: walking each output plane in turn
-/// (`raw[i * channels + c]`) reads the whole source once per channel — three passes
-/// over 12.5MB for a 2712x1538 RGB frame, on the per-frame camera ingest path, where
-/// interleaved did one. Instead the source is walked once and each sample scattered to
-/// its plane, with planes split apart up front so the write is a sequential store
-/// stream per channel, not a bounds-checked `data[c * area + i]` per sample.
+/// (`raw[i * channels + c]`) reads the whole source once per channel — three passes over
+/// 12.5MB for a 2712x1538 RGB frame on the camera ingest path, where interleaved did one.
+/// The source is instead walked once and scattered to each plane, so the write is a sequential store per channel, not a bounds-checked `data[c * area + i]` per sample.
 #[inline]
 fn scatter_to_planes(
     data: &mut [f32],
@@ -22,16 +20,14 @@ fn scatter_to_planes(
     channels: usize,
     sample: impl Fn(usize, usize) -> f32 + Sync,
 ) {
-    // Why only the multi-channel arm is parallel: `frame_ingest_benchmark` shows these
-    // are different kinds of work. Mono is one streaming read + write with a multiply,
-    // and a single core already saturates it (4.2M samples in ~1.1ms at 2712x1538,
-    // ~22GB/s) — rayon measured **18-21% slower** there, dispatch overhead against no
-    // spare bandwidth. Interleaved scatters each pixel to three planes, genuinely
-    // compute-bound: parallelising took `from_raw_rgb8` from 14.2ms to 4.8ms (-66%).
-    //
-    // Left unresolved on purpose: a Pi 5/RK3588 core doesn't saturate memory
-    // bandwidth, so mono may split profitably there — an ARM measurement
-    // (`from_raw_bayer16_mono`) would settle it, not a guess shipped untested.
+    // Why only the multi-channel arm is parallel: `frame_ingest_benchmark` shows
+    // these are different kinds of work. Mono is one streaming read+write with a
+    // multiply; a single core already saturates it (4.2M samples in ~1.1ms at
+    // 2712x1538, ~22GB/s) — rayon measured 18-21% slower there, dispatch
+    // overhead against no spare bandwidth. Interleaved scatters each pixel to
+    // three planes, genuinely compute-bound: parallelising took `from_raw_rgb8`
+    // from 14.2ms to 4.8ms (-66%). Left unresolved: a Pi 5/RK3588 core doesn't
+    // saturate memory bandwidth, so mono may split profitably there — an ARM measurement (`from_raw_bayer16_mono`) would settle it, not a guess shipped untested.
     if channels == 1 {
         for (i, slot) in data[..pixels].iter_mut().enumerate() {
             *slot = sample(i, 0);
@@ -241,12 +237,10 @@ mod tests {
     /// A plain interleaved-to-planar projection: `data[c * pixels + i]` from
     /// `raw[i * channels + c]`, with no chunking and no parallelism.
     ///
-    /// This is the shape [`scatter_to_planes`] replaced. It exists so the rewrite is
-    /// pinned against something other than itself — the RGB arm recovers the absolute
-    /// sample index from the chunk index (`block * chunk`), and that arithmetic is
-    /// correct for every full chunk whether or not it is right for the trailing one.
-    /// The decode itself is mirrored rather than rewritten — `* inv_max` and `/ max`
-    /// differ by an ULP, and the traversal is what is under test here, not the scaling.
+    /// This is the shape [`scatter_to_planes`] replaced, pinned against something
+    /// other than itself: the RGB arm recovers the absolute sample index from
+    /// the chunk index (`block * chunk`), correct for every full chunk whether or
+    /// not it's right for the trailing one. The decode is mirrored, not rewritten — `* inv_max` and `/ max` differ by an ULP, and the traversal is what's under test, not the scaling.
     fn sequential_planes(raw: &[u8], pixels: usize, channels: usize, max: f32) -> Vec<f32> {
         let inv_max = 1.0 / max;
         let mut out = vec![0.0f32; pixels * channels];

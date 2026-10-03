@@ -1,13 +1,11 @@
 //! Grid-node sampling shared by the bilinear and RBF background extractors: lay a grid
 //! over the frame, take a star-rejected median in a box around each node, then prune
 //! nodes that landed on nebulosity. Extracted after Community and Pro each carried a
-//! byte-identical copy of `GridNode` and friends, both reaching pixels through
-//! `frame.data()` plus a hand-computed `channel * area` offset — the pattern
-//! `AGENTS.md` asks reviewers to flag.
+//! byte-identical `GridNode` copy, both reaching pixels via `frame.data()` plus a
+//! hand-computed `channel * area` offset — the pattern `AGENTS.md` asks reviewers to flag.
 //!
-//! Grid *placement* stays unshared: Community hugs the frame boundary so delta-stepping
-//! can march between nodes branchlessly; Pro centres nodes in each cell because its TPS
-//! solve wants interior samples. Each keeps its own `initialize_grid`.
+//! Grid *placement* stays unshared: Community hugs the frame boundary for branchless
+//! delta-stepping; Pro centres nodes in each cell for its TPS solve's interior samples.
 
 use crate::frame::Frame;
 
@@ -104,11 +102,9 @@ pub fn mad(values: &[f32], median_value: f32) -> f32 {
     mad_with_scratch(values, median_value, &mut deviations)
 }
 
-/// Extract the background value for a single node using iterative sigma clipping.
-///
-/// Collects pixels from a `box_size x box_size` window centred on the node, then applies
-/// up to [`SIGMA_CLIP_ITERATIONS`] rounds of sigma clipping to reject bright stars,
-/// returning the median of what survives.
+/// Extract the background value for a single node using iterative sigma clipping: collects
+/// pixels from a `box_size x box_size` window, applies up to [`SIGMA_CLIP_ITERATIONS`]
+/// rounds to reject bright stars, and returns the median of what survives.
 ///
 /// Reads through [`Frame::channel_data`] rather than `frame.data()` plus a
 /// `channel * width * height` offset: the plane is a contiguous run, so its rows are
@@ -288,12 +284,9 @@ pub struct PruneConfig {
     pub neighbour_threshold: f32,
 }
 
-/// Prune nodes that landed on nebulosity using a two-stage approach:
-///
-/// 1. **Global rejection**: reject nodes above
-///    `global_median + global_sigma * MAD * 1.4826`.
-/// 2. **Neighbor rejection**: reject nodes exceeding the local 8-neighbor median by
-///    `neighbour_threshold`.
+/// Prune nodes that landed on nebulosity using a two-stage approach: (1) **global**
+/// rejection, nodes above `global_median + global_sigma * MAD * 1.4826`; (2) **neighbor**
+/// rejection, nodes exceeding the local 8-neighbor median by `neighbour_threshold`.
 ///
 /// Stage 2 reads a snapshot taken before it starts, so a node's fate does not depend on
 /// whether its neighbours have already been visited.

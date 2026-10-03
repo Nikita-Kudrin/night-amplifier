@@ -1,17 +1,11 @@
-//! The downsample kernel, as per-output-pixel source weights along one axis.
-//!
-//! Each output pixel integrates its exact source footprint `[i*s, (i+1)*s)` over the
-//! source *linearly interpolated* (a 1 px tent per sample), not over whole source pixels.
-//! A whole-pixel box at a non-integer ratio averages 2 samples on most lines and 3 on
-//! every ~11th (3008 -> 1440): those lines carried 18 % less noise, a lattice at 18 arcmin
-//! through a 100 mm eyepiece lens. Fractional box edges alone still vary 1.26x in 2D; the
-//! tent keeps ratios from 1.4x up under 1.05x.
-//!
-//! The tent costs sharpness near unity — a 2.5 px star kept 83 % of the box's peak at
-//! 1.07x (IMX464 at 1440p), 90 % at 1.42x — so a `[-a, 1+2a, -a]` sharpen on the
-//! output grid, folded into the taps, gives it back. Shift-invariant on the output grid,
-//! it scales every pixel's noise alike and prints no lattice of its own. `a` tapers with
-//! the ratio: from 1.9x the tent alone already beats the box's worst-phase peak.
+//! The downsample kernel, as per-output-pixel source weights along one axis. Each
+//! output pixel integrates its source footprint *linearly interpolated* (a 1 px tent per
+//! sample), not whole source pixels: a whole-pixel box at a non-integer ratio averages 2
+//! samples on most lines and 3 on every ~11th (3008 -> 1440), those lines carrying 18 %
+//! less noise — a lattice at 18 arcmin through a 100 mm eyepiece. Box edges alone vary
+//! 1.26x in 2D; the tent keeps ratios from 1.4x up under 1.05x. Near unity it costs
+//! sharpness instead (a 2.5 px star kept 83 % of the box's peak at 1.07x, 90 % at 1.42x),
+//! clawed back by a `[-a, 1+2a, -a]` sharpen folded into the taps, tapering to 0 by 1.9x.
 
 /// Sharpen amount at and below [`SHARPEN_FULL_BELOW`]: 1.07x kept 97-99 % of the box's
 /// peak with 10 % less grain than it.
@@ -111,14 +105,10 @@ impl AxisTaps {
     /// of independent source samples.
     ///
     /// An output pixel is `sum(w_i * x_i)` with `sum(w_i) = 1`, so its variance is
-    /// `sum(w_i^2 * sigma_i^2)` — not `sigma^2`. Built here, beside the weights it is
-    /// derived from, so the two cannot drift apart: a noise field resampled with any
-    /// other kernel overstates output noise by roughly `sqrt(k)` for a `k`-fold
-    /// reduction, and every threshold built on it then comes out that much too
-    /// aggressive. Nothing downstream reports a number that would show it.
-    ///
-    /// The sharpen's negative lobes need no special case — `w^2` is positive either way,
-    /// and that sharpening *raises* output noise falls out correctly.
+    /// `sum(w_i^2 * sigma_i^2)`, not `sigma^2`. Built beside the weights it derives from
+    /// so the two cannot drift apart — resampling with any other kernel overstates output
+    /// noise by roughly `sqrt(k)` for a `k`-fold reduction. The sharpen's negative lobes
+    /// need no special case: `w^2` is positive either way, so sharpening correctly raises noise too.
     pub(super) fn sum_sq(&self) -> &[f32] {
         &self.sum_sq
     }

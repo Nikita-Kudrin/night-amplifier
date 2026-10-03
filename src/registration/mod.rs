@@ -1,15 +1,11 @@
-//! Image Registration using Triangle Matching: aligns frames by finding corresponding
-//! stars between a reference and each new frame. Pipeline: form "asterisms" from star
-//! triplets -> compute scale-invariant side-length ratios `(a/c, b/c)` as a descriptor
-//! (sorted `a ≤ b ≤ c`) -> match triangles with similar descriptors across frames ->
-//! RANSAC-like voting for consistent correspondences -> solve the affine transform.
+//! Image Registration using Triangle Matching: aligns frames by matching stars between
+//! a reference and each new frame. Forms "asterisms" from star triplets, computes
+//! scale-invariant side-length ratios `(a/c, b/c)` (sorted `a ≤ b ≤ c`) as a descriptor,
+//! matches triangles with similar descriptors, RANSAC-votes for correspondences, and
+//! solves the affine transform (θ, tx/ty — no scaling). [`adaptive`] also handles field
+//! rotation, cloud cover, satellite trails, brightness/FOV differences.
 //!
-//! [`adaptive`] handles field rotation, cloud cover, satellite trails, brightness
-//! variation, and FOV-scale differences. The 2D affine transform solves for θ
-//! (rotation), tx/ty (translation) — no scaling for astronomical field rotation.
-//!
-//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`],
-//! [`adaptive`], [`engine`].
+//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`], [`adaptive`], [`engine`].
 
 mod adaptive;
 mod config;

@@ -225,16 +225,14 @@ pub async fn run_capture_loop(
         }
     };
 
-    // Each channel is sized from the payload it carries, not from one frame size for
-    // all three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a
-    // quarter to a sixth of the debayered frame — while only the render channel moves
-    // the f32 `Frame`. The stacking channel is bounded by the lag it would introduce as
-    // well, which is why the exposure comes into it.
-    //
-    // Resolved once, from the settings this session started with. A `SyncSender` cannot
-    // be resized anyway, and the probe frame the depth is derived from is equally a
-    // snapshot — so an exposure changed mid-session leaves the channels as they are, and
-    // the figure actually used is logged below rather than left to be inferred.
+    // Each channel is sized from the payload it carries, not one frame size for all
+    // three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a quarter
+    // to a sixth of the debayered frame — while only the render channel moves the f32
+    // `Frame`; the stacking channel is also bounded by the lag it would introduce,
+    // which is why the exposure factors in. Resolved once, from the settings this
+    // session started with — a `SyncSender` cannot be resized anyway, and the probe
+    // frame the depth is derived from is equally a snapshot — so an exposure changed
+    // mid-session leaves the channels as they are; the figure used is logged below.
     let raw_memory = probe_raw.data_slice().len();
     let frame_memory = probe_frame.memory_size();
     let capacities = pipeline_capacities(raw_memory, frame_memory, settings.exposure_us);

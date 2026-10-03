@@ -1,12 +1,11 @@
-//! Channel-averaged luminance extraction for star detection.
+//! Channel-averaged luminance extraction for star detection. Split out because
+//! `detection::adaptive` and `detection::detector` carried byte-identical copies,
+//! both edited identically during the planar migration — the point at which
+//! duplication stops being harmless.
 //!
-//! Split out because `detection::adaptive` and `detection::detector` carried
-//! byte-identical copies of this, and both were edited identically during the planar
-//! migration — which is the point at which duplication stops being harmless.
-//!
-//! Distinct from `planetary::quality::frame_to_luminance`, which uses Rec. 709
-//! weights. Star detection wants a flat channel average so a red-heavy field is not
-//! down-weighted relative to a green-heavy one.
+//! Distinct from `planetary::quality::frame_to_luminance` (Rec. 709 weights): star
+//! detection wants a flat channel average so a red-heavy field isn't down-weighted
+//! relative to a green-heavy one.
 
 use crate::error::Result;
 use crate::frame::Frame;
@@ -14,18 +13,12 @@ use rayon::prelude::*;
 
 /// Mean of all channels per pixel. Planar layout makes this one pass (`channels`
 /// streaming reads, one write) vs. interleaved's strided gather or the first planar
-/// version's `channels` read-modify-write passes.
+/// version's read-modify-write passes.
 ///
-/// Parallel because every `StarDetector::detect` starts here, once per captured frame:
-/// a plain `(0..pixel_count).map().collect()` measured **24.9ms** of a 137ms
-/// `stacking_iteration` on a 3008x3008 colour frame — one core streaming 108MB while
-/// nineteen idled, the largest serial section in the stacking thread. Destination is
-/// allocated once and written via `par_chunks_mut`, not `collect`ed, for one
-/// allocation instead of rayon's per-task intermediates.
-///
-/// `pub` because the Pro plate solver projects colour frames down to this before
-/// ASTAP — it must match the projection detection used to decide the frame was
-/// solvable, since Rec. 709 would down-weight the red-heavy fields this protects.
+/// Parallel: every `StarDetector::detect` starts here, and a plain `.map().collect()`
+/// measured **24.9ms** of a 137ms `stacking_iteration` on a 3008x3008 frame (one core
+/// streaming 108MB, nineteen idle) — the largest serial section in the stacking
+/// thread. Allocated once, written via `par_chunks_mut` not `collect`ed; `pub` since the Pro plate solver must match this projection before ASTAP (Rec. 709 would down-weight red-heavy fields).
 pub fn mean_luminance(frame: &Frame) -> Vec<f32> {
     let pixel_count = frame.pixel_count();
     let channels = frame.channels();

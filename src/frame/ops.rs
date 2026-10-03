@@ -39,10 +39,9 @@ impl Frame {
 
     /// Writes the interleaved 8-bit conversion into a caller-owned buffer.
     ///
-    /// Same output as [`Frame::to_rgb8_fast`] without the allocation, for callers that
-    /// already hold a pooled buffer of the right size. Exists so those callers do not
-    /// re-derive the planar → interleaved gather themselves: duplicating it is exactly
-    /// how the PNG writer and the SER writer drifted apart from it before.
+    /// Same output as [`Frame::to_rgb8_fast`] without the allocation, for callers that already
+    /// hold a pooled buffer of the right size — exists so they don't re-derive the planar →
+    /// interleaved gather themselves, which is exactly how the PNG and SER writers drifted apart from it before.
     ///
     /// # Panics
     /// Panics unless `out.len() == self.sample_count()`.

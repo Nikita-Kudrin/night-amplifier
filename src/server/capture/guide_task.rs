@@ -1,21 +1,11 @@
-//! The guide camera's free-running loop.
-//!
-//! Deliberately not the four-thread imaging pipeline: a guide camera is never stacked,
-//! so there is nothing to accumulate, no display copy to negotiate and no stage that can
-//! fall behind. One thread does the whole job.
-//!
-//! It starts on connect rather than on Start Capture, because the two things it exists
-//! for — plate solving and a look through the guide scope — are what you want *while*
-//! framing, before any imaging session has begun.
-//!
-//! # The render gate
-//!
-//! Post-processing is identical to the main camera's, and runs only while somebody is
-//! actually watching the guide stream ([`FrameStream::has_viewers`]). Nobody watching
-//! means no background extraction, no stretch solve, no encode — the expensive two
-//! thirds of a frame's cost — so a connected guide camera does not double the CPU bill
-//! of a session that is only ever looking at the main image. Solving and raw saving are
-//! *not* gated: both are the reason the loop is running at all.
+//! The guide camera's free-running loop: one thread, not the four-thread imaging
+//! pipeline, since nothing here is stacked or queued. Starts on connect, not Start
+//! Capture, so plate solving and a look through the guide scope are available *while*
+//! framing, before any imaging session begins.
+//! **Render gate**: post-processing matches the main camera's but runs only while
+//! somebody watches ([`FrameStream::has_viewers`]), skipping extraction/stretch/encode
+//! (two thirds of a frame's cost) so a guide camera doesn't double a main-only
+//! session's CPU bill. Solving and raw saving aren't gated — they're why the loop runs.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
