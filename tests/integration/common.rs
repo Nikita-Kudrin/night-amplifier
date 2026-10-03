@@ -26,15 +26,12 @@ pub const MIN_STACKING_SUCCESS_RATE: f64 = 0.5;
 
 /// Minimum fraction of frames the live-stacking path must get into the stack.
 ///
-/// Higher than `MIN_STACKING_SUCCESS_RATE` because that constant covers the
-/// batch path, which has no quality gate to lose frames to. The live path
-/// deliberately drops badly fitted frames — but dropping a third of a clean
-/// fixture set means detection, registration, or the gate's thresholds have
-/// regressed, not that the fixtures went bad.
-///
-/// Measured against the stack rather than against admissions, so an early
-/// re-base — which discards everything before it — shows up here as the lost
-/// integration it is. The managed sets currently sit at 83–100 %.
+/// Higher than `MIN_STACKING_SUCCESS_RATE`, which covers the batch path with no quality gate
+/// to lose frames to. The live path deliberately drops badly fitted frames, but losing a third
+/// of a clean fixture set means detection, registration, or the gate's thresholds regressed,
+/// not that the fixtures went bad. Measured against the stack, not admissions, so an early
+/// re-base (which discards everything before it) shows up here as the lost integration it is.
+/// Managed sets sit at 83–100 %.
 pub const MIN_LIVE_STACKING_RETENTION: f64 = 0.7;
 
 /// Re-bases a clean fixture set may make before the gate is chasing noise.
@@ -103,32 +100,19 @@ pub const DEBAYER_OUTPUT_DIR: &str = "debayer";
 // ============================================================================
 // Planar Layout Detectors
 // ============================================================================
-//
-// `Frame` stores pixels planar (`channel * width * height + y * width + x`) while
-// every 8-bit output format is interleaved. Reading a planar buffer as interleaved
-// makes each output pixel three *adjacent samples of one channel*, so chroma
-// collapses toward zero. That is cheap to assert on and needs no golden image,
-// which makes it the detector for the whole class of layout bugs.
-//
-// Measured on the bundled fixtures: a correct *stretched* colour render scores ~32, a
-// planar-read-as-interleaved one ~0.5.
-//
-// Calibration matters. This threshold only applies **after** background
-// neutralisation and stretch. Raw linear data is legitimately near-neutral — a freshly
-// debayered sub from the bundled FITS fixture scores 0.72 with nothing wrong with it —
-// so asserting this on a linear frame produces a false failure. For raw data, assert a
-// scene-independent structural property instead (see the CFA-site check in
-// `debayer_tests`).
+// `Frame` stores pixels planar (`channel*width*height + y*width + x`); every 8-bit format is
+// interleaved, so reading planar as interleaved makes each pixel three adjacent samples of one
+// channel, collapsing chroma toward zero — cheap to assert, no golden image needed (stretched
+// fixture ~32, planar-as-interleaved ~0.5). Valid only after stretch: raw data is near-neutral
+// (fresh sub scores 0.72 clean) — for raw data assert a structural property instead (`debayer_tests`).
 
-/// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures
-/// must exceed. Do not apply to raw linear frames; see the note above.
+/// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures must
+/// exceed. Do not apply to raw linear frames; see the note above.
 ///
-/// A floor against channels collapsing, which is an all-or-nothing defect: reading the
-/// planar buffer as interleaved scores ~0, not a few percent low. It was 5.0, close enough
-/// to the real numbers that raising `ContrastConfig`'s strength to 1.0 tripped it at 4.97
-/// — the eyepiece view at full intensity puts more of the frame in the curve's toe, which
-/// costs a little chroma. 4.0 keeps an order of magnitude over the defect while leaving
-/// the threshold off the measurement it is meant to bracket.
+/// A floor against channels collapsing (all-or-nothing: planar-as-interleaved scores ~0, not
+/// a few percent low). Was 5.0, until raising `ContrastConfig`'s strength to 1.0 tripped it
+/// at 4.97 — full intensity puts more of the frame in the curve's toe, costing a little
+/// chroma. 4.0 keeps an order of magnitude over the defect while staying off that measurement.
 pub const MIN_CHROMA_SPREAD: f64 = 4.0;
 
 /// Mean per-pixel `|R-G| + |G-B|` over an interleaved RGB8 buffer, in 0-255 units.

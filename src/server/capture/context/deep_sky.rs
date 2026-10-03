@@ -15,16 +15,12 @@ use crate::server::capture::frame_gate::{FrameAdmission, FrameGate, RejectionRea
 
 /// The nearest method the *live* accumulator can actually execute.
 ///
-/// `MinMax` needs the minimum and maximum of a sample set nobody keeps — `MasterStack`
-/// holds 16 bytes a pixel and no history, and carrying two more floats would put a
-/// 3008x3008x3 stack at 650 MB. Only the batch `compute_rejection` implements it, and
-/// nothing live calls that, so passing it through leaves the session with *no* rejection:
-/// `add_frame_with_border_and_quality` routes only the two clipping methods to the plugin
-/// and averages everything else. Substituting the nearest method that does run is the
-/// honest reading of what the observer asked for.
-///
-/// Separate from [`resolve_rejection`] so it can be tested exhaustively without a plugin
-/// registered — the licence check is what makes that impossible in Community.
+/// `MinMax` needs the min/max of a sample set nobody keeps — `MasterStack` holds 16
+/// bytes a pixel and no history, and two more floats would put a 3008x3008x3 stack at
+/// 650 MB. Only the batch `compute_rejection` implements it; the live path routes only
+/// the two clipping methods to the plugin and averages everything else, so passing
+/// `MinMax` through would leave the session with *no* rejection. Substituting the
+/// nearest method that does run is the honest reading of what was asked for.
 fn live_equivalent(method: RejectionMethod) -> RejectionMethod {
     match method {
         RejectionMethod::MinMax => RejectionMethod::SigmaClip,
@@ -298,6 +294,14 @@ impl StackingContext {
     pub fn compute(&self) -> Result<Frame, String> {
         self.stacker
             .compute()
+            .map_err(|e| format!("Failed to compute stack: {}", e))
+    }
+
+    /// The stacked result and its coverage map, from one read of the accumulator.
+    #[instrument(skip(self), fields(frame_count = self.frame_count()))]
+    pub fn compute_with_coverage(&self) -> Result<(Frame, crate::frame::NoiseField), String> {
+        self.stacker
+            .compute_with_coverage()
             .map_err(|e| format!("Failed to compute stack: {}", e))
     }
 

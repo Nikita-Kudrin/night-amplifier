@@ -6,57 +6,42 @@ use crate::render::black_point::estimate_background_mode;
 use crate::render::stretch::{estimate_tone_mapping_strength, ToneMappingAlgorithm};
 use crate::statistics::ImageStats;
 
-/// Smallest sky-above-black gap the solver will be asked to stretch, keeping the
-/// stretch factor finite when the sky sits on the black point.
-///
-/// A numerical guard and nothing more. It used to be `1e-4` — about 6.5 ADU of a
-/// 16-bit frame — which on an IMX533 deep-sky stack is larger than `k * sigma` from
-/// roughly 16 subs on, so past that depth the floor, not the solve, set the black
-/// point. That accident was the only reason a deeper stack ever looked smoother
-/// (grain 4.4 -> 1.5 output levels over 106 subs, falling as sigma once floored),
-/// and it arrived at whatever depth the camera's gain happened to put sigma below
-/// it. `depth_grain_gain` does that deliberately instead.
-///
-/// `1e-5` — 0.65 ADU — rather than smaller: `solve_stretch_factor_newton` treats a gap
-/// of `1e-6` or less as degenerate and returns an identity stretch, so the floor has to
-/// stay clear of it. Real gaps are far above either: ~2.9e-4 on a single IMX533 sub and
-/// ~1.6e-4 at 106 frames with the depth gain applied.
+/// Smallest sky-above-black gap the solver will stretch — a numerical guard keeping
+/// the stretch factor finite when the sky sits on the black point. Was `1e-4` (6.5
+/// ADU of 16-bit): on an IMX533 stack that exceeds `k * sigma` past ~16 subs, so the
+/// floor silently set the black point instead of the solve — the only reason a deeper
+/// stack ever looked smoother (grain 4.4->1.5 over 106 subs). `depth_grain_gain` now
+/// does that on purpose. Now `1e-5` (0.65 ADU): the solver treats ≤`1e-6` as
+/// degenerate (identity stretch), and real gaps run far above either (~2.9e-4 on one
+/// sub, ~1.6e-4 at 106 frames with depth gain applied).
 const MIN_EFFECTIVE_MEDIAN: f32 = 1e-5;
 
-/// Stack depth past which the sky stops getting calmer.
-///
-/// The split below is only affordable while the stack's noise really is falling as
-/// `sqrt(N)`. It is not, deep into a real session — rejection, drift and a sky that
-/// changes all take from it. On the 106-sub IMX533 set sigma falls as `N^0.41` over
-/// the first 32 subs and as `N^0.19` from there to 106. At a 1/8 split the gain
-/// stays under even that tail, so this is no longer what stops the target paying for
-/// the sky; it is kept because a session of 3-5 hours at 5 s reaches thousands of subs
-/// and nothing is gained by letting the black point keep widening over them.
-/// Guarded by `stack_depth_grain_tests`.
+/// Stack depth past which the sky stops getting calmer. The split below is only
+/// affordable while stack noise really falls as `sqrt(N)` — it doesn't, deep into a
+/// real session: rejection, drift and a changing sky all take from it. On the
+/// 106-sub IMX533 set, sigma falls as `N^0.41` over the first 32 subs and `N^0.19`
+/// from there to 106; at a 1/8 split the gain stays under even that tail, so this no
+/// longer gates the trade. Kept because a 3-5 hour session at 5 s reaches thousands
+/// of subs, and nothing is gained letting the black point keep widening. Guarded by
+/// `stack_depth_grain_tests`.
 const MAX_GAIN_DEPTH: f32 = 64.0;
 
-/// Share of the stack's `sqrt(N)` spent on a calmer sky rather than a brighter target,
-/// at the middle of the Background Grain dial.
-///
-/// `1/4` — an even split — was measured against three real sessions and spends more
-/// than the stack delivers: at 114 subs it put the black point 2.83 sigmas wider,
-/// costing the same 2.83x in rendered target contrast (M27 core 89 -> 47 output
-/// levels) for grain the spatial filters reach more cheaply. `1/8` gives the target
-/// back 1.5-1.7x (M27 47 -> 78, globular 98 -> 150, M31 159 -> 203) while the sky
-/// stays within a few percent of where it was, because the wavelet — whose thresholds
-/// are relative to the frame's own noise, so they self-scale with depth — now carries
-/// that work.
+/// Share of the stack's `sqrt(N)` spent on a calmer sky rather than a brighter
+/// target, at the middle of the Background Grain dial. `1/4` (even split), measured
+/// against three real sessions, spends more than the stack delivers: at 114 subs it
+/// put the black point 2.83 sigmas wider, costing the same 2.83x in target contrast
+/// (M27 core 89->47). `1/8` gives the target back 1.5-1.7x (M27 47->78, globular
+/// 98->150, M31 159->203) while the sky stays within a few percent, because the
+/// wavelet — noise-relative, so it self-scales with depth — now carries that work.
 pub const DEFAULT_GRAIN_SPLIT: f32 = 0.125;
 
-/// Smallest split the dial can ask for, and it is deliberately **not zero**.
-///
-/// At `0` the wavelet cannot take over: its thresholds are noise-relative, so it removes
-/// a constant *fraction* of the noise and never pins absolute output grain. On the
-/// 106-sub IMX533 session with denoising on, displayed sky grain then *rises* with depth
-/// (1.41 -> 2.30 output levels from 1 to 106 subs) and target-to-grain peaks at 64 subs
-/// and falls back — the give-back failure `MAX_GAIN_DEPTH` exists to prevent, reappearing
-/// from the other end. At `1/12` grain is near flat with depth (1.41 -> 1.66), so the
-/// bottom of the dial is still a setting a long session does not regress on.
+/// Smallest split the dial can ask for, deliberately **not zero**: at `0` the wavelet
+/// can't take over (its thresholds are noise-relative, so it removes a constant
+/// *fraction* of noise, never pinning absolute output grain). On a 106-sub IMX533
+/// session with denoising on, sky grain then *rises* with depth (1.41 -> 2.30 over
+/// 1-106 subs) and target-to-grain peaks at 64 subs and falls back — the give-back
+/// `MAX_GAIN_DEPTH` exists to prevent. At `1/12` grain stays near flat (1.41 -> 1.66),
+/// so this is a setting a long session doesn't regress on.
 pub const MIN_GRAIN_SPLIT: f32 = 1.0 / 12.0;
 
 /// Largest split the dial can ask for: the even split, kept as the top of the range
@@ -73,22 +58,14 @@ fn max_effective_sigma(grain_split: f32) -> f32 {
     5.0 * MAX_GAIN_DEPTH.powf(grain_split)
 }
 
-/// How much wider than `black_point_sigma` the black point sits, for a stack of
-/// `frames` at a given split.
-///
-/// Stacking `N` frames buys `sqrt(N)` in signal-to-noise. Under a scale-invariant
-/// tone curve all of it goes to faint-signal contrast and none to the sky: the MTF
-/// solve pins `mtf(k * sigma) = target_background`, so displayed sky grain is
-/// `T(1-T)/k` whatever sigma is, and the sky looks exactly as grainy at 100 subs as
-/// at one (measured: 4.2 output levels at 1 sub, 4.4 at 8).
-///
-/// This splits the gain instead — `k` grows as `N^grain_split`, so displayed grain
-/// falls as `N^-grain_split` and faint-signal contrast rises as `N^(1/2 - grain_split)`
-/// for as long as the stack's own noise falls as `sqrt(N)`; see `MAX_GAIN_DEPTH` for
-/// where it stops. Their ratio is `sqrt(N)` whatever the split; only the split is a
-/// choice, and `DEFAULT_GRAIN_SPLIT` says why its default is the one it is. A wider
-/// black point clips nothing: it sits *further below* the sky, so the faintest signal
-/// is dimmer but still above black.
+/// How much wider than `black_point_sigma` the black point sits, for a stack of `frames`
+/// at a given split. Stacking `N` buys `sqrt(N)` SNR; a scale-invariant curve with fixed
+/// `k` sends all of it to faint-signal contrast, none to the sky (`mtf(k*sigma) =
+/// target_background` pins sky grain at `T(1-T)/k` regardless of sigma — measured 4.2
+/// output levels at 1 sub, 4.4 at 8). This splits the gain instead: `k` grows as
+/// `N^grain_split`, so grain falls as `N^-grain_split` and contrast rises as
+/// `N^(1/2-grain_split)` while stack noise still falls as `sqrt(N)` (see
+/// `MAX_GAIN_DEPTH`); their ratio stays `sqrt(N)` regardless of split.
 pub fn depth_grain_gain(frames: u32, grain_split: f32) -> f32 {
     (frames.max(1) as f32)
         .min(MAX_GAIN_DEPTH)
@@ -105,21 +82,54 @@ pub fn depth_grain_gain(frames: u32, grain_split: f32) -> f32 {
 /// every cast sky, so it stays until there is real-data evidence for another.
 const UNLINKED_BELOW_BLACK: f32 = 1e-4;
 
-/// The per-channel counterpart of `effective_median`.
-///
-/// Two cases the one literal here used to conflate. A channel *above* the black point
-/// has a real gap and gets it, floored only by the same numerical guard the luminance
-/// gap uses — at `1e-4` that measurement was overridden from the depth at which
-/// `k * sigma` drops under 6.5 ADU (~7e-5 by 106 subs on an IMX533), so the linked and
-/// unlinked midtones drifted apart with stack depth for no reason in the data. A channel
-/// at or below the black point has no gap at all and gets
-/// [`UNLINKED_BELOW_BLACK`]. Pinned by `an_unlinked_channel_tracks_its_own_gap`.
+/// The per-channel counterpart of `effective_median`. Two cases the one literal
+/// here used to conflate. A channel *above* the black point has a real gap and
+/// gets it, floored by the same guard the luminance gap uses — at `1e-4` that was
+/// overridden from the depth where `k * sigma` drops under 6.5 ADU (~7e-5 by 106
+/// subs on an IMX533), drifting the linked and unlinked midtones apart with stack
+/// depth for no reason in the data. A channel at or below the black point has no
+/// gap at all and gets [`UNLINKED_BELOW_BLACK`]. Pinned by
+/// `an_unlinked_channel_tracks_its_own_gap`.
 fn unlinked_effective_median(gap: f32) -> f32 {
     if gap > 0.0 {
         gap.max(MIN_EFFECTIVE_MEDIAN)
     } else {
         UNLINKED_BELOW_BLACK
     }
+}
+
+/// Half-width of the band each signal-fraction gate blends across.
+///
+/// The gates were steps, and a stack deepening through one jumped: sigma falls with depth,
+/// so the share of samples above `mode + 2 sigma` climbs even under a static sky. Orion's
+/// crossed 0.2 at depth 7 and its core rendered 29 output levels brighter in one frame; a
+/// field sitting on a gate flipped between two curves every frame. Outside the bands the
+/// curve is exactly what the steps gave.
+const GATE_BLEND: f32 = 0.05;
+
+/// How far `signal_fraction` has crossed the gate at `threshold`: 0 below its band, 1
+/// above it, linear between — a smoothstep would be half as steep again mid-band.
+fn gate(signal_fraction: f32, threshold: f32) -> f32 {
+    ((signal_fraction - threshold + GATE_BLEND) / (2.0 * GATE_BLEND)).clamp(0.0, 1.0)
+}
+
+/// The black point factor and target background a frame's share of signal asks for,
+/// before the depth gain: a frame that is mostly signal gets its black point nearer the
+/// sky, and past 0.4 a brighter sky.
+fn signal_adapted(config: &AutoStretchConfig, signal_fraction: f32) -> (f32, f32) {
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let (above_low, above_high) = (gate(signal_fraction, 0.2), gate(signal_fraction, 0.4));
+    let sigma = lerp(
+        lerp(config.black_point_sigma, config.black_point_sigma * 0.8, above_low),
+        (config.black_point_sigma * 0.6).max(1.5),
+        above_high,
+    );
+    let target = lerp(
+        config.target_background,
+        (config.target_background * 1.3).min(0.20),
+        above_high,
+    );
+    (sigma, target)
 }
 
 pub fn compute_auto_stretch(
@@ -141,15 +151,10 @@ pub fn compute_auto_stretch_with_algorithm(
     let mean_sigma = stats.mean_sigma();
 
     let signal_fraction = estimate_signal_fraction(&background.luminance_samples, mode, mean_sigma);
+    let (signal_sigma, target_background) = signal_adapted(&config, signal_fraction);
 
-    let adaptive_sigma = (if signal_fraction > 0.4 {
-        (config.black_point_sigma * 0.6).max(1.5)
-    } else if signal_fraction > 0.2 {
-        config.black_point_sigma * 0.8
-    } else {
-        config.black_point_sigma
-    } * depth_grain_gain(config.stack_depth, config.grain_split))
-    .min(max_effective_sigma(config.grain_split));
+    let adaptive_sigma = (signal_sigma * depth_grain_gain(config.stack_depth, config.grain_split))
+        .min(max_effective_sigma(config.grain_split));
 
     // Floor the gap, then derive the black point from it.
     //
@@ -164,8 +169,8 @@ pub fn compute_auto_stretch_with_algorithm(
 
     // Everything the solve turns on, in one line. `signal_fraction` is measured
     // against `mode + 2 * mean_sigma`, so it moves with the *noise* as well as the
-    // signal — a deepening stack shrinks sigma and can walk this across the 0.2/0.4
-    // gates without the sky having changed at all.
+    // signal — a deepening stack shrinks sigma and walks it through the 0.2/0.4 gates
+    // without the sky having changed at all, which is why they are bands (`GATE_BLEND`).
     tracing::debug!(
         mode,
         mean_sigma,
@@ -177,12 +182,6 @@ pub fn compute_auto_stretch_with_algorithm(
         effective_median,
         "Auto-stretch inputs"
     );
-
-    let target_background = if signal_fraction > 0.4 {
-        (config.target_background * 1.3).min(0.20)
-    } else {
-        config.target_background
-    };
 
     let mut midtones = [0.5, 0.5, 0.5];
     let mut w = 0.0;
@@ -374,6 +373,72 @@ mod tests {
                 r.adaptive_sigma,
                 stats.mean_sigma()
             );
+        }
+    }
+
+    /// Every `black_point_sigma` and `target_background` a solve starts from: the three
+    /// deep-sky profiles, planetary, and the default the exports use.
+    fn gate_configs() -> Vec<AutoStretchConfig> {
+        use crate::render::autostretch::StretchAggressiveness::{High, Low, Medium};
+        let mut configs: Vec<_> = [Low, Medium, High]
+            .into_iter()
+            .map(|a| AutoStretchConfig::from_profile(false, a))
+            .collect();
+        configs.push(AutoStretchConfig::from_profile(true, Medium));
+        configs.push(AutoStretchConfig::default());
+        // The setting's floor, where the upper gate's `max(1.5)` makes it steepest.
+        configs.push(AutoStretchConfig::default().with_black_point_sigma(0.5));
+        configs
+    }
+
+    /// No share of signal is a cliff. The steps these replaced moved the black point by a
+    /// fifth of itself or more between two frames whose signal fraction differed in the
+    /// fourth decimal place — which every deepening stack that crosses 0.2 or 0.4 does.
+    #[test]
+    fn the_signal_gates_have_no_step() {
+        for config in gate_configs() {
+            let mut previous = signal_adapted(&config, 0.0);
+            for i in 1..=10_000 {
+                let fraction = i as f32 / 10_000.0;
+                let (sigma, target) = signal_adapted(&config, fraction);
+                assert!(
+                    (sigma / previous.0 - 1.0).abs() < 0.005,
+                    "black point factor {} -> {sigma} at signal fraction {fraction} \
+                     (setting {})",
+                    previous.0,
+                    config.black_point_sigma
+                );
+                assert!(
+                    (target / previous.1 - 1.0).abs() < 0.005,
+                    "target background {} -> {target} at signal fraction {fraction}",
+                    previous.1
+                );
+                previous = (sigma, target);
+            }
+        }
+    }
+
+    /// Away from the two thresholds nothing moved: a field clearly below, between or above
+    /// them renders exactly as the steps rendered it.
+    #[test]
+    fn away_from_the_gates_the_curve_is_the_old_steps() {
+        for config in gate_configs() {
+            let (b, t) = (config.black_point_sigma, config.target_background);
+            let above_both = ((b * 0.6).max(1.5), (t * 1.3).min(0.20));
+            for (fraction, expected) in [
+                (0.0, (b, t)),
+                (0.14, (b, t)),
+                (0.26, (b * 0.8, t)),
+                (0.34, (b * 0.8, t)),
+                (0.46, above_both),
+                (1.0, above_both),
+            ] {
+                let got = signal_adapted(&config, fraction);
+                assert!(
+                    (got.0 - expected.0).abs() < 1e-6 && (got.1 - expected.1).abs() < 1e-6,
+                    "signal fraction {fraction}: {got:?}, the steps gave {expected:?}"
+                );
+            }
         }
     }
 

@@ -1,16 +1,11 @@
 //! The reconnect supervisor: reopens a suspended camera (see `recovery`) and resumes
-//! what it was doing.
-//!
-//! Safe to automate only because of three guards: a stale handle can no longer close a
+//! what it was doing. Safe to automate via three guards: a stale handle can't close a
 //! device a reconnect just opened (`camera::DeviceLease`), a reopened handle isn't
-//! trusted until it answers (`lifecycle::verify_responsive`), and it isn't trusted
-//! until it is the *same camera* (`camera::identity`) — reopening by list position put
-//! the imaging camera in the guide role on 2026-09-07.
-//!
-//! Prompt, but not reckless: the first attempt waits for any SDK call the watchdog
-//! abandoned to come back out of the vendor library (up to `ABANDONED_CALL_WAIT`),
-//! retries follow `RETRY_SCHEDULE`, and the whole effort is bounded by `TOTAL_BUDGET`.
-//! Silent until `NOTICE_AFTER`. Single-flight per slot.
+//! trusted until it answers (`lifecycle::verify_responsive`), and not until it's the
+//! *same camera* (`camera::identity`) — list-position reopen put the imaging camera
+//! in the guide role on 2026-09-07. First attempt waits for an abandoned SDK call to
+//! return (`ABANDONED_CALL_WAIT`), retries follow `RETRY_SCHEDULE` bounded by
+//! `TOTAL_BUDGET`, silent until `NOTICE_AFTER`; single-flight per slot.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -289,12 +284,11 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
 /// Put back the capture-shaping settings the session was running with.
 ///
 /// The reopen applies the camera's stored profile, which can differ from what the
-/// interrupted session was actually using. The plan follows every settings update made
-/// while the capture ran or was paused (`update_settings`), so this restores the
-/// observer's latest values, not the ones the capture started with. Saved and announced:
-/// a silent write left every client showing values the resumed capture was not using.
-/// The camera-hardware fields (cooler, dew heater, sensor mode) are deliberately left as
-/// the reopen set them, since those belong to the device rather than the session.
+/// interrupted session was using. The plan follows every settings update made while
+/// capture ran or was paused (`update_settings`), restoring the observer's latest
+/// values, not the ones capture started with. Saved and announced — a silent write
+/// once left clients showing values the resumed capture wasn't using. Hardware fields
+/// (cooler, dew heater, sensor mode) stay as the reopen set them; those belong to the device.
 async fn restore_settings(state: &Arc<AppState>, plan: &SessionResumePlan) {
     restore_capture_fields(&mut *state.settings.write().await, plan);
     state.save_settings().await;

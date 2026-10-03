@@ -104,6 +104,14 @@ pub async fn run_capture_loop(
             state.end_capture_state().await;
             return;
         }
+        // Recovered like a handle a running capture lost: the capture pauses for the reopen,
+        // which resumes it, and recovery decides what the observer hears.
+        Err(e @ ApiError::CameraHandleLost { .. }) => {
+            warn!(camera_id = %camera_id, error = %e, "No camera handle to start the capture with");
+            lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
+            state.end_capture_state().await;
+            return;
+        }
         Err(e) => {
             error!(camera_id = %camera_id, error = %e, "Failed to take camera handle for capture");
             state.send_error(format!("Failed to take camera handle: {}", e));
@@ -116,6 +124,16 @@ pub async fn run_capture_loop(
     state
         .set_camera_token(CameraRole::Main, camera.cancel_token())
         .await;
+
+    // A Stop or Disconnect that landed during startup found no token to cut the probe
+    // exposure with; without this the first frame would run its whole length.
+    if state.is_cancelled() {
+        debug!(camera_id = %camera_id, "Capture stopped before its first frame");
+        state.clear_camera_token(CameraRole::Main).await;
+        lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
+        state.end_capture_state().await;
+        return;
+    }
 
     // New session: force a full CaptureConfig reapply on the very next
     // capture() regardless of any out-of-band mutation (cooler/target-temp)
@@ -165,6 +183,11 @@ pub async fn run_capture_loop(
                 Some(Err(e)) if !e.is_sdk_disconnected() && !matches!(e, CameraError::ExposureTimeout(_))
             );
             match camera {
+                // Cut short by a Stop or Disconnect: what was asked for, not a failure.
+                Some(cam) if !faulted && state.is_cancelled() => {
+                    debug!(reason = %reason, "Probe frame cancelled by a stop");
+                    lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(cam)).await
+                }
                 Some(cam) if !faulted => {
                     error!(reason = %reason, "Failed to capture probe frame for pipeline setup");
                     state.send_error(format!("Failed to capture initial frame: {}", reason));
@@ -202,16 +225,14 @@ pub async fn run_capture_loop(
         }
     };
 
-    // Each channel is sized from the payload it carries, not from one frame size for
-    // all three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a
-    // quarter to a sixth of the debayered frame — while only the render channel moves
-    // the f32 `Frame`. The stacking channel is bounded by the lag it would introduce as
-    // well, which is why the exposure comes into it.
-    //
-    // Resolved once, from the settings this session started with. A `SyncSender` cannot
-    // be resized anyway, and the probe frame the depth is derived from is equally a
-    // snapshot — so an exposure changed mid-session leaves the channels as they are, and
-    // the figure actually used is logged below rather than left to be inferred.
+    // Each channel is sized from the payload it carries, not one frame size for all
+    // three: the two capture channels move `Arc<RawFrame>` — sensor bytes, a quarter
+    // to a sixth of the debayered frame — while only the render channel moves the f32
+    // `Frame`; the stacking channel is also bounded by the lag it would introduce,
+    // which is why the exposure factors in. Resolved once, from the settings this
+    // session started with — a `SyncSender` cannot be resized anyway, and the probe
+    // frame the depth is derived from is equally a snapshot — so an exposure changed
+    // mid-session leaves the channels as they are; the figure used is logged below.
     let raw_memory = probe_raw.data_slice().len();
     let frame_memory = probe_frame.memory_size();
     let capacities = pipeline_capacities(raw_memory, frame_memory, settings.exposure_us);

@@ -1,18 +1,11 @@
-//! The two fused f32 -> RGB8 kernels every streamed frame goes through. Both share
-//! one shape: a **row source** producing one interleaved RGB f32 row at output
-//! resolution, and a **tail** applying the tone curve, saturation, contrast and the
-//! 8-bit write. The sources differ (one expands a frame already fitting the
-//! bounding box, the other area-averages a larger one down) as separate traversals
-//! with separate planar indexing — why `frame/layout_tests.rs` carries a row for each.
-//!
-//! Two drivers because the denoisers can't fuse: with denoising off, each row is
-//! gathered, transformed and written inside one closure against a thread-local
-//! scratch row, no full-resolution intermediate. Either denoiser needs cross-row
-//! neighbourhood access, so on, the driver stages the whole resampled image as f32
-//! at *output* resolution (24MB for a 1440² eyepiece, vs 108MB at native 3008²),
-//! denoises it, then runs the per-row tail. Keeping the fused path for the off case
-//! isn't just an optimization — it's what makes `DenoiseConfig::OFF` byte-identical
-//! to the pre-denoise output, not merely equivalent.
+//! The two fused f32 -> RGB8 kernels every streamed frame goes through: a **row
+//! source** producing one interleaved RGB f32 row at output resolution, and a
+//! **tail** applying the tone curve, saturation, contrast and 8-bit write — sources
+//! differ (expand vs area-average) as separate traversals with separate planar
+//! indexing (see `frame/layout_tests.rs`). Denoisers can't fuse into that row-at-a-
+//! time path: when one is on, the driver stages the whole resampled image as f32 at
+//! output resolution first (24MB at 1440² vs 108MB at native 3008²) — keeping the
+//! fused path for the off case keeps `DenoiseConfig::OFF` byte-identical to pre-denoise output.
 
 use std::cell::RefCell;
 
@@ -34,14 +27,12 @@ thread_local! {
 }
 
 /// Convert a Frame to RGB8 data, area-averaging down to a bounding box if needed. No
-/// debayering here: a 1-channel frame reaching this function is genuine monochrome,
-/// never raw CFA — the stacking task demosaics colour sensors before the render path
-/// sees a frame, and nothing between there and here changes channel count. So mono
-/// channels are simply replicated across RGB. The old code instead ran
-/// `detect_cfa_pattern` (never errors on a 1-channel frame, confidence discarded)
-/// and debayered unconditionally — a full-resolution f32 RGB frame (3x the mono
-/// source, ~196MB on an ASI1600MM) per payload per frame, with colour fringing on grey
-/// data.
+/// debayering here: a 1-channel frame is genuine monochrome, never raw CFA — stacking
+/// demosaics colour sensors before the render path sees a frame, so mono channels are
+/// simply replicated across RGB. The old code instead ran `detect_cfa_pattern`
+/// (confidence discarded) and debayered unconditionally — a full-resolution f32 RGB
+/// frame (3x the mono source, ~196MB on an ASI1600MM) per payload per frame, with
+/// colour fringing on grey data.
 pub fn frame_to_rgb8_downsampled(
     ready_frame: &RenderReadyFrame,
     max_width: u32,
@@ -92,15 +83,14 @@ pub fn frame_to_rgb8_downsampled_with(
     Ok((rgb8, target_width as u32, target_height as u32))
 }
 
-/// The exact size [`frame_to_rgb8_downsampled`] produces for a frame fitted into
-/// a bounding box, without doing the conversion.
+/// The exact size [`frame_to_rgb8_downsampled`] produces for a frame fitted into a
+/// bounding box, without doing the conversion.
 ///
-/// The render task keys its per-frame conversion cache on this: two payloads
-/// whose resolutions are different boxes but resolve to the same output
-/// size are the *same* conversion, and that conversion carries the
-/// denoisers and costs several times the encode that follows it. Sharing it is
-/// only sound if the size is decided by exactly the arithmetic the conversion
-/// will use, which is why this is the one copy of that arithmetic.
+/// The render task keys its per-frame conversion cache on this: two payloads whose
+/// resolutions are different boxes but resolve to the same output size are the *same*
+/// conversion, one that carries the denoisers and costs several times the encode that
+/// follows. Sharing it is only sound if the size matches exactly the arithmetic the
+/// conversion uses, which is why this is the one copy of it.
 pub fn output_dimensions(
     width: usize,
     height: usize,
@@ -155,18 +145,13 @@ pub(crate) fn expand_to_rgb8_fused(
 }
 
 /// Area-average `frame` to `target_width` x `target_height` in **linear light**, then
-/// apply the tone-curve stretch (+ saturation/contrast) to the averaged result.
-/// Stretch happens after downsampling, not before (the pre-fusion order): the
-/// stretch curves here (asinh, MTF) are concave, so Jensen's inequality guarantees
-/// `curve(average(pixels)) >= average(curve(pixels))` for any source box — this
-/// order can only preserve or brighten faint detail in a downsampled stream, never dim
-/// it (see `test_downsample_then_stretch_is_at_least_as_bright_as_stretch_then_downsample`).
-///
-/// The kernel is [`AxisTaps`], not a whole-pixel box: see there for why.
-///
-/// `pub(crate)` for the same reason as [`expand_to_rgb8_fused`]: its `else` arm
-/// indexes `plane_size * 2` unconditionally, and [`frame_to_rgb8_downsampled`] is
-/// the guard.
+/// apply the tone-curve stretch (+ saturation/contrast) to the result. Stretch runs
+/// after downsampling, not before: the curves (asinh, MTF) are concave, so Jensen's
+/// inequality guarantees `curve(avg(pixels)) >= avg(curve(pixels))` for any source box
+/// — this order can only preserve or brighten faint detail, never dim it (see the
+/// downsample-then-stretch brightness test). Kernel is [`AxisTaps`], not a whole-pixel
+/// box; `pub(crate)` like [`expand_to_rgb8_fused`], whose `else` arm indexes
+/// `plane_size * 2` unconditionally, guarded only by [`frame_to_rgb8_downsampled`].
 pub(crate) fn area_downsample_to_rgb8_fused(
     ready_frame: &RenderReadyFrame,
     target_width: usize,
@@ -328,6 +313,7 @@ impl RowSource for StagedRows<'_> {
 }
 
 /// The tone-curve half of both kernels, hoisted out of the per-row closure.
+#[derive(Clone)]
 pub(super) struct RowTail<'a> {
     config: &'a crate::render::RenderPipelineConfig,
     has_stretch: bool,
@@ -369,14 +355,7 @@ impl<'a> RowTail<'a> {
     }
 
     pub(super) fn apply(&self, f32_row: &mut [f32]) {
-        if self.has_stretch {
-            crate::render::simd::apply_luminance_scale_lut_simd(
-                f32_row,
-                self.black_point,
-                &self.scale_lut,
-                self.config.stretch_config.color_intensity,
-            );
-        }
+        self.apply_tone(f32_row);
         if self.has_saturate {
             if let Some(plugin) =
                 crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN)
@@ -394,6 +373,58 @@ impl<'a> RowTail<'a> {
             apply_shadow_floor_slice(f32_row, table);
         }
     }
+
+    /// The stretch alone: the image the AI denoiser reads.
+    fn apply_tone(&self, f32_row: &mut [f32]) {
+        if self.has_stretch {
+            crate::render::simd::apply_luminance_scale_lut_simd(
+                f32_row,
+                self.black_point,
+                &self.scale_lut,
+                self.config.stretch_config.color_intensity,
+            );
+        }
+    }
+
+    /// This tail without its stretch, for rows the staged path has already toned.
+    fn after_tone(&self) -> Self {
+        Self {
+            has_stretch: false,
+            ..self.clone()
+        }
+    }
+}
+
+/// The frame's noise map, resampled onto the output grid this conversion produces:
+/// coverage by position, and (when the field carries one) a variance plane, in
+/// quadrature with the same taps the pixels went through.
+///
+/// An output pixel is `sum(w_i * x_i)` with `sum(w_i) = 1`, so its variance is
+/// `sum(w_i^2 * sigma_i^2)` — resampling the map like an image instead overstates
+/// noise by roughly `sqrt(k)` for a `k`-fold reduction, so the factor comes from
+/// `AxisTaps::sum_sq` on the *same cached instance* the pixels use. `None` when there's no map, or it has nothing to say.
+pub(super) fn output_noise_field(
+    ready_frame: &RenderReadyFrame,
+    target_width: usize,
+    target_height: usize,
+) -> Option<crate::frame::NoiseField> {
+    let field = ready_frame.noise.as_deref()?;
+    if !field.is_usable() {
+        return None;
+    }
+    let frame = &ready_frame.linear_frame;
+    let (width, height) = (frame.width(), frame.height());
+
+    let _span = tracing::info_span!("noise_resample", target_width, target_height).entered();
+    if (target_width, target_height) == (width, height) {
+        // Not resampled, so the taps are the identity and carry all of the variance.
+        return field.resampled(target_width, target_height, &[1.0], &[1.0]).ok();
+    }
+    let columns = AxisTaps::cached(width, target_width);
+    let rows = AxisTaps::cached(height, target_height);
+    field
+        .resampled(target_width, target_height, columns.sum_sq(), rows.sum_sq())
+        .ok()
 }
 
 /// Drive a row source to interleaved RGB8, staging the resampled image only when
@@ -437,7 +468,22 @@ fn render_rgb8<S: RowSource>(
         return output;
     }
 
-    stage_and_denoise(source, &tail, display, &denoise, sky_shadow, &mut output, scratch);
+    // Only built for the linear filters: they are its only reader, so on the fused path
+    // and for the network alone the resample would be work for nothing.
+    let noise = denoise
+        .linear_enabled()
+        .then(|| output_noise_field(ready_frame, target_width, target_height))
+        .flatten();
+    stage_and_denoise(
+        source,
+        &tail,
+        display,
+        &denoise,
+        sky_shadow,
+        noise.as_ref(),
+        &mut output,
+        scratch,
+    );
     output
 }
 
@@ -445,12 +491,17 @@ fn render_rgb8<S: RowSource>(
 /// denoise it, then run the tone curve and the 8-bit write per row. A sky shadow
 /// streams the denoised rows through the same driver as the fused path: applied to
 /// the whole image it held two more full planes (~208 MB at 26 MP native).
+///
+/// The AI denoiser splits the tail: it reads the stretched image, so the stretch runs
+/// over the whole staged image first and the rest of the tail after the network.
+#[allow(clippy::too_many_arguments)]
 fn stage_and_denoise<S: RowSource>(
     source: &S,
     tail: &RowTail,
     display: DisplayOutput,
     denoise: &DenoiseConfig,
     sky_shadow: Option<crate::render::SkyShadow>,
+    noise: Option<&crate::frame::NoiseField>,
     output: &mut [u8],
     scratch: &mut DenoiseScratch,
 ) {
@@ -491,8 +542,33 @@ fn stage_and_denoise<S: RowSource>(
         target_width,
         target_height,
         denoise,
+        noise,
         scratch,
     );
+
+    // Without a stretch there is no display-referred image to hand the network, so the
+    // frame renders as the linear filters left it.
+    let toned;
+    let tail = if denoise.ai.is_enabled() && tail.has_stretch {
+        {
+            let _span = tracing::info_span!("tone", samples = staged_len).entered();
+            staged
+                .par_chunks_mut(row_len)
+                .with_min_len(32)
+                .for_each(|row| tail.apply_tone(row));
+        }
+        crate::render::denoise::ai::denoise_display_rgb_with(
+            staged,
+            target_width,
+            target_height,
+            &denoise.ai,
+            scratch,
+        );
+        toned = tail.after_tone();
+        &toned
+    } else {
+        tail
+    };
 
     if let Some(shadow) = sky_shadow {
         let rows = StagedRows {

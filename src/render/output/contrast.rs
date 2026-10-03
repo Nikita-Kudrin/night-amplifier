@@ -13,18 +13,14 @@ pub struct ContrastConfig {
     pub midpoint: f32,
 }
 
-/// `strength` is at its maximum and `midpoint` sits *below* the sky, which is what makes
-/// that affordable: the sky falls on the curve's compressive half and the target on its
-/// expansive one, so the curve brightens the target and darkens the sky in one pass
-/// instead of trading one for the other. Measured on four sessions against `strength`
-/// 0.8: target core +7-10 %, sky -2 output levels, octave-band sky noise within a few
-/// percent everywhere, and the star radial profile slightly *better* (M27's r=13-25 tail
-/// fell). Contrast is the only free brightness lever here — the tone curve's own
-/// grain split (`AutoStretchConfig::grain_split`) costs target contrast 1:1.
-///
-/// The midpoint stays at 0.2. Lowering it was measured and rejected: it washes the
-/// background out rather than lifting the target (sky 23 -> 32 output levels, p1 11 ->
-/// 16 at 0.1), because it moves the sky onto the expansive half.
+/// `strength` is at max, `midpoint` sits *below* the sky — affordable because the sky
+/// falls on the curve's compressive half and the target on its expansive one, so one
+/// pass brightens the target and darkens the sky at once. Measured on four sessions vs
+/// `strength` 0.8: target core +7-10%, sky -2 output levels, star radial profile
+/// slightly better (M27's r=13-25 tail fell). Contrast is the only free brightness
+/// lever — the tone curve's own grain split costs target contrast 1:1. Midpoint stays
+/// at 0.2: lowering it washes the background out instead (sky 23 -> 32 output levels,
+/// p1 11 -> 16 at 0.1), moving the sky onto the expansive half.
 impl Default for ContrastConfig {
     fn default() -> Self {
         Self {

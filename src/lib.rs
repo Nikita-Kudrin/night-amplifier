@@ -3,15 +3,14 @@
 //! A high-performance astronomy image stacking engine optimized for
 //! Electronically Assisted Astronomy (EAA) on embedded platforms like Raspberry Pi 5.
 
-// `unused_imports` stays allowed crate-wide: clearing the ~60 stale ones is
-// separate work and the lint has never caught a real defect here. `dead_code` is
-// deliberately *not* allowed crate-wide any more — a blanket allow is what let the
-// raw-CFA migration leave a live-looking `buffer_to_frame` in two camera shims,
-// still debayering inside the shim, with no caller and no warning. It is allowed
-// only on the two modules wrapping vendored SDK bindings, where the 200-odd unused
-// items actually live. `unused_variables` and `unused_assignments` are deliberately
-// not allowed either — suppressing them is what let the planar migration ship three
-// half-converted call sites whose only symptom was a local computed and never read.
+// `unused_imports` stays allowed crate-wide: clearing the ~60 stale ones is separate
+// work and the lint has never caught a real defect here. `dead_code` is deliberately
+// *not* allowed crate-wide any more — a blanket allow let the raw-CFA migration leave
+// a live-looking `buffer_to_frame` in two camera shims, still debayering with no
+// caller and no warning; it's allowed only on the two modules wrapping vendored SDK
+// bindings, where the 200-odd unused items actually live. `unused_variables` and
+// `unused_assignments` are deliberately not allowed either — suppressing them let the
+// planar migration ship three half-converted call sites whose only symptom was a local computed and never read.
 #![allow(unused_imports)]
 
 pub mod background;
@@ -30,6 +29,7 @@ pub mod frame;
 #[allow(dead_code)] // vendored INDI protocol surface, likewise
 pub mod indi;
 pub mod logging;
+pub mod native_library;
 pub mod parallel;
 pub mod planetary;
 pub mod process;
@@ -64,7 +64,7 @@ pub use detection::{
     BackgroundStats, DetectionConfig, Star, StarDetector,
 };
 pub use error::{Result, StackError};
-pub use frame::{Frame, PixelFormat};
+pub use frame::{Frame, NoiseField, PixelFormat, NOISE_REDUCTION};
 pub use process::{ChildGuard, ExternalProcess};
 pub use registration::{
     register_frames, register_frames_adaptive, AdaptiveRegistration, AdaptiveRegistrationResult,

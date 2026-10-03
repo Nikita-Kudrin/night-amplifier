@@ -1,28 +1,11 @@
-//! Sky-level estimation, the input the black point is derived from.
-//!
-//! Separate binary rather than a fifth group in `render_benchmark`, which already sits
-//! at ~28 s of the ~30 s budget — the same reason `scale_lut_benchmark` was split out.
-//!
-//! `estimate_background_mode` costs what it costs almost regardless of frame size: it
-//! strides the frame for a fixed ~50 000 luminance samples, then bins them twice — once
-//! coarsely to pick the sky's region, once finely to locate the peak inside it.
-//!
-//! The two cases differ in how tightly the sky clusters, which is what the refinement is
-//! sensitive to. A deep stack (sigma ~2e-5 against a 2.4e-4 coarse bin) puts nearly every
-//! sample inside the refinement window, so its window test predicts perfectly; a single
-//! sub spreads over ~5 bins and roughly half the samples fall outside, which costs branch
-//! mispredictions — measured 0.51 ms against 0.61 ms per call. Keep both: the deeper case
-//! is the one production spends its time in, and the shallower one is where a future
-//! change to the window test would show up first.
-//!
-//! Guards a real regression. Refining by sorting the window and taking its half-sample
-//! mode — the first fix for the black point snapping a whole coarse bin as a stack
-//! deepened — measured 1.40 ms per call against 0.39 ms for the unrefined original. The
-//! sub-histogram that replaced it keeps the resolution for 0.51 ms.
-//!
-//! Production shape throughout: 3008x3008x3 is the IMX533 this was measured on, and it
-//! matters beyond pixel count — at that size the sampling stride is 181, so the 50 000
-//! reads are scattered across a 108 MB frame and miss cache on nearly every one.
+//! Sky-level estimation, the input black point is derived from. Separate binary (same
+//! ~28/30 s budget reason as `scale_lut_benchmark`). `estimate_background_mode` strides
+//! ~50 000 luminance samples regardless of frame size, binning twice: coarse to find the
+//! sky region, fine to locate the peak. Guards a real regression: sorting the window for
+//! its half-sample mode (the original fix for black point snapping a whole coarse bin)
+//! cost 1.40 ms vs 0.39 ms unrefined; the sub-histogram that replaced it keeps the
+//! resolution for 0.51 ms. The two cases differ in sky clustering — deep stack (sigma
+//! ~2e-5 vs 2.4e-4 bin) at 0.51 ms, single sub at 0.61 ms from branch mispredictions.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use night_amplifier::frame::Frame;

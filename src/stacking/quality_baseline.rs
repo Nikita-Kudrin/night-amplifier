@@ -10,17 +10,14 @@ use super::config::{FrameQuality, WeightingConfig};
 /// is too small to say what typical looks like, so every frame weighs the same.
 const WARMUP_FRAMES: usize = 5;
 
-/// The session's yardstick for frame quality: median FWHM and SNR of frames already
-/// blended in. Medians, not extremes — normalising against a running min/max (the
-/// original approach) makes a frame's weight depend on arrival order, since whichever
-/// frame is the current extreme scores 0.0 or 1.0 however marginally, and that early
-/// weight is permanent once blended. Ratios against a median are scale-free and
-/// converge, so equal quality earns equal weight regardless of arrival time.
+/// The session's yardstick for frame quality: median FWHM and SNR of frames
+/// already blended in. Medians, not extremes — a running min/max (the
+/// original approach) makes weight depend on arrival order, since whichever
+/// frame is the current extreme scores 0.0 or 1.0, permanently once blended;
+/// ratios against a median are scale-free and converge instead.
 ///
-/// Median over the whole session, not a rolling window (unlike `frame_gate`, which
-/// wants to track drifting conditions) — a frame's weight freezes when blended, so
-/// weights are only comparable if measured against the same scale: two frames of
-/// equal quality an hour apart must contribute equally.
+/// Whole session, not a rolling window (unlike `frame_gate`, which tracks
+/// drifting conditions): weight freezes at blend time, so it's only comparable against the same scale — equal quality an hour apart must weigh equally.
 #[derive(Default)]
 pub struct QualityBaseline {
     /// Kept sorted so the median is a lookup and insertion needs no allocation

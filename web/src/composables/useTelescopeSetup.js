@@ -3,13 +3,8 @@ import {updateSettings} from './api.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 
 /**
- * Composable for telescope setup and FOV calculation: manages focal length, camera
- * sensor selection (pixel size + resolution), and barlow/reducer coefficient,
- * computing FOV for display and persisting params (the backend derives the
- * solver's FOV hint from them). On camera connect, auto-resolves settings: restores
- * a stored per-camera profile if seen before, else inherits focal_length/barlow
- * from the previous camera and fills pixel size from the driver or CAMERA_DATABASE.
- *
+ * Telescope setup + FOV calculation: focal length, sensor (pixel size/resolution), and
+ * barlow coefficient, persisted as the solver's FOV hint; auto-resolves from the camera on connect.
  * @param {Object} options
  * @param {Function} options.withErrorHandling - Error handling wrapper
  * @param {import('vue').Ref} options.connectedCameraInfo - Reactive camera info from selected camera
@@ -95,16 +90,13 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
                 cameraProfiles.value[lastCameraName.value] = {...telescope}
             }
 
-            // Posting `telescope` is all the solver needs: the backend derives the
-            // image-height FOV from these parameters itself, and prefers a FOV
-            // measured by a previous solve on this rig over any computed one.
+            // Posting `telescope` is all the solver needs: the backend derives the image-
+            // height FOV itself and prefers a previously measured FOV over any computed one.
             //
-            // This used to also POST /push-to/config with `max(fovX, fovY)`, which
-            // overwrote that decision unconditionally a few milliseconds later. Two
-            // problems: it discarded a solved FOV in favour of a computed one, and
-            // `max(x, y)` is the *width* field on a non-square sensor while ASTAP's
-            // `-fov` wants the height. On a 2712x1538 sensor that is a 1.76x error,
-            // and a wrong FOV does not slow a hinted attempt down -- it makes it fail.
+            // This used to also POST /push-to/config with `max(fovX, fovY)`, overwriting
+            // that decision ms later — discarding a solved FOV for a computed one, using
+            // the *width* field where ASTAP's `-fov` wants height. On a 2712x1538 sensor
+            // that's a 1.76x error: a wrong FOV doesn't slow a hinted attempt, it fails it.
             const doSave = async () => {
                 await updateSettings({
                     telescope,

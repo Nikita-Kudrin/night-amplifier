@@ -163,7 +163,7 @@ pub(crate) fn handle_stall(
         ),
     }
     if let StallVerdict::Escalate(_) = verdict {
-        camera_health::record_fault(state, camera_name, FaultKind::Timeout);
+        camera_health::record_fault(state, site.role(), camera_name, FaultKind::Timeout);
     }
     verdict
 }

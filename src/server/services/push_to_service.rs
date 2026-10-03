@@ -19,13 +19,12 @@ pub struct PushToService;
 impl PushToService {
     /// Get the current Push-To status
     ///
-    /// Read-only on purpose. `PushToState` mirrors the plugin so the stacking
-    /// thread can gate plate solving without awaiting it, but a status poll is
-    /// the wrong place to repair that mirror: `solving_in_progress` is a latch
-    /// owned by `solve_frame`, and clearing it from here would let a second
-    /// solve start under one already in flight. The mirror is maintained by the
-    /// target mutations below and re-synced from `solve_frame`'s own
-    /// authoritative read of the plugin.
+    /// Read-only on purpose. `PushToState` mirrors the plugin so the stacking thread
+    /// can gate plate solving without awaiting it, but a status poll is the wrong
+    /// place to repair that mirror: `solving_in_progress` is a latch owned by
+    /// `solve_frame`, and clearing it here would let a second solve start under one
+    /// already in flight. The mirror is kept in sync by the target mutations below
+    /// and `solve_frame`'s own authoritative read of the plugin.
     pub async fn get_status(_state: &AppState) -> PushToStatusResponse {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.get_status().await
@@ -77,15 +76,12 @@ impl PushToService {
         Ok(())
     }
 
-    /// Tell the solver which camera is producing frames now.
+    /// Tell the solver which camera is producing frames now. No-op without the Pro plugin.
     ///
-    /// Called on connect and on disconnect rather than only on a settings change: the
-    /// telescope profile is what the *user* believes the optics are, and two cameras
-    /// sharing a sensor format leave it identical. The camera name is the one fact
-    /// that always changes, and it is what lets the solver notice that a remembered
-    /// field of view was measured through something else.
-    ///
-    /// No-op without the Pro plugin.
+    /// Called on connect and disconnect, not only on a settings change: the telescope profile
+    /// is what the *user* believes the optics are, and two cameras sharing a sensor format
+    /// leave it identical. The camera name is the one fact that always changes, letting the
+    /// solver notice a remembered field of view was measured through something else.
     pub async fn set_active_camera(camera: Option<String>) {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
             plugin.set_active_camera(camera).await;
@@ -230,15 +226,14 @@ impl PushToService {
     }
 }
 
-/// Server-side mirror of the Push-To plugin, so the stacking thread can decide
-/// whether a plate solve is worth preparing a frame for without awaiting the
-/// plugin's own locks. The first two fields are caches, not the source of truth
-/// (the plugin is) — they exist only to keep `capture::solving::plate_solve_available`
-/// synchronous and cheap; every consequential check repeats against the plugin
-/// inside `solve_frame`. Write `has_target` through
-/// [`AppState::set_push_to_has_target`]. The last two are event de-duplication
-/// state, owned here since they're about what this server already told clients,
-/// which the plugin has no view of.
+/// Server-side mirror of the Push-To plugin, so the stacking thread can decide whether
+/// a plate solve is worth preparing a frame for without awaiting the plugin's own
+/// locks. The first two fields are caches, not the source of truth (the plugin is) —
+/// they exist only to keep `capture::solving::plate_solve_available` synchronous and
+/// cheap; every consequential check repeats against the plugin inside `solve_frame`.
+/// Write `has_target` through [`AppState::set_push_to_has_target`]. The last two are
+/// event de-duplication state, owned here since they're about what this server already
+/// told clients, which the plugin has no view of.
 #[derive(Default)]
 pub struct PushToState {
     /// Latch owned by `solve_frame`: raised before a solve is dispatched, cleared

@@ -120,18 +120,26 @@ pub async fn events_handler(
     ws.on_upgrade(move |socket| handle_events(socket, state))
 }
 
+/// Send the state a client cannot rebuild from changes alone: the capture state and every
+/// camera's phase. Returns `false` once the socket is gone.
+async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
+    let snapshot = [
+        ServerEvent::state_changed(state.capture_state().await),
+        state.camera_phases_event().await,
+    ];
+    for event in snapshot {
+        if socket.send(Message::Text(event.to_json().into())).await.is_err() {
+            return false;
+        }
+    }
+    true
+}
+
 /// Handle the events WebSocket connection
 async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
     let mut events_rx = state.subscribe_events();
 
-    // Send initial state
-    let initial_state = state.capture_state().await;
-    let initial_event = ServerEvent::state_changed(initial_state);
-    if socket
-        .send(Message::Text(initial_event.to_json().into()))
-        .await
-        .is_err()
-    {
+    if !send_snapshot(&mut socket, &state).await {
         return;
     }
 
@@ -164,9 +172,13 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        // Client is too slow, send warning
+                        // Client is too slow: what it dropped may have been a state or
+                        // phase change, so it gets the current picture again.
                         let warning = ServerEvent::warning(format!("Dropped {} events (client too slow)", n));
                         let _ = socket.send(Message::Text(warning.to_json().into())).await;
+                        if !send_snapshot(&mut socket, &state).await {
+                            break;
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         break;

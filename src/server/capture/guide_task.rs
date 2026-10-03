@@ -1,22 +1,13 @@
-//! The guide camera's free-running loop.
-//!
-//! Deliberately not the four-thread imaging pipeline: a guide camera is never stacked,
-//! so there is nothing to accumulate, no display copy to negotiate and no stage that can
-//! fall behind. One thread does the whole job.
-//!
-//! It starts on connect rather than on Start Capture, because the two things it exists
-//! for — plate solving and a look through the guide scope — are what you want *while*
-//! framing, before any imaging session has begun.
-//!
-//! # The render gate
-//!
-//! Post-processing is identical to the main camera's, and runs only while somebody is
-//! actually watching the guide stream ([`FrameStream::has_viewers`]). Nobody watching
-//! means no background extraction, no stretch solve, no encode — the expensive two
-//! thirds of a frame's cost — so a connected guide camera does not double the CPU bill
-//! of a session that is only ever looking at the main image. Solving and raw saving are
-//! *not* gated: both are the reason the loop is running at all.
+//! The guide camera's free-running loop: one thread, not the four-thread imaging
+//! pipeline, since nothing here is stacked or queued. Starts on connect, not Start
+//! Capture, so plate solving and a look through the guide scope are available *while*
+//! framing, before any imaging session begins.
+//! **Render gate**: post-processing matches the main camera's but runs only while
+//! somebody watches ([`FrameStream::has_viewers`]), skipping extraction/stretch/encode
+//! (two thirds of a frame's cost) so a guide camera doesn't double a main-only
+//! session's CPU bill. Solving and raw saving aren't gated — they're why the loop runs.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,9 +25,10 @@ use crate::camera::Camera;
 use crate::disk_writer::{OpenSession, WritingSessionType};
 use crate::camera::CameraStatus;
 use crate::server::camera_session::ramp::RampState;
+use crate::server::error::ApiError;
 use crate::server::state::{
     AppState, CameraCaptureProfile, CameraOp, CameraRole, CaptureMode, CaptureSettings,
-    ConnectedCameraInfo, RawSessionResume, RenderReadyFrame, StreamKind,
+    ConnectedCameraInfo, GuideLoopTicket, RawSessionResume, RenderReadyFrame, StreamKind,
 };
 
 /// How long the loop waits before retrying after a recoverable capture error, so a
@@ -48,54 +40,87 @@ const ERROR_BACKOFF: Duration = Duration::from_millis(500);
 /// polling so it recovers the moment they do.
 const REJECTED_CONFIG_BACKOFF: Duration = Duration::from_secs(2);
 
-/// Start the guide loop for a freshly connected guide camera.
+/// Start the guide loop for a connected guide camera. Returns `false`, starting nothing,
+/// while a loop is already registered — starting, running, or winding down on its own: a
+/// second one would compete with it for the one handle.
 ///
 /// Non-blocking: the handle is checked out on a tokio task, because `take_for_capture`
 /// may have to wait for the monitor to hand it back and `connect` must not block on that.
-pub fn start(state: &Arc<AppState>, camera: &ConnectedCameraInfo) {
-    // Published before the spawn, not inside it: a disconnect arriving while the task is
-    // still queued would otherwise find no token, decide no loop was running, and close
-    // the handle out from under it.
-    let cancel = Arc::new(AtomicBool::new(false));
-    *state
-        .guide_cancel
-        .lock()
-        .expect("guide_cancel mutex poisoned") = Some(Arc::clone(&cancel));
+pub fn start(state: &Arc<AppState>, camera: &ConnectedCameraInfo) -> bool {
+    // Registered before the spawn, not inside it: a disconnect arriving while the task is
+    // still queued would otherwise find no loop, decide none was running, and close the
+    // handle out from under it.
+    let Some(ticket) = state.guide_loops.register() else {
+        return false;
+    };
 
     let state = Arc::clone(state);
     let camera = camera.clone();
     tokio::spawn(async move {
-        if let Err(e) = spawn_loop(&state, &camera, cancel).await {
-            error!(camera = %camera.info.name, error = %e, "Could not start the guide loop");
-            state.clear_guide_cancel();
-            state.send_error(format!(
-                "Guide camera '{}' connected but its loop could not start: {}",
-                camera.info.name, e
-            ));
+        let id = ticket.id;
+        let Err(failure) = spawn_loop(&state, &camera, ticket).await else {
+            return;
+        };
+        state.guide_loops.finish(id);
+        match failure {
+            StartFailure::Recovering => info!(
+                camera = %camera.info.name,
+                "Guide loop not started: the camera is being reopened, which restarts it"
+            ),
+            StartFailure::Lost => info!(
+                camera = %camera.info.name,
+                "Guide loop not started: its handle was lost and the camera disconnected"
+            ),
+            StartFailure::Failed(e) => {
+                error!(camera = %camera.info.name, error = %e, "Could not start the guide loop");
+                state.send_error(format!(
+                    "Guide camera '{}' connected but its loop could not start: {}",
+                    camera.info.name, e
+                ));
+            }
         }
     });
+    true
+}
+
+/// Why a guide loop did not start.
+enum StartFailure {
+    /// The handle went to recovery instead; the reopen starts the loop again.
+    Recovering,
+    /// The handle was lost and, with reconnecting off, the camera torn down — which the
+    /// reconnect supervisor reports.
+    Lost,
+    Failed(String),
 }
 
 async fn spawn_loop(
     state: &Arc<AppState>,
     camera_info: &ConnectedCameraInfo,
-    cancel: Arc<AtomicBool>,
-) -> Result<(), String> {
+    ticket: GuideLoopTicket,
+) -> Result<(), StartFailure> {
     let camera_name = camera_info.info.name.clone();
+    let GuideLoopTicket { id, cancel } = ticket;
 
-    // A disconnect that landed between `start` and here has already set the token; taking
+    // A disconnect that landed between `start` and here has already set the switch; taking
     // the handle now would leave it checked out of a slot nobody is going to reclaim.
     if cancel.load(Ordering::SeqCst) {
         return Ok(());
     }
 
-    let camera = crate::server::camera_session::lifecycle::take_for_capture(
+    let camera = match crate::server::camera_session::lifecycle::take_for_capture(
         state,
         CameraRole::Guide,
         &camera_name,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    {
+        Ok(camera) => camera,
+        Err(ApiError::CameraRecovering { .. }) => return Err(StartFailure::Recovering),
+        Err(ApiError::CameraHandleLost { .. }) => {
+            return Err(hand_back_lost_handle(state, id, &camera_name).await)
+        }
+        Err(e) => return Err(StartFailure::Failed(e.to_string())),
+    };
 
     state
         .set_camera_token(CameraRole::Guide, camera.cancel_token())
@@ -109,21 +134,30 @@ async fn spawn_loop(
     let loop_state = Arc::clone(state);
     let loop_info = camera_info.clone();
     let rt = tokio::runtime::Handle::current();
-    std::thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("guide-task".into())
         .spawn(move || {
-            // Set here rather than in `connect`: this is the first moment a loop
+            // Marked here rather than in `connect`: this is the first moment a loop
             // certainly exists, so a spawn that never got this far cannot leave the
             // imaging camera stood down for a solve source that is not there.
-            loop_state.set_guide_loop_running(true);
-            let camera = run(&loop_state, &loop_info, camera, &cancel, resume, &rt);
-            loop_state.set_guide_loop_running(false);
+            loop_state.guide_loops.mark_running(id);
+            // A panic would end the thread still registered, its slot `Guiding` with no
+            // handle: Start answered "running" and no later loop could take the camera.
+            // Recovered like the imaging pipeline's panicked capture thread.
+            let camera = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                run(&loop_state, &loop_info, camera, &cancel, resume, &rt)
+            }))
+            .unwrap_or_else(|_| {
+                error!(camera = %loop_info.info.name, "The guide loop panicked; handing its camera to recovery");
+                None
+            });
 
-            // Retire the token *before* handing the handle back. On the device-loss path
+            // Unregistered *before* handing the handle back. On the device-loss path
             // `return_from_capture(None)` reaches `finalize_disconnect`, which asks this
             // loop to stop — and a loop asking itself to stop would sit out the whole
-            // wait budget for a handle it has already lost.
-            loop_state.clear_guide_cancel();
+            // wait budget for a handle it has already lost. By id, so a loop that `stop`
+            // gave up on and that ends after its successor started leaves that one be.
+            loop_state.guide_loops.finish(id);
 
             rt.block_on(crate::server::camera_session::lifecycle::return_from_capture(
                 &loop_state,
@@ -131,11 +165,34 @@ async fn spawn_loop(
                 &loop_info.info.name,
                 camera,
             ));
-        })
-        .map_err(|e| format!("failed to spawn the guide thread: {e}"))?;
+        });
+    if let Err(e) = spawned {
+        // The handle went down with the closure. Recover it like any other lost handle.
+        hand_back_lost_handle(state, id, &camera_name).await;
+        return Err(StartFailure::Failed(format!("failed to spawn the guide thread: {e}")));
+    }
 
     info!(camera = %camera_name, "Guide camera loop started");
     Ok(())
+}
+
+/// Recover a handle this starting loop never got, or lost on the way. Unregistered first:
+/// the teardown stops "the guide loop", and a registered one is waited on for its handle
+/// — this loop, which has none to give, for the whole of `stop`'s budget.
+async fn hand_back_lost_handle(state: &Arc<AppState>, id: u64, camera_name: &str) -> StartFailure {
+    state.guide_loops.finish(id);
+    crate::server::camera_session::lifecycle::return_from_capture(
+        state,
+        CameraRole::Guide,
+        camera_name,
+        None,
+    )
+    .await;
+    if state.slot(CameraRole::Guide).is_recovering() {
+        StartFailure::Recovering
+    } else {
+        StartFailure::Lost
+    }
 }
 
 /// Ask the guide loop to stop and wait for it to hand the handle back.
@@ -144,13 +201,11 @@ async fn spawn_loop(
 /// or the wait budget expires — a loop stuck inside a vendor call has already abandoned
 /// its handle to the capture watchdog, and waiting longer would not produce one.
 pub async fn stop(state: &Arc<AppState>) {
-    // Cleared before the early return, not after it: once this function has been called
-    // the loop is not running, and the flag has to say so whether or not there was a
-    // token to signal. Solving goes back to the imaging camera immediately — a cooled
-    // guide camera then warms up for minutes, and leaving the flag set through all of it
-    // means neither camera may offer the solver a frame.
-    state.set_guide_loop_running(false);
-    let Some(cancel) = state.take_guide_cancel() else {
+    // Unregistered first: once this function has been called the loop is not running,
+    // and solving goes back to the imaging camera immediately — a cooled guide camera
+    // then warms up for minutes, and leaving it marked running through all of it means
+    // neither camera may offer the solver a frame.
+    let Some(cancel) = state.guide_loops.take() else {
         return;
     };
     cancel.store(true, Ordering::SeqCst);
@@ -401,7 +456,9 @@ impl SensorReadout {
                 return;
             }
         };
-        self.temperature_c = Some(status.temperature_c);
+        if status.has_plausible_temperature() {
+            self.temperature_c = Some(status.temperature_c);
+        }
         rt.block_on(state.update_camera_status(
             &camera_info.info.name,
             status,
@@ -480,10 +537,11 @@ fn render_and_publish(
 ) {
     let _span = tracing::info_span!("guide_render").entered();
 
+    let settings = super::stage_config::guide_render_settings(settings.clone());
     let mut display_frame = frame;
-    let (pipeline_config, stretch_result) = match super::pipeline::process_preview_frame_with_analysis(
+    let rendered = match super::pipeline::process_preview_frame_with_analysis(
         Arc::make_mut(&mut display_frame),
-        settings,
+        &settings,
         // Every guide frame is a single sub — there is no stack behind it, which is the
         // same context live view runs in.
         AnalysisContext::ONE_SHOT,
@@ -498,8 +556,11 @@ fn render_and_publish(
 
     let ready = Arc::new(RenderReadyFrame {
         linear_frame: display_frame,
-        pipeline_config,
-        stretch_result,
+        pipeline_config: rendered.pipeline_config,
+        stretch_result: rendered.stretch_result,
+        // A guide frame is a single sub: nothing accumulated it, so there is no
+        // per-pixel noise to report.
+        noise: None,
     });
 
     let stream = &state.guide_stream;

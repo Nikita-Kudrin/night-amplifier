@@ -1,16 +1,11 @@
-//! Decoupled asynchronous capture pipeline: four independent dedicated-thread tasks
-//! connected by bounded MPSC channels — **CaptureTask** (acquires frames),
-//! **StorageTask** (saves raw to disk), **StackingTask** (registration +
-//! accumulation), **RenderTask** (preview render + encode). `Arc<Frame>` gives
-//! zero-copy sharing between channels; capacities derive from a memory budget over
-//! actual frame size. Each thread carries a `tokio::runtime::Handle` from the async
-//! orchestrator, for `handle.block_on()`/`handle.spawn()`.
-//!
-//! **Push-To** runs as two more thread tasks (solve, watch) fed by one-slot channels that
-//! drop an offer rather than queue it. See `push_to_tasks`.
-//!
-//! The guide camera bypasses all of that: **GuideTask** is one thread with no channels,
-//! because nothing it produces is stacked or queued. See `guide_task`.
+//! Decoupled asynchronous capture pipeline: four dedicated-thread tasks connected by
+//! bounded MPSC channels — **CaptureTask** (acquires), **StorageTask** (saves raw),
+//! **StackingTask** (registration + accumulation), **RenderTask** (preview + encode).
+//! `Arc<Frame>` gives zero-copy sharing; capacities derive from a memory budget over
+//! actual frame size. Each thread holds a `tokio::runtime::Handle` for
+//! `block_on()`/`spawn()`. **Push-To** is two more thread tasks over one-slot channels
+//! that drop rather than queue (`push_to_tasks`). The guide camera bypasses all this:
+//! **GuideTask** is one thread, no channels — nothing it produces is stacked or queued.
 
 pub mod analysis;
 pub mod channel;

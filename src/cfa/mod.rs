@@ -1,17 +1,11 @@
-//! Raw-CFA stage: corrections that must run on the sensor mosaic, before demosaic
-//! turns it into RGB. Once debayered, a correction meaningful only on the mosaic has
-//! nowhere to go: **hot pixels** ([`hot_pixels`]) get smeared into a coloured 3x3
-//! cross; **row/column FPN** ([`fpn`]) stops being a pattern once rows mix; **dark and
-//! flat calibration** ([`crate::calibration`]) is defined on raw samples.
+//! Raw-CFA stage: corrections that must run on the sensor mosaic, before demosaic turns it into RGB.
+//! **Hot pixels** ([`hot_pixels`]) smear into a coloured 3x3 cross once debayered; **row/column FPN**
+//! ([`fpn`]) stops being a pattern once rows mix; **dark/flat calibration** is defined on raw samples.
 //!
-//! [`RawFrame::to_cfa_frame`](crate::camera::RawFrame::to_cfa_frame) hands back a
-//! still-mosaiced [`CfaFrame`]; the stacking task debayers after running
-//! [`CfaPipeline`] over it (empty pipeline = bit-identical to debayering direct).
-//!
-//! Both corrections work one *colour site* at a time (the sub-lattice sharing a
-//! filter — 4 for Bayer, 1 for mono, described by [`CfaPlanes`]): mixing sites reads
-//! the mosaic pattern itself as signal, since neighbouring R/B samples sit at
-//! different levels.
+//! [`RawFrame::to_cfa_frame`](crate::camera::RawFrame::to_cfa_frame) hands back a still-mosaiced
+//! [`CfaFrame`]; stacking debayers after running [`CfaPipeline`] over it (empty pipeline = bit-
+//! identical to debayering direct). Both corrections work one *colour site* at a time (4 for Bayer,
+//! 1 for mono, see [`CfaPlanes`]) — mixing sites reads the mosaic pattern itself as signal.
 
 pub mod fpn;
 pub mod hot_pixels;

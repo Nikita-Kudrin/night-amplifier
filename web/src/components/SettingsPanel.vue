@@ -1,7 +1,9 @@
 <script setup>
-import {ref, inject, watch, computed} from 'vue'
-import {updateSettings} from '../composables/api.js'
+import {ref, inject, watch, computed, unref} from 'vue'
+import {remeasureAiCompute, updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
+import {useAiCompute} from '../composables/useAiCompute.js'
+import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute.js'
 import {
   BasePanel,
   BaseToggle,
@@ -37,7 +39,13 @@ const simulatorEnabledRef = inject('simulatorEnabled')
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const capabilities = inject('capabilities', {
   has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false, saturation_boost: false},
+  deep_sky: {
+    advanced_rejection: false,
+    rbf_background: false,
+    saturation_boost: false,
+    denoise: false,
+    ai_denoise: false,
+  },
   planetary: {advanced_stacking: false},
   push_to: {astap_solver: false},
 })
@@ -58,6 +66,52 @@ const simulatorEnabled = computed({
 })
 
 const localSettings = ref(defaultSettings())
+
+/**
+ * The network is Pro, needs the Denoise switch, and Focus/Finder mode holds it off. The
+ * mode never changes the switch itself: it stays the observer's for when the mode ends.
+ */
+const aiDenoiseAvailable = computed(() => unref(capabilities)?.deep_sky?.ai_denoise ?? false)
+const aiDenoiseLocked = computed(
+    () => !aiDenoiseAvailable.value || !localSettings.value.denoise.enabled || focusMode.value
+)
+const aiDenoiseHeldOff = computed(() => {
+  if (!aiDenoiseAvailable.value || !localSettings.value.denoise.ai) return ''
+  if (!localSettings.value.denoise.enabled) return 'Held off while Denoise is off.'
+  if (focusMode.value) return 'Held off by Focus/Finder mode.'
+  return ''
+})
+
+/**
+ * Where the network runs, from the server's one-time benchmark. A hardware choice, not a
+ * picture control: it stays usable while the AI switch is off, so the observer can pick
+ * before switching it on.
+ */
+const {report: aiComputeReport, refresh: refreshAiCompute} = useAiCompute()
+const aiComputeOptionList = computed(() => aiComputeOptions(aiComputeReport.value))
+const aiComputeHint = computed(() => aiComputeSummary(aiComputeReport.value))
+const aiComputeUnusable = computed(() => unusableRungs(aiComputeReport.value))
+const aiComputeLocked = computed(() => !aiDenoiseAvailable.value || !isReady(aiComputeReport.value))
+
+async function applyAiCompute(value) {
+  await applyGroup('denoise', {...localSettings.value.denoise, ai_compute: value})
+  refreshAiCompute()
+}
+
+/**
+ * Measure again: after a new driver or runtime, or to retry a unit recorded as crashing.
+ * The server refuses while a capture runs; its message lands in the panel's error.
+ */
+const remeasuring = ref(false)
+async function remeasure() {
+  remeasuring.value = true
+  try {
+    await withErrorHandling(() => remeasureAiCompute())
+    await refreshAiCompute()
+  } finally {
+    remeasuring.value = false
+  }
+}
 
 watch(
     settings,
@@ -100,9 +154,7 @@ watch(
           sensor_correction: newSettings.sensor_correction
               ? {...newSettings.sensor_correction}
               : {...DEFAULT_SETTINGS.sensor_correction},
-          denoise: newSettings.denoise
-              ? {...newSettings.denoise}
-              : {...DEFAULT_SETTINGS.denoise},
+          denoise: {...DEFAULT_SETTINGS.denoise, ...newSettings.denoise},
           preview_resolution:
               newSettings.preview_resolution ?? DEFAULT_SETTINGS.preview_resolution,
           streaming_resolution:
@@ -175,6 +227,8 @@ const HELP = HELP_TEXTS
         :preview-resolution="localSettings.preview_resolution"
         :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
+        :denoise-available="capabilities.deep_sky?.denoise ?? false"
+        :ai-denoise-available="aiDenoiseAvailable"
         :format-percent="formatPercent"
         :format-sigma="formatSigma"
         @apply="applyGroup"
@@ -649,6 +703,70 @@ const HELP = HELP_TEXTS
 
       <div class="control-group">
         <BaseToggle
+            v-model="localSettings.denoise.ai"
+            label="AI denoising"
+            data-test="ai-denoise-toggle"
+            :help="HELP.denoise_ai"
+            :disabled="aiDenoiseLocked"
+            @update:model-value="applyGroup('denoise', {...localSettings.denoise, ai: $event})"
+        >
+          <template #label-extra>
+            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
+          </template>
+        </BaseToggle>
+        <span v-if="aiDenoiseHeldOff" class="hint">{{ aiDenoiseHeldOff }}</span>
+      </div>
+
+      <div class="control-group" data-test="ai-compute">
+        <div class="control-row">
+          <label class="control-label" for="ai-compute-select" style="margin-bottom: 0; flex: 1">
+            AI compute
+            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
+            <BaseInfoIcon :message="HELP.ai_compute"/>
+          </label>
+          <select
+              id="ai-compute-select"
+              v-model="localSettings.denoise.ai_compute"
+              class="select ai-compute-select"
+              data-test="ai-compute-select"
+              :disabled="aiComputeLocked"
+              @change="applyAiCompute($event.target.value)"
+          >
+            <option
+                v-for="opt in aiComputeOptionList"
+                :key="opt.value"
+                :value="opt.value"
+                :disabled="opt.disabled"
+                :title="opt.reason || undefined"
+            >
+              {{ opt.label }}
+            </option>
+          </select>
+        </div>
+        <span v-if="aiDenoiseAvailable && aiComputeHint" class="hint" data-test="ai-compute-hint">{{ aiComputeHint }}</span>
+        <div v-if="aiDenoiseAvailable && !aiComputeLocked" class="ai-compute-remeasure">
+          <button
+              type="button"
+              class="btn btn-sm btn-secondary"
+              data-test="ai-compute-remeasure"
+              :disabled="remeasuring"
+              @click="remeasure"
+          >
+            Measure again
+          </button>
+          <BaseInfoIcon :message="HELP.ai_compute_remeasure"/>
+        </div>
+        <ul v-if="aiDenoiseAvailable && aiComputeUnusable.length" class="hint ai-compute-reasons" data-test="ai-compute-reasons">
+          <li v-for="rung in aiComputeUnusable" :key="rung.rung">
+            <strong>{{ rung.label }}:</strong>
+            {{ rung.device ? `${rung.device} — ` : '' }}{{ rung.reason }}
+            <a v-if="rung.installable" :href="SYSTEM_DEPENDENCIES_URL" target="_blank" rel="noopener">How to install</a>
+          </li>
+        </ul>
+      </div>
+
+      <div class="control-group">
+        <BaseToggle
             v-model="simulatorEnabled"
             label="Simulated Camera"
             data-test="simulator-toggle"
@@ -715,5 +833,27 @@ const HELP = HELP_TEXTS
 .storage-mode-toggle {
   margin-left: 0.75rem;
   margin-top: 0.25rem;
+}
+
+.ai-compute-select {
+  width: 190px;
+  padding: 0.25rem 2rem 0.25rem 0.5rem;
+  height: 32px;
+}
+
+.ai-compute-remeasure {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+}
+
+.ai-compute-reasons {
+  margin: 0.375rem 0 0;
+  padding-left: 1rem;
+}
+
+.ai-compute-reasons a {
+  color: var(--primary);
 }
 </style>

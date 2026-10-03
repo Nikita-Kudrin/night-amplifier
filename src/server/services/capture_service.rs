@@ -66,8 +66,13 @@ impl CaptureService {
             }
         }
 
-        if state.guide_loop_running() {
-            return Err(ApiError::GuideAlreadyRunning);
+        // Already running is the state the observer asked for, not an error. The client
+        // that pressed Start was showing a stopped loop because it had missed the event that
+        // said otherwise — a phone waking up, a reloaded page — and a 409 told it nothing
+        // it could act on (2026-09-20).
+        if Self::guide_loop_active(state) {
+            info!(camera_id = %camera.id, "Start requested for a guide camera that is already running");
+            return Ok(camera.id);
         }
 
         info!(camera_id = %camera.id, "Starting the guide camera");
@@ -75,9 +80,15 @@ impl CaptureService {
         Ok(camera.id)
     }
 
+    /// A guide loop is registered — starting, exposing, or winding down on its own.
+    /// `guide_loop_running` alone misses one still taking its handle.
+    fn guide_loop_active(state: &AppState) -> bool {
+        state.guide_loops.is_registered() || state.guide_loop_running()
+    }
+
     /// Stop the guide camera's loop, which also stops its raw-frame saving.
     async fn stop_guide(state: &Arc<AppState>) -> bool {
-        if !state.guide_loop_running() {
+        if !Self::guide_loop_active(state) {
             return false;
         }
         info!("Stopping the guide camera");
@@ -103,6 +114,10 @@ impl CaptureService {
         state: &Arc<AppState>,
         camera_id: Option<String>,
     ) -> ApiResult<String> {
+        if crate::render::denoise::ai::benchmark_pending() {
+            return Err(ApiError::HardwareBenchmarkRunning);
+        }
+
         // Check if already capturing. A capture paused for recovery is still running.
         let current_state = state.capture_state().await;
         if matches!(
@@ -171,13 +186,12 @@ impl CaptureService {
 
     /// Leave Focus/Finder mode if the capture about to run would stack under it.
     ///
-    /// The mode drops a raw-mosaic correction, and a stack integrated without it can never
-    /// be cleaned again — so a stacking session must never begin under it. `update_settings`
-    /// refuses to *enter* the mode while stacking; this closes the other order, where the
-    /// observer was already focusing and then pressed Start. Live view keeps the mode.
-    ///
-    /// Silent by design: it restores the observer's own values at the moment they start
-    /// mattering, and the `SettingsUpdated` broadcast moves the toggle in every client.
+    /// The mode drops a raw-mosaic correction, and a stack integrated without it can
+    /// never be cleaned again. `update_settings` refuses to *enter* the mode while
+    /// stacking; this closes the other order, where the observer was already focusing
+    /// and then pressed Start (live view keeps the mode). Silent by design: it restores
+    /// the observer's own values at the moment they start mattering, and the
+    /// `SettingsUpdated` broadcast moves the toggle in every client.
     async fn leave_focus_mode_for_capture(state: &Arc<AppState>) {
         // Both callers have just moved the state to `Starting`; a resume has already
         // restored the plan's stacking mode (`reconnect::restore_settings`).
@@ -189,15 +203,13 @@ impl CaptureService {
         }
     }
 
-    /// Restart the capture a device fault interrupted, in the mode it was
-    /// running in and on top of the stack it had already accumulated.
+    /// Restart the capture a device fault interrupted, in the mode it was running in
+    /// and on top of the stack it had already accumulated.
     ///
-    /// Deliberately not `start_capture`: that resets the session counters and
-    /// opens a new raw-frame directory, which for a live-stacking session means
-    /// throwing away the whole point of the last hour.
-    ///
+    /// Deliberately not `start_capture`: that resets the session counters and opens a
+    /// new raw-frame directory, throwing away a live-stacking session's last hour.
     /// Only a capture paused for recovery resumes, and it leaves the pause with one
-    /// compare-and-set: a Stop or a Disconnect that ends the pause first makes this
+    /// compare-and-set: a Stop or Disconnect that ends the pause first makes this
     /// `CaptureNotPaused` instead of a capture restarted behind the observer's back.
     pub async fn resume_capture(state: &Arc<AppState>, plan: &SessionResumePlan) -> ApiResult<()> {
         {

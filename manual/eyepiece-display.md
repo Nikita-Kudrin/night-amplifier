@@ -83,6 +83,20 @@ version, expect a darker, smoother one at the same setting now, and turn it down
 if the faint outskirts of your target have gone.
 :::
 
+### While a stack builds
+
+The picture changes only as fast as the stack does. Colour balance and the
+background model are re-measured every few frames rather than every frame — they
+are expensive and move slowly — and in between, the stack's noise figure used to
+be held still while the stack kept getting deeper. Faint signal faded a little for
+a few frames and then jumped back: on a short-exposure session, a pulse every few
+seconds. The noise figure now follows the stack's own rate of improvement in
+between, so faint structure brightens steadily.
+
+A target that fills a large part of the frame — a bright nebula, a big galaxy —
+also used to brighten in one jump at the moment the stack judged the frame mostly
+signal. That judgement is now gradual, spread over the frames where it happens.
+
 ## Black floor
 
 Sets where black sits. The slider runs both ways from zero, and the two
@@ -154,15 +168,23 @@ care what happens to the background. It does nothing while Black floor is positi
 ## Dithering
 
 Breaks up the steps between brightness levels before the image is reduced to
-8 bits.
+8 bits. The pattern is blue noise: fine and random-looking, with no grid of its own
+for the eye to pick out of a smooth sky, which the regular 8×8 pattern it replaced
+left there.
 
 **You will probably see no difference, and that is the expected result.** A sky
 with visible grain already dithers itself — the noise is doing the job. This
 matters once the background is genuinely smooth, which is what
 [Noise Reduction](/noise-reduction) is for: a smoothed low-slope gradient
 quantised to 256 levels is exactly what shows banding, and this is what prevents
-it. It costs nothing to leave on, so leave it on and judge it after the
-denoisers, not before.
+it. Leave it on and judge it after the denoisers, not before.
+
+It arrives whole only on `/eyepiece_quality`, which sends the picture exactly as
+rendered — at the price of a few percent more data per frame. `/eyepiece` and the
+live view are JPEG, and JPEG takes back much of what the dither adds between two
+brightness levels; with Noise Reduction on they are compressed more gently for this
+reason, which keeps about half of it (see
+[Streaming Resolution](/noise-reduction#streaming-resolution)).
 
 ## What these do not fix
 

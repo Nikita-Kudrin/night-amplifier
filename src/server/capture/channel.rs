@@ -16,25 +16,14 @@ use crate::camera::RawFrame;
 use crate::frame::Frame;
 use crate::server::state::{CaptureSettings, ConnectedCameraInfo};
 
-/// How many messages one pipeline channel holds that its consumer has not taken yet.
-/// `SyncSender` exposes no length, so this tracks it alongside: incremented *before*
-/// a send is attempted (given back if it fails), decremented for every message taken
-/// out — including ones a drain discards.
-///
-/// Two callers, different reasons: stacking→render reads it to decide whether to
-/// build a display copy at all (`MasterStack::compute()`'s copy is 434MB read + 108MB
-/// written on a 3008² colour stack, and the render task used to `drain_to_latest` and
-/// throw half away unread — waste landing on the thread dropping camera frames, i.e.
-/// lost sky). The two capture channels only *report* depth, distinguishing "slow"
-/// from "stalled once".
-///
-/// Increment leads the send because the count must never sit *below* the true depth:
-/// for the render channel that's unrecoverable — `want_display` is `pending() == 0`,
-/// so a count stuck at one on an empty channel stops the stacking task from ever
-/// building another display frame, which stops the render task from ever
-/// decrementing again. Counting after `try_send` leaves exactly that window; counting
-/// first can only overshoot, costing one skipped display copy the next iteration
-/// corrects. Reading it is advisory — nothing downstream depends on it being exact.
+/// How many messages one pipeline channel holds that its consumer hasn't taken yet.
+/// `SyncSender` exposes no length, so this tracks it: incremented *before* a send,
+/// decremented per message taken. Stacking→render reads it to decide whether to build
+/// a display copy at all (`MasterStack::compute()`'s copy is 434MB read + 108MB
+/// written on a 3008² colour stack); capture channels only *report* depth. Increment
+/// leads the send so the count never sits below true depth: undercounting the render
+/// channel is unrecoverable (`want_display` is `pending() == 0`, stalling the stacking
+/// task forever), so overcounting is preferred — one skipped copy, corrected next iteration.
 #[derive(Clone, Debug, Default)]
 pub struct QueueDepth(Arc<AtomicUsize>);
 
@@ -75,12 +64,11 @@ impl QueueDepth {
 /// Ceiling on the memory budget for in-flight frame queues, whatever the host has.
 ///
 /// The budget itself is [`frame_queue_budget_bytes`]: the smaller of a fifth of RAM
-/// and this. It used to be a flat 2 GB, which is a quarter of an 8 GB Pi 5 and half of
-/// a 4 GB one — and the queues are not the only claim on that memory. A 3008x3008
-/// colour stack holds a 434 MB accumulator, allocates a 108 MB frame per
-/// `MasterStack::compute()`, and the warp and denoise paths take their own scratch on
-/// top. On a 4 GB board with a 9 MP sensor that combination is an OOM risk, not merely
-/// a swapping one.
+/// and this. It used to be a flat 2 GB — a quarter of an 8 GB Pi 5, half of a 4 GB one
+/// — and the queues aren't the only claim on that memory: a 3008x3008 colour stack
+/// holds a 434 MB accumulator, allocates a 108 MB frame per `MasterStack::compute()`,
+/// and the warp/denoise paths take their own scratch on top. On a 4 GB board with a
+/// 9 MP sensor that combination is an OOM risk, not merely a swapping one.
 pub const FRAME_QUEUE_BUDGET_CAP: usize = 1024 * 1024 * 1024;
 
 /// Budget when the host's RAM cannot be determined.
@@ -106,13 +94,11 @@ const PIPELINE_CHANNELS: usize = 3;
 /// Memory budget for in-flight frame queues on this host.
 ///
 /// `min(MemTotal / 5, 1 GiB)`, floored at 64 MiB, or 512 MiB when `MemTotal` cannot be
-/// read. Resolved once — the value cannot change for the life of the process, and the
-/// probe reads a file.
-///
-/// `MemTotal` rather than `MemAvailable` on purpose: available memory moves with
-/// whatever else is on the board, so two capture sessions started minutes apart would
-/// size their channels differently and a queue-depth report from the field would not be
-/// reproducible.
+/// read. Resolved once, since the probe reads a file and the value cannot change for
+/// the life of the process. `MemTotal` rather than `MemAvailable` on purpose: available
+/// memory moves with whatever else is on the board, so two capture sessions started
+/// minutes apart would size their channels differently and a field queue-depth report
+/// would not be reproducible.
 pub fn frame_queue_budget_bytes() -> usize {
     static BUDGET: OnceLock<usize> = OnceLock::new();
     *BUDGET.get_or_init(|| budget_for(read_mem_total_bytes()))
@@ -136,16 +122,14 @@ fn read_mem_total_bytes() -> Option<usize> {
     parse_mem_total(&std::fs::read_to_string("/proc/meminfo").ok()?)
 }
 
-/// Pull `field` (`MemTotal`, `MemAvailable`…) out of `/proc/meminfo` content, in bytes.
+/// Pull `field` (`MemTotal`, `MemAvailable`…) out of `/proc/meminfo` content, in
+/// bytes. Split out from the read so the parser is testable on any host.
 ///
-/// Split out from the read so the parser is testable on any host.
-///
-/// The unit is checked rather than assumed. `/proc/meminfo` has reported kB for the
-/// life of the file, but silently treating an unrecognised suffix as kB would misread
-/// the budget by a factor of 1024 in whichever direction the kernel moved — reporting
-/// "unknown" is the safe failure. The arithmetic runs in `u64` and saturates on the way
-/// back to `usize`, because a 32-bit ARM build cannot hold a large `kB` value scaled by
-/// 1024.
+/// The unit is checked rather than assumed: `/proc/meminfo` has always reported kB,
+/// but silently treating an unrecognised suffix as kB would misread the budget by a
+/// factor of 1024 in whichever direction the kernel moved, so reporting "unknown" is
+/// the safe failure. The arithmetic runs in `u64` and saturates back to `usize`,
+/// since a 32-bit ARM build cannot hold a large `kB` value scaled by 1024.
 pub(crate) fn parse_meminfo_bytes(meminfo: &str, field: &str) -> Option<usize> {
     let line = meminfo
         .lines()
@@ -298,6 +282,13 @@ pub struct StackedFrame {
     /// The render task's analysis cache refreshes on proportional growth in this, not on
     /// elapsed frames, because the statistics it holds fall as `1/sqrt(N)`.
     pub stack_depth: u32,
+    /// The stack's coverage map — see [`crate::frame::NoiseField`]. `None` whenever no
+    /// accumulator stands behind the frame or its subs covered it completely.
+    ///
+    /// Not charged against the channel's memory budget: at 3008x3008 this is 0.57 MB
+    /// beside a 108 MB display frame, within the slack `pipeline_capacities` already
+    /// carries.
+    pub noise: Option<crate::frame::NoiseField>,
 }
 
 #[cfg(test)]

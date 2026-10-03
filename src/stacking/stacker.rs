@@ -182,6 +182,16 @@ impl Stacker {
     pub fn coverage_map(&self) -> Frame {
         self.stack.coverage_map()
     }
+
+    /// The stacked result and its coverage map, from one read of the accumulator.
+    pub fn compute_with_coverage(&self) -> Result<(Frame, crate::frame::NoiseField)> {
+        self.stack.compute_with_coverage()
+    }
+
+    /// Per-pixel variance of the stacked mean. See [`MasterStack::noise_field`].
+    pub fn noise_field(&self) -> crate::frame::NoiseField {
+        self.stack.noise_field()
+    }
 }
 
 #[cfg(test)]

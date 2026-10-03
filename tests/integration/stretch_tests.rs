@@ -169,15 +169,14 @@ fn test_eyepiece_intensity_metrics() {
         img.path.file_name().unwrap_or_default()
     );
 
-    // Runs the preview pipeline at `intensity`, then applies the fused LUT it produced
-    // exactly as the streaming encoder does, and reports the mean median.
+    // Runs the preview pipeline at `intensity`, then applies the fused LUT it produced exactly
+    // as the streaming encoder does, and reports the mean median.
     //
-    // `apply_scale_lut_frame` rather than a hand-rolled `par_chunks_mut(width * 3)` loop:
-    // `Frame` is planar and the loop this replaced drove the *interleaved* kernel over it,
-    // so both measurements below were taken from an image whose channels had been
-    // scrambled into each other. The comparison still passed, because both sides were
-    // scrambled identically — which is precisely why it had stopped being a regression
-    // guard for the eyepiece intensity path.
+    // Uses `apply_scale_lut_frame` rather than a hand-rolled `par_chunks_mut(width * 3)` loop:
+    // `Frame` is planar, and the loop this replaced drove the *interleaved* kernel over it, so
+    // both measurements below came from an image whose channels had been scrambled together.
+    // The comparison still passed — both sides were scrambled identically — which is exactly
+    // why it had stopped being a regression guard for the eyepiece intensity path.
     let mean_median_at = |intensity: f32| {
         let mut settings = night_amplifier::server::state::CaptureSettings::default();
         settings.auto_stretch = true;
@@ -188,12 +187,12 @@ fn test_eyepiece_intensity_metrics() {
             frame = night_amplifier::debayer_auto(&frame).unwrap().0;
         }
 
-        let (_config, stretch_res) =
-            night_amplifier::server::capture::pipeline::process_preview_frame(
-                &mut frame, &settings,
-            )
-            .unwrap();
-        let res = stretch_res.unwrap();
+        let res = night_amplifier::server::capture::pipeline::process_preview_frame(
+            &mut frame, &settings,
+        )
+        .unwrap()
+        .stretch_result
+        .unwrap();
 
         night_amplifier::render::stretch::apply_scale_lut_frame(
             &mut frame,

@@ -29,13 +29,11 @@ pub enum FrameType {
     /// Stretched stacked frame, already rendered to interleaved 8-bit RGB (PNG for sharing).
     ///
     /// Carries finished bytes rather than a `Frame`: they come from
-    /// `crate::server::encoding::frame_to_rgb8_downsampled`, the same conversion
-    /// the live view streams through, so the saved file matches on-screen output
-    /// instead of skipping the encoder-only stages (spatial denoise, display
-    /// quantization) a bare `Frame` render would miss. Rendering happens in
-    /// `server::capture::storage` — a server-layer concern — and only the
-    /// resulting bytes cross into this module, keeping `disk_writer` itself
-    /// unaware of the render/encoding pipeline.
+    /// `crate::server::encoding::frame_to_rgb8_downsampled`, the same conversion the live
+    /// view streams through, so the saved file matches on-screen output instead of
+    /// skipping encoder-only stages (spatial denoise, display quantization) a bare
+    /// `Frame` render would miss. Rendering happens in `server::capture::storage` — a
+    /// server-layer concern — only the resulting bytes cross into this module, keeping `disk_writer` unaware of the render/encoding pipeline.
     StackedPng {
         rgb8: Arc<Vec<u8>>,
         width: u32,
@@ -76,14 +74,12 @@ pub struct WriteRequest {
     pub frame_type: FrameType,
     /// The session that was open when this frame was queued.
     ///
-    /// Filled in by [`DiskWriterHandle::queue_frame`]; whatever a caller sets here is
-    /// overwritten, since only the handle knows what is open at that moment.
-    ///
-    /// Resolved at enqueue time rather than at write time, so a session rolled while
-    /// the queue still holds frames — which is what a mid-capture mode change does —
-    /// cannot retarget frames that belong to the session before it, nor write them in
-    /// the wrong container. `None` only when nothing was open, which is an error for a
-    /// raw frame and a fallback to a bare timestamp for a stacked one.
+    /// Filled in by [`DiskWriterHandle::queue_frame`], overwriting whatever a caller
+    /// sets, since only the handle knows what is open at that moment. Resolved at
+    /// enqueue time, not write time, so a session rolled while the queue still holds
+    /// frames (a mid-capture mode change) can't retarget those frames to the new
+    /// session or write them into the wrong container. `None` only when nothing was
+    /// open: an error for a raw frame, a fallback to a bare timestamp for a stacked one.
     pub session: Option<OpenSession>,
     /// Frame number (for raw frames)
     pub frame_number: u64,

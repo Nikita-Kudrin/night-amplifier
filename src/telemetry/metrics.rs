@@ -189,12 +189,11 @@ pub fn record_latest_frame_size(_format: &'static str, _bytes: u64) {}
 // ============================================================================
 // Per-frame pipeline instrumentation
 // ============================================================================
-//
-// The instruments above are recorded at most a few times per session, so they
-// rebuild their meter and instrument on every call. The ones below fire once
-// per frame, so they cache the instrument in a `OnceLock` and the per-call cost
-// is a single atomic add. Keep this section to *pipeline stages* — anything
-// finer (per row, per pixel, per tile) would distort what it measures.
+// The instruments above rebuild their meter/instrument per call (used only a few
+// times per session); these fire once per frame, so they cache the instrument in a
+// `OnceLock` — per-call cost is a single atomic add. Keep this section to *pipeline
+// stages*: anything finer (per row, per pixel, per tile) would distort what it
+// measures.
 
 /// A high-level pipeline stage, timed once per frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

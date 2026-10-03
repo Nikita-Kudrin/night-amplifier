@@ -247,11 +247,10 @@ function reportDownloadError(message) {
 /**
  * Save the frame the server last rendered, at its own resolution rather than the
  * tier this screen happens to be streaming. `circular` is the round eyepiece
- * image; without it, the same picture as the uncropped stretched result.
+ * image; without it, the uncropped stretched result.
  *
- * The server names the file — the timestamp in it is its to stamp — and the name
- * travels with the bytes, because the blob the fetch produced has none of the
- * headers it arrived with.
+ * The server names the file (it owns the timestamp); the name travels with the
+ * bytes since the fetch's blob carries none of the headers it arrived with.
  */
 async function downloadSnapshot(circular) {
   if (downloading.value) return

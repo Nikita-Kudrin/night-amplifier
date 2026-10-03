@@ -64,6 +64,24 @@ export async function getCapabilities() {
     return request('/capabilities')
 }
 
+/**
+ * The AI denoiser's hardware benchmark and where the network runs, resolved for the
+ * saved "AI compute" choice.
+ * @returns {Promise<object>}
+ */
+export async function getAiCompute() {
+    return request('/ai-compute')
+}
+
+/**
+ * Measure the hardware again: forget this computer's result and the units recorded as
+ * crashing. Refused (409) while a capture runs.
+ * @returns {Promise<object>} the report as it stands
+ */
+export async function remeasureAiCompute() {
+    return request('/ai-compute/benchmark', {method: 'POST'})
+}
+
 // ============================================================================
 // Eyepiece
 // ============================================================================
@@ -92,16 +110,9 @@ function snapshotFilename(header) {
 }
 
 /**
- * Fetch the current eyepiece frame as a PNG, with the name the server gave it.
- *
- * Deliberately not routed through `request()`: that helper parses every response
- * as JSON, which is exactly what a PNG body is not.
- *
- * The server renders one snapshot at a time — a native-resolution render costs
- * hundreds of megabytes, so a second caller is turned away rather than queued.
- * That is what 503 means here, and it is worth waiting out: retry on the server's
- * own cadence until the window closes. A 404 is the other kind of "not now" —
- * nothing has been rendered yet — and no amount of retrying fixes it.
+ * Fetch the current eyepiece frame as a PNG, named by the server — not routed through
+ * `request()` (parses JSON). One render at a time (hundreds of MB at native res); 503
+ * means retry on that cadence, 404 means nothing's rendered yet — don't retry that.
  *
  * @param {boolean} circular - Round eyepiece image, or the uncropped frame.
  * @returns {Promise<{blob: Blob, filename: string}>}
@@ -244,12 +255,16 @@ export async function connectCamera(cameraId, role = 'main') {
 }
 
 /**
- * Disconnect from a camera
+ * Disconnect a camera. A capture running on it is stopped first, and a cooled camera
+ * warms up before it closes unless `skipWarmup` says to close it now.
  * @param {string} cameraId - Camera ID
+ * @param {{skipWarmup?: boolean}} [options]
+ * @returns {Promise<{message: string, camera_id: string, warming_up: boolean, warmup_remaining_s?: number}>}
  */
-export async function disconnectCamera(cameraId) {
+export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
     return request(`/cameras/${encodeURIComponent(cameraId)}/disconnect`, {
         method: 'POST',
+        ...(skipWarmup ? {body: {skip_warmup: true}} : {}),
     })
 }
 

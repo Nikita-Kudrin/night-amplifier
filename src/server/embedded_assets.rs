@@ -1,12 +1,10 @@
 //! Serves the Vue 3 frontend from assets embedded at compile time.
 //!
-//! The `web/dist/` directory (Vite production build output) is baked into the
-//! binary via `rust_embed`. This lets us ship a single executable with no
-//! external files required.
+//! The `web/dist/` directory (Vite production build output) is baked into the binary
+//! via `rust_embed`, so a single executable ships with no external files required.
 //!
 //! In development the server can still serve from the filesystem (see
-//! `ServerConfig::static_dir`); this module is the fallback when that
-//! directory is absent.
+//! `ServerConfig::static_dir`); this module is the fallback when that directory is absent.
 
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};

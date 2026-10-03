@@ -1,13 +1,11 @@
-//! Camera lifecycle management (connect → precool → capture → warmup → disconnect)
+//! Camera lifecycle management (connect → precool → capture → warmup → disconnect).
 //!
-//! Owns the long-lived camera handle stored in `AppState.active_camera`,
-//! and runs a background `std::thread` monitor that polls sensor status
-//! every `PHASE_POLL_INTERVAL` while broadcasting `CameraStatusUpdated`
-//! and `CameraPhaseChanged` events.
-//!
-//! The monitor runs on an OS thread (not a tokio task) because vendor
-//! FFI calls (`camera.status()`, `camera.set_cooler(...)`) can block under
-//! USB stall — we must never hold the runtime worker across those calls.
+//! Owns the long-lived camera handle stored in `AppState.active_camera`, and runs a
+//! background `std::thread` monitor that polls sensor status every
+//! `PHASE_POLL_INTERVAL`, broadcasting `CameraStatusUpdated`/`CameraPhaseChanged`.
+//! Runs on an OS thread, not tokio, since vendor FFI (`camera.status()`,
+//! `camera.set_cooler(...)`) can block under USB stall — never hold the runtime
+//! worker across those calls.
 
 use std::time::Duration;
 

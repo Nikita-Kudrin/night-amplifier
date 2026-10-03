@@ -66,6 +66,7 @@ pub fn run_render_task(
             frame_number,
             settings,
             stack_depth,
+            mut noise,
         } = latest;
 
         let _iter_span =
@@ -73,14 +74,13 @@ pub fn run_render_task(
                 .entered();
 
         // The preview pipeline mutates in place. `make_mut` hands back the buffer
-        // untouched when we hold the only handle (the usual case); a live second
-        // holder (disk saving, an in-flight solve) forces the copy instead of paying
-        // it unconditionally. Staying inside the `Arc` also lets the rendered frame
-        // reach `latest_raw_frame` without re-wrapping.
+        // untouched when we hold the only handle (usual case); a live second holder
+        // (disk saving, an in-flight solve) forces the copy instead. Staying inside the
+        // `Arc` also lets the rendered frame reach `latest_raw_frame` without re-wrapping.
         //
-        // This log predicts `make_mut`'s decision rather than observing it, so a
-        // holder dropping in between is a false positive — harmless, since no handle
-        // can be *acquired* once the frame is here, so silence still proves no copy.
+        // This log predicts the decision rather than observing it — a holder dropping in
+        // between is a false positive, harmless since no handle can be acquired here, so
+        // silence still proves no copy.
         if Arc::get_mut(&mut display_frame).is_none() {
             debug!("Preview frame still shared, copying before render");
         }
@@ -96,7 +96,14 @@ pub fn run_render_task(
         if bin > 1 {
             let _span = tracing::info_span!("preview_bin", factor = bin).entered();
             match display_frame.downsample(bin) {
-                Ok(binned) => display_frame = Arc::new(binned),
+                Ok(binned) => {
+                    display_frame = Arc::new(binned);
+                    // The map describes the frame, so it follows every geometry change
+                    // the frame makes. Only applied where the frame really was binned,
+                    // so a failed downsample cannot leave the two describing different
+                    // grids.
+                    noise = noise.and_then(|field| field.binned(bin).ok());
+                }
                 // Not fatal: the pipeline is perfectly capable of running at sensor
                 // resolution, it is just slower. A failure here must not cost the frame.
                 Err(e) => warn!(error = %e, factor = bin, "Preview binning failed, rendering at full resolution"),
@@ -104,7 +111,7 @@ pub fn run_render_task(
         }
 
         // Process frame through unified render pipeline
-        let (pipeline_config, stretch_result) = {
+        let rendered = {
             let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Render);
             match pipeline::process_preview_frame_with_analysis(
                 Arc::make_mut(&mut display_frame),
@@ -128,10 +135,15 @@ pub fn run_render_task(
         // stack: a rejected frame still leaves the slow-moving stack on screen.
         let chunk_count = if showing_stack { 1 } else { max_chunks };
 
+        // Coverage is a share of the stack: no stage between the accumulator and the
+        // encoders changes it, so the map rides through untouched.
+        let noise = noise.map(Arc::new);
+
         let ready_frame = Arc::new(crate::server::state::RenderReadyFrame {
             linear_frame: display_frame,
-            pipeline_config,
-            stretch_result,
+            pipeline_config: rendered.pipeline_config,
+            stretch_result: rendered.stretch_result,
+            noise,
         });
 
         let raw_frame = ready_frame;
@@ -204,19 +216,14 @@ fn encode_payloads(
     }
 }
 
-/// The preview bin factor for one capture session, resolved once and held — not
-/// recomputed per frame. It used to be: called every iteration against the largest
-/// connected client's bounding box, flipping between 1 and 2 whenever the client set
-/// crossed a 2x boundary. Binning isn't neutral: the tone curve solves from median
-/// and MAD, and a 2x2 box average halves MAD, moving the black point and curve with
-/// it (measured: solved `scale_lut` gained 25.7% at the 1% input point) — every
-/// viewer saw the jump, not just the arriving client.
-///
-/// So the factor is a session property (sensor shape + [`Resolution`], both
-/// observer-controlled), held until one changes. Shape stays part of the key because
-/// hardware binning/ROI/mono-colour swaps reshape the frame mid-session and already
-/// reset the stack — a deliberate observer act, the same class of event as starting
-/// a session, logged for that reason.
+/// The preview bin factor for one capture session, resolved once and held, not
+/// recomputed per frame. It used to flip between 1 and 2 every iteration against the
+/// largest client's bounding box at a 2x boundary — binning isn't neutral, a 2x2 box
+/// average halves MAD and moves the tone curve's black point with it (measured:
+/// `scale_lut` gained 25.7% at the 1% input point), so every viewer saw the jump, not
+/// just the arriving client. Instead it's a session property (sensor shape +
+/// [`Resolution`]): shape stays in the key because binning/ROI/mono-colour swaps
+/// reshape the frame mid-session and already reset the stack, the same deliberate act.
 #[derive(Default)]
 struct SessionBinFactor {
     resolved: Option<((usize, usize), Resolution)>,
@@ -255,31 +262,14 @@ impl SessionBinFactor {
     }
 }
 
-/// Largest integer bin that still leaves the preview the pixels [`Resolution`]
-/// asks for. Background neutralisation, subtraction, SCNR and black-point all walk
-/// every sample before `frame_to_rgb8_downsampled` throws away what the stream doesn't
-/// need (76% of a 3008² frame streamed at 1440p) — the same argument AGENTS.md
-/// makes for running denoisers at stream resolution applies to every stage above them.
-///
-/// Integer, not the exact box: `Frame::downsample` stays an exact box average with
-/// no resampling phase to get wrong, leaving the encoder's fractional resample to
-/// land the final size — conservative, never smaller than the largest requested box,
-/// 1 whenever halving would undershoot it. `target` comes from
-/// [`Resolution::target_box`], never the connected clients (see
-/// [`SessionBinFactor`]); `Native` has no box and never reaches here, making
-/// "no downsampling" the default rather than something to protect.
-///
-/// All-or-nothing at the **2x boundary**: a 3008² sensor at 4K bins by 1
-/// (saves nothing); at 1440p/1080p it bins by 2 and the whole pipeline runs on
-/// a quarter of the samples (phones, tablets, eyepiece view). Capped at 4 — past that
-/// the background grid is estimated from too few samples to mean anything, and
-/// nothing served is under 1080 anyway.
-///
-/// Bounds against the **output size**, not the bounding box: a 3008² frame in a
-/// 2560x1440 box comes out 1440x1440 (short edge binds, aspect preserved), so
-/// comparing against the raw box would refuse to bin a square sensor at any resolution.
-/// `encoding::output_dimensions` is the one copy of that arithmetic, kept here to
-/// agree with the encoder.
+/// Largest integer bin that still leaves the preview the pixels [`Resolution`] asks
+/// for — every pixel-walking stage above it (neutralisation, subtraction, SCNR,
+/// black-point) pays for samples downsampling would otherwise drop (76% of a 3008²
+/// frame at 1440p). All-or-nothing at the **2x boundary**: a 3008² sensor bins by 1 at
+/// 4K (saves nothing) but by 2 at 1440p/1080p, a quarter of the samples. Capped at 4 —
+/// past that the background grid has too few samples to mean anything. Bounds against
+/// **output size**: a 3008² frame in a 2560x1440 box comes out 1440x1440 (short edge
+/// binds), so the raw box would wrongly refuse to bin a square sensor.
 fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize {
     const MAX_BIN: usize = 4;
     if target.0 == 0 || target.1 == 0 {
@@ -433,8 +423,8 @@ mod tests {
         let mut full = frame.clone();
         let mut binned = frame.downsample(2).unwrap();
 
-        let (_, full_stretch) = process_preview_frame(&mut full, &settings).unwrap();
-        let (_, binned_stretch) = process_preview_frame(&mut binned, &settings).unwrap();
+        let full_stretch = process_preview_frame(&mut full, &settings).unwrap().stretch_result;
+        let binned_stretch = process_preview_frame(&mut binned, &settings).unwrap().stretch_result;
 
         let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
         let binned_lut = binned_stretch.expect("binned stretch").scale_lut;
@@ -528,6 +518,7 @@ mod tests {
         let settings = crate::server::state::CaptureSettings::default();
         let frame = crate::frame::Frame::zeros(4, 4, 3).unwrap();
         let msg = super::StackedFrame {
+            noise: None,
             display_frame: std::sync::Arc::new(frame),
             showing_stack: true,
             was_stacked: true,
@@ -549,6 +540,7 @@ mod tests {
 
         let settings = crate::server::state::CaptureSettings::default();
         let initial = super::StackedFrame {
+            noise: None,
             display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
             showing_stack: false,
             was_stacked: false,
@@ -560,6 +552,7 @@ mod tests {
         // Queue additional frames
         for n in 0..3 {
             let msg = super::StackedFrame {
+                noise: None,
                 display_frame: Arc::new(crate::frame::Frame::zeros(4, 4, 3).unwrap()),
                 showing_stack: false,
                 was_stacked: false,
@@ -571,6 +564,7 @@ mod tests {
         }
         // Last frame is the "latest"
         let last = super::StackedFrame {
+            noise: None,
             display_frame: Arc::new(crate::frame::Frame::filled(4, 4, 3, 1.0).unwrap()),
             showing_stack: true,
             was_stacked: true,

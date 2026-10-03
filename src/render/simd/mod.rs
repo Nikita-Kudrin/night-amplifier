@@ -1,15 +1,11 @@
-//! SIMD-optimised operations for the render pipeline, using the `wide` crate for
-//! portable SIMD across x86_64 and ARM. `Frame` is planar but the streaming encoder's
-//! rows are interleaved, so luminance kernels exist in both shapes — [`interleaved`]
-//! and [`planar`] — each pair pinned together by an equivalence test.
-//!
-//! Does the interleaved variant earn its keep? On x86-64, SIMD and scalar swap places
-//! inside each other's confidence intervals (`render_benchmark`'s `scale_lut` group)
-//! — no measurable difference, since the per-lane LUT lookup stays a scalar gather.
-//! Kept anyway: the deployment target is a Pi 5, and NEON's stride-3 gather/scatter
-//! may trade differently — deleting on x86 evidence alone would be a guess. The
-//! planar kernels aren't in question: `apply_fused_stretch_frame` runs the same
-//! 12.5M samples in 2.4ms.
+//! SIMD-optimised render-pipeline ops using the `wide` crate, portable across x86_64 and
+//! ARM. Rows come planar (`Frame`) and interleaved (streaming encoder), so luminance
+//! kernels exist in both shapes ([`interleaved`], [`planar`]), pinned by an equivalence
+//! test. Interleaved SIMD shows no measurable gain over scalar on x86-64
+//! (`render_benchmark`'s `scale_lut` group — overlapping confidence intervals, since the
+//! per-lane LUT lookup stays a scalar gather), but is kept for the Pi 5 target, where
+//! NEON's stride-3 gather/scatter may trade differently and deleting on x86 evidence alone
+//! would be a guess. Planar is proven: `apply_fused_stretch_frame` runs 12.5M samples in 2.4ms.
 
 use wide::f32x4;
 
@@ -97,14 +93,12 @@ pub fn multiply_scalar_clamp_simd(data: &mut [f32], scalar: f32) {
 
 /// Linearly interpolated lookup into a scale LUT indexed by luminance in `[0, 1]`.
 ///
-/// Interpolating rather than truncating matters because the tone curves are steepest
-/// exactly where the sky background sits. With an 8192-entry table a truncated lookup
-/// is off by up to ~8 LSB of 8-bit output at aggressive midtones (m ≈ 0.001); with
-/// interpolation the worst case drops below 0.15 LSB.
+/// Interpolation matters because tone curves are steepest where the sky sits: with an
+/// 8192-entry table, truncation is off by up to ~8 LSB of 8-bit output at aggressive
+/// midtones (m ≈ 0.001), while interpolation keeps the worst case below 0.15 LSB.
 ///
-/// `lum` is clamped into the table, so a luminance above 1.0 (possible after
-/// calibration overshoot) saturates at the last entry instead of extrapolating, and a
-/// NaN resolves to the last entry rather than wrapping to index 0.
+/// `lum` is clamped into the table: a luminance above 1.0 (calibration overshoot)
+/// saturates at the last entry instead of extrapolating, and NaN resolves there too.
 #[inline(always)]
 fn scale_lut_lookup(scale_lut: &[f32], lum: f32) -> f32 {
     let lut_max = (scale_lut.len() - 1) as f32;

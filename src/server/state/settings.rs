@@ -6,7 +6,7 @@ use super::StreamKind;
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, CaptureConfig, DualSamplingMode};
 use crate::planetary::AlignmentRoi;
-use crate::render::{SaturationBoostConfig, StretchAggressiveness};
+use crate::render::{AiComputePreference, SaturationBoostConfig, StretchAggressiveness};
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
 /// Capture settings that can be modified during a session
@@ -264,13 +264,11 @@ pub struct TelescopeSettings {
 
 /// Corrections that run on the raw CFA mosaic, before demosaic.
 ///
-/// These target the defects stacking cannot remove: a hot pixel and a readout
-/// offset are in the same place in every sub, so averaging frames leaves them
-/// exactly where they were. Both are only well defined on the mosaic — after
-/// demosaic a hot site has already been smeared into a coloured 3x3 cross, and
-/// neighbouring sensor rows have been mixed together.
+/// These target defects stacking cannot remove: a hot pixel and a readout offset sit
+/// in the same place in every sub, so averaging leaves them untouched. Both are only
+/// well defined on the mosaic — after demosaic a hot site is smeared into a coloured 3x3 cross, and neighbouring sensor rows are mixed together.
 ///
-/// Hot-pixel rejection has no switch: it always runs, and `hot_pixel_sigma` is its only
+/// Hot-pixel rejection has no switch: it always runs, `hot_pixel_sigma` is its only
 /// tuning. See `stage_config::build_cfa_pipeline` for why.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SensorCorrectionSettings {
@@ -428,36 +426,42 @@ impl EyepieceStreamResolution {
 /// recover is exactly what a denoiser removes.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DenoiseSettings {
+    /// The master switch, and a Pro control like the rest of this block. Off gives
+    /// `DenoiseConfig::OFF`, which the encoders guarantee is *byte-identical* to the
+    /// pre-denoise output rather than merely equivalent, so the toggle costs nothing.
+    ///
+    /// Deliberately **not** managed by Focus/Finder mode, unlike `chroma` and
+    /// `luma_strength` (the mode already reaches off through those): forcing this one
+    /// false once made a saved file migrate the Background Grain dial to `0.0` with
+    /// nothing to put it back. The observer's master switch stays theirs.
+    #[serde(default = "default_denoise_enabled")]
+    pub enabled: bool,
     /// Guided-filter smoothing of the chroma planes, against luminance as the
     /// guide. Removes colour mottle; the eye resolves little chroma detail, so
     /// this is the cheap half with almost nothing to lose.
     #[serde(default = "default_chroma_denoise")]
     pub chroma: bool,
     /// How far the chroma planes move toward the filtered result, `0..=1`.
-    #[serde(default = "default_denoise_strength")]
+    #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
     pub chroma_strength: f32,
     /// How hard the render fights sky grain, `0..=1`. The "Background Grain" control.
     ///
-    /// Three mechanisms, spent cheapest-first, and what makes that ordering real is which
-    /// *scales* each one reaches. An observer reads grain at 8-128 px, and on a 1440p
-    /// stream of a deep IMX533 stack the 16-32 and 32-64 px bands are the two largest.
+    /// Three mechanisms, spent cheapest-first by *scale* reached. On a 1440p IMX533
+    /// stack the 16-32 and 32-64 px bands dominate perceived grain.
     ///
-    /// - **Below the middle**: the wavelet's finest scale
-    ///   (`LumaDenoiseConfig::thresholds_for`) and the tone curve's split
-    ///   (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT` and
-    ///   `DEFAULT_GRAIN_SPLIT`. This half trades brightness for *fine speckle*: measured,
-    ///   it moves 8-128 px noise by under 2 %.
-    /// - **Above the middle**: wavelet levels 5-6, the only mechanism that reaches
-    ///   16-64 px. Measured on six real sessions it takes 8-128 px noise down 12-15 % for
-    ///   3 % of target brightness, against the tone curve's 1:1.
+    /// - **Below the middle**: wavelet finest scale (`LumaDenoiseConfig::thresholds_for`)
+    ///   + tone curve split (`AutoStretchConfig::grain_split`) between `MIN_GRAIN_SPLIT`
+    ///   and `DEFAULT_GRAIN_SPLIT`. Trades brightness for fine speckle: moves 8-128 px
+    ///   noise under 2%.
+    /// - **Above the middle**: wavelet levels 5-6, the only mechanism reaching 16-64 px.
+    ///   Six-session measurement: 8-128 px noise down 12-15% for 3% of target
+    ///   brightness, vs. the curve's 1:1.
     ///
-    /// The curve's split **stops at `DEFAULT_GRAIN_SPLIT`** and no longer runs on to
-    /// `MAX_GRAIN_SPLIT`. Reaching 1/4 cost 38-43 % of target brightness for 37-39 % of
-    /// the grain, which is the 1:1 exchange it always was and is not a trade any position
-    /// of a user-facing control should offer. The coarse levels replace that range.
-    ///
-    /// `0.5` is the middle; see [`DEFAULT_BACKGROUND_GRAIN`] for what it is and is not.
-    #[serde(default = "default_background_grain")]
+    /// Split stops at `DEFAULT_GRAIN_SPLIT`, never `MAX_GRAIN_SPLIT`: reaching 1/4 cost
+    /// 38-43% of brightness for 37-39% of grain, the same 1:1 exchange — not a trade a
+    /// user control should offer. Coarse levels replace that range. `0.5` is the middle;
+    /// see [`DEFAULT_BACKGROUND_GRAIN`].
+    #[serde(default = "default_background_grain", deserialize_with = "nullable_f32")]
     pub background_grain: f32,
     /// Scales the mid-scale wavelet thresholds (levels 2-4), `0..=1`. `1.0` is both the
     /// tuned value and the ceiling; `0.0` is the wavelet's genuine off switch.
@@ -465,22 +469,68 @@ pub struct DenoiseSettings {
     /// Note what this can and cannot reach: it leaves the finest level and the coarse
     /// pair alone, so it is the "the target still looks too noisy" control, not the "the
     /// sky still looks grainy" one — that is the Background Grain dial.
-    #[serde(default = "default_denoise_strength")]
+    #[serde(default = "default_denoise_strength", deserialize_with = "nullable_f32")]
     pub luma_strength: f32,
+    /// How much the wavelet raises the target's own structure, `0..=1`. The "Detail"
+    /// control; `0` renders exactly as before it existed.
+    ///
+    /// A gain on the levels [`luma_strength`](Self::luma_strength) thresholds, applied to
+    /// what survived the threshold and held off the sky and every star by the plugin — so
+    /// it rides on the brightness denoiser and does nothing while that is off.
+    #[serde(default = "default_detail", deserialize_with = "nullable_f32")]
+    pub detail: f32,
+    /// The AI denoiser (Pro): a small network run after the stretch, taking over the
+    /// finest four wavelet levels and Detail while it runs. Off by default. Needs the
+    /// master switch on, like every filter here.
+    ///
+    /// Not managed by Focus/Finder mode either: the mode holds the network off where the
+    /// frame's config is built (`stage_config::requested_denoise`), so this stays the
+    /// observer's value — a switch the mode forced false once cost a saved file its dial.
+    #[serde(default)]
+    pub ai: bool,
+    /// The "AI compute" choice (Pro): which unit runs the network. Auto takes the hardware
+    /// benchmark's pick; a forced rung this machine cannot use falls back to Auto. Unknown
+    /// values read as Auto ([`AiComputePreference`]'s own `Deserialize`).
+    #[serde(default)]
+    pub ai_compute: AiComputePreference,
+}
+
+/// Reads JSON `null` as NaN instead of failing. serde_json writes a non-finite `f32` as
+/// `null` (and `1e39` over the API narrows to infinity), so one such value used to fail
+/// the whole of `settings.json` on the next start — every camera, telescope and eyepiece
+/// setting back to its default, made permanent by the next save. The block's
+/// `sanitized()` turns the NaN into that field's default.
+fn nullable_f32<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+    use serde::Deserialize;
+    Ok(Option::<f32>::deserialize(deserializer)?.unwrap_or(f32::NAN))
+}
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        fallback
+    }
 }
 
 /// The middle of the dial: the wavelet's finest scale fully spent, the tone curve at
 /// `DEFAULT_GRAIN_SPLIT`, the coarse levels off.
 ///
-/// **Not** the render of any earlier build, and worth being exact about because the
-/// first version of this said it was. The build before the dial defaulted
-/// `star_protection` to `1.0` — the finest scale *untouched* — and its tone curve split
-/// to `1/4`. The dial's middle is neither: its equivalent of that protection is `0.0`
-/// and its split is `1/8`. Measured on the 106-sub IMX533 set, dial 0.0 renders the
-/// target core at 161 output levels against 141 at the middle, and fine (1-4 px) sky
-/// noise at 0.51/0.50 against 0.24/0.31. The middle is where it is because it is the
-/// tuned trade, not because it reproduces anything.
+/// **Not** the render of any earlier build, despite a first draft claiming so: the
+/// pre-dial build defaulted `star_protection` to `1.0` (finest scale *untouched*) and
+/// its split to `1/4`; the dial's middle is neither (`0.0` / `1/8`). On the 106-sub
+/// IMX533 set, dial 0.0 renders the target core at 161 output levels vs. 141 at the
+/// middle, and fine (1-4 px) sky noise at 0.51/0.50 vs. 0.24/0.31 — the middle is a tuned trade, not a reproduction of anything.
 pub const DEFAULT_BACKGROUND_GRAIN: f32 = 0.5;
+
+/// The Detail control's default, not an off switch: stars injected on every test target
+/// stay within the plugin's guard here, where the top of the dial leaves a faint ring. See
+/// the Pro repo's `plugins::denoise::detail`.
+pub const DEFAULT_DETAIL: f32 = 0.5;
+
+fn default_denoise_enabled() -> bool {
+    true
+}
 
 fn default_chroma_denoise() -> bool {
     true
@@ -494,100 +544,46 @@ fn default_background_grain() -> f32 {
     DEFAULT_BACKGROUND_GRAIN
 }
 
+fn default_detail() -> f32 {
+    DEFAULT_DETAIL
+}
+
 impl Default for DenoiseSettings {
     fn default() -> Self {
         Self {
+            enabled: default_denoise_enabled(),
             chroma: default_chroma_denoise(),
             chroma_strength: default_denoise_strength(),
             background_grain: default_background_grain(),
             luma_strength: default_denoise_strength(),
+            detail: default_detail(),
+            ai: false,
+            ai_compute: AiComputePreference::Auto,
         }
     }
 }
 
 impl DenoiseSettings {
-    /// Whether the wavelet runs at all.
+    /// These settings with the nonsense taken out: finite, and in `0..=1`.
     ///
-    /// Only a zero `luma_strength` turns it off, which is the genuine off switch the
-    /// filter needs: every denoiser has a setting at which nebulae turn to plastic and
-    /// only an observer at the eyepiece can find it. The dial's bottom end does *not*
-    /// turn it off — it leaves the finest scale untouched, which is where the grain is,
-    /// and keeps the coarse scales that cost nothing visible.
-    pub fn luma_enabled(&self) -> bool {
-        self.luma_strength > 0.0
-    }
-
-    /// How much of the finest wavelet scale the dial leaves alone, `0..=1`.
-    ///
-    /// The finest scale carries both the sky grain and the star cores, and a B3 spline
-    /// transform puts ~94 % of the noise variance there — but that variance is 1-4 px
-    /// speckle, which at streaming resolution is close to invisible. It is spent first
-    /// because it is nearly free in target contrast, not because it is what an observer
-    /// notices: across the dial's whole lower half the 8-128 px bands move under 2 %.
-    ///
-    /// Fully spent by the middle and held there above it.
-    pub fn star_protection(&self) -> f32 {
-        let dial = self.dial();
-        (1.0 - dial / DEFAULT_BACKGROUND_GRAIN).clamp(0.0, 1.0)
-    }
-
-    /// The dial position, with the nonsense taken out.
-    ///
-    /// `f32::clamp` passes NaN straight through, and this value arrives over JSON — a NaN
-    /// reaches the wavelet's threshold table and the tone curve's exponent, where every
-    /// comparison it meets is false.
-    fn dial(&self) -> f32 {
-        if self.background_grain.is_finite() {
-            self.background_grain.clamp(0.0, 1.0)
-        } else {
-            DEFAULT_BACKGROUND_GRAIN
+    /// Applied wherever the block enters or leaves — `POST /api/settings`, loading and
+    /// saving `settings.json` — so no reader ever sees a value `f32::clamp` would pass
+    /// straight through (NaN), and none is ever written as `null` ([`nullable_f32`]).
+    /// The plugin sanitises again for itself, since a test can hand it anything.
+    pub fn sanitized(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            chroma: self.chroma,
+            chroma_strength: finite_or(self.chroma_strength, 1.0).clamp(0.0, 1.0),
+            background_grain: finite_or(self.background_grain, DEFAULT_BACKGROUND_GRAIN)
+                .clamp(0.0, 1.0),
+            luma_strength: finite_or(self.luma_strength, 1.0).clamp(0.0, 1.0),
+            detail: finite_or(self.detail, DEFAULT_DETAIL).clamp(0.0, 1.0),
+            ai: self.ai,
+            ai_compute: self.ai_compute,
         }
     }
-
-    /// How hard the wavelet's coarse levels (5-6) run, `0..=1`.
-    ///
-    /// The dial's upper half, and the only lever it has that reaches the 16-64 px band.
-    /// Zero at and below the middle, so the default render is untouched and an observer
-    /// who wants brightness never pays for a pass they are not using.
-    pub fn coarse_denoise(&self) -> f32 {
-        let dial = self.dial();
-        ((dial - DEFAULT_BACKGROUND_GRAIN) / (1.0 - DEFAULT_BACKGROUND_GRAIN)).clamp(0.0, 1.0)
-    }
-
-    /// The share of the stack's depth the tone curve spends on the sky, for this dial
-    /// position. See [`crate::render::AutoStretchConfig::grain_split`].
-    ///
-    /// Flat at `MIN_GRAIN_SPLIT` over the bottom quarter, rising to `DEFAULT_GRAIN_SPLIT`
-    /// by the middle, and **flat again above it**. Three segments, because going *down*
-    /// from the default the expensive lever has to be given back first: the curve costs
-    /// target brightness 1:1, so taking it off is what buys brightness, and the wavelet's
-    /// finest scale — which costs almost nothing — is what the last quarter spends.
-    ///
-    /// A straight ramp over the whole lower half was tried and reported from the field:
-    /// at dial 15 % it left the curve 30 % of the way up and took 5-9 % of the target with
-    /// it (M27 core 148 -> 141 output levels, outer 99 -> 90 on the observer's own
-    /// render). The flat bottom quarter is what makes a low dial mean "brightness,
-    /// please" rather than "a bit of everything".
-    ///
-    /// Above the middle the curve is not asked for anything at all; that range belongs to
-    /// the coarse levels, which buy the same sky at about a fifteenth of the cost.
-    ///
-    /// The floor is `MIN_GRAIN_SPLIT`, not zero, and that is deliberate: see its own
-    /// documentation for the give-back this avoids on a long session.
-    pub fn grain_split(&self) -> f32 {
-        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
-        let dial = self.dial();
-        let t = ((dial - CURVE_HOLDS_BELOW) / (DEFAULT_BACKGROUND_GRAIN - CURVE_HOLDS_BELOW))
-            .clamp(0.0, 1.0);
-        MIN_GRAIN_SPLIT + (DEFAULT_GRAIN_SPLIT - MIN_GRAIN_SPLIT) * t
-    }
 }
-
-/// Dial position below which the tone curve stays at `MIN_GRAIN_SPLIT`.
-///
-/// The bottom quarter of the dial spends the wavelet's finest scale and nothing else, so
-/// every position in it costs the same (nothing) in target brightness.
-const CURVE_HOLDS_BELOW: f32 = 0.25;
 
 /// Settings specifically for the eyepiece view feature
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -595,8 +591,10 @@ pub struct EyepieceSettings {
     /// Enable Binoview
     pub binoview: bool,
     /// Screen width
+    #[serde(deserialize_with = "nullable_f32")]
     pub screen_width: f32,
     /// Screen height
+    #[serde(deserialize_with = "nullable_f32")]
     pub screen_height: f32,
     /// Measurement unit (e.g. "mm", "inches")
     pub screen_measurement: String,
@@ -608,18 +606,17 @@ pub struct EyepieceSettings {
     #[serde(default = "default_circular_view")]
     pub circular_view: bool,
     /// Dark background enhancement intensity (0.0 to 1.0)
-    #[serde(default = "default_intensity")]
+    #[serde(default = "default_intensity", deserialize_with = "nullable_f32")]
     pub intensity: f32,
     /// Where black sits, as a signed fraction of full scale, in `[-0.09, 0.5]`.
-    /// **Positive** lifts the output floor by this fraction — an OLED shows a zero
-    /// pixel fully off, and the autostretch black point clamps a few percent of sky
-    /// pixels to zero, reading as black speckle at the eyepiece. **Negative** pushes
-    /// the sky toward black instead, anchored to the sky rather than full scale:
-    /// `-0.052` puts the floor at sky level whether the sky is nominal or bright, so
-    /// one setting behaves the same on every target (the sky otherwise sits at
-    /// 14-17 output levels, a visible grey — dimming it via the stretch would dim
-    /// the target too, see [`intensity`](Self::intensity)).
-    #[serde(default = "default_black_floor")]
+    /// **Positive** lifts the output floor — an OLED shows a zero pixel fully off, and
+    /// the autostretch black point clamps a few percent of sky pixels to zero, reading
+    /// as black speckle at the eyepiece. **Negative** pushes the sky toward black
+    /// instead, anchored to the sky rather than full scale: `-0.052` puts the floor at
+    /// sky level whether the sky is nominal or bright, so one setting behaves the same
+    /// on every target (sky otherwise sits at 14-17 output levels, a visible grey —
+    /// dimming via the stretch would dim the target too; see [`intensity`](Self::intensity)).
+    #[serde(default = "default_black_floor", deserialize_with = "nullable_f32")]
     pub black_floor: f32,
 
     /// Let the darkening half of `black_floor` clip to true black instead of
@@ -632,7 +629,7 @@ pub struct EyepieceSettings {
     /// default; no effect while `black_floor` is positive.
     #[serde(default)]
     pub darker_sky: bool,
-    /// Ordered dithering at the 8-bit conversion, to keep smooth gradients from
+    /// Blue-noise dithering at the 8-bit conversion, to keep smooth gradients from
     /// banding once denoising removes the noise that currently masks the steps.
     #[serde(default = "default_dither")]
     pub dither: bool,
@@ -655,6 +652,22 @@ fn default_black_floor() -> f32 {
 
 fn default_dither() -> bool {
     true
+}
+
+impl EyepieceSettings {
+    /// These settings with every non-finite number replaced by its default, applied where
+    /// the block enters or leaves, as [`DenoiseSettings::sanitized`] is and for the same
+    /// `null` reason. Ranges stay the renderer's business — `stage_config` clamps
+    /// `intensity` and `black_floor` where it reads them — so only a value that could
+    /// not be saved is replaced here.
+    pub fn sanitized(mut self) -> Self {
+        let defaults = Self::default();
+        self.screen_width = finite_or(self.screen_width, defaults.screen_width);
+        self.screen_height = finite_or(self.screen_height, defaults.screen_height);
+        self.intensity = finite_or(self.intensity, defaults.intensity);
+        self.black_floor = finite_or(self.black_floor, defaults.black_floor);
+        self
+    }
 }
 
 impl Default for EyepieceSettings {
@@ -849,21 +862,14 @@ impl CaptureSettings {
         profile: &CameraCaptureProfile,
         role: super::CameraRole,
     ) -> CaptureConfig {
-        // "Low Noise" dual-sampling trades frame rate for read noise, so it's
-        // only worth selecting while frames are actually being integrated —
-        // not during a raw live-view feed under a stacking-capable target
-        // type. `stacking` alone covers both the "Stacking" and "Wanderer"
-        // UI modes: the frontend always sets `stacking: true` whenever it
-        // sets `wanderer_mode: true` (see `CaptureControls.vue`'s
-        // `applyStackingMode`), so there's no case Wanderer needs to add here
-        // — and OR-ing `wanderer_mode` in directly would be wrong for the
-        // orthogonal-misuse case of `stacking: false, wanderer_mode: true`
-        // (no frames integrated there either).
-        //
-        // The stacking flags describe the *imaging* session, so they say nothing about a
-        // guide camera: nothing it produces is ever integrated, and starting a Deep Sky
-        // stack used to flip the guide camera to `LowReadoutNoise` — buying read noise
-        // it does not need with the frame rate it does.
+        // "Low Noise" dual-sampling trades frame rate for read noise, so it's only
+        // worth selecting while frames are actually integrated, not during live view.
+        // `stacking` alone covers both "Stacking" and "Wanderer" UI modes (frontend
+        // always sets `stacking: true` with `wanderer_mode: true`, see
+        // `CaptureControls.vue`'s `applyStackingMode`); OR-ing `wanderer_mode` in
+        // directly would wrongly fire on `stacking: false, wanderer_mode: true`. The
+        // flags describe the *imaging* session only — applying this to the guide
+        // camera once flipped it to `LowReadoutNoise`, buying read noise it never needed.
         let is_actively_stacking = role == super::CameraRole::Main
             && self.stacking
             && self.stacking_type.supports_stacking();
@@ -902,27 +908,14 @@ impl CaptureSettings {
             .unwrap_or_else(|| self.telescope.clone())
     }
 
-    /// Give a newly connected camera a telescope profile of its own, from what the
-    /// camera itself reports. Returns whether one was written.
-    ///
-    /// Without this, `solver_telescope` answers for an unprofiled camera with the flat
-    /// block — which describes whichever camera the user last configured. Two cameras
-    /// then produce the same Push-To rig key and share one remembered field of view.
-    /// On 2026-09-07 that handed the guide camera the main camera's 0.5152 deg for a
-    /// rig imaging 1.4516 deg, and a 2.8x-wrong FOV *fails* a plate solve rather than
-    /// slowing it: 19 minutes with no solve at all, on frames that solve in 0.1 s.
-    ///
-    /// Only the sensor is seeded, because only the sensor is something the camera can
-    /// state. Focal length and Barlow are carried over from the flat block just when
-    /// that block is already describing this sensor — otherwise it belongs to the other
-    /// camera and would attach one scope's focal length to the other's body.
-    ///
-    /// Never overwrites an existing profile: the equipment UI's values are the user's,
-    /// and this is only filling in a camera they have not configured.
-    ///
-    /// A camera that reports no pixel size (the simulator reports zero) is left alone —
-    /// there is nothing to tell it apart with, and `identifies_optics` already treats
-    /// that key as a wildcard rather than an identity.
+    /// Give a newly connected camera its own telescope profile, from what it reports.
+    /// Without this, unprofiled cameras share the flat block's FOV — on 2026-09-07
+    /// that gave the guide camera the main camera's 0.5152 deg for a rig imaging
+    /// 1.4516 deg, and the 2.8x-wrong FOV *failed* the solve outright (19 min with no
+    /// solve, vs. 0.1 s normally). Only the sensor is seeded (all the camera states);
+    /// focal length/Barlow carry over from the flat block only when it already
+    /// describes this sensor. Never overwrites an existing profile; no pixel size
+    /// (simulator: zero) leaves it alone.
     pub fn ensure_camera_telescope_profile(
         &mut self,
         camera_name: &str,
@@ -966,97 +959,56 @@ impl CaptureSettings {
 mod tests {
     use super::*;
 
-    /// What the dial's middle actually is, stated in the three numbers it resolves to.
+    /// A settings block Community never interprets still has to survive a round trip.
     ///
-    /// It is **not** the render of the build before the dial, whatever an earlier version
-    /// of this test said: that one left the finest scale untouched (`star_protection`
-    /// defaulted to `1.0`) and split the tone curve at `1/4`. The middle spends the finest
-    /// scale in full and splits at `1/8`. Those are different pictures — 161 against 141
-    /// output levels of target core on the 106-sub IMX533 set — and the point of pinning
-    /// them here is that the next change to either lever has to say so out loud.
+    /// The opposite of the lesson the `luma` switch taught: *those* fields were deleted
+    /// from the format and deliberately not migrated. These are retained and ignored, so
+    /// a Pro observer who runs Community once does not come back to a reset dial.
     #[test]
-    fn the_dials_middle_is_the_tuned_trade() {
-        let d = DenoiseSettings::default();
-        assert_eq!(d.background_grain, DEFAULT_BACKGROUND_GRAIN);
-        assert_eq!(d.star_protection(), 0.0, "the finest scale is fully spent at the middle");
-        assert!((d.grain_split() - crate::render::DEFAULT_GRAIN_SPLIT).abs() < 1e-6);
-        assert_eq!(d.coarse_denoise(), 0.0, "the coarse levels are headroom above it, not the default");
-        assert!(d.luma_enabled());
-    }
-
-    /// Monotone in both directions, cheapest lever first, and nothing past the middle
-    /// touches the tone curve.
-    ///
-    /// A dial where a higher setting gave *more* grain somewhere in the middle would be
-    /// worse than the three controls it replaced.
-    #[test]
-    fn the_dial_is_monotone_and_spends_the_cheap_levers_first() {
-        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
-        let at = |dial: f32| DenoiseSettings {
-            background_grain: dial,
-            ..Default::default()
+    fn community_keeps_the_pro_only_keys_it_does_not_read() {
+        let tuned = DenoiseSettings {
+            enabled: true,
+            chroma: false,
+            chroma_strength: 0.4,
+            background_grain: 0.82,
+            luma_strength: 0.3,
+            detail: 0.9,
+            ai: true,
+            ai_compute: AiComputePreference::IntegratedGpu,
         };
-
-        let mut previous = (f32::MAX, 0.0f32, 0.0f32);
-        for step in 0..=100 {
-            let d = at(step as f32 / 100.0);
-            let (protection, split, coarse) =
-                (d.star_protection(), d.grain_split(), d.coarse_denoise());
-            assert!(
-                protection <= previous.0 + 1e-6
-                    && split >= previous.1 - 1e-6
-                    && coarse >= previous.2 - 1e-6,
-                "dial {:.2}: ({protection}, {split}, {coarse}) is not monotone against \
-                 the step below ({}, {}, {})",
-                step as f32 / 100.0,
-                previous.0,
-                previous.1,
-                previous.2
-            );
-            assert!((MIN_GRAIN_SPLIT..=DEFAULT_GRAIN_SPLIT).contains(&split));
-            assert!((0.0..=1.0).contains(&protection) && (0.0..=1.0).contains(&coarse));
-            previous = (protection, split, coarse);
-        }
-
-        // The ends, and the shape between them.
-        assert_eq!(at(0.0).star_protection(), 1.0);
-        assert!((at(0.0).grain_split() - MIN_GRAIN_SPLIT).abs() < 1e-6);
-        assert_eq!(at(0.0).coarse_denoise(), 0.0);
-        assert_eq!(at(1.0).star_protection(), 0.0, "the free lever stays spent");
-        assert_eq!(at(1.0).coarse_denoise(), 1.0);
-
-        // The tone curve is the expensive lever, so the dial stops asking it for
-        // anything at the middle. Every position past that is the coarse levels, which
-        // buy the same sky at about a fifth of the target contrast.
-        for dial in [0.5f32, 0.6, 0.75, 0.9, 1.0] {
-            assert!(
-                (at(dial).grain_split() - DEFAULT_GRAIN_SPLIT).abs() < 1e-6,
-                "dial {dial} moved the tone curve past the default"
-            );
-        }
-        assert!(at(0.4).grain_split() < DEFAULT_GRAIN_SPLIT);
-        assert_eq!(at(0.4).coarse_denoise(), 0.0, "the coarse pass must not run early");
+        let round_tripped: DenoiseSettings =
+            serde_json::from_str(&serde_json::to_string(&tuned).unwrap()).unwrap();
+        assert_eq!(round_tripped, tuned);
     }
 
-    /// Out-of-range and non-finite values arrive over JSON, and both derived numbers feed
-    /// a tone curve and a threshold table.
+    /// NaN arrives over JSON and `f32::clamp` passes it straight through, where it
+    /// reaches a tone-curve exponent and makes every comparison it meets false. Sanitised
+    /// in Community so the plugin may assume finite values.
     #[test]
-    fn the_dial_clamps_whatever_it_is_handed() {
-        use crate::render::{DEFAULT_GRAIN_SPLIT, MIN_GRAIN_SPLIT};
-        for dial in [-5.0f32, 0.0, 1.0, 7.0, f32::NAN] {
-            let d = DenoiseSettings { background_grain: dial, ..Default::default() };
-            let (protection, split, coarse) =
-                (d.star_protection(), d.grain_split(), d.coarse_denoise());
-            assert!(
-                (0.0..=1.0).contains(&protection),
-                "dial {dial} gave protection {protection}"
-            );
-            assert!(
-                (MIN_GRAIN_SPLIT..=DEFAULT_GRAIN_SPLIT).contains(&split),
-                "dial {dial} gave split {split}"
-            );
-            assert!((0.0..=1.0).contains(&coarse), "dial {dial} gave coarse {coarse}");
-        }
+    fn sanitizing_takes_the_nonsense_out_wherever_it_came_from() {
+        let wild = DenoiseSettings {
+            enabled: true,
+            chroma: true,
+            chroma_strength: f32::NAN,
+            background_grain: 7.0,
+            luma_strength: -3.0,
+            detail: f32::INFINITY,
+            ai: true,
+            ai_compute: AiComputePreference::Npu,
+        };
+        let clean = wild.sanitized();
+        assert_eq!(clean.chroma_strength, 1.0, "NaN must fall back, not propagate");
+        assert!(clean.ai, "sanitising must not drop the network switch");
+        assert_eq!(clean.ai_compute, AiComputePreference::Npu, "nor the compute choice");
+        assert_eq!(clean.background_grain, 1.0);
+        assert_eq!(clean.luma_strength, 0.0);
+        assert_eq!(clean.detail, DEFAULT_DETAIL, "an infinite dial is no position at all");
+        assert!(clean.sanitized() == clean, "sanitising must be idempotent");
+
+        let nan_dial = DenoiseSettings { background_grain: f32::NAN, ..Default::default() };
+        assert_eq!(nan_dial.sanitized().background_grain, DEFAULT_BACKGROUND_GRAIN);
+        let negative_detail = DenoiseSettings { detail: -0.5, ..Default::default() };
+        assert_eq!(negative_detail.sanitized().detail, 0.0);
     }
 
     /// The dial is the only grain key there is, and a file missing it takes the middle.
@@ -1086,29 +1038,65 @@ mod tests {
         }));
         assert_eq!(written.background_grain, 0.75);
         assert_eq!(written.luma_strength, 0.5);
+        assert_eq!(
+            written.detail, DEFAULT_DETAIL,
+            "a file from before the Detail control takes its default, not zero"
+        );
+        assert!(!written.ai, "a file from before the network leaves it off");
+        assert!(
+            read(serde_json::json!({ "detail": null })).detail.is_nan(),
+            "a null reads as NaN for `sanitized` to replace, never as a failed file"
+        );
     }
 
-    /// The saved shape is the four keys the code reads and nothing else, and it reads
+    /// The saved shape is the keys the code reads and nothing else, and it reads
     /// back as itself.
     #[test]
     fn the_denoise_block_round_trips() {
         let settings = DenoiseSettings {
+            enabled: true,
             chroma: false,
             chroma_strength: 0.25,
             background_grain: 0.8,
             luma_strength: 0.6,
+            detail: 0.3,
+            ai: true,
+            ai_compute: AiComputePreference::Cpu,
         };
         let json = serde_json::to_value(&settings).unwrap();
         let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(|k| k.as_str()).collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["background_grain", "chroma", "chroma_strength", "luma_strength"],
+            [
+                "ai",
+                "ai_compute",
+                "background_grain",
+                "chroma",
+                "chroma_strength",
+                "detail",
+                "enabled",
+                "luma_strength"
+            ],
             "the saved block must carry the keys the code reads and nothing else"
         );
         assert_eq!(
             serde_json::from_value::<DenoiseSettings>(json).unwrap(),
             settings
+        );
+    }
+
+    /// Files saved before the setting existed, and values this build does not know, load
+    /// as Auto rather than failing the whole file.
+    #[test]
+    fn a_missing_or_unknown_ai_compute_reads_as_auto() {
+        let read = |json: serde_json::Value| serde_json::from_value::<DenoiseSettings>(json).unwrap();
+        assert_eq!(read(serde_json::json!({})).ai_compute, AiComputePreference::Auto);
+        assert_eq!(read(serde_json::json!({ "ai_compute": "tpu" })).ai_compute, AiComputePreference::Auto);
+        assert_eq!(read(serde_json::json!({ "ai_compute": null })).ai_compute, AiComputePreference::Auto);
+        assert_eq!(
+            read(serde_json::json!({ "ai_compute": "discrete_gpu" })).ai_compute,
+            AiComputePreference::DiscreteGpu
         );
     }
 

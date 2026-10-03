@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex, RwLock};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::events::ServerEvent;
 use super::services::PushToState;
@@ -20,6 +20,7 @@ mod camera_slot;
 mod capture_mode;
 pub mod focus_mode;
 mod frame_stream;
+mod guide_loop;
 mod stream_viewers;
 mod session;
 mod settings;
@@ -33,6 +34,7 @@ pub use camera_slot::{
 pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
+pub use guide_loop::{GuideLoopTicket, GuideLoops};
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
@@ -41,7 +43,7 @@ pub use session::{
 pub use settings::{
     default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
     CaptureSettings, DenoiseSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
-    SensorCorrectionSettings, TelescopeSettings, DEFAULT_PREVIEW_RESOLUTION,
+    SensorCorrectionSettings, TelescopeSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL, DEFAULT_PREVIEW_RESOLUTION,
     DEFAULT_STREAMING_RESOLUTION,
 };
 pub use types::{CameraPhase, CameraRole, CaptureState, RenderReadyFrame, StretchResult};
@@ -74,17 +76,15 @@ pub struct AppState {
     pub push_to: RwLock<Option<PushToState>>,
     /// Push-To's solve and watch consumer threads, started by the first frame offered.
     pub(crate) push_to_tasks: std::sync::OnceLock<crate::server::capture::push_to_tasks::PushToTasks>,
-    /// True while the guide loop is actually exposing, so the plate-solve source can be
-    /// decided with an atomic load on the stacking thread rather than a lock — see
-    /// `capture::solving::SolveSource`.
+    /// The guide camera's free-running loop: whether one is registered, whether it is
+    /// exposing, and its stop switch. "Exposing" decides the plate-solve source with an
+    /// atomic load on the stacking thread — see `capture::solving::SolveSource`.
     ///
-    /// Deliberately not "a guide camera is connected". The two diverge in both
-    /// directions: a cooled guide camera stays registered for the whole of its warm-up
-    /// with its loop already stopped, and `connect` can return before a loop that then
-    /// fails to start. Either way presence answered "the guide camera is solving" when
-    /// nothing was, and the imaging camera stood down for nothing. `guide_task` owns
-    /// this flag: it is set when the loop starts running and cleared when it stops.
-    pub guide_loop_running: AtomicBool,
+    /// Deliberately not "a guide camera is connected": a cooled guide camera stays
+    /// registered through its whole warm-up with its loop already stopped, and
+    /// `connect` can return before a loop that then fails to start — either way,
+    /// presence once answered "solving" when nothing was. Only `guide_task` (un)registers loops.
+    pub guide_loops: guide_loop::GuideLoops,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
     /// Counter for frames dropped due to pipeline back-pressure
@@ -122,23 +122,15 @@ pub struct AppState {
     /// it. Cleared whenever a capture starts fresh or stops cleanly — holding
     /// full-resolution accumulators between sessions would be pure waste.
     pub stacking_carryover: StdMutex<Option<crate::server::capture::StackingCarryover>>,
-    /// Stop switch for the guide camera's free-running loop. Separate from
-    /// `cancel_flag`, which belongs to the imaging capture — stopping a capture must not
-    /// stop plate solving, and disconnecting the guide camera must not stop the capture.
-    ///
-    /// A `std` mutex, not a tokio one, so `guide_task::start` can publish the token
-    /// *before* spawning: a disconnect landing in the gap would otherwise find no token,
-    /// return immediately, and close the handle underneath a loop that was still
-    /// starting up.
-    pub guide_cancel: StdMutex<Option<Arc<AtomicBool>>>,
-    /// Consecutive camera faults keyed by camera name, with the instant the
-    /// streak was last extended. Every fault detector — the capture watchdog,
+    /// Consecutive camera faults keyed by role and camera name, with the instant the
+    /// streak was last extended. The role keeps two bodies of one model apart: a guide
+    /// twin's stall must not skip the imaging twin's warm-up. Every fault detector — the capture watchdog,
     /// the status-poll watchdog and the monitor's cooler poll — feeds this one
     /// counter, so evidence from any of them counts toward the same
     /// escalation. Cleared by a call that succeeds, and aged out after
     /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
     /// behind the occasional success. See `camera_health`.
-    pub consecutive_watchdog_timeouts: StdMutex<HashMap<String, (u32, Instant)>>,
+    pub consecutive_watchdog_timeouts: StdMutex<HashMap<(CameraRole, String), (u32, Instant)>>,
     /// Whether restarting a stalled stream in place has lately worked, per role and camera
     /// name. Outlives the capture loop, whose next reopen it decides on. See
     /// `camera_health::RestartHistory`.
@@ -220,13 +212,12 @@ impl AppState {
             disk_writer: disk_writer_handle,
             push_to: RwLock::new(push_to),
             push_to_tasks: std::sync::OnceLock::new(),
-            guide_loop_running: AtomicBool::new(false),
+            guide_loops: guide_loop::GuideLoops::default(),
             settings_persistence,
             dropped_frames: AtomicU64::new(0),
             delivered_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
             camera_slots: std::array::from_fn(|_| CameraSlot::default()),
-            guide_cancel: StdMutex::new(None),
             camera_connect_lock: Mutex::new(()),
             device_catalog: Arc::new(crate::camera::RegistryCatalog::new()),
             discovery_calls: StdMutex::new(HashMap::new()),
@@ -287,10 +278,10 @@ impl AppState {
             .map(|info| info.info.name.clone())
     }
 
-    /// Whether the guide loop is running. An atomic load, so the stacking thread can
+    /// Whether the guide loop is exposing. An atomic load, so the stacking thread can
     /// ask it per frame.
     pub fn guide_loop_running(&self) -> bool {
-        self.guide_loop_running.load(Ordering::SeqCst)
+        self.guide_loops.is_running()
     }
 
     /// Whether the guide camera owns plate solving: its loop is running, or it is being
@@ -301,22 +292,10 @@ impl AppState {
         self.guide_loop_running() || self.slot(CameraRole::Guide).is_recovering()
     }
 
+    /// Mark a guide loop running or not without one behind it — for tests that simulate
+    /// the loop. `guide_task` goes through [`Self::guide_loops`].
     pub fn set_guide_loop_running(&self, running: bool) {
-        self.guide_loop_running.store(running, Ordering::SeqCst);
-    }
-
-    /// Take the guide loop's stop switch, leaving the slot empty. `None` means no loop
-    /// is running, which is what makes `guide_task::stop` idempotent.
-    pub fn take_guide_cancel(&self) -> Option<Arc<AtomicBool>> {
-        self.guide_cancel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-    }
-
-    /// Drop the stop switch without signalling it — for a loop that never started.
-    pub fn clear_guide_cancel(&self) {
-        *self.guide_cancel.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.guide_loops.force_running(running);
     }
 
     /// Save current settings to disk
@@ -389,18 +368,18 @@ impl AppState {
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
+        crate::render::denoise::ai::start_benchmark();
         true
     }
 
     /// End a capture pipeline: `Idle`, unless it has been paused for recovery.
     ///
-    /// A pipeline that ended on a device fault has already been suspended by the time it
-    /// stops, and marking it `Idle` would tell the UI the session was over. So has one that
-    /// never got going because its camera failed again between a reopen and the resume —
-    /// the slot is recovering and the plan is still there — and ending that one discarded
-    /// the plan the recovery under way would have resumed. Any other end is final, so the
-    /// resume plan and the parked stack go with it: left behind, the next quiet recovery of
-    /// the idle camera restarted a capture the observer saw end.
+    /// A pipeline ended by a device fault is already suspended, and marking it `Idle`
+    /// would tell the UI the session was over — same for one that never got going
+    /// because its camera failed again between reopen and resume (slot recovering,
+    /// plan still there); ending that would discard the plan recovery needs. Any other
+    /// end is final, so the resume plan and parked stack go with it: left behind, the
+    /// next quiet recovery of the idle camera restarted a capture the observer saw end.
     pub async fn end_capture_state(&self) {
         let recovering = self.slot(CameraRole::Main).is_recovering()
             && self.session_resume_plan.read().await.is_some();
@@ -423,6 +402,9 @@ impl AppState {
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
+        // A licence activated mid-session left the AI compute benchmark to here, when every
+        // capture thread has been joined. Idempotent, so any other end does nothing.
+        crate::render::denoise::ai::start_benchmark();
     }
 
     /// Increment frame count and broadcast event.
@@ -512,13 +494,13 @@ impl AppState {
 
     /// Extend a camera's fault streak and return its new length. A streak
     /// older than `ttl` has expired and restarts at 1.
-    pub fn bump_fault_streak(&self, camera_name: &str, ttl: Duration) -> u32 {
+    pub fn bump_fault_streak(&self, role: CameraRole, camera_name: &str, ttl: Duration) -> u32 {
         let now = Instant::now();
         let mut counts = self
             .consecutive_watchdog_timeouts
             .lock()
             .expect("consecutive_watchdog_timeouts mutex poisoned");
-        let entry = counts.entry(camera_name.to_string()).or_insert((0, now));
+        let entry = counts.entry((role, camera_name.to_string())).or_insert((0, now));
         if now.duration_since(entry.1) > ttl {
             entry.0 = 0;
         }
@@ -605,6 +587,12 @@ impl AppState {
         status: CameraStatus,
         target_temp_c: Option<f64>,
     ) {
+        // Dropped rather than shown: the UI's temperature, the precool check in
+        // `return_from_capture` and every ramp seeded from this cache would believe it.
+        if !status.has_plausible_temperature() {
+            debug!(camera_name, temperature_c = status.temperature_c, "Ignoring an implausible sensor temperature");
+            return;
+        }
         {
             let mut map = self.latest_camera_status.write().await;
             map.insert(camera_name.to_string(), status.clone());
@@ -632,14 +620,39 @@ impl AppState {
     /// which names the camera for the UI.
     pub async fn set_camera_phase(&self, role: CameraRole, camera_name: &str, phase: CameraPhase) {
         *self.slot(role).phase.write().await = phase;
-        let _ = self
-            .events
-            .send(ServerEvent::camera_phase_changed(camera_name, role, phase));
+        // Every client's countdown, not only the one whose Disconnect started the warm-up.
+        let warmup_remaining = match phase {
+            CameraPhase::WarmingUp => self.slot(role).warmup_remaining(),
+            _ => None,
+        };
+        let _ = self.events.send(ServerEvent::camera_phase_changed(
+            camera_name,
+            role,
+            phase,
+            warmup_remaining,
+        ));
     }
 
     /// The lifecycle phase of `role`'s camera; `Disconnected` when the slot is empty.
     pub async fn camera_phase(&self, role: CameraRole) -> CameraPhase {
         *self.slot(role).phase.read().await
+    }
+
+    /// Every connected camera's phase, as the event that replaces a client's copy.
+    pub async fn camera_phases_event(&self) -> ServerEvent {
+        let connected: Vec<ConnectedCameraInfo> =
+            self.cameras.read().await.values().cloned().collect();
+        let mut cameras = Vec::with_capacity(connected.len());
+        for camera in connected {
+            let slot = self.slot(camera.role);
+            cameras.push(super::events::CameraPhaseEntry {
+                name: camera.info.name,
+                role: camera.role,
+                phase: (*slot.phase.read().await).into(),
+                warmup_remaining_s: slot.warmup_remaining().map(|left| left.as_secs()),
+            });
+        }
+        ServerEvent::CameraPhases { cameras }
     }
 
     /// Update the cached "plugin holds a target" flag. No-op without Push-To.
@@ -907,6 +920,45 @@ mod tests {
             }
             other => panic!("Unexpected event: {:?}", other),
         }
+    }
+
+    /// Every client counts a warm-up down, not only the one whose Disconnect started it and
+    /// read the time left from the answer.
+    #[tokio::test]
+    async fn a_warming_up_phase_event_carries_the_time_left() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let mut subscriber = state.subscribe_events();
+        state
+            .slot(CameraRole::Main)
+            .begin_warmup(Instant::now() + Duration::from_secs(120));
+
+        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::WarmingUp).await;
+        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::Idle).await;
+
+        let left = |event| match event {
+            ServerEvent::CameraPhaseChanged { warmup_remaining_s, .. } => warmup_remaining_s,
+            other => panic!("expected a phase change, got {other:?}"),
+        };
+        let warming = left(subscriber.try_recv().unwrap()).expect("time left");
+        assert!((110..=120).contains(&warming), "{warming}");
+        assert_eq!(left(subscriber.try_recv().unwrap()), None, "only a warm-up counts down");
+    }
+
+    /// -300 °C from a just-reopened Ares-C PRO (2026-09-20) is a glitch, not a reading:
+    /// cached, it is what every ramp seed and the UI's temperature would have used.
+    #[tokio::test]
+    async fn an_implausible_temperature_is_neither_cached_nor_broadcast() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let mut subscriber = state.subscribe_events();
+        let glitch = CameraStatus {
+            temperature_c: -300.0,
+            ..Default::default()
+        };
+
+        state.update_camera_status("Ares", glitch, Some(0.0)).await;
+
+        assert!(state.get_camera_status("Ares").await.is_none());
+        assert!(subscriber.try_recv().is_err(), "the glitch was broadcast");
     }
 
     #[tokio::test]

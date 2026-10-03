@@ -6,6 +6,7 @@ fn to_ready_frame(
     config.auto_stretch = false;
     config.saturation_boost = false;
     night_amplifier::server::state::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,
         stretch_result: None,
@@ -661,22 +662,14 @@ fn probe_render_task_stage_breakdown() {
 // Fused render kernel — intermediate clamp impact
 // ============================================================================
 
-/// Quantifies, on real fixtures, how far the shipped fused stretch+contrast kernel
-/// (Phase 2 of the live-view performance plan) diverges from the three separate passes
-/// it replaces.
+/// Quantifies, on real fixtures, how far the shipped fused stretch+contrast kernel (Phase 2
+/// of the live-view performance plan) diverges from the three passes it replaces: three
+/// `clamp(clamp(c * s_stretch) * s_contrast)` vs. fused `clamp(c * s_stretch * s_contrast)`, scale read from an interpolated LUT.
 ///
-/// Three passes: `clamp(clamp(c * s_stretch) * s_contrast)`.
-/// Fused:        `clamp(c * s_stretch * s_contrast)`, scale read from an interpolated LUT.
-///
-/// Two distinct sources of difference, reported separately because they carry completely
-/// different weight:
-///
-/// - **Clipping pixels** — a channel exceeded 1.0 *between* the stages, so the reference
-///   fed a clamped (and therefore too dark) luminance into contrast. This is the accepted
-///   trade of the fusion and can move a blown star core by tens of LSB.
-/// - **Everything else** — pure LUT quantisation, which must stay under a single LSB.
-///   This is the number that regresses if the LUT loses interpolation or if entry 0 stops
-///   carrying the curve's `L -> 0` limit.
+/// Two sources of difference, weighted differently: **clipping pixels**, where a channel
+/// exceeded 1.0 *between* stages so the reference fed a clamped (too-dark) luminance into
+/// contrast — the accepted trade, moving a blown star core by tens of LSB; and **everything
+/// else**, pure LUT quantisation that must stay under a single LSB, which regresses if the LUT loses interpolation or entry 0 stops carrying the curve's `L -> 0` limit.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]

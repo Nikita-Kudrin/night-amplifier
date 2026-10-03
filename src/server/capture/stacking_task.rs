@@ -34,15 +34,14 @@ pub struct StackingChannels {
     pub render_capacity: usize,
 }
 
-/// Stacking pipeline running on a dedicated OS thread.
+/// Stacking pipeline running on a dedicated OS thread. Receives captured frames, runs
+/// star detection, registration, and accumulation, and sends the resulting display
+/// frame to the render channel. Owns all stacking contexts exclusively — no shared
+/// mutable state.
 ///
-/// Receives captured frames, runs star detection, registration, and
-/// accumulation. Sends the resulting display frame to the render channel.
-/// Owns all stacking contexts exclusively — no shared mutable state.
-///
-/// `carryover` seeds those contexts from a capture that ended unexpectedly, so
-/// a session resumed after a reconnect keeps the integration it had already
-/// built rather than starting from one frame.
+/// `carryover` seeds those contexts from a capture that ended unexpectedly, so a
+/// session resumed after a reconnect keeps the integration it had already built
+/// rather than starting from one frame.
 pub fn run_stacking_task(
     state: Arc<AppState>,
     channels: StackingChannels,
@@ -168,6 +167,7 @@ pub fn run_stacking_task(
         let stack_reset;
         let mut rejected_because;
         let mut stack_depth;
+        let noise;
         let mut display_frame = if stacking_enabled && !stacking_failed {
             debug!(
                 stacking = settings.stacking,
@@ -212,6 +212,7 @@ pub fn run_stacking_task(
             stack_reset = outcome.stack_reset;
             rejected_because = outcome.rejected_because;
             stack_depth = outcome.stack_depth;
+            noise = outcome.noise;
             outcome.display_frame.map(Arc::new)
         } else {
             debug!(
@@ -225,6 +226,7 @@ pub fn run_stacking_task(
             stack_reset = false;
             rejected_because = None;
             stack_depth = 0;
+            noise = None;
             Some(Arc::clone(&frame))
         };
 
@@ -269,16 +271,14 @@ pub fn run_stacking_task(
         // stacked, leaving the UI's rejection counter pinned at zero.
         let was_stacked = stacking_enabled && registration_succeeded;
 
-        // Trigger plate solving asynchronously. Gated up front: without the
-        // Push-To plugin the solve is a no-op, and spawning it would keep a
-        // second handle on the frame alive long enough to make the render
-        // task's `Arc::try_unwrap` fail and copy instead.
-        //
-        // Skipped along with the display copy on an iteration that made none: the solve
-        // wants the stack, not a single sub, and `solve_frame` is rate-limited by
-        // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
-        // Declines outright while a guide camera is connected: that camera is the solve
-        // source then, and it offers frames far more often than an imaging sub arrives.
+        // Trigger plate solving asynchronously. Gated up front: without the Push-To
+        // plugin the solve is a no-op, and spawning it would keep a second handle on
+        // the frame alive long enough to make the render task's `Arc::try_unwrap` fail
+        // and copy instead. Skipped along with the display copy on an iteration that
+        // made none — the solve wants the stack, not a single sub, and `solve_frame` is
+        // rate-limited by `MIN_SOLVE_ATTEMPT_INTERVAL` anyway. Declines outright while a
+        // guide camera is connected: that camera is the solve source then, and offers
+        // frames far more often than an imaging sub arrives.
         if let (true, Some(frame_to_solve)) = (
             solving::plate_solve_available(&state, solving::SolveSource::Main),
             display_frame.as_ref(),
@@ -327,6 +327,9 @@ pub fn run_stacking_task(
             frame_number,
             settings,
             stack_depth,
+            // Wanderer mode's reset above swapped the stack for a raw sub, so a map
+            // measured on the stack no longer describes what is on screen.
+            noise: showing_stack.then_some(noise).flatten(),
         };
         // Publish the count *before* the message, undone on arms that didn't send.
         // `try_send` makes the frame visible instantly, so counting after leaves a
@@ -438,6 +441,53 @@ fn check_dimension_mismatch(
     false
 }
 
+/// The stack a session ends with, and what its export needs beside the pixels.
+struct FinalStack {
+    frame: Frame,
+    depth: usize,
+    /// The deep-sky stack's coverage map, when its subs did not all cover it.
+    coverage: Option<crate::frame::NoiseField>,
+}
+
+/// The session's stack, from whichever context holds one.
+///
+/// Depth and coverage travel with the frame, from the context that holds all three,
+/// because the saved PNG is rendered with both as the live view renders them: the tone
+/// curve spends the depth (`render::autostretch::depth_grain_gain`) and the filters read
+/// the coverage. Re-deriving the depth from the session's `stacked_count` would let the
+/// export and the live view disagree about the same stack — by the reference frame, and
+/// by anything a mid-session reset did to the counters.
+fn final_stack(
+    stacking_ctx: &Option<StackingContext>,
+    comet_ctx: &Option<Box<dyn CometContext>>,
+    planetary_ctx: &Option<PlanetaryStackingContext>,
+) -> Option<FinalStack> {
+    let without_map = |frame: Option<Frame>, depth: usize| {
+        frame.map(|frame| FinalStack { frame, depth, coverage: None })
+    };
+    stacking_ctx
+        .as_ref()
+        .and_then(|ctx| {
+            let (frame, coverage) = ctx.compute_with_coverage().ok()?;
+            Some(FinalStack {
+                frame,
+                depth: ctx.frame_count(),
+                // Filtered as `pipeline::process_frame_with_stacking` filters the live one.
+                coverage: coverage.is_usable().then_some(coverage),
+            })
+        })
+        .or_else(|| {
+            comet_ctx
+                .as_ref()
+                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
+        })
+        .or_else(|| {
+            planetary_ctx
+                .as_ref()
+                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
+        })
+}
+
 /// Save the final stacked result at the end of a capture session.
 fn save_stacked_result(
     state: &Arc<AppState>,
@@ -446,26 +496,7 @@ fn save_stacked_result(
     planetary_ctx: &Option<PlanetaryStackingContext>,
     rt: &tokio::runtime::Handle,
 ) {
-    // The depth travels with the frame, from the context that holds both. The saved PNG
-    // is tone-curved by it (`render::autostretch::depth_grain_gain`), so re-deriving it
-    // from the session's `stacked_count` would let the export and the live view disagree
-    // about the same stack — by the reference frame, and by anything a mid-session reset
-    // did to the counters.
-    let stacked = stacking_ctx
-        .as_ref()
-        .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        .or_else(|| {
-            comet_ctx
-                .as_ref()
-                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        })
-        .or_else(|| {
-            planetary_ctx
-                .as_ref()
-                .and_then(|ctx| Some((ctx.compute().ok()?, ctx.frame_count())))
-        });
-
-    if let Some((frame, depth)) = stacked {
+    if let Some(stack) = final_stack(stacking_ctx, comet_ctx, planetary_ctx) {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
@@ -473,8 +504,9 @@ fn save_stacked_result(
         if let Some(info) = camera_info {
             rt.block_on(storage::save_stacked_result(
                 state,
-                Some(frame),
-                depth as u32,
+                Some(stack.frame),
+                stack.depth as u32,
+                stack.coverage,
                 &info,
             ));
         }
@@ -519,6 +551,40 @@ mod tests {
     fn changing_the_stacking_type_restarts_a_running_stack() {
         assert!(must_reset_stack(true, true, true));
         assert!(!must_reset_stack(true, true, false));
+    }
+
+    /// The export renders the deep-sky stack with the coverage map the live view carries,
+    /// so the session's final stack has to hand it over: here a drifting session whose
+    /// left strip only the reference reached.
+    #[test]
+    fn the_final_deep_sky_stack_carries_its_coverage_map() {
+        use crate::frame::Frame;
+        use crate::registration::AffineTransform;
+
+        let settings = CaptureSettings::default();
+        let sky = || Frame::filled(32, 32, 1, 0.3).unwrap();
+        let mut drifted = sky();
+        for y in 0..32 {
+            for x in 0..8 {
+                drifted.set_pixel(x, y, 0, 0.0); // the warp border's value
+            }
+        }
+        let mut ctx = StackingContext::new(32, 32, 1, &settings).expect("context");
+        ctx.stacker.add_reference(&sky()).unwrap();
+        for _ in 0..3 {
+            ctx.stacker.add_frame(&drifted, &AffineTransform::identity()).unwrap();
+        }
+
+        let stack = super::final_stack(&Some(ctx), &None, &None).expect("a stack");
+        assert_eq!(stack.depth, 4);
+        let coverage = stack.coverage.expect("a thin strip is something to say");
+        let strip = coverage.sample_coverage(2, 16);
+        assert!((strip - 0.25).abs() < 1e-6, "the strip read {strip}");
+
+        // Every sub covered all of it: nothing to carry, as the live view carries nothing.
+        let mut even = StackingContext::new(32, 32, 1, &settings).expect("context");
+        even.stacker.add_reference(&sky()).unwrap();
+        assert!(super::final_stack(&Some(even), &None, &None).unwrap().coverage.is_none());
     }
 
     #[test]

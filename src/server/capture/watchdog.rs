@@ -50,25 +50,14 @@ pub(crate) enum StatusPollOutcome {
     TimedOut,
 }
 
-/// Read the camera's live status, cache it, and broadcast a `CameraStatusUpdated`
-/// event — bounded by `STATUS_POLL_TIMEOUT`. The camera handle is owned by exactly
-/// one thread at a time (avoiding contention with vendor SDKs that require a single
-/// handle per device); that thread is temporarily a detached watchdog thread for the
-/// duration of this call, so a stuck read can't block frame delivery — no vendor SDK
-/// call but the image-data read has its own timeout, so an unbounded USB hiccup in
-/// `camera.status()` could otherwise block live view silently (observed: seconds to
-/// indefinitely).
+/// Reads the camera's live status, caches it, and broadcasts `CameraStatusUpdated`
+/// — bounded by `STATUS_POLL_TIMEOUT` on a temporary watchdog thread, since no
+/// vendor SDK call but the image-data read has its own timeout; an unbounded USB
+/// hiccup could otherwise block live view silently (observed: seconds to indefinitely).
 ///
-/// Waits up to `STATUS_POLL_TIMEOUT` on a channel; if it returns in time the handle
-/// comes back normally, otherwise it's abandoned for good — no way to forcibly
-/// cancel a stuck synchronous FFI call in Rust, so callers must treat `TimedOut` as
-/// a real disconnect. Abandoning is only safe because of `camera::DeviceLease`: SDKs
-/// close by device *index*, so a `Drop` running minutes later closes whichever
-/// handle owns that index by then (killed a camera 80s after a successful reconnect
-/// on 2026-08-22) — the lease makes a superseded handle's close a no-op.
-///
-/// Also tracks consecutive timeouts per camera to distinguish a USB hiccup from a
-/// persistent fault — see `camera_health::PERSISTENT_FAULT_THRESHOLD`.
+/// A timeout abandons the handle for good — no way to cancel a stuck synchronous FFI
+/// call. Safe only via `camera::DeviceLease`: SDKs close by device *index*, so a late
+/// `Drop` (once killed a camera 80s after reconnect, 2026-08-22) is a no-op instead.
 pub(crate) fn poll_camera_status_bounded(
     camera: Box<dyn crate::camera::Camera>,
     state: &Arc<AppState>,
@@ -109,7 +98,7 @@ pub(crate) fn poll_camera_status_bounded(
             // A response arrived within budget — whatever it says, the camera
             // is currently communicating, so any prior timeout streak no
             // longer indicates an active fault.
-            camera_health::clear_fault_streak(state, &camera_name);
+            camera_health::clear_fault_streak(state, role, &camera_name);
 
             if elapsed > Duration::from_millis(500) {
                 warn!(
@@ -132,7 +121,7 @@ pub(crate) fn poll_camera_status_bounded(
                 timeout = ?STATUS_POLL_TIMEOUT,
                 "camera.status() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            camera_health::record_fault(state, role, &camera_name, FaultKind::Timeout);
             StatusPollOutcome::TimedOut
         }
     }
@@ -154,20 +143,14 @@ pub(crate) enum CaptureOutcome {
     TimedOut,
 }
 
-/// Run `camera.capture(&config)` bounded by `watchdog_timeout`, the same way
-/// `poll_camera_status_bounded` bounds `camera.status()`. Every backend's capture loop
-/// enforces `CaptureConfig::stall_budget` *between* its blocking SDK calls, but can't
-/// fire if one of those calls itself hangs — observed: a ~3-minute freeze inside
-/// PlayerOne's `is_image_ready()` poll, unresponsive to Stop, before the SDK finally
-/// errored. `watchdog_timeout` comes from [`capture_watchdog_timeout`], just above that
-/// budget, so the backend's own stop-and-return always runs first and this stays the
-/// last resort. `role` registers the call in its slot's `sdk_calls`, which a reconnect
-/// waits on before reopening the device.
-///
-/// Caveat: if cancellation lands while `capture()` is already stuck and this
-/// watchdog fires first, the session ends as a disconnect, not a clean stop — no way
-/// to do better without real vendor-SDK cancellation, but still strictly better than
-/// hanging indefinitely.
+/// Runs `camera.capture(&config)` bounded by `watchdog_timeout`, mirroring how
+/// `poll_camera_status_bounded` bounds `camera.status()`. Backends enforce
+/// `CaptureConfig::stall_budget` between blocking SDK calls, but that can't fire if
+/// a call itself hangs (observed: ~3-minute freeze in PlayerOne's
+/// `is_image_ready()` poll, unresponsive to Stop). `watchdog_timeout`
+/// ([`capture_watchdog_timeout`]) sits above that budget, so the backend's own
+/// stop-and-return runs first; `role` registers the call in `sdk_calls` for a
+/// reconnect to wait on. A cancel landing here still ends as a disconnect, not a clean stop.
 pub(crate) fn capture_frame_bounded(
     camera: Box<dyn crate::camera::Camera>,
     config: crate::camera::CaptureConfig,
@@ -201,23 +184,14 @@ pub(crate) fn capture_frame_bounded(
             let started = std::time::Instant::now();
             let result = camera.capture(&config);
 
-            // How long the vendor call blocked, vs. the exposure it was asked for.
-            // Fields, not a child span: `Camera::capture` is one blocking vendor call
-            // (on the continuous path, `get_video_data` handing back an
-            // already-completed frame), so exposure and transfer aren't separable
-            // from out here without instrumenting inside all five shims for a
-            // boundary that doesn't exist in the mode live stacking uses.
+            // How long the vendor call blocked vs. the exposure asked for — fields, not a
+            // child span, since `Camera::capture` is one blocking call with no separable
+            // exposure/transfer boundary across all five shims. Once reported 131ms
+            // against a 100ms exposure, with no way to tell slow link from long exposure —
+            // matters on a Pi 5, where shared USB3 degrades first.
             //
-            // Purpose: `camera_capture` reported 131ms against a 100ms exposure in
-            // production traces, with nothing saying whether the extra 31ms was a
-            // slow link or a long exposure — matters on a Pi 5, where shared USB3
-            // degrades first.
-            //
-            // `overhead_us` is **signed**: a saturating unsigned version reported `0`
-            // on exactly the path it was added for (continuous mode's already-waiting
-            // frame), so every sample saturated and the field answered nothing.
-            // Negative now means the frame was already waiting; `call_us` carries the
-            // raw measurement for any other arithmetic needed.
+            // `overhead_us` is **signed**: a saturating unsigned version reported `0` for an
+            // already-waiting frame, saturating every sample; negative now means it was waiting.
             let call_us = started.elapsed().as_micros().min(i64::MAX as u128) as i64;
             span.record("call_us", call_us);
             span.record(
@@ -244,9 +218,9 @@ pub(crate) fn capture_frame_bounded(
             // streak — it extends it.
             match &result {
                 Err(e) if e.is_sdk_disconnected() => {
-                    camera_health::record_fault(state, &camera_name, FaultKind::DeviceLost);
+                    camera_health::record_fault(state, role, &camera_name, FaultKind::DeviceLost);
                 }
-                _ => camera_health::clear_fault_streak(state, &camera_name),
+                _ => camera_health::clear_fault_streak(state, role, &camera_name),
             }
             CaptureOutcome::Completed(camera, result)
         }
@@ -256,7 +230,7 @@ pub(crate) fn capture_frame_bounded(
                 timeout = ?watchdog_timeout,
                 "camera.capture() did not return in time — abandoning camera handle (suspected USB stall)"
             );
-            camera_health::record_fault(state, &camera_name, FaultKind::Timeout);
+            camera_health::record_fault(state, role, &camera_name, FaultKind::Timeout);
             CaptureOutcome::TimedOut
         }
     }

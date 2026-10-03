@@ -1,13 +1,11 @@
 //! Mapping `CaptureSettings` onto the configuration each capture stage takes.
 //!
-//! One direction only: settings in, stage configuration out. Nothing here
-//! touches a frame except [`convert_captured_frame`], which is the one call that
-//! ties the raw-CFA stage together and so belongs with the builders that decide
-//! what is in it.
+//! One direction only: settings in, stage configuration out. The one exception is
+//! [`convert_captured_frame`], which ties the raw-CFA stage together and so
+//! belongs with the builders that decide what's in it.
 //!
-//! Split out of `pipeline.rs`, which had grown past the size where the two
-//! halves — "what should this stage be configured as" and "run a frame through
-//! the stack" — could still be read as one thing.
+//! Split out of `pipeline.rs` once it grew too large to read "what should this
+//! stage be configured as" and "run a frame through the stack" as one thing.
 
 use crate::background::BackgroundConfig;
 use crate::camera::{CameraInfo, CameraResult, RawFrame};
@@ -24,16 +22,14 @@ pub fn build_cfa_pipeline(settings: &CaptureSettings) -> CfaPipeline {
     let correction = &settings.sensor_correction;
     let mut pipeline = CfaPipeline::new();
 
-    // Hot pixels first: a column carrying hundreds of them would otherwise drag
-    // its own median, and the FPN correction would spread that across the column.
+    // Hot pixels first: a column carrying hundreds would drag its own median, and FPN would spread that across it.
     //
-    // Unconditional, and not user-switchable, because the plate solver reads the frame
-    // this stage produces. Without it bilinear demosaic turns every hot pixel into a
-    // star-sized blob: on 0.5 s gain-337 guide subs they outnumbered the real stars 72
-    // to 25 and ASTAP failed at any FOV, where the cleaned frame solved full-sky in
-    // 2-4 s. Focus/Finder mode used to switch it off for frame rate — precisely while
-    // hunting a target. Kept for planetary too: the filter is one-sided and
-    // isolation-gated, so it cannot bite a disc.
+    // Unconditional, not user-switchable: the plate solver reads this stage's output.
+    // Without it, bilinear turns every hot pixel into a star-sized blob — on 0.5s
+    // gain-337 guide subs they outnumbered real stars 72 to 25 and ASTAP failed at
+    // any FOV, where the cleaned frame solved full-sky in 2-4s. Focus/Finder mode
+    // once switched it off for frame rate, precisely while hunting — kept on since,
+    // including for planetary (one-sided, isolation-gated: cannot bite a disc).
     pipeline = pipeline.with_stage(Box::new(HotPixelFilter::new(HotPixelConfig {
         sigma: correction.hot_pixel_sigma,
         ..HotPixelConfig::default()
@@ -93,19 +89,12 @@ pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
 
 /// The sky level the black floor's percentage is quoted against.
 ///
-/// The slider reads in fractions of full scale on both sides, because that is
-/// what its positive half has always meant and what the manual documents. The
-/// darkening half is anchored to the sky rather than to full scale, though, so
-/// the two have to be related by something: this is the post-contrast sky level
-/// at the shipped stretch settings — `sky_level_after_contrast(0.08, default)`,
-/// which is where a deep-sky frame lands. A setting of `-0.045` therefore puts
-/// the floor at the sky level under a nominal sky, and *still* puts it at the
-/// sky level under a brighter one, which is the whole point of anchoring.
-///
-/// It is a *derived* number, not a chosen one: it moved 0.052 -> 0.045 when
-/// `ContrastConfig`'s strength went to 1.0, because a stronger curve compresses the
-/// sky further. `the_nominal_sky_level_matches_the_shipped_curve` is what makes the
-/// next change to the curve fail here instead of silently mis-scaling the slider.
+/// Both slider halves read in fractions of full scale, but darkening anchors to
+/// the sky, not full scale — so `-0.045` is the post-contrast sky level at the
+/// shipped stretch settings (`sky_level_after_contrast(0.08, default)`), putting
+/// the floor at the sky under both a nominal and a brighter sky — the point of
+/// anchoring. *Derived*, not chosen: moved 0.052 -> 0.045 when `ContrastConfig`'s
+/// strength went to 1.0; `the_nominal_sky_level_matches_the_shipped_curve` guards it.
 const NOMINAL_SKY_LEVEL: f32 = 0.045;
 
 /// Pedestal held under the soft (spatial) darkening, in fractions of full scale.
@@ -124,30 +113,14 @@ const DARKENED_FLOOR_PEDESTAL: f32 = 0.006;
 /// — for a floor of nothing.
 const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 
-/// How far down the slider reaches, matching `BLACK_FLOOR_LIMITS` in the
-/// frontend. Enforced here rather than trusted: `POST /api/settings` takes any
-/// `f32`, and the darkening half is the half where a wild value has somewhere to
-/// go — `ShadowFloor::from_sky` caps the depth it produces, but the fraction it
-/// is handed would still make one slider step mean nothing.
-///
-/// -0.045 is one `NOMINAL_SKY_LEVEL`: the end of the slider puts the floor exactly at the
-/// sky, a fraction of 1.0. That is where the *hard* form has to stop, and it is the binding
-/// half — `ShadowFloor` clips at `fraction * sky`, so past 1.0 "Darker sky" clips above the
-/// sky and starts eating the target it exists to separate (measured, a fraction of 1.11 cost
-/// 6 % of target excess and put 34 % of samples on pure black). The soft form's own ceiling
-/// is a little further out (`sky_shadow::MAX_DARKENING`, a tenth of the sky left, at a
-/// fraction of 1.125), so calibrating to the hard form leaves a sliver of spatial travel
-/// unused rather than letting one slider position mean two different trades.
-///
-/// **The reach is the calibrated quantity, not the number.** It moved from -0.06 when
-/// `ContrastConfig`'s strength went to 1.0: that lowered `NOMINAL_SKY_LEVEL` 0.052 -> 0.045,
-/// so the same slider position now asks for a larger fraction of a smaller sky. Almost
-/// nothing is lost at the eyepiece — the darkest reachable sky is within an output level of
-/// where it was, because the stronger S-curve had already darkened it before the floor saw
-/// it. Re-measure this if the stretch moves again; `a_negative_black_floor_darkens_instead_of_lifting`
-/// pins the fraction at the end stop and
-/// `the_black_floor_darkens_the_sky_without_dimming_the_target` exercises both forms there,
-/// which is the position that was never covered before. Mirrored by `BLACK_FLOOR_LIMITS`.
+/// How far down the slider reaches, matching `BLACK_FLOOR_LIMITS` in the frontend
+/// — enforced here, not trusted, since `POST /api/settings` takes any `f32` with
+/// nowhere else to clamp a wild value. Stops at fraction 1.0 (= `NOMINAL_SKY_LEVEL`),
+/// where `ShadowFloor` clips at `fraction * sky`: past that, "Darker sky" eats into
+/// the target it exists to separate (measured: 1.11 cost 6% target excess, 34% of
+/// samples at pure black). The soft form's own ceiling sits further out
+/// (`MAX_DARKENING`, fraction 1.125), left unused here on purpose. Calibrated, not
+/// fixed — see `NOMINAL_SKY_LEVEL`'s history; pinned by the black-floor tests below.
 const MIN_BLACK_FLOOR: f32 = -NOMINAL_SKY_LEVEL;
 
 /// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
@@ -166,46 +139,42 @@ const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
 /// is the whole point of the eyepiece view.
 const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
 
-/// Map the denoise settings onto the config the encoders read.
+/// The denoise config the encoders read, with the gates Community owns.
 ///
-/// Skipped for planetary the same way `cfa::fpn` is: lucky imaging exists to
-/// recover the fine detail these filters remove, and a lunar disc is exactly the
-/// low-contrast large-scale structure a wavelet threshold flattens.
+/// Planetary is refused here, not in the plugin: it's a product rule, not tuning
+/// — the same asymmetry `cfa::fpn`, superpixel debayering, and the black floor
+/// each state at their own site. Lucky imaging exists to recover fine detail these
+/// filters remove, and a lunar disc is the low-contrast large-scale structure a
+/// wavelet threshold flattens. The master switch is refused here too, so "off"
+/// means off whatever a plugin would do.
 fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
-    use crate::render::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
+    if settings.stacking_type == crate::stacking::StackingType::Planetary
+        || !settings.denoise.enabled
+    {
+        return crate::render::DenoiseConfig::OFF;
+    }
+    crate::render::denoise::config_for(&requested_denoise(settings), settings.stretch_aggressiveness)
+}
 
-    if settings.stacking_type == crate::stacking::StackingType::Planetary {
-        return DenoiseConfig::OFF;
+/// The observer's denoise settings as this frame may use them.
+///
+/// Focus/Finder mode holds the network off here, at the frame's config, rather than by
+/// forcing `DenoiseSettings::ai` false: framing wants frame rate and the network is the
+/// costliest stage of a render, but the switch stays the observer's for when the mode
+/// ends. The classic filters then keep the scales they would have handed it.
+pub(crate) fn requested_denoise(settings: &CaptureSettings) -> crate::server::state::DenoiseSettings {
+    crate::server::state::DenoiseSettings {
+        ai: settings.denoise.ai && !settings.focus_mode,
+        ..settings.denoise.clone()
     }
+}
 
-    let d = &settings.denoise;
-    // Star Fields is looking for point sources against an empty sky and has no nebulosity
-    // to protect, so it leans harder on the finest scale and puts the star's peak back
-    // with a gain. See `render::STAR_FIELD_FINE_BOOST`.
-    let star_field = settings.stretch_aggressiveness == crate::render::StretchAggressiveness::Low;
-    let mut k = LumaDenoiseConfig::thresholds_for(d.star_protection(), d.coarse_denoise());
-    if star_field {
-        k[0] *= crate::render::STAR_FIELD_FINE_BOOST;
-    }
-    DenoiseConfig {
-        chroma: ChromaDenoiseConfig {
-            enabled: d.chroma,
-            strength: d.chroma_strength.clamp(0.0, 1.0),
-            ..ChromaDenoiseConfig::default()
-        },
-        luma: LumaDenoiseConfig {
-            enabled: d.luma_enabled(),
-            strength: d
-                .luma_strength
-                .clamp(0.0, crate::render::MAX_LUMA_STRENGTH),
-            k,
-            gain: if star_field {
-                crate::render::STAR_FIELD_GAIN
-            } else {
-                crate::render::UNIT_WAVELET_GAIN
-            },
-        },
-    }
+/// The settings the guide camera's stream renders with: the observer's, less the AI
+/// denoiser. Nothing stacks there, a frame arrives every second or two, and each pass
+/// would take its cores from the imaging camera's stacking.
+pub(crate) fn guide_render_settings(mut settings: CaptureSettings) -> CaptureSettings {
+    settings.denoise.ai = false;
+    settings
 }
 
 /// `black_floor` with the nonsense taken out: dead-banded at zero, clamped to
@@ -270,7 +239,7 @@ pub fn get_render_pipeline_config(
         // The expensive half of the Background Grain dial. It belongs here, with the
         // profile, and not at `AutoStretchConfig::default()`: the default is what an
         // export or a one-shot render uses, and those have no dial to read.
-        .with_grain_split(settings.denoise.grain_split());
+        .with_grain_split(crate::render::denoise::grain_split_for(&settings.denoise));
         let saturation_config = settings.saturation_boost_config();
 
         // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle
@@ -593,6 +562,41 @@ mod tests {
         settings.auto_stretch = true;
         let config = get_render_pipeline_config(&settings, false);
         assert!(!config.shadow_floor.is_none());
+    }
+
+    /// Focus/Finder mode holds the network off at the frame's config, and leaves the
+    /// observer's switch alone on the way in and on the way out.
+    #[test]
+    fn focus_mode_holds_the_network_off_without_touching_its_switch() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        assert!(requested_denoise(&settings).ai);
+
+        crate::server::state::focus_mode::set(&mut settings, true);
+        assert!(!requested_denoise(&settings).ai, "framing must not pay for the network");
+        assert!(settings.denoise.ai, "the mode changed the observer's switch");
+
+        crate::server::state::focus_mode::set(&mut settings, false);
+        assert!(requested_denoise(&settings).ai);
+    }
+
+    /// The guide stream never asks for the network, whatever the imaging settings say;
+    /// every other denoise setting reaches it unchanged.
+    #[test]
+    fn the_guide_stream_renders_without_the_network() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        settings.denoise.background_grain = 0.8;
+
+        let guide = guide_render_settings(settings.clone());
+        assert!(!requested_denoise(&guide).ai);
+        assert_eq!(
+            guide.denoise,
+            crate::server::state::DenoiseSettings {
+                ai: false,
+                ..settings.denoise
+            }
+        );
     }
 
     /// A lunar disc is most of its own frame, so the median the floor anchors to

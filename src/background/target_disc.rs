@@ -1,26 +1,11 @@
 //! Keeping a frame-filling target out of the background model.
 //!
-//! Brightness pruning measures its thresholds on the nodes themselves, so when a halo
-//! covers most of the frame the halo *is* the reference: on the 2026-09-14 globular
-//! (IMX533) the spline carried a 1.6 sigma plateau and took 49-56 % of the glow at
-//! 256 px. No brightness rule separates a halo from a gradient — a quadratic baseline
-//! took 96 %. Crowding does: halo nodes sit on unresolved stars and read 11-39 % rougher
-//! than open sky, which a gradient never does (`NodeSample::scatter` fits a plane out).
-//!
-//! So crowding only *finds* the target; a disc around it, sized by where the node excess
-//! over an outer surface falls to noise, is refilled from that surface. The spline can then
-//! neither bend into the target nor extrapolate the rim's inward slope. Halo taken at
-//! 256 px: 49 % -> 11 % (2048 crop), 56 % -> 18 % (full frame); no disc on 12 synthetic
-//! linear/horizon/dome/bowl gradients.
-//!
-//! The surface is a plane unless the outer nodes are clearly curved. Uncalibrated
-//! vignetting is a dome, which a plane reads as ring excess (the disc ran to [`MAX_RADIUS`])
-//! and cuts out of the model: 2.78 of a 7.66 sigma rise followed under a centred cluster.
-//! A quadratic always, though, follows a halo's own wing where it fills the frame (field
-//! crop: 5/10 % -> 18/36 % taken), so it must earn its place — [`MAX_CURVED_RESIDUAL`].
-//!
-//! Shared by both extractors: the RBF spline (Pro) and the bilinear grid, each refilling
-//! the disc's nodes before its own interpolation.
+//! Brightness pruning measures its threshold on the nodes themselves, so a frame-filling
+//! halo becomes its own reference (2026-09-14 globular, IMX533: 49-56% of glow taken at
+//! 256px; a quadratic baseline took 96%). Crowding catches it instead — halo nodes read
+//! 11-39% rougher than open sky, which a gradient never does (`NodeSample::scatter` fits
+//! a plane out). A disc sized where that excess over an outer surface falls to noise is
+//! refilled from the surface (256px: 49%->11%, 56%->18%; no disc on 12 synthetic gradients).
 
 use nalgebra::{DMatrix, DVector};
 use rayon::prelude::*;

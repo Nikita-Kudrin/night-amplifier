@@ -7,9 +7,10 @@
 //! guide camera connected at once, "the camera" is no longer an answer.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
-use super::install;
+use super::{install, WARMUP_TIMEOUT};
 use crate::camera::identity::{self, CameraIdError};
 use crate::camera::{Camera, CameraInfo};
 use crate::server::error::{ApiError, ApiResult};
@@ -23,7 +24,48 @@ use crate::telemetry::metrics as telemetry_metrics;
 /// How long a caller waits for the monitor to hand the camera handle back
 /// before giving up. Slightly over the monitor's own `FFI_CALL_TIMEOUT`, so a
 /// call that is merely slow is waited out and only a genuine stall gives up.
-const HANDLE_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3_500);
+const HANDLE_WAIT_TIMEOUT: Duration = Duration::from_millis(3_500);
+
+/// A warm-up's hard deadline, kept here rather than by the monitor: a monitor that is
+/// wedged, paused, or polling a camera that never answers cannot end a warm-up, and on
+/// 2026-09-20 nothing else could either. Past the monitor's own `WARMUP_TIMEOUT`, which
+/// normally ends it first.
+const WARMUP_DEADLINE: Duration = WARMUP_TIMEOUT.saturating_add(Duration::from_secs(30));
+
+/// How often the warm-up deadline watchdog looks.
+#[cfg(not(test))]
+const WARMUP_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const WARMUP_WATCH_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How long a Disconnect waits for the capture it stopped to wind down and hand the
+/// handle back. The final stack is written first: up to 7.5 s on the Pi (2026-09-20).
+#[cfg(not(test))]
+const CAPTURE_STOP_WAIT: Duration = Duration::from_secs(15);
+#[cfg(test)]
+pub(super) const CAPTURE_STOP_WAIT: Duration = Duration::from_secs(3);
+
+/// Budget for switching a camera's cooler off and closing it without a warm-up.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whether a Disconnect of a cooled camera warms it up first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmupPolicy {
+    /// Warm up first while the camera can be — cooled, answering, and holding a handle.
+    WhenPossible,
+    /// Switch the cooler off and close now. The observer's call: thermal shock to the
+    /// sensor is theirs to accept.
+    Skip,
+}
+
+/// Where a Disconnect left the camera.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisconnectOutcome {
+    Disconnected,
+    /// Warming up; the handle closes on its own once warm, and by the deadline at the
+    /// latest. `remaining` is the time left to that deadline.
+    WarmingUp { remaining: Option<Duration> },
+}
 
 /// Why a camera session is ending. Decides whether the reconnect supervisor
 /// treats the loss as something to recover from.
@@ -260,18 +302,14 @@ pub fn camera_profile_key(provider: &str, camera_name: &str, role: CameraRole) -
     }
 }
 
-/// Swap the per-camera profile for `key` into `role`'s live hardware fields, seeding a
-/// fresh one from those fields if the camera has no profile yet.
+/// Swap the per-camera profile for `key` into `role`'s live hardware fields (flat
+/// `CaptureSettings` for Main, `guide_camera` for Guide — both can be connected at once
+/// and can't share one set of values), seeding a fresh profile if none exists yet.
 ///
-/// Either way the profile is clamped to what this camera can actually do, and the
-/// clamped copy is written back to the map. Clamping the *stored* path too is what
-/// repairs a profile that was persisted out of range — settings files written before
-/// `CameraCaptureProfile` had a real `Default` hold `exposure_us: 0, bin: 0`, which
-/// `CaptureConfig::validate` rejects on every frame.
-///
-/// "Live fields" means the flat `CaptureSettings` fields for the main camera and
-/// `CaptureSettings::guide_camera` for the guide — the two cameras are connected at once
-/// and cannot share one set of values.
+/// Either way the profile is clamped to what this camera can do, and the clamped copy
+/// written back to the map — clamping the *stored* path too repairs a profile persisted
+/// out of range: files written before `CameraCaptureProfile` had a real `Default` hold
+/// `exposure_us: 0, bin: 0`, which `CaptureConfig::validate` rejects on every frame.
 pub fn apply_camera_profile_on_connect(
     settings: &mut CaptureSettings,
     key: String,
@@ -289,13 +327,12 @@ pub fn apply_camera_profile_on_connect(
 
 /// Bring a profile inside what `info` supports.
 ///
-/// Two kinds of clamp, and they answer different questions. Capability fields (cooler,
-/// sensor mode, dew heater) are zeroed when the hardware has none, so a previous
-/// camera's settings cannot bleed into a profile that could never use them. Range
-/// fields (exposure, gain, binning) are the three `CaptureConfig::validate` rejects
-/// outright — an out-of-range one is not a cosmetic problem, it stops the camera
-/// capturing at all. A zero there means "never configured", so it takes the default
-/// rather than the camera's minimum: a 32 µs sub is a valid exposure and a useless one.
+/// Two kinds of clamp. Capability fields (cooler, sensor mode, dew heater) are
+/// zeroed when the hardware has none, so a previous camera's settings can't bleed
+/// into a profile that could never use them. Range fields (exposure, gain, binning)
+/// are the three `CaptureConfig::validate` rejects outright, stopping capture — a
+/// zero there means "never configured" and takes the default rather than the
+/// camera's minimum: a 32 µs sub is valid but useless.
 pub(crate) fn clamp_profile_to_camera(profile: &mut CameraCaptureProfile, info: &CameraInfo) {
     let defaults = CameraCaptureProfile::default();
 
@@ -344,8 +381,19 @@ fn apply_profile_to_role(
     }
 }
 
-/// Disconnect (or begin warmup prior to disconnect) for a camera.
-pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<String> {
+/// Disconnect a camera, ending its session in bounded time whatever it is doing.
+///
+/// The observer's Disconnect is a must (2026-09-20: a camera unplugged mid-session could be
+/// neither disconnected nor started until the board was power-cycled). The imaging
+/// camera's capture is stopped first, the stack saved as on any Stop. A cooled camera
+/// warms up first while that can work — answering, with a handle to command — and closes
+/// at once when it cannot or `warmup` says to skip it. A warm-up always ends by
+/// [`WARMUP_DEADLINE`].
+pub async fn disconnect(
+    state: &Arc<AppState>,
+    camera_id: &str,
+    warmup: WarmupPolicy,
+) -> ApiResult<DisconnectOutcome> {
     let connected = {
         let cameras = state.cameras.read().await;
         cameras.get(camera_id).cloned()
@@ -357,22 +405,12 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
     let role = connected.role;
     let camera_name = connected.info.name;
 
-    // Can't disconnect the imaging camera mid-capture — user must stop capture first.
     // The guide camera has no such tie: its loop is its own and stopping it costs the
     // session nothing but plate solving.
-    //
-    // A capture paused for recovery ends here instead. Ended first, with the same
-    // compare-and-set a resume makes: checked only, a reopen finishing meanwhile resumed
-    // the capture on the camera this disconnect was warming up, and cancelled the warm-up.
-    if role == CameraRole::Main
-        && !state.end_paused_capture().await
-        && matches!(
-            state.capture_state().await,
-            CaptureState::Capturing | CaptureState::Starting
-        )
-    {
-        return Err(ApiError::CameraInUse);
-    }
+    let capture_winding_down = match role {
+        CameraRole::Main => end_capture_for_disconnect(state, &camera_name).await,
+        CameraRole::Guide => false,
+    };
 
     // Nothing to warm up or stop: the handle is already gone, and ending the session is
     // what stops the supervisor. Behind the connect lock, which a reopen holds from
@@ -382,17 +420,25 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
         let _reopen_done = state.camera_connect_lock.lock().await;
         if state.slot(role).is_recovering() {
             finalize_disconnect(state, role, &camera_name, DisconnectCause::Requested).await;
-            return Ok(camera_name);
+            return Ok(DisconnectOutcome::Disconnected);
         }
         // It came back while we waited: disconnect it the ordinary way.
     }
 
-    let phase = state.camera_phase(role).await;
+    let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
 
-    // Already warming up — idempotent no-op.
-    if phase == CameraPhase::WarmingUp {
+    if state.camera_phase(role).await == CameraPhase::WarmingUp {
+        if warmup == WarmupPolicy::Skip {
+            info!(camera_id = %camera_id, "Warm-up skipped on request; disconnecting now");
+            disconnect_without_warmup(state, role, &camera_name).await;
+            return Ok(DisconnectOutcome::Disconnected);
+        }
+        // A warm-up nothing is timing would have no end.
+        if state.slot(role).warmup().is_none() {
+            begin_warmup(state, role, &camera_name, fast).await;
+        }
         info!(camera_id = %camera_id, "Disconnect requested but already warming up");
-        return Ok(camera_name);
+        return Ok(warming_up(state, role));
     }
 
     // Stop the free-running loop before anything touches the handle, so the loop is not
@@ -405,32 +451,201 @@ pub async fn disconnect(state: &Arc<AppState>, camera_id: &str) -> ApiResult<Str
     // (current intent) OR the last status sample reported cooler_on, ramp
     // the TEC down before closing the handle. Relying on settings alone is
     // important because the monitor may not have polled yet on fresh connects.
-    let (cooler_enabled_in_settings, fast) = {
-        let settings = state.settings.read().await;
-        let profile = settings.profile_for(role);
-        (profile.cooler_enabled, profile.cooler_fast_mode)
-    };
+    let cooler_enabled_in_settings = state.settings.read().await.profile_for(role).cooler_enabled;
     let cooler_reported_on = state
         .get_camera_status(&camera_name)
         .await
         .map(|s| s.cooler_on)
         .unwrap_or(false);
-    let needs_warmup = cooler_enabled_in_settings || cooler_reported_on;
-
-    if needs_warmup {
-        // Start warmup; monitor thread will close handle + emit
-        // CameraDisconnected when the sensor reaches WARMUP_THRESHOLD_C.
-        state
-            .set_camera_phase(role, &camera_name, CameraPhase::WarmingUp)
-            .await;
-        send_monitor_cmd(state, role, MonitorCmd::StartWarmup { fast });
-        info!(camera_id = %camera_id, fast, "Warmup initiated; disconnect will complete asynchronously");
-        Ok(camera_name)
-    } else {
-        // No cooler active — close immediately.
+    if !(cooler_enabled_in_settings || cooler_reported_on) {
         finalize_disconnect(state, role, &camera_name, DisconnectCause::Requested).await;
-        Ok(camera_name)
+        return Ok(DisconnectOutcome::Disconnected);
     }
+
+    if let Some(why) = warmup_impossible(state, role, &camera_name, warmup, capture_winding_down).await
+    {
+        info!(camera_id = %camera_id, why, "Disconnecting without a warm-up");
+        disconnect_without_warmup(state, role, &camera_name).await;
+        return Ok(DisconnectOutcome::Disconnected);
+    }
+
+    // Still saving its stack: the handle comes back through `return_from_capture`, which
+    // starts the warm-up then. The deadline holds from now, in case it never does.
+    if capture_winding_down {
+        track_warmup(state, role, &camera_name).await;
+        info!(camera_id = %camera_id, "Warm-up begins once the capture has handed the camera back");
+        return Ok(warming_up(state, role));
+    }
+
+    // The monitor closes the handle and emits `CameraDisconnected` once the sensor
+    // reaches WARMUP_THRESHOLD_C; the watchdog makes sure that happens by the deadline.
+    begin_warmup(state, role, &camera_name, fast).await;
+    info!(camera_id = %camera_id, fast, "Warmup initiated; disconnect will complete asynchronously");
+    Ok(warming_up(state, role))
+}
+
+fn warming_up(state: &AppState, role: CameraRole) -> DisconnectOutcome {
+    DisconnectOutcome::WarmingUp {
+        remaining: state.slot(role).warmup_remaining(),
+    }
+}
+
+/// Why a cooled camera cannot be warmed up, or `None` when it can. A capture still winding
+/// down holds the handle and will give it back, so its empty slot is not "no handle".
+async fn warmup_impossible(
+    state: &Arc<AppState>,
+    role: CameraRole,
+    camera_name: &str,
+    warmup: WarmupPolicy,
+    capture_winding_down: bool,
+) -> Option<&'static str> {
+    if warmup == WarmupPolicy::Skip {
+        return Some("skipped on request");
+    }
+    // Unplugged, or stalling: every ramp step would fail, for minutes.
+    if crate::server::camera_health::has_recent_fault(state, role, camera_name) {
+        return Some("the camera's last calls failed");
+    }
+    if capture_winding_down {
+        return None;
+    }
+    // Waits out a monitor poll in progress. Empty after that, nothing can command the TEC.
+    if !handle_reachable(state, role) || with_camera(state, role, |_| ()).await.is_none() {
+        return Some("there is no camera handle to command");
+    }
+    None
+}
+
+/// Whether the handle is in the slot or on its way back from a monitor call. Disconnect
+/// asks after stopping the capture and the guide loop, so nothing else can bring it back.
+fn handle_reachable(state: &AppState, role: CameraRole) -> bool {
+    let slot = state.slot(role);
+    slot.holds_handle() || slot.monitor_call_age().is_some()
+}
+
+/// Stop the imaging capture so its camera can be disconnected, and wait — bounded — for
+/// the pipeline to wind down and hand the handle back. Returns `true` when it is still
+/// winding down at the end of the wait.
+///
+/// The sub in flight is cut short: Stop alone lets it finish, and a 300 s deep-sky sub
+/// outlasted the wait, so the cooled camera was closed with no warm-up.
+async fn end_capture_for_disconnect(state: &Arc<AppState>, camera_name: &str) -> bool {
+    // A capture paused for recovery ends with the same compare-and-set a resume makes:
+    // checked only, a reopen finishing meanwhile resumed the capture on the camera this
+    // disconnect was warming up, and cancelled the warm-up.
+    if state.end_paused_capture().await {
+        return false;
+    }
+    let running = |capture: CaptureState| {
+        matches!(
+            capture,
+            CaptureState::Starting | CaptureState::Capturing | CaptureState::Stopping
+        )
+    };
+    if !running(state.capture_state().await) {
+        return false;
+    }
+    info!(camera_name, "Disconnect requested during a capture; stopping the capture first");
+    crate::server::services::CaptureService::stop_capture(state).await;
+    state.cancel_active_exposure(CameraRole::Main).await;
+
+    let deadline = tokio::time::Instant::now() + CAPTURE_STOP_WAIT;
+    while running(state.capture_state().await) {
+        if tokio::time::Instant::now() >= deadline {
+            warn!(camera_name, "The capture is still stopping; the camera disconnects once it has");
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+/// Put the camera into `WarmingUp`, start the watchdog, and have the monitor drive it.
+async fn begin_warmup(state: &Arc<AppState>, role: CameraRole, camera_name: &str, fast: bool) {
+    track_warmup(state, role, camera_name).await;
+    send_monitor_cmd(state, role, MonitorCmd::StartWarmup { fast });
+}
+
+/// Put the camera into `WarmingUp` and start the watchdog that ends the warm-up by
+/// [`WARMUP_DEADLINE`] whatever the monitor manages. Nothing drives it yet: callers whose
+/// monitor can command the camera now use [`begin_warmup`].
+async fn track_warmup(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
+    let warmup = state.slot(role).begin_warmup(Instant::now() + WARMUP_DEADLINE);
+    state
+        .set_camera_phase(role, camera_name, CameraPhase::WarmingUp)
+        .await;
+
+    let state = Arc::clone(state);
+    let camera_name = camera_name.to_string();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(WARMUP_WATCH_INTERVAL).await;
+            // Ended — complete, cancelled by a Start, skipped — or replaced by a later one.
+            let Some(current) = state.slot(role).warmup().filter(|w| w.epoch == warmup.epoch)
+            else {
+                return;
+            };
+            if Instant::now() < current.deadline {
+                continue;
+            }
+            let ours = state
+                .camera_in_role(role)
+                .await
+                .is_some_and(|camera| camera.info.name == camera_name);
+            if !ours || state.camera_phase(role).await != CameraPhase::WarmingUp {
+                return;
+            }
+            warn!(
+                camera_name,
+                role = role.label(),
+                "The warm-up overran its deadline; disconnecting without finishing it"
+            );
+            disconnect_without_warmup(&state, role, &camera_name).await;
+            return;
+        }
+    });
+}
+
+/// End the session now: cooler off on the way out, then close — bounded, on a thread of
+/// its own, because the cameras this is for are the ones that may not answer.
+async fn disconnect_without_warmup(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
+    // The monitor first, so it neither polls the handle away nor reads the slot emptied
+    // below as a lost handle.
+    send_monitor_cmd(state, role, MonitorCmd::Shutdown);
+    state.slot(role).set_monitor_tx(None);
+    if role == CameraRole::Guide {
+        crate::server::capture::guide_task::stop(state).await;
+    }
+
+    let camera = if handle_reachable(state, role) {
+        take_camera(state, role).await
+    } else {
+        None
+    };
+    if let Some(camera) = camera {
+        let released = state
+            .slot(role)
+            .sdk_calls
+            .run_bounded(RELEASE_TIMEOUT, move || {
+                let mut camera = camera;
+                if camera.info().has_cooler {
+                    if let Err(e) = camera.set_cooler(false) {
+                        warn!(error = %e, "Could not switch the cooler off before closing");
+                    }
+                }
+                if let Err(e) = camera.close() {
+                    warn!(error = %e, "camera.close() failed — dropping anyway");
+                }
+            })
+            .await;
+        if released.is_err() {
+            warn!(
+                camera_name,
+                "The camera did not answer while being switched off; its handle closes when the call returns"
+            );
+        }
+    }
+    finalize_disconnect(state, role, camera_name, DisconnectCause::Requested).await;
 }
 
 /// Take a slot's camera handle for a capture session. Cancels any in-progress
@@ -449,6 +664,7 @@ pub async fn take_for_capture(
         // monitor would have installed is overridden anyway.
         debug!(camera_name, "Cancelling warmup: capture requested");
         send_monitor_cmd(state, role, MonitorCmd::CancelWarmup);
+        state.slot(role).end_warmup();
         let profile = state.settings.read().await.profile_for(role);
         if profile.cooler_enabled {
             let _ = with_camera(state, role, |cam| cam.set_cooler(true)).await;
@@ -471,17 +687,9 @@ pub async fn take_for_capture(
     // its polling loop. This avoids contention with capture's own calls.
     send_monitor_cmd(state, role, MonitorCmd::HandOffToCapture);
 
-    let camera = take_camera(state, role).await.ok_or_else(|| {
-        if state.slot(role).is_recovering() {
-            return ApiError::CameraRecovering {
-                camera: camera_name.to_string(),
-            };
-        }
-        ApiError::Internal(format!(
-            "Camera '{}' did not become available for capture — the monitor is stuck in a camera call",
-            camera_name
-        ))
-    })?;
+    let Some(camera) = take_camera(state, role).await else {
+        return Err(abandon_hand_off(state, role, camera_name, phase).await);
+    };
 
     // A guide camera's loop runs for the length of the connection, not the length of a
     // session, and the gates below it need to be able to tell those apart.
@@ -492,6 +700,66 @@ pub async fn take_for_capture(
     state.set_camera_phase(role, camera_name, phase).await;
 
     Ok(camera)
+}
+
+/// Undo a hand-off whose take came back empty, and say what is holding the handle.
+///
+/// The monitor is resumed unless another owner holds the handle: left paused it never
+/// polls again, and a warm-up the Start cancelled left the phase at `WarmingUp` with
+/// nothing driving it. On 2026-09-20 that made every later Disconnect a no-op until the
+/// board was power-cycled. A lost handle is [`ApiError::CameraHandleLost`].
+async fn abandon_hand_off(
+    state: &Arc<AppState>,
+    role: CameraRole,
+    camera_name: &str,
+    phase: CameraPhase,
+) -> ApiError {
+    let slot = state.slot(role);
+    if slot.is_recovering() {
+        return ApiError::CameraRecovering {
+            camera: camera_name.to_string(),
+        };
+    }
+
+    // Another owner still has it — a stopping capture, or a guide loop on its way out —
+    // and hands it back when done. The monitor stays paused for that owner.
+    let owner = match phase {
+        CameraPhase::Capturing => Some("a capture that is still stopping"),
+        CameraPhase::Guiding => Some("the guide loop"),
+        _ => None,
+    };
+    if let Some(owner) = owner {
+        warn!(camera_name, role = role.label(), owner, "The camera handle is still held elsewhere");
+        return ApiError::Internal(format!(
+            "Camera '{camera_name}' is still held by {owner}; try again in a moment"
+        ));
+    }
+
+    send_monitor_cmd(state, role, MonitorCmd::ResumeAfterCapture);
+    if let Some(busy_for) = slot.monitor_call_age() {
+        if phase == CameraPhase::WarmingUp {
+            let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
+            begin_warmup(state, role, camera_name, fast).await;
+        }
+        warn!(camera_name, role = role.label(), ?busy_for, "The camera's status poll is still inside the driver");
+        return ApiError::Internal(format!(
+            "Camera '{}' is busy: its status poll has been inside the camera driver for {:.1} s",
+            camera_name,
+            busy_for.as_secs_f64()
+        ));
+    }
+
+    // Nobody holds it, so it is lost. The caller hands back `None`, which reopens it the way
+    // a device fault would — not this function: tearing down from inside the take made the
+    // guide loop's teardown wait out `guide_task::stop`'s budget on the loop asking.
+    error!(
+        camera_name,
+        role = role.label(),
+        "The camera handle is missing and nothing holds it; handing the camera to recovery"
+    );
+    ApiError::CameraHandleLost {
+        camera: camera_name.to_string(),
+    }
 }
 
 /// Return the handle after a capture session ends. If the capture thread
@@ -535,6 +803,15 @@ pub async fn return_from_capture(
                 .lock()
                 .expect("camera handle mutex poisoned") = Some(cam);
             state.slot(role).notify_handle_returned();
+
+            // A Disconnect that outlasted this capture's wind-down left its warm-up waiting
+            // for the handle. Only now can the monitor command the cooler.
+            if state.slot(role).warmup().is_some() {
+                let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
+                send_monitor_cmd(state, role, MonitorCmd::ResumeAfterCapture);
+                send_monitor_cmd(state, role, MonitorCmd::StartWarmup { fast });
+                return;
+            }
 
             // Decide phase: if cooling is enabled and we're not yet near target,
             // precooling; otherwise idle. We use the last cached status as a
@@ -587,7 +864,13 @@ pub async fn return_from_capture(
                 role = role.label(),
                 "Capture ended without returning handle; cleaning up"
             );
-            finalize_disconnect(state, role, camera_name, DisconnectCause::DeviceFault).await;
+            // A camera the observer is disconnecting is not one to reopen.
+            let cause = if state.slot(role).warmup().is_some() {
+                DisconnectCause::Requested
+            } else {
+                DisconnectCause::DeviceFault
+            };
+            finalize_disconnect(state, role, camera_name, cause).await;
         }
     }
 }
@@ -615,6 +898,7 @@ pub async fn finalize_disconnect(
         return;
     }
     let was_recovering = state.slot(role).end_recovery();
+    state.slot(role).end_warmup();
 
     // Shut down the monitor thread first.
     send_monitor_cmd(state, role, MonitorCmd::Shutdown);

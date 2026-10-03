@@ -178,22 +178,14 @@ impl AutoStretchConfig {
             }
         } else {
             match aggressiveness {
-                // Star Fields, and **asinh on purpose** — a product decision, not a
-                // tuning one. This mode exists to show a field of stars and nothing
-                // else: nebulosity and galaxy structure are explicitly not its job, so
-                // the gentler curve and the brighter sky that come with asinh are the
-                // character that is wanted.
-                //
-                // What it costs, measured on a 3028-frame M27 so the next person does not
-                // have to re-derive it: asinh pins the rendered star peak at ~160 output
-                // levels however it is tuned (MTF reaches 220), and it shows *fewer* stars
-                // than either MTF profile — 2398 per megapixel above sky+20 against Deep
-                // Sky's 2777, and 976 above sky+60 against 1721. Raising
-                // `target_background` recovers the count but only by lifting the sky with
-                // it (0.16 gives 3096 stars and a sky of 40 output levels); bounding
-                // `max_stretch` to keep highlights linear makes both worse at once. So
-                // these are the best asinh numbers available at a sky of 24, not a local
-                // optimum waiting to be improved.
+                // Star Fields, and **asinh on purpose**: a product decision. The mode shows a field of
+                // stars, not nebulosity/galaxy structure, so asinh's gentler curve and brighter sky are
+                // wanted. Cost, measured on a 3028-frame M27: asinh pins the star peak at ~160 output
+                // levels however tuned (MTF reaches 220), and shows fewer stars than either MTF profile
+                // (2398/MP above sky+20 vs Deep Sky's 2777; 976 vs 1721 above sky+60). Raising
+                // `target_background` recovers count only by lifting the sky too (0.16 -> 3096 stars,
+                // sky 40); bounding `max_stretch` worsens both — these are the best asinh numbers at sky
+                // 24, not a local optimum.
                 StretchAggressiveness::Low => Self {
                     target_background: 0.10,
                     black_point_sigma: 1.5,

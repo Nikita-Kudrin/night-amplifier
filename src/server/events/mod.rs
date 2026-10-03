@@ -2,7 +2,10 @@
 //!
 //! Events are serialized to JSON using serde with automatic snake_case naming.
 
+mod ai_compute;
 mod install;
+
+pub use ai_compute::spawn_ai_compute_watcher;
 
 use serde::Serialize;
 
@@ -70,7 +73,15 @@ pub enum ServerEvent {
         name: String,
         role: CameraRole,
         phase: CameraPhaseDto,
+        /// Seconds until a warm-up is cut short, at the latest; with `WarmingUp` only.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warmup_remaining_s: Option<u64>,
     },
+
+    /// Every connected camera's phase at once, replacing what the client holds. Sent when
+    /// a client connects and after it fell behind: phases otherwise arrive only as
+    /// changes, and a page that missed one showed "Start guide" for a running loop.
+    CameraPhases { cameras: Vec<CameraPhaseEntry> },
 
     /// The camera hit a run of consecutive status-poll watchdog timeouts across
     /// reconnects — likely a persistent hardware/USB fault rather than an
@@ -108,6 +119,10 @@ pub enum ServerEvent {
     /// which needs the correction the mode holds off. Pressing Start stays silent — the
     /// observer asked for the stack, and `SettingsUpdated` moves the toggle.
     FocusModeLeft,
+
+    /// The AI compute report changed (benchmark progress, a result, a unit that failed at
+    /// runtime). Clients refetch `GET /api/ai-compute`, which resolves their preference.
+    AiComputeChanged,
 
     /// Error occurred
     Error { message: String },
@@ -292,6 +307,17 @@ impl From<CaptureState> for CaptureStateDto {
     }
 }
 
+/// One camera in [`ServerEvent::CameraPhases`].
+#[derive(Debug, Clone, Serialize)]
+pub struct CameraPhaseEntry {
+    pub name: String,
+    pub role: CameraRole,
+    pub phase: CameraPhaseDto,
+    /// Seconds until a warm-up in progress is cut short, at the latest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warmup_remaining_s: Option<u64>,
+}
+
 /// DTO for CameraPhase serialization (snake_case to match JS event handling).
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -384,11 +410,17 @@ impl ServerEvent {
         }
     }
 
-    pub fn camera_phase_changed(name: impl Into<String>, role: CameraRole, phase: CameraPhase) -> Self {
+    pub fn camera_phase_changed(
+        name: impl Into<String>,
+        role: CameraRole,
+        phase: CameraPhase,
+        warmup_remaining: Option<std::time::Duration>,
+    ) -> Self {
         ServerEvent::CameraPhaseChanged {
             name: name.into(),
             role,
             phase: phase.into(),
+            warmup_remaining_s: warmup_remaining.map(|left| left.as_secs()),
         }
     }
 
@@ -683,21 +715,32 @@ mod tests {
 
     #[test]
     fn test_camera_phase_changed_serialization() {
-        let event =
-            ServerEvent::camera_phase_changed("Test Cam", CameraRole::Guide, CameraPhase::Precooling);
+        let event = ServerEvent::camera_phase_changed(
+            "Test Cam",
+            CameraRole::Guide,
+            CameraPhase::Precooling,
+            None,
+        );
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "camera_phase_changed");
         assert_eq!(json["name"], "Test Cam");
         assert_eq!(json["role"], "guide");
         assert_eq!(json["phase"], "precooling");
+        assert!(json.get("warmup_remaining_s").is_none());
     }
 
     #[test]
     fn test_camera_phase_warming_up_serialization() {
-        let event = ServerEvent::camera_phase_changed("Test Cam", CameraRole::Main, CameraPhase::WarmingUp);
+        let event = ServerEvent::camera_phase_changed(
+            "Test Cam",
+            CameraRole::Main,
+            CameraPhase::WarmingUp,
+            Some(std::time::Duration::from_secs(329)),
+        );
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["phase"], "warming_up");
+        assert_eq!(json["warmup_remaining_s"], 329);
     }
 }

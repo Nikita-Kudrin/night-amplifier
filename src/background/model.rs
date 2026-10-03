@@ -120,16 +120,12 @@ impl BackgroundModel {
         v0 * (1.0 - fy) + v1 * fy
     }
 
-    /// Subtract this background model from a frame
+    /// Subtract this background model from a frame, clamping to [0.0, 1.0] afterward.
     ///
-    /// Values are clamped to [0.0, 1.0] after subtraction.
-    ///
-    /// If `gradient_only` is true, only the gradient (variation from a reference level)
-    /// is subtracted. This preserves the base signal level while removing gradients caused
-    /// by light pollution. This is important for low-signal astronomical images.
-    ///
-    /// The reference level is determined by `reference_percentile` (default 10th percentile).
-    /// The `aggressiveness` parameter controls how much of the gradient to subtract.
+    /// If `gradient_only`, only the gradient (variation from a reference level) is
+    /// subtracted, preserving the base signal — important for low-signal targets. The
+    /// reference level is `reference_percentile` (default 10th); `aggressiveness` controls
+    /// how much of the gradient to subtract.
     #[instrument(skip(self, frame), fields(
         resolution = %format!("{}x{}", frame.width(), frame.height()),
         channels = frame.channels(),
@@ -245,15 +241,14 @@ impl BackgroundModel {
         }
     }
 
-    /// Fast delta-stepping subtraction using boundary-hugging node coordinates:
-    /// iterates grid bands, computing edge values per scanline and advancing via a
-    /// constant delta — no per-pixel divisions or weight lookups.
+    /// Fast delta-stepping subtraction using boundary-hugging node coordinates: iterates
+    /// grid bands, computing edge values per scanline and advancing via a constant delta —
+    /// no per-pixel divisions or weight lookups.
     ///
-    /// Parallel **per row**, not per band: the predecessor split work across 11 bands
-    /// (default 12x12 grid) via `(data as *const [f32] as *mut f32)` — UB under Stacked
-    /// Borrows regardless of the bands not overlapping. Planar layout makes the safe
-    /// version simpler: each plane is contiguous, so `par_chunks_mut(width)` hands out
-    /// one owned row per task, with a row's band precomputed from its `y` alone.
+    /// Parallel **per row**, not per band: the predecessor split work across 11 bands (default
+    /// 12x12 grid) via `(data as *const [f32] as *mut f32)` — UB under Stacked Borrows
+    /// regardless of overlap. Planar layout is simpler and safe: each plane is contiguous,
+    /// so `par_chunks_mut(width)` hands one owned row per task, its band precomputed from `y`.
     fn subtract_delta_stepping(
         &self,
         frame: &mut Frame,

@@ -1,22 +1,11 @@
-//! The soft half of the darkening black floor: a *gain* on the sky, chosen per pixel
-//! from a 3x3 mean of the stretched luminance rather than from the pixel itself.
-//!
-//! Why spatial: sky grain after the stretch is ~0.35x the sky level, and any pointwise
-//! curve that keeps a faint target's excess keeps noise excursions of the same size.
-//! The softplus knee this replaced flattened the lower half of the noise while the
-//! upper half survived — 20-35 % of sky pixels within one level of the pedestal and
-//! relative grain up 1.7-2x (2026-09-14 globular, IMX533): blocky dark clumps with
-//! bright specks at a pixel-resolving eyepiece. A 3x3 mean has a third of the noise,
-//! so flat sky takes the full gain (relative grain kept) while coherent structure
-//! above the sky, and stars, keep their level.
-//!
-//! Measured on that render at a 3x3 guide and a 1.05-2.0 sky shoulder: grain x0.81,
-//! 89 % of the halo's excess kept, sky beside a star lifted 1.16x. A 5x5 guide lifted
-//! it 1.6x — a bright square around every star.
-//!
-//! Everything is expressed per row ([`luma_row`], [`guide_row`], [`SkyShadow::apply_row`])
-//! and the sky is sampled at fixed positions, so the encoder's streamed rows (denoised or
-//! not), the whole-image reference and the planar frame path compute the same image.
+//! The soft half of the darkening black floor: a *gain* on the sky, chosen per pixel from a
+//! 3x3 mean of the stretched luminance, not the pixel itself — pointwise gain keeps noise
+//! excursions the size of the signal they ride on (sky grain ~0.35x sky level). The softplus
+//! knee this replaced left 20-35% of sky pixels within one level of the pedestal and grain up
+//! 1.7-2x (2026-09-14 globular, IMX533): blocky clumps with bright specks at the eyepiece. A
+//! 3x3 mean has a third of the noise, so flat sky takes the full gain while stars/structure
+//! above sky keep their level; measured grain x0.81, 89% of halo excess kept, star-adjacent
+//! sky +1.16x (5x5 guide: +1.6x — a bright square around every star).
 
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
@@ -174,10 +163,9 @@ pub(crate) fn guide_row(up: &[f32], mid: &[f32], down: &[f32], out: &mut [f32]) 
 /// median of the samples there.
 ///
 /// Not the median of all samples: a faint target over most of the frame *is* the median.
-/// A 1.6-sky nebula over 60 % of a frame was darkened like the sky (kept 50 % of its
-/// level where the shoulder keeps ~79 %) and lost half its contrast. Bins are sized from
-/// the 5th-25th percentile gap (~1 sigma of whatever the darkest fifth is), so the
-/// histogram resolves the sky however wide the target makes the full range.
+/// A 1.6-sky nebula over 60% of a frame was darkened like the sky (50% of its level kept vs
+/// the shoulder's ~79%, losing half its contrast); bins come from the 5th-25th percentile
+/// gap (~1 sigma of the darkest fifth) so the histogram resolves the sky at any target width.
 fn estimate_sky(samples: &[f32], floor: f32) -> Option<f32> {
     // Selection, not a sort: 92k samples sorted cost ~2 ms of a 4.6 ms encode.
     let mut finite: Vec<f32> = samples.iter().copied().filter(|v| v.is_finite()).collect();
@@ -257,11 +245,15 @@ fn quantile(values: &mut [f32], q: f32) -> f32 {
     *values.select_nth_unstable_by(k, |a, b| a.total_cmp(b)).1
 }
 
-/// Apply to a whole interleaved RGB f32 image (already stretched, contrast applied):
-/// the reference the encoder's streamed rows are pinned against. `luma` and `guide` are
-/// grown to `width * height`.
-#[cfg(test)]
-pub(crate) fn apply_sky_shadow_interleaved(
+/// Apply to a whole interleaved RGB f32 image (already stretched, contrast applied): the
+/// reference the encoder's streamed rows are pinned against. `luma` and `guide` are grown
+/// to `width * height`.
+///
+/// Compiled into the library rather than gated on `cfg(test)`: the denoised half of that
+/// pinning moved to the Pro repo with the filters, and a reference only one of the two
+/// callers can build is not a reference. Production never calls it — it stages the whole
+/// image (~208 MB at 26 MP) instead of streaming via `encoding::sky_shadow_rows`.
+pub fn apply_sky_shadow_interleaved(
     rgb: &mut [f32],
     width: usize,
     height: usize,

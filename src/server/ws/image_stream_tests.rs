@@ -11,6 +11,7 @@ fn ready_frame(width: usize, height: usize) -> Arc<RenderReadyFrame> {
         ..Default::default()
     };
     Arc::new(RenderReadyFrame {
+        noise: None,
         linear_frame: Arc::new(Frame::filled(width, height, 3, 0.25).unwrap()),
         pipeline_config: config,
         stretch_result: None,

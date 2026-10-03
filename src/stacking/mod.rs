@@ -18,7 +18,7 @@ pub use config::{
 };
 pub use incremental_pixel::{
     mean_error_table, scale_alpha_table, IncrementalPixel, CLIPPED_SCALE_WINDOW,
-    MEAN_ERROR_TABLE_LEN, SCALE_FLOOR, SCALE_WINDOW,
+    MEAN_ERROR_TABLE_LEN, SCALE_FLOOR, SCALE_WINDOW, COLLAPSED_SCALE_MARGIN, SCALE_GUARD_MIN_OBSERVATIONS, WARMUP_SIGMA_GUARD,
 };
 pub use pipeline::{FrameProcessingResult, PipelineConfig, StackingPipeline, StackingStats};
 pub use rejection::RejectionMethod;
