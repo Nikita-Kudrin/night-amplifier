@@ -1,14 +1,11 @@
-//! Push-To's work must not run on the server's runtime.
-//!
-//! 2026-09-14: star detection, the luminance projection and the FITS write ran synchronously
-//! inside the plugin's async calls, on the runtime workers every lock and socket of the
-//! server waits on — and the guide camera's stalls began during bursts of solves.
-//! `solving::offer_plate_solve` hands it to Push-To's own task threads (`push_to_tasks`).
-//! The fake plugin holds its thread the way that work does; the test watches whether the
-//! server notices.
-//!
-//! One test in its own binary: it registers into the process-global `PUSH_TO_PLUGIN` and
-//! flips `PRO_LICENSE_ACTIVE`, as `solve_source_staleness_test` does.
+//! Push-To's work must not run on the server's runtime. 2026-09-14: star detection,
+//! the luminance projection, and the FITS write ran synchronously inside the plugin's
+//! async calls, on the runtime workers every lock and socket of the server waits on —
+//! guide camera stalls began during bursts of solves. `solving::offer_plate_solve` now
+//! hands it to Push-To's own task threads (`push_to_tasks`); the fake plugin holds its
+//! thread the way that work does and the test watches whether the server notices. One
+//! test, in its own binary, like `solve_source_staleness_test`: mutates global
+//! `PUSH_TO_PLUGIN`/`PRO_LICENSE_ACTIVE`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -87,16 +87,14 @@ pub(crate) fn interpolate_diagonal(
         * 0.25
 }
 
-/// Determine R/B horizontal orientation at a green pixel for a given pattern
+/// Determine R/B horizontal orientation at a green pixel for a given pattern.
 ///
-/// Returns `(red_horizontal, blue_horizontal)`, which are always opposites.
-///
-/// Only the *row* matters, never the column: a green pixel sits either in a row of red and green or
-/// in a row of blue and green, and its horizontal neighbours are whichever of the two the row
-/// carries. So RGGB and GRBG agree (both start their even rows with red) and BGGR and GBRG agree,
-/// even though the green pixels sit at opposite column parities. Keying this on `x` as well used to
-/// send GRBG's odd-row greens down a bogus "not a green position" arm, which filled blue from the
-/// two *red* neighbours above and below.
+/// Returns `(red_horizontal, blue_horizontal)`, always opposites. Only the *row*
+/// matters, never the column: a green pixel sits in a row of red+green or blue+green,
+/// and its horizontal neighbours are whichever the row carries. RGGB and GRBG agree
+/// (both start even rows with red); BGGR and GBRG agree likewise, despite their green
+/// pixels sitting at opposite column parities. Keying this on `x` too once sent GRBG's
+/// odd-row greens down a bogus arm, filling blue from the two *red* neighbours above/below.
 #[inline]
 pub(crate) fn get_rb_orientation(pattern: CfaPattern, y: usize) -> (bool, bool) {
     let y_odd = y & 1;

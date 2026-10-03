@@ -319,17 +319,14 @@ fn test_pipeline_rejects_corrupted_frame() {
     assert!(pipeline.stats().frames_stacked == 1);
 }
 
-/// Drives the live-stacking context over the managed fixture sets, the way the
-/// capture task does, and holds the line on the two numbers that regressed
-/// together: how many frames survive registration, and how well the survivors
-/// align.
+/// Drives the live-stacking context over the managed fixture sets, the way the capture
+/// task does, and holds the line on two numbers that regressed together: how many frames
+/// survive registration, and how well the survivors align.
 ///
-/// Restricted to `MANAGED_FIXTURE_SETS` because `tests/fixtures/` is gitignored
-/// and may hold stray capture output on any given machine.
-///
-/// Registration used to run on the 30 stars `DetectionConfig::fast()` returned,
-/// and every transform it produced was stacked regardless of how badly it fitted
-/// — 6 px residuals included, which is what smeared the result.
+/// Restricted to `MANAGED_FIXTURE_SETS` since `tests/fixtures/` is gitignored and may hold
+/// stray capture output on any given machine. Registration used to run on the 30 stars
+/// `DetectionConfig::fast()` returned, stacking every transform regardless of fit — 6 px
+/// residuals included, which is what smeared the result.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]

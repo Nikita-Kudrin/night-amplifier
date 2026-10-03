@@ -238,15 +238,13 @@ function sensorModePill(cam) {
       ? settings.value?.guide_camera?.sensor_mode_override
       : settings.value?.sensor_mode_override
   // Mirrors the backend's `is_actively_stacking` gate in
-  // `to_capture_config_with()` (server/state/settings.rs): Low Noise is only
-  // worth its frame-rate cost while frames are actually being integrated.
-  // `stacking_type !== 'planetary'` stands in for "DeepSky or Comet" —
-  // `StackingType::supports_stacking()` is `true` for every variant today,
-  // so the Rust condition reduces to exactly this. `wanderer_mode` doesn't
-  // need to appear here either: the UI always sets `stacking: true`
-  // alongside `wanderer_mode: true` (see `applyStackingMode` in
-  // CaptureControls.vue), so `stacking` alone already covers "Stacking or
-  // Wanderer". Never true for the guide camera: nothing it produces is stacked.
+  // `to_capture_config_with()` (server/state/settings.rs): Low Noise only
+  // pays its frame-rate cost while frames are being integrated.
+  // `stacking_type !== 'planetary'` stands for "DeepSky or Comet" since
+  // `StackingType::supports_stacking()` is true for every variant today.
+  // `wanderer_mode` need not appear: the UI always pairs `stacking: true`
+  // with it (see `applyStackingMode` in CaptureControls.vue). Never true
+  // for the guide camera: nothing it produces is stacked.
   const isActivelyStacking =
       !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
   const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')

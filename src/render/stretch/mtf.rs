@@ -68,17 +68,14 @@ fn lut_lookup(lut: &[f32], value: f32) -> f32 {
     lut[((value * 65535.0) as usize).min(LUT_SIZE - 1)]
 }
 
-/// Apply MTF to an entire frame in-place. `midtone == 0.5` is the identity (see
-/// `mtf`), skipping the pass and its incidental `[0,1]` clamp — safe since pixel
-/// data is normalised to `[0,1]` by contract, and the 1e-6 window keeps any residual
-/// curve error four orders of magnitude below one 8-bit LSB.
+/// Apply MTF to a frame in-place. `midtone == 0.5` is the identity (see `mtf`), skipping
+/// the pass and its `[0,1]` clamp — safe since pixels are normalised to `[0,1]` by
+/// contract, and the 1e-6 window keeps residual curve error four orders of magnitude
+/// below one 8-bit LSB.
 ///
-/// No `color_intensity` parameter: unlike
-/// [`asinh_stretch_frame`](crate::render::stretch::asinh_stretch_frame), this applies
-/// the curve to each channel independently rather than scaling by a luminance ratio.
-/// Used to *accept* one, bound as `_color_intensity` — silently ignored with no sign
-/// in the signature. [`mtf_stretch_color_preserving`] is the colour-preserving
-/// per-pixel variant that does take one.
+/// No `color_intensity`: unlike [`asinh_stretch_frame`](crate::render::stretch::asinh_stretch_frame),
+/// this applies the curve per channel rather than scaling by a luminance ratio;
+/// [`mtf_stretch_color_preserving`] is the per-pixel variant that takes one.
 pub fn mtf_stretch_frame(frame: &mut Frame, midtones: [f32; 3]) -> Result<()> {
     if (midtones[0] - 0.5).abs() < 1e-6
         && (midtones[1] - 0.5).abs() < 1e-6

@@ -302,18 +302,14 @@ pub fn camera_profile_key(provider: &str, camera_name: &str, role: CameraRole) -
     }
 }
 
-/// Swap the per-camera profile for `key` into `role`'s live hardware fields, seeding a
-/// fresh one from those fields if the camera has no profile yet.
+/// Swap the per-camera profile for `key` into `role`'s live hardware fields (flat
+/// `CaptureSettings` for Main, `guide_camera` for Guide — both can be connected at once
+/// and can't share one set of values), seeding a fresh profile if none exists yet.
 ///
-/// Either way the profile is clamped to what this camera can actually do, and the
-/// clamped copy is written back to the map. Clamping the *stored* path too is what
-/// repairs a profile that was persisted out of range — settings files written before
-/// `CameraCaptureProfile` had a real `Default` hold `exposure_us: 0, bin: 0`, which
-/// `CaptureConfig::validate` rejects on every frame.
-///
-/// "Live fields" means the flat `CaptureSettings` fields for the main camera and
-/// `CaptureSettings::guide_camera` for the guide — the two cameras are connected at once
-/// and cannot share one set of values.
+/// Either way the profile is clamped to what this camera can do, and the clamped copy
+/// written back to the map — clamping the *stored* path too repairs a profile persisted
+/// out of range: files written before `CameraCaptureProfile` had a real `Default` hold
+/// `exposure_us: 0, bin: 0`, which `CaptureConfig::validate` rejects on every frame.
 pub fn apply_camera_profile_on_connect(
     settings: &mut CaptureSettings,
     key: String,
@@ -331,13 +327,12 @@ pub fn apply_camera_profile_on_connect(
 
 /// Bring a profile inside what `info` supports.
 ///
-/// Two kinds of clamp, and they answer different questions. Capability fields (cooler,
-/// sensor mode, dew heater) are zeroed when the hardware has none, so a previous
-/// camera's settings cannot bleed into a profile that could never use them. Range
-/// fields (exposure, gain, binning) are the three `CaptureConfig::validate` rejects
-/// outright — an out-of-range one is not a cosmetic problem, it stops the camera
-/// capturing at all. A zero there means "never configured", so it takes the default
-/// rather than the camera's minimum: a 32 µs sub is a valid exposure and a useless one.
+/// Two kinds of clamp. Capability fields (cooler, sensor mode, dew heater) are
+/// zeroed when the hardware has none, so a previous camera's settings can't bleed
+/// into a profile that could never use them. Range fields (exposure, gain, binning)
+/// are the three `CaptureConfig::validate` rejects outright, stopping capture — a
+/// zero there means "never configured" and takes the default rather than the
+/// camera's minimum: a 32 µs sub is valid but useless.
 pub(crate) fn clamp_profile_to_camera(profile: &mut CameraCaptureProfile, info: &CameraInfo) {
     let defaults = CameraCaptureProfile::default();
 

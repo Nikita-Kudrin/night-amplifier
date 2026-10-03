@@ -8,13 +8,12 @@ use tracing::{debug, warn};
 
 /// JPEG quality for an output of this size, and whether the denoisers ran on it.
 ///
-/// 95 below 1440p and 90 from there up, where the payload is largest — except for a
-/// denoised frame, which is 95 at every size. Its sky is smooth to a fraction of a level
-/// and the dither carries what lies between levels; q90 quantises that away with the
-/// rest of each 8x8 block's fine detail, and block means then miss by 4-9x what they did
-/// before the encoder (`dither_tests`). On four denoised sessions q95 cuts that loss over
-/// the sky by 31-55 % (0.24-0.27 -> 0.12-0.17 levels) for 1.5-2x the payload: 2.5-4.2 Mb
-/// a 1440p frame (Pro `measure_the_jpeg_quality_on_denoised_sessions`).
+/// 95 below 1440p and 90 above, where the payload is largest — except a denoised frame,
+/// which is 95 at every size. Its sky is smooth to a fraction of a level and the dither
+/// carries what lies between levels; q90 quantises that away, and block means then miss
+/// by 4-9x what they did before the encoder (`dither_tests`). On four denoised sessions
+/// q95 cuts that sky loss by 31-55% (0.24-0.27 -> 0.12-0.17 levels) for 1.5-2x the
+/// payload: 2.5-4.2 Mb a 1440p frame (Pro `measure_the_jpeg_quality_on_denoised_sessions`).
 pub fn jpeg_quality(width: u32, height: u32, denoised: bool) -> i32 {
     if denoised || width.min(height) < 1440 {
         95

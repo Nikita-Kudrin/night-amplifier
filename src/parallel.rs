@@ -1,23 +1,13 @@
 //! Rayon work partitioning shared by the render kernels and the Pro plugins.
 
-/// Elements per rayon task for a flat pass over a contiguous run. Targets many chunks
-/// per worker so work stealing still balances, floored so a short run doesn't fan out
-/// past what the work is worth.
+/// Elements per rayon task for a flat pass over a contiguous run: many chunks per
+/// worker so work stealing balances, floored so a short run doesn't fan out past
+/// what the work is worth.
 ///
-/// Twelve chunks/worker, not four: sized for asymmetric cores (RK3588's 4xA76@2.4GHz +
-/// 4xA55@1.8GHz is a ~3x per-core spread) — four leaves the scheduler nothing to steal,
-/// so the critical path ends on a slow A55 core; at twelve the tail is small enough to
-/// migrate. Costs only bookkeeping on symmetric machines, bounded by the 8192 floor.
-///
-/// **No divisibility constraint** on `len` — the version this replaced searched
-/// upward for a divisor so callers could recover a channel index from a flat chunk
-/// index, costing 0.115-4.9ms per call and sometimes giving up entirely (`len`, no
-/// parallelism), making `subtract_black_point` 4.8x more expensive on odd shapes.
-/// Callers needing per-channel behaviour dispatch per plane instead.
-///
-/// The result is a function of `rayon::current_num_threads()`, so anything depending
-/// on the exact chunk length depends on core count — see
-/// `render::denoise::tests::the_ycbcr_round_trip_is_invariant_to_thread_count`.
+/// Twelve chunks/worker, not four: RK3588's 4xA76@2.4GHz + 4xA55@1.8GHz is a ~3x
+/// per-core spread, so four leaves nothing to steal while twelve keeps the tail
+/// small enough to migrate. **No divisibility constraint** on `len`: the prior
+/// divisor search cost 0.115-4.9ms/call and made `subtract_black_point` 4.8x slower on odd shapes.
 pub fn balanced_chunk_len(len: usize) -> usize {
     if len == 0 {
         return 1;

@@ -106,15 +106,14 @@ pub enum CameraError {
 }
 
 impl CameraError {
-    /// Whether this error means the camera's SDK handle no longer refers to a
-    /// live device — unplugged, USB bus reset, or closed underneath us.
-    /// Callers must abandon the handle rather than retry on it.
+    /// Whether this error means the camera's SDK handle no longer refers to a live device —
+    /// unplugged, USB bus reset, or closed underneath us. Callers must abandon the handle
+    /// rather than retry on it.
     ///
-    /// Two sources, and deliberately no third: the typed variants that say so
-    /// outright, and the [`device_lost`] marker each shim attaches after
-    /// classifying its own vendor code. Nothing here matches vendor
-    /// vocabulary — that approach only ever worked for PlayerOne, because it
-    /// is the one provider that renders its error enum symbolically.
+    /// Two sources, deliberately no third: the typed variants that say so outright, and the
+    /// [`device_lost`] marker each shim attaches after classifying its own vendor code.
+    /// Nothing here matches vendor vocabulary — that only ever worked for PlayerOne, the one
+    /// provider that renders its error enum symbolically.
     pub fn is_sdk_disconnected(&self) -> bool {
         match self {
             CameraError::Disconnected | CameraError::NotOpen | CameraError::DeviceLost(_) => true,

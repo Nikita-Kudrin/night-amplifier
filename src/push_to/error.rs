@@ -64,13 +64,12 @@ pub enum PushToError {
 impl PushToError {
     /// Whether this says the *frame* was unusable rather than the *sky* unmatchable.
     ///
-    /// The two demand opposite responses and were handled identically. A solve that
-    /// ASTAP ran and lost means the cached position is stale — we settled somewhere
-    /// new and could not place it. A frame rejected before ASTAP ever saw it means
-    /// only that this picture was poor; the scope has not moved, the cached position
-    /// is still the best thing known, and the next frame routinely fixes it by
-    /// itself. Conflating them discarded a good fix over one blurred frame and then
-    /// refused to look again for the length of an exponential backoff.
+    /// The two demand opposite responses and were handled identically. A solve ASTAP
+    /// ran and lost means the cached position is stale — we settled somewhere new and
+    /// couldn't place it. A frame rejected before ASTAP saw it means only this picture
+    /// was poor; the scope hasn't moved, the cached position is still best known, and
+    /// the next frame usually fixes it. Conflating them discarded a good fix over one
+    /// blurred frame, then refused to look again for a whole exponential backoff.
     pub fn is_frame_quality(&self) -> bool {
         matches!(
             self,

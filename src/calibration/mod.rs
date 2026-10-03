@@ -2,11 +2,10 @@
 //! noise and uneven illumination before the rest of the pipeline sees a frame.
 //!
 //! **Dark**: `calibrated = max(0, raw - dark)`, clamped to avoid negatives. **Flat**:
-//! `calibrated = raw / normalized_flat`, pre-normalized by its own mean (average areas
-//! ≈1.0, vignetted corners <1.0 brightened, bright centre >1.0 dimmed). Combined:
-//! `(raw - dark) / normalized_flat`; SIMD-friendly and Rayon-parallel.
-//!
-//! Submodules: `dark`, `flat`, `pipeline`, `builders` (construct masters), `simd`.
+//! `calibrated = raw / normalized_flat`, pre-normalized by its own mean (vignetted
+//! corners <1.0 brightened, centre >1.0 dimmed). Combined: `(raw - dark) /
+//! normalized_flat`; SIMD-friendly, Rayon-parallel. Submodules: `dark`, `flat`,
+//! `pipeline`, `builders` (construct masters), `simd`.
 
 mod builders;
 mod dark;

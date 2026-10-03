@@ -1,34 +1,24 @@
 //! Focus/Finder mode: hold the cosmetic pipeline stages off while framing.
 //!
-//! Focusing and star-hopping need frame rate, not a clean image — the six
-//! settings below are the ones that cost per-frame work and buy nothing at a
-//! focus mask. The mode is reversible, so entering it snapshots what it
-//! overwrites and leaving it puts every value back.
+//! Focusing/star-hopping need frame rate, not a clean image — six settings cost
+//! per-frame work for nothing at a focus mask; reversible, so leaving restores them.
 //!
-//! Deliberately *not* in the managed set: `superpixel_debayer`, which is the
-//! cheap demosaic (bins 2x2 rather than interpolating), so forcing it either
-//! way would trade against the frame rate this mode exists to buy. Nor hot-pixel
-//! rejection, which has no switch at all: Push-To solves the frames this mode is used
-//! to hunt with, and without it they do not solve (see `build_cfa_pipeline`).
+//! Deliberately *not* managed: `superpixel_debayer` (cheap 2x2-bin demosaic, trading
+//! against the frame rate this mode buys) and hot-pixel rejection, which has no
+//! switch — Push-To needs it to solve these frames.
 
 use super::capture_mode::CaptureMode;
 use super::settings::CaptureSettings;
 use super::types::CaptureState;
 
-/// The six settings Focus/Finder mode forces off, as they were before it did.
+/// The six settings Focus/Finder mode forces off, as they were before it did. One is a
+/// strength not a boolean (`denoise_luma_strength`), hence `PartialEq` not `Eq`.
+/// Stored rather than recomputed: once live values are off they no longer say what
+/// the observer chose.
 ///
-/// One of them is a strength rather than a boolean (`denoise_luma_strength`), which is
-/// why this derives `PartialEq` and not `Eq`.
-///
-/// Stored rather than recomputed because there is nothing to recompute from:
-/// once the live values are off they no longer say what the observer chose.
-///
-/// Every field is `#[serde(default)]` on purpose: a snapshot that fails to parse takes
-/// the whole `PersistedSettings` down with it and `load()` then returns `None`, resetting
-/// *every* setting the observer has. Each default is the setting's own default rather
-/// than `false`, so a field missing from an older file restores the correction rather
-/// than silently disabling it — five of the six are on by default. A file written while
-/// the mode also managed `hot_pixel_rejection` still carries that key; it is ignored.
+/// Every field is `#[serde(default)]`: a parse failure resets the whole
+/// `PersistedSettings`. Each default is the setting's own, not `false`, so a missing
+/// field restores the correction rather than disabling it (five of six are on).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FocusModeSnapshot {
     #[serde(default = "default_on")]
@@ -88,16 +78,12 @@ fn saturation_boost_licensed() -> bool {
 
 /// Whether the mode would damage a stack integrated by this capture.
 ///
-/// One of the six — `fpn_removal` — runs on the raw mosaic *before* demosaic, so the
-/// frame it produces is the frame that goes into the accumulator. Turning it off
-/// mid-session mixes row/column banding into an existing master, and that is precisely
-/// the defect averaging cannot remove: nothing later can take it back out. The other
-/// five are render-only.
-///
-/// So no conflict wherever no affected frame reaches an accumulator: live view integrates
-/// nothing, a type without line flattening (planetary) loses nothing, and an idle or
-/// stopping capture takes no new frame — the loop checks for Stop before it snapshots
-/// settings. Leaving the mode is never a conflict.
+/// One of the six — `fpn_removal` — runs on the raw mosaic *before* demosaic, so
+/// turning it off mid-session mixes row/column banding into an existing master, a
+/// defect averaging cannot remove. The other five are render-only: no conflict there,
+/// nor wherever no affected frame reaches an accumulator (live view integrates
+/// nothing, planetary has no line flattening to lose, idle/stopping takes no new
+/// frame). Leaving the mode is never a conflict.
 pub fn conflicts_with_capture(
     mode: CaptureMode,
     stacking_type: crate::stacking::StackingType,

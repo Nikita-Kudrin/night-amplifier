@@ -21,14 +21,12 @@ use crate::server::state::{AppState, RenderReadyFrame};
 
 /// One snapshot render at a time, process-wide.
 ///
-/// A native-resolution render is the most expensive thing this server does on
-/// demand: on a 26 MP sensor with the denoisers on it transiently holds ~933 MB of
-/// denoise scratch plus two RGB8 buffers of up to 77 MB each, and takes ~0.5 s on
-/// a desktop (several times that on a Pi 5). The eyepiece view is a *second-device*
-/// view by design, so two clients clicking Download is ordinary use, not abuse —
-/// unbounded, that is gigabytes at once on a board with 8 GB shared with the
-/// pipeline. Callers that find it taken are told to come back rather than queued:
-/// waiting holds a connection open for however long the frame in front takes.
+/// The most expensive thing this server does on demand: on a 26 MP sensor with
+/// denoisers on it transiently holds ~933 MB of scratch plus two RGB8 buffers up to
+/// 77 MB each, taking ~0.5 s on a desktop (several times that on a Pi 5). The eyepiece
+/// view is a *second-device* view by design, so two clients downloading at once is
+/// ordinary use, not abuse — unbounded, that's gigabytes at once on an 8 GB Pi board.
+/// Callers that find it taken are told to come back, not queued: waiting holds a connection open for however long the frame in front takes.
 static SNAPSHOT_SLOT: Semaphore = Semaphore::const_new(1);
 
 /// What a busy server tells the client to wait, in seconds. The frontend retries
@@ -136,20 +134,14 @@ fn render_snapshot_png(frame: &RenderReadyFrame, circular: bool) -> Result<Vec<u
     encode_rgb8_png(&masked, side, side).map_err(|e| e.to_string())
 }
 
-/// The round eyepiece image: the centre square of the frame, black outside the
-/// circle inscribed in it. Returns the pixels and the side they form.
-///
-/// Square because that is what the view shows. Its canvas is `100cqmin` on both
-/// axes with `object-fit: cover`, so a wide frame is centre-cropped to a square
-/// *before* `clip-path: circle(closest-side)` cuts the circle out of it. Masking
-/// the full rectangle instead put the same circle in the middle of a wide canvas —
-/// the right pixels, but over half the file wasted on padding for an IMX464 frame
-/// (2712x1538: 55.5 %) and a shape the observer never saw.
-///
-/// Black rather than transparent: an alpha channel is composited onto whatever the
-/// viewer shows behind it, which is white in every default light theme — the field
-/// stop came out glaring instead of dark. Opaque means RGB, so the fourth channel
-/// carrying nothing but 0 or 255 goes with it.
+/// The round eyepiece image: the centre square of the frame, black outside the circle
+/// inscribed in it. Returns the pixels and the side they form. Square because that's
+/// what the view shows: canvas is `100cqmin` with `object-fit: cover`, centre-cropped
+/// *before* `clip-path: circle(closest-side)` cuts the circle — masking the full
+/// rectangle instead wasted over half the file on padding (IMX464 2712x1538: 55.5%) for
+/// a shape never seen. Black, not transparent: an alpha channel composites onto
+/// whatever's behind it (white by default), so the field stop glared instead of dark;
+/// opaque means RGB, dropping the fourth channel.
 fn circular_rgb(rgb8: &[u8], width: u32, height: u32) -> (Vec<u8>, u32) {
     let (w, side) = (width as usize, width.min(height) as usize);
     // Truncating halves, matching `object-fit: cover`'s centring on an odd margin.

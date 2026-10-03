@@ -1,16 +1,11 @@
-//! A coarse, per-channel map of how noisy each part of an image is.
-//!
-//! Produced by `stacking::MasterStack` from the accumulator it already keeps, resampled
-//! onto an output grid by `server::encoding`, and consumed by the denoise plugin. It
-//! lives here rather than under any of the three because none of them owns it: it is an
-//! image-shaped data type, and `frame` is where those live.
-//!
-//! **Variance, never sigma.** Every operation on this field — block reduction, resample,
-//! folding channels into luminance — combines independent contributions in quadrature,
-//! and a field of sigmas cannot be averaged or interpolated without squaring it first.
-//! Resampling it like an image overstates the output noise by roughly `sqrt(k)` for a
-//! `k`-fold reduction, and every threshold built on it then comes out that much too
-//! aggressive. See [`NoiseField::resampled`].
+//! A coarse, per-channel map of how noisy each part of an image is. Produced
+//! by `stacking::MasterStack` from its accumulator, resampled onto an output
+//! grid by `server::encoding`, consumed by the denoise plugin — lives here,
+//! not under any of the three, since none of them owns it. **Variance, never
+//! sigma**: every operation here combines contributions in quadrature (block
+//! reduction, resample, folding channels to luminance), and a sigma field
+//! can't be resampled without squaring first — that overstates noise by
+//! `sqrt(k)` for a `k`-fold reduction, making thresholds built on it too aggressive.
 
 use crate::error::{Result, StackError};
 
@@ -24,31 +19,25 @@ use crate::error::{Result, StackError};
 /// describe, is still resolved with room to spare.
 pub const NOISE_REDUCTION: usize = 8;
 
-/// Per-channel variance and coverage over a coarse grid, with the image geometry they
-/// describe.
-///
-/// Cells are plane-major like [`crate::frame::Frame`] (`idx = channel*w*h + y*w + x`).
-/// A variance cell is [`f32::NAN`] where there was nothing to measure — a stack too
-/// shallow to have a spread yet — rather than `0.0`, which would propagate silently
-/// through a divide and read as "perfectly clean".
-///
-/// **The variance plane is optional**, and absent on the per-frame path. The filters read
-/// coverage only (see the Pro repo's `denoise::noise_map` for the measurement that
-/// decided it), and reducing three variance planes on the stacking thread cost as much
-/// again as the display copy itself. [`crate::stacking::MasterStack::noise_field`]
-/// measures it on demand.
+/// Per-channel variance and coverage over a coarse grid, with the image
+/// geometry they describe. Cells are plane-major like
+/// [`crate::frame::Frame`] (`idx = channel*w*h + y*w + x`). A variance cell
+/// is [`f32::NAN`] where nothing was measured yet (stack too shallow for a
+/// spread), not `0.0`, which would propagate through a divide and read as
+/// "perfectly clean". **The plane itself is optional**, absent on the
+/// per-frame path: filters read coverage only, and reducing three variance
+/// planes on the stacking thread cost as much again as the display copy — see [`crate::stacking::MasterStack::noise_field`], which measures it on demand.
 #[derive(Debug, Clone)]
 pub struct NoiseField {
     variance: Option<Vec<f32>>,
-    /// Share of the stack's subs that reached each cell, `offered / frame_count`, one plane.
-    /// Reached, not kept: a sample the rejector clipped still covered its pixel.
-    ///
-    /// Carried beside the variance, not folded into it, because the two terms of
-    /// `m2 / count` do different things to a threshold. The per-sub variance `m2` rises
-    /// with brightness — around every star and across a bright target — and a threshold
-    /// raised there moves a star's core light into its wings (measured: +1.3-1.9 output
-    /// levels at r=5-9 px on M27 and Andromeda). `1 / coverage` is the part that is
-    /// purely about how many subs a place holds, which is what a stack border is.
+    /// Share of the stack's subs that reached each cell, `offered / frame_count`,
+    /// one plane. Reached, not kept: a sample the rejector clipped still covered
+    /// its pixel. Carried beside the variance, not folded in, since the two terms
+    /// of `m2 / count` do different things to a threshold: per-sub variance `m2`
+    /// rises with brightness (around stars, across a bright target), and a
+    /// threshold raised there moves a star's core light into its wings (measured:
+    /// +1.3-1.9 output levels at r=5-9 px on M27 and Andromeda). `1 / coverage`
+    /// is purely about how many subs a place holds — what a stack border is.
     coverage: Vec<f32>,
     width: usize,
     height: usize,
@@ -281,21 +270,13 @@ impl NoiseField {
     }
 
     /// This field, resampled onto an output image of `target_width x target_height`.
-    ///
-    /// `column_scale` and `row_scale` are the per-output-index factors by which the
-    /// resample kernel scales the variance of independent source samples — `sum(w^2)`
-    /// for that index's taps, which `server::encoding::AxisTaps` builds beside the
-    /// weights so the two cannot drift apart. An output pixel is `sum(w_i * x_i)` with
-    /// `sum(w_i) = 1`, so its variance is `sum(w_i^2 * sigma_i^2)`; because this field is
-    /// deliberately coarse, `sigma^2` is constant across a tap footprint of two or three
-    /// source pixels and the separable double sum collapses to the product used here.
-    ///
-    /// Pass a single `1.0` for an axis that is not resampled.
-    ///
-    /// **This is the step that is easiest to get wrong and hardest to see.** Resampling
-    /// the field like an image — averaging its sigmas — overstates output noise by
-    /// roughly `sqrt(k)`, and nothing downstream reports a number that would show it;
-    /// `encoding::tests` guards both directions.
+    /// `column_scale`/`row_scale` are the per-output-index `sum(w^2)` for that
+    /// index's taps (built beside the weights by `server::encoding::AxisTaps` so
+    /// they can't drift apart). An output pixel is `sum(w_i*x_i)` with
+    /// `sum(w_i)=1`, so its variance is `sum(w_i^2*sigma_i^2)` — since this field
+    /// is deliberately coarse, `sigma^2` is constant over a 2-3 source-pixel tap
+    /// footprint, collapsing the separable double sum to the product used here.
+    /// Pass `1.0` for an unresampled axis. **Easiest step to get wrong**: averaging sigmas like an image overstates noise by `sqrt(k)`, caught only by `encoding::tests`.
     pub fn resampled(
         &self,
         target_width: usize,

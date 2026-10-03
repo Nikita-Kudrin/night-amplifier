@@ -416,12 +416,11 @@ mod tests {
     /// The dynamic pedestal must be derived from the centre crop of a single plane.
     ///
     /// The interleaved indexing that survived the planar migration stayed silent for
-    /// three-channel frames — `y * w * 3` lands inside the green plane by arithmetic
-    /// accident — so it never scrambled channels. What it did do was sample the wrong
-    /// *rows*: roughly the middle 75 % of the frame height at a 3-pixel horizontal
-    /// stride that wraps across row ends, instead of the centre 25 % x 25 % crop. This
-    /// fixture separates the two by making green flat inside the crop and noisy outside
-    /// it, and reads the pedestal back through its only observable effect.
+    /// three-channel frames — `y * w * 3` lands inside the green plane by accident — so it
+    /// never scrambled channels. It did sample the wrong *rows*: roughly the middle 75% of
+    /// frame height at a 3-pixel stride wrapping across row ends, instead of the centre
+    /// 25% x 25% crop. This fixture separates the two by making green flat inside the crop
+    /// and noisy outside it, reading the pedestal back through its only observable effect.
     #[test]
     fn pedestal_is_sampled_from_the_centre_crop_of_one_plane() {
         let (w, h) = (256usize, 256usize);
@@ -461,11 +460,10 @@ mod tests {
     /// `subtract_from` and `get_background` are two implementations of the same bilinear
     /// interpolation and must agree everywhere.
     ///
-    /// Exercised on a **portrait** grid, which is the case that used to diverge:
-    /// `subtract_weight_based` clamped the grid *row* index against `grid_width - 1`.
-    /// That is invisible while the grid is square (the extractor's 12x12 and 16x16
-    /// defaults) or wider than it is tall (RBF's `eval_height = 256 * h / w` on a
-    /// landscape frame), and wrong as soon as there are more grid rows than columns —
+    /// Exercised on a **portrait** grid, the case that used to diverge: `subtract_weight_based`
+    /// clamped the grid *row* index against `grid_width - 1`. That's invisible while the grid
+    /// is square (extractor's 12x12/16x16 defaults) or wider than tall (RBF's
+    /// `eval_height = 256 * h / w` on landscape), and wrong once rows outnumber columns —
     /// every row past `grid_width - 1` collapsed onto that one.
     #[test]
     fn weight_based_subtraction_agrees_with_get_background_on_a_portrait_grid() {

@@ -1,19 +1,11 @@
 //! What a deeper stack is allowed to look like.
 //!
-//! Stacking `N` frames buys `sqrt(N)` in signal-to-noise, and the tone curve decides
-//! how it is spent. A scale-invariant curve spends all of it on faint-signal contrast
-//! and none on the sky: the MTF solve pins `mtf(k * sigma) = target_background`, so
-//! displayed grain is `T(1-T)/k` whatever `sigma` is, and 100 subs look exactly as
-//! grainy as one (measured: 4.2 output levels at 1 sub, 4.4 at 8).
-//! `render::autostretch::depth_grain_gain` splits it instead — `k` grows as `N^s`, so
-//! grain falls as `N^-s` and contrast still rises as `N^(1/2 - s)`. The split `s` is the
-//! Background Grain dial's expensive lever and defaults to `1/8`, not the even `1/4`;
-//! the assertions read it from `depth_grain_gain` rather than restating it.
-//!
-//! Measured here in output bytes, through the real preview path and encoder: a
-//! synthetic sky where only the noise amplitude changes (so nothing else can move),
-//! the bundled fixture set, and — when present — a 106-sub session from outside the
-//! repo.
+//! Stacking `N` frames buys `sqrt(N)` SNR; the tone curve decides the spend. A
+//! scale-invariant curve spends it all on contrast, none on sky: grain is `T(1-T)/k`, so 100
+//! subs look as grainy as 1 (4.2 output levels at 1 sub, 4.4 at 8). `depth_grain_gain` splits
+//! it instead: `k` grows as `N^s`, grain falls as `N^-s`, contrast rises as `N^(1/2-s)`. `s`
+//! is the Grain dial's lever, default `1/8` not `1/4`. Measured in output bytes via the real
+//! preview/encoder path: synthetic sky, the fixture set, and a 106-sub session when present.
 
 use std::path::Path;
 

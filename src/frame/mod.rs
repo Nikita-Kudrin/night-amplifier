@@ -1,21 +1,11 @@
-//! Core Frame data structure: holds image data as a contiguous `Vec<f32>` for
-//! high-precision stacking arithmetic, stored **plane-major**
-//! (`idx = channel*(width*height) + y*width + x`) so SIMD and spatial filters read a
-//! channel as a contiguous run, not a stride-3 gather.
-//!
-//! **`Frame` is planar; every 8-bit output format is interleaved** (JPEG/LZ4/PNG/SER
-//! `Rgb`/`Bgr`; FITS NAXIS3=3 is the one exception, staying planar). Crossing that
-//! boundary wrongly compiles cleanly and collapses colour toward grey — it has
-//! already happened once, across eight output paths at once.
-//!
-//! Rules: use [`Frame::planes`]/[`planes_mut`]/[`channel_data`]/[`get_pixel`], never
-//! `frame.data()` with `* channels` math (review flag); build fixtures with
-//! [`Frame::set_pixel`], never hand-computed offsets (an offset-encoded fixture can't
-//! catch a layout bug); `src/frame/layout_tests.rs` covers every output path — add a
-//! row per format, per traversal, and sweep the whole interior, not one pixel
-//! (`c * area + p` coincides with the planar read at `p % 3 == 0`). 8-bit conversion
-//! always rounds via [`sample_to_u8`]; 16-bit writers truncate. Reuse
-//! [`Frame::write_rgb8_into`] rather than re-deriving the gather.
+//! Core Frame data structure: holds image data as a contiguous `Vec<f32>`,
+//! stored **plane-major** (`idx = channel*(width*height) + y*width + x`) so
+//! SIMD and spatial filters read a channel as a contiguous run, not a
+//! stride-3 gather. **Planar; every 8-bit output format is interleaved**
+//! (JPEG/LZ4/PNG/SER `Rgb`/`Bgr`; FITS NAXIS3=3 stays planar) — crossing that
+//! wrongly compiles and collapses colour toward grey, as happened once across
+//! eight output paths at once. Use [`Frame::planes`]/`channel_data`/`get_pixel`,
+//! never `frame.data()` with `* channels` math; fixtures via [`Frame::set_pixel`]; `layout_tests` sweeps every path; 8-bit rounds via [`sample_to_u8`], 16-bit truncates; reuse [`Frame::write_rgb8_into`].
 
 mod factory;
 mod format;
@@ -185,16 +175,14 @@ impl Frame {
         self.width == other.width && self.height == other.height && self.channels == other.channels
     }
 
-    /// Area-average downsample by an integer factor, preserving f32 precision.
-    /// **No call sites in this crate — used by the Pro plate-solve plugin** to bin a
-    /// frame before ASTAP. Once deleted as "dead code", which broke the Pro build; a
-    /// dead-code claim about a `pub` item isn't verifiable from this repo alone. Keep
-    /// it, or update `night-amplifier-pro` in the same change.
+    /// Area-average downsample by an integer factor, preserving f32 precision. **No call
+    /// sites in this crate** — used by the Pro plate-solve plugin to bin a frame before
+    /// ASTAP. Once deleted as "dead code", which broke the Pro build: a dead-code claim
+    /// about a `pub` item isn't verifiable from this repo alone; keep it, or update `night-amplifier-pro` together.
     ///
-    /// Distinct from the streaming encoder's box filter (`server::encoding`), which
-    /// takes an arbitrary target size and emits `u8` — this takes an integer factor
-    /// and stays f32 for solver precision. Trailing pixels are dropped: output is
-    /// `width / factor` by `height / factor`.
+    /// Distinct from the streaming encoder's box filter (`server::encoding`), which takes an
+    /// arbitrary target size and emits `u8` — this takes an integer factor and stays f32 for
+    /// solver precision. Trailing pixels are dropped: output is `width/factor` by `height/factor`.
     pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {
         use rayon::prelude::*;
 

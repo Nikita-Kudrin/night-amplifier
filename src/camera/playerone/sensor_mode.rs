@@ -1,12 +1,11 @@
-//! Player One sensor mode (Dual Sampling) support. The safe `playerone-sdk` crate
-//! doesn't expose sensor-mode APIs, so this wraps the raw `playerone-sdk-sys` bindings
-//! behind `catch_ffi_panic`. Cameras that support dual sampling (e.g. Uranus-C Pro)
-//! advertise "Normal" (higher FPS) and "LRN" (Low Readout Noise) modes.
+//! Player One sensor mode (Dual Sampling) support. The safe `playerone-sdk` crate doesn't
+//! expose sensor-mode APIs, so this wraps raw `playerone-sdk-sys` bindings behind `catch_ffi_panic`.
+//! Dual-sampling cameras (e.g. Uranus-C Pro) advertise Normal/LRN (Low Readout Noise) modes.
 //!
-//! TODO: temporary workaround — once <https://github.com/Uriopass/playerone-sdk-rs>
-//! ships the sensor-mode API in the safe wrapper (`playerone-sdk >= 0.3.0`), delete
-//! this file, drop the `playerone-sdk-sys` dependency, and replace callers in
-//! `playerone/mod.rs`/`playerone/capture.rs` with `playerone_sdk::Camera` directly.
+//! TODO: once <https://github.com/Uriopass/playerone-sdk-rs> ships the sensor-mode API in
+//! the safe wrapper (`playerone-sdk >= 0.3.0`), delete this file, drop the
+//! `playerone-sdk-sys` dependency, and replace callers in `playerone/mod.rs`/`capture.rs`
+//! with `playerone_sdk::Camera` directly.
 
 use std::os::raw::c_int;
 

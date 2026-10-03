@@ -47,17 +47,14 @@ impl Default for AdaptiveRegistration {
 const LIVE_FIRST_RUNG_MAX_STARS: usize = 30;
 
 impl AdaptiveRegistration {
-    /// Creates a new adaptive registration: two configs, tried in order. `fast` used
-    /// to lead, but measured across fixtures it failed almost every frame (34/34 on
-    /// the 250mm dumbbell set, 15/19 on the 130mm one) — nearly every frame paid for a
-    /// doomed attempt before `robust` did the real work. `default` succeeds where
-    /// `fast` fails, at equal or better fit quality, making the common case one
-    /// attempt instead of two.
+    /// Creates a new adaptive registration: two configs tried in order. `fast` used to
+    /// lead but failed almost every frame (34/34 on the 250mm set, 15/19 on 130mm), so
+    /// `default` runs first — equal or better fit quality, one attempt instead of two.
     ///
-    /// First rung capped at [`LIVE_FIRST_RUNG_MAX_STARS`] — reordering on attempt
-    /// *count* alone was a regression, since discarded `fast` costs 0.01-0.07ms while
-    /// uncapped `default` costs up to 80ms on a dense field. Fit quality is unchanged:
-    /// accuracy comes from RANSAC over correspondences, not star count.
+    /// First rung capped at [`LIVE_FIRST_RUNG_MAX_STARS`] rather than reordering by
+    /// attempt count: discarded `fast` costs 0.01-0.07ms vs up to 80ms for uncapped
+    /// `default` on a dense field. Fit quality is unchanged — RANSAC over
+    /// correspondences decides accuracy, not star count.
     pub fn new() -> Self {
         Self {
             configs: vec![

@@ -1,27 +1,11 @@
-//! Benchmark for `process_preview_frame` — the whole linear half of the render thread.
-//!
-//! Run with: cargo bench --bench preview_pipeline_benchmark
-//!
-//! Everything the render task does before the encoders happens here: background
-//! neutralisation, background subtraction, SCNR, and the auto-stretch preparation. In
-//! production traces it was 190 ms of a 300 ms `render_iteration`, and it had no
-//! benchmark — the pieces were covered individually by `render_benchmark`,
-//! `background_benchmark` and `statistics_benchmark`, but not the sum, so there was no
-//! number to measure a *structural* change against.
-//!
-//! # What the cases are for
-//!
-//! `analysis` is the part a cross-frame cache could skip: the white-balance grid, the
-//! background model estimate, and the image statistics. All three are statistical
-//! descriptions of a stack that moves by 1/N per frame, so recomputing them every frame
-//! is arguably waste — but only if they are a large enough share of the total to be
-//! worth the invalidation logic. This case measures that share directly, against
-//! `full`, so the decision is evidence rather than arithmetic.
-//!
-//! The pipeline mutates its input, so this uses `iter_batched_ref` over a `Vec` of
-//! clones — plain repetition would feed iteration N+1 iteration N's output, and a
-//! neutralised, background-subtracted frame is not the workload the first iteration ran.
-//! At ~50 MB a clone that is also why `REPS` is small and the measurement window short.
+//! Benchmark for `process_preview_frame` — the whole linear half of the render thread:
+//! background neutralisation, subtraction, SCNR, auto-stretch prep. Traced at 190 ms of a
+//! 300 ms `render_iteration`, with no benchmark of its own — `render_benchmark`,
+//! `background_benchmark` and `statistics_benchmark` covered the pieces but not the sum,
+//! so there was no number to catch a *structural* regression. `analysis` isolates what a
+//! cross-frame cache could skip (white-balance grid, background estimate, image stats —
+//! all 1/N-per-frame) against `full`, so the invalidation-logic call is evidence, not
+//! arithmetic. Mutates in place, so `iter_batched_ref` clones (~50 MB) keep `REPS` small.
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode};
 use night_amplifier::background::BackgroundConfig;

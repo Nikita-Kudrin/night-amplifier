@@ -196,19 +196,14 @@ pub fn session_type_for(settings: &CaptureSettings) -> WritingSessionType {
     }
 }
 
-/// Bring the disk writer in line with settings that just changed. `POST
-/// /api/settings` can turn saving on or change capture mode long after
-/// `initialize_capture_session` ran — the writer's enabled flag, whether a session
-/// directory is open, and whether its name still matches the mode are one decision,
-/// made in one place. Rolling the directory on a mode change stops a folder from
-/// lying about its contents: Live view then Stacking without stopping is ordinary,
-/// and `ensure_session` alone would leave stacked subs in a folder named `-live`.
+/// Keeps the disk writer in sync with settings changed after
+/// `initialize_capture_session` ran: enabled flag, open session, and
+/// name-matches-mode are one decision. Rolls the directory on a mode change —
+/// Live view then Stacking without stopping is ordinary, and `ensure_session`
+/// alone would leave stacked subs in a folder named `-live`.
 ///
-/// # Locking
-/// Both arguments are passed in, not read here: `AppState::frame_processed` takes
-/// `session` *then* `settings`, so reading either lock under a settings guard would
-/// invert that order — the caller resolves both before taking the guard and calls
-/// this after dropping it.
+/// Locking: args are passed in, not read here, since `frame_processed` takes
+/// `session` *then* `settings` — reading either under a settings guard would invert that order.
 pub async fn sync_disk_session(
     state: &AppState,
     settings: &CaptureSettings,
@@ -630,25 +625,14 @@ mod tests {
     }
 }
 
-/// Fully render a stacked frame for PNG export: the exact interleaved RGB8 bytes a
-/// live viewer at Native Streaming Resolution would see (background, stretch, saturation,
-/// contrast, spatial denoise, 8-bit quantization). Routes through
-/// `process_preview_frame_with_analysis` and `frame_to_rgb8_downsampled` — the render task's own
-/// per-frame calls, bounding box left unbounded — rather than calling
-/// `RenderPipeline::process` directly, which only knows the four *pipeline* stages;
-/// denoise and pedestal/dither live only in the streaming encoders (see AGENTS.md's
-/// *Spatial denoising*), so the direct path silently produced a PNG missing whatever
-/// noise reduction was visible live. Runs once per session, not per frame, so the
-/// plain (non-scratch-reusing) conversion is the right trade.
-///
-/// `pub` so the Pro repo can test it: the regression above only exists when a denoise
-/// plugin is registered, and the guard must call this function rather than a copy of
-/// what it does, since "the export took a different path from the live view" was the bug.
-///
-/// `coverage` is the stack's coverage map, as the render task carries it to the filters:
-/// the live view raises their thresholds where fewer subs reached, so an export without
-/// it saved a thin border grainier than the observer saw (5.7 % of bytes differed with a
-/// thinly covered quarter). `None` wherever the live view has none either.
+/// Fully renders a stacked frame for PNG export: the exact RGB8 bytes a live
+/// viewer would see, via `process_preview_frame_with_analysis` +
+/// `frame_to_rgb8_downsampled` (the render task's own calls) rather than
+/// `RenderPipeline::process` directly, which skips denoise/pedestal-dither (those
+/// live only in the streaming encoders, AGENTS.md's *Spatial denoising*) — the
+/// direct path once silently dropped noise reduction. `pub` so Pro can test that
+/// regression directly. `coverage`: without it a thin border saved grainier than
+/// observed live (5.7% of bytes differed over a thinly covered quarter).
 pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,

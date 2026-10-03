@@ -1,13 +1,11 @@
-//! Ownership guard against a stale camera handle closing a device a newer handle has
-//! since opened. Vendor SDKs close by device *index*, not an opaque handle, so a close
-//! from an abandoned handle lands on whoever holds that index *now* — and handles get
-//! abandoned routinely, since a stuck FFI call can't be cancelled and is handed to a
-//! detached thread whose `Drop` may fire minutes later. Observed 2026-08-22: exactly
-//! this closed device 0 from under a handle the user had already reconnected onto.
+//! Ownership guard against a stale camera handle closing a device a newer handle has since opened.
+//! Vendor SDKs close by device *index*, not an opaque handle, so a close from an abandoned handle
+//! lands on whoever holds that index *now* — abandonment is routine (a stuck FFI call can't be
+//! cancelled). Observed 2026-08-22: exactly this closed device 0 under an already-reconnected handle.
 //!
-//! Every open takes a [`DeviceLease`], stamping its slot's generation; reopening bumps
-//! it, invalidating older leases. [`DeviceLease::begin_close`] is the single gate every
-//! vendor close must pass, authorizing exactly one close for the current lease.
+//! Every open takes a [`DeviceLease`], stamping its slot's generation; reopening bumps it,
+//! invalidating older leases — [`DeviceLease::begin_close`] is the single gate every vendor close
+//! must pass, authorizing exactly one close per lease.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};

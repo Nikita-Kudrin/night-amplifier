@@ -1,15 +1,11 @@
-//! The AI denoiser's boundary: its config as data, the trait it arrives through, and the
-//! call the encoder makes. The network, its weights and every tuned number live in the Pro
-//! repo's `plugins::ai_denoise`; without that plugin the config is always
-//! [`AiDenoiseConfig::OFF`] and nothing here runs.
-//!
-//! It runs **display-referred**, where the classic filters run in linear light: after the
-//! stretch, before saturation, the S-curve and the floor, at stream resolution. The model
-//! was trained on stretched, background-compensated RGB, so linear light is a distribution
-//! it never saw; placed after the S-curve it softened stars more (M27 excess at r=5 px
-//! +43 % against +26 %). So with it on, the S-curve stays out of the fused scale LUT
-//! (`server::capture::pipeline`) and the encoder stages the stretch before calling it
-//! (`server::encoding::fused`).
+//! The AI denoiser's boundary: config as data, the trait it arrives through, and the call
+//! the encoder makes. Network, weights, and every tuned number live in Pro's
+//! `plugins::ai_denoise`; without that plugin, config is always [`AiDenoiseConfig::OFF`].
+//! Runs **display-referred** (after stretch, before saturation/S-curve/floor), unlike the
+//! classic filters' linear light — the model trained on stretched, background-compensated
+//! RGB, which linear light never matches. After the S-curve instead, it softened stars
+//! more (M27 excess at r=5px: +43% vs +26%), so the S-curve stays out of the fused scale
+//! LUT (`server::capture::pipeline`) and the encoder stages the stretch first.
 
 use std::sync::OnceLock;
 

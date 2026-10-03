@@ -34,15 +34,14 @@ pub struct StackingChannels {
     pub render_capacity: usize,
 }
 
-/// Stacking pipeline running on a dedicated OS thread.
+/// Stacking pipeline running on a dedicated OS thread. Receives captured frames, runs
+/// star detection, registration, and accumulation, and sends the resulting display
+/// frame to the render channel. Owns all stacking contexts exclusively — no shared
+/// mutable state.
 ///
-/// Receives captured frames, runs star detection, registration, and
-/// accumulation. Sends the resulting display frame to the render channel.
-/// Owns all stacking contexts exclusively — no shared mutable state.
-///
-/// `carryover` seeds those contexts from a capture that ended unexpectedly, so
-/// a session resumed after a reconnect keeps the integration it had already
-/// built rather than starting from one frame.
+/// `carryover` seeds those contexts from a capture that ended unexpectedly, so a
+/// session resumed after a reconnect keeps the integration it had already built
+/// rather than starting from one frame.
 pub fn run_stacking_task(
     state: Arc<AppState>,
     channels: StackingChannels,
@@ -272,16 +271,14 @@ pub fn run_stacking_task(
         // stacked, leaving the UI's rejection counter pinned at zero.
         let was_stacked = stacking_enabled && registration_succeeded;
 
-        // Trigger plate solving asynchronously. Gated up front: without the
-        // Push-To plugin the solve is a no-op, and spawning it would keep a
-        // second handle on the frame alive long enough to make the render
-        // task's `Arc::try_unwrap` fail and copy instead.
-        //
-        // Skipped along with the display copy on an iteration that made none: the solve
-        // wants the stack, not a single sub, and `solve_frame` is rate-limited by
-        // `MIN_SOLVE_ATTEMPT_INTERVAL` anyway — it takes the next frame that has one.
-        // Declines outright while a guide camera is connected: that camera is the solve
-        // source then, and it offers frames far more often than an imaging sub arrives.
+        // Trigger plate solving asynchronously. Gated up front: without the Push-To
+        // plugin the solve is a no-op, and spawning it would keep a second handle on
+        // the frame alive long enough to make the render task's `Arc::try_unwrap` fail
+        // and copy instead. Skipped along with the display copy on an iteration that
+        // made none — the solve wants the stack, not a single sub, and `solve_frame` is
+        // rate-limited by `MIN_SOLVE_ATTEMPT_INTERVAL` anyway. Declines outright while a
+        // guide camera is connected: that camera is the solve source then, and offers
+        // frames far more often than an imaging sub arrives.
         if let (true, Some(frame_to_solve)) = (
             solving::plate_solve_available(&state, solving::SolveSource::Main),
             display_frame.as_ref(),

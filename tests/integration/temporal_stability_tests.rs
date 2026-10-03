@@ -1,19 +1,11 @@
 //! How much the rendered picture moves from frame to frame when the sky does not.
 //!
-//! Replays a real session's subs through the production preview path and encoder with one
-//! `PreviewAnalysis` held across frames, as the render task holds it: live view (each sub
-//! on its own) and stacked view (the running stack at every depth, rendered through the
-//! held analysis *and* a fresh one). The fresh render is what the cache must reproduce;
-//! the gap between them is the cache's own contribution to what the observer sees.
-//!
-//! This found the stacked view's pulse — the target sagging between cache refreshes and
-//! jumping at each, 5 output levels on M27 — and Orion's 29-level jump where its signal
-//! fraction crossed 0.2. The guard is `capture::analysis::stability_tests`; this is the
-//! real-data diagnostic behind it.
-//!
-//! `TEMPORAL_STABILITY_FRAMES` (default 40) caps the subs per session, sessions follow
-//! `RENDER_BRIGHTNESS_SETS`, and `TEMPORAL_STABILITY_ROWS` prints every frame's solve
-//! inputs (captured from the solver's `Auto-stretch inputs` debug event).
+//! Replays a session's subs through the production preview path and encoder with one
+//! `PreviewAnalysis` held across frames: live view (each sub alone) and stacked view
+//! (through the held analysis *and* a fresh one) — the gap is the cache's own
+//! contribution. Found the stacked pulse (5 output levels on M27) and Orion's 29-level
+//! jump at signal fraction 0.2; guarded by `capture::analysis::stability_tests`.
+//! `TEMPORAL_STABILITY_FRAMES` (default 40) caps subs/session per `RENDER_BRIGHTNESS_SETS`; `TEMPORAL_STABILITY_ROWS` prints solve inputs.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

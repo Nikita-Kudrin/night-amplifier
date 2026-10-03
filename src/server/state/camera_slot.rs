@@ -366,11 +366,9 @@ impl InFlightCalls {
     ///
     /// A call past the deadline keeps running. What it eventually returns — an opened
     /// handle, typically — is dropped on its own thread *before* the call leaves the
-    /// count, so a caller that waits for the count to drain never reopens a device whose
-    /// late handle has not been closed yet.
-    ///
-    /// A call that does come back in time is off the count before this returns, so the
-    /// caller's next `in_flight` check never sees it.
+    /// count, so a caller waiting for the count to drain never reopens a device whose
+    /// late handle isn't closed yet. A call that comes back in time is off the count
+    /// before this returns, so the caller's next `in_flight` check never sees it.
     pub async fn run_bounded<T: Send + 'static>(
         self: &Arc<Self>,
         timeout: Duration,

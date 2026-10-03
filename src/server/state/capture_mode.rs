@@ -10,17 +10,12 @@ const GUIDE_SUFFIX: &str = "-guide";
 
 /// Which capture mode a session is running in.
 ///
-/// The first three are derived from `stacking` + `wanderer_mode` rather than stored:
-/// that pair is what the frontend sends (see `applyStackingMode` in
-/// `CaptureControls.vue`), and this is the only place that reads it as a mode.
-/// `stacking: false` is Live view whatever `wanderer_mode` says — the same reading
-/// [`crate::server::state::CaptureSettings::to_capture_config`] already takes of that
-/// orthogonal-misuse combination, since no frames are integrated there either.
-///
-/// `Guide` is the exception: it is not derivable from those flags and
-/// `CaptureSettings::capture_mode` never returns it. The guide loop names its own mode,
-/// because a guide camera is a *position* on the rig rather than something the imaging
-/// settings can describe.
+/// The first three are derived from `stacking` + `wanderer_mode` rather than stored —
+/// the pair the frontend sends (`applyStackingMode` in `CaptureControls.vue`).
+/// `stacking: false` is Live view whatever `wanderer_mode` says, matching
+/// [`crate::server::state::CaptureSettings::to_capture_config`]'s reading of that case.
+/// `Guide` is the exception: not derivable from those flags, so the guide loop names
+/// its own mode — a rig *position*, not something imaging settings describe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureMode {
     /// Raw feed, no stacking.

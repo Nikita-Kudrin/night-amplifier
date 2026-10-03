@@ -1,18 +1,11 @@
-//! Background camera status monitor, on a dedicated OS thread (not a tokio task, so
-//! a blocking FFI call like a USB stall inside `camera.status()` can't poison a
-//! runtime worker). Polls `camera.status()` every `PHASE_POLL_INTERVAL` while the
-//! handle is in the pool, broadcasts `CameraStatusUpdated`, drives
-//! `Precooling -> Idle` once the sensor settles for `STABILITY_SAMPLE_COUNT`
-//! samples, and drives warmup: on `StartWarmup`, ramps the setpoint to
-//! `WARMUP_RAMP_TARGET_C` at `RAMP_RATE_C_PER_MIN`, then once the sensor hits
-//! `WARMUP_THRESHOLD_C` at ≤5% duty, disables the cooler, closes the handle, and
-//! broadcasts `CameraDisconnected`.
-//!
-//! Both ramps are rate-limited to `RAMP_RATE_C_PER_MIN` (5°C/min in production): the
-//! commanded setpoint nudges toward its final value each tick, but the SDK call
-//! only fires when the rounded integer changes — one call per ~12s at that rate.
-//! Starting capture mid-ramp aborts it; the capture thread's per-frame
-//! `apply_cooler_config` pushes the final target instead.
+//! Background camera status monitor, on a dedicated OS thread (not tokio) so a
+//! blocking FFI call like a USB stall in `camera.status()` can't poison a runtime
+//! worker. Polls every `PHASE_POLL_INTERVAL`, broadcasts `CameraStatusUpdated`,
+//! drives `Precooling -> Idle` after `STABILITY_SAMPLE_COUNT` stable samples, and
+//! drives warmup: ramps to `WARMUP_RAMP_TARGET_C` at `RAMP_RATE_C_PER_MIN`, then at
+//! `WARMUP_THRESHOLD_C` and ≤5% duty disables the cooler and closes the handle.
+//! Rate-limited to `RAMP_RATE_C_PER_MIN` (5°C/min): the SDK call fires only when
+//! the rounded setpoint changes (~one call per 12s); mid-ramp capture aborts it.
 
 use std::sync::mpsc;
 use std::sync::Arc;

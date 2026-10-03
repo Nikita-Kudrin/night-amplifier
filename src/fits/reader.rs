@@ -74,14 +74,12 @@ fn extract_fits_info(info: &HduInfo) -> Result<(FitsShape, ImageType)> {
 
 /// Reads the HDU payload and normalises it into a planar [`Frame`].
 ///
-/// FITS colour is plane-major and so is `Frame`, so a [`FitsColourLayout::Planar`]
-/// source needs no reordering at all. Only the interleaved form (NAXIS1 = 3) is
-/// scattered across planes.
+/// FITS colour is plane-major like `Frame`, so only the interleaved form (NAXIS1 = 3)
+/// needs reordering across planes; [`FitsColourLayout::Planar`] is used as-is.
 ///
-/// The integer arms used to route through `FitsData::Bytes` -> `Frame::from_raw`, which
-/// de-interleaves — so a planar source had to be interleaved first, and the two
-/// conversions then cancelled. Correct, but two full-buffer passes and two extra
-/// allocations per loaded frame to arrive where the data already was.
+/// The integer arms route through `FitsData::Bytes` -> `Frame::from_raw`, which
+/// de-interleaves — so a planar source was interleaved first to cancel that out:
+/// correct, but costs two extra full-buffer passes and allocations per frame.
 fn read_fits_data(
     hdu: &fitsio::hdu::FitsHdu,
     fitsfile: &mut FitsFile,

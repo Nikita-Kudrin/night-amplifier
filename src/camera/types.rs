@@ -542,21 +542,14 @@ impl CaptureConfig {
             .saturating_mul(bytes_per_pixel)
     }
 
-    /// How long a shim waits for a frame before declaring the stream stalled and
-    /// stopping it, so the next `capture()` restarts it in place.
+    /// How long a shim waits for a frame before declaring the stream stalled and restarting it in
+    /// place. Timed from entering `capture()` (config reapply included), the same instant the watchdog
+    /// starts, so it stays `WATCHDOG_SLACK` above it — timing from after the reapply let a slow reapply
+    /// desync the clocks and the watchdog abandon the handle instead of costing one in-place retry.
     ///
-    /// Timed from entering `capture()`, config reapply included — the instant the
-    /// watchdog starts too, so it stays exactly `WATCHDOG_SLACK` above. Timing from after
-    /// the reapply put that time *between* the two clocks, where a slow reapply let the
-    /// watchdog abandon the handle; inside the budget it costs at most one in-place
-    /// restart, since the retry finds the config already applied.
-    ///
-    /// Exposure, plus [`FRAME_STALL_ALLOWANCE`], plus the transfer at
-    /// [`TRANSFER_FLOOR_BYTES_PER_SEC`]. It replaces `timeout + exposure` (120 s + the
-    /// exposure), which the outer watchdog always beat — so a frame that was merely lost
-    /// cost the whole handle and a reconnect instead of one frame. The watchdog is
-    /// derived from this (`capture::watchdog::capture_watchdog_timeout`) and must stay
-    /// above it.
+    /// = exposure + [`FRAME_STALL_ALLOWANCE`] + transfer at [`TRANSFER_FLOOR_BYTES_PER_SEC`]; replaces
+    /// `timeout + exposure` (120s + exposure, always beaten by the outer watchdog, costing a whole
+    /// reconnect for one lost frame). The watchdog derives from this and must stay above it.
     pub fn stall_budget(&self, frame_bytes: usize) -> Duration {
         let transfer_ms = (frame_bytes as u64).saturating_mul(1000) / TRANSFER_FLOOR_BYTES_PER_SEC;
         Duration::from_micros(self.exposure_us)
