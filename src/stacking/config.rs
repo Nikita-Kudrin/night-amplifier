@@ -354,6 +354,19 @@ impl WeightingConfig {
     }
 }
 
+impl From<WeightingPreset> for WeightingConfig {
+    fn from(preset: WeightingPreset) -> Self {
+        match preset {
+            WeightingPreset::Disabled => Self::disabled(),
+            WeightingPreset::Balanced => Self::balanced(),
+            WeightingPreset::Galaxies => Self::for_galaxies(),
+            WeightingPreset::Nebulae => Self::for_nebulae(),
+            WeightingPreset::FwhmOnly => Self::fwhm_only(),
+            WeightingPreset::SnrOnly => Self::snr_only(),
+        }
+    }
+}
+
 /// Configuration for the stacking algorithm.
 #[derive(Debug, Clone)]
 pub struct StackingConfig {
@@ -507,5 +520,21 @@ mod tests {
         assert!(StackingType::DeepSky.uses_fpn_removal());
         assert!(StackingType::Comet.uses_fpn_removal());
         assert!(!StackingType::Planetary.uses_fpn_removal());
+    }
+
+    #[test]
+    fn each_weighting_preset_maps_to_its_named_config() {
+        let expected = [
+            (WeightingPreset::Disabled, WeightingConfig::disabled()),
+            (WeightingPreset::Balanced, WeightingConfig::balanced()),
+            (WeightingPreset::Galaxies, WeightingConfig::for_galaxies()),
+            (WeightingPreset::Nebulae, WeightingConfig::for_nebulae()),
+            (WeightingPreset::FwhmOnly, WeightingConfig::fwhm_only()),
+            (WeightingPreset::SnrOnly, WeightingConfig::snr_only()),
+        ];
+        assert_eq!(expected.len(), WeightingPreset::all().len());
+        for (preset, config) in expected {
+            assert_eq!(WeightingConfig::from(preset), config, "{preset:?}");
+        }
     }
 }

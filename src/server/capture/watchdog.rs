@@ -1,6 +1,5 @@
 use crate::camera::Camera;
 use crate::server::camera_health::{self, FaultKind};
-use crate::server::capture::channel::CapturedFrame;
 use crate::server::state::{AppState, CameraRole};
 use crate::telemetry::metrics as telemetry_metrics;
 use std::sync::mpsc;
@@ -265,100 +264,24 @@ mod watchdog_tests {
     use super::*;
     use crate::server::camera_health::PERSISTENT_FAULT_THRESHOLD;
     use crate::server::events::ServerEvent;
+    use crate::camera::testing::FakeCamera;
     use crate::server::state::AppState;
-    use std::sync::atomic::AtomicBool;
 
-    /// Minimal `Camera` double whose `status()`/`capture()` can each
-    /// independently simulate a stuck SDK call.
-    struct TestCamera {
-        info: crate::camera::CameraInfo,
-        status_delay: Duration,
-        capture_delay: Duration,
-        cancel_flag: Arc<AtomicBool>,
+    /// A camera whose `status()` takes `delay` to answer, as a stuck SDK call does.
+    fn slow_status_camera(delay: Duration) -> FakeCamera {
+        FakeCamera::new("Test Cam").sized(4, 4).provider("Test").status_delay(delay)
     }
 
-    impl TestCamera {
-        fn new(status_delay: Duration) -> Self {
-            Self::with_delays(status_delay, Duration::ZERO)
-        }
-
-        fn with_capture_delay(capture_delay: Duration) -> Self {
-            Self::with_delays(Duration::ZERO, capture_delay)
-        }
-
-        fn with_delays(status_delay: Duration, capture_delay: Duration) -> Self {
-            Self {
-                info: crate::camera::CameraInfo {
-                    name: "Test Cam".to_string(),
-                    ..Default::default()
-                },
-                status_delay,
-                capture_delay,
-                cancel_flag: Arc::new(AtomicBool::new(false)),
-            }
-        }
-    }
-
-    impl crate::camera::Camera for TestCamera {
-        fn info(&self) -> &crate::camera::CameraInfo {
-            &self.info
-        }
-        fn gain_presets(&self) -> crate::camera::CameraResult<crate::camera::GainPresets> {
-            Ok(crate::camera::GainPresets::default())
-        }
-        fn status(&self) -> crate::camera::CameraResult<crate::camera::CameraStatus> {
-            if !self.status_delay.is_zero() {
-                std::thread::sleep(self.status_delay);
-            }
-            Ok(crate::camera::CameraStatus::default())
-        }
-        fn set_target_temperature(&mut self, _temp_c: f64) -> crate::camera::CameraResult<()> {
-            Ok(())
-        }
-        fn set_cooler(&mut self, _enabled: bool) -> crate::camera::CameraResult<()> {
-            Ok(())
-        }
-        fn set_dew_heater(
-            &mut self,
-            _enabled: bool,
-            _power: i32,
-        ) -> crate::camera::CameraResult<()> {
-            Ok(())
-        }
-        fn capture(
-            &mut self,
-            _config: &crate::camera::CaptureConfig,
-        ) -> crate::camera::CameraResult<crate::camera::RawFrame> {
-            if !self.capture_delay.is_zero() {
-                std::thread::sleep(self.capture_delay);
-            }
-            Ok(crate::camera::RawFrame {
-                data: vec![0; 4 * 4].into(),
-                width: 4,
-                height: 4,
-                format: crate::camera::ImageFormat::Raw8,
-            })
-        }
-        fn cancel(&self) {
-            self.cancel_flag
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-        fn cancel_token(&self) -> Arc<AtomicBool> {
-            Arc::clone(&self.cancel_flag)
-        }
-        fn close(&mut self) -> crate::camera::CameraResult<()> {
-            Ok(())
-        }
-        fn provider_name(&self) -> &'static str {
-            "Test"
-        }
+    /// A camera whose `capture()` takes `delay` to return, whatever `cancel()` says.
+    fn slow_capture_camera(delay: Duration) -> FakeCamera {
+        FakeCamera::new("Test Cam").sized(4, 4).provider("Test").stuck_for(delay)
     }
 
     #[tokio::test]
     pub(crate) async fn poll_camera_status_bounded_completes_when_fast() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(Duration::ZERO));
+        let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(Duration::ZERO));
         let rt = tokio::runtime::Handle::current();
 
         let outcome = tokio::task::spawn_blocking({
@@ -381,7 +304,7 @@ mod watchdog_tests {
     pub(crate) async fn poll_camera_status_bounded_times_out_on_stuck_call() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(
+        let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(
             STATUS_POLL_TIMEOUT + Duration::from_secs(5),
         ));
         let rt = tokio::runtime::Handle::current();
@@ -408,7 +331,7 @@ mod watchdog_tests {
     /// time, returning once the call has been dispatched (it will show up as
     /// a `TimedOut` outcome, same as the dedicated timeout test above).
     async fn stuck_poll(state: &Arc<AppState>, rt: &tokio::runtime::Handle) {
-        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(
+        let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(
             STATUS_POLL_TIMEOUT + Duration::from_secs(5),
         ));
         let state = Arc::clone(state);
@@ -463,7 +386,7 @@ mod watchdog_tests {
         }
 
         // A fast, successful poll should clear the streak.
-        let fast_camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::new(Duration::ZERO));
+        let fast_camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(Duration::ZERO));
         let outcome = {
             let state = Arc::clone(&state);
             let rt = rt.clone();
@@ -502,7 +425,7 @@ mod watchdog_tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
         let camera: Box<dyn crate::camera::Camera> =
-            Box::new(TestCamera::with_capture_delay(Duration::ZERO));
+            Box::new(slow_capture_camera(Duration::ZERO));
 
         let outcome = capture_frame_bounded(
             camera,
@@ -526,7 +449,7 @@ mod watchdog_tests {
     pub(crate) fn capture_frame_bounded_times_out_on_stuck_call() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::with_capture_delay(
+        let camera: Box<dyn crate::camera::Camera> = Box::new(slow_capture_camera(
             TEST_CAPTURE_WATCHDOG_TIMEOUT + Duration::from_secs(5),
         ));
 
@@ -551,7 +474,7 @@ mod watchdog_tests {
     }
 
     fn stuck_capture(state: &Arc<AppState>) {
-        let camera: Box<dyn crate::camera::Camera> = Box::new(TestCamera::with_capture_delay(
+        let camera: Box<dyn crate::camera::Camera> = Box::new(slow_capture_camera(
             TEST_CAPTURE_WATCHDOG_TIMEOUT + Duration::from_secs(5),
         ));
         capture_frame_bounded(
@@ -611,7 +534,7 @@ mod watchdog_tests {
 
         // A fast, successful capture should clear the streak.
         let fast_camera: Box<dyn crate::camera::Camera> =
-            Box::new(TestCamera::with_capture_delay(Duration::ZERO));
+            Box::new(slow_capture_camera(Duration::ZERO));
         let outcome = capture_frame_bounded(
             fast_camera,
             crate::camera::CaptureConfig::default(),

@@ -6,12 +6,11 @@ use crate::cfa::CfaPipeline;
 use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
 use crate::server::state::{AppState, CameraRole, SensorCorrectionSettings, StackingType};
-use crate::stacking::CometContext;
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
+use super::context::{LiveStacker, StackingCarryover};
 use super::frame_gate::RejectionReason;
-use super::context::{PlanetaryStackingContext, StackingCarryover, StackingContext};
 use super::{pipeline, solving, storage};
 
 /// The channel ends the stacking task owns, with the depth counters that shadow them.
@@ -58,16 +57,9 @@ pub fn run_stacking_task(
 
     debug!(resumed = carryover.is_some(), "Stacking task started");
 
-    let carryover = carryover.unwrap_or(StackingCarryover {
-        stacking: None,
-        comet: None,
-        planetary: None,
-    });
+    let mut stacker: Option<Box<dyn LiveStacker>> = carryover.map(|carried| carried.stacker);
     let (mut was_stacking_enabled, mut last_stacking_type) =
-        reset_detector_start(&carryover, rt.block_on(state.settings.read()).stacking_type);
-    let mut stacking_ctx: Option<StackingContext> = carryover.stacking;
-    let mut comet_ctx: Option<Box<dyn CometContext>> = carryover.comet;
-    let mut planetary_ctx: Option<PlanetaryStackingContext> = carryover.planetary;
+        reset_detector_start(stacker.as_deref());
     let mut stacking_failed = false;
 
     // The raw-CFA stage, rebuilt only when what it is derived from moves: a stage
@@ -137,9 +129,7 @@ pub fn run_stacking_task(
         let stacking_type_changed = settings.stacking_type != last_stacking_type;
 
         if must_reset_stack(stacking_enabled, was_stacking_enabled, stacking_type_changed) {
-            stacking_ctx = None;
-            comet_ctx = None;
-            planetary_ctx = None;
+            stacker = None;
             stacking_failed = false;
             rt.block_on(state.reset_counters());
             info!(
@@ -151,13 +141,9 @@ pub fn run_stacking_task(
         last_stacking_type = settings.stacking_type;
 
         // Check frame dimension mismatch (e.g. after binning change)
-        let dimension_mismatch =
-            check_dimension_mismatch(&frame, &stacking_ctx, &comet_ctx, &planetary_ctx);
-        if dimension_mismatch {
+        if check_dimension_mismatch(&frame, stacker.as_deref()) {
             info!("Frame dimensions changed (likely due to binning change), resetting stack");
-            stacking_ctx = None;
-            comet_ctx = None;
-            planetary_ctx = None;
+            stacker = None;
             rt.block_on(state.reset_counters());
         }
 
@@ -181,32 +167,13 @@ pub fn run_stacking_task(
             // change under the pipeline mid-frame.
             let want_display = render_depth.pending() == 0;
 
-            // The pipeline functions expect &Frame — Arc<Frame> derefs transparently
-            let outcome = match settings.stacking_type {
-                StackingType::Comet => rt.block_on(pipeline::process_frame_with_comet_stacking(
-                    &frame,
-                    &settings,
-                    &mut comet_ctx,
-                    &mut stacking_failed,
-                    want_display,
-                )),
-                StackingType::Planetary => {
-                    rt.block_on(pipeline::process_frame_with_planetary_stacking(
-                        &frame,
-                        &settings,
-                        &mut planetary_ctx,
-                        &mut stacking_failed,
-                        want_display,
-                    ))
-                }
-                _ => rt.block_on(pipeline::process_frame_with_stacking(
-                    &frame,
-                    &settings,
-                    &mut stacking_ctx,
-                    &mut stacking_failed,
-                    want_display,
-                )),
-            };
+            let outcome = pipeline::stack_frame(
+                &frame,
+                &settings,
+                &mut stacker,
+                &mut stacking_failed,
+                want_display,
+            );
             registration_succeeded = outcome.frame_added;
             showing_stack = outcome.showing_stack;
             stack_reset = outcome.stack_reset;
@@ -250,9 +217,7 @@ pub fn run_stacking_task(
                 reason = rejected_because.map(|r| r.describe()).unwrap_or("registration failed"),
                 "Wanderer mode: movement detected, resetting stack"
             );
-            stacking_ctx = None;
-            comet_ctx = None;
-            planetary_ctx = None;
+            stacker = None;
             rt.block_on(state.reset_counters());
             // Always displayed, even when the compute above was skipped: the stack this
             // frame was measured against no longer exists, so the view must stop showing
@@ -359,19 +324,15 @@ pub fn run_stacking_task(
     }
 
     // Save stacked result before exiting
-    save_stacked_result(&state, &stacking_ctx, &comet_ctx, &planetary_ctx, &rt);
+    save_stacked_result(&state, stacker.as_deref(), &rt);
 
-    // Park the accumulators in case this capture is about to be resumed after a
-    // reconnect. A fresh start or a clean stop clears them; see
+    // Park the accumulator in case this capture is about to be resumed after a
+    // reconnect. A fresh start or a clean stop clears it; see
     // `CaptureService::start_capture` and `stop_capture`.
     *state
         .stacking_carryover
         .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(StackingCarryover {
-        stacking: stacking_ctx,
-        comet: comet_ctx,
-        planetary: planetary_ctx,
-    });
+        .unwrap_or_else(|e| e.into_inner()) = stacker.map(|stacker| StackingCarryover { stacker });
 
     debug!("Stacking task ended");
 }
@@ -379,16 +340,16 @@ pub fn run_stacking_task(
 /// Where the stack-reset detector starts: whether stacking counts as already on, and
 /// with which type.
 ///
-/// A resumed session carries a stack built under the settings it resumes with. Starting
+/// A resumed session carries a stack, which counts as running in its own mode. Starting
 /// from "off" made its first frame read as stacking being switched on, which discarded
 /// the carried stack and zeroed its counters — every reconnect resumed from one frame.
-fn reset_detector_start(carryover: &StackingCarryover, stacking_type: StackingType) -> (bool, StackingType) {
-    let carried =
-        carryover.stacking.is_some() || carryover.comet.is_some() || carryover.planetary.is_some();
-    if carried {
-        return (true, stacking_type);
+/// Its own mode rather than the settings' one: resumed under another mode, the carried
+/// stack cannot take the new frames, and the first of them has to restart it.
+fn reset_detector_start(carried: Option<&dyn LiveStacker>) -> (bool, StackingType) {
+    match carried {
+        Some(stacker) => (true, stacker.kind()),
+        None => (false, StackingType::DeepSky),
     }
-    (false, StackingType::DeepSky)
 }
 
 /// Whether this frame starts a new stack: stacking was just switched on, or its type
@@ -416,29 +377,11 @@ fn wanderer_detected_movement(
     rejected_because.is_none_or(|reason| reason.means_the_sky_moved())
 }
 
-/// Check if frame dimensions match any existing stacking context.
-fn check_dimension_mismatch(
-    frame: &Frame,
-    stacking_ctx: &Option<StackingContext>,
-    comet_ctx: &Option<Box<dyn CometContext>>,
-    planetary_ctx: &Option<PlanetaryStackingContext>,
-) -> bool {
-    if let Some(ctx) = stacking_ctx.as_ref() {
-        return frame.width() != ctx.width()
-            || frame.height() != ctx.height()
-            || frame.channels() != ctx.channels();
-    }
-    if let Some(ctx) = comet_ctx.as_ref() {
-        return frame.width() != ctx.width()
-            || frame.height() != ctx.height()
-            || frame.channels() != ctx.channels();
-    }
-    if let Some(ctx) = planetary_ctx.as_ref() {
-        return frame.width() != ctx.width()
-            || frame.height() != ctx.height()
-            || frame.channels() != ctx.channels();
-    }
-    false
+/// Whether a running stack was built for a different frame geometry than `frame`.
+fn check_dimension_mismatch(frame: &Frame, stacker: Option<&dyn LiveStacker>) -> bool {
+    stacker.is_some_and(|stacker| {
+        stacker.geometry() != (frame.width(), frame.height(), frame.channels())
+    })
 }
 
 /// The stack a session ends with, and what its export needs beside the pixels.
@@ -449,54 +392,31 @@ struct FinalStack {
     coverage: Option<crate::frame::NoiseField>,
 }
 
-/// The session's stack, from whichever context holds one.
+/// The session's stack, if it holds one.
 ///
-/// Depth and coverage travel with the frame, from the context that holds all three,
+/// Depth and coverage travel with the frame, from the stack that holds all three,
 /// because the saved PNG is rendered with both as the live view renders them: the tone
 /// curve spends the depth (`render::autostretch::depth_grain_gain`) and the filters read
 /// the coverage. Re-deriving the depth from the session's `stacked_count` would let the
 /// export and the live view disagree about the same stack — by the reference frame, and
 /// by anything a mid-session reset did to the counters.
-fn final_stack(
-    stacking_ctx: &Option<StackingContext>,
-    comet_ctx: &Option<Box<dyn CometContext>>,
-    planetary_ctx: &Option<PlanetaryStackingContext>,
-) -> Option<FinalStack> {
-    let without_map = |frame: Option<Frame>, depth: usize| {
-        frame.map(|frame| FinalStack { frame, depth, coverage: None })
-    };
-    stacking_ctx
-        .as_ref()
-        .and_then(|ctx| {
-            let (frame, coverage) = ctx.compute_with_coverage().ok()?;
-            Some(FinalStack {
-                frame,
-                depth: ctx.frame_count(),
-                // Filtered as `pipeline::process_frame_with_stacking` filters the live one.
-                coverage: coverage.is_usable().then_some(coverage),
-            })
-        })
-        .or_else(|| {
-            comet_ctx
-                .as_ref()
-                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
-        })
-        .or_else(|| {
-            planetary_ctx
-                .as_ref()
-                .and_then(|ctx| without_map(ctx.compute().ok(), ctx.frame_count()))
-        })
+fn final_stack(stacker: Option<&dyn LiveStacker>) -> Option<FinalStack> {
+    let stacker = stacker?;
+    let (frame, coverage) = stacker.snapshot().ok()?;
+    Some(FinalStack {
+        frame,
+        depth: stacker.depth(),
+        coverage,
+    })
 }
 
 /// Save the final stacked result at the end of a capture session.
 fn save_stacked_result(
     state: &Arc<AppState>,
-    stacking_ctx: &Option<StackingContext>,
-    comet_ctx: &Option<Box<dyn CometContext>>,
-    planetary_ctx: &Option<PlanetaryStackingContext>,
+    stacker: Option<&dyn LiveStacker>,
     rt: &tokio::runtime::Handle,
 ) {
-    if let Some(stack) = final_stack(stacking_ctx, comet_ctx, planetary_ctx) {
+    if let Some(stack) = final_stack(stacker) {
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
@@ -517,34 +437,54 @@ fn save_stacked_result(
 mod tests {
     use super::wanderer_detected_movement as moved;
     use super::RejectionReason;
-    use super::{must_reset_stack, reset_detector_start, StackingCarryover, StackingContext};
+    use super::{check_dimension_mismatch, must_reset_stack, reset_detector_start};
+    use crate::server::capture::context::{
+        CometStacker, LiveStacker, PlanetaryStackingContext, StackingContext,
+    };
     use crate::server::state::{CaptureSettings, StackingType};
+
+    fn deep_sky(width: usize, height: usize, channels: usize) -> Box<dyn LiveStacker> {
+        let settings = CaptureSettings::default();
+        Box::new(StackingContext::new(width, height, channels, &settings).expect("context"))
+    }
 
     /// A reconnect hands the stacking task the stack it had built. Its first frame must
     /// carry on with it, not restart the integration.
     #[test]
     fn a_resumed_stack_survives_its_first_frame() {
-        let settings = CaptureSettings::default();
-        let carryover = StackingCarryover {
-            stacking: Some(StackingContext::new(16, 16, 1, &settings).expect("context")),
-            comet: None,
-            planetary: None,
-        };
-        let (was_enabled, last_type) = reset_detector_start(&carryover, StackingType::Planetary);
-        assert_eq!((was_enabled, last_type), (true, StackingType::Planetary));
-        assert!(!must_reset_stack(true, was_enabled, StackingType::Planetary != last_type));
+        let carried = deep_sky(16, 16, 1);
+        let (was_enabled, last_type) = reset_detector_start(Some(carried.as_ref()));
+        assert_eq!((was_enabled, last_type), (true, StackingType::DeepSky));
+        assert!(!must_reset_stack(true, was_enabled, StackingType::DeepSky != last_type));
+    }
+
+    /// A deep-sky stack cannot take planetary frames: resumed under another mode, the
+    /// carried stack has to make way for that mode's own.
+    #[test]
+    fn a_stack_resumed_under_another_mode_restarts() {
+        let carried = deep_sky(16, 16, 1);
+        let (was_enabled, last_type) = reset_detector_start(Some(carried.as_ref()));
+        assert!(must_reset_stack(true, was_enabled, StackingType::Planetary != last_type));
     }
 
     #[test]
     fn a_fresh_session_starts_its_stack_on_the_first_frame() {
-        let empty = StackingCarryover {
-            stacking: None,
-            comet: None,
-            planetary: None,
-        };
-        let (was_enabled, last_type) = reset_detector_start(&empty, StackingType::Planetary);
+        let (was_enabled, last_type) = reset_detector_start(None);
         assert!(must_reset_stack(true, was_enabled, StackingType::Planetary != last_type));
         assert!(!must_reset_stack(false, was_enabled, false), "stacking off resets nothing");
+    }
+
+    /// Each mode reports its own kind, which is what the reset detector compares against.
+    #[test]
+    fn every_mode_reports_its_own_kind() {
+        let settings = CaptureSettings::default();
+        let planetary = PlanetaryStackingContext::new(16, 16, 1, &settings).expect("context");
+        let comet = CometStacker::from_context(Box::new(
+            crate::server::capture::context::StubComet::new(16, 16, 1),
+        ));
+        assert_eq!(deep_sky(16, 16, 1).kind(), StackingType::DeepSky);
+        assert_eq!(planetary.kind(), StackingType::Planetary);
+        assert_eq!(comet.kind(), StackingType::Comet);
     }
 
     #[test]
@@ -575,7 +515,7 @@ mod tests {
             ctx.stacker.add_frame(&drifted, &AffineTransform::identity()).unwrap();
         }
 
-        let stack = super::final_stack(&Some(ctx), &None, &None).expect("a stack");
+        let stack = super::final_stack(Some(&ctx)).expect("a stack");
         assert_eq!(stack.depth, 4);
         let coverage = stack.coverage.expect("a thin strip is something to say");
         let strip = coverage.sample_coverage(2, 16);
@@ -584,15 +524,26 @@ mod tests {
         // Every sub covered all of it: nothing to carry, as the live view carries nothing.
         let mut even = StackingContext::new(32, 32, 1, &settings).expect("context");
         even.stacker.add_reference(&sky()).unwrap();
-        assert!(super::final_stack(&Some(even), &None, &None).unwrap().coverage.is_none());
+        assert!(super::final_stack(Some(&even)).unwrap().coverage.is_none());
+        assert!(super::final_stack(None).is_none(), "no stack, nothing to save");
     }
 
     #[test]
     fn test_check_dimension_mismatch_no_context() {
         let frame = crate::frame::Frame::zeros(100, 100, 3).unwrap();
-        assert!(!super::check_dimension_mismatch(
-            &frame, &None, &None, &None
-        ));
+        assert!(!check_dimension_mismatch(&frame, None));
+    }
+
+    /// A binning change or a colour/mono swap: the running stack cannot take the frame.
+    #[test]
+    fn a_frame_of_another_geometry_does_not_fit_the_running_stack() {
+        let stack = deep_sky(100, 100, 3);
+        let fits = crate::frame::Frame::zeros(100, 100, 3).unwrap();
+        let binned = crate::frame::Frame::zeros(50, 50, 3).unwrap();
+        let mono = crate::frame::Frame::zeros(100, 100, 1).unwrap();
+        assert!(!check_dimension_mismatch(&fits, Some(stack.as_ref())));
+        assert!(check_dimension_mismatch(&binned, Some(stack.as_ref())));
+        assert!(check_dimension_mismatch(&mono, Some(stack.as_ref())));
     }
 
     #[test]

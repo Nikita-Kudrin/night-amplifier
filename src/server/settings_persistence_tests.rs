@@ -8,13 +8,27 @@ mod tests {
 
     use crate::background::BackgroundExtractionAlgorithm;
     use crate::render::StretchAggressiveness;
-    use crate::server::settings_persistence::{PersistedSettings, SettingsPersistence};
+    use crate::server::settings_persistence::{SettingsFile, SettingsPersistence};
     use crate::server::state::{
         CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
         FocusModeSnapshot, Resolution, EyepieceStreamResolution, RawFrameSaving, SensorCorrectionSettings,
         TelescopeSettings,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
+
+    /// What `load` makes of a file holding `json`.
+    fn read(json: serde_json::Value) -> CaptureSettings {
+        SettingsFile::from_json(json).expect("the file parses").settings
+    }
+
+    /// What `save` writes for `settings`.
+    fn written(settings: &CaptureSettings) -> serde_json::Value {
+        let file = SettingsFile {
+            settings: settings.clone(),
+            simulated_directories: Vec::new(),
+        };
+        serde_json::from_str(&file.to_json().expect("settings serialise")).unwrap()
+    }
 
     #[test]
     fn test_persisted_settings_roundtrip() {
@@ -159,8 +173,7 @@ mod tests {
             }),
         };
 
-        let persisted = PersistedSettings::from(&settings);
-        let restored: CaptureSettings = persisted.into();
+        let restored = read(written(&settings));
 
         assert_eq!(restored.exposure_us, settings.exposure_us);
         assert_eq!(restored.gain, settings.gain);
@@ -292,8 +305,7 @@ mod tests {
             "stacking_type": "deep_sky",
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let restored: CaptureSettings = persisted.into();
+        let restored = read(json);
 
         assert!(!restored.focus_mode);
         assert!(restored.focus_mode_snapshot.is_none());
@@ -326,8 +338,7 @@ mod tests {
             },
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let restored: CaptureSettings = persisted.into();
+        let restored = read(json);
 
         assert!(!restored.focus_mode);
         assert!(restored.focus_mode_snapshot.is_none());
@@ -370,8 +381,7 @@ mod tests {
             "focus_mode": true,
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let restored: CaptureSettings = persisted.into();
+        let restored = read(json);
 
         assert!(!restored.focus_mode);
     }
@@ -510,7 +520,7 @@ mod tests {
             "wanderer_mode": false
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
+        let persisted = read(json);
         assert!(
             persisted.planetary_auto_tracking,
             "Missing field should default to true"
@@ -550,8 +560,7 @@ mod tests {
             "wanderer_mode": false
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let settings: CaptureSettings = persisted.into();
+        let settings = read(json);
 
         assert!(
             settings.raw_frame_saving.stacking,
@@ -578,7 +587,7 @@ mod tests {
             ..CaptureSettings::default()
         };
 
-        let json = serde_json::to_value(PersistedSettings::from(&settings)).unwrap();
+        let json = written(&settings);
 
         assert!(json.get("save_raw_frames").is_none());
         assert_eq!(json["raw_frame_saving"]["live_view"], true);
@@ -612,8 +621,7 @@ mod tests {
             "wanderer_mode": false
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let settings: CaptureSettings = persisted.into();
+        let settings = read(json);
 
         assert_eq!(settings.raw_frame_saving, RawFrameSaving::default());
     }
@@ -657,7 +665,7 @@ mod tests {
         // `push_to_fov` was removed when Push-To moved its solver state into the Pro
         // plugin's own file. Every existing installation has that key on disk, so
         // loading must ignore it rather than fall back to defaults and silently wipe
-        // the user's configuration. This is the guarantee to keep if `PersistedSettings`
+        // the user's configuration. This is the guarantee to keep if `CaptureSettings`
         // ever gains `#[serde(deny_unknown_fields)]`.
         let temp_file = NamedTempFile::new().unwrap();
         let persistence = SettingsPersistence::new(temp_file.path());
@@ -749,8 +757,7 @@ mod tests {
             },
         });
 
-        let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-        let mut restored: CaptureSettings = persisted.into();
+        let mut restored = read(json);
 
         assert_eq!(restored.sensor_correction.hot_pixel_sigma, 7.5);
         assert!(restored.sensor_correction.superpixel_debayer);
@@ -761,7 +768,7 @@ mod tests {
         assert!(restored.sensor_correction.fpn_removal);
         assert!(restored.background_subtraction);
 
-        let saved = serde_json::to_string(&PersistedSettings::from(&restored)).unwrap();
+        let saved = written(&restored).to_string();
         assert!(
             !saved.contains("hot_pixel_rejection"),
             "the removed switch must not be written back"
@@ -787,8 +794,7 @@ mod tests {
                 "sensor_correction": { "hot_pixel_sigma": on_disk },
             });
 
-            let persisted: PersistedSettings = serde_json::from_value(json).unwrap();
-            let restored: CaptureSettings = persisted.into();
+            let restored = read(json);
 
             assert_eq!(
                 restored.sensor_correction.hot_pixel_sigma, loaded,
@@ -844,7 +850,7 @@ mod tests {
             gain: 222,
             ..Default::default()
         };
-        let mut json = serde_json::to_value(PersistedSettings::from(&settings)).unwrap();
+        let mut json = written(&settings);
         json["denoise"]["background_grain"] = serde_json::Value::Null;
         json["denoise"]["detail"] = serde_json::Value::Null;
         json["eyepiece"]["black_floor"] = serde_json::Value::Null;
@@ -860,5 +866,107 @@ mod tests {
         );
         assert_eq!(loaded.denoise.detail, crate::server::state::DEFAULT_DETAIL);
         assert_eq!(loaded.eyepiece.black_floor, EyepieceSettings::default().black_floor);
+    }
+
+    /// Keys an older build required — a file missing one used to fail to parse, and
+    /// `load` then answered with defaults for every camera, telescope and eyepiece
+    /// setting. Now the one missing key takes its default and the rest load.
+    #[test]
+    fn a_file_missing_a_once_required_key_keeps_everything_else() {
+        let mut json = written(&CaptureSettings {
+            gain: 222,
+            telescope: TelescopeSettings {
+                focal_length_mm: Some(400.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        for key in ["exposure_us", "stacking_type", "rejection_sigma"] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+
+        let loaded = read(json);
+
+        assert_eq!(loaded.gain, 222);
+        assert_eq!(loaded.telescope.focal_length_mm, Some(400.0));
+        let defaults = CaptureSettings::default();
+        assert_eq!(loaded.exposure_us, defaults.exposure_us);
+        assert_eq!(loaded.stacking_type, defaults.stacking_type);
+    }
+
+    /// A file from before `rejection_method` existed has always loaded as `None`, unlike
+    /// a fresh install's `SigmaClip`; one schema for the file must not change that quietly.
+    #[test]
+    fn a_file_without_a_rejection_method_loads_without_rejection() {
+        let mut json = written(&CaptureSettings::default());
+        json.as_object_mut().unwrap().remove("rejection_method");
+
+        assert_eq!(read(json).rejection_method, RejectionMethod::None);
+        assert_eq!(CaptureSettings::default().rejection_method, RejectionMethod::SigmaClip);
+    }
+
+    /// A hand-edited file is held to the same ranges the API holds a request to, in every
+    /// profile it carries.
+    #[test]
+    fn out_of_range_values_in_a_file_load_inside_their_range() {
+        let mut json = written(&CaptureSettings::default());
+        json["rejection_sigma"] = serde_json::json!(100.0);
+        json["auto_stretch_intensity"] = serde_json::json!(-3.0);
+        json["simulated_preload_images"] = serde_json::json!(0);
+        json["target_temp_c"] = serde_json::json!(-273.0);
+        json["dew_heater_power"] = serde_json::json!(500);
+        json["guide_camera"]["dew_heater_power"] = serde_json::json!(-5);
+        json["camera_profiles"] = serde_json::json!({
+            "ZWO/ASI2600MC": { "exposure_us": 1000, "gain": 0, "offset": 0, "bin": 1,
+                               "cooler_enabled": true, "target_temp_c": 99.0,
+                               "sensor_mode_override": null },
+        });
+
+        let loaded = read(json);
+
+        assert_eq!(loaded.rejection_sigma, 10.0);
+        assert_eq!(loaded.auto_stretch_intensity, 0.0);
+        assert_eq!(loaded.simulated_preload_images, 1);
+        assert_eq!(loaded.target_temp_c, Some(-60.0));
+        assert_eq!(loaded.dew_heater_power, 100);
+        assert_eq!(loaded.guide_camera.dew_heater_power, 0);
+        assert_eq!(loaded.camera_profiles["ZWO/ASI2600MC"].target_temp_c, Some(30.0));
+    }
+
+    /// The simulated-camera directories ride along in the file but belong to the camera
+    /// registry: they come back out beside the settings, never as one of them.
+    #[test]
+    fn simulated_directories_travel_beside_the_settings() {
+        let file = SettingsFile {
+            settings: CaptureSettings::default(),
+            simulated_directories: vec!["/data/m42".to_string()],
+        };
+        let json: serde_json::Value = serde_json::from_str(&file.to_json().unwrap()).unwrap();
+        assert_eq!(json["simulated_directories"], serde_json::json!(["/data/m42"]));
+
+        let back = SettingsFile::from_json(json).unwrap();
+        assert_eq!(back.simulated_directories, vec!["/data/m42".to_string()]);
+    }
+
+    /// `null` where the per-mode group belongs reads as "no group", so the legacy
+    /// switch still migrates and the rest of the file survives.
+    #[test]
+    fn a_null_raw_frame_saving_falls_back_to_the_legacy_switch() {
+        let mut json = written(&CaptureSettings {
+            gain: 222,
+            ..Default::default()
+        });
+        json["raw_frame_saving"] = serde_json::Value::Null;
+        json["save_raw_frames"] = serde_json::json!(true);
+
+        let loaded = read(json);
+
+        assert_eq!(loaded.gain, 222);
+        assert!(loaded.raw_frame_saving.stacking);
+    }
+
+    #[test]
+    fn a_file_that_is_not_an_object_is_refused() {
+        assert!(SettingsFile::from_json(serde_json::json!([1, 2, 3])).is_err());
     }
 }

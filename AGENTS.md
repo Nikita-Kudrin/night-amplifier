@@ -62,7 +62,9 @@ If you can't fix a test, don't simplify it into not testing the idea. Tests can 
 **Never run benchmarks alongside other tests/tasks** — it skews the numbers. Real-data fixtures live in
 `DEFAULT_FIXTURES` (`tests/integration/common.rs`), download on demand; a test wanting one calls
 `stack_depth_grain_tests::managed_session`, which **panics** rather than skip. Measurement instruments
-(`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`.
+(`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. Server tests fake cameras with
+`camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or count calls at runtime), not a
+hand-written `Camera` impl.
 
 ## Benchmark sizing
 
@@ -144,6 +146,10 @@ visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` sk
   camera; every close goes through `lease.begin_close()`, and an abandoned handle is never closed eagerly.
   `{provider}_{index}` ids follow USB enumeration order, so a guide reconnect can install the *imaging* camera —
   recovery keeps a device's **recorded id** even if the index moved.
+- **Vendor capture loops share `camera::exposure::ExposureLoop`**: a vendor implements `SdkExposure` (apply, start,
+  abort, poll, plus its quirks) and the loop owns re-apply, stream/single switching, cancel and stall. The stall clock
+  starts on entering `capture`, re-apply included (`CaptureConfig::stall_budget` says why); ToupTek and SVBony apply
+  before stopping a stream, kept as found until hardware says otherwise.
 - **Fault detection**: one detector with a per-role+name streak serves all watchdogs, so alternating faults still
   escalate. Recovery is a ladder (stream restart → quiet suspend → supervisor retry → give-up), silent before 20 s;
   a failed hand-off always resumes the monitor. Only a *named, different* camera discards the FOV cache, since a
@@ -211,8 +217,17 @@ lattice). WebGL needs `UNPACK_ALIGNMENT` 1 for the frontend's unpadded RGB rows.
 ## Adding a Stacking Type / Settings Persistence
 
 Add a `StackingType` variant (`src/stacking/config.rs`), update `all()`, and implement its capability methods
-(`display_name`, `uses_star_registration`, `uses_fpn_removal`, etc.) — no changes needed in `capture.rs`. Settings
-persist as `settings.json` in the server working directory, loaded on startup, saved on `POST /api/settings`.
+(`display_name`, `uses_star_registration`, `uses_fpn_removal`, etc.). A type with its own accumulator also gets a
+`LiveStacker` impl (`server/capture/context/`) and a `create_live_stacker` arm; the stacking task drives every mode
+through that trait, and a carried stack only resumes under its own `kind()`.
+
+**`CaptureSettings` is the one settings schema**: `settings.json` (in the server working directory, loaded on
+startup, saved on `POST /api/settings`), the `/api/settings` answer (minus the Focus/Finder snapshot) and the
+defaults are all its serde. A new setting is a field there, one in `UpdateSettingsRequest` and a name in
+`SettingsService::apply`'s copy list. A key missing from a file takes `Default`; a key an older build named
+differently is rewritten by `settings_persistence::migrate`; ranges live in `CaptureSettings::sanitized`, which load,
+update and save all run. `SettingsService` checks a request whole before applying any of it — a refused one changes
+nothing — then runs the reactions its `SettingsDelta` names, outside the write lock.
 
 ## Full Image Processing Pipeline
 

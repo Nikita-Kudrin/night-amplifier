@@ -1,17 +1,16 @@
 //! Correlation-aligned planetary live stacking.
 
-use tracing::{debug, field, info_span, instrument, warn, Span};
+use tracing::{debug, field, info, instrument, warn, Span};
 
-use crate::frame::Frame;
+use super::LiveStacker;
+use crate::frame::{Frame, NoiseField};
 use crate::planetary::AlignmentRoi;
+use crate::server::capture::frame_gate::FrameAdmission;
 use crate::server::state::CaptureSettings;
 use crate::stacking::{
-    FrameQuality, RejectionMethod, Stacker, StackingConfig, WeightingConfig, WeightingPreset,
+    FrameQuality, RejectionMethod, Stacker, StackingConfig, StackingType, WeightingConfig,
     REJECTION_PLUGIN,
 };
-
-// CometStackingContext functionality is now provided by the CometPlugin trait
-// and implemented in the Pro version.
 
 /// Holds state for planetary-based live stacking pipeline
 pub struct PlanetaryStackingContext {
@@ -29,14 +28,7 @@ impl PlanetaryStackingContext {
     ) -> Option<Self> {
         // Planetary stacking often uses mean or median without aggressive rejection
         // but for live stacking, SigmaClip is usually safe and effective.
-        let weighting = match settings.weighting_preset {
-            WeightingPreset::Disabled => WeightingConfig::disabled(),
-            WeightingPreset::Balanced => WeightingConfig::balanced(),
-            WeightingPreset::Galaxies => WeightingConfig::for_galaxies(),
-            WeightingPreset::Nebulae => WeightingConfig::for_nebulae(),
-            WeightingPreset::FwhmOnly => WeightingConfig::fwhm_only(),
-            WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
-        };
+        let weighting = WeightingConfig::from(settings.weighting_preset);
 
         let rejection = if crate::license::pro_plugin(&REJECTION_PLUGIN).is_some() {
             RejectionMethod::SigmaClip
@@ -204,14 +196,7 @@ impl PlanetaryStackingContext {
 
     /// Update stacking parameters from current settings dynamically
     pub fn update_from_settings(&mut self, settings: &CaptureSettings) {
-        let weighting = match settings.weighting_preset {
-            WeightingPreset::Disabled => WeightingConfig::disabled(),
-            WeightingPreset::Balanced => WeightingConfig::balanced(),
-            WeightingPreset::Galaxies => WeightingConfig::for_galaxies(),
-            WeightingPreset::Nebulae => WeightingConfig::for_nebulae(),
-            WeightingPreset::FwhmOnly => WeightingConfig::fwhm_only(),
-            WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
-        };
+        let weighting = WeightingConfig::from(settings.weighting_preset);
 
         let rejection = settings.rejection_method;
 
@@ -224,11 +209,64 @@ impl PlanetaryStackingContext {
     }
 }
 
+impl LiveStacker for PlanetaryStackingContext {
+    fn kind(&self) -> StackingType {
+        StackingType::Planetary
+    }
+
+    fn geometry(&self) -> (usize, usize, usize) {
+        (self.width(), self.height(), self.channels())
+    }
+
+    fn depth(&self) -> usize {
+        self.frame_count()
+    }
+
+    fn has_reference(&self) -> bool {
+        self.is_initialized
+    }
+
+    fn apply_settings(&mut self, settings: &CaptureSettings) {
+        self.update_from_settings(settings);
+    }
+
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), String> {
+        self.initialize_with_reference(frame)?;
+        info!("Planetary stacking initialized with reference frame");
+        Ok(())
+    }
+
+    fn offer(&mut self, frame: &Frame, settings: &CaptureSettings) -> Result<FrameAdmission, String> {
+        // An error leaves the accumulated stack on screen, as a failed alignment does.
+        let added = match self.add_frame(frame, settings) {
+            Ok(true) => {
+                info!(frame_count = self.frame_count(), "Frame added to planetary stack");
+                true
+            }
+            Ok(false) => {
+                info!(
+                    frame_count = self.frame_count(),
+                    "Planetary alignment failed, frame not added to stack"
+                );
+                false
+            }
+            Err(e) => {
+                warn!(error = %e, "Error adding frame to planetary stack");
+                false
+            }
+        };
+        Ok(FrameAdmission::unreasoned(added))
+    }
+
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String> {
+        self.compute().map(|frame| (frame, None))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frame::Frame;
-    use crate::planetary::AlignmentRoi;
     use crate::server::state::CaptureSettings;
 
     #[test]

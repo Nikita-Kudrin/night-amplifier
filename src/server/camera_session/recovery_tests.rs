@@ -4,15 +4,16 @@
 //! reorder the list in between — the three things the 2026-09-07 session did to the
 //! real one.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::tests::eventually;
 use super::{lifecycle, reconnect};
+use crate::camera::testing::{CameraControls, FakeCamera};
 use crate::camera::{
-    Camera, CameraEntry, CameraError, CameraInfo, CameraResult, CameraStatus, CaptureConfig,
-    DeviceCatalog, DeviceIdentity, GainPresets, ImageFormat, OpenedCamera, RawFrame, SensorType,
+    CameraEntry, CameraError, CameraInfo, CameraResult, DeviceCatalog, DeviceIdentity,
+    ImageFormat, OpenedCamera, SensorType,
 };
 use crate::server::camera_session::lifecycle::DisconnectCause;
 use crate::server::events::ServerEvent;
@@ -49,27 +50,16 @@ struct FakeCatalog {
     /// Makes `open` hand back this device instead of the listed one, the way a list
     /// that reordered between enumeration and open would.
     impostor: Mutex<Option<FakeDevice>>,
-    released: Arc<AtomicUsize>,
     /// Opens of this device wait inside the "vendor SDK" until it is cleared, the way a
     /// real open takes seconds on a busy bus — or never returns.
     held: Mutex<Option<&'static str>>,
     open_calls: AtomicUsize,
-    /// Captures still to fail with a stall, across every camera this bus opens.
-    stalls: Arc<AtomicUsize>,
-    /// Captures still to fail with an ordinary, non-fault error.
-    failures: Arc<AtomicUsize>,
-    /// Captures still to fail as a lost device.
-    lost: Arc<AtomicUsize>,
-    /// Run once from inside `install_camera`, when it applies the dew heater.
-    during_install: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
     /// Cameras this bus opens have a cooler.
     cooled: AtomicBool,
-    /// How long every `status()` takes, in milliseconds.
-    status_delay_ms: Arc<AtomicU64>,
-    /// How long every exposure takes, in milliseconds; cut short by `cancel`.
-    exposure_ms: Arc<AtomicU64>,
-    /// `status()` calls still to panic, across every camera this bus opens.
-    status_panics: Arc<AtomicUsize>,
+    /// Shared by every camera this bus opens: a test scripts the next stall, failure,
+    /// lost device or `status()` panic, and counts releases, whichever handle the server
+    /// holds. `on_dew_heater` runs from inside `install_camera`.
+    camera: Arc<CameraControls>,
 }
 
 impl FakeCatalog {
@@ -161,116 +151,17 @@ impl DeviceCatalog for FakeCatalog {
         self.opened.lock().unwrap().push(device.name);
         let mut info = Self::info_for(&device);
         info.has_cooler = self.cooled.load(Ordering::SeqCst);
+        // Exposures are cut short by `cancel`, after the 20 ms every SDK call takes.
+        let camera = FakeCamera::sharing(device.name, Arc::clone(&self.camera))
+            .with_info(|camera_info| *camera_info = info)
+            .provider(PROVIDER)
+            .cancellable()
+            .stuck_for(Duration::from_millis(20));
         Ok(OpenedCamera {
-            camera: Box::new(FakeCamera {
-                info,
-                status_delay_ms: Arc::clone(&self.status_delay_ms),
-                exposure_ms: Arc::clone(&self.exposure_ms),
-                status_panics: Arc::clone(&self.status_panics),
-                cancel_flag: Arc::new(AtomicBool::new(false)),
-                released: Arc::clone(&self.released),
-                stalls: Arc::clone(&self.stalls),
-                failures: Arc::clone(&self.failures),
-                lost: Arc::clone(&self.lost),
-                during_install: Arc::clone(&self.during_install),
-            }),
+            camera: Box::new(camera),
             provider: PROVIDER.to_string(),
         })
     }
-}
-
-struct FakeCamera {
-    info: CameraInfo,
-    status_delay_ms: Arc<AtomicU64>,
-    exposure_ms: Arc<AtomicU64>,
-    status_panics: Arc<AtomicUsize>,
-    cancel_flag: Arc<AtomicBool>,
-    released: Arc<AtomicUsize>,
-    stalls: Arc<AtomicUsize>,
-    failures: Arc<AtomicUsize>,
-    lost: Arc<AtomicUsize>,
-    during_install: Arc<Mutex<Option<Box<dyn FnOnce() + Send>>>>,
-}
-
-impl Drop for FakeCamera {
-    fn drop(&mut self) {
-        self.released.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
-impl Camera for FakeCamera {
-    fn info(&self) -> &CameraInfo {
-        &self.info
-    }
-    fn gain_presets(&self) -> CameraResult<GainPresets> {
-        Ok(GainPresets::default())
-    }
-    fn status(&self) -> CameraResult<CameraStatus> {
-        std::thread::sleep(Duration::from_millis(self.status_delay_ms.load(Ordering::SeqCst)));
-        if take_one(&self.status_panics) {
-            panic!("scripted panic in status()");
-        }
-        Ok(CameraStatus::default())
-    }
-    fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-        Ok(())
-    }
-    fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-        Ok(())
-    }
-    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
-        let hook = self.during_install.lock().unwrap().take();
-        if let Some(hook) = hook {
-            hook();
-        }
-        Ok(())
-    }
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
-        std::thread::sleep(Duration::from_millis(20));
-        let started = std::time::Instant::now();
-        while started.elapsed() < Duration::from_millis(self.exposure_ms.load(Ordering::SeqCst))
-            && !self.cancel_flag.load(Ordering::SeqCst)
-        {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if self.cancel_flag.swap(false, Ordering::SeqCst) {
-            return Err(CameraError::Cancelled);
-        }
-        if take_one(&self.stalls) {
-            return Err(CameraError::ExposureTimeout(Duration::from_millis(20)));
-        }
-        if take_one(&self.failures) {
-            return Err(CameraError::ExposureFailed("scripted failure".to_string()));
-        }
-        if take_one(&self.lost) {
-            return Err(CameraError::Disconnected);
-        }
-        let pixels = (self.info.max_width * self.info.max_height) as usize;
-        Ok(RawFrame {
-            data: vec![7u8; pixels].into(),
-            width: self.info.max_width,
-            height: self.info.max_height,
-            format: ImageFormat::Raw8,
-        })
-    }
-    fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-    fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
-    }
-    fn close(&mut self) -> CameraResult<()> {
-        Ok(())
-    }
-    fn provider_name(&self) -> &'static str {
-        PROVIDER
-    }
-}
-
-fn take_one(counter: &AtomicUsize) -> bool {
-    counter
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(1))
-        .is_ok()
 }
 
 fn rig(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
@@ -388,7 +279,7 @@ async fn a_serial_that_opens_as_another_camera_is_refused_and_closed() {
         matches!(result, Err(crate::server::error::ApiError::CameraIdentityMismatch { .. })),
         "got {result:?}"
     );
-    assert_eq!(catalog.released.load(Ordering::SeqCst), 1, "the wrong camera is closed again");
+    assert_eq!(catalog.camera.drops.load(Ordering::SeqCst), 1, "the wrong camera is closed again");
     assert!(state.cameras.read().await.is_empty());
     assert!(!state.slot(CameraRole::Main).holds_handle());
 }
@@ -842,9 +733,9 @@ async fn a_camera_that_fails_again_right_after_its_reinstall_still_comes_back() 
     assert!(eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await);
 
     // Two losses in a row: the running loop's exposure, then the reopened loop's first.
-    catalog.lost.store(2, Ordering::SeqCst);
+    catalog.camera.lost.store(2, Ordering::SeqCst);
     assert!(
-        eventually(|| catalog.lost.load(Ordering::SeqCst) == 0, Duration::from_secs(5)).await,
+        eventually(|| catalog.camera.lost.load(Ordering::SeqCst) == 0, Duration::from_secs(5)).await,
         "both losses should have been reported"
     );
 
@@ -869,7 +760,7 @@ async fn a_stalled_first_frame_does_not_end_the_capture() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     let mut events = state.subscribe_events();
-    catalog.stalls.store(1, Ordering::SeqCst);
+    catalog.camera.stalls.store(1, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
     let capturing = eventually(
@@ -905,7 +796,7 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
     let catalog = FakeCatalog::with(&[NEPTUNE]);
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
-    catalog.failures.store(1, Ordering::SeqCst);
+    catalog.camera.failures.store(1, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
@@ -954,7 +845,7 @@ async fn a_fault_during_the_reinstall_is_recovered_not_swallowed() {
     let fired = Arc::new(AtomicBool::new(false));
     {
         let (state, fired, rt) = (Arc::clone(&state), Arc::clone(&fired), tokio::runtime::Handle::current());
-        *catalog.during_install.lock().unwrap() = Some(Box::new(move || {
+        *catalog.camera.on_dew_heater.lock().unwrap() = Some(Box::new(move || {
             // Reported from another thread, the way the new monitor or guide loop would.
             std::thread::spawn(move || {
                 rt.block_on(lifecycle::finalize_disconnect(
@@ -1009,13 +900,13 @@ async fn stopping_the_guide_loop_of_a_recovering_slot_waits_for_the_loop() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Guide).await;
     assert!(eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await);
-    let released_before = catalog.released.load(Ordering::SeqCst);
+    let released_before = catalog.camera.drops.load(Ordering::SeqCst);
 
     assert_eq!(state.slot(CameraRole::Guide).begin_suspend(), crate::server::state::SuspendVerdict::Suspended);
     let started = std::time::Instant::now();
     crate::server::capture::guide_task::stop(&state).await;
     let waited = started.elapsed();
-    let released = catalog.released.load(Ordering::SeqCst) - released_before;
+    let released = catalog.camera.drops.load(Ordering::SeqCst) - released_before;
 
     teardown(&state).await;
     assert_eq!(released, 1, "stop returned while the loop still held its handle");
@@ -1032,7 +923,7 @@ async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     let mut events = state.subscribe_events();
-    catalog.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
+    catalog.camera.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
     let resumed = eventually(
@@ -1145,7 +1036,7 @@ async fn a_hung_vendor_call_during_the_reinstall_does_not_block_connect() {
     let (entered, release) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
     {
         let (entered, release) = (Arc::clone(&entered), Arc::clone(&release));
-        *catalog.during_install.lock().unwrap() = Some(Box::new(move || {
+        *catalog.camera.on_dew_heater.lock().unwrap() = Some(Box::new(move || {
             entered.store(true, Ordering::SeqCst);
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             while !release.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
@@ -1337,7 +1228,7 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
     let first_written = std::fs::metadata(&first).and_then(|m| m.modified()).unwrap();
     let before = state.delivered_frames.load(Ordering::SeqCst);
 
-    catalog.lost.store(1, Ordering::SeqCst);
+    catalog.camera.lost.store(1, Ordering::SeqCst);
     let resumed = eventually(
         || {
             state.delivered_frames.load(Ordering::SeqCst) >= before + 5
@@ -1531,8 +1422,8 @@ async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status()
     }
     connect(&state, &ARES, CameraRole::Main).await;
     // Under the scaled-down OPEN_TIMEOUT, so the reopen's own probe still passes.
-    catalog.status_delay_ms.store(150, Ordering::SeqCst);
-    catalog.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
+    catalog.camera.status_delay_ms.store(150, Ordering::SeqCst);
+    catalog.camera.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
     let delivered_before = state.delivered_frames.load(Ordering::SeqCst);
@@ -1582,7 +1473,7 @@ async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
     );
     // Every sub from here on is a minute long, and the watchdog knows it.
     state.settings.write().await.exposure_us = 60_000_000;
-    catalog.exposure_ms.store(60_000, Ordering::SeqCst);
+    catalog.camera.exposure_ms.store(60_000, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let started = std::time::Instant::now();
@@ -1592,7 +1483,7 @@ async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
     let took = started.elapsed();
 
     // Let a sub still running end now, so the test does not wait it out.
-    catalog.exposure_ms.store(0, Ordering::SeqCst);
+    catalog.camera.exposure_ms.store(0, Ordering::SeqCst);
     let _ = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
     wait_idle(&state).await;
     teardown(&state).await;
@@ -1619,7 +1510,7 @@ async fn disconnecting_during_the_first_long_exposure_neither_waits_it_out_nor_r
         settings.exposure_us = 60_000_000;
     }
     connect(&state, &ARES, CameraRole::Main).await;
-    catalog.exposure_ms.store(60_000, Ordering::SeqCst);
+    catalog.camera.exposure_ms.store(60_000, Ordering::SeqCst);
     let mut events = state.subscribe_events();
 
     CaptureService::start_capture(&state, None).await.unwrap();
@@ -1629,7 +1520,7 @@ async fn disconnecting_during_the_first_long_exposure_neither_waits_it_out_nor_r
         .expect("disconnect while the capture starts");
     let took = started.elapsed();
 
-    catalog.exposure_ms.store(0, Ordering::SeqCst);
+    catalog.camera.exposure_ms.store(0, Ordering::SeqCst);
     let _ = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
     wait_idle(&state).await;
     teardown(&state).await;
@@ -1687,7 +1578,7 @@ async fn a_guide_loop_that_panics_is_reopened_and_runs_again() {
     assert!(eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await);
     let opens = catalog.open_calls.load(Ordering::SeqCst);
 
-    catalog.status_panics.store(1, Ordering::SeqCst);
+    catalog.camera.status_panics.store(1, Ordering::SeqCst);
     let back = eventually(
         || {
             catalog.open_calls.load(Ordering::SeqCst) > opens
@@ -1700,7 +1591,7 @@ async fn a_guide_loop_that_panics_is_reopened_and_runs_again() {
     let phase = phase_of(&state, CameraRole::Guide).await;
     teardown(&state).await;
 
-    assert_eq!(catalog.status_panics.load(Ordering::SeqCst), 0, "the loop never sampled the sensor");
+    assert_eq!(catalog.camera.status_panics.load(Ordering::SeqCst), 0, "the loop never sampled the sensor");
     assert!(back, "the guide loop did not come back after its panic");
     assert_eq!(phase, CameraPhase::Guiding);
 }

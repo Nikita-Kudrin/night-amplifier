@@ -193,161 +193,23 @@ impl CameraInfoResponse {
     }
 }
 
-/// Settings response
-#[derive(Debug, Serialize, Deserialize)]
+/// What `GET`/`POST /api/settings` answer: every setting, in `settings.json`'s shape.
+///
+/// Except the Focus/Finder snapshot: it is the server's record of what to restore, and a
+/// client that could read it would be tempted to write it.
+#[derive(Debug, Serialize)]
 pub struct SettingsResponse {
-    pub exposure_us: u64,
-    pub gain: i32,
-    pub offset: i32,
-    pub bin: u8,
-    pub auto_stretch: bool,
-    pub stacking: bool,
-    pub rejection_sigma: f32,
-    pub rejection_method: RejectionMethod,
-    pub background_subtraction: bool,
-    /// Algorithm for background extraction
-    pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
-    /// Which capture modes write their raw frames to disk
-    pub raw_frame_saving: RawFrameSaving,
-    pub save_stacked_image: bool,
-    pub stacking_type: StackingType,
-    /// Quality-based frame weighting preset for stacking
-    pub weighting_preset: WeightingPreset,
-    /// Auto stretch aggressiveness (Low, Medium, High)
-    pub stretch_aggressiveness: StretchAggressiveness,
-    /// Auto Stretch intensity multiplier (0.0 to 1.0, where 0.0 means no color boost, default 0.3)
-    pub auto_stretch_intensity: f32,
-    /// Enable shadow saturation boost for more vibrant deep-sky colors
-    pub saturation_boost: bool,
-    /// Shadow saturation boost strength (0.0-1.0)
-    pub saturation_boost_strength: f32,
-    /// Use simulated camera
-    pub use_simulated_camera: bool,
-    /// Number of images to preload for simulated camera
-    pub simulated_preload_images: usize,
-    /// Show the focus image when waiting for frames
-    pub show_focus_image: bool,
-    /// Force showing the focus image even when the stream is active
-    pub force_focus_image_now: bool,
-    /// Region of interest for comet nucleus tracking (used in Comet stacking mode)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comet_roi: Option<AlignmentRoi>,
-    /// Region of interest for planetary alignment (used in Planetary stacking mode)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub planetary_roi: Option<AlignmentRoi>,
-    /// Enable auto tracking of planetary ROI
-    pub planetary_auto_tracking: bool,
-    /// Enable multi-point alignment for planetary (Pro only)
-    pub planetary_multi_point_alignment: bool,
-    /// Enable "Wanderer" mode for automatic stack reset on movement
-    pub wanderer_mode: bool,
-    pub auto_reconnect: bool,
-    pub auto_resume_capture: bool,
-    pub sensor_correction: SensorCorrectionSettings,
-    #[serde(default)]
-    pub denoise: DenoiseSettings,
-    #[serde(default = "crate::server::state::default_preview_resolution")]
-    pub preview_resolution: Resolution,
-    #[serde(default = "crate::server::state::default_streaming_resolution")]
-    pub streaming_resolution: Resolution,
-    pub eyepiece: EyepieceSettings,
-    pub telescope: TelescopeSettings,
-    /// Per-camera telescope profiles keyed by camera name
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
-    /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub camera_profiles: HashMap<String, CameraCaptureProfile>,
-    /// The guide camera's live hardware values. The flat fields above are the imaging
-    /// camera's; both are live at once, so the UI reads whichever the selected camera
-    /// holds.
-    #[serde(default)]
-    pub guide_camera: CameraCaptureProfile,
-    /// Name of the last active camera
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_camera_name: Option<String>,
-    /// Whether the cooler should be active during capture
-    pub cooler_enabled: bool,
-    /// Target sensor temperature in Celsius
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_temp_c: Option<f64>,
-    /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
-    #[serde(default)]
-    pub cooler_fast_mode: bool,
-    /// Manual override for camera sensor mode (Player One dual sampling).
-    /// When null, the mode is auto-selected based on `stacking_type`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sensor_mode_override: Option<DualSamplingMode>,
-    /// Whether anti-dew heater is enabled
-    pub dew_heater_enabled: bool,
-    /// Anti-dew heater power level (0-100)
-    pub dew_heater_power: i32,
-    /// Whether the user has accepted the End User License Agreement
-    pub eula_accepted: bool,
-    /// INDI server host
-    pub indi_server_host: String,
-    /// INDI server port
-    pub indi_server_port: u16,
-    /// Whether Focus/Finder mode is holding the cosmetic pipeline stages off.
-    ///
-    /// The snapshot behind it is deliberately not exposed: it is the server's record of
-    /// what to restore, and a client that could read it would be tempted to write it.
-    #[serde(default)]
-    pub focus_mode: bool,
+    #[serde(flatten)]
+    pub settings: CaptureSettings,
 }
 
 impl From<&CaptureSettings> for SettingsResponse {
     fn from(settings: &CaptureSettings) -> Self {
         Self {
-            exposure_us: settings.exposure_us,
-            gain: settings.gain,
-            offset: settings.offset,
-            bin: settings.bin,
-            auto_stretch: settings.auto_stretch,
-            stacking: settings.stacking,
-            rejection_sigma: settings.rejection_sigma,
-            rejection_method: settings.rejection_method,
-            background_subtraction: settings.background_subtraction,
-            background_extraction_algorithm: settings.background_extraction_algorithm,
-            raw_frame_saving: settings.raw_frame_saving,
-            save_stacked_image: settings.save_stacked_image,
-            stacking_type: settings.stacking_type,
-            weighting_preset: settings.weighting_preset,
-            stretch_aggressiveness: settings.stretch_aggressiveness,
-            auto_stretch_intensity: settings.auto_stretch_intensity,
-            saturation_boost: settings.saturation_boost,
-            saturation_boost_strength: settings.saturation_boost_strength,
-            use_simulated_camera: settings.use_simulated_camera,
-            simulated_preload_images: settings.simulated_preload_images,
-            show_focus_image: settings.show_focus_image,
-            force_focus_image_now: settings.force_focus_image_now,
-            comet_roi: settings.comet_roi,
-            planetary_roi: settings.planetary_roi,
-            planetary_auto_tracking: settings.planetary_auto_tracking,
-            planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
-            wanderer_mode: settings.wanderer_mode,
-            auto_reconnect: settings.auto_reconnect,
-            auto_resume_capture: settings.auto_resume_capture,
-            sensor_correction: settings.sensor_correction.clone(),
-            denoise: settings.denoise.clone(),
-            preview_resolution: settings.preview_resolution,
-            streaming_resolution: settings.streaming_resolution,
-            eyepiece: settings.eyepiece.clone(),
-            telescope: settings.telescope.clone(),
-            camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
-            camera_profiles: settings.camera_profiles.clone(),
-            guide_camera: settings.guide_camera.clone(),
-            last_camera_name: settings.last_camera_name.clone(),
-            cooler_enabled: settings.cooler_enabled,
-            target_temp_c: settings.target_temp_c,
-            cooler_fast_mode: settings.cooler_fast_mode,
-            sensor_mode_override: settings.sensor_mode_override,
-            dew_heater_enabled: settings.dew_heater_enabled,
-            dew_heater_power: settings.dew_heater_power,
-            eula_accepted: settings.eula_accepted,
-            indi_server_host: settings.indi_server_host.clone(),
-            indi_server_port: settings.indi_server_port,
-            focus_mode: settings.focus_mode,
+            settings: CaptureSettings {
+                focus_mode_snapshot: None,
+                ..settings.clone()
+            },
         }
     }
 }
@@ -617,8 +479,59 @@ mod tests {
         };
 
         let response = SettingsResponse::from(&settings);
-        assert_eq!(response.exposure_us, 2_000_000);
-        assert_eq!(response.gain, 100);
+        assert_eq!(response.settings.exposure_us, 2_000_000);
+        assert_eq!(response.settings.gain, 100);
+    }
+
+    /// The keys the frontend reads, pinned: the answer is `CaptureSettings` serialised,
+    /// so a serde attribute added for `settings.json` would otherwise change it unseen.
+    /// Optional values and empty maps are left out rather than sent as `null`.
+    #[test]
+    fn the_settings_answer_keeps_its_wire_shape() {
+        const ALWAYS: &[&str] = &[
+            "auto_reconnect", "auto_resume_capture", "auto_stretch", "auto_stretch_intensity",
+            "background_extraction_algorithm", "background_subtraction", "bin",
+            "cooler_enabled", "cooler_fast_mode", "denoise", "dew_heater_enabled",
+            "dew_heater_power", "eula_accepted", "exposure_us", "eyepiece", "focus_mode",
+            "force_focus_image_now", "gain", "guide_camera", "indi_server_host",
+            "indi_server_port", "offset", "planetary_auto_tracking",
+            "planetary_multi_point_alignment", "preview_resolution", "raw_frame_saving",
+            "rejection_method", "rejection_sigma", "saturation_boost",
+            "saturation_boost_strength", "save_stacked_image", "sensor_correction",
+            "show_focus_image", "simulated_preload_images", "stacking", "stacking_type",
+            "streaming_resolution", "stretch_aggressiveness", "telescope",
+            "use_simulated_camera", "wanderer_mode", "weighting_preset",
+        ];
+        const WHEN_SET: &[&str] = &[
+            "camera_profiles", "camera_telescope_profiles", "comet_roi", "last_camera_name",
+            "planetary_roi", "sensor_mode_override", "target_temp_c",
+        ];
+        let keys = |settings: &CaptureSettings| -> Vec<String> {
+            let value = serde_json::to_value(SettingsResponse::from(settings)).unwrap();
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+
+        assert_eq!(keys(&CaptureSettings::default()), ALWAYS);
+
+        let roi = AlignmentRoi { x: 1, y: 2, width: 30, height: 40 };
+        let mut everything = CaptureSettings {
+            comet_roi: Some(roi),
+            planetary_roi: Some(roi),
+            last_camera_name: Some("Ares-C PRO".into()),
+            target_temp_c: Some(-10.0),
+            sensor_mode_override: Some(DualSamplingMode::Normal),
+            ..Default::default()
+        };
+        everything.camera_telescope_profiles.insert("Ares-C PRO".into(), Default::default());
+        everything.camera_profiles.insert("PlayerOne/Ares-C PRO".into(), Default::default());
+        crate::server::state::focus_mode::set(&mut everything, true);
+
+        let mut expected: Vec<&str> = ALWAYS.iter().chain(WHEN_SET).copied().collect();
+        expected.sort();
+        assert_eq!(keys(&everything), expected, "and never the Focus/Finder snapshot");
+        assert!(everything.focus_mode_snapshot.is_some(), "the snapshot was there to leak");
     }
 
     #[test]

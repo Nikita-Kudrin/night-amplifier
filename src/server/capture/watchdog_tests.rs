@@ -1,9 +1,10 @@
 //! The stall ladder's first rung: a lost frame restarts the stream in place, and only a
 //! run of them is treated as a camera fault.
 
+use crate::camera::testing::{Exposure, FakeCamera};
 use crate::camera::{
-    Camera, CameraError, CameraInfo, CameraResult, CaptureConfig, GainPresets, ImageFormat,
-    RawFrame, SensorType, FRAME_STALL_ALLOWANCE, TRANSFER_FLOOR_BYTES_PER_SEC,
+    Camera, CameraInfo, CaptureConfig, ImageFormat, FRAME_STALL_ALLOWANCE,
+    TRANSFER_FLOOR_BYTES_PER_SEC,
 };
 use crate::server::capture::channel::{PipelineCapacities, QueueDepth};
 use crate::server::capture::stall::{EscalationReason, StallTracker, StallVerdict, STALL_ESCALATION};
@@ -11,9 +12,8 @@ use crate::server::capture::task::{run_capture_task, CaptureChannels, FrameNumbe
 use crate::server::capture::watchdog::*;
 use crate::server::events::ServerEvent;
 use crate::server::state::{AppState, CameraRole, ConnectedCameraInfo};
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 const MB: usize = 1_000_000;
@@ -224,7 +224,7 @@ fn an_abandoned_capture_stays_in_flight_until_it_returns() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     let release = Arc::new(AtomicBool::new(false));
-    let camera = ScriptedCamera::new(vec![Step::BlockUntil(Arc::clone(&release))]);
+    let camera = scripted(vec![Exposure::BlockUntil(Arc::clone(&release))]);
 
     let outcome = capture_frame_bounded(
         Box::new(camera),
@@ -249,126 +249,9 @@ fn an_abandoned_capture_stays_in_flight_until_it_returns() {
 
 // --- The capture loops ---------------------------------------------------------------
 
-enum Step {
-    Frame,
-    Stall,
-    BlockUntil(Arc<AtomicBool>),
-}
-
-/// Plays a script of outcomes, then keeps delivering frames and cancels whatever loop
-/// is driving it once the script and `extra_frames` are both spent.
-struct ScriptedCamera {
-    info: CameraInfo,
-    steps: Mutex<VecDeque<Step>>,
-    extra_frames: AtomicUsize,
-    on_done: Option<Box<dyn Fn() + Send + Sync>>,
-    cancel_flag: Arc<AtomicBool>,
-    frames: Arc<AtomicUsize>,
-    closes: Arc<AtomicUsize>,
-    close_blocks_until: Option<Arc<AtomicBool>>,
-}
-
-impl ScriptedCamera {
-    fn new(steps: Vec<Step>) -> Self {
-        Self {
-            info: CameraInfo {
-                name: "Scripted Camera".to_string(),
-                max_width: 32,
-                max_height: 24,
-                sensor_type: SensorType::Mono,
-                supported_formats: vec![ImageFormat::Raw8, ImageFormat::Raw16],
-                ..Default::default()
-            },
-            steps: Mutex::new(steps.into()),
-            extra_frames: AtomicUsize::new(0),
-            on_done: None,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            frames: Arc::new(AtomicUsize::new(0)),
-            closes: Arc::new(AtomicUsize::new(0)),
-            close_blocks_until: None,
-        }
-    }
-
-    fn then_frames(mut self, count: usize, on_done: impl Fn() + Send + Sync + 'static) -> Self {
-        self.extra_frames = AtomicUsize::new(count);
-        self.on_done = Some(Box::new(on_done));
-        self
-    }
-
-    fn frame(&self) -> CameraResult<RawFrame> {
-        self.frames.fetch_add(1, Ordering::SeqCst);
-        let pixels = (self.info.max_width * self.info.max_height) as usize;
-        Ok(RawFrame {
-            data: vec![7u8; pixels].into(),
-            width: self.info.max_width,
-            height: self.info.max_height,
-            format: ImageFormat::Raw8,
-        })
-    }
-}
-
-impl Camera for ScriptedCamera {
-    fn info(&self) -> &CameraInfo {
-        &self.info
-    }
-    fn gain_presets(&self) -> CameraResult<GainPresets> {
-        Ok(GainPresets::default())
-    }
-    fn status(&self) -> CameraResult<crate::camera::CameraStatus> {
-        Ok(Default::default())
-    }
-    fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-        Ok(())
-    }
-    fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-        Ok(())
-    }
-    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
-        Ok(())
-    }
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<RawFrame> {
-        let step = self.steps.lock().unwrap().pop_front();
-        match step {
-            Some(Step::Frame) => self.frame(),
-            Some(Step::Stall) => Err(CameraError::ExposureTimeout(Duration::from_millis(1))),
-            Some(Step::BlockUntil(release)) => {
-                while !release.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                self.frame()
-            }
-            None => {
-                let left = self.extra_frames.load(Ordering::SeqCst);
-                if left == 0 {
-                    if let Some(done) = &self.on_done {
-                        done();
-                    }
-                    std::thread::sleep(Duration::from_millis(5));
-                    return Err(CameraError::Cancelled);
-                }
-                self.extra_frames.store(left - 1, Ordering::SeqCst);
-                self.frame()
-            }
-        }
-    }
-    fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-    fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
-    }
-    fn close(&mut self) -> CameraResult<()> {
-        self.closes.fetch_add(1, Ordering::SeqCst);
-        if let Some(release) = &self.close_blocks_until {
-            while !release.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-        }
-        Ok(())
-    }
-    fn provider_name(&self) -> &'static str {
-        "Scripted"
-    }
+/// Plays `steps`, then delivers frames until `then_frames` runs out.
+fn scripted(steps: Vec<Exposure>) -> FakeCamera {
+    FakeCamera::new("Scripted Camera").provider("Scripted").scripted(steps)
 }
 
 fn connected(info: &CameraInfo, role: CameraRole) -> ConnectedCameraInfo {
@@ -389,25 +272,25 @@ struct MainLoopRun {
     fault_streak: Option<u32>,
 }
 
-async fn drive_main_loop(steps: Vec<Step>, extra_frames: usize) -> MainLoopRun {
+async fn drive_main_loop(steps: Vec<Exposure>, extra_frames: usize) -> MainLoopRun {
     let (state, _dw) = AppState::new_for_testing();
     drive_main_loop_on(Arc::new(state), steps, extra_frames).await
 }
 
-async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Step>, extra_frames: usize) -> MainLoopRun {
+async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Exposure>, extra_frames: usize) -> MainLoopRun {
     let mut events = state.subscribe_events();
 
     let camera = {
         let state = Arc::clone(&state);
-        ScriptedCamera::new(steps).then_frames(extra_frames, move || state.request_cancel())
+        scripted(steps).then_frames(extra_frames, move || state.request_cancel())
     };
-    let frames = Arc::clone(&camera.frames);
+    let controls = camera.controls();
     state
         .cameras
         .write()
         .await
-        .insert("scripted_0".to_string(), connected(&camera.info, CameraRole::Main));
-    let name = camera.info.name.clone();
+        .insert("scripted_0".to_string(), connected(camera.info(), CameraRole::Main));
+    let name = camera.info().name.clone();
 
     let (stacking_tx, stacking_rx) = mpsc::sync_channel(64);
     let (storage_tx, storage_rx) = mpsc::sync_channel(64);
@@ -445,7 +328,7 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Step>, extra_frames
         .map(|(count, _)| *count);
     MainLoopRun {
         returned_handle: returned.is_some(),
-        frames: frames.load(Ordering::SeqCst),
+        frames: controls.frames.load(Ordering::SeqCst),
         delivered: state.delivered_frames.load(Ordering::SeqCst),
         events: seen,
         fault_streak,
@@ -463,7 +346,7 @@ fn has_error_or_disconnect(events: &[ServerEvent]) -> bool {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_single_stall_costs_one_frame_not_the_camera() {
-    let run = drive_main_loop(vec![Step::Frame, Step::Stall, Step::Frame], 3).await;
+    let run = drive_main_loop(vec![Exposure::Frame, Exposure::Stall, Exposure::Frame], 3).await;
 
     assert!(run.returned_handle, "the loop must keep the handle through a stall");
     assert_eq!(run.frames, 5);
@@ -477,7 +360,7 @@ async fn a_single_stall_costs_one_frame_not_the_camera() {
 async fn stalls_separated_by_a_frame_never_escalate() {
     let mut steps = Vec::new();
     for _ in 0..4 {
-        steps.extend([Step::Stall, Step::Stall, Step::Frame]);
+        steps.extend([Exposure::Stall, Exposure::Stall, Exposure::Frame]);
     }
     let run = drive_main_loop(steps, 1).await;
 
@@ -487,7 +370,7 @@ async fn stalls_separated_by_a_frame_never_escalate() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_run_of_stalls_hands_the_camera_to_recovery() {
-    let steps = (0..STALL_ESCALATION).map(|_| Step::Stall).collect();
+    let steps = (0..STALL_ESCALATION).map(|_| Exposure::Stall).collect();
     let run = drive_main_loop(steps, 5).await;
 
     assert!(!run.returned_handle, "an escalated stall ends as a device fault");
@@ -496,14 +379,14 @@ async fn a_run_of_stalls_hands_the_camera_to_recovery() {
     assert!(!has_error_or_disconnect(&run.events), "recovery decides what the user sees");
 }
 
-async fn drive_guide_loop(steps: Vec<Step>, extra_frames: usize) -> (bool, usize) {
+async fn drive_guide_loop(steps: Vec<Exposure>, extra_frames: usize) -> (bool, usize) {
     let (state, _dw) = AppState::new_for_testing();
     run_guide_loop_on(&Arc::new(state), steps, extra_frames).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_guide_loop_restarts_a_stalled_stream_in_place() {
-    let (kept_handle, frames) = drive_guide_loop(vec![Step::Stall, Step::Stall, Step::Frame], 2).await;
+    let (kept_handle, frames) = drive_guide_loop(vec![Exposure::Stall, Exposure::Stall, Exposure::Frame], 2).await;
     assert!(kept_handle);
     assert_eq!(frames, 3);
 }
@@ -517,13 +400,13 @@ async fn an_escalated_stall_does_not_wait_on_a_hung_close() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     let release = Arc::new(AtomicBool::new(false));
-    let mut camera = ScriptedCamera::new((0..STALL_ESCALATION).map(|_| Step::Stall).collect());
-    camera.close_blocks_until = Some(Arc::clone(&release));
+    let camera = scripted((0..STALL_ESCALATION).map(|_| Exposure::Stall).collect())
+        .close_blocks_until(Arc::clone(&release));
     state
         .cameras
         .write()
         .await
-        .insert("scripted_0".to_string(), connected(&camera.info, CameraRole::Main));
+        .insert("scripted_0".to_string(), connected(camera.info(), CameraRole::Main));
 
     let (stacking_tx, _stacking_rx) = mpsc::sync_channel(4);
     let (storage_tx, _storage_rx) = mpsc::sync_channel(4);
@@ -547,7 +430,7 @@ async fn an_escalated_stall_does_not_wait_on_a_hung_close() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn the_guide_loop_hands_a_run_of_stalls_to_recovery() {
-    let steps = (0..STALL_ESCALATION).map(|_| Step::Stall).collect();
+    let steps = (0..STALL_ESCALATION).map(|_| Exposure::Stall).collect();
     let (kept_handle, frames) = drive_guide_loop(steps, 2).await;
     assert!(!kept_handle);
     assert_eq!(frames, 0);
@@ -564,16 +447,16 @@ fn distrust_restarts(state: &AppState, role: CameraRole, camera_name: &str) {
 
 async fn run_guide_loop_on(
     state: &Arc<AppState>,
-    steps: Vec<Step>,
+    steps: Vec<Exposure>,
     extra_frames: usize,
 ) -> (bool, usize) {
     let cancel = Arc::new(AtomicBool::new(false));
     let camera = {
         let cancel = Arc::clone(&cancel);
-        ScriptedCamera::new(steps).then_frames(extra_frames, move || cancel.store(true, Ordering::SeqCst))
+        scripted(steps).then_frames(extra_frames, move || cancel.store(true, Ordering::SeqCst))
     };
-    let frames = Arc::clone(&camera.frames);
-    let info = connected(&camera.info, CameraRole::Guide);
+    let controls = camera.controls();
+    let info = connected(camera.info(), CameraRole::Guide);
     let state = Arc::clone(state);
     let rt = tokio::runtime::Handle::current();
     let returned = tokio::task::spawn_blocking(move || {
@@ -581,7 +464,7 @@ async fn run_guide_loop_on(
     })
     .await
     .unwrap();
-    (returned.is_some(), frames.load(Ordering::SeqCst))
+    (returned.is_some(), controls.frames.load(Ordering::SeqCst))
 }
 
 /// The field sequence end to end: the first run pays for its restarts, and the loop the
@@ -592,11 +475,11 @@ async fn the_guide_loop_after_a_reopen_skips_restarts_that_did_not_work() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
 
-    let run = (0..STALL_ESCALATION).map(|_| Step::Stall).collect();
+    let run = (0..STALL_ESCALATION).map(|_| Exposure::Stall).collect();
     let (kept_handle, _) = run_guide_loop_on(&state, run, 2).await;
     assert!(!kept_handle, "precondition: the first run escalates");
 
-    let (kept_handle, frames) = run_guide_loop_on(&state, vec![Step::Stall], 2).await;
+    let (kept_handle, frames) = run_guide_loop_on(&state, vec![Exposure::Stall], 2).await;
     assert!(!kept_handle, "the reopened loop must not restart a stream that never recovered");
     assert_eq!(frames, 0);
 }
@@ -607,7 +490,7 @@ async fn a_camera_whose_restarts_never_work_is_reopened_at_its_first_stall() {
     let state = Arc::new(state);
     distrust_restarts(&state, CameraRole::Main, "Scripted Camera");
 
-    let run = drive_main_loop_on(state, vec![Step::Frame, Step::Stall], 3).await;
+    let run = drive_main_loop_on(state, vec![Exposure::Frame, Exposure::Stall], 3).await;
 
     assert!(!run.returned_handle, "a restart known not to work must not be spent");
     assert_eq!(run.frames, 1);

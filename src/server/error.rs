@@ -75,6 +75,13 @@ pub enum ApiError {
     #[error("Cannot change stacking type while capturing")]
     StackingTypeChangeNotAllowed,
 
+    /// Entering the mode drops the banding correction from frames a running stack keeps.
+    #[error("Cannot enter Focus/Finder mode while stacking - it would mix hot pixels and banding into the stack. Stop the capture first.")]
+    FocusModeWhileStacking,
+
+    #[error("{0} is a Pro feature")]
+    ProFeatureRequired(&'static str),
+
     #[error("Invalid camera ID format. Expected: provider_index")]
     InvalidCameraIdFormat,
 
@@ -133,6 +140,8 @@ impl ApiError {
             ApiError::CaptureCameraIsNotMain { .. } => StatusCode::CONFLICT,
             ApiError::NoGuideCameraConnected => StatusCode::BAD_REQUEST,
             ApiError::StackingTypeChangeNotAllowed => StatusCode::CONFLICT,
+            ApiError::FocusModeWhileStacking => StatusCode::CONFLICT,
+            ApiError::ProFeatureRequired(_) => StatusCode::FORBIDDEN,
             ApiError::InvalidCameraIdFormat => StatusCode::BAD_REQUEST,
             ApiError::InvalidCameraIndex => StatusCode::BAD_REQUEST,
             ApiError::CameraOpenFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,

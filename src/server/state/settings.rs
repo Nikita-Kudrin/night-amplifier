@@ -9,8 +9,14 @@ use crate::planetary::AlignmentRoi;
 use crate::render::{AiComputePreference, SaturationBoostConfig, StretchAggressiveness};
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
-/// Capture settings that can be modified during a session
-#[derive(Debug, Clone)]
+/// Capture settings that can be modified during a session.
+///
+/// Also the schema of `settings.json` and of the settings API's answer, so a new setting
+/// is one field here. A key missing from a file takes its value from `Default`, which
+/// keeps a file written by any older build loadable; `settings_persistence::migrate`
+/// rewrites the keys an older build named differently.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CaptureSettings {
     /// Exposure time in microseconds
     pub exposure_us: u64,
@@ -27,6 +33,10 @@ pub struct CaptureSettings {
     /// Sigma for rejection during stacking
     pub rejection_sigma: f32,
     /// Outlier rejection method (None, SigmaClip, etc.)
+    ///
+    /// A file from before this key existed has always loaded as `None`, not as the
+    /// `SigmaClip` a fresh install starts with; kept that way on purpose.
+    #[serde(default = "RejectionMethod::default")]
     pub rejection_method: RejectionMethod,
     /// Enable background subtraction
     pub background_subtraction: bool,
@@ -59,15 +69,19 @@ pub struct CaptureSettings {
     /// Whether the cooler should be active during capture (cooled cameras only)
     pub cooler_enabled: bool,
     /// Target sensor temperature in Celsius (None means "no target set")
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target_temp_c: Option<f64>,
     /// Bypass the 5 °C/min ramp and cool/warm as fast as the hardware allows.
     /// Defeats sensor-stress / condensation protections — user-opt-in only.
     pub cooler_fast_mode: bool,
     /// Manual override for camera sensor mode. None means "derive from stacking_type".
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sensor_mode_override: Option<DualSamplingMode>,
     /// Region of interest for comet nucleus tracking
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comet_roi: Option<AlignmentRoi>,
     /// Region of interest for planetary alignment
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub planetary_roi: Option<AlignmentRoi>,
     /// Enable auto tracking of planetary ROI
     pub planetary_auto_tracking: bool,
@@ -100,11 +114,13 @@ pub struct CaptureSettings {
     /// Telescope and camera parameters for FOV calculation
     pub telescope: TelescopeSettings,
     /// Per-camera telescope profiles keyed by camera name
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
     /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`.
     /// Holds the seven hardware-specific fields so switching between cameras
     /// doesn't leak stale values (e.g. cooler=true from a cooled camera into
     /// an uncooled one).
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub camera_profiles: HashMap<String, CameraCaptureProfile>,
     /// The guide camera's live hardware values.
     ///
@@ -114,6 +130,7 @@ pub struct CaptureSettings {
     /// remembers it across reconnects exactly as it does the main camera's.
     pub guide_camera: CameraCaptureProfile,
     /// Name of the last active camera (for profile inheritance)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_camera_name: Option<String>,
     /// Whether the user has accepted the End User License Agreement
     pub eula_accepted: bool,
@@ -127,7 +144,9 @@ pub struct CaptureSettings {
     /// through [`super::focus_mode::set`], never by assignment — a bare write leaves the
     /// snapshot behind and the next toggle restores the wrong values.
     pub focus_mode: bool,
-    /// What the managed settings were before Focus/Finder mode overwrote them.
+    /// What the managed settings were before Focus/Finder mode overwrote them. Never sent
+    /// to a client: see `SettingsResponse`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub focus_mode_snapshot: Option<FocusModeSnapshot>,
 }
 
@@ -218,6 +237,14 @@ impl CameraCaptureProfile {
             dew_heater_enabled,
             dew_heater_power,
         }
+    }
+
+    /// This profile with the cooler setpoint and heater power inside what the hardware
+    /// takes. Idempotent.
+    pub fn sanitized(mut self) -> Self {
+        self.target_temp_c = self.target_temp_c.map(|t| t.clamp(-60.0, 30.0));
+        self.dew_heater_power = self.dew_heater_power.clamp(0, 100);
+        self
     }
 
     /// Write the fields onto the flat `CaptureSettings`.
@@ -757,6 +784,31 @@ impl Default for CaptureSettings {
 }
 
 impl CaptureSettings {
+    /// Every value inside the range the rest of the server assumes, however it arrived:
+    /// a request, or an older or hand-edited file. Idempotent, so every path runs it.
+    pub fn sanitized(mut self) -> Self {
+        self.rejection_sigma = self.rejection_sigma.clamp(0.5, 10.0);
+        self.auto_stretch_intensity = self.auto_stretch_intensity.clamp(0.0, 1.0);
+        self.saturation_boost_strength = self.saturation_boost_strength.clamp(0.0, 1.0);
+        self.simulated_preload_images = self.simulated_preload_images.max(1);
+        self.main_camera_profile().sanitized().apply_to(&mut self);
+        self.guide_camera = self.guide_camera.sanitized();
+        for profile in self.camera_profiles.values_mut() {
+            *profile = profile.clone().sanitized();
+        }
+        self.sensor_correction = self.sensor_correction.sanitized();
+        self.denoise = self.denoise.sanitized();
+        self.eyepiece = self.eyepiece.sanitized();
+        // `focus_mode == focus_mode_snapshot.is_some()` holds both ways: a flag with no
+        // snapshot has nothing to restore from, and a snapshot with no flag describes
+        // values already in force.
+        if !(self.focus_mode && self.focus_mode_snapshot.is_some()) {
+            self.focus_mode = false;
+            self.focus_mode_snapshot = None;
+        }
+        self
+    }
+
     /// The size a stream family is sent at: Streaming Resolution for JPEG, Eyepiece
     /// Streaming Resolution for lossless.
     ///

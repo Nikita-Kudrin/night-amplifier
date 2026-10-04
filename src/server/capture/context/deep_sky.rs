@@ -2,13 +2,13 @@
 
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
+use super::LiveStacker;
 use crate::detection::{compute_median_fwhm, compute_median_snr, Star};
-use crate::frame::Frame;
+use crate::frame::{Frame, NoiseField};
 use crate::registration::AdaptiveRegistration;
 use crate::server::state::CaptureSettings;
 use crate::stacking::{
-    FrameQuality, RejectionMethod, Stacker, StackingConfig, WeightingConfig, WeightingPreset,
-    REJECTION_PLUGIN,
+    FrameQuality, RejectionMethod, Stacker, StackingConfig, StackingType, REJECTION_PLUGIN,
 };
 
 use crate::server::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason};
@@ -61,28 +61,11 @@ impl StackingContext {
         channels: usize,
         settings: &CaptureSettings,
     ) -> Option<Self> {
-        // Convert weighting preset to WeightingConfig
-        let weighting = match settings.weighting_preset {
-            WeightingPreset::Disabled => WeightingConfig::disabled(),
-            WeightingPreset::Balanced => WeightingConfig::balanced(),
-            WeightingPreset::Galaxies => WeightingConfig::for_galaxies(),
-            WeightingPreset::Nebulae => WeightingConfig::for_nebulae(),
-            WeightingPreset::FwhmOnly => WeightingConfig::fwhm_only(),
-            WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
-        };
-
-        // Resolved the same way `update_from_settings` does it, so a session does not
+        // Built the same way `update_from_settings` builds it, so a session does not
         // start on a different method than a no-op settings edit would give it. This
         // used to hardcode `SigmaClip`, which meant the observer's choice only took
         // effect if they happened to touch settings mid-session.
-        let rejection = resolve_rejection(settings);
-
-        let stacking_config = StackingConfig::default()
-            .with_rejection(rejection)
-            .with_sigma(settings.rejection_sigma)
-            .with_weighting(weighting);
-
-        let stacker = match Stacker::new(width, height, channels, stacking_config) {
+        let stacker = match Stacker::new(width, height, channels, stacking_config(settings)) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker");
@@ -323,29 +306,82 @@ impl StackingContext {
 
     /// Update stacking parameters from current settings dynamically
     pub fn update_from_settings(&mut self, settings: &CaptureSettings) {
-        let weighting = match settings.weighting_preset {
-            WeightingPreset::Disabled => WeightingConfig::disabled(),
-            WeightingPreset::Balanced => WeightingConfig::balanced(),
-            WeightingPreset::Galaxies => WeightingConfig::for_galaxies(),
-            WeightingPreset::Nebulae => WeightingConfig::for_nebulae(),
-            WeightingPreset::FwhmOnly => WeightingConfig::fwhm_only(),
-            WeightingPreset::SnrOnly => WeightingConfig::snr_only(),
-        };
-
-        let rejection = resolve_rejection(settings);
-
-        let config = StackingConfig::default()
-            .with_rejection(rejection)
-            .with_sigma(settings.rejection_sigma)
-            .with_weighting(weighting);
-
-        self.stacker.update_config(config);
+        self.stacker.update_config(stacking_config(settings));
     }
+}
+
+impl LiveStacker for StackingContext {
+    fn kind(&self) -> StackingType {
+        StackingType::DeepSky
+    }
+
+    fn geometry(&self) -> (usize, usize, usize) {
+        (self.width(), self.height(), self.channels())
+    }
+
+    fn depth(&self) -> usize {
+        self.frame_count()
+    }
+
+    fn has_reference(&self) -> bool {
+        self.is_initialized
+    }
+
+    fn apply_settings(&mut self, settings: &CaptureSettings) {
+        self.update_from_settings(settings);
+    }
+
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), String> {
+        let star_count = self.initialize_with_reference(frame)?;
+        info!(star_count, "Stacking initialized with reference frame");
+        Ok(())
+    }
+
+    fn offer(&mut self, frame: &Frame, _settings: &CaptureSettings) -> Result<FrameAdmission, String> {
+        let admission = self.add_frame(frame)?;
+        // `residual` as Debug, not the bare f32: NaN/inf are legitimate sentinels here
+        // (see `FrameAdmission::mean_residual`), and OTel exports a bare f32 as a double
+        // attribute that Jaeger's query API 500s trying to JSON-encode — taking down every
+        // trace search that touches one. Debug makes it a string attribute instead.
+        match admission.rejected_because {
+            None => info!(
+                frame_count = self.frame_count(),
+                matched_stars = admission.matched_stars,
+                residual = ?admission.mean_residual,
+                "Frame added to stack"
+            ),
+            Some(reason) => info!(
+                frame_count = self.frame_count(),
+                matched_stars = admission.matched_stars,
+                residual = ?admission.mean_residual,
+                reason = reason.describe(),
+                "Frame not added to stack"
+            ),
+        }
+        Ok(admission)
+    }
+
+    /// One read of the 434 MB accumulator for both the display copy and the coverage
+    /// map; see `MasterStack::compute_with_coverage`. A stack every sub covered
+    /// completely — the common case — carries no map, so it costs the encoders nothing.
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String> {
+        let (frame, coverage) = self.compute_with_coverage()?;
+        Ok((frame, coverage.is_usable().then_some(coverage)))
+    }
+}
+
+/// The accumulator's configuration for `settings`, at session start and on every edit.
+fn stacking_config(settings: &CaptureSettings) -> StackingConfig {
+    StackingConfig::default()
+        .with_rejection(resolve_rejection(settings))
+        .with_sigma(settings.rejection_sigma)
+        .with_weighting(settings.weighting_preset.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stacking::WeightingPreset;
 
     /// Exhaustive: a new variant must be considered by every test here.
     const ALL_METHODS: [RejectionMethod; 4] = [
