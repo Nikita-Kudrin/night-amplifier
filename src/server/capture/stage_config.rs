@@ -12,6 +12,7 @@ use crate::camera::{CameraInfo, CameraResult, RawFrame};
 use crate::cfa::{CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
 use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
+use crate::plugins::Plugins;
 use crate::server::state::CaptureSettings;
 
 /// The raw-CFA stage for the current settings.
@@ -147,13 +148,17 @@ const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
 /// filters remove, and a lunar disc is the low-contrast large-scale structure a
 /// wavelet threshold flattens. The master switch is refused here too, so "off"
 /// means off whatever a plugin would do.
-fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
+fn denoise_config(settings: &CaptureSettings, plugins: &Plugins) -> crate::render::DenoiseConfig {
     if settings.stacking_type == crate::stacking::StackingType::Planetary
         || !settings.denoise.enabled
     {
         return crate::render::DenoiseConfig::OFF;
     }
-    crate::render::denoise::config_for(&requested_denoise(settings), settings.stretch_aggressiveness)
+    crate::render::denoise::config_for(
+        plugins,
+        &requested_denoise(settings),
+        settings.stretch_aggressiveness,
+    )
 }
 
 /// The observer's denoise settings as this frame may use them.
@@ -214,12 +219,14 @@ fn darkening_request(settings: &CaptureSettings) -> Option<crate::render::Shadow
 
 pub fn get_render_pipeline_config(
     settings: &CaptureSettings,
+    plugins: &Plugins,
     for_fits: bool,
 ) -> crate::render::RenderPipelineConfig {
     use crate::render::{AutoStretchConfig, RenderPipelineConfig};
 
     // Set configuration first, then explicit toggle last to override the config's auto-enable
     let mut config = RenderPipelineConfig::new()
+        .with_plugins(plugins.clone())
         .with_background_config(get_background_config(settings))
         .with_background_subtraction(settings.background_subtraction);
 
@@ -239,7 +246,7 @@ pub fn get_render_pipeline_config(
         // The expensive half of the Background Grain dial. It belongs here, with the
         // profile, and not at `AutoStretchConfig::default()`: the default is what an
         // export or a one-shot render uses, and those have no dial to read.
-        .with_grain_split(crate::render::denoise::grain_split_for(&settings.denoise));
+        .with_grain_split(crate::render::denoise::grain_split_for(plugins, &settings.denoise));
         let saturation_config = settings.saturation_boost_config();
 
         // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle
@@ -277,7 +284,7 @@ pub fn get_render_pipeline_config(
 
         config.shadow_floor = darkening.unwrap_or(crate::render::ShadowFloorRequest::NONE);
 
-        config.denoise = denoise_config(settings);
+        config.denoise = denoise_config(settings, plugins);
 
         // Apply eyepiece dark background enhancement
         let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;
@@ -349,21 +356,21 @@ mod tests {
         // Test 1: Both enabled
         settings.background_subtraction = true;
         settings.auto_stretch = true;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.background_subtraction);
         assert!(config.auto_stretch);
 
         // Test 2: Both disabled
         settings.background_subtraction = false;
         settings.auto_stretch = false;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(!config.background_subtraction);
         assert!(!config.auto_stretch);
 
         // Test 3: Mixed
         settings.background_subtraction = true;
         settings.auto_stretch = false;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.background_subtraction);
         assert!(!config.auto_stretch);
     }
@@ -375,11 +382,11 @@ mod tests {
 
         // Base config
         settings.eyepiece.intensity = 0.0;
-        let base_config = get_render_pipeline_config(&settings, false);
+        let base_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
 
         // Max intensity config (slider at 1.0, internal intensity 0.4)
         settings.eyepiece.intensity = 1.0;
-        let max_config = get_render_pipeline_config(&settings, false);
+        let max_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
 
         let blend = |base: f32, target: f32| base * 0.6 + target * 0.4;
         let expected_bg = blend(
@@ -419,7 +426,7 @@ mod tests {
 
         // Half intensity config (slider at 0.5, internal intensity 0.2)
         settings.eyepiece.intensity = 0.5;
-        let half_config = get_render_pipeline_config(&settings, false);
+        let half_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
 
         let expected_half_bg =
             base_config.stretch_config.target_background * 0.8 + EYEPIECE_TARGET_BACKGROUND * 0.2;
@@ -436,7 +443,7 @@ mod tests {
         let mut previous = f32::MIN;
         for step in 0..=10 {
             settings.eyepiece.intensity = step as f32 / 10.0;
-            let sigma = get_render_pipeline_config(&settings, false)
+            let sigma = get_render_pipeline_config(&settings, &Plugins::none(), false)
                 .stretch_config
                 .black_point_sigma;
             assert!(
@@ -457,7 +464,7 @@ mod tests {
         settings.auto_stretch = true;
         for step in 0..=10 {
             settings.eyepiece.intensity = step as f32 / 10.0;
-            let sigma = get_render_pipeline_config(&settings, false)
+            let sigma = get_render_pipeline_config(&settings, &Plugins::none(), false)
                 .stretch_config
                 .black_point_sigma;
             assert!(
@@ -476,13 +483,13 @@ mod tests {
         settings.eyepiece.black_floor = 0.05;
         settings.eyepiece.dither = true;
 
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!((config.display.pedestal - 0.05).abs() < 1e-6);
         assert!(config.display.dither);
 
         settings.eyepiece.black_floor = 0.0;
         settings.eyepiece.dither = false;
-        let plain = get_render_pipeline_config(&settings, false);
+        let plain = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(
             plain.display.is_plain(),
             "both settings off must reproduce a plain conversion"
@@ -497,7 +504,7 @@ mod tests {
         settings.eyepiece.black_floor = -NOMINAL_SKY_LEVEL;
         settings.eyepiece.darker_sky = false;
 
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(
             (config.shadow_floor.fraction - 1.0).abs() < 1e-5,
             "a floor of one nominal sky level must resolve to a fraction of 1.0,              got {}",
@@ -512,7 +519,7 @@ mod tests {
 
         // And the positive half is untouched by any of it.
         settings.eyepiece.black_floor = 0.05;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!((config.display.pedestal - 0.05).abs() < 1e-6);
         assert!(config.shadow_floor.is_none());
     }
@@ -526,13 +533,13 @@ mod tests {
         settings.eyepiece.black_floor = -0.05;
         settings.eyepiece.darker_sky = true;
 
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.hard);
         assert_eq!(config.display.pedestal, 0.0);
 
         // It says nothing while the slider is on its lifting half.
         settings.eyepiece.black_floor = 0.04;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
         assert!((config.display.pedestal - 0.04).abs() < 1e-6);
     }
@@ -550,7 +557,7 @@ mod tests {
         settings.eyepiece.black_floor = -0.09;
         settings.eyepiece.dither = false;
 
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
         assert!(
             config.display.is_plain(),
@@ -560,7 +567,7 @@ mod tests {
 
         // The same position with a solve behind it is the live feature.
         settings.auto_stretch = true;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(!config.shadow_floor.is_none());
     }
 
@@ -572,11 +579,11 @@ mod tests {
         settings.denoise.ai = true;
         assert!(requested_denoise(&settings).ai);
 
-        crate::server::state::focus_mode::set(&mut settings, true);
+        crate::server::state::focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
         assert!(!requested_denoise(&settings).ai, "framing must not pay for the network");
         assert!(settings.denoise.ai, "the mode changed the observer's switch");
 
-        crate::server::state::focus_mode::set(&mut settings, false);
+        crate::server::state::focus_mode::set(&mut settings, false, &crate::plugins::Plugins::none());
         assert!(requested_denoise(&settings).ai);
     }
 
@@ -609,7 +616,7 @@ mod tests {
         settings.eyepiece.dither = false;
         settings.stacking_type = crate::stacking::StackingType::Planetary;
 
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
         assert!(
             config.display.is_plain(),
@@ -622,7 +629,7 @@ mod tests {
             crate::stacking::StackingType::Comet,
         ] {
             settings.stacking_type = stacking_type;
-            let config = get_render_pipeline_config(&settings, false);
+            let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
             assert!(
                 !config.shadow_floor.is_none(),
                 "{stacking_type:?} lost the floor along with Planetary"
@@ -643,7 +650,7 @@ mod tests {
         // input stepping onto zero can produce.
         for value in [-1.3877788e-17f32, -0.0, 0.0, 5e-5, -5e-5] {
             settings.eyepiece.black_floor = value;
-            let config = get_render_pipeline_config(&settings, false);
+            let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
             assert!(
                 config.shadow_floor.is_none() && config.display.is_plain(),
                 "black_floor {value:e} was not treated as zero: floor {:?}, \
@@ -662,13 +669,13 @@ mod tests {
         let mut settings = CaptureSettings::default();
 
         settings.eyepiece.black_floor = -5.0;
-        let clamped = get_render_pipeline_config(&settings, false).shadow_floor;
+        let clamped = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
         settings.eyepiece.black_floor = MIN_BLACK_FLOOR;
-        let end_stop = get_render_pipeline_config(&settings, false).shadow_floor;
+        let end_stop = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
         assert_eq!(clamped, end_stop);
 
         settings.eyepiece.black_floor = f32::NAN;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
         assert!(
             config.display.pedestal.is_finite(),
@@ -676,7 +683,7 @@ mod tests {
         );
 
         settings.eyepiece.black_floor = 10.0;
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
         assert!((config.display.pedestal - MAX_BLACK_FLOOR).abs() < 1e-6);
     }
@@ -689,14 +696,14 @@ mod tests {
         settings.eyepiece.black_floor = 0.05;
         settings.eyepiece.dither = true;
 
-        let config = get_render_pipeline_config(&settings, true);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), true);
         assert!(config.display.is_plain());
 
         // Nor may the darkening half, which would bake a display curve into
         // linear data that is meant to be re-stretched later.
         settings.eyepiece.black_floor = -0.05;
         settings.eyepiece.darker_sky = true;
-        let config = get_render_pipeline_config(&settings, true);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), true);
         assert!(config.display.is_plain());
         assert!(config.shadow_floor.is_none());
 
@@ -761,7 +768,7 @@ mod tests {
     fn finder_mode_cannot_take_hot_pixel_rejection_out_of_the_pipeline() {
         let mut settings =
             settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
-        crate::server::state::focus_mode::set(&mut settings, true);
+        crate::server::state::focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
 
         assert_eq!(
             build_cfa_pipeline(&settings).stage_names(),

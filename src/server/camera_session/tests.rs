@@ -1507,7 +1507,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
                 16,
                 16,
                 1,
-                &crate::server::capture::StackSettings::of(&settings),
+                &crate::server::capture::StackSettings::of(&settings, &crate::plugins::Plugins::none()),
             )
             .expect("context"),
         ),

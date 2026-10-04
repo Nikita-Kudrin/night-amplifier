@@ -357,9 +357,7 @@ impl<'a> RowTail<'a> {
     pub(super) fn apply(&self, f32_row: &mut [f32]) {
         self.apply_tone(f32_row);
         if self.has_saturate {
-            if let Some(plugin) =
-                crate::license::pro_plugin(&crate::render::stretch::saturation::SATURATION_PLUGIN)
-            {
+            if let Some(plugin) = self.config.plugins.saturation() {
                 plugin.apply_boost_slice(f32_row, &self.config.saturation_config);
             }
         }
@@ -537,7 +535,9 @@ fn stage_and_denoise<S: RowSource>(
             .for_each(|(y, row)| source.gather_row(y, row));
     }
 
+    let plugins = &tail.config.plugins;
     crate::render::denoise::denoise_rgb_interleaved_with(
+        plugins,
         staged,
         target_width,
         target_height,
@@ -558,6 +558,7 @@ fn stage_and_denoise<S: RowSource>(
                 .for_each(|row| tail.apply_tone(row));
         }
         crate::render::denoise::ai::denoise_display_rgb_with(
+            plugins,
             staged,
             target_width,
             target_height,

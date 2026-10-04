@@ -30,7 +30,8 @@ impl StackingContext {
         // start on a different method than a no-op settings edit would give it. This
         // used to hardcode `SigmaClip`, which meant the observer's choice only took
         // effect if they happened to touch settings mid-session.
-        let stacker = match Stacker::new(width, height, channels, settings.config.clone()) {
+        let config = settings.config.clone();
+        let stacker = match Stacker::with_plugins(width, height, channels, config, settings.plugins.clone()) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker");
@@ -361,7 +362,7 @@ mod tests {
                 settings.rejection_method = method;
                 settings.weighting_preset = preset;
                 settings.rejection_sigma = sigma;
-                let settings = StackSettings::of(&settings);
+                let settings = StackSettings::of(&settings, &crate::plugins::Plugins::none());
 
                 let mut at_start =
                     StackingContext::new(64, 64, 3, &settings).expect("context builds");

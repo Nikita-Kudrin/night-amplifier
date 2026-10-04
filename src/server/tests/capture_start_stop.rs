@@ -349,7 +349,7 @@ async fn resume_with_focus_mode_on(stacking: bool) -> Arc<AppState> {
     {
         let mut settings = state.settings.write().await;
         settings.stacking = stacking;
-        focus_mode::set(&mut settings, true);
+        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
     }
     state.set_capture_state(CaptureState::Recovering).await;
     let plan = SessionResumePlan {
@@ -428,7 +428,7 @@ async fn test_starting_a_planetary_stack_keeps_focus_mode() {
         let mut settings = state.settings.write().await;
         settings.stacking = true;
         settings.stacking_type = StackingType::Planetary;
-        focus_mode::set(&mut settings, true);
+        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
     }
 
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
@@ -444,7 +444,7 @@ async fn live_view_under_focus_mode(stacking_type: StackingType) -> Arc<AppState
         let mut settings = state.settings.write().await;
         settings.stacking = false;
         settings.stacking_type = stacking_type;
-        focus_mode::set(&mut settings, true);
+        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
     }
     state.set_capture_state(CaptureState::Capturing).await;
     state

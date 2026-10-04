@@ -10,7 +10,7 @@ use super::super::events::ServerEvent;
 use super::super::state::AppState;
 use crate::push_to::{
     CatalogEntryResponse, CoordinateResponse, PushToBlocker, PushToDirectionResponse, PushToError,
-    PushToStatusResponse, TelescopeSettings, PUSH_TO_PLUGIN,
+    PushToStatusResponse, TelescopeSettings,
 };
 
 /// Push-To navigation service
@@ -25,8 +25,8 @@ impl PushToService {
     /// `solve_frame`, and clearing it here would let a second solve start under one
     /// already in flight. The mirror is kept in sync by the target mutations below
     /// and `solve_frame`'s own authoritative read of the plugin.
-    pub async fn get_status(_state: &AppState) -> PushToStatusResponse {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    pub async fn get_status(state: &AppState) -> PushToStatusResponse {
+        if let Some(plugin) = state.plugins.push_to_solver() {
             plugin.get_status().await
         } else {
             PushToStatusResponse {
@@ -47,7 +47,7 @@ impl PushToService {
     /// a cancel is not a failure in any case — reporting it as one made a still-good
     /// last position look untrustworthy.
     pub async fn cancel_solve(state: &AppState) -> Result<bool, String> {
-        let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) else {
+        let Some(plugin) = state.plugins.push_to_solver() else {
             return Err("Push-To navigation requires Night Amplifier Pro".to_string());
         };
 
@@ -65,7 +65,7 @@ impl PushToService {
     /// so the movement detector would report `Idle` on every later frame and nothing
     /// would ever re-solve against the new optics.
     pub async fn restart_solve(state: &AppState, reason: &str) -> Result<(), String> {
-        let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) else {
+        let Some(plugin) = state.plugins.push_to_solver() else {
             return Ok(()); // No plugin available; nothing to restart.
         };
 
@@ -76,39 +76,27 @@ impl PushToService {
         Ok(())
     }
 
-    /// Tell the solver which camera is producing frames now. No-op without the Pro plugin.
-    ///
-    /// Called on connect and disconnect, not only on a settings change: the telescope profile
-    /// is what the *user* believes the optics are, and two cameras sharing a sensor format
-    /// leave it identical. The camera name is the one fact that always changes, letting the
-    /// solver notice a remembered field of view was measured through something else.
-    pub async fn set_active_camera(camera: Option<String>) {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            plugin.set_active_camera(camera).await;
-        }
-    }
-
     /// Tell the solver the whole rig at once — which camera, through which optics.
     ///
-    /// Preferred over calling [`PushToService::set_active_camera`] and
-    /// [`PushToService::set_telescope_settings`] in sequence: the two together are one
-    /// fact, and the solver resolves its remembered field of view from both. See
-    /// [`PushToSolverPlugin::set_rig`].
+    /// Called on connect and disconnect, not only on a settings change: two cameras sharing
+    /// a sensor format leave the telescope profile identical, and the camera name lets the
+    /// solver notice a remembered field of view was measured through something else. The
+    /// two together are one fact; see [`PushToSolverPlugin::set_rig`].
     ///
     /// No-op without the Pro plugin.
-    pub async fn set_rig(camera: Option<String>, telescope: TelescopeSettings) {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    pub async fn set_rig(state: &AppState, camera: Option<String>, telescope: TelescopeSettings) {
+        if let Some(plugin) = state.plugins.push_to_solver() {
             plugin.set_rig(camera, telescope).await;
         }
     }
 
     /// Search the catalog
     pub async fn search_catalog(
-        _state: &AppState,
+        state: &AppState,
         query: &str,
         limit: usize,
     ) -> Vec<CatalogEntryResponse> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             plugin.search_catalog(query, limit).await
         } else {
             vec![]
@@ -117,10 +105,10 @@ impl PushToService {
 
     /// Get all catalog entries of a specific type
     pub async fn get_catalog_by_type(
-        _state: &AppState,
+        state: &AppState,
         catalog_type_str: &str,
     ) -> Vec<CatalogEntryResponse> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             plugin.get_catalog_by_type(catalog_type_str).await
         } else {
             vec![]
@@ -132,7 +120,7 @@ impl PushToService {
         state: &AppState,
         name: &str,
     ) -> Result<CatalogEntryResponse, String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.set_target_by_name(name).await.map_err(|e| e.to_string())?;
             state.push_to_target_changed(true).await;
             let _ = state.events.send(ServerEvent::target_changed(
@@ -153,7 +141,7 @@ impl PushToService {
         ra_degrees: f64,
         dec_degrees: f64,
     ) -> Result<CoordinateResponse, String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin
                 .set_target_by_coords(ra_degrees, dec_degrees)
                 .await
@@ -174,7 +162,7 @@ impl PushToService {
 
     /// Clear the current target
     pub async fn clear_target(state: &AppState) -> Result<(), String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.clear_target().await.map_err(|e| e.to_string());
             // Only mirror a clear that actually happened — a failed clear leaves
             // the plugin holding the target, and claiming otherwise would stop
@@ -190,8 +178,8 @@ impl PushToService {
     }
 
     /// Get the push direction (if position and target are both set)
-    pub async fn get_direction(_state: &AppState) -> Option<PushToDirectionResponse> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    pub async fn get_direction(state: &AppState) -> Option<PushToDirectionResponse> {
+        if let Some(plugin) = state.plugins.push_to_solver() {
             plugin.get_direction().await
         } else {
             None
@@ -199,8 +187,8 @@ impl PushToService {
     }
 
     /// Update the FOV hint for the solver
-    pub async fn set_fov(_state: &AppState, fov_degrees: f32) -> Result<(), String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    pub async fn set_fov(state: &AppState, fov_degrees: f32) -> Result<(), String> {
+        if let Some(plugin) = state.plugins.push_to_solver() {
             plugin.set_fov(fov_degrees).await.map_err(|e| e.to_string())
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
@@ -209,10 +197,10 @@ impl PushToService {
 
     /// Update telescope settings on the solver for precise FOV calculation
     pub async fn set_telescope_settings(
-        _state: &AppState,
+        state: &AppState,
         settings: TelescopeSettings,
     ) -> Result<(), String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state.plugins.push_to_solver() {
             plugin
                 .set_telescope_settings(settings)
                 .await
@@ -223,8 +211,8 @@ impl PushToService {
     }
 
     /// Load a solver database
-    pub async fn load_database(_state: &AppState, path: &str) -> Result<(), String> {
-        if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    pub async fn load_database(state: &AppState, path: &str) -> Result<(), String> {
+        if let Some(plugin) = state.plugins.push_to_catalog() {
             plugin.load_database(path).await.map_err(|e| e.to_string())
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())

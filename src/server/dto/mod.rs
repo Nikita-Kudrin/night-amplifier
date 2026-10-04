@@ -528,7 +528,7 @@ mod tests {
         };
         everything.camera_telescope_profiles.insert("Ares-C PRO".into(), Default::default());
         everything.camera_profiles.insert("PlayerOne/Ares-C PRO".into(), Default::default());
-        crate::server::state::focus_mode::set(&mut everything, true);
+        crate::server::state::focus_mode::set(&mut everything, true, &crate::plugins::Plugins::none());
 
         let mut expected: Vec<&str> = ALWAYS.iter().chain(WHEN_SET).copied().collect();
         expected.sort();

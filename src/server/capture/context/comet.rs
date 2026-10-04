@@ -5,7 +5,7 @@ use tracing::{info, warn};
 use super::{LiveStacker, StackSettings};
 use crate::frame::{Frame, NoiseField};
 use crate::server::capture::frame_gate::FrameAdmission;
-use crate::stacking::{CometContext, StackingType, COMET_PLUGIN};
+use crate::stacking::{CometContext, StackingType};
 
 /// A [`LiveStacker`] over the plugin's context, which owns the nucleus alignment.
 pub struct CometStacker(Box<dyn CometContext>);
@@ -18,7 +18,9 @@ impl CometStacker {
         channels: usize,
         settings: &StackSettings,
     ) -> Result<Self, String> {
-        let plugin = crate::license::pro_plugin(&COMET_PLUGIN)
+        let plugin = settings
+            .plugins
+            .comet()
             .ok_or_else(|| "Comet stacking plugin not found (Pro feature)".to_string())?;
         Ok(Self(plugin.create_context(width, height, channels, &settings.comet())))
     }
@@ -192,7 +194,7 @@ mod tests {
 
     #[test]
     fn without_the_plugin_there_is_no_comet_stack() {
-        let settings = StackSettings::of(&CaptureSettings::default());
+        let settings = StackSettings::of(&CaptureSettings::default(), &crate::plugins::Plugins::none());
         let refused = CometStacker::new(32, 32, 1, &settings);
         assert!(refused.is_err(), "Community has no comet alignment to run");
     }
@@ -211,7 +213,7 @@ mod tests {
     /// accumulated comet has to stay on screen, so neither outcome is an `Err`.
     #[test]
     fn a_frame_the_nucleus_cannot_be_found_in_leaves_the_stack_alone() {
-        let settings = StackSettings::of(&CaptureSettings::default());
+        let settings = StackSettings::of(&CaptureSettings::default(), &crate::plugins::Plugins::none());
         let mut comet = stacker(vec![
             Ok(false),
             Err(crate::error::StackError::Registration("lost the nucleus".into())),
@@ -240,7 +242,7 @@ mod tests {
         let stub = StubComet::new(32, 32, 1);
         let updates = std::sync::Arc::clone(&stub.roi_updates);
         let mut comet = CometStacker::from_context(Box::new(stub));
-        let mut settings = StackSettings::of(&CaptureSettings::default());
+        let mut settings = StackSettings::of(&CaptureSettings::default(), &crate::plugins::Plugins::none());
 
         comet.apply_settings(&settings);
         assert_eq!(updates.load(Ordering::Relaxed), 0, "no ROI drawn, nothing to send");

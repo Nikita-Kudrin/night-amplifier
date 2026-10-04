@@ -1,18 +1,19 @@
 //! `GET /api/ai-compute` and the capture gate, against a fake AI denoise plugin. The
-//! plugin registry is process-wide, which is why this is its own binary and its tests run
-//! one at a time.
+//! server is built by `Server::new`, which takes the process's installed plugins and
+//! licence flag, so this is its own binary and its tests run one at a time.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::{Arc, Mutex, Once};
 
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use night_amplifier::license::{LicenseDetails, LICENSE_UPDATER, PRO_LICENSE_ACTIVE};
+use night_amplifier::plugins::{self, Plugins};
 use night_amplifier::render::denoise::ai;
 use night_amplifier::render::denoise::DenoiseSettings;
 use night_amplifier::render::{
     AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin, BenchmarkState,
-    ComputeRung, DenoiseScratch, RungReport, AI_DENOISE_PLUGIN,
+    ComputeRung, DenoiseScratch, RungReport,
 };
 use night_amplifier::server::state::CaptureState;
 use night_amplifier::server::{Server, ServerConfig};
@@ -80,7 +81,7 @@ fn install() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         isolate_cwd();
-        AI_DENOISE_PLUGIN.set(Box::new(FakePlugin)).ok().expect("nothing else registers a plugin here");
+        plugins::install(Plugins::none().with_ai_denoise(Arc::new(FakePlugin)));
     });
     PRO_LICENSE_ACTIVE.store(true, Ordering::SeqCst);
 }
@@ -131,7 +132,7 @@ async fn the_report_and_the_capture_gate_follow_the_plugin() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(retry_after.as_deref(), Some("5"));
     assert!(body["error"].as_str().unwrap().contains("Benchmarking"), "{body}");
-    assert!(ai::benchmark_pending());
+    assert!(ai::benchmark_pending(&Plugins::installed()));
 
     // Finished: the gate opens. No camera is connected, so the start fails on that instead.
     BENCHMARKING.store(false, Ordering::SeqCst);
@@ -141,9 +142,9 @@ async fn the_report_and_the_capture_gate_follow_the_plugin() {
 
     // The watcher's counter and the startup hook reach the plugin.
     GENERATION.store(42, Ordering::SeqCst);
-    assert_eq!(ai::compute_generation(), 42);
+    assert_eq!(ai::compute_generation(&Plugins::installed()), 42);
     let before = STARTS.load(Ordering::SeqCst);
-    ai::start_benchmark();
+    ai::start_benchmark(&Plugins::installed());
     assert_eq!(STARTS.load(Ordering::SeqCst), before + 1);
 
     // Without a licence the plugin is not asked: no report, no gate, no benchmark.
@@ -151,12 +152,12 @@ async fn the_report_and_the_capture_gate_follow_the_plugin() {
     PRO_LICENSE_ACTIVE.store(false, Ordering::SeqCst);
     let (_, _, body) = call(&app, "GET", "/api/ai-compute").await;
     assert_eq!(body["data"]["state"], "unavailable");
-    assert!(!ai::benchmark_pending());
+    assert!(!ai::benchmark_pending(&Plugins::installed()));
     let (status, _, _) = call(&app, "POST", "/api/capture/start").await;
     assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE);
     let before = (STARTS.load(Ordering::SeqCst), REMEASURES.load(Ordering::SeqCst));
-    ai::start_benchmark();
-    ai::remeasure();
+    ai::start_benchmark(&Plugins::installed());
+    ai::remeasure(&Plugins::installed());
     assert_eq!((STARTS.load(Ordering::SeqCst), REMEASURES.load(Ordering::SeqCst)), before);
 }
 

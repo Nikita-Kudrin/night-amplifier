@@ -2,30 +2,30 @@
 //!
 //! Provides information about available features and plugins.
 
+use std::sync::Arc;
+
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
-use crate::background::BACKGROUND_PLUGIN;
-use crate::push_to::PUSH_TO_PLUGIN;
-use crate::render::{AI_DENOISE_PLUGIN, DENOISE_PLUGIN, SATURATION_PLUGIN};
 use crate::server::dto::{
     ApiResponse, CapabilitiesResponse, CometCapabilities, DeepSkyCapabilities,
     PlanetaryCapabilities, PushToCapabilities,
 };
-use crate::stacking::{COMET_PLUGIN, REJECTION_PLUGIN};
+use crate::server::state::AppState;
 
 /// GET /api/capabilities
 ///
-/// Returns the current server capabilities based on registered plugins.
-pub async fn get_capabilities() -> impl IntoResponse {
-    let active = crate::license::is_pro_active();
-    let has_rejection = active && REJECTION_PLUGIN.get().is_some();
-    let has_background = active && BACKGROUND_PLUGIN.get().is_some();
-    let has_push_to = active && PUSH_TO_PLUGIN.get().is_some();
-    let has_saturation = active && SATURATION_PLUGIN.get().is_some();
-    let has_comet = active && COMET_PLUGIN.get().is_some();
-    let has_denoise = active && DENOISE_PLUGIN.get().is_some();
-    let has_ai_denoise = active && AI_DENOISE_PLUGIN.get().is_some();
+/// What the server's plugins offer while the licence is active.
+pub async fn get_capabilities(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let plugins = &state.plugins;
+    let has_rejection = plugins.rejection().is_some();
+    let has_background = plugins.background().is_some();
+    let has_push_to = plugins.push_to_solver().is_some();
+    let has_saturation = plugins.saturation().is_some();
+    let has_comet = plugins.comet().is_some();
+    let has_denoise = plugins.denoise().is_some();
+    let has_ai_denoise = plugins.ai_denoise().is_some();
 
     let has_pro = has_rejection
         || has_background

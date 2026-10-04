@@ -114,7 +114,7 @@ impl CaptureService {
         state: &Arc<AppState>,
         camera_id: Option<String>,
     ) -> ApiResult<String> {
-        if crate::render::denoise::ai::benchmark_pending() {
+        if crate::render::denoise::ai::benchmark_pending(&state.plugins) {
             return Err(ApiError::HardwareBenchmarkRunning);
         }
 

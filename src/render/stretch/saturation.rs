@@ -1,7 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 use tracing::instrument;
 
 /// Plugin trait for shadow saturation boost (Commercial feature)
@@ -16,9 +15,6 @@ pub trait SaturationPlugin: Send + Sync {
     /// require a second full-resolution pass. `row.len()` is always a multiple of 3.
     fn apply_boost_slice(&self, row: &mut [f32], config: &SaturationBoostConfig);
 }
-
-/// Global registry for the saturation plugin
-pub static SATURATION_PLUGIN: OnceLock<Box<dyn SaturationPlugin>> = OnceLock::new();
 
 /// Configuration for shadow saturation boost: enhances colour saturation in shadow
 /// regions where colour is perceptually lost during non-linear stretching, applied
@@ -64,12 +60,13 @@ impl SaturationBoostConfig {}
 pub fn apply_shadow_saturation_boost(
     frame: &mut Frame,
     config: &SaturationBoostConfig,
+    plugins: &crate::plugins::Plugins,
 ) -> Result<()> {
     if !config.enabled {
         return Ok(());
     }
 
-    if let Some(plugin) = crate::license::pro_plugin(&SATURATION_PLUGIN) {
+    if let Some(plugin) = plugins.saturation() {
         plugin.apply_boost(frame, config)
     } else {
         Err(StackError::InvalidConfiguration(

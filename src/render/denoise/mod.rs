@@ -11,14 +11,14 @@ pub mod ai;
 pub mod ai_compute;
 pub(crate) mod settings;
 
-pub use ai::{AiDenoiseConfig, AiDenoisePlugin, AI_DENOISE_PLUGIN};
+pub use ai::{AiDenoiseConfig, AiDenoisePlugin};
 pub use ai_compute::{
     AiComputePreference, AiComputeReport, BenchmarkProgress, BenchmarkState, ComputeRung,
     RungReport,
 };
 pub use settings::{DenoiseSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL};
 
-use std::sync::OnceLock;
+use crate::plugins::Plugins;
 
 /// Wavelet levels a [`LumaDenoiseConfig`] carries per-level values for.
 ///
@@ -160,7 +160,7 @@ pub trait DenoisePlugin: Send + Sync {
     /// this is reached, so no plugin can get it wrong. `settings.ai` is true exactly when
     /// the network runs this frame, not merely when asked ([`config_for`]): filters hand it
     /// the scales it covers and must not give them up to a network that isn't there. Leave
-    /// the returned `ai` off; Community fills it from [`AI_DENOISE_PLUGIN`].
+    /// the returned `ai` off; Community fills it from the AI denoise plugin.
     fn config(
         &self,
         settings: &DenoiseSettings,
@@ -194,9 +194,6 @@ pub trait DenoisePlugin: Send + Sync {
         scratch: &mut DenoiseScratch,
     );
 }
-
-/// Global registry for the denoise plugin.
-pub static DENOISE_PLUGIN: OnceLock<Box<dyn DenoisePlugin>> = OnceLock::new();
 
 /// Reusable working buffers for one denoise pass. At 1440² a pass touches ~75MB
 /// (staged interleaved RGB, three planar channels, three more for the transform),
@@ -237,12 +234,14 @@ pub fn take(buf: &mut Vec<f32>, len: usize) -> &mut [f32] {
 /// Denoise an interleaved RGB f32 image in place, at the resolution it will be
 /// displayed at. Allocates its own buffers; see [`denoise_rgb_interleaved_with`].
 pub fn denoise_rgb_interleaved(
+    plugins: &Plugins,
     buf: &mut [f32],
     width: usize,
     height: usize,
     config: &DenoiseConfig,
 ) {
     denoise_rgb_interleaved_with(
+        plugins,
         buf,
         width,
         height,
@@ -261,6 +260,7 @@ pub fn denoise_rgb_interleaved(
 /// what it was before denoising existed. Only the linear filters run here; the network
 /// is [`ai::denoise_display_rgb_with`], after the stretch.
 pub fn denoise_rgb_interleaved_with(
+    plugins: &Plugins,
     buf: &mut [f32],
     width: usize,
     height: usize,
@@ -272,7 +272,7 @@ pub fn denoise_rgb_interleaved_with(
     if pixels == 0 || buf.len() < pixels * 3 || !config.linear_enabled() {
         return;
     }
-    let Some(plugin) = crate::license::pro_plugin(&DENOISE_PLUGIN) else {
+    let Some(plugin) = plugins.denoise() else {
         return;
     };
 
@@ -290,17 +290,19 @@ pub fn denoise_rgb_interleaved_with(
 /// `cfa::fpn`, superpixel debayering and the black floor each state at their own site.
 /// So does Focus/Finder mode's hold on the network.
 pub fn config_for(
+    plugins: &Plugins,
     settings: &DenoiseSettings,
     aggressiveness: crate::render::StretchAggressiveness,
 ) -> DenoiseConfig {
-    let ai = ai::config_for(settings);
+    let ai = ai::config_for(plugins, settings);
     // The classic filters give the network its scales only while it really runs: asked
     // for without a plugin to answer, they must keep today's picture.
     let classic_settings = DenoiseSettings {
         ai: ai.is_enabled(),
         ..settings.clone()
     };
-    let classic = crate::license::pro_plugin(&DENOISE_PLUGIN)
+    let classic = plugins
+        .denoise()
         .map(|plugin| plugin.config(&classic_settings, aggressiveness))
         .unwrap_or(DenoiseConfig::OFF);
     DenoiseConfig { ai, ..classic }
@@ -314,11 +316,12 @@ pub fn config_for(
 /// off gives exactly Community's picture. The UI greys the Background Grain dial out with
 /// the filters; a dial that still moved the curve would be a control nobody can reach
 /// (measured before this gate: 1/12 at 0 %, 1/8 at the middle, switch off).
-pub fn grain_split_for(settings: &DenoiseSettings) -> f32 {
+pub fn grain_split_for(plugins: &Plugins, settings: &DenoiseSettings) -> f32 {
     if !settings.enabled {
         return crate::render::DEFAULT_GRAIN_SPLIT;
     }
-    crate::license::pro_plugin(&DENOISE_PLUGIN)
+    plugins
+        .denoise()
         .map(|plugin| plugin.grain_split(settings))
         .unwrap_or(crate::render::DEFAULT_GRAIN_SPLIT)
 }
@@ -372,15 +375,17 @@ mod tests {
         };
         assert!(config.is_enabled());
 
-        denoise_rgb_interleaved_with(&mut buf, 16, 16, &config, None, &mut Default::default());
+        let plugins = Plugins::none().always_licensed();
+        denoise_rgb_interleaved_with(&plugins, &mut buf, 16, 16, &config, None, &mut Default::default());
         assert_eq!(buf, before);
     }
 
     #[test]
     fn without_the_plugin_the_config_is_off_and_the_split_is_the_dials_middle() {
+        let plugins = Plugins::none().always_licensed();
         let settings = DenoiseSettings::default();
         assert_eq!(
-            config_for(&settings, crate::render::StretchAggressiveness::Medium),
+            config_for(&plugins, &settings, crate::render::StretchAggressiveness::Medium),
             DenoiseConfig::OFF
         );
         let asking_for_the_network = DenoiseSettings {
@@ -388,11 +393,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            config_for(&asking_for_the_network, crate::render::StretchAggressiveness::Medium),
+            config_for(&plugins, &asking_for_the_network, crate::render::StretchAggressiveness::Medium),
             DenoiseConfig::OFF
         );
         assert_eq!(
-            grain_split_for(&settings),
+            grain_split_for(&plugins, &settings),
             crate::render::DEFAULT_GRAIN_SPLIT
         );
     }

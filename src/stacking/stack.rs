@@ -13,7 +13,8 @@ use tracing::{info_span, warn};
 use super::config::{FrameQuality, StackingConfig};
 use super::incremental_pixel::IncrementalPixel;
 use super::quality_baseline::QualityBaseline;
-use super::rejection::{RejectionMethod, REJECTION_PLUGIN};
+use super::rejection::RejectionMethod;
+use crate::plugins::Plugins;
 
 /// One row of variance cells from the `r` accumulator rows they cover.
 ///
@@ -79,14 +80,28 @@ pub struct MasterStack {
     pixels: Vec<IncrementalPixel>,
     quality_baseline: QualityBaseline,
     frame_qualities: Vec<FrameQuality>,
+    /// Where the clipping methods come from; asked every frame, so a lapsed licence
+    /// degrades the next one.
+    plugins: Plugins,
 }
 
 impl MasterStack {
+    /// A stack running the process's [installed](Plugins::installed) plugins.
     pub fn new(
         width: usize,
         height: usize,
         channels: usize,
         config: StackingConfig,
+    ) -> Result<Self> {
+        Self::with_plugins(width, height, channels, config, Plugins::installed())
+    }
+
+    pub fn with_plugins(
+        width: usize,
+        height: usize,
+        channels: usize,
+        config: StackingConfig,
+        plugins: Plugins,
     ) -> Result<Self> {
         if width == 0 || height == 0 || channels == 0 {
             return Err(StackError::InvalidDimensions {
@@ -101,7 +116,7 @@ impl MasterStack {
             RejectionMethod::SigmaClip
                 | RejectionMethod::WinsorizedSigmaClip
                 | RejectionMethod::MinMax
-        ) && crate::license::pro_plugin(&REJECTION_PLUGIN).is_none()
+        ) && plugins.rejection().is_none()
         {
             return Err(StackError::InvalidConfiguration(
                     "Advanced outlier rejection (Sigma Clipping, MinMax) is only available in Night Amplifier Pro.\n\
@@ -119,6 +134,7 @@ impl MasterStack {
             pixels: vec![IncrementalPixel::new(); pixel_count],
             quality_baseline: QualityBaseline::default(),
             frame_qualities: Vec::new(),
+            plugins,
         })
     }
 
@@ -183,7 +199,7 @@ impl MasterStack {
         );
 
         if needs_rejection {
-            if let Some(plugin) = crate::license::pro_plugin(&REJECTION_PLUGIN) {
+            if let Some(plugin) = self.plugins.rejection() {
                 plugin.blend_incremental(
                     &mut self.pixels,
                     data,
@@ -407,7 +423,7 @@ impl MasterStack {
             RejectionMethod::SigmaClip
                 | RejectionMethod::WinsorizedSigmaClip
                 | RejectionMethod::MinMax
-        ) && crate::license::pro_plugin(&REJECTION_PLUGIN).is_none()
+        ) && self.plugins.rejection().is_none()
         {
             warn!("Ignoring request for advanced rejection method - Night Amplifier Pro required.");
             config.rejection = RejectionMethod::None;

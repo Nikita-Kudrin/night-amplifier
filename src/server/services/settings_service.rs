@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use super::PushToService;
+use crate::plugins::Plugins;
 use crate::server::camera_session::lifecycle::{
     self, apply_cooler_settings, apply_dew_heater_settings, camera_profile_key,
 };
@@ -87,12 +88,10 @@ pub(crate) struct ProFeatures {
 }
 
 impl ProFeatures {
-    fn licensed() -> Self {
+    fn of(plugins: &Plugins) -> Self {
         Self {
-            saturation_boost: crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN)
-                .is_some(),
-            multi_point_planetary: crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN)
-                .is_some(),
+            saturation_boost: plugins.saturation().is_some(),
+            multi_point_planetary: plugins.planetary().is_some(),
         }
     }
 }
@@ -174,11 +173,13 @@ macro_rules! set_present {
     };
 }
 
-/// Applies a request [`check`] accepted onto `settings`.
+/// Applies a request [`check`] accepted onto `settings`. `plugins` decide what leaving
+/// Focus/Finder mode may restore.
 pub(crate) fn apply(
     request: UpdateSettingsRequest,
     settings: &mut CaptureSettings,
     target: &UpdateTarget,
+    plugins: &Plugins,
 ) -> SettingsDelta {
     let delta = SettingsDelta {
         optics: optics_change(&request, settings, target.role),
@@ -247,13 +248,13 @@ pub(crate) fn apply(
     // anything a stale client wrote behind its back rather than letting the next toggle
     // silently revert it.
     match focus_request {
-        Some(on) => focus_mode::set(settings, on),
+        Some(on) => focus_mode::set(settings, on, plugins),
         None => focus_mode::reconcile(settings),
     }
     // A running live view switched to stacking: no start path sees that, and `check`
     // only guards *entering*. Inside the write guard, so the stacking task never reads
     // `stacking` on with the corrections still held off.
-    let left_focus_mode = focus_mode::leave_if_conflicting(settings, target.capture_state);
+    let left_focus_mode = focus_mode::leave_if_conflicting(settings, target.capture_state, plugins);
 
     *settings = std::mem::take(settings).sanitized();
     SettingsDelta {
@@ -292,8 +293,8 @@ impl SettingsService {
 
         let (applied, delta) = {
             let mut settings = state.settings.write().await;
-            check(&request, &settings, target.capture_state, ProFeatures::licensed())?;
-            let delta = apply(request, &mut settings, &target);
+            check(&request, &settings, target.capture_state, ProFeatures::of(&state.plugins))?;
+            let delta = apply(request, &mut settings, &target, &state.plugins);
             (settings.clone(), delta)
         };
 

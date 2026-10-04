@@ -10,6 +10,7 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode};
 use night_amplifier::background::BackgroundConfig;
 use night_amplifier::frame::Frame;
+use night_amplifier::plugins::Plugins;
 use night_amplifier::server::capture::pipeline::{
     process_preview_frame, process_preview_frame_with_analysis,
 };
@@ -60,6 +61,7 @@ fn create_sky_frame() -> Frame {
 const REPS: usize = 6;
 
 fn bench_preview_pipeline(c: &mut Criterion) {
+    let plugins = Plugins::installed();
     let frame = create_sky_frame();
     let settings = CaptureSettings::default();
 
@@ -74,7 +76,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
             || vec![frame.clone(); REPS],
             |frames| {
                 for f in frames.iter_mut() {
-                    black_box(process_preview_frame(f, &settings).unwrap());
+                    black_box(process_preview_frame(f, &settings, &plugins).unwrap());
                 }
             },
             BatchSize::LargeInput,
@@ -90,7 +92,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
     // whole of it.
     let focus_settings = {
         let mut s = CaptureSettings::default();
-        night_amplifier::server::state::focus_mode::set(&mut s, true);
+        night_amplifier::server::state::focus_mode::set(&mut s, true, &plugins);
         s
     };
     group.bench_function(format!("focus_mode_x{}", REPS), |b| {
@@ -98,7 +100,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
             || vec![frame.clone(); REPS],
             |frames| {
                 for f in frames.iter_mut() {
-                    black_box(process_preview_frame(f, &focus_settings).unwrap());
+                    black_box(process_preview_frame(f, &focus_settings, &plugins).unwrap());
                 }
             },
             BatchSize::LargeInput,
@@ -145,7 +147,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
                         showing_stack: true,
                         stack_depth: 1000 + i as u32,
                     };
-                    black_box(process_preview_frame_with_analysis(f, &settings, ctx, analysis).unwrap());
+                    black_box(process_preview_frame_with_analysis(f, &settings, &plugins, ctx, analysis).unwrap());
                 }
             },
             BatchSize::LargeInput,

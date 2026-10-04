@@ -32,6 +32,7 @@ pub mod logging;
 pub mod native_library;
 pub mod parallel;
 pub mod planetary;
+pub mod plugins;
 pub mod process;
 pub mod push_to;
 pub mod registration;
@@ -126,7 +127,7 @@ pub use planetary::{
 pub use ser::{write_ser, SerColorId, SerHeader, SerReader, SerWriter};
 
 // Push-To navigation support
-pub use push_to::{PushToError, PushToResult, PUSH_TO_PLUGIN};
+pub use push_to::{PushToError, PushToResult};
 
 // Telemetry support (OpenTelemetry)
 pub use telemetry::{

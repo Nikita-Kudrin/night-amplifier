@@ -5,6 +5,7 @@
 
 use crate::error::Result;
 use crate::frame::Frame;
+use crate::plugins::Plugins;
 use crate::registration::AffineTransform;
 use tracing::{info_span, instrument, Span};
 
@@ -25,14 +26,25 @@ pub struct Stacker {
 }
 
 impl Stacker {
-    /// Creates a new stacker with the given dimensions.
+    /// Creates a new stacker with the given dimensions, running the process's
+    /// [installed](Plugins::installed) plugins.
     pub fn new(
         width: usize,
         height: usize,
         channels: usize,
         config: StackingConfig,
     ) -> Result<Self> {
-        let stack = MasterStack::new(width, height, channels, config)?;
+        Self::with_plugins(width, height, channels, config, Plugins::installed())
+    }
+
+    pub fn with_plugins(
+        width: usize,
+        height: usize,
+        channels: usize,
+        config: StackingConfig,
+        plugins: Plugins,
+    ) -> Result<Self> {
+        let stack = MasterStack::with_plugins(width, height, channels, config, plugins)?;
         let warp_buffer = Frame::zeros(width, height, channels)?;
 
         Ok(Self {

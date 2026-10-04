@@ -543,6 +543,7 @@ fn render_and_publish(
     let rendered = match super::pipeline::process_preview_frame_with_analysis(
         Arc::make_mut(&mut display_frame),
         &settings,
+        &state.plugins,
         // Every guide frame is a single sub — there is no stack behind it, which is the
         // same context live view runs in.
         AnalysisContext::ONE_SHOT,

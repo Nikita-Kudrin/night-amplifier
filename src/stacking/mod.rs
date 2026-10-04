@@ -27,7 +27,4 @@ pub use stack::MasterStack;
 pub use stacker::Stacker;
 pub use warp::{warp_frame, warp_frame_into};
 
-// Re-export rejection and comet plugins
-pub use rejection::{RejectionPlugin, REJECTION_PLUGIN};
-use std::sync::OnceLock;
-pub static COMET_PLUGIN: OnceLock<Box<dyn CometPlugin>> = OnceLock::new();
+pub use rejection::RejectionPlugin;

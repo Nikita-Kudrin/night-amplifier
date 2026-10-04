@@ -29,7 +29,7 @@ pub use denoise::{
     take, AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin,
     BenchmarkProgress, BenchmarkState, ChromaDenoiseConfig, ComputeRung, DenoiseConfig,
     DenoisePlugin, DenoiseScratch, DenoiseSettings, LumaDenoiseConfig, RungReport,
-    AI_DENOISE_PLUGIN, DENOISE_PLUGIN, MAX_LEVELS as MAX_WAVELET_LEVELS,
+    MAX_LEVELS as MAX_WAVELET_LEVELS,
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, apply_shadow_floor_frame, finalize_for_display,
@@ -40,7 +40,7 @@ pub use output::{
 pub use stretch::{
     apply_shadow_saturation_boost, apply_tone_mapping, asinh, asinh_stretch,
     asinh_stretch_color_preserving, asinh_stretch_frame, estimate_tone_mapping_strength,
-    SaturationBoostConfig, SaturationPlugin, ToneMappingAlgorithm, SATURATION_PLUGIN,
+    SaturationBoostConfig, SaturationPlugin, ToneMappingAlgorithm,
 };
 pub use white_balance::{
     compute_neutralization_multipliers, compute_white_balance_grid,

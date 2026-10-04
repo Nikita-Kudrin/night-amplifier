@@ -1,5 +1,6 @@
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
+use crate::plugins::Plugins;
 use rayon::prelude::*;
 use tracing::{debug, instrument, warn};
 
@@ -35,12 +36,23 @@ struct BilinearModel {
 /// Background extractor for light pollution removal
 pub struct BackgroundExtractor {
     pub(crate) config: BackgroundConfig,
+    /// Where RBF comes from: the process's [installed](Plugins::installed) set unless
+    /// [`Self::with_plugins`] says otherwise.
+    plugins: Plugins,
 }
 
 impl BackgroundExtractor {
     /// Create a new background extractor with the given configuration
     pub fn new(config: BackgroundConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            plugins: Plugins::installed(),
+        }
+    }
+
+    pub fn with_plugins(mut self, plugins: Plugins) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     /// Create a new background extractor with default configuration
@@ -62,7 +74,7 @@ impl BackgroundExtractor {
         match self.config.algorithm {
             BackgroundExtractionAlgorithm::GridBilinear => self.estimate_bilinear(frame),
             BackgroundExtractionAlgorithm::Rbf => {
-                if let Some(plugin) = crate::license::pro_plugin(&super::BACKGROUND_PLUGIN) {
+                if let Some(plugin) = self.plugins.background() {
                     plugin.estimate_rbf(frame, &self.config)
                 } else {
                     Err(StackError::InvalidConfiguration(

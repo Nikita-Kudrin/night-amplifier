@@ -7,11 +7,10 @@
 //! more (M27 excess at r=5px: +43% vs +26%), so the S-curve stays out of the fused scale
 //! LUT (`server::capture::pipeline`) and the encoder stages the stretch first.
 
-use std::sync::OnceLock;
-
 use super::ai_compute::{AiComputePreference, AiComputeReport, BenchmarkState};
 use super::DenoiseScratch;
 use super::DenoiseSettings;
+use crate::plugins::Plugins;
 
 /// The network as the encoders see it. A data carrier: the plugin fills it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,52 +83,51 @@ pub trait AiDenoisePlugin: Send + Sync {
     }
 }
 
-/// Global registry for the AI denoise plugin.
-pub static AI_DENOISE_PLUGIN: OnceLock<Box<dyn AiDenoisePlugin>> = OnceLock::new();
-
 /// The network's config: [`AiDenoiseConfig::OFF`] unless the observer asked for it and
 /// the plugin is here to answer.
-pub fn config_for(settings: &DenoiseSettings) -> AiDenoiseConfig {
+pub fn config_for(plugins: &Plugins, settings: &DenoiseSettings) -> AiDenoiseConfig {
     if !settings.ai {
         return AiDenoiseConfig::OFF;
     }
-    crate::license::pro_plugin(&AI_DENOISE_PLUGIN)
+    plugins
+        .ai_denoise()
         .map(|plugin| plugin.config(settings))
         .unwrap_or(AiDenoiseConfig::OFF)
 }
 
 /// See [`AiDenoisePlugin::start_benchmark`]. Nothing to do without the plugin.
-pub fn start_benchmark() {
-    if let Some(plugin) = crate::license::pro_plugin(&AI_DENOISE_PLUGIN) {
+pub fn start_benchmark(plugins: &Plugins) {
+    if let Some(plugin) = plugins.ai_denoise() {
         plugin.start_benchmark();
     }
 }
 
 /// See [`AiDenoisePlugin::remeasure`]. Nothing to do without the plugin.
-pub fn remeasure() {
-    if let Some(plugin) = crate::license::pro_plugin(&AI_DENOISE_PLUGIN) {
+pub fn remeasure(plugins: &Plugins) {
+    if let Some(plugin) = plugins.ai_denoise() {
         plugin.remeasure();
     }
 }
 
 /// See [`AiDenoisePlugin::compute_report`]; unavailable without the plugin.
-pub fn compute_report(preference: AiComputePreference) -> AiComputeReport {
-    crate::license::pro_plugin(&AI_DENOISE_PLUGIN)
+pub fn compute_report(plugins: &Plugins, preference: AiComputePreference) -> AiComputeReport {
+    plugins
+        .ai_denoise()
         .map(|plugin| plugin.compute_report(preference))
         .unwrap_or_else(AiComputeReport::unavailable)
 }
 
 /// See [`AiDenoisePlugin::compute_generation`].
-pub fn compute_generation() -> u64 {
-    crate::license::pro_plugin(&AI_DENOISE_PLUGIN).map_or(0, |plugin| plugin.compute_generation())
+pub fn compute_generation(plugins: &Plugins) -> u64 {
+    plugins.ai_denoise().map_or(0, |plugin| plugin.compute_generation())
 }
 
 /// Whether the hardware benchmark is checking the hardware or measuring it. New captures
 /// wait for both: `Checking` can become `Benchmarking`, and a session running then would
 /// compete with it for the CPU (dropped frames) and skew timings that are stored for good.
-pub fn benchmark_pending() -> bool {
+pub fn benchmark_pending(plugins: &Plugins) -> bool {
     matches!(
-        compute_report(AiComputePreference::Auto).state,
+        compute_report(plugins, AiComputePreference::Auto).state,
         BenchmarkState::Checking | BenchmarkState::Benchmarking
     )
 }
@@ -137,6 +135,7 @@ pub fn benchmark_pending() -> bool {
 /// Run the network over a staged, already stretched image, in place. A no-op without
 /// the plugin or with a config that asks for nothing.
 pub fn denoise_display_rgb_with(
+    plugins: &Plugins,
     buf: &mut [f32],
     width: usize,
     height: usize,
@@ -147,7 +146,7 @@ pub fn denoise_display_rgb_with(
     if pixels == 0 || buf.len() < pixels * 3 || !config.is_enabled() {
         return;
     }
-    let Some(plugin) = crate::license::pro_plugin(&AI_DENOISE_PLUGIN) else {
+    let Some(plugin) = plugins.ai_denoise() else {
         return;
     };
 
@@ -180,7 +179,7 @@ mod tests {
                 ai,
                 ..Default::default()
             };
-            assert_eq!(config_for(&settings), AiDenoiseConfig::OFF);
+            assert_eq!(config_for(&Plugins::none(), &settings), AiDenoiseConfig::OFF);
         }
     }
 
@@ -198,19 +197,21 @@ mod tests {
         };
         assert!(config.is_enabled());
 
-        denoise_display_rgb_with(&mut buf, 16, 16, &config, &mut Default::default());
+        let plugins = Plugins::none().always_licensed();
+        denoise_display_rgb_with(&plugins, &mut buf, 16, 16, &config, &mut Default::default());
         assert_eq!(buf, before);
     }
 
     /// Community alone has no benchmark: nothing is reported, nothing blocks a capture.
     #[test]
     fn without_the_plugin_there_is_no_benchmark() {
-        start_benchmark();
-        remeasure();
+        let plugins = Plugins::none().always_licensed();
+        start_benchmark(&plugins);
+        remeasure(&plugins);
         for preference in [AiComputePreference::Auto, AiComputePreference::Npu] {
-            assert_eq!(compute_report(preference), AiComputeReport::unavailable());
+            assert_eq!(compute_report(&plugins, preference), AiComputeReport::unavailable());
         }
-        assert_eq!(compute_generation(), 0);
-        assert!(!benchmark_pending());
+        assert_eq!(compute_generation(&plugins), 0);
+        assert!(!benchmark_pending(&plugins));
     }
 }

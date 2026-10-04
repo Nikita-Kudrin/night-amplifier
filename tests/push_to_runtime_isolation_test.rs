@@ -3,9 +3,8 @@
 //! async calls, on the runtime workers every lock and socket of the server waits on —
 //! guide camera stalls began during bursts of solves. `solving::offer_plate_solve` now
 //! hands it to Push-To's own task threads (`push_to_tasks`); the fake plugin holds its
-//! thread the way that work does and the test watches whether the server notices. One
-//! test, in its own binary, like `solve_source_staleness_test`: mutates global
-//! `PUSH_TO_PLUGIN`/`PRO_LICENSE_ACTIVE`.
+//! thread the way that work does and the test watches whether the server notices. The
+//! plugin is the test state's own (`AppState::plugins`), so nothing process-wide changes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,11 +13,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use night_amplifier::detection::StarDetector;
 use night_amplifier::frame::Frame;
+use night_amplifier::plugins::Plugins;
 use night_amplifier::push_to::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, FrameOutcome, PushToCatalogPlugin, PushToDirectionResponse, PushToEvents,
-    PushToInstallerPlugin, PushToResult, PushToSolverPlugin, PushToStatusResponse,
-    TelescopeSettings, PUSH_TO_PLUGIN,
+    CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
+    PushToStatusResponse, TelescopeSettings,
 };
 use night_amplifier::server::capture::solving::{offer_plate_solve, SolveSource};
 use night_amplifier::server::services::PushToState;
@@ -114,60 +112,6 @@ impl PushToSolverPlugin for BlockingPlugin {
     }
 }
 
-/// Not reached by a solve offer, but `PushToSystemPlugin` requires all three traits.
-#[async_trait]
-impl PushToCatalogPlugin for BlockingPlugin {
-    async fn search_catalog(&self, _query: &str, _limit: usize) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_by_type(&self, _catalog_type: &str) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_name(&self, _name: &str) -> PushToResult<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_coords(
-        &self,
-        _ra: f64,
-        _dec: f64,
-    ) -> PushToResult<CoordinateResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn clear_target(&self) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-    async fn load_database(&self, _path: &str) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-}
-
-#[async_trait]
-impl PushToInstallerPlugin for BlockingPlugin {
-    async fn get_astap_status(&self) -> AstapStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_astap(
-        &self,
-        _database_types: &[String],
-        _events: Arc<dyn PushToEvents>,
-    ) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_status(&self) -> CatalogStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_catalog(
-        &self,
-        _include_stars: bool,
-        _events: Arc<dyn PushToEvents>,
-    ) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-}
-
 /// `AppState::new` reads `settings.json` and `./captures` from the working directory, so the
 /// test runs from a fresh one — see `solve_source_staleness_test`.
 fn isolate_cwd() {
@@ -184,19 +128,16 @@ fn isolate_cwd() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn push_to_work_never_holds_the_servers_runtime() {
     isolate_cwd();
-    night_amplifier::license::PRO_LICENSE_ACTIVE.store(true, Ordering::SeqCst);
 
     let offers = Arc::new(AtomicUsize::new(0));
     let threads = Arc::new(Mutex::new(Vec::new()));
-    PUSH_TO_PLUGIN
-        .set(Box::new(BlockingPlugin {
-            offers: Arc::clone(&offers),
-            threads: Arc::clone(&threads),
-        }))
-        .ok()
-        .expect("this binary registers the plugin exactly once");
+    let plugin = BlockingPlugin {
+        offers: Arc::clone(&offers),
+        threads: Arc::clone(&threads),
+    };
 
-    let (state, _disk_writer) = AppState::new();
+    let (mut state, _disk_writer) = AppState::new();
+    state.plugins = Plugins::none().with_push_to_solver(Arc::new(plugin)).always_licensed();
     let state = Arc::new(state);
     *state.push_to.write().await = Some(PushToState::default());
 

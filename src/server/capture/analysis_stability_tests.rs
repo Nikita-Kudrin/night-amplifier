@@ -145,7 +145,7 @@ fn render(
 ) -> Vec<u8> {
     let mut frame = Frame::from_f32_vec(data, SIZE, SIZE, 3).unwrap();
     let rendered =
-        process_preview_frame_with_analysis(&mut frame, settings, ctx, analysis).unwrap();
+        process_preview_frame_with_analysis(&mut frame, settings, &crate::plugins::Plugins::none(), ctx, analysis).unwrap();
     let ready = RenderReadyFrame {
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: rendered.pipeline_config,

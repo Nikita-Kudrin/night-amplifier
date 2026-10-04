@@ -9,7 +9,6 @@ use crate::frame::Frame;
 use super::alignment::compute_alignment;
 use super::config::{AlignmentRoi, PlanetaryConfig, PlanetaryStackMethod, PlanetaryStackStats};
 use super::quality::compute_quality;
-use std::sync::OnceLock;
 
 /// PlanetaryStacker trait for the Pro plugin
 pub trait PlanetaryStackerPlugin: Send + Sync {
@@ -24,9 +23,6 @@ pub trait PlanetaryStackerPlugin: Send + Sync {
     /// Clears any cached alignment points when the reference frame changes
     fn clear_cache(&self);
 }
-
-/// Global registry for the planetary stacking plugin
-pub static PLANETARY_PLUGIN: OnceLock<Box<dyn PlanetaryStackerPlugin>> = OnceLock::new();
 
 /// A scored frame ready for stacking
 #[derive(Debug)]

@@ -8,6 +8,7 @@ use tracing::{instrument, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::context::{create_live_stacker, LiveStacker, StackSettings};
+use crate::plugins::Plugins;
 use super::frame_gate::RejectionReason;
 use crate::frame::Frame;
 use crate::server::state::CaptureSettings;
@@ -118,11 +119,12 @@ impl StackingOutcome {
 pub fn stack_frame(
     frame: &Frame,
     settings: &CaptureSettings,
+    plugins: &Plugins,
     stacker: &mut Option<Box<dyn LiveStacker>>,
     stacking_failed: &mut bool,
     want_display: bool,
 ) -> StackingOutcome {
-    let stack = StackSettings::of(settings);
+    let stack = StackSettings::of(settings, plugins);
     let stacker = match stacker {
         Some(stacker) => stacker,
         None => match create_live_stacker(settings.stacking_type, frame, &stack) {
@@ -197,10 +199,12 @@ pub struct PreviewRender {
 pub fn process_preview_frame(
     frame: &mut Frame,
     settings: &CaptureSettings,
+    plugins: &Plugins,
 ) -> crate::error::Result<PreviewRender> {
     process_preview_frame_with_analysis(
         frame,
         settings,
+        plugins,
         AnalysisContext::ONE_SHOT,
         &mut PreviewAnalysis::new(),
     )
@@ -215,6 +219,7 @@ pub fn process_preview_frame(
 pub fn process_preview_frame_with_analysis(
     frame: &mut Frame,
     settings: &CaptureSettings,
+    plugins: &Plugins,
     ctx: AnalysisContext,
     analysis: &mut PreviewAnalysis,
 ) -> crate::error::Result<PreviewRender> {
@@ -230,7 +235,7 @@ pub fn process_preview_frame_with_analysis(
     )
     .entered();
 
-    let mut pipeline_config = get_render_pipeline_config(settings, false);
+    let mut pipeline_config = get_render_pipeline_config(settings, plugins, false);
     // How deep the stack is decides how much of its noise reduction the stretch
     // spends on a calmer sky (`render::autostretch::depth_grain_gain`). Set here
     // rather than in `get_render_pipeline_config`, which only sees settings.
@@ -283,7 +288,11 @@ pub fn process_preview_frame_with_analysis(
     if pipeline_config.background_subtraction {
         let _span1 = tracing::info_span!("background_subtraction").entered();
         let config = pipeline_config.background_config.clone();
-        match analysis.background(|| BackgroundExtractor::new(config).estimate(frame)) {
+        match analysis.background(|| {
+            BackgroundExtractor::new(config)
+                .with_plugins(plugins.clone())
+                .estimate(frame)
+        }) {
             Ok(model) => {
                 let _span = tracing::info_span!("subtract_model").entered();
                 model.subtract_from(frame);
@@ -462,13 +471,13 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        let first = stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
+        let first = stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
         assert!(!failed, "reference frame should have initialised the stack");
         assert!(first.frame_added);
 
         // A blank frame has nothing to register against.
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = stack_frame(&blank, &settings, &mut ctx, &mut failed, true);
+        let outcome = stack_frame(&blank, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert!(
             !outcome.frame_added,
@@ -489,10 +498,10 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
+        stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = stack_frame(&blank, &settings, &mut ctx, &mut failed, true);
+        let outcome = stack_frame(&blank, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let reason = outcome
             .rejected_because
@@ -525,14 +534,14 @@ mod tests {
         for i in 0..8 {
             let frame = starfield(150, 150, i as f32 * 0.25);
             let outcome =
-                stack_frame(&frame, &settings, &mut ctx, &mut failed, true);
+                stack_frame(&frame, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
             assert!(outcome.frame_added, "sharp frame {i} should have stacked");
         }
 
         // Same field, same star positions, stars twice as wide.
         let defocused = starfield_with_spread(150, 150, 0.0, 2.2);
         let outcome =
-            stack_frame(&defocused, &settings, &mut ctx, &mut failed, true);
+            stack_frame(&defocused, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert_eq!(
             outcome.rejected_because,
@@ -562,10 +571,10 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
+        stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = stack_frame(&shifted, &settings, &mut ctx, &mut failed, true);
+        let outcome = stack_frame(&shifted, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert!(outcome.frame_added);
         assert_eq!(outcome.rejected_because, None);
@@ -579,10 +588,10 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
+        stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = stack_frame(&shifted, &settings, &mut ctx, &mut failed, true);
+        let outcome = stack_frame(&shifted, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert!(outcome.showing_stack);
         assert!(
@@ -603,7 +612,7 @@ mod tests {
         let mut frame = Frame::filled(10, 10, 3, 0.2).unwrap();
         let settings = CaptureSettings::default();
 
-        let stretch = process_preview_frame(&mut frame, &settings).map(|r| r.stretch_result)
+        let stretch = process_preview_frame(&mut frame, &settings, &Plugins::none()).map(|r| r.stretch_result)
             .expect("a frame too small to measure must still render");
         assert!(
             stretch.is_none(),
@@ -625,11 +634,11 @@ mod tests {
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
+        stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
         let outcome =
-            stack_frame(&shifted, &settings, &mut ctx, &mut failed, false);
+            stack_frame(&shifted, &settings, &Plugins::none(), &mut ctx, &mut failed, false);
 
         assert!(
             outcome.display_frame.is_none(),
@@ -648,7 +657,7 @@ mod tests {
         // it carries the integration this iteration contributed.
         let third = starfield(150, 150, 4.0);
         let outcome =
-            stack_frame(&third, &settings, &mut ctx, &mut failed, true);
+            stack_frame(&third, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
         assert!(outcome.display_frame.is_some());
         assert_eq!(
             ctx.as_ref().expect("context").depth(),
@@ -672,14 +681,14 @@ mod tests {
         let mut failed = false;
         let sub = Frame::filled(32, 32, 1, 0.5).unwrap();
 
-        let first = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        let first = stack_frame(&sub, &settings, &Plugins::none(), &mut stacker, &mut failed, true);
         assert!(first.frame_added && !first.showing_stack, "the reference shows as itself");
 
-        let aligned = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        let aligned = stack_frame(&sub, &settings, &Plugins::none(), &mut stacker, &mut failed, true);
         assert!(aligned.frame_added && aligned.showing_stack);
         assert_eq!(aligned.stack_depth, 2);
 
-        let lost = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        let lost = stack_frame(&sub, &settings, &Plugins::none(), &mut stacker, &mut failed, true);
         assert!(!lost.frame_added);
         assert!(lost.showing_stack, "the comet stack stays on screen");
         assert_eq!(lost.rejected_because, None);
@@ -698,7 +707,7 @@ mod tests {
         let mut failed = false;
         let sub = Frame::filled(32, 32, 1, 0.5).unwrap();
 
-        let outcome = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        let outcome = stack_frame(&sub, &settings, &Plugins::none(), &mut stacker, &mut failed, true);
 
         assert!(failed, "the session must stop asking for a stack it cannot build");
         assert!(stacker.is_none());
@@ -722,12 +731,12 @@ mod tests {
 
         // Process with background subtraction enabled
         let mut frame_bg = frame.clone();
-        process_preview_frame(&mut frame_bg, &settings).unwrap();
+        process_preview_frame(&mut frame_bg, &settings, &Plugins::none()).unwrap();
 
         // Check if the RenderPipeline used background subtraction
         // Since we reordered the calls, get_render_pipeline_config will now correctly
         // return a config with background_subtraction = true if settings say so.
-        let config = get_render_pipeline_config(&settings, false);
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.background_subtraction);
     }
 }

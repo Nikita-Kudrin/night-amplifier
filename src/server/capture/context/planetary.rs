@@ -5,6 +5,7 @@ use tracing::{debug, field, info, instrument, warn, Span};
 use super::{LiveStacker, StackSettings};
 use crate::frame::{Frame, NoiseField};
 use crate::planetary::AlignmentRoi;
+use crate::plugins::Plugins;
 use crate::server::capture::frame_gate::FrameAdmission;
 use crate::stacking::{FrameQuality, Stacker, StackingType};
 
@@ -13,6 +14,8 @@ pub struct PlanetaryStackingContext {
     pub stacker: Stacker,
     pub is_initialized: bool,
     pub reference_frame: Option<Frame>,
+    /// Multi-point alignment comes from here, checked frame by frame.
+    plugins: Plugins,
 }
 
 impl PlanetaryStackingContext {
@@ -22,7 +25,8 @@ impl PlanetaryStackingContext {
         channels: usize,
         settings: &StackSettings,
     ) -> Option<Self> {
-        let stacker = match Stacker::new(width, height, channels, settings.config.clone()) {
+        let config = settings.config.clone();
+        let stacker = match Stacker::with_plugins(width, height, channels, config, settings.plugins.clone()) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker for planetary mode");
@@ -34,6 +38,7 @@ impl PlanetaryStackingContext {
             stacker,
             is_initialized: false,
             reference_frame: None,
+            plugins: settings.plugins.clone(),
         })
     }
 
@@ -41,7 +46,7 @@ impl PlanetaryStackingContext {
     pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), String> {
         self.reference_frame = Some(frame.clone());
 
-        if let Some(plugin) = crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN) {
+        if let Some(plugin) = self.plugins.planetary() {
             plugin.clear_cache();
         }
 
@@ -96,7 +101,7 @@ impl PlanetaryStackingContext {
 
         // Try multi-point alignment via Pro plugin, falling back to single-point correlation.
         let warped_frame: Option<Frame> = if settings.planetary_multi_point_alignment {
-            crate::license::pro_plugin(&crate::planetary::PLANETARY_PLUGIN).and_then(|plugin| {
+            settings.plugins.planetary().and_then(|plugin| {
                 match plugin.warp_frame(frame, reference, &roi, search_radius) {
                     Ok(warped) => Some(warped),
                     Err(e) => {
@@ -242,7 +247,7 @@ mod tests {
     use crate::server::state::CaptureSettings;
 
     fn defaults() -> StackSettings {
-        StackSettings::of(&CaptureSettings::default())
+        StackSettings::of(&CaptureSettings::default(), &Plugins::none())
     }
 
     #[test]
