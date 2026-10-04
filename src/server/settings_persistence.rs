@@ -2,349 +2,73 @@
 //!
 //! Saves settings to a JSON file so they persist across server restarts.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, warn};
+use serde_json::{Map, Value};
+use tracing::{debug, info, warn};
 
-use super::state::{
-    CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings, FocusModeSnapshot,
-    RawFrameSaving, Resolution, SensorCorrectionSettings, TelescopeSettings,
-};
-use crate::background::BackgroundExtractionAlgorithm;
-use crate::camera::{add_simulated_directory, get_simulated_directories, DualSamplingMode};
-use crate::planetary::AlignmentRoi;
-use crate::render::StretchAggressiveness;
-use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
+use super::state::{CaptureSettings, RawFrameSaving};
+use crate::camera::{add_simulated_directory, get_simulated_directories};
 
 pub const DEFAULT_SETTINGS_FILE: &str = "settings.json";
 
-/// Persisted settings structure matching CaptureSettings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistedSettings {
-    pub exposure_us: u64,
-    pub gain: i32,
-    pub offset: i32,
-    pub bin: u8,
-    pub auto_stretch: bool,
-    pub stacking: bool,
-    pub rejection_sigma: f32,
-    #[serde(default)]
-    pub rejection_method: RejectionMethod,
-    pub background_subtraction: bool,
-    #[serde(default)]
-    pub background_extraction_algorithm: BackgroundExtractionAlgorithm,
-    /// Which capture modes write their raw frames to disk.
-    ///
-    /// `None` marks a settings file written before the per-mode switches existed, which
-    /// is what [`PersistedSettings::resolved_raw_frame_saving`] migrates from
-    /// `save_raw_frames`. A file this version wrote always carries the group.
-    #[serde(default)]
-    pub raw_frame_saving: Option<RawFrameSaving>,
-    /// The single pre-per-mode switch, read only to migrate a settings file written by
-    /// an older build. Never written back — dropping it is what completes the migration.
-    #[serde(default, skip_serializing)]
-    pub save_raw_frames: Option<bool>,
-    pub save_stacked_image: bool,
-    pub stacking_type: StackingType,
-    #[serde(default)]
-    pub weighting_preset: WeightingPreset,
-    /// Auto stretch aggressiveness (Low, Medium, High)
-    #[serde(default)]
-    pub stretch_aggressiveness: StretchAggressiveness,
-    /// Auto stretch color intensity
-    #[serde(default = "default_auto_stretch_intensity")]
-    pub auto_stretch_intensity: f32,
-    /// Enable shadow saturation boost (defaults to false if not present)
-    #[serde(default)]
-    pub saturation_boost: bool,
-    /// Shadow saturation boost strength (defaults to 0.5 if not present)
-    #[serde(default = "default_saturation_strength")]
-    pub saturation_boost_strength: f32,
-    /// Use simulated camera (defaults to false if not present)
-    #[serde(default)]
-    pub use_simulated_camera: bool,
-    /// Number of images to preload for simulated camera (defaults to 5 if not present)
-    #[serde(default = "default_preload_images")]
-    pub simulated_preload_images: usize,
-    /// Show the focus image when waiting for frames
-    #[serde(default = "default_show_focus_image")]
-    pub show_focus_image: bool,
-    /// Force showing the focus image even when the stream is active
-    #[serde(default)]
-    pub force_focus_image_now: bool,
-    /// Persisted simulated camera directories (only simulated cameras are persisted)
-    #[serde(default)]
+/// What `settings.json` holds: the settings, plus the simulated-camera directories, which
+/// live in the camera registry rather than in `CaptureSettings`.
+pub(crate) struct SettingsFile {
+    pub settings: CaptureSettings,
     pub simulated_directories: Vec<String>,
-    /// Region of interest for comet nucleus tracking
-    #[serde(default)]
-    pub comet_roi: Option<AlignmentRoi>,
-    /// Enable "Wanderer" mode
-    #[serde(default)]
-    pub wanderer_mode: bool,
-    /// Region of interest for planetary alignment
-    #[serde(default)]
-    pub planetary_roi: Option<AlignmentRoi>,
-    /// Enable auto tracking of planetary ROI
-    #[serde(default = "default_planetary_auto_tracking")]
-    pub planetary_auto_tracking: bool,
-    /// Enable multi-point alignment for planetary (Pro only)
-    #[serde(default)]
-    pub planetary_multi_point_alignment: bool,
-    // NOTE: `push_to_fov` used to live here. Plate solving is a Pro feature and now
-    // persists its own solver state (position + per-rig FOV) in `push_to_state.json`,
-    // which the Pro plugin owns end to end. Files written by older versions still
-    // contain the key; serde ignores it, and Pro relearns the FOV on its first solve.
-    #[serde(default)]
-    pub eyepiece: EyepieceSettings,
-    #[serde(default)]
-    pub sensor_correction: SensorCorrectionSettings,
-    #[serde(default)]
-    pub denoise: DenoiseSettings,
-    #[serde(default = "crate::server::state::default_preview_resolution")]
-    pub preview_resolution: Resolution,
-    #[serde(default = "crate::server::state::default_streaming_resolution")]
-    pub streaming_resolution: Resolution,
-    #[serde(default)]
-    pub telescope: TelescopeSettings,
-    /// Per-camera telescope profiles keyed by camera name
-    #[serde(default)]
-    pub camera_telescope_profiles: HashMap<String, TelescopeSettings>,
-    /// Per-camera capture profiles keyed by `"{provider}/{model_name}"`
-    #[serde(default)]
-    pub camera_profiles: HashMap<String, CameraCaptureProfile>,
-    /// The guide camera's live hardware values. Its own block, not one of the flat
-    /// fields, because both cameras are connected at once.
-    #[serde(default)]
-    pub guide_camera: CameraCaptureProfile,
-    /// Name of the last active camera
-    #[serde(default)]
-    pub last_camera_name: Option<String>,
-    /// Whether the cooler should be active during capture
-    #[serde(default)]
-    pub cooler_enabled: bool,
-    /// Target sensor temperature in Celsius
-    #[serde(default)]
-    pub target_temp_c: Option<f64>,
-    /// Bypass the 5 °C/min cool/warm ramp (advanced users only)
-    #[serde(default)]
-    pub cooler_fast_mode: bool,
-    #[serde(default)]
-    pub sensor_mode_override: Option<DualSamplingMode>,
-    /// Whether anti-dew heater is enabled
-    #[serde(default = "default_dew_heater_enabled")]
-    pub dew_heater_enabled: bool,
-    /// Anti-dew heater power level (0-100)
-    #[serde(default = "default_dew_heater_power")]
-    pub dew_heater_power: i32,
-    /// Reopen the camera automatically after an unexpected dropout.
-    #[serde(default = "default_true")]
-    pub auto_reconnect: bool,
-    /// Resume the interrupted capture after an automatic reconnect.
-    #[serde(default = "default_true")]
-    pub auto_resume_capture: bool,
-    /// Whether the user has accepted the End User License Agreement
-    #[serde(default)]
-    pub eula_accepted: bool,
-    #[serde(default = "default_indi_server_host")]
-    pub indi_server_host: String,
-    #[serde(default = "default_indi_server_port")]
-    pub indi_server_port: u16,
-    /// Whether Focus/Finder mode was on. Persisted with its snapshot so a restart
-    /// mid-session cannot strand the observer's real settings in the disabled state.
-    #[serde(default)]
-    pub focus_mode: bool,
-    /// What the managed settings were before Focus/Finder mode overwrote them.
-    #[serde(default)]
-    pub focus_mode_snapshot: Option<FocusModeSnapshot>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn default_indi_server_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-fn default_indi_server_port() -> u16 {
-    7624
-}
-
-fn default_dew_heater_enabled() -> bool {
-    true
-}
-
-fn default_dew_heater_power() -> i32 {
-    10
-}
-
-fn default_preload_images() -> usize {
-    5
-}
-
-fn default_show_focus_image() -> bool {
-    true
-}
-
-fn default_saturation_strength() -> f32 {
-    0.5
-}
-
-fn default_auto_stretch_intensity() -> f32 {
-    0.3
-}
-
-fn default_planetary_auto_tracking() -> bool {
-    true
-}
-
-impl From<&CaptureSettings> for PersistedSettings {
-    fn from(settings: &CaptureSettings) -> Self {
-        // Get current simulated directories from the registry
-        let simulated_directories = get_simulated_directories()
-            .into_iter()
-            .map(|p| p.display().to_string())
-            .collect();
-
-        Self {
-            exposure_us: settings.exposure_us,
-            gain: settings.gain,
-            offset: settings.offset,
-            bin: settings.bin,
-            auto_stretch: settings.auto_stretch,
-            stacking: settings.stacking,
-            rejection_sigma: settings.rejection_sigma,
-            rejection_method: settings.rejection_method,
-            background_subtraction: settings.background_subtraction,
-            background_extraction_algorithm: settings.background_extraction_algorithm,
-            raw_frame_saving: Some(settings.raw_frame_saving),
-            save_raw_frames: None,
-            save_stacked_image: settings.save_stacked_image,
-            stacking_type: settings.stacking_type,
-            weighting_preset: settings.weighting_preset,
-            stretch_aggressiveness: settings.stretch_aggressiveness,
-            auto_stretch_intensity: settings.auto_stretch_intensity,
-            saturation_boost: settings.saturation_boost,
-            saturation_boost_strength: settings.saturation_boost_strength,
-            use_simulated_camera: settings.use_simulated_camera,
-            simulated_preload_images: settings.simulated_preload_images,
-            show_focus_image: settings.show_focus_image,
-            force_focus_image_now: settings.force_focus_image_now,
+impl SettingsFile {
+    /// Reads a file's JSON, migrating whatever an older build wrote on the way.
+    pub(crate) fn from_json(mut value: Value) -> serde_json::Result<Self> {
+        let Some(file) = value.as_object_mut() else {
+            return Err(serde::de::Error::custom("a settings file is a JSON object"));
+        };
+        migrate(file);
+        let simulated_directories = match file.remove("simulated_directories") {
+            Some(directories) => Vec::deserialize(directories)?,
+            None => Vec::new(),
+        };
+        Ok(Self {
+            settings: CaptureSettings::deserialize(value)?.sanitized(),
             simulated_directories,
-            comet_roi: settings.comet_roi,
-            planetary_roi: settings.planetary_roi,
-            planetary_auto_tracking: settings.planetary_auto_tracking,
-            planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
-            wanderer_mode: settings.wanderer_mode,
-            eyepiece: settings.eyepiece.clone().sanitized(),
-            sensor_correction: settings.sensor_correction.clone(),
-            denoise: settings.denoise.sanitized(),
-            preview_resolution: settings.preview_resolution,
-            streaming_resolution: settings.streaming_resolution,
-            telescope: settings.telescope.clone(),
-            camera_telescope_profiles: settings.camera_telescope_profiles.clone(),
-            camera_profiles: settings.camera_profiles.clone(),
-            guide_camera: settings.guide_camera.clone(),
-            last_camera_name: settings.last_camera_name.clone(),
-            cooler_enabled: settings.cooler_enabled,
-            target_temp_c: settings.target_temp_c,
-            cooler_fast_mode: settings.cooler_fast_mode,
-            sensor_mode_override: settings.sensor_mode_override,
-            dew_heater_enabled: settings.dew_heater_enabled,
-            dew_heater_power: settings.dew_heater_power,
-            auto_reconnect: settings.auto_reconnect,
-            auto_resume_capture: settings.auto_resume_capture,
-            eula_accepted: settings.eula_accepted,
-            indi_server_host: settings.indi_server_host.clone(),
-            indi_server_port: settings.indi_server_port,
-            focus_mode: settings.focus_mode,
-            focus_mode_snapshot: settings.focus_mode_snapshot.clone(),
+        })
+    }
+
+    /// The file's text. Serialised directly rather than through a `Value`, which would
+    /// widen every `f32` and write `0.3` as `0.30000001192092896`.
+    pub(crate) fn to_json(&self) -> serde_json::Result<String> {
+        #[derive(Serialize)]
+        struct Written<'a> {
+            #[serde(flatten)]
+            settings: &'a CaptureSettings,
+            simulated_directories: &'a [String],
         }
+        let settings = self.settings.clone().sanitized();
+        serde_json::to_string_pretty(&Written {
+            settings: &settings,
+            simulated_directories: &self.simulated_directories,
+        })
     }
 }
 
-impl PersistedSettings {
-    /// The per-mode selection this file describes, migrating an older file on the way.
-    ///
-    /// A pre-per-mode build only ever saved raw frames in Stacking — the gate was
-    /// `stacking && !wanderer_mode` — so that is the one switch a legacy `true` may
-    /// turn on. Without this an upgrade reads the old key as an unknown field and
-    /// silently drops it, and the first save writes the loss back out for good.
-    fn resolved_raw_frame_saving(&self) -> RawFrameSaving {
-        if let Some(raw_frame_saving) = self.raw_frame_saving {
-            return raw_frame_saving;
-        }
-        RawFrameSaving {
-            stacking: self.save_raw_frames.unwrap_or(false),
+/// Rewrites the keys an older build wrote into the shape `CaptureSettings` reads.
+///
+/// `save_raw_frames` was the single switch before the per-mode ones. A pre-per-mode build
+/// only ever saved raw frames in Stacking — the gate was `stacking && !wanderer_mode` — so
+/// that is the one switch a legacy `true` may turn on. Without this an upgrade reads the
+/// old key as an unknown field and drops it, and the first save writes the loss back.
+fn migrate(file: &mut Map<String, Value>) {
+    let legacy_raw_saving = file.remove("save_raw_frames").and_then(|v| v.as_bool());
+    if file.get("raw_frame_saving").is_none_or(Value::is_null) {
+        let saving = RawFrameSaving {
+            stacking: legacy_raw_saving.unwrap_or(false),
             ..RawFrameSaving::default()
-        }
-    }
-}
-
-impl From<PersistedSettings> for CaptureSettings {
-    fn from(persisted: PersistedSettings) -> Self {
-        let raw_frame_saving = persisted.resolved_raw_frame_saving();
-        let guide_camera = persisted.guide_camera.clone();
-        Self {
-            guide_camera,
-            exposure_us: persisted.exposure_us,
-            gain: persisted.gain,
-            offset: persisted.offset,
-            bin: persisted.bin,
-            auto_stretch: persisted.auto_stretch,
-            stacking: persisted.stacking,
-            rejection_sigma: persisted.rejection_sigma,
-            rejection_method: persisted.rejection_method,
-            background_subtraction: persisted.background_subtraction,
-            background_extraction_algorithm: persisted.background_extraction_algorithm,
-            raw_frame_saving,
-            save_stacked_image: persisted.save_stacked_image,
-            stacking_type: persisted.stacking_type,
-            weighting_preset: persisted.weighting_preset,
-            stretch_aggressiveness: persisted.stretch_aggressiveness,
-            auto_stretch_intensity: persisted.auto_stretch_intensity,
-            saturation_boost: persisted.saturation_boost,
-            saturation_boost_strength: persisted.saturation_boost_strength,
-            use_simulated_camera: persisted.use_simulated_camera,
-            simulated_preload_images: persisted.simulated_preload_images,
-            show_focus_image: persisted.show_focus_image,
-            force_focus_image_now: persisted.force_focus_image_now,
-            comet_roi: persisted.comet_roi,
-            planetary_roi: persisted.planetary_roi,
-            planetary_auto_tracking: persisted.planetary_auto_tracking,
-            planetary_multi_point_alignment: persisted.planetary_multi_point_alignment,
-            wanderer_mode: persisted.wanderer_mode,
-            eyepiece: persisted.eyepiece.sanitized(),
-            sensor_correction: persisted.sensor_correction.sanitized(),
-            denoise: persisted.denoise.sanitized(),
-            preview_resolution: persisted.preview_resolution,
-            streaming_resolution: persisted.streaming_resolution,
-            telescope: persisted.telescope,
-            camera_telescope_profiles: persisted.camera_telescope_profiles,
-            camera_profiles: persisted.camera_profiles,
-            last_camera_name: persisted.last_camera_name,
-            cooler_enabled: persisted.cooler_enabled,
-            target_temp_c: persisted.target_temp_c,
-            cooler_fast_mode: persisted.cooler_fast_mode,
-            sensor_mode_override: persisted.sensor_mode_override,
-            dew_heater_enabled: persisted.dew_heater_enabled,
-            dew_heater_power: persisted.dew_heater_power,
-            auto_reconnect: persisted.auto_reconnect,
-            auto_resume_capture: persisted.auto_resume_capture,
-            eula_accepted: persisted.eula_accepted,
-            indi_server_host: persisted.indi_server_host,
-            indi_server_port: persisted.indi_server_port,
-            // A file written before the mode existed carries neither key, and the
-            // invariant `focus_mode == focus_mode_snapshot.is_some()` has to hold in both
-            // directions: a flag with no snapshot has nothing to restore from, and a
-            // snapshot with no flag describes values already in force.
-            focus_mode: persisted.focus_mode && persisted.focus_mode_snapshot.is_some(),
-            focus_mode_snapshot: persisted
-                .focus_mode_snapshot
-                .filter(|_| persisted.focus_mode),
-        }
+        };
+        let saving = serde_json::to_value(saving).expect("a struct of bools serialises");
+        file.insert("raw_frame_saving".to_string(), saving);
     }
 }
 
@@ -381,61 +105,36 @@ impl SettingsPersistence {
             return None;
         }
 
-        match std::fs::read_to_string(&self.file_path) {
-            Ok(contents) => match serde_json::from_str::<PersistedSettings>(&contents) {
-                Ok(persisted) => {
-                    info!("Loaded settings from {:?}", self.file_path);
-
-                    // Restore persisted simulated camera directories
-                    for dir_path in &persisted.simulated_directories {
-                        let path = PathBuf::from(dir_path);
-                        match add_simulated_directory(path) {
-                            Ok(true) => {
-                                info!(
-                                    directory = %dir_path,
-                                    "Restored simulated camera directory"
-                                );
-                            }
-                            Ok(false) => {
-                                debug!(
-                                    directory = %dir_path,
-                                    "Simulated camera directory already exists"
-                                );
-                            }
-                            Err(e) => {
-                                warn!(
-                                    directory = %dir_path,
-                                    error = %e,
-                                    "Failed to restore simulated camera directory"
-                                );
-                            }
-                        }
-                    }
-
-                    Some(persisted.into())
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to parse settings file {:?}: {}. Using defaults.",
-                        self.file_path, e
-                    );
-                    None
-                }
-            },
-            Err(e) => {
-                warn!(
-                    "Failed to read settings file {:?}: {}. Using defaults.",
-                    self.file_path, e
-                );
-                None
+        let parsed = std::fs::read_to_string(&self.file_path)
+            .map_err(|e| format!("Failed to read settings file {:?}: {e}", self.file_path))
+            .and_then(|contents| {
+                serde_json::from_str(&contents)
+                    .and_then(SettingsFile::from_json)
+                    .map_err(|e| format!("Failed to parse settings file {:?}: {e}", self.file_path))
+            });
+        let file = match parsed {
+            Ok(file) => file,
+            Err(message) => {
+                warn!("{message}. Using defaults.");
+                return None;
             }
-        }
+        };
+        info!("Loaded settings from {:?}", self.file_path);
+        restore_simulated_directories(&file.simulated_directories);
+        Some(file.settings)
     }
 
     /// Save settings to the JSON file
     pub fn save(&self, settings: &CaptureSettings) -> Result<(), SettingsPersistenceError> {
-        let persisted = PersistedSettings::from(settings);
-        let json = serde_json::to_string_pretty(&persisted)
+        let file = SettingsFile {
+            settings: settings.clone(),
+            simulated_directories: get_simulated_directories()
+                .into_iter()
+                .map(|p| p.display().to_string())
+                .collect(),
+        };
+        let json = file
+            .to_json()
             .map_err(|e| SettingsPersistenceError::SerializationFailed(e.to_string()))?;
 
         std::fs::write(&self.file_path, json)
@@ -448,6 +147,21 @@ impl SettingsPersistence {
     /// Get the path to the settings file
     pub fn file_path(&self) -> &Path {
         &self.file_path
+    }
+}
+
+/// Re-registers the simulated cameras a previous run had, one directory at a time.
+fn restore_simulated_directories(directories: &[String]) {
+    for dir_path in directories {
+        match add_simulated_directory(PathBuf::from(dir_path)) {
+            Ok(true) => info!(directory = %dir_path, "Restored simulated camera directory"),
+            Ok(false) => debug!(directory = %dir_path, "Simulated camera directory already exists"),
+            Err(e) => warn!(
+                directory = %dir_path,
+                error = %e,
+                "Failed to restore simulated camera directory"
+            ),
+        }
     }
 }
 

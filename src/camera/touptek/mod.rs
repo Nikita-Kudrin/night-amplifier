@@ -2,7 +2,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 pub mod ffi_types;
 pub mod sdk;
@@ -14,10 +13,10 @@ use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
 
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
+use super::exposure::{Acquisition, ExposureLoop, Poll, Progress, SdkExposure};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
-    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
-    SensorType,
+    CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
 };
 
 use ffi_types::*;
@@ -69,11 +68,8 @@ impl CameraProvider for TouptekProvider {
 pub struct TouptekCamera {
     handle: TouptekHandle,
     info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
     cooler_on: bool,
-    last_applied_config: Option<CaptureConfig>,
-    buffer_pool: BufferPool,
-    stream_running: bool,
+    exposure: ExposureLoop,
 }
 
 impl TouptekCamera {
@@ -125,11 +121,8 @@ impl TouptekCamera {
         Ok(Self {
             handle,
             info,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
             cooler_on: false,
-            last_applied_config: None,
-            buffer_pool: BufferPool::new(),
-            stream_running: false,
+            exposure: ExposureLoop::new(),
         })
     }
 }
@@ -221,179 +214,20 @@ impl Camera for TouptekCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-        config.validate(&self.info)?;
-        self.cancel_flag.store(false, Ordering::SeqCst);
-
-        let bin = config.bin;
-
-        if config.should_reapply(self.last_applied_config.as_ref()) {
-            // Set exposure
-            catch_ffi_panic("ToupTek::set_expo", || {
-                self.handle.set_exposure_us(config.exposure_us as u32)
-            })
-            .map_err(CameraError::from)?
-            .map_err(CameraError::ExposureFailed)?;
-
-            // Set gain (Camera trait uses i32, ToupTek SDK uses u16 percent)
-            catch_ffi_panic("ToupTek::set_gain", || {
-                self.handle.set_gain(config.gain as u16)
-            })
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set gain: {}", e),
-            })?;
-
-            // Set binning
-            if bin > 1 {
-                catch_ffi_panic("ToupTek::set_bin", || self.handle.set_binning(bin))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| CameraError::SdkError {
-                        code: -1,
-                        message: format!("Failed to set binning: {}", e),
-                    })?;
-            }
-
-            // Set ROI or full resolution
-            if let Some((x, y, w, h)) = config.roi {
-                catch_ffi_panic("ToupTek::set_roi", || self.handle.set_roi(x, y, w, h))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| CameraError::SdkError {
-                        code: -1,
-                        message: format!("Failed to set ROI: {}", e),
-                    })?;
-            } else {
-                // Full frame at index 0 (highest resolution)
-                catch_ffi_panic("ToupTek::set_esize", || self.handle.set_resolution_index(0))
-                    .map_err(CameraError::from)?
-                    .map_err(|e| CameraError::SdkError {
-                        code: -1,
-                        message: format!("Failed to set resolution: {}", e),
-                    })?;
-            }
-
-            self.last_applied_config = Some(config.clone());
-            if self.stream_running {
-                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                self.stream_running = false;
-            }
-        }
-
-        let is_continuous = config.is_continuous();
-
-        // Start pull mode
-        if !is_continuous {
-            if self.stream_running {
-                let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                self.stream_running = false;
-            }
-            catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
-                .map_err(CameraError::from)?
-                .map_err(CameraError::ExposureFailed)?;
-        } else if !self.stream_running {
-            catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
-                .map_err(CameraError::from)?
-                .map_err(CameraError::ExposureFailed)?;
-            self.stream_running = true;
-        }
-
-        // Calculate buffer size
-        let (w, h) = catch_ffi_panic("ToupTek::get_size", || self.handle.get_resolution())
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to get resolution: {}", e),
-            })?;
-        let w = w as u32;
-        let h = h as u32;
-
-        let bytes_per_pixel = match config.format {
-            ImageFormat::Raw16 => 2usize,
-            ImageFormat::Raw8 => 1,
-            ImageFormat::Rgb24 => 3,
-        };
-        let buf_size = (w as usize) * (h as usize) * bytes_per_pixel;
-        let mut buffer = self.buffer_pool.get(buf_size);
-
-        let total_timeout = config.stall_budget(buf_size);
-        let wait_ms = total_timeout.as_millis().min(u32::MAX as u128) as u32;
-
-        let start = Instant::now();
-
-        let fatal_error = self.handle.get_fatal_error_flag();
-
-        // Wait for the image
-        let frame_info = loop {
-            if self.cancel_flag.load(Ordering::SeqCst) {
-                if is_continuous {
-                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                    self.stream_running = false;
-                }
-                return Err(CameraError::Cancelled);
-            }
-
-            if start.elapsed() > total_timeout {
-                if is_continuous {
-                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                    self.stream_running = false;
-                }
-                return Err(CameraError::ExposureTimeout(total_timeout));
-            }
-
-            if fatal_error.load(Ordering::SeqCst) {
-                if is_continuous {
-                    let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                    self.stream_running = false;
-                }
-                return Err(CameraError::ExposureFailed(
-                    "Camera reported a hardware error or disconnect during capture".to_string(),
-                ));
-            }
-
-            // Try to pull with a short wait — allows cancel checks
-            let chunk_wait = 500u32.min(wait_ms);
-            match catch_ffi_panic("ToupTek::wait_image", || {
-                self.handle.wait_image_raw(chunk_wait, &mut buffer)
-            }) {
-                Ok(Ok(info)) => break info,
-                Ok(Err(_)) => continue, // Not ready yet
-                Err(e) => {
-                    if is_continuous {
-                        let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-                        self.stream_running = false;
-                    }
-                    return Err(CameraError::ExposureFailed(e.to_string()));
-                }
-            }
-        };
-
-        // Stop pull mode if not continuous
-        if !is_continuous {
-            let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
-        }
-
-        // Build Frame
-        let actual_w = frame_info.width as usize;
-        let actual_h = frame_info.height as usize;
-
-        Ok(RawFrame {
-            data: buffer,
-            width: actual_w as u32,
-            height: actual_h as u32,
-            format: config.format,
-        })
+        let Self { handle, info, exposure, .. } = self;
+        exposure.capture(&mut TouptekExposure { handle, info }, config)
     }
 
     fn invalidate_config_cache(&mut self) {
-        self.last_applied_config = None;
+        self.exposure.invalidate();
     }
 
     fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
+        self.exposure.cancel();
     }
 
     fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
+        self.exposure.cancel_token()
     }
 
     fn close(&mut self) -> CameraResult<()> {
@@ -407,6 +241,126 @@ impl Camera for TouptekCamera {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// ToupTek's calls for the shared [`ExposureLoop`]. One pull mode serves both acquisitions.
+struct TouptekExposure<'a> {
+    handle: &'a TouptekHandle,
+    info: &'a CameraInfo,
+}
+
+impl SdkExposure for TouptekExposure<'_> {
+    const STOP_STREAM_BEFORE_APPLY: bool = false;
+
+    fn info(&self) -> &CameraInfo {
+        self.info
+    }
+
+    fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
+        let sdk_error = |what: &str, e: String| CameraError::SdkError {
+            code: -1,
+            message: format!("Failed to set {what}: {e}"),
+        };
+        catch_ffi_panic("ToupTek::set_expo", || {
+            self.handle.set_exposure_us(config.exposure_us as u32)
+        })
+        .map_err(CameraError::from)?
+        .map_err(CameraError::ExposureFailed)?;
+
+        // The Camera trait's gain is an i32; ToupTek's is a u16 percentage.
+        catch_ffi_panic("ToupTek::set_gain", || self.handle.set_gain(config.gain as u16))
+            .map_err(CameraError::from)?
+            .map_err(|e| sdk_error("gain", e))?;
+
+        if config.bin > 1 {
+            catch_ffi_panic("ToupTek::set_bin", || self.handle.set_binning(config.bin))
+                .map_err(CameraError::from)?
+                .map_err(|e| sdk_error("binning", e))?;
+        }
+
+        match config.roi {
+            Some((x, y, w, h)) => {
+                catch_ffi_panic("ToupTek::set_roi", || self.handle.set_roi(x, y, w, h))
+                    .map_err(CameraError::from)?
+                    .map_err(|e| sdk_error("ROI", e))
+            }
+            // Index 0 is the full, highest resolution.
+            None => catch_ffi_panic("ToupTek::set_esize", || self.handle.set_resolution_index(0))
+                .map_err(CameraError::from)?
+                .map_err(|e| sdk_error("resolution", e)),
+        }
+    }
+
+    fn start(&mut self, _acquisition: Acquisition) -> CameraResult<()> {
+        catch_ffi_panic("ToupTek::start_pull", || self.handle.start_pull_mode())
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)
+    }
+
+    /// Only a stream is stopped: a single exposure's pull mode is left as it was.
+    fn abort(&mut self, acquisition: Acquisition) {
+        if acquisition == Acquisition::Stream {
+            self.stop();
+        }
+    }
+
+    /// The SDK's own size, read once pull mode has started.
+    fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize> {
+        let (w, h) = catch_ffi_panic("ToupTek::get_size", || self.handle.get_resolution())
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: format!("Failed to get resolution: {}", e),
+            })?;
+        let bytes_per_pixel = match config.format {
+            ImageFormat::Raw16 => 2usize,
+            ImageFormat::Raw8 => 1,
+            ImageFormat::Rgb24 => 3,
+        };
+        Ok((w as u32 as usize) * (h as u32 as usize) * bytes_per_pixel)
+    }
+
+    fn poll(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        let error = if self.handle.get_fatal_error_flag().load(Ordering::SeqCst) {
+            CameraError::ExposureFailed(
+                "Camera reported a hardware error or disconnect during capture".to_string(),
+            )
+        } else {
+            // A short wait per call, so a cancel is seen between them.
+            let budget_ms = progress.budget.as_millis().min(u32::MAX as u128) as u32;
+            match catch_ffi_panic("ToupTek::wait_image", || {
+                self.handle.wait_image_raw(500u32.min(budget_ms), buffer)
+            }) {
+                Ok(Ok(frame)) => {
+                    return Poll::Ready {
+                        width: frame.width as u32,
+                        height: frame.height as u32,
+                    }
+                }
+                Ok(Err(_)) => return Poll::Pending,
+                Err(e) => CameraError::ExposureFailed(e.to_string()),
+            }
+        };
+        let stream_ended = progress.acquisition == Acquisition::Stream;
+        if stream_ended {
+            self.stop();
+        }
+        Poll::Failed {
+            error,
+            stream_ended,
+        }
+    }
+
+    fn finish_single(&mut self) -> CameraResult<()> {
+        self.stop();
+        Ok(())
+    }
+}
+
+impl TouptekExposure<'_> {
+    fn stop(&self) {
+        let _ = catch_ffi_panic("ToupTek::stop", || self.handle.stop());
+    }
+}
 
 /// Every enumerated device, in the order `open` indexes them. `identities` derives from this
 /// list, so a device without a model lists by name instead of being dropped — dropping it

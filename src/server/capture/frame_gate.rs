@@ -181,6 +181,18 @@ impl FrameAdmission {
             mean_residual: result.mean_residual,
         }
     }
+
+    /// A verdict from a mode that aligns without star matching or a gate (comet,
+    /// planetary): it says whether the frame joined, never why it did not.
+    pub(super) fn unreasoned(added: bool) -> Self {
+        Self {
+            added,
+            rejected_because: None,
+            rebased: false,
+            matched_stars: 0,
+            mean_residual: f32::NAN,
+        }
+    }
 }
 
 /// Rolling medians of the registration residual and star size seen this session.

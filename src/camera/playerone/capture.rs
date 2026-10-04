@@ -7,15 +7,13 @@ pub struct ROI {
     pub width: u32,
     pub height: u32,
 }
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use super::super::error::{CameraError, CameraResult};
+use super::super::exposure::{Acquisition, Poll, Progress, SdkExposure};
 use super::super::types::{CameraInfo, CaptureConfig, ImageFormat};
 use super::sensor_mode;
-use crate::camera::types::RawFrame;
 use crate::ffi_safety::catch_ffi_panic;
 
 pub fn apply_config(
@@ -192,128 +190,102 @@ fn apply_cooler_config(camera: &mut POACamera, config: &CaptureConfig) {
 
 /// `start` is when `capture()` was entered, config reapply included — see
 /// [`CaptureConfig::stall_budget`].
-pub fn run_capture(
-    camera: &mut POACamera,
-    info: &CameraInfo,
-    config: &CaptureConfig,
-    cancel_flag: &AtomicBool,
-    buffer_pool: &crate::camera::types::BufferPool,
-    stream_running: &mut bool,
-    start: Instant,
-) -> CameraResult<RawFrame> {
-    // Reset cancel flag
-    cancel_flag.store(false, Ordering::SeqCst);
+/// Player One's calls for the shared [`ExposureLoop`](crate::camera::exposure::ExposureLoop).
+pub(super) struct PlayerOneExposure<'a> {
+    pub camera: &'a mut POACamera,
+    pub info: &'a CameraInfo,
+}
 
-    // Resize the (persistent, caller-owned) buffer to exactly match the
-    // selected format and capture dimensions. `Frame::from_raw` enforces
-    // buffer length equality, so an over-allocated worst-case buffer would
-    // be rejected downstream. `resize` is a no-op when the length is already
-    // correct (the common case, frame to frame), and only zero-fills the
-    // newly added tail when growing — no full reallocation/memset every
-    // frame the way a fresh `vec![0u8; buffer_len]` would need.
-    let (width, height) = config.frame_dimensions(info);
-    let bytes_per_pixel = match config.format {
-        ImageFormat::Raw8 => 1,
-        ImageFormat::Raw16 => 2,
-        ImageFormat::Rgb24 => 3,
-    };
-    let buffer_len = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(bytes_per_pixel);
-    let mut buffer = buffer_pool.get(buffer_len);
-
-    let total_timeout = config.stall_budget(buffer_len);
-    let is_continuous = config.is_continuous();
-
-    // Start exposure if not already running in continuous mode
-    if is_continuous {
-        if !*stream_running {
-            catch_ffi_panic("PlayerOne::start_exposure(false)", || {
-                camera.start_exposure(false)
-            })
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
-            *stream_running = true;
-        }
-    } else {
-        if *stream_running {
-            let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-            *stream_running = false;
-        }
-        catch_ffi_panic("PlayerOne::start_exposure(true)", || {
-            camera.start_exposure(true)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+impl SdkExposure for PlayerOneExposure<'_> {
+    fn info(&self) -> &CameraInfo {
+        self.info
     }
 
-    // Wait for image to be ready
-    loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-            if is_continuous {
-                *stream_running = false;
-            }
-            return Err(CameraError::Cancelled);
+    fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
+        apply_config(self.camera, config, self.info)
+    }
+
+    fn start(&mut self, acquisition: Acquisition) -> CameraResult<()> {
+        let (single, context) = match acquisition {
+            Acquisition::Stream => (false, "PlayerOne::start_exposure(false)"),
+            Acquisition::Single => (true, "PlayerOne::start_exposure(true)"),
+        };
+        catch_ffi_panic(context, || self.camera.start_exposure(single))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))
+    }
+
+    fn abort(&mut self, _acquisition: Acquisition) {
+        let _ = catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure());
+    }
+
+    /// Read before the stop, which resets it: whether the SDK was receiving frames and
+    /// dropping them, or receiving nothing, separates two different faults.
+    fn on_stall(&mut self, progress: &Progress) {
+        if progress.acquisition != Acquisition::Stream {
+            return;
         }
-
-        if start.elapsed() > total_timeout {
-            // Read before the stop, which resets it: whether the SDK was receiving frames
-            // and dropping them, or receiving nothing, separates two different faults.
-            if is_continuous {
-                match catch_ffi_panic("PlayerOne::dropped_images_count", || {
-                    camera.dropped_images_count()
-                }) {
-                    Ok(Some(Ok(dropped))) => {
-                        warn!(dropped, budget = ?total_timeout, "Player One video stream stalled")
-                    }
-                    Ok(Some(Err(e))) => debug!(error = %e, "Could not read the dropped-frame count"),
-                    Ok(None) | Err(_) => {}
-                }
+        match catch_ffi_panic("PlayerOne::dropped_images_count", || {
+            self.camera.dropped_images_count()
+        }) {
+            Ok(Some(Ok(dropped))) => {
+                warn!(dropped, budget = ?progress.budget, "Player One video stream stalled")
             }
-            let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-            if is_continuous {
-                *stream_running = false;
-            }
-            return Err(CameraError::ExposureTimeout(total_timeout));
+            Ok(Some(Err(e))) => debug!(error = %e, "Could not read the dropped-frame count"),
+            Ok(None) | Err(_) => {}
         }
+    }
 
-        let ready_result = catch_ffi_panic("PlayerOne::is_image_ready", || camera.is_image_ready())
-            .map_err(CameraError::from)?;
+    fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize> {
+        let (width, height) = config.frame_dimensions(self.info);
+        let bytes_per_pixel = match config.format {
+            ImageFormat::Raw8 => 1,
+            ImageFormat::Raw16 => 2,
+            ImageFormat::Rgb24 => 3,
+        };
+        Ok((width as usize)
+            .saturating_mul(height as usize)
+            .saturating_mul(bytes_per_pixel))
+    }
 
-        match ready_result {
-            Ok(true) => break,
+    fn poll(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        let failed = |error, stream_ended| Poll::Failed {
+            error,
+            stream_ended,
+        };
+        let ready = match catch_ffi_panic("PlayerOne::is_image_ready", || {
+            self.camera.is_image_ready()
+        }) {
+            Ok(ready) => ready,
+            Err(e) => return failed(CameraError::from(e), false),
+        };
+        match ready {
+            Ok(true) => {}
             Ok(false) => {
                 std::thread::sleep(Duration::from_millis(5));
+                return Poll::Pending;
             }
             Err(e) => {
-                let _ = catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure());
-                if is_continuous {
-                    *stream_running = false;
-                }
-                return Err(CameraError::ExposureFailed(format!("{:?}", e)));
+                let _ = catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure());
+                let stream_ended = progress.acquisition == Acquisition::Stream;
+                return failed(CameraError::ExposureFailed(format!("{:?}", e)), stream_ended);
             }
+        }
+        match catch_ffi_panic("PlayerOne::get_image_data", || {
+            self.camera.get_image_data(buffer, Some(500))
+        }) {
+            Ok(Ok(())) => {
+                let (width, height) = progress.config.frame_dimensions(self.info);
+                Poll::Ready { width, height }
+            }
+            Ok(Err(e)) => failed(CameraError::ImageReadFailed(format!("{:?}", e)), false),
+            Err(e) => failed(CameraError::from(e), false),
         }
     }
 
-    // Get image data
-    catch_ffi_panic("PlayerOne::get_image_data", || {
-        camera.get_image_data(&mut buffer, Some(500))
-    })
-    .map_err(CameraError::from)?
-    .map_err(|e| CameraError::ImageReadFailed(format!("{:?}", e)))?;
-
-    // Stop exposure if not continuous
-    if !is_continuous {
-        catch_ffi_panic("PlayerOne::stop_exposure", || camera.stop_exposure())
+    fn finish_single(&mut self) -> CameraResult<()> {
+        catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure())
             .map_err(CameraError::from)?
-            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))?;
+            .map_err(|e| CameraError::ExposureFailed(format!("{:?}", e)))
     }
-
-    Ok(RawFrame {
-        data: buffer,
-        width,
-        height,
-        format: config.format,
-    })
 }

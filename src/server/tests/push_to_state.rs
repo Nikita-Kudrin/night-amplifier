@@ -1,7 +1,7 @@
 //! Server-side Push-To bookkeeping: the solve latch, and the de-duplication that
 //! keeps per-frame recomputation off the event bus.
 
-use crate::server::api::settings::{optics_change, OpticsChange};
+use crate::server::services::{optics_change, OpticsChange};
 use crate::server::dto::UpdateSettingsRequest;
 use crate::server::services::PushToState;
 use crate::server::state::{CameraRole, CaptureSettings, TelescopeSettings};

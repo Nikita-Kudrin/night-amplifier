@@ -5,7 +5,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::Frame;
 
 use super::error::CameraResult;
 use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
@@ -172,92 +171,15 @@ pub trait CameraProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::types::SensorType;
+    use crate::camera::testing::FakeCamera;
 
-    // Mock camera for testing
-    struct MockCamera {
-        info: CameraInfo,
-        cancel_flag: Arc<AtomicBool>,
-    }
-
-    impl MockCamera {
-        fn new() -> Self {
-            Self {
-                info: CameraInfo {
-                    name: "Mock Camera".to_string(),
-                    id: 0,
-                    max_width: 1920,
-                    max_height: 1080,
-                    sensor_type: SensorType::Mono,
-                    has_dew_heater: false,
-                    ..Default::default()
-                },
-                cancel_flag: Arc::new(AtomicBool::new(false)),
-            }
-        }
-    }
-
-    impl Camera for MockCamera {
-        fn info(&self) -> &CameraInfo {
-            &self.info
-        }
-
-        fn gain_presets(&self) -> CameraResult<GainPresets> {
-            Ok(GainPresets::default())
-        }
-
-        fn status(&self) -> CameraResult<CameraStatus> {
-            Ok(CameraStatus::default())
-        }
-
-        fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-            Err(super::super::error::CameraError::ParameterNotSupported(
-                "cooler".to_string(),
-            ))
-        }
-
-        fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-            Err(super::super::error::CameraError::ParameterNotSupported(
-                "cooler".to_string(),
-            ))
-        }
-
-        fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
-            Err(super::super::error::CameraError::ParameterNotSupported(
-                "dew_heater".to_string(),
-            ))
-        }
-
-        fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-            Ok(RawFrame {
-                data: vec![0; (self.info.max_width * self.info.max_height) as usize].into(),
-                width: self.info.max_width,
-                height: self.info.max_height,
-                format: config.format,
-            })
-        }
-
-        fn cancel(&self) {
-            self.cancel_flag
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-        }
-
-        fn cancel_token(&self) -> Arc<AtomicBool> {
-            Arc::clone(&self.cancel_flag)
-        }
-
-        fn close(&mut self) -> CameraResult<()> {
-            Ok(())
-        }
-
-        fn provider_name(&self) -> &'static str {
-            "Mock"
-        }
+    fn camera() -> FakeCamera {
+        FakeCamera::new("Mock Camera").sized(1920, 1080)
     }
 
     #[test]
     fn test_mock_camera_trait() {
-        let mut camera = MockCamera::new();
+        let mut camera = camera();
         assert_eq!(camera.info().name, "Mock Camera");
         assert_eq!(camera.provider_name(), "Mock");
         assert!(camera.gain_presets().is_ok());
@@ -267,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_camera_capture() {
-        let mut camera = MockCamera::new();
+        let mut camera = camera();
         let config = CaptureConfig::default();
         let frame = camera.capture(&config);
         assert!(frame.is_ok());
@@ -278,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_cancel_token() {
-        let camera = MockCamera::new();
+        let camera = camera();
         let token = camera.cancel_token();
         assert!(!token.load(std::sync::atomic::Ordering::SeqCst));
         camera.cancel();
@@ -287,7 +209,7 @@ mod tests {
 
     #[test]
     fn invalidate_config_cache_default_is_safe_through_trait_object() {
-        let mut camera: Box<dyn Camera> = Box::new(MockCamera::new());
+        let mut camera: Box<dyn Camera> = Box::new(camera());
         camera.invalidate_config_cache();
         assert!(camera.capture(&CaptureConfig::default()).is_ok());
     }

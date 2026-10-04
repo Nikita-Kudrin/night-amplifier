@@ -4,15 +4,15 @@
 //! provider) so we can drive phase transitions deterministically without
 //! depending on the global simulated-camera directory registry.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::camera::testing::{CameraControls, FakeCamera};
 use crate::camera::{
     Camera, CameraError, CameraInfo, CameraResult, CameraStatus, CaptureConfig, GainPresets,
     SensorType,
 };
-use crate::frame::Frame;
 use crate::server::camera_session::lifecycle::DisconnectCause;
 use crate::server::camera_session::{lifecycle, monitor, PHASE_POLL_INTERVAL};
 use crate::server::events::ServerEvent;
@@ -1243,108 +1243,16 @@ fn send_monitor_cmd_for_test(state: &Arc<AppState>, cmd: MonitorCmd) {
     }
 }
 
-/// A camera whose SDK reports its device gone from a chosen call onwards, the
-/// way a real one does after a USB reset: `open()` already succeeded, and every
+/// A camera whose SDK reports its device gone once `CameraControls::dead` is raised,
+/// the way a real one does after a USB reset: `open()` already succeeded, and every
 /// subsequent call answers with a device-loss code.
-struct DeadCamera {
-    info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
-    dead: Arc<AtomicBool>,
-    closes: Arc<AtomicUsize>,
+fn dead_camera() -> FakeCamera {
+    FakeCamera::new("Dead Camera").sized(640, 480).cooled()
 }
 
-impl DeadCamera {
-    fn new() -> (Self, Arc<AtomicBool>, Arc<AtomicUsize>) {
-        let dead = Arc::new(AtomicBool::new(false));
-        let closes = Arc::new(AtomicUsize::new(0));
-        let cam = Self {
-            info: CameraInfo {
-                name: "Dead Camera".to_string(),
-                id: 0,
-                max_width: 640,
-                max_height: 480,
-                sensor_type: SensorType::Mono,
-                has_cooler: true,
-                min_temp_c: Some(-40.0),
-                max_temp_c: Some(30.0),
-                ..Default::default()
-            },
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            dead: Arc::clone(&dead),
-            closes: Arc::clone(&closes),
-        };
-        (cam, dead, closes)
-    }
-
-    fn check(&self) -> CameraResult<()> {
-        if self.dead.load(Ordering::SeqCst) {
-            // The exact shape a shim produces once it has classified the code.
-            return Err(CameraError::CoolingFailed(crate::camera::mark_device_lost(
-                "POASetConfig failed: POA_ERROR_NOT_OPENED",
-            )));
-        }
-        Ok(())
-    }
-}
-
-impl Camera for DeadCamera {
-    fn info(&self) -> &CameraInfo {
-        &self.info
-    }
-
-    fn gain_presets(&self) -> CameraResult<GainPresets> {
-        Ok(GainPresets::default())
-    }
-
-    fn status(&self) -> CameraResult<CameraStatus> {
-        self.check()?;
-        Ok(CameraStatus {
-            temperature_c: 0.0,
-            cooler_power: Some(0.0),
-            cooler_on: true,
-            is_exposing: false,
-            current_gain: 0,
-            current_offset: 0,
-            current_exposure_us: 1_000,
-            dew_heater_on: false,
-        })
-    }
-
-    fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-        self.check()
-    }
-
-    fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-        self.check()
-    }
-
-    fn set_dew_heater(&mut self, _enabled: bool, _power: i32) -> CameraResult<()> {
-        self.check()
-    }
-
-    fn capture(&mut self, _config: &CaptureConfig) -> CameraResult<crate::camera::RawFrame> {
-        self.check()?;
-        Err(CameraError::Cancelled)
-    }
-
-    fn cancel(&self) {}
-
-    fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
-    }
-
-    fn close(&mut self) -> CameraResult<()> {
-        self.closes.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    fn provider_name(&self) -> &'static str {
-        "Mock"
-    }
-}
-
-async fn install_dead_camera(state: &Arc<AppState>) -> (String, Arc<AtomicBool>, Arc<AtomicUsize>) {
-    let (cam, dead, closes) = DeadCamera::new();
+async fn install_dead_camera(state: &Arc<AppState>) -> (String, Arc<CameraControls>) {
+    let cam = dead_camera();
+    let controls = cam.controls();
     let name = cam.info().name.clone();
     let connected_info = ConnectedCameraInfo {
         id: "mock_0".to_string(),
@@ -1369,7 +1277,7 @@ async fn install_dead_camera(state: &Arc<AppState>) -> (String, Arc<AtomicBool>,
         tokio::runtime::Handle::current(),
     );
     *state.slot(CameraRole::Main).monitor_tx.lock().unwrap() = Some(tx);
-    (name, dead, closes)
+    (name, controls)
 }
 
 /// Wait for `predicate` to hold, or give up. Returns whether it held.
@@ -1395,9 +1303,9 @@ async fn a_lost_device_ends_the_session_instead_of_being_polled_forever() {
     // separately by `reconnect_is_not_attempted_*`.
     state.settings.write().await.auto_reconnect = false;
 
-    let (name, dead, _closes) = install_dead_camera(&state).await;
+    let (name, camera) = install_dead_camera(&state).await;
     let mut events = state.subscribe_events();
-    dead.store(true, Ordering::SeqCst);
+    camera.dead.store(true, Ordering::SeqCst);
 
     let escalated = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -1440,12 +1348,12 @@ async fn one_fault_does_not_end_the_session() {
     let state = Arc::new(state);
     state.settings.write().await.auto_reconnect = false;
 
-    let (name, dead, _closes) = install_dead_camera(&state).await;
+    let (name, camera) = install_dead_camera(&state).await;
 
     // One poll's worth of failure, then the camera answers again.
-    dead.store(true, Ordering::SeqCst);
+    camera.dead.store(true, Ordering::SeqCst);
     tokio::time::sleep(PHASE_POLL_INTERVAL + Duration::from_millis(200)).await;
-    dead.store(false, Ordering::SeqCst);
+    camera.dead.store(false, Ordering::SeqCst);
 
     tokio::time::sleep(PHASE_POLL_INTERVAL * 2).await;
     assert!(
@@ -1464,10 +1372,10 @@ async fn no_reconnect_when_the_camera_dies_during_warmup() {
     let state = Arc::new(state);
     state.settings.write().await.auto_reconnect = true;
 
-    let (name, dead, _closes) = install_dead_camera(&state).await;
+    let (name, camera) = install_dead_camera(&state).await;
     state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp).await;
     send_monitor_cmd_for_test(&state, MonitorCmd::StartWarmup { fast: false });
-    dead.store(true, Ordering::SeqCst);
+    camera.dead.store(true, Ordering::SeqCst);
 
     assert!(
         eventually(
@@ -1497,7 +1405,7 @@ async fn no_reconnect_when_the_setting_is_off() {
     let state = Arc::new(state);
     state.settings.write().await.auto_reconnect = false;
 
-    let (name, _dead, _closes) = install_dead_camera(&state).await;
+    let (name, _camera) = install_dead_camera(&state).await;
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::DeviceFault).await;
 
     // The supervisor starts, reads the setting, and gives up before its first
@@ -1521,7 +1429,7 @@ async fn reconnect_is_single_flight() {
     let state = Arc::new(state);
     state.settings.write().await.auto_reconnect = true;
 
-    let (name, _dead, _closes) = install_dead_camera(&state).await;
+    let (name, _camera) = install_dead_camera(&state).await;
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::DeviceFault).await;
 
     assert!(
@@ -1592,10 +1500,11 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
         let mut session = state.session.write().await;
         session.stacked_count = 514;
     }
+    let settings = state.settings.read().await.clone();
     *state.stacking_carryover.lock().unwrap() = Some(StackingCarryover {
-        stacking: None,
-        comet: None,
-        planetary: None,
+        stacker: Box::new(
+            crate::server::capture::StackingContext::new(16, 16, 1, &settings).expect("context"),
+        ),
     });
 
     let plan = SessionResumePlan {
@@ -2357,13 +2266,13 @@ async fn a_device_lost_during_warmup_ends_it_at_once() {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
     }
-    let (_name, dead, _closes) = install_dead_camera(&state).await;
+    let (_name, camera) = install_dead_camera(&state).await;
     let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
         .await
         .unwrap();
     assert!(matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }));
 
-    dead.store(true, Ordering::SeqCst);
+    camera.dead.store(true, Ordering::SeqCst);
 
     assert!(
         camera_gone(&state, PHASE_POLL_INTERVAL * 2 + Duration::from_secs(1)).await,
@@ -2438,53 +2347,6 @@ async fn a_guide_loop_that_finds_its_handle_lost_is_not_waited_on_by_its_own_tea
     );
 }
 
-/// A camera whose `status()` panics: the guide loop calls it on its own thread, outside
-/// any watchdog, so a panic there ends the thread mid-loop.
-struct PanickingStatusCamera {
-    inner: MockCamera,
-    panic: Arc<AtomicBool>,
-}
-
-impl Camera for PanickingStatusCamera {
-    fn info(&self) -> &CameraInfo {
-        self.inner.info()
-    }
-    fn gain_presets(&self) -> CameraResult<GainPresets> {
-        self.inner.gain_presets()
-    }
-    fn status(&self) -> CameraResult<CameraStatus> {
-        if self.panic.load(Ordering::SeqCst) {
-            panic!("status() panicked inside the guide loop");
-        }
-        self.inner.status()
-    }
-    fn set_target_temperature(&mut self, temp_c: f64) -> CameraResult<()> {
-        self.inner.set_target_temperature(temp_c)
-    }
-    fn set_cooler(&mut self, enabled: bool) -> CameraResult<()> {
-        self.inner.set_cooler(enabled)
-    }
-    fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()> {
-        self.inner.set_dew_heater(enabled, power)
-    }
-    fn capture(&mut self, config: &CaptureConfig) -> CameraResult<crate::camera::RawFrame> {
-        std::thread::sleep(Duration::from_millis(20));
-        self.inner.capture(config)
-    }
-    fn cancel(&self) {
-        self.inner.cancel()
-    }
-    fn cancel_token(&self) -> Arc<AtomicBool> {
-        self.inner.cancel_token()
-    }
-    fn close(&mut self) -> CameraResult<()> {
-        self.inner.close()
-    }
-    fn provider_name(&self) -> &'static str {
-        "Mock"
-    }
-}
-
 /// A guide loop that dies mid-loop keeps its registration and its "running" flag, and the
 /// slot stays `Guiding` with no handle. Start then answers "running" for a loop that does
 /// not exist (and keeps the imaging camera from solving), and after Stop no new loop can
@@ -2494,9 +2356,12 @@ async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     state.settings.write().await.auto_reconnect = false;
-    let (inner, _cooler) = MockCamera::new(false, 1.0);
-    let panic = Arc::new(AtomicBool::new(false));
-    let camera = PanickingStatusCamera { inner, panic: Arc::clone(&panic) };
+    // `status()` panicking: the guide loop calls it on its own thread, outside any
+    // watchdog, so a panic there ends the thread mid-loop.
+    let camera = FakeCamera::new("Mock Cooled Camera")
+        .sized(640, 480)
+        .stuck_for(Duration::from_millis(20));
+    let controls = camera.controls();
     let info = ConnectedCameraInfo {
         id: "mock_1".to_string(),
         provider: "Mock".to_string(),
@@ -2515,7 +2380,7 @@ async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
         eventually(|| state.guide_loop_running(), Duration::from_secs(3)).await,
         "the loop never started"
     );
-    panic.store(true, Ordering::SeqCst);
+    controls.panic_on_status(true);
 
     let released = eventually(
         || !state.guide_loops.is_registered() && !state.guide_loop_running(),

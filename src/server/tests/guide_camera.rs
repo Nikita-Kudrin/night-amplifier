@@ -185,7 +185,7 @@ async fn the_camera_list_reports_each_cameras_role() {
 /// would report a framing change that never happened (and restart a healthy solve).
 #[tokio::test]
 async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
-    use crate::server::api::settings::optics_change;
+    use crate::server::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let mut settings = CaptureSettings {
@@ -213,7 +213,7 @@ async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
 /// when the shared telescope block is untouched.
 #[tokio::test]
 async fn rewriting_the_optics_profiles_counts_as_a_telescope_change() {
-    use crate::server::api::settings::optics_change;
+    use crate::server::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let settings = CaptureSettings::default();

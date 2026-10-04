@@ -1,8 +1,8 @@
 //! QHYCCD camera implementation
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub mod ffi_types;
 pub mod sdk;
@@ -15,10 +15,10 @@ use shim::{scan_cameras, QhyHandle};
 
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
+use super::exposure::{Acquisition, ExposureLoop, Poll, Progress, SdkExposure};
 use super::traits::{Camera, CameraProvider};
 use super::types::{
-    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
-    SensorType,
+    CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
 };
 
 /// QHY camera provider
@@ -152,10 +152,7 @@ fn build_camera_info(camera: &QhyHandle, id: &str, index: i32) -> CameraResult<C
 pub struct QhyCamera {
     camera: QhyHandle,
     info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
-    last_applied_config: Option<CaptureConfig>,
-    buffer_pool: BufferPool,
-    stream_running: bool,
+    exposure: ExposureLoop,
 }
 
 impl QhyCamera {
@@ -181,10 +178,7 @@ impl QhyCamera {
         let slf = Self {
             camera,
             info,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            last_applied_config: None,
-            buffer_pool: BufferPool::new(),
-            stream_running: false,
+            exposure: ExposureLoop::new(),
         };
 
         // Initialize defaults
@@ -214,73 +208,6 @@ impl QhyCamera {
             "Camera '{}' not found",
             name
         )))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn apply_capture_config(
-        &self,
-        exposure_us: u64,
-        gain: i32,
-        offset: i32,
-        x: u32,
-        y: u32,
-        w: u32,
-        h: u32,
-        bin: u32,
-        bits: u32,
-    ) -> CameraResult<()> {
-        catch_ffi_panic("QHY::set_exposure", || {
-            self.camera
-                .set_param(ControlId::Exposure, exposure_us as f64)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set exposure: {}", e),
-        })?;
-
-        catch_ffi_panic("QHY::set_gain", || {
-            self.camera.set_param(ControlId::Gain, gain as f64)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set gain: {}", e),
-        })?;
-
-        catch_ffi_panic("QHY::set_offset", || {
-            self.camera.set_param(ControlId::Offset, offset as f64)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set offset: {}", e),
-        })?;
-
-        catch_ffi_panic("QHY::set_resolution", || {
-            self.camera.set_resolution(x, y, w, h)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set resolution: {}", e),
-        })?;
-
-        catch_ffi_panic("QHY::set_bin", || self.camera.set_bin(bin))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set bin mode: {}", e),
-            })?;
-
-        catch_ffi_panic("QHY::set_bits", || self.camera.set_bits(bits))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set bit mode: {}", e),
-            })?;
-
-        Ok(())
     }
 }
 
@@ -389,154 +316,20 @@ impl Camera for QhyCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-        config.validate(&self.info)?;
-        self.cancel_flag.store(false, Ordering::SeqCst);
-
-        let bin = config.bin as u32;
-        let bits = match config.format {
-            ImageFormat::Raw8 | ImageFormat::Rgb24 => 8,
-            ImageFormat::Raw16 => 16,
-        };
-
-        let (x, y, w, h) = if let Some((x, y, w, h)) = config.roi {
-            (x, y, w, h)
-        } else {
-            (0, 0, self.info.max_width / bin, self.info.max_height / bin)
-        };
-
-        if config.should_reapply(self.last_applied_config.as_ref()) {
-            if self.stream_running {
-                let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(0));
-                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
-                self.stream_running = false;
-            }
-            self.apply_capture_config(
-                config.exposure_us,
-                config.gain,
-                config.offset,
-                x,
-                y,
-                w,
-                h,
-                bin,
-                bits,
-            )?;
-            self.last_applied_config = Some(config.clone());
-        }
-
-        let exposure_duration = Duration::from_micros(config.exposure_us);
-        let total_timeout = config.stall_budget(config.frame_bytes(&self.info));
-        let start = Instant::now();
-
-        let is_continuous = config.is_continuous();
-
-        if !is_continuous {
-            if self.stream_running {
-                let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(0));
-                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
-                self.stream_running = false;
-            }
-            catch_ffi_panic("QHY::start_single", || self.camera.start_single_frame())
-                .map_err(CameraError::from)?
-                .map_err(CameraError::ExposureFailed)?;
-        } else {
-            if !self.stream_running {
-                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(1));
-                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
-                catch_ffi_panic("QHY::start_live", || self.camera.start_live())
-                    .map_err(CameraError::from)?
-                    .map_err(CameraError::ExposureFailed)?;
-                self.stream_running = true;
-            }
-        }
-
-        let mut buf_len = (w * h * (bits / 8)) as usize;
-        if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 {
-            buf_len *= 3;
-        }
-        let mut buffer = self.buffer_pool.get(buf_len);
-
-        loop {
-            if self.cancel_flag.load(Ordering::SeqCst) {
-                if is_continuous {
-                    let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                    self.stream_running = false;
-                } else {
-                    let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
-                }
-                return Err(CameraError::Cancelled);
-            }
-
-            if start.elapsed() > total_timeout {
-                if is_continuous {
-                    let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                    self.stream_running = false;
-                } else {
-                    let _ = catch_ffi_panic("QHY::cancel", || self.camera.cancel());
-                }
-                return Err(CameraError::ExposureTimeout(total_timeout));
-            }
-
-            let ready = if is_continuous {
-                catch_ffi_panic("QHY::get_live", || self.camera.get_live_frame(&mut buffer))
-            } else {
-                catch_ffi_panic("QHY::get_single", || {
-                    self.camera.get_single_frame(&mut buffer)
-                })
-            };
-
-            match ready {
-                Ok(Ok((bw, bh))) => {
-                    return Ok(RawFrame {
-                        data: buffer,
-                        width: bw,
-                        height: bh,
-                        format: config.format,
-                    });
-                }
-                Ok(Err(e)) => {
-                    // QHY GetQHYCCDSingleFrame usually returns READ_DIRECTLY or ERROR if it's not ready yet.
-                    if e == "QHYCCD_READ_DIRECTLY" || e == "QHYCCD_ERROR" || e == "4294967295" {
-                        let elapsed = start.elapsed();
-                        if elapsed < exposure_duration.saturating_sub(Duration::from_millis(50)) {
-                            // Initial backoff: sleep until 50ms before exposure ends, max 100ms at a time
-                            let remaining = exposure_duration - elapsed - Duration::from_millis(50);
-                            std::thread::sleep(remaining.min(Duration::from_millis(100)));
-                        } else {
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                        continue;
-                    } else {
-                        if is_continuous {
-                            let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                            self.stream_running = false;
-                        }
-                        return Err(CameraError::ExposureFailed(e));
-                    }
-                }
-                Err(e) => {
-                    if is_continuous {
-                        let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
-                        self.stream_running = false;
-                    }
-                    return Err(CameraError::ExposureFailed(e.to_string()));
-                }
-            }
-        }
+        let Self { camera, info, exposure } = self;
+        exposure.capture(&mut QhyExposure { camera, info }, config)
     }
 
     fn invalidate_config_cache(&mut self) {
-        self.last_applied_config = None;
+        self.exposure.invalidate();
     }
 
     fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
+        self.exposure.cancel();
     }
 
     fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
+        self.exposure.cancel_token()
     }
 
     fn close(&mut self) -> CameraResult<()> {
@@ -546,6 +339,198 @@ impl Camera for QhyCamera {
 
     fn provider_name(&self) -> &'static str {
         "QHY"
+    }
+}
+
+
+#[allow(clippy::too_many_arguments)]
+fn apply_capture_config(
+    camera: &QhyHandle,
+    exposure_us: u64,
+    gain: i32,
+    offset: i32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    bin: u32,
+    bits: u32,
+) -> CameraResult<()> {
+    catch_ffi_panic("QHY::set_exposure", || {
+        camera
+            .set_param(ControlId::Exposure, exposure_us as f64)
+    })
+    .map_err(CameraError::from)?
+    .map_err(|e| CameraError::SdkError {
+        code: -1,
+        message: format!("Failed to set exposure: {}", e),
+    })?;
+
+    catch_ffi_panic("QHY::set_gain", || {
+        camera.set_param(ControlId::Gain, gain as f64)
+    })
+    .map_err(CameraError::from)?
+    .map_err(|e| CameraError::SdkError {
+        code: -1,
+        message: format!("Failed to set gain: {}", e),
+    })?;
+
+    catch_ffi_panic("QHY::set_offset", || {
+        camera.set_param(ControlId::Offset, offset as f64)
+    })
+    .map_err(CameraError::from)?
+    .map_err(|e| CameraError::SdkError {
+        code: -1,
+        message: format!("Failed to set offset: {}", e),
+    })?;
+
+    catch_ffi_panic("QHY::set_resolution", || {
+        camera.set_resolution(x, y, w, h)
+    })
+    .map_err(CameraError::from)?
+    .map_err(|e| CameraError::SdkError {
+        code: -1,
+        message: format!("Failed to set resolution: {}", e),
+    })?;
+
+    catch_ffi_panic("QHY::set_bin", || camera.set_bin(bin))
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::SdkError {
+            code: -1,
+            message: format!("Failed to set bin mode: {}", e),
+        })?;
+
+    catch_ffi_panic("QHY::set_bits", || camera.set_bits(bits))
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::SdkError {
+            code: -1,
+            message: format!("Failed to set bit mode: {}", e),
+        })?;
+
+    Ok(())
+}
+
+/// The sensor window `config` reads out: its ROI, or the whole binned sensor.
+fn frame_window(config: &CaptureConfig, info: &CameraInfo) -> (u32, u32, u32, u32) {
+    let bin = config.bin as u32;
+    config
+        .roi
+        .unwrap_or((0, 0, info.max_width / bin, info.max_height / bin))
+}
+
+fn bit_depth(config: &CaptureConfig) -> u32 {
+    match config.format {
+        ImageFormat::Raw8 | ImageFormat::Rgb24 => 8,
+        ImageFormat::Raw16 => 16,
+    }
+}
+
+/// QHY's calls for the shared [`ExposureLoop`].
+struct QhyExposure<'a> {
+    camera: &'a QhyHandle,
+    info: &'a CameraInfo,
+}
+
+impl SdkExposure for QhyExposure<'_> {
+    fn info(&self) -> &CameraInfo {
+        self.info
+    }
+
+    fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
+        let (x, y, w, h) = frame_window(config, self.info);
+        apply_capture_config(
+            self.camera,
+            config.exposure_us,
+            config.gain,
+            config.offset,
+            x,
+            y,
+            w,
+            h,
+            config.bin as u32,
+            bit_depth(config),
+        )
+    }
+
+    fn start(&mut self, acquisition: Acquisition) -> CameraResult<()> {
+        let started = match acquisition {
+            Acquisition::Stream => {
+                let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(1));
+                let _ = catch_ffi_panic("QHY::init", || self.camera.init());
+                catch_ffi_panic("QHY::start_live", || self.camera.start_live())
+            }
+            Acquisition::Single => {
+                catch_ffi_panic("QHY::start_single", || self.camera.start_single_frame())
+            }
+        };
+        started
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)
+    }
+
+    /// Back to single-frame mode, which a cancel or a stall does not need: those only stop
+    /// the stream, and the next start re-enters live mode anyway.
+    fn end_stream(&mut self) {
+        let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+        let _ = catch_ffi_panic("QHY::set_stream_mode", || self.camera.set_stream_mode(0));
+        let _ = catch_ffi_panic("QHY::init", || self.camera.init());
+    }
+
+    fn abort(&mut self, acquisition: Acquisition) {
+        let _ = match acquisition {
+            Acquisition::Stream => catch_ffi_panic("QHY::stop_live", || self.camera.stop_live()),
+            Acquisition::Single => catch_ffi_panic("QHY::cancel", || self.camera.cancel()),
+        };
+    }
+
+    fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize> {
+        let (_, _, w, h) = frame_window(config, self.info);
+        let mut len = (w * h * (bit_depth(config) / 8)) as usize;
+        if self.info.sensor_type == SensorType::Color && config.format == ImageFormat::Rgb24 {
+            len *= 3;
+        }
+        Ok(len)
+    }
+
+    fn poll(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        let read = match progress.acquisition {
+            Acquisition::Stream => {
+                catch_ffi_panic("QHY::get_live", || self.camera.get_live_frame(buffer))
+            }
+            Acquisition::Single => {
+                catch_ffi_panic("QHY::get_single", || self.camera.get_single_frame(buffer))
+            }
+        };
+        let error = match read {
+            Ok(Ok((width, height))) => return Poll::Ready { width, height },
+            // GetQHYCCDSingleFrame usually answers READ_DIRECTLY or ERROR while not ready.
+            Ok(Err(e)) if e == "QHYCCD_READ_DIRECTLY" || e == "QHYCCD_ERROR" || e == "4294967295" => {
+                back_off(progress);
+                return Poll::Pending;
+            }
+            Ok(Err(e)) => CameraError::ExposureFailed(e),
+            Err(e) => CameraError::ExposureFailed(e.to_string()),
+        };
+        let stream_ended = progress.acquisition == Acquisition::Stream;
+        if stream_ended {
+            let _ = catch_ffi_panic("QHY::stop_live", || self.camera.stop_live());
+        }
+        Poll::Failed {
+            error,
+            stream_ended,
+        }
+    }
+}
+
+/// Sleeps until 50 ms before the exposure ends, at most 100 ms at a time, then polls every
+/// 5 ms.
+fn back_off(progress: &Progress) {
+    let exposure = Duration::from_micros(progress.config.exposure_us);
+    let polling_from = exposure.saturating_sub(Duration::from_millis(50));
+    if progress.waited < polling_from {
+        std::thread::sleep((polling_from - progress.waited).min(Duration::from_millis(100)));
+    } else {
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 

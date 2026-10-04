@@ -2,9 +2,9 @@
 //!
 //! Uses the `cameraunit_asi` crate for safe Rust bindings to the ZWO ASI SDK.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub mod ffi_types;
 pub mod sdk;
@@ -18,10 +18,9 @@ use shim::{
 use super::device_lease::DeviceLease;
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
+use super::exposure::{Acquisition, ExposureLoop, Poll, Progress, SdkExposure};
 use super::traits::{Camera, CameraProvider};
-use super::types::{
-    BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
-};
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame};
 
 mod props;
 
@@ -83,10 +82,7 @@ impl CameraProvider for ZwoProvider {
 pub struct ZwoCamera {
     camera: ZwoShimCamera,
     info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
-    last_applied_config: Option<CaptureConfig>,
-    buffer_pool: BufferPool,
-    stream_running: bool,
+    exposure: ExposureLoop,
 }
 
 impl ZwoCamera {
@@ -156,10 +152,7 @@ impl ZwoCamera {
         Ok(Self {
             camera,
             info,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            last_applied_config: None,
-            buffer_pool: BufferPool::new(),
-            stream_running: false,
+            exposure: ExposureLoop::new(),
         })
     }
 
@@ -181,10 +174,7 @@ impl ZwoCamera {
                 return Ok(Self {
                     camera,
                     info,
-                    cancel_flag: Arc::new(AtomicBool::new(false)),
-                    last_applied_config: None,
-                    buffer_pool: BufferPool::new(),
-                    stream_running: false,
+                    exposure: ExposureLoop::new(),
                 });
             }
         }
@@ -193,82 +183,6 @@ impl ZwoCamera {
             "Camera '{}' not found",
             name
         )))
-    }
-
-    fn apply_config(&mut self, config: &CaptureConfig) -> CameraResult<()> {
-        let exposure = config.exposure_us as i64;
-        catch_ffi_panic("ZWO::set_exposure", || self.camera.set_exposure(exposure))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set exposure: {}", e),
-            })?;
-
-        let gain = config.gain as i64;
-        catch_ffi_panic("ZWO::set_gain_raw", || self.camera.set_gain_raw(gain))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set gain: {}", e),
-            })?;
-
-        let format = match config.format {
-            ImageFormat::Raw8 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RAW8,
-            ImageFormat::Raw16 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RAW16,
-            ImageFormat::Rgb24 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RGB24,
-        };
-        catch_ffi_panic("ZWO::set_image_fmt", || self.camera.set_image_fmt(format))
-            .map_err(CameraError::from)?
-            .map_err(|e| CameraError::SdkError {
-                code: -1,
-                message: format!("Failed to set image format: {}", e),
-            })?;
-
-        let (x, y, w, h) = if let Some((x, y, w, h)) = config.roi {
-            (x as i32, y as i32, w as i32, h as i32)
-        } else {
-            let width = (self.info.max_width / config.bin as u32) as i32;
-            let height = (self.info.max_height / config.bin as u32) as i32;
-            (0, 0, width, height)
-        };
-
-        catch_ffi_panic("ZWO::set_roi", || {
-            self.camera.set_roi(x, y, w, h, config.bin as i32)
-        })
-        .map_err(CameraError::from)?
-        .map_err(|e| CameraError::SdkError {
-            code: -1,
-            message: format!("Failed to set ROI: {}", e),
-        })?;
-
-        if self.info.has_cooler {
-            if config.cooler_enabled {
-                if let Some(temp) = config.target_temp_c {
-                    let result = catch_ffi_panic("ZWO::set_temperature", || {
-                        self.camera.set_temperature(temp as f32)
-                    });
-                    match result {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            tracing::warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature")
-                        }
-                        Err(e) => tracing::warn!(error = %e, "Panic setting target temperature"),
-                    }
-                }
-            }
-            let result = catch_ffi_panic("ZWO::set_cooler", || {
-                self.camera.set_cooler(config.cooler_enabled)
-            });
-            match result {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state")
-                }
-                Err(e) => tracing::warn!(error = %e, "Panic setting cooler state"),
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -385,165 +299,20 @@ impl Camera for ZwoCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-        // Before the config reapply below, on purpose — see `CaptureConfig::stall_budget`.
-        let start = Instant::now();
-        config.validate(&self.info)?;
-        self.cancel_flag.store(false, Ordering::SeqCst);
-        let total_timeout = config.stall_budget(config.frame_bytes(&self.info));
-        let is_continuous = config.is_continuous();
-
-        let (width, height) = config.frame_dimensions(&self.info);
-        let channels = match config.format {
-            ImageFormat::Raw8 | ImageFormat::Raw16 => 1,
-            ImageFormat::Rgb24 => 3,
-        };
-        let bytes_per_channel = match config.format {
-            ImageFormat::Raw8 | ImageFormat::Rgb24 => 1,
-            ImageFormat::Raw16 => 2,
-        };
-
-        let required_size = (width * height * channels * bytes_per_channel) as usize;
-        let mut buffer = self.buffer_pool.get(required_size);
-
-        if config.should_reapply(self.last_applied_config.as_ref()) {
-            if self.stream_running {
-                let _ = catch_ffi_panic("ZWO::stop_video_capture", || {
-                    self.camera.stop_video_capture()
-                });
-                self.stream_running = false;
-            }
-            self.apply_config(config)?;
-            self.last_applied_config = Some(config.clone());
-        }
-
-        if is_continuous {
-            if !self.stream_running {
-                catch_ffi_panic("ZWO::start_video_capture", || {
-                    self.camera.start_video_capture()
-                })
-                .map_err(CameraError::from)?
-                .map_err(CameraError::ExposureFailed)?;
-                self.stream_running = true;
-            }
-
-            // Loop just to allow cancellation while waiting for blocking ASIGetVideoData
-            // Actually, ASIGetVideoData is a single blocking call. To allow cancellation,
-            // we'd need to either use a shorter timeout and loop, or wait in a thread.
-            // ZWO SDK video capture timeout is in milliseconds.
-            // We can pass a shorter timeout (e.g. 100ms) and loop, checking cancel_flag.
-            let mut got_frame = false;
-            while start.elapsed() <= total_timeout {
-                if self.cancel_flag.load(Ordering::SeqCst) {
-                    let _ = catch_ffi_panic("ZWO::stop_video_capture", || {
-                        self.camera.stop_video_capture()
-                    });
-                    self.stream_running = false;
-                    return Err(CameraError::Cancelled);
-                }
-
-                let wait_ms =
-                    100.min(total_timeout.saturating_sub(start.elapsed()).as_millis() as i32);
-
-                match catch_ffi_panic("ZWO::get_video_data", || {
-                    self.camera.get_video_data(&mut buffer, wait_ms.max(10))
-                }) {
-                    Ok(Ok(())) => {
-                        got_frame = true;
-                        break;
-                    }
-                    Ok(Err(e)) if crate::camera::device_lost::is_marked(&e) => {
-                        // Retrying a lost device only runs the stall budget down before
-                        // the loop above can report what the SDK already said.
-                        self.stream_running = false;
-                        return Err(CameraError::ImageReadFailed(e));
-                    }
-                    Ok(Err(_)) => {
-                        // Timeout or error, loop and retry if time remains. Avoid 100% CPU spin-loop
-                        // if the SDK returns immediately on error.
-                        std::thread::sleep(Duration::from_millis(5));
-                        continue;
-                    }
-                    Err(e) => {
-                        let _ = catch_ffi_panic("ZWO::stop_video_capture", || {
-                            self.camera.stop_video_capture()
-                        });
-                        self.stream_running = false;
-                        return Err(CameraError::ImageReadFailed(e.to_string()));
-                    }
-                }
-            }
-            if !got_frame {
-                let _ = catch_ffi_panic("ZWO::stop_video_capture", || {
-                    self.camera.stop_video_capture()
-                });
-                self.stream_running = false;
-                return Err(CameraError::ExposureTimeout(total_timeout));
-            }
-        } else {
-            if self.stream_running {
-                let _ = catch_ffi_panic("ZWO::stop_video_capture", || {
-                    self.camera.stop_video_capture()
-                });
-                self.stream_running = false;
-            }
-
-            catch_ffi_panic("ZWO::start_exposure", || self.camera.start_capture())
-                .map_err(CameraError::from)?
-                .map_err(CameraError::ExposureFailed)?;
-
-            loop {
-                if self.cancel_flag.load(Ordering::SeqCst) {
-                    let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                    return Err(CameraError::Cancelled);
-                }
-
-                if start.elapsed() > total_timeout {
-                    let _ = catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                    return Err(CameraError::ExposureTimeout(total_timeout));
-                }
-
-                let ready_result =
-                    catch_ffi_panic("ZWO::image_ready", || self.camera.is_image_ready())
-                        .map_err(CameraError::from)?;
-
-                match ready_result {
-                    Ok(true) => break,
-                    Ok(false) => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(e) => {
-                        let _ =
-                            catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture());
-                        return Err(CameraError::ExposureFailed(e));
-                    }
-                }
-            }
-
-            catch_ffi_panic("ZWO::download_image", || {
-                self.camera.get_image_data(&mut buffer)
-            })
-            .map_err(CameraError::from)?
-            .map_err(CameraError::ImageReadFailed)?;
-        }
-
-        Ok(RawFrame {
-            data: buffer,
-            width,
-            height,
-            format: config.format,
-        })
+        let Self { camera, info, exposure } = self;
+        exposure.capture(&mut ZwoExposure { camera, info }, config)
     }
 
     fn invalidate_config_cache(&mut self) {
-        self.last_applied_config = None;
+        self.exposure.invalidate();
     }
 
     fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
+        self.exposure.cancel();
     }
 
     fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
+        self.exposure.cancel_token()
     }
 
     fn close(&mut self) -> CameraResult<()> {
@@ -552,6 +321,194 @@ impl Camera for ZwoCamera {
 
     fn provider_name(&self) -> &'static str {
         "ZWO"
+    }
+}
+
+/// ZWO's calls for the shared [`ExposureLoop`].
+struct ZwoExposure<'a> {
+    camera: &'a ZwoShimCamera,
+    info: &'a CameraInfo,
+}
+
+impl SdkExposure for ZwoExposure<'_> {
+    fn info(&self) -> &CameraInfo {
+        self.info
+    }
+
+    fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
+        let exposure = config.exposure_us as i64;
+        catch_ffi_panic("ZWO::set_exposure", || self.camera.set_exposure(exposure))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: format!("Failed to set exposure: {}", e),
+            })?;
+
+        let gain = config.gain as i64;
+        catch_ffi_panic("ZWO::set_gain_raw", || self.camera.set_gain_raw(gain))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: format!("Failed to set gain: {}", e),
+            })?;
+
+        let format = match config.format {
+            ImageFormat::Raw8 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RAW8,
+            ImageFormat::Raw16 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RAW16,
+            ImageFormat::Rgb24 => ffi_types::ASI_IMG_TYPE_ASI_IMG_RGB24,
+        };
+        catch_ffi_panic("ZWO::set_image_fmt", || self.camera.set_image_fmt(format))
+            .map_err(CameraError::from)?
+            .map_err(|e| CameraError::SdkError {
+                code: -1,
+                message: format!("Failed to set image format: {}", e),
+            })?;
+
+        let (x, y, w, h) = if let Some((x, y, w, h)) = config.roi {
+            (x as i32, y as i32, w as i32, h as i32)
+        } else {
+            let width = (self.info.max_width / config.bin as u32) as i32;
+            let height = (self.info.max_height / config.bin as u32) as i32;
+            (0, 0, width, height)
+        };
+
+        catch_ffi_panic("ZWO::set_roi", || {
+            self.camera.set_roi(x, y, w, h, config.bin as i32)
+        })
+        .map_err(CameraError::from)?
+        .map_err(|e| CameraError::SdkError {
+            code: -1,
+            message: format!("Failed to set ROI: {}", e),
+        })?;
+
+        if self.info.has_cooler {
+            if config.cooler_enabled {
+                if let Some(temp) = config.target_temp_c {
+                    let result = catch_ffi_panic("ZWO::set_temperature", || {
+                        self.camera.set_temperature(temp as f32)
+                    });
+                    match result {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            tracing::warn!(error = ?e, target_temp_c = temp, "Failed to set target temperature")
+                        }
+                        Err(e) => tracing::warn!(error = %e, "Panic setting target temperature"),
+                    }
+                }
+            }
+            let result = catch_ffi_panic("ZWO::set_cooler", || {
+                self.camera.set_cooler(config.cooler_enabled)
+            });
+            match result {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(error = ?e, enabled = config.cooler_enabled, "Failed to set cooler state")
+                }
+                Err(e) => tracing::warn!(error = %e, "Panic setting cooler state"),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn start(&mut self, acquisition: Acquisition) -> CameraResult<()> {
+        let started = match acquisition {
+            Acquisition::Stream => {
+                catch_ffi_panic("ZWO::start_video_capture", || self.camera.start_video_capture())
+            }
+            Acquisition::Single => {
+                catch_ffi_panic("ZWO::start_exposure", || self.camera.start_capture())
+            }
+        };
+        started
+            .map_err(CameraError::from)?
+            .map_err(CameraError::ExposureFailed)
+    }
+
+    fn abort(&mut self, acquisition: Acquisition) {
+        let _ = match acquisition {
+            Acquisition::Stream => {
+                catch_ffi_panic("ZWO::stop_video_capture", || self.camera.stop_video_capture())
+            }
+            Acquisition::Single => {
+                catch_ffi_panic("ZWO::cancel_capture", || self.camera.stop_capture())
+            }
+        };
+    }
+
+    fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize> {
+        let (width, height) = config.frame_dimensions(self.info);
+        let (channels, bytes_per_channel) = match config.format {
+            ImageFormat::Raw8 => (1, 1),
+            ImageFormat::Raw16 => (1, 2),
+            ImageFormat::Rgb24 => (3, 1),
+        };
+        Ok((width * height * channels * bytes_per_channel) as usize)
+    }
+
+    fn poll(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        match progress.acquisition {
+            Acquisition::Stream => self.poll_stream(progress, buffer),
+            Acquisition::Single => self.poll_single(progress, buffer),
+        }
+    }
+}
+
+impl ZwoExposure<'_> {
+    /// A short wait per call, so a cancel is seen between them.
+    fn poll_stream(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        let wait_ms = 100.min(progress.left().as_millis() as i32).max(10);
+        match catch_ffi_panic("ZWO::get_video_data", || {
+            self.camera.get_video_data(buffer, wait_ms)
+        }) {
+            Ok(Ok(())) => {
+                let (width, height) = progress.config.frame_dimensions(self.info);
+                Poll::Ready { width, height }
+            }
+            // A lost device has no stream left to stop.
+            Ok(Err(e)) if crate::camera::device_lost::is_marked(&e) => Poll::Failed {
+                error: CameraError::ImageReadFailed(e),
+                stream_ended: true,
+            },
+            Ok(Err(_)) => {
+                std::thread::sleep(Duration::from_millis(5));
+                Poll::Pending
+            }
+            Err(e) => {
+                self.abort(Acquisition::Stream);
+                Poll::Failed {
+                    error: CameraError::ImageReadFailed(e.to_string()),
+                    stream_ended: true,
+                }
+            }
+        }
+    }
+
+    fn poll_single(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll {
+        let failed = |error| Poll::Failed {
+            error,
+            stream_ended: false,
+        };
+        match catch_ffi_panic("ZWO::image_ready", || self.camera.is_image_ready()) {
+            Err(e) => return failed(CameraError::from(e)),
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => {
+                std::thread::sleep(Duration::from_millis(5));
+                return Poll::Pending;
+            }
+            Ok(Err(e)) => {
+                self.abort(Acquisition::Single);
+                return failed(CameraError::ExposureFailed(e));
+            }
+        }
+        match catch_ffi_panic("ZWO::download_image", || self.camera.get_image_data(buffer)) {
+            Ok(Ok(())) => {
+                let (width, height) = progress.config.frame_dimensions(self.info);
+                Poll::Ready { width, height }
+            }
+            Ok(Err(e)) => failed(CameraError::ImageReadFailed(e)),
+            Err(e) => failed(CameraError::from(e)),
+        }
     }
 }
 

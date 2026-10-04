@@ -132,14 +132,14 @@ fn test_settings_response_from_settings() {
 
     let response = SettingsResponse::from(&settings);
 
-    assert_eq!(response.exposure_us, 5_000_000);
-    assert_eq!(response.gain, 200);
-    assert_eq!(response.offset, 30);
-    assert_eq!(response.bin, 2);
-    assert!(!response.auto_stretch);
-    assert!(!response.stacking);
-    assert_eq!(response.rejection_sigma, 3.0);
-    assert!(!response.background_subtraction);
-    assert_eq!(response.raw_frame_saving, RawFrameSaving::default());
-    assert!(response.save_stacked_image);
+    assert_eq!(response.settings.exposure_us, 5_000_000);
+    assert_eq!(response.settings.gain, 200);
+    assert_eq!(response.settings.offset, 30);
+    assert_eq!(response.settings.bin, 2);
+    assert!(!response.settings.auto_stretch);
+    assert!(!response.settings.stacking);
+    assert_eq!(response.settings.rejection_sigma, 3.0);
+    assert!(!response.settings.background_subtraction);
+    assert_eq!(response.settings.raw_frame_saving, RawFrameSaving::default());
+    assert!(response.settings.save_stacked_image);
 }

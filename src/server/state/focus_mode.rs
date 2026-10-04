@@ -16,8 +16,8 @@ use super::types::CaptureState;
 /// Stored rather than recomputed: once live values are off they no longer say what
 /// the observer chose.
 ///
-/// Every field is `#[serde(default)]`: a parse failure resets the whole
-/// `PersistedSettings`. Each default is the setting's own, not `false`, so a missing
+/// Every field is `#[serde(default)]`: a parse failure here fails the whole settings
+/// file. Each default is the setting's own, not `false`, so a missing
 /// field restores the correction rather than disabling it (five of six are on).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FocusModeSnapshot {

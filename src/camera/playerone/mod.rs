@@ -5,13 +5,14 @@ pub mod sdk;
 pub mod shim;
 
 use shim::{Camera as POACamera, CameraDescription};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use super::device_lost::tolerate_unsupported;
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
-use super::types::{BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
+use super::exposure::ExposureLoop;
+use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 use crate::ffi_safety::catch_ffi_panic;
 use crate::Frame;
 
@@ -114,10 +115,7 @@ impl CameraProvider for PlayerOneProvider {
 pub struct PlayerOneCamera {
     camera: POACamera,
     info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
-    last_applied_config: Option<CaptureConfig>,
-    buffer_pool: BufferPool,
-    stream_running: bool,
+    exposure: ExposureLoop,
 }
 
 impl PlayerOneCamera {
@@ -149,10 +147,7 @@ impl PlayerOneCamera {
         Ok(Self {
             camera,
             info,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            last_applied_config: None,
-            buffer_pool: BufferPool::new(),
-            stream_running: false,
+            exposure: ExposureLoop::new(),
         })
     }
 }
@@ -281,40 +276,20 @@ impl Camera for PlayerOneCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-        let start = std::time::Instant::now();
-        config.validate(&self.info)?;
-        if config.should_reapply(self.last_applied_config.as_ref()) {
-            let _span = tracing::info_span!("configure_camera", sensor_mode = ?config.sensor_mode)
-                .entered();
-            if self.stream_running {
-                let _ = catch_ffi_panic("PlayerOne::stop_exposure", || self.camera.stop_exposure());
-                self.stream_running = false;
-            }
-            capture::apply_config(&mut self.camera, config, &self.info)?;
-            self.last_applied_config = Some(config.clone());
-        }
-        let _span = tracing::info_span!("read_frame").entered();
-        capture::run_capture(
-            &mut self.camera,
-            &self.info,
-            config,
-            &self.cancel_flag,
-            &self.buffer_pool,
-            &mut self.stream_running,
-            start,
-        )
+        let Self { camera, info, exposure } = self;
+        exposure.capture(&mut capture::PlayerOneExposure { camera, info }, config)
     }
 
     fn invalidate_config_cache(&mut self) {
-        self.last_applied_config = None;
+        self.exposure.invalidate();
     }
 
     fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
+        self.exposure.cancel();
     }
 
     fn cancel_token(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.cancel_flag)
+        self.exposure.cancel_token()
     }
 
     fn close(&mut self) -> CameraResult<()> {

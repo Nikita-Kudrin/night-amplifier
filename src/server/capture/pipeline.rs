@@ -4,14 +4,13 @@
 //! re-exported here, so `pipeline::build_cfa_pipeline` and friends still resolve
 //! for the capture and stacking tasks that call them.
 
-use tracing::{info, instrument, warn};
+use tracing::{instrument, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::context::{PlanetaryStackingContext, StackingContext};
+use super::context::{create_live_stacker, LiveStacker};
 use super::frame_gate::RejectionReason;
 use crate::frame::Frame;
 use crate::server::state::CaptureSettings;
-use crate::stacking::{CometContext, COMET_PLUGIN};
 
 pub use super::stage_config::{
     build_cfa_pipeline, convert_captured_frame, debayer_algorithm, get_background_config,
@@ -106,299 +105,74 @@ impl StackingOutcome {
     }
 }
 
-/// Process a frame through the stacking pipeline
+/// Offers one frame to the session's stack, creating the stack on the first frame.
+///
+/// `stacking_failed` latches when the mode cannot run at all (no plugin, no reference
+/// stars), so the caller stops asking and shows raw subs until the stack is reset.
 #[instrument(skip_all, fields(
     width = frame.width(),
     height = frame.height(),
     channels = frame.channels(),
+    kind = ?settings.stacking_type,
 ))]
-pub async fn process_frame_with_stacking(
+pub fn stack_frame(
     frame: &Frame,
     settings: &CaptureSettings,
-    stacking_ctx: &mut Option<StackingContext>,
+    stacker: &mut Option<Box<dyn LiveStacker>>,
     stacking_failed: &mut bool,
     want_display: bool,
 ) -> StackingOutcome {
-    // Initialize stacking context on first frame
-    if stacking_ctx.is_none() {
-        let ctx = StackingContext::new(frame.width(), frame.height(), frame.channels(), settings);
-        if ctx.is_none() {
-            warn!("Failed to create stacking context, falling back to single-frame mode");
-            *stacking_failed = true;
-            return StackingOutcome::single_frame(frame, false);
-        }
-        *stacking_ctx = ctx;
-    }
-
-    let ctx = stacking_ctx.as_mut().unwrap();
-    ctx.update_from_settings(settings);
-
-    // Initialize with reference frame if not yet done
-    if !ctx.is_initialized {
-        match ctx.initialize_with_reference(frame) {
-            Ok(star_count) => {
-                info!(
-                    star_count = star_count,
-                    "Stacking initialized with reference frame"
-                );
-            }
+    let stacker = match stacker {
+        Some(stacker) => stacker,
+        None => match create_live_stacker(settings.stacking_type, frame, settings) {
+            Ok(created) => stacker.insert(created),
             Err(e) => {
-                warn!(error = %e, "Failed to initialize stacking, falling back to single-frame mode");
+                warn!(error = %e, "Cannot stack, falling back to single-frame mode");
                 *stacking_failed = true;
                 return StackingOutcome::single_frame(frame, false);
             }
+        },
+    };
+    stacker.apply_settings(settings);
+
+    if !stacker.has_reference() {
+        if let Err(e) = stacker.set_reference(frame) {
+            warn!(error = %e, "Failed to initialize stacking, falling back to single-frame mode");
+            *stacking_failed = true;
+            return StackingOutcome::single_frame(frame, false);
         }
-        return StackingOutcome::single_frame(frame, true); // First frame is always "successful"
+        return StackingOutcome::single_frame(frame, true); // The reference always "joins"
     }
 
-    // Add frame to stack
-    let admission = match ctx.add_frame(frame) {
-        Ok(admission) => {
-            match admission.rejected_because {
-                None => info!(
-                    frame_count = ctx.frame_count(),
-                    matched_stars = admission.matched_stars,
-                    // Debug, not the bare f32: NaN/inf are legitimate sentinels here
-                    // (see FrameAdmission::mean_residual) but OTel exports them as a
-                    // double attribute, and Jaeger's query API 500s trying to JSON-encode
-                    // a non-finite float — taking down every trace search that touches
-                    // one, not just this span. Recording via Debug makes it a string
-                    // attribute instead, which is immune.
-                    residual = ?admission.mean_residual,
-                    "Frame added to stack"
-                ),
-                Some(reason) => info!(
-                    frame_count = ctx.frame_count(),
-                    matched_stars = admission.matched_stars,
-                    residual = ?admission.mean_residual,
-                    reason = reason.describe(),
-                    "Frame not added to stack"
-                ),
-            }
-            admission
-        }
+    let admission = match stacker.offer(frame, settings) {
+        Ok(admission) => admission,
         Err(e) => {
             warn!(error = %e, "Error adding frame to stack");
             return StackingOutcome::single_frame(frame, false);
         }
+    };
+    let depth = stacker.depth() as u32;
+    let with_verdict = |outcome: StackingOutcome| StackingOutcome {
+        stack_reset: admission.rebased,
+        rejected_because: admission.rejected_because,
+        ..outcome
     };
 
     // The frame is in the stack now. What follows is only the copy the live view needs,
     // and the render task already having one queued means this copy's only destination
     // is `drain_to_latest`.
     if !want_display {
-        return StackingOutcome {
-            stack_reset: admission.rebased,
-            rejected_because: admission.rejected_because,
-            ..StackingOutcome::stacked_not_displayed(admission.added, ctx.frame_count() as u32)
-        };
+        return with_verdict(StackingOutcome::stacked_not_displayed(admission.added, depth));
     }
 
-    // Return the current stacked result for display (raw, background subtraction applied in preview)
-    let depth = ctx.frame_count() as u32;
-    // The display copy and the coverage map come from one read of the 434 MB
-    // accumulator; see `MasterStack::compute_with_coverage`.
-    match ctx.compute_with_coverage() {
+    // The raw stack; background subtraction happens in the preview.
+    match stacker.snapshot() {
         Ok((stacked, noise)) => StackingOutcome {
-            stack_reset: admission.rebased,
-            rejected_because: admission.rejected_because,
-            // A stack every sub covered completely has nothing to say — the common case —
-            // and is not carried at all, so it costs the encoders nothing.
-            noise: noise.is_usable().then_some(noise),
-            ..StackingOutcome::stacked(stacked, admission.added, depth)
+            noise,
+            ..with_verdict(StackingOutcome::stacked(stacked, admission.added, depth))
         },
         Err(e) => {
             warn!(error = %e, "Failed to compute stack, using raw frame");
-            StackingOutcome::single_frame(frame, false)
-        }
-    }
-}
-
-/// Process a frame through the comet stacking pipeline
-#[instrument(skip_all, fields(
-    width = frame.width(),
-    height = frame.height(),
-    channels = frame.channels(),
-))]
-pub async fn process_frame_with_comet_stacking(
-    frame: &Frame,
-    settings: &CaptureSettings,
-    comet_ctx: &mut Option<Box<dyn CometContext>>,
-    stacking_failed: &mut bool,
-    want_display: bool,
-) -> StackingOutcome {
-    // Initialize comet stacking context on first frame using plugin
-    if comet_ctx.is_none() {
-        let plugin = crate::license::pro_plugin(&COMET_PLUGIN);
-        if let Some(plugin) = plugin {
-            let ctx =
-                plugin.create_context(frame.width(), frame.height(), frame.channels(), settings);
-            *comet_ctx = Some(ctx);
-        } else {
-            warn!(
-                "Comet stacking plugin not found (Pro feature), falling back to single-frame mode"
-            );
-            *stacking_failed = true;
-            return StackingOutcome::single_frame(frame, false);
-        }
-    }
-
-    let ctx = comet_ctx.as_mut().unwrap();
-    ctx.update_from_settings(settings);
-
-    // Check if ROI was updated in settings and update detector
-    if let Some(new_roi) = settings.comet_roi {
-        let current_roi = ctx.get_roi();
-        if new_roi.x != current_roi.x
-            || new_roi.y != current_roi.y
-            || new_roi.width != current_roi.width
-            || new_roi.height != current_roi.height
-        {
-            info!(
-                x = new_roi.x,
-                y = new_roi.y,
-                width = new_roi.width,
-                height = new_roi.height,
-                "Comet ROI updated"
-            );
-            ctx.update_roi(new_roi);
-        }
-    }
-
-    // Initialize with reference frame if not yet done
-    if ctx.frame_count() == 0 {
-        match ctx.initialize_with_reference(frame) {
-            Ok(()) => {
-                info!("Comet stacking initialized with reference frame");
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to initialize comet stacking, falling back to single-frame mode");
-                *stacking_failed = true;
-                return StackingOutcome::single_frame(frame, false);
-            }
-        }
-        return StackingOutcome::single_frame(frame, true); // First frame is success
-    }
-
-    // Add frame to stack
-    let frame_added = match ctx.add_frame(frame) {
-        Ok(true) => {
-            info!(
-                frame_count = ctx.frame_count(),
-                "Frame added to comet stack"
-            );
-            true
-        }
-        Ok(false) => {
-            info!(
-                frame_count = ctx.frame_count(),
-                "Comet alignment failed, frame not added to stack"
-            );
-            false
-        }
-        Err(e) => {
-            warn!(error = %e, "Error adding frame to comet stack");
-            false
-        }
-    };
-
-    // See `process_frame_with_stacking`: the accumulator is already updated, and this
-    // copy of it has nowhere to go while the render task still holds one.
-    if !want_display {
-        return StackingOutcome::stacked_not_displayed(frame_added, ctx.frame_count() as u32);
-    }
-
-    // Return the current stacked result for display (raw, background subtraction applied in preview)
-    let depth = ctx.frame_count() as u32;
-    match ctx.compute() {
-        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added, depth),
-        Err(e) => {
-            warn!(error = %e, "Failed to compute comet stack, using raw frame");
-            StackingOutcome::single_frame(frame, false)
-        }
-    }
-}
-
-/// Process a frame through the planetary stacking pipeline
-#[instrument(skip_all, fields(
-    width = frame.width(),
-    height = frame.height(),
-    channels = frame.channels(),
-))]
-pub async fn process_frame_with_planetary_stacking(
-    frame: &Frame,
-    settings: &CaptureSettings,
-    planetary_ctx: &mut Option<PlanetaryStackingContext>,
-    stacking_failed: &mut bool,
-    want_display: bool,
-) -> StackingOutcome {
-    // Initialize planetary stacking context on first frame
-    if planetary_ctx.is_none() {
-        let ctx = PlanetaryStackingContext::new(
-            frame.width(),
-            frame.height(),
-            frame.channels(),
-            settings,
-        );
-        if ctx.is_none() {
-            warn!("Failed to create planetary stacking context, falling back to single-frame mode");
-            *stacking_failed = true;
-            return StackingOutcome::single_frame(frame, false);
-        }
-        *planetary_ctx = ctx;
-    }
-
-    let ctx = planetary_ctx.as_mut().unwrap();
-    ctx.update_from_settings(settings);
-
-    // Initialize with reference frame if not yet done
-    if !ctx.is_initialized {
-        match ctx.initialize_with_reference(frame) {
-            Ok(()) => {
-                info!("Planetary stacking initialized with reference frame");
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to initialize planetary stacking, falling back to single-frame mode");
-                *stacking_failed = true;
-                return StackingOutcome::single_frame(frame, false);
-            }
-        }
-        return StackingOutcome::single_frame(frame, true); // First frame is success
-    }
-
-    // Add frame to stack
-    let frame_added = match ctx.add_frame(frame, settings) {
-        Ok(true) => {
-            info!(
-                frame_count = ctx.frame_count(),
-                "Frame added to planetary stack"
-            );
-            true
-        }
-        Ok(false) => {
-            info!(
-                frame_count = ctx.frame_count(),
-                "Planetary alignment failed, frame not added to stack"
-            );
-            false
-        }
-        Err(e) => {
-            warn!(error = %e, "Error adding frame to planetary stack");
-            false
-        }
-    };
-
-    // See `process_frame_with_stacking`.
-    if !want_display {
-        return StackingOutcome::stacked_not_displayed(frame_added, ctx.frame_count() as u32);
-    }
-
-    // Return the current stacked result for display (raw, background subtraction applied in preview)
-    let depth = ctx.frame_count() as u32;
-    match ctx.compute() {
-        Ok(stacked) => StackingOutcome::stacked(stacked, frame_added, depth),
-        Err(e) => {
-            warn!(error = %e, "Failed to compute planetary stack, using raw frame");
             StackingOutcome::single_frame(frame, false)
         }
     }
@@ -680,20 +454,20 @@ mod tests {
     /// registered the caller used to be handed the raw sub, so the preview
     /// alternated between a deep stack and a single noisy frame. The stack is
     /// still there and still displayable — only the counter should change.
-    #[tokio::test]
-    async fn a_rejected_frame_still_leaves_the_stack_on_screen() {
+    #[test]
+    fn a_rejected_frame_still_leaves_the_stack_on_screen() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        let first = process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+        let first = stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
         assert!(!failed, "reference frame should have initialised the stack");
         assert!(first.frame_added);
 
         // A blank frame has nothing to register against.
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed, true).await;
+        let outcome = stack_frame(&blank, &settings, &mut ctx, &mut failed, true);
 
         assert!(
             !outcome.frame_added,
@@ -707,17 +481,17 @@ mod tests {
 
     /// The reason has to survive the pipeline, or the status bar can only say
     /// how many frames were dropped and never why.
-    #[tokio::test]
-    async fn a_rejected_frame_reports_why() {
+    #[test]
+    fn a_rejected_frame_reports_why() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
 
         let blank = Frame::filled(150, 150, 1, 0.02).unwrap();
-        let outcome = process_frame_with_stacking(&blank, &settings, &mut ctx, &mut failed, true).await;
+        let outcome = stack_frame(&blank, &settings, &mut ctx, &mut failed, true);
 
         let reason = outcome
             .rejected_because
@@ -740,8 +514,8 @@ mod tests {
     /// opposite of what the mode is for. Pinned against real pipeline output
     /// because it is the pipeline, not the classifier, that decides which verdict
     /// a soft frame gets.
-    #[tokio::test]
-    async fn a_soft_frame_is_not_the_telescope_being_moved() {
+    #[test]
+    fn a_soft_frame_is_not_the_telescope_being_moved() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
@@ -750,14 +524,14 @@ mod tests {
         for i in 0..8 {
             let frame = starfield(150, 150, i as f32 * 0.25);
             let outcome =
-                process_frame_with_stacking(&frame, &settings, &mut ctx, &mut failed, true).await;
+                stack_frame(&frame, &settings, &mut ctx, &mut failed, true);
             assert!(outcome.frame_added, "sharp frame {i} should have stacked");
         }
 
         // Same field, same star positions, stars twice as wide.
         let defocused = starfield_with_spread(150, 150, 0.0, 2.2);
         let outcome =
-            process_frame_with_stacking(&defocused, &settings, &mut ctx, &mut failed, true).await;
+            stack_frame(&defocused, &settings, &mut ctx, &mut failed, true);
 
         assert_eq!(
             outcome.rejected_because,
@@ -780,34 +554,34 @@ mod tests {
     /// The other half of the Wanderer contract, pinned against real pipeline
     /// output rather than a hand-made verdict: a frame that stacks reports no
     /// reason at all, so nothing can read it as movement.
-    #[tokio::test]
-    async fn a_stacked_frame_gives_wanderer_nothing_to_react_to() {
+    #[test]
+    fn a_stacked_frame_gives_wanderer_nothing_to_react_to() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, true).await;
+        let outcome = stack_frame(&shifted, &settings, &mut ctx, &mut failed, true);
 
         assert!(outcome.frame_added);
         assert_eq!(outcome.rejected_because, None);
         assert!(!outcome.stack_reset);
     }
 
-    #[tokio::test]
-    async fn a_frame_that_registers_joins_the_stack() {
+    #[test]
+    fn a_frame_that_registers_joins_the_stack() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
-        let outcome = process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, true).await;
+        let outcome = stack_frame(&shifted, &settings, &mut ctx, &mut failed, true);
 
         assert!(outcome.showing_stack);
         assert!(
@@ -843,18 +617,18 @@ mod tests {
     /// moves the frame count. Getting this wrong would silently throw away integration
     /// time whenever the render thread fell behind — which is exactly the condition the
     /// flag exists to detect, so it would bite hardest on the slowest machines.
-    #[tokio::test]
-    async fn skipping_the_display_copy_still_stacks_the_frame() {
+    #[test]
+    fn skipping_the_display_copy_still_stacks_the_frame() {
         let settings = CaptureSettings::default();
         let mut ctx = None;
         let mut failed = false;
 
         let reference = starfield(150, 150, 0.0);
-        process_frame_with_stacking(&reference, &settings, &mut ctx, &mut failed, true).await;
+        stack_frame(&reference, &settings, &mut ctx, &mut failed, true);
 
         let shifted = starfield(150, 150, 2.0);
         let outcome =
-            process_frame_with_stacking(&shifted, &settings, &mut ctx, &mut failed, false).await;
+            stack_frame(&shifted, &settings, &mut ctx, &mut failed, false);
 
         assert!(
             outcome.display_frame.is_none(),
@@ -873,13 +647,62 @@ mod tests {
         // it carries the integration this iteration contributed.
         let third = starfield(150, 150, 4.0);
         let outcome =
-            process_frame_with_stacking(&third, &settings, &mut ctx, &mut failed, true).await;
+            stack_frame(&third, &settings, &mut ctx, &mut failed, true);
         assert!(outcome.display_frame.is_some());
         assert_eq!(
-            ctx.as_ref().expect("context").frame_count(),
+            ctx.as_ref().expect("context").depth(),
             3,
             "all three frames must be in the stack, including the undisplayed one"
         );
+    }
+
+    /// Comet reports no reasons, so a frame the nucleus could not be found in has to
+    /// come through the shared driver exactly as a deep-sky rejection does: counted as
+    /// not stacked, with the accumulated comet still on screen.
+    #[test]
+    fn a_comet_frame_that_fails_to_align_keeps_the_comet_on_screen() {
+        use crate::server::capture::context::{CometStacker, StubComet};
+
+        let mut settings = CaptureSettings::default();
+        settings.stacking_type = crate::stacking::StackingType::Comet;
+        let stub = StubComet::new(32, 32, 1).answering(vec![Ok(true), Ok(false)]);
+        let mut stacker: Option<Box<dyn LiveStacker>> =
+            Some(Box::new(CometStacker::from_context(Box::new(stub))));
+        let mut failed = false;
+        let sub = Frame::filled(32, 32, 1, 0.5).unwrap();
+
+        let first = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        assert!(first.frame_added && !first.showing_stack, "the reference shows as itself");
+
+        let aligned = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        assert!(aligned.frame_added && aligned.showing_stack);
+        assert_eq!(aligned.stack_depth, 2);
+
+        let lost = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+        assert!(!lost.frame_added);
+        assert!(lost.showing_stack, "the comet stack stays on screen");
+        assert_eq!(lost.rejected_because, None);
+        let shown = lost.display_frame.expect("a display copy was asked for");
+        assert!((shown.get_pixel(0, 0, 0) - 0.02).abs() < 1e-6, "the stack, not the sub");
+        assert!(!failed);
+    }
+
+    /// A mode that cannot run here — comet without the Pro plugin — latches the
+    /// session onto single frames instead of retrying the plugin every frame.
+    #[test]
+    fn a_mode_that_cannot_run_falls_back_to_single_frames() {
+        let mut settings = CaptureSettings::default();
+        settings.stacking_type = crate::stacking::StackingType::Comet;
+        let mut stacker = None;
+        let mut failed = false;
+        let sub = Frame::filled(32, 32, 1, 0.5).unwrap();
+
+        let outcome = stack_frame(&sub, &settings, &mut stacker, &mut failed, true);
+
+        assert!(failed, "the session must stop asking for a stack it cannot build");
+        assert!(stacker.is_none());
+        assert!(!outcome.frame_added && !outcome.showing_stack);
+        assert!(outcome.display_frame.is_some(), "the raw sub is still shown");
     }
 
     #[test]

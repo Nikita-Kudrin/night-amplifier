@@ -18,6 +18,7 @@ mod catalog;
 mod device_lease;
 mod device_lost;
 mod error;
+pub(crate) mod exposure;
 pub mod identity;
 mod registry;
 mod simulated;
@@ -26,6 +27,8 @@ mod types;
 
 #[cfg(test)]
 mod sdk_loading_tests;
+#[cfg(test)]
+pub(crate) mod testing;
 
 #[cfg(feature = "playerone")]
 mod playerone;

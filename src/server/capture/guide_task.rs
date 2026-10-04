@@ -687,170 +687,23 @@ impl GuideDiskSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::camera::{
-        CameraInfo, CameraResult, CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
-    };
+    use crate::camera::testing::{CameraControls, FakeCamera};
+    use crate::camera::{CameraInfo, ImageFormat, SensorType};
     use crate::server::services::CaptureService;
     use crate::server::state::{CaptureState, Resolution, StreamKind, ViewerGuard};
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::Mutex as StdMutex;
 
-    /// Counts its own exposures and stops the loop after `frames`, so a test drives an
-    /// exact number of iterations rather than racing a wall clock.
-    struct CountingCamera {
-        info: CameraInfo,
-        cancel_flag: Arc<AtomicBool>,
-        captured: Arc<AtomicUsize>,
-        stop_after: usize,
-        stop: Arc<AtomicBool>,
-        /// What the loop drove the hardware with, per exposure, so a test can tell a
-        /// queued call from a dropped one and a ramped setpoint from a snapped one.
-        log: Arc<StdMutex<DriveLog>>,
-        /// Sensor temperature `status()` reports, so a ramp has somewhere to start.
-        temperature_c: f64,
-        /// How long each exposure takes. Zero for the tests that drive an exact frame
-        /// count; a real interval for the ones that stop a *free-running* loop, which
-        /// otherwise spins as fast as the disk writer accepts frames.
-        frame_delay: Duration,
-        /// Runs inside every exposure: stands in for an observer editing settings while
-        /// the camera is exposing.
-        during_exposure: Option<Box<dyn FnMut() + Send>>,
-    }
-
-    /// What the guide loop actually asked of the camera.
-    #[derive(Default, Debug)]
-    struct DriveLog {
-        dew_heater: Vec<(bool, i32)>,
-        setpoints: Vec<Option<f64>>,
-        status_reads: usize,
-    }
-
-    impl CountingCamera {
-        fn new(stop_after: usize, stop: Arc<AtomicBool>) -> (Self, Arc<AtomicUsize>) {
-            let (cam, captured, _log) = Self::with_log(stop_after, stop);
-            (cam, captured)
-        }
-
-        fn with_log(
-            stop_after: usize,
-            stop: Arc<AtomicBool>,
-        ) -> (Self, Arc<AtomicUsize>, Arc<StdMutex<DriveLog>>) {
-            let captured = Arc::new(AtomicUsize::new(0));
-            let log = Arc::new(StdMutex::new(DriveLog::default()));
-            let info = CameraInfo {
-                name: "Mock Guide Camera".to_string(),
-                max_width: 32,
-                max_height: 24,
-                sensor_type: SensorType::Mono,
-                supported_formats: vec![ImageFormat::Raw8, ImageFormat::Raw16],
-                has_cooler: true,
-                has_dew_heater: true,
-                min_temp_c: Some(-40.0),
-                max_temp_c: Some(30.0),
-                ..Default::default()
-            };
-            (
-                Self {
-                    info,
-                    cancel_flag: Arc::new(AtomicBool::new(false)),
-                    captured: Arc::clone(&captured),
-                    stop_after,
-                    stop,
-                    log: Arc::clone(&log),
-                    temperature_c: 20.0,
-                    frame_delay: Duration::ZERO,
-                    during_exposure: None,
-                },
-                captured,
-                log,
-            )
-        }
-
-        /// Slow the camera to one frame per `delay`, so a test can watch a loop it does
-        /// not drive frame by frame.
-        fn paced(mut self, delay: Duration) -> Self {
-            self.frame_delay = delay;
-            self
-        }
-
-        fn sized(mut self, width: u32, height: u32) -> Self {
-            self.info.max_width = width;
-            self.info.max_height = height;
-            self
-        }
-
-        fn during_exposure(mut self, hook: impl FnMut() + Send + 'static) -> Self {
-            self.during_exposure = Some(Box::new(hook));
-            self
-        }
-    }
-
-    impl Camera for CountingCamera {
-        fn info(&self) -> &CameraInfo {
-            &self.info
-        }
-
-        fn gain_presets(&self) -> CameraResult<GainPresets> {
-            Ok(GainPresets::default())
-        }
-
-        fn status(&self) -> CameraResult<crate::camera::CameraStatus> {
-            self.log.lock().unwrap().status_reads += 1;
-            Ok(crate::camera::CameraStatus {
-                temperature_c: self.temperature_c,
-                ..Default::default()
+    /// A cooled guide camera with a dew heater that raises `stop` on its `stop_after`th
+    /// frame, so a test drives an exact number of iterations rather than racing a clock.
+    fn counting_camera(stop_after: usize, stop: Arc<AtomicBool>) -> FakeCamera {
+        FakeCamera::new("Mock Guide Camera")
+            .cooled()
+            .with_info(|info| info.has_dew_heater = true)
+            .reporting_temperature(20.0)
+            .on_frame(move |delivered| {
+                if delivered >= stop_after {
+                    stop.store(true, Ordering::SeqCst);
+                }
             })
-        }
-
-        fn set_target_temperature(&mut self, _temp_c: f64) -> CameraResult<()> {
-            Ok(())
-        }
-
-        fn set_cooler(&mut self, _enabled: bool) -> CameraResult<()> {
-            Ok(())
-        }
-
-        fn set_dew_heater(&mut self, enabled: bool, power: i32) -> CameraResult<()> {
-            self.log.lock().unwrap().dew_heater.push((enabled, power));
-            Ok(())
-        }
-
-        fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-            self.log.lock().unwrap().setpoints.push(config.target_temp_c);
-            if !self.frame_delay.is_zero() {
-                std::thread::sleep(self.frame_delay);
-            }
-            if let Some(hook) = self.during_exposure.as_mut() {
-                hook();
-            }
-            let n = self.captured.fetch_add(1, Ordering::SeqCst) + 1;
-            if n >= self.stop_after {
-                self.stop.store(true, Ordering::SeqCst);
-            }
-            let pixels = (self.info.max_width * self.info.max_height) as usize;
-            Ok(RawFrame {
-                data: vec![7u8; pixels].into(),
-                width: self.info.max_width,
-                height: self.info.max_height,
-                format: ImageFormat::Raw8,
-            })
-        }
-
-        fn cancel(&self) {
-            self.cancel_flag.store(true, Ordering::SeqCst);
-        }
-
-        fn cancel_token(&self) -> Arc<AtomicBool> {
-            Arc::clone(&self.cancel_flag)
-        }
-
-        fn close(&mut self) -> CameraResult<()> {
-            Ok(())
-        }
-
-        fn provider_name(&self) -> &'static str {
-            "Mock"
-        }
     }
 
     fn guide_camera_info() -> ConnectedCameraInfo {
@@ -865,7 +718,7 @@ mod tests {
                 max_height: 24,
                 sensor_type: SensorType::Mono,
                 supported_formats: vec![ImageFormat::Raw8, ImageFormat::Raw16],
-                // Matched to `CountingCamera`: `config_overrides` strips the cooler
+                // Matched to `counting_camera`: `config_overrides` strips the cooler
                 // fields from a config bound for a camera that says it has none.
                 has_cooler: true,
                 has_dew_heater: true,
@@ -880,7 +733,8 @@ mod tests {
     /// many the camera actually delivered.
     async fn drive_guide_loop(state: &Arc<AppState>, frames: usize) -> usize {
         let stop = Arc::new(AtomicBool::new(false));
-        let (camera, captured) = CountingCamera::new(frames, Arc::clone(&stop));
+        let camera = counting_camera(frames, Arc::clone(&stop));
+        let controls = camera.controls();
         let info = guide_camera_info();
         let state = Arc::clone(state);
         let rt = tokio::runtime::Handle::current();
@@ -891,7 +745,7 @@ mod tests {
         .await
         .expect("guide loop panicked");
 
-        captured.load(Ordering::SeqCst)
+        controls.frames.load(Ordering::SeqCst)
     }
 
     /// The requirement in one test: a guide camera nobody is looking at must not pay for
@@ -961,7 +815,7 @@ mod tests {
 
         let stop = Arc::new(AtomicBool::new(false));
         let editor = Arc::clone(&state);
-        let (camera, _captured) = CountingCamera::new(1, Arc::clone(&stop));
+        let camera = counting_camera(1, Arc::clone(&stop));
         let camera = camera.sized(2400, 1600).during_exposure(move || {
             editor.settings.blocking_write().streaming_resolution = Resolution::Hd1080;
         });
@@ -1065,7 +919,7 @@ mod tests {
         );
 
         let stop = Arc::new(AtomicBool::new(false));
-        let (camera, _captured) = CountingCamera::new(2, Arc::clone(&stop));
+        let camera = counting_camera(2, Arc::clone(&stop));
         let info = guide_camera_info();
         {
             let state = Arc::clone(&state);
@@ -1085,9 +939,10 @@ mod tests {
     }
 
     /// Drive `frames` exposures and hand back everything the loop asked of the camera.
-    async fn drive_and_log(state: &Arc<AppState>, frames: usize) -> Arc<StdMutex<DriveLog>> {
+    async fn drive_and_log(state: &Arc<AppState>, frames: usize) -> Arc<CameraControls> {
         let stop = Arc::new(AtomicBool::new(false));
-        let (camera, _captured, log) = CountingCamera::with_log(frames, Arc::clone(&stop));
+        let camera = counting_camera(frames, Arc::clone(&stop));
+        let log = camera.controls();
         let info = guide_camera_info();
         let state = Arc::clone(state);
         let rt = tokio::runtime::Handle::current();
@@ -1115,7 +970,7 @@ mod tests {
 
         let log = drive_and_log(&state, 2).await;
 
-        assert_eq!(log.lock().unwrap().dew_heater, vec![(true, 65)]);
+        assert_eq!(*log.dew_heater.lock().unwrap(), vec![(true, 65)]);
         assert!(
             state.slot(CameraRole::Guide).drain_ops().is_empty(),
             "the loop must consume what it applied"
@@ -1133,7 +988,7 @@ mod tests {
         let log = drive_and_log(&state, 2).await;
 
         assert!(
-            log.lock().unwrap().status_reads >= 1,
+            log.status_reads.load(Ordering::SeqCst) >= 1,
             "the guide loop never read the sensor"
         );
         let status = state
@@ -1158,7 +1013,7 @@ mod tests {
 
         let log = drive_and_log(&state, 1).await;
 
-        let first = log.lock().unwrap().setpoints[0];
+        let first = log.setpoints.lock().unwrap()[0];
         // The sensor reports 20 °C, so a ramp starts there. Under the test-time rate the
         // first step may already reach the target; what must never happen is the loop
         // commanding the target before it has looked at the sensor at all.
@@ -1257,7 +1112,7 @@ mod tests {
 
         let log = drive_and_log(&state, 1).await;
 
-        assert_eq!(log.lock().unwrap().setpoints[0], Some(-15.0));
+        assert_eq!(log.setpoints.lock().unwrap()[0], Some(-15.0));
     }
 
     /// The directory the guide loop is currently filling, if any.
@@ -1293,8 +1148,7 @@ mod tests {
     /// assertions can read it.
     async fn connect_and_start_guide(state: &Arc<AppState>) {
         let never_stops = Arc::new(AtomicBool::new(false));
-        let (camera, _captured, _log) = CountingCamera::with_log(usize::MAX, never_stops);
-        let camera = camera.paced(Duration::from_millis(20));
+        let camera = counting_camera(usize::MAX, never_stops).stuck_for(Duration::from_millis(20));
         let info = guide_camera_info();
 
         state
