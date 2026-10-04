@@ -1,6 +1,7 @@
 use super::*;
 use crate::frame::Frame;
-use crate::server::state::{EyepieceStreamResolution, RenderReadyFrame};
+use crate::render::display::RenderReadyFrame;
+use crate::server::state::EyepieceStreamResolution;
 
 /// A frame the encoder can run on without a stretch solve behind it.
 fn ready_frame(width: usize, height: usize) -> Arc<RenderReadyFrame> {

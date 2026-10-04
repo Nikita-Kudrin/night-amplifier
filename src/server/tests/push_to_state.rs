@@ -1,10 +1,11 @@
 //! Server-side Push-To bookkeeping: the solve latch, and the de-duplication that
 //! keeps per-frame recomputation off the event bus.
 
-use crate::server::services::{optics_change, OpticsChange};
+use crate::push_to::TelescopeSettings;
 use crate::server::dto::UpdateSettingsRequest;
 use crate::server::services::PushToState;
-use crate::server::state::{CameraRole, CaptureSettings, TelescopeSettings};
+use crate::server::services::{optics_change, OpticsChange};
+use crate::server::state::{CameraRole, CaptureSettings};
 use std::time::{Duration, Instant};
 
 /// No cadence floor, so the latch tests exercise the latch alone.

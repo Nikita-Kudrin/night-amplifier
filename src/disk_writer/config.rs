@@ -29,7 +29,7 @@ pub enum FrameType {
     /// Stretched stacked frame, already rendered to interleaved 8-bit RGB (PNG for sharing).
     ///
     /// Carries finished bytes rather than a `Frame`: they come from
-    /// `crate::server::encoding::frame_to_rgb8_downsampled`, the same conversion the live
+    /// `crate::render::display::frame_to_rgb8_downsampled`, the same conversion the live
     /// view streams through, so the saved file matches on-screen output instead of
     /// skipping encoder-only stages (spatial denoise, display quantization) a bare
     /// `Frame` render would miss. Rendering happens in `server::capture::storage` — a

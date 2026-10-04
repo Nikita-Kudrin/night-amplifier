@@ -4,8 +4,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 
 use super::super::dto::{
-    ApiResponse, MessageResponse, PushToConfigRequest, PushToStatusResponse, SearchCatalogRequest,
-    SetTargetRequest,
+    ApiResponse, MessageResponse, PushToConfigRequest, SearchCatalogRequest, SetTargetRequest,
 };
 use super::super::services::PushToService;
 use super::super::state::AppState;

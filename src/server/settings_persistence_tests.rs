@@ -7,12 +7,14 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use crate::background::BackgroundExtractionAlgorithm;
+    use crate::cfa::SensorCorrectionSettings;
+    use crate::push_to::TelescopeSettings;
+    use crate::render::denoise::DenoiseSettings;
     use crate::render::StretchAggressiveness;
     use crate::server::settings_persistence::{SettingsFile, SettingsPersistence};
     use crate::server::state::{
-        CameraCaptureProfile, CaptureSettings, DenoiseSettings, EyepieceSettings,
-        FocusModeSnapshot, Resolution, EyepieceStreamResolution, RawFrameSaving, SensorCorrectionSettings,
-        TelescopeSettings,
+        CameraCaptureProfile, CaptureSettings, EyepieceSettings, EyepieceStreamResolution,
+        FocusModeSnapshot, RawFrameSaving, Resolution,
     };
     use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
@@ -862,9 +864,9 @@ mod tests {
         assert_eq!(loaded.gain, 222);
         assert_eq!(
             loaded.denoise.background_grain,
-            crate::server::state::DEFAULT_BACKGROUND_GRAIN
+            crate::render::denoise::DEFAULT_BACKGROUND_GRAIN
         );
-        assert_eq!(loaded.denoise.detail, crate::server::state::DEFAULT_DETAIL);
+        assert_eq!(loaded.denoise.detail, crate::render::denoise::DEFAULT_DETAIL);
         assert_eq!(loaded.eyepiece.black_floor, EyepieceSettings::default().black_floor);
     }
 

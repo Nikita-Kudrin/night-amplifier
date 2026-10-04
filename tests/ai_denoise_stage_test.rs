@@ -9,11 +9,15 @@ use std::cell::{Cell, RefCell};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Once};
 
-use night_amplifier::render::{AiDenoiseConfig, AiDenoisePlugin, DenoiseScratch, AI_DENOISE_PLUGIN};
+use night_amplifier::render::denoise::DenoiseSettings;
+use night_amplifier::render::display::frame_to_rgb8_downsampled;
+use night_amplifier::render::display::RenderReadyFrame;
+use night_amplifier::render::{
+    AiDenoiseConfig, AiDenoisePlugin, DenoiseScratch, AI_DENOISE_PLUGIN,
+};
 use night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis;
 use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
-use night_amplifier::server::encoding::frame_to_rgb8_downsampled;
-use night_amplifier::server::state::{CaptureSettings, DenoiseSettings, RenderReadyFrame};
+use night_amplifier::server::state::CaptureSettings;
 use night_amplifier::Frame;
 
 thread_local! {

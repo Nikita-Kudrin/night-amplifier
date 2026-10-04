@@ -3,9 +3,10 @@ use std::sync::Arc;
 use tracing::{debug, info};
 
 use crate::cfa::CfaPipeline;
+use crate::cfa::SensorCorrectionSettings;
 use crate::debayer::DebayerAlgorithm;
 use crate::frame::Frame;
-use crate::server::state::{AppState, CameraRole, SensorCorrectionSettings, StackingType};
+use crate::server::state::{AppState, CameraRole, StackingType};
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
@@ -439,12 +440,12 @@ mod tests {
     use super::RejectionReason;
     use super::{check_dimension_mismatch, must_reset_stack, reset_detector_start};
     use crate::server::capture::context::{
-        CometStacker, LiveStacker, PlanetaryStackingContext, StackingContext,
+        CometStacker, LiveStacker, PlanetaryStackingContext, StackSettings, StackingContext,
     };
     use crate::server::state::{CaptureSettings, StackingType};
 
     fn deep_sky(width: usize, height: usize, channels: usize) -> Box<dyn LiveStacker> {
-        let settings = CaptureSettings::default();
+        let settings = StackSettings::of(&CaptureSettings::default());
         Box::new(StackingContext::new(width, height, channels, &settings).expect("context"))
     }
 
@@ -477,7 +478,7 @@ mod tests {
     /// Each mode reports its own kind, which is what the reset detector compares against.
     #[test]
     fn every_mode_reports_its_own_kind() {
-        let settings = CaptureSettings::default();
+        let settings = StackSettings::of(&CaptureSettings::default());
         let planetary = PlanetaryStackingContext::new(16, 16, 1, &settings).expect("context");
         let comet = CometStacker::from_context(Box::new(
             crate::server::capture::context::StubComet::new(16, 16, 1),
@@ -501,7 +502,7 @@ mod tests {
         use crate::frame::Frame;
         use crate::registration::AffineTransform;
 
-        let settings = CaptureSettings::default();
+        let settings = StackSettings::of(&CaptureSettings::default());
         let sky = || Frame::filled(32, 32, 1, 0.3).unwrap();
         let mut drifted = sky();
         for y in 0..32 {

@@ -240,6 +240,75 @@ impl std::fmt::Debug for CfaPipeline {
     }
 }
 
+/// Corrections that run on the raw CFA mosaic, before demosaic.
+///
+/// These target defects stacking cannot remove: a hot pixel and a readout offset sit
+/// in the same place in every sub, so averaging leaves them untouched. Both are only
+/// well defined on the mosaic — after demosaic a hot site is smeared into a coloured 3x3 cross, and neighbouring sensor rows are mixed together.
+///
+/// Hot-pixel rejection has no switch: it always runs, `hot_pixel_sigma` is its only
+/// tuning. See `stage_config::build_cfa_pipeline` for why.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SensorCorrectionSettings {
+    /// How far above its brightest same-colour neighbour a sample must sit to
+    /// count as hot, in sigmas of that colour site's own noise.
+    #[serde(default = "default_hot_pixel_sigma")]
+    pub hot_pixel_sigma: f32,
+    /// Flatten per-row and per-column readout offsets.
+    #[serde(default = "default_fpn_removal")]
+    pub fpn_removal: bool,
+    /// Bin each 2x2 CFA quad to one RGB pixel instead of interpolating.
+    ///
+    /// Halves both dimensions. Free on a sensor that oversamples the eyepiece
+    /// screen (IMX533's 3008² becomes 1504², still above 1440²) and a real loss
+    /// on one that does not (IMX464 lands at 1356x769), which is why it is off
+    /// by default.
+    #[serde(default)]
+    pub superpixel_debayer: bool,
+}
+
+/// The range `hot_pixel_sigma` is held to at every boundary it can arrive through. Keep in
+/// sync with `HOT_PIXEL_SIGMA_LIMITS` in `web/src/constants/index.js`.
+///
+/// Enforced rather than trusted because the stage has no off switch any more, so this is
+/// the only way to break it. Measured on a guide sub: sigma <= 0 or a huge value disables it
+/// outright (0 corrections), and 0.5-1 replaced 48-65k noise samples a frame.
+const HOT_PIXEL_SIGMA_RANGE: std::ops::RangeInclusive<f32> = 3.0..=12.0;
+
+fn default_hot_pixel_sigma() -> f32 {
+    5.0
+}
+
+fn default_fpn_removal() -> bool {
+    true
+}
+
+impl SensorCorrectionSettings {
+    /// This block with `hot_pixel_sigma` inside [`HOT_PIXEL_SIGMA_RANGE`]; a non-finite
+    /// value falls back to the default rather than to either end of the range.
+    pub fn sanitized(mut self) -> Self {
+        self.hot_pixel_sigma = if self.hot_pixel_sigma.is_finite() {
+            self.hot_pixel_sigma.clamp(
+                *HOT_PIXEL_SIGMA_RANGE.start(),
+                *HOT_PIXEL_SIGMA_RANGE.end(),
+            )
+        } else {
+            default_hot_pixel_sigma()
+        };
+        self
+    }
+}
+
+impl Default for SensorCorrectionSettings {
+    fn default() -> Self {
+        Self {
+            hot_pixel_sigma: default_hot_pixel_sigma(),
+            fpn_removal: default_fpn_removal(),
+            superpixel_debayer: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

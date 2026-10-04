@@ -9,9 +9,10 @@
 
 use super::{AnalysisContext, PreviewAnalysis};
 use crate::frame::Frame;
+use crate::render::display::frame_to_rgb8_downsampled;
+use crate::render::display::RenderReadyFrame;
 use crate::server::capture::pipeline::process_preview_frame_with_analysis;
-use crate::server::encoding::frame_to_rgb8_downsampled;
-use crate::server::state::{CaptureSettings, RenderReadyFrame};
+use crate::server::state::CaptureSettings;
 
 const SIZE: usize = 256;
 /// One sub's noise, in linear units.

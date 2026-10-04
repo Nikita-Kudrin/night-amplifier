@@ -346,7 +346,7 @@ impl DiskWriterHandle {
     /// Queue an already-rendered stretched PNG for writing.
     ///
     /// `rgb8` must be interleaved 8-bit RGB at `width` x `height`, produced by
-    /// `crate::server::encoding::frame_to_rgb8_downsampled` (or an equivalent
+    /// `crate::render::display::frame_to_rgb8_downsampled` (or an equivalent
     /// call through the same encoder) so the file matches what the live view
     /// rendered — see `FrameType::StackedPng`.
     pub fn queue_stacked_png(

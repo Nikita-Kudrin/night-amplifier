@@ -1503,7 +1503,13 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
     let settings = state.settings.read().await.clone();
     *state.stacking_carryover.lock().unwrap() = Some(StackingCarryover {
         stacker: Box::new(
-            crate::server::capture::StackingContext::new(16, 16, 1, &settings).expect("context"),
+            crate::server::capture::StackingContext::new(
+                16,
+                16,
+                1,
+                &crate::server::capture::StackSettings::of(&settings),
+            )
+            .expect("context"),
         ),
     });
 

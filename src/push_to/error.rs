@@ -8,6 +8,10 @@ pub enum PushToError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    /// The request named nothing the plugin can act on, e.g. no known database type.
+    #[error("{0}")]
+    InvalidRequest(String),
+
     #[error("Push-To plugin not found. This feature requires Night Amplifier Pro.")]
     PluginRequired,
 

@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use crate::server::state::{CaptureSettings, FrameStream, RenderReadyFrame, Resolution, StreamKind};
+use crate::render::display::RenderReadyFrame;
+use crate::server::state::{CaptureSettings, FrameStream, Resolution, StreamKind};
 use crate::telemetry::metrics as telemetry_metrics;
 
 /// Both families' resolutions for one frame, read from the live settings (see
@@ -57,7 +58,7 @@ impl ConversionCache {
         max_w: u32,
         max_h: u32,
     ) -> Result<Rgb8Image, String> {
-        let key = crate::server::encoding::output_dimensions(
+        let key = crate::render::display::output_dimensions(
             frame.linear_frame.width(),
             frame.linear_frame.height(),
             max_w,
@@ -68,7 +69,7 @@ impl ConversionCache {
         }
 
         let _span = tracing::info_span!("frame_to_rgb8", width = key.0, height = key.1).entered();
-        let data = crate::server::encoding::frame_to_rgb8_downsampled_with(
+        let data = crate::render::display::frame_to_rgb8_downsampled_with(
             frame,
             max_w,
             max_h,

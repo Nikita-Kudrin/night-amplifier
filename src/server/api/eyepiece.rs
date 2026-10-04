@@ -15,9 +15,11 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+use crate::render::display::encode_rgb8_png;
+use crate::render::display::frame_to_rgb8_downsampled;
+use crate::render::display::RenderReadyFrame;
 use crate::server::dto::ApiResponse;
-use crate::server::encoding::{encode_rgb8_png, frame_to_rgb8_downsampled};
-use crate::server::state::{AppState, RenderReadyFrame};
+use crate::server::state::AppState;
 
 /// One snapshot render at a time, process-wide.
 ///

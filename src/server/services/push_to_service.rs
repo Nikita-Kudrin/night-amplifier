@@ -6,12 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::super::dto::{
-    CatalogEntryResponse, CoordinateResponse, PushToDirectionResponse, PushToStatusResponse,
-};
 use super::super::events::ServerEvent;
-use super::super::state::{AppState, TelescopeSettings};
-use crate::push_to::{PushToBlocker, PushToError, PUSH_TO_PLUGIN};
+use super::super::state::AppState;
+use crate::push_to::{
+    CatalogEntryResponse, CoordinateResponse, PushToBlocker, PushToDirectionResponse, PushToError,
+    PushToStatusResponse, TelescopeSettings, PUSH_TO_PLUGIN,
+};
 
 /// Push-To navigation service
 pub struct PushToService;
@@ -133,7 +133,7 @@ impl PushToService {
         name: &str,
     ) -> Result<CatalogEntryResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            let result = plugin.set_target_by_name(name).await?;
+            let result = plugin.set_target_by_name(name).await.map_err(|e| e.to_string())?;
             state.push_to_target_changed(true).await;
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
@@ -154,7 +154,10 @@ impl PushToService {
         dec_degrees: f64,
     ) -> Result<CoordinateResponse, String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
+            let result = plugin
+                .set_target_by_coords(ra_degrees, dec_degrees)
+                .await
+                .map_err(|e| e.to_string())?;
             state.push_to_target_changed(true).await;
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
@@ -172,7 +175,7 @@ impl PushToService {
     /// Clear the current target
     pub async fn clear_target(state: &AppState) -> Result<(), String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            let result = plugin.clear_target().await;
+            let result = plugin.clear_target().await.map_err(|e| e.to_string());
             // Only mirror a clear that actually happened — a failed clear leaves
             // the plugin holding the target, and claiming otherwise would stop
             // plate solving for a target that is still set.
@@ -198,7 +201,7 @@ impl PushToService {
     /// Update the FOV hint for the solver
     pub async fn set_fov(_state: &AppState, fov_degrees: f32) -> Result<(), String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            plugin.set_fov(fov_degrees).await
+            plugin.set_fov(fov_degrees).await.map_err(|e| e.to_string())
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }
@@ -210,7 +213,10 @@ impl PushToService {
         settings: TelescopeSettings,
     ) -> Result<(), String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            plugin.set_telescope_settings(settings).await
+            plugin
+                .set_telescope_settings(settings)
+                .await
+                .map_err(|e| e.to_string())
         } else {
             Ok(()) // No plugin available; not an error
         }
@@ -219,7 +225,7 @@ impl PushToService {
     /// Load a solver database
     pub async fn load_database(_state: &AppState, path: &str) -> Result<(), String> {
         if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
-            plugin.load_database(path).await
+            plugin.load_database(path).await.map_err(|e| e.to_string())
         } else {
             Err("Push-To navigation requires Night Amplifier Pro".to_string())
         }

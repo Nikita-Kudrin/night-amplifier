@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::{watch, Mutex, RwLock};
 
-use super::{RenderReadyFrame, StreamKind};
+use super::StreamKind;
+use crate::render::display::RenderReadyFrame;
 use crate::telemetry::metrics as telemetry_metrics;
 
 /// Everything singular about one stream of rendered frames.

@@ -492,18 +492,6 @@ impl ServerEvent {
         }
     }
 
-    pub fn plate_solving_started(target_name: Option<String>) -> Self {
-        ServerEvent::PlateSolvingStarted { target_name }
-    }
-
-    pub fn plate_solving_progress(stage: impl Into<String>, attempt: usize, total: usize) -> Self {
-        ServerEvent::PlateSolvingProgress {
-            stage: stage.into(),
-            attempt,
-            total,
-        }
-    }
-
     pub fn position_solved(
         ra_degrees: f64,
         dec_degrees: f64,

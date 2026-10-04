@@ -1,10 +1,10 @@
 use lz4_flex::compress_prepend_size;
 
+use crate::render::display::frame_to_rgb8_downsampled;
 use crate::server::encoding::format::*;
-use crate::server::encoding::fused::frame_to_rgb8_downsampled;
 
 pub fn encode_rgb8_lz4(
-    ready_frame: &crate::server::state::RenderReadyFrame,
+    ready_frame: &crate::render::display::RenderReadyFrame,
     max_w: u32,
     max_h: u32,
 ) -> Result<Vec<u8>, String> {
@@ -39,7 +39,7 @@ pub fn encode_rgb8_lz4(
 /// each independently via Rayon. When `chunk_count == 1`, produces a single
 /// chunk (sequential, yields CPU to other tasks like stacking).
 pub fn encode_rgb8_lz4_chunked(
-    ready_frame: &crate::server::state::RenderReadyFrame,
+    ready_frame: &crate::render::display::RenderReadyFrame,
     chunk_count: usize,
     max_w: u32,
     max_h: u32,

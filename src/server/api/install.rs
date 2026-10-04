@@ -7,12 +7,11 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 use tracing::info;
 
-use super::super::dto::{
-    ApiResponse, AstapInstallRequest, AstapStatusResponse, CatalogInstallRequest,
-    CatalogStatusResponse, DatabaseTypeResponse, MessageResponse,
-};
+use super::super::dto::{ApiResponse, AstapInstallRequest, CatalogInstallRequest, MessageResponse};
 use super::super::state::AppState;
-use crate::push_to::PUSH_TO_PLUGIN;
+use crate::push_to::{
+    AstapStatusResponse, CatalogStatusResponse, DatabaseTypeResponse, PUSH_TO_PLUGIN,
+};
 
 /// GET /api/astap/status
 ///
@@ -62,7 +61,7 @@ pub async fn install_astap(
     let database_types = request.into_database_types();
     if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         match plugin
-            .install_astap(&database_types, _state.events.clone())
+            .install_astap(&database_types, Arc::new(_state.events.clone()))
             .await
         {
             Ok(_) => (
@@ -72,7 +71,7 @@ pub async fn install_astap(
                     camera_id: None,
                 }),
             ),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e.to_string())),
         }
     } else {
         (
@@ -113,7 +112,7 @@ pub async fn install_catalog(
 ) -> impl IntoResponse {
     if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
         match plugin
-            .install_catalog(request.include_stars, _state.events.clone())
+            .install_catalog(request.include_stars, Arc::new(_state.events.clone()))
             .await
         {
             Ok(_) => (
@@ -123,7 +122,7 @@ pub async fn install_catalog(
                     camera_id: None,
                 }),
             ),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e.to_string())),
         }
     } else {
         (

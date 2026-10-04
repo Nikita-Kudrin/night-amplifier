@@ -1,5 +1,6 @@
 //! Push-To Navigation System (Pro feature). Plugin interfaces only, so Community
-//! compiles safely while the functionality itself is gated.
+//! compiles safely while the functionality itself is gated. The ports speak this
+//! module's own types ([`types`], [`events`]); the server maps them to the wire.
 //!
 //! Split into three sub-traits (Interface Segregation):
 //! - [`PushToSolverPlugin`] — plate solving, position tracking, direction calculation
@@ -7,17 +8,22 @@
 //! - [`PushToInstallerPlugin`] — ASTAP and catalog installation management
 
 pub mod error;
+pub mod events;
+mod types;
+
 pub use error::{PushToError, PushToResult};
+pub use events::{PushToEvent, PushToEvents};
+pub use types::{
+    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
+    DatabaseTypeResponse, InstalledDatabaseInfo, PushToDirectionResponse, PushToPositionResponse,
+    PushToStatusResponse, TelescopeSettings,
+};
+
+use std::sync::{Arc, OnceLock};
 
 use crate::detection::StarDetector;
 use crate::frame::Frame;
-use crate::server::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, PushToDirectionResponse, PushToPositionResponse, PushToStatusResponse,
-    TelescopeSettings,
-};
 use async_trait::async_trait;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallStage {
@@ -206,8 +212,8 @@ impl PushToBlocker {
 /// Plate solving, position tracking, and direction calculation.
 #[async_trait]
 pub trait PushToSolverPlugin: Send + Sync {
-    /// Initialize the plugin with an event sender
-    fn init(&self, _events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>) {}
+    /// Hand the plugin the port its events go out through.
+    fn init(&self, _events: Arc<dyn PushToEvents>) {}
 
     /// Process a new frame for plate solving.
     ///
@@ -269,11 +275,11 @@ pub trait PushToSolverPlugin: Send + Sync {
     async fn get_direction(&self) -> Option<PushToDirectionResponse>;
 
     /// Update the field-of-view hint for the solver
-    async fn set_fov(&self, fov: f32) -> Result<(), String>;
+    async fn set_fov(&self, fov: f32) -> PushToResult<()>;
 
     /// Update telescope settings for FOV calculation.
     /// The solver will compute the precise image-height FOV from these parameters.
-    async fn set_telescope_settings(&self, settings: TelescopeSettings) -> Result<(), String>;
+    async fn set_telescope_settings(&self, settings: TelescopeSettings) -> PushToResult<()>;
 
     /// Name the camera *and* the optics it is looking through, as one change.
     ///
@@ -299,16 +305,16 @@ pub trait PushToCatalogPlugin: Send + Sync {
     async fn get_catalog_by_type(&self, catalog_type: &str) -> Vec<CatalogEntryResponse>;
 
     /// Set the current target by catalog name (e.g. "M31", "NGC 7000")
-    async fn set_target_by_name(&self, name: &str) -> Result<CatalogEntryResponse, String>;
+    async fn set_target_by_name(&self, name: &str) -> PushToResult<CatalogEntryResponse>;
 
     /// Set the current target by RA/Dec coordinates
-    async fn set_target_by_coords(&self, ra: f64, dec: f64) -> Result<CoordinateResponse, String>;
+    async fn set_target_by_coords(&self, ra: f64, dec: f64) -> PushToResult<CoordinateResponse>;
 
     /// Clear the current target
-    async fn clear_target(&self) -> Result<(), String>;
+    async fn clear_target(&self) -> PushToResult<()>;
 
     /// Load a solver database from the given path
-    async fn load_database(&self, path: &str) -> Result<(), String>;
+    async fn load_database(&self, path: &str) -> PushToResult<()>;
 }
 
 /// ASTAP binary and catalog installation management.
@@ -324,8 +330,8 @@ pub trait PushToInstallerPlugin: Send + Sync {
     async fn install_astap(
         &self,
         database_types: &[String],
-        events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
-    ) -> Result<(), String>;
+        events: Arc<dyn PushToEvents>,
+    ) -> PushToResult<()>;
 
     /// Get OpenNGC catalog installation status
     async fn get_catalog_status(&self) -> CatalogStatusResponse;
@@ -334,8 +340,8 @@ pub trait PushToInstallerPlugin: Send + Sync {
     async fn install_catalog(
         &self,
         include_stars: bool,
-        events: tokio::sync::broadcast::Sender<crate::server::ServerEvent>,
-    ) -> Result<(), String>;
+        events: Arc<dyn PushToEvents>,
+    ) -> PushToResult<()>;
 }
 
 /// Combined Push-To plugin trait for registration in the global OnceLock.
@@ -408,14 +414,11 @@ mod set_rig_tests {
             None
         }
 
-        async fn set_fov(&self, _fov: f32) -> Result<(), String> {
+        async fn set_fov(&self, _fov: f32) -> PushToResult<()> {
             Ok(())
         }
 
-        async fn set_telescope_settings(
-            &self,
-            _settings: TelescopeSettings,
-        ) -> Result<(), String> {
+        async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> PushToResult<()> {
             self.calls.lock().unwrap().push("telescope");
             Ok(())
         }

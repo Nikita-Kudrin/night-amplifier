@@ -1,122 +1,182 @@
-//! Install-related ServerEvent constructors (ASTAP and catalog installation)
+//! The Push-To plugin's events on the wire: each [`PushToEvent`] is one `/ws/events`
+//! message, field for field.
+
+use tokio::sync::broadcast;
 
 use super::ServerEvent;
+use crate::push_to::{PushToEvent, PushToEvents};
 
-impl ServerEvent {
-    pub fn astap_install_starting(component: impl Into<String>) -> Self {
-        ServerEvent::AstapInstallStarting {
-            component: component.into(),
+impl From<PushToEvent> for ServerEvent {
+    fn from(event: PushToEvent) -> Self {
+        match event {
+            PushToEvent::SolveStarted { target_name } => Self::PlateSolvingStarted { target_name },
+            PushToEvent::SolveProgress { stage, attempt, total } => {
+                Self::PlateSolvingProgress { stage, attempt, total }
+            }
+            PushToEvent::AstapInstallStarting { component } => Self::AstapInstallStarting { component },
+            PushToEvent::AstapInstallProgress {
+                component,
+                bytes_downloaded,
+                total_bytes,
+                percent,
+                stage,
+                overall_percent,
+            } => Self::AstapInstallProgress {
+                component,
+                bytes_downloaded,
+                total_bytes,
+                percent,
+                stage,
+                overall_percent,
+            },
+            PushToEvent::AstapInstallExtracting {
+                component,
+                progress,
+                stage,
+                overall_percent,
+            } => Self::AstapInstallExtracting {
+                component,
+                progress,
+                stage,
+                overall_percent,
+            },
+            PushToEvent::AstapInstallCompleted {
+                component,
+                stage,
+                overall_percent,
+            } => Self::AstapInstallCompleted {
+                component,
+                stage,
+                overall_percent,
+            },
+            PushToEvent::AstapInstallFailed { component, error } => {
+                Self::AstapInstallFailed { component, error }
+            }
+            PushToEvent::CatalogInstallStarting => Self::CatalogInstallStarting,
+            PushToEvent::CatalogInstallProgress {
+                file_name,
+                bytes_downloaded,
+                total_bytes,
+                percent,
+            } => Self::CatalogInstallProgress {
+                file_name,
+                bytes_downloaded,
+                total_bytes,
+                percent,
+            },
+            PushToEvent::CatalogFileCompleted { file_name } => Self::CatalogFileCompleted { file_name },
+            PushToEvent::CatalogInstallCompleted { object_count } => {
+                Self::CatalogInstallCompleted { object_count }
+            }
+            PushToEvent::CatalogInstallFailed { error } => Self::CatalogInstallFailed { error },
+        }
+    }
+}
+
+/// Every `/ws/events` client hears the plugin; a send with none connected is not an error.
+impl PushToEvents for broadcast::Sender<ServerEvent> {
+    fn emit(&self, event: PushToEvent) {
+        let _ = self.send(event.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::push_to::InstallStage;
+
+    /// Captured from the `ServerEvent` constructors these events replaced: the wire is
+    /// the contract the frontend reads, so the mapping must reproduce it byte for byte.
+    #[test]
+    fn push_to_events_keep_their_wire_shape() {
+        let cases = [
+            (
+                PushToEvent::SolveStarted { target_name: Some("M31".into()) },
+                r#"{"type":"plate_solving_started","target_name":"M31"}"#,
+            ),
+            (
+                PushToEvent::SolveStarted { target_name: None },
+                r#"{"type":"plate_solving_started","target_name":null}"#,
+            ),
+            (
+                PushToEvent::SolveProgress { stage: "Hinted FOV 1.2°".into(), attempt: 2, total: 4 },
+                r#"{"type":"plate_solving_progress","stage":"Hinted FOV 1.2°","attempt":2,"total":4}"#,
+            ),
+            (
+                PushToEvent::AstapInstallStarting { component: "ASTAP CLI".into() },
+                r#"{"type":"astap_install_starting","component":"ASTAP CLI"}"#,
+            ),
+            (
+                PushToEvent::astap_install_progress(
+                    "D80 Database",
+                    500,
+                    Some(2000),
+                    Some(&InstallStage::DownloadingDatabase),
+                ),
+                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":2000,"percent":25.0,"stage":"Downloading Database","overall_percent":37.5}"#,
+            ),
+            (
+                PushToEvent::astap_install_progress("D80 Database", 500, None, None),
+                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":null,"percent":null,"stage":null,"overall_percent":null}"#,
+            ),
+            (
+                PushToEvent::astap_install_extracting(
+                    "D80 Database",
+                    40.0,
+                    Some(&InstallStage::ExtractingDatabase),
+                ),
+                r#"{"type":"astap_install_extracting","component":"D80 Database","progress":40.0,"stage":"Extracting Database","overall_percent":94.0}"#,
+            ),
+            (
+                PushToEvent::astap_install_completed("ASTAP CLI", Some(&InstallStage::CliCompleted)),
+                r#"{"type":"astap_install_completed","component":"ASTAP CLI","stage":"ASTAP CLI Installed","overall_percent":20.0}"#,
+            ),
+            (
+                PushToEvent::AstapInstallFailed { component: "ASTAP CLI".into(), error: "network".into() },
+                r#"{"type":"astap_install_failed","component":"ASTAP CLI","error":"network"}"#,
+            ),
+            (
+                PushToEvent::AstapInstallProgress {
+                    component: "x".into(),
+                    bytes_downloaded: 1,
+                    total_bytes: Some(4),
+                    percent: Some(25.0),
+                    stage: Some("s".into()),
+                    overall_percent: Some(3.5),
+                },
+                r#"{"type":"astap_install_progress","component":"x","bytes_downloaded":1,"total_bytes":4,"percent":25.0,"stage":"s","overall_percent":3.5}"#,
+            ),
+            (PushToEvent::CatalogInstallStarting, r#"{"type":"catalog_install_starting"}"#),
+            (
+                PushToEvent::catalog_install_progress("NGC.csv", 300, Some(1200)),
+                r#"{"type":"catalog_install_progress","file_name":"NGC.csv","bytes_downloaded":300,"total_bytes":1200,"percent":25.0}"#,
+            ),
+            (
+                PushToEvent::CatalogFileCompleted { file_name: "NGC.csv".into() },
+                r#"{"type":"catalog_file_completed","file_name":"NGC.csv"}"#,
+            ),
+            (
+                PushToEvent::CatalogInstallCompleted { object_count: 13957 },
+                r#"{"type":"catalog_install_completed","object_count":13957}"#,
+            ),
+            (
+                PushToEvent::CatalogInstallFailed { error: "disk full".into() },
+                r#"{"type":"catalog_install_failed","error":"disk full"}"#,
+            ),
+        ];
+        for (event, wire) in cases {
+            let json = serde_json::to_string(&ServerEvent::from(event.clone())).unwrap();
+            assert_eq!(json, wire, "{event:?}");
         }
     }
 
-    pub fn astap_install_progress(
-        component: impl Into<String>,
-        bytes_downloaded: u64,
-        total_bytes: Option<u64>,
-        stage: Option<&crate::push_to::InstallStage>,
-    ) -> Self {
-        let percent = total_bytes.map(|total| (bytes_downloaded as f32 / total as f32) * 100.0);
-
-        // Calculate overall progress based on stage
-        let (stage_name, overall_percent) = if let Some(s) = stage {
-            let base = s.base_progress();
-            let weight = s.weight();
-            let stage_progress = percent.unwrap_or(0.0) / 100.0;
-            let overall = base + (weight * stage_progress);
-            (Some(s.display_name().to_string()), Some(overall))
-        } else {
-            (None, None)
-        };
-
-        ServerEvent::AstapInstallProgress {
-            component: component.into(),
-            bytes_downloaded,
-            total_bytes,
-            percent,
-            stage: stage_name,
-            overall_percent,
-        }
-    }
-
-    pub fn astap_install_extracting(
-        component: impl Into<String>,
-        progress: f32,
-        stage: Option<&crate::push_to::InstallStage>,
-    ) -> Self {
-        // Calculate overall progress based on stage
-        let (stage_name, overall_percent) = if let Some(s) = stage {
-            let base = s.base_progress();
-            let weight = s.weight();
-            let stage_progress = progress / 100.0;
-            let overall = base + (weight * stage_progress);
-            (Some(s.display_name().to_string()), Some(overall))
-        } else {
-            (None, None)
-        };
-
-        ServerEvent::AstapInstallExtracting {
-            component: component.into(),
-            progress,
-            stage: stage_name,
-            overall_percent,
-        }
-    }
-
-    pub fn astap_install_completed(
-        component: impl Into<String>,
-        stage: Option<&crate::push_to::InstallStage>,
-    ) -> Self {
-        let (stage_name, overall_percent) = if let Some(s) = stage {
-            (Some(s.display_name().to_string()), Some(s.base_progress()))
-        } else {
-            (None, None)
-        };
-
-        ServerEvent::AstapInstallCompleted {
-            component: component.into(),
-            stage: stage_name,
-            overall_percent,
-        }
-    }
-
-    pub fn astap_install_failed(component: impl Into<String>, error: impl Into<String>) -> Self {
-        ServerEvent::AstapInstallFailed {
-            component: component.into(),
-            error: error.into(),
-        }
-    }
-
-    pub fn catalog_install_starting() -> Self {
-        ServerEvent::CatalogInstallStarting
-    }
-
-    pub fn catalog_install_progress(
-        file_name: impl Into<String>,
-        bytes_downloaded: u64,
-        total_bytes: Option<u64>,
-    ) -> Self {
-        let percent = total_bytes.map(|total| (bytes_downloaded as f32 / total as f32) * 100.0);
-        ServerEvent::CatalogInstallProgress {
-            file_name: file_name.into(),
-            bytes_downloaded,
-            total_bytes,
-            percent,
-        }
-    }
-
-    pub fn catalog_file_completed(file_name: impl Into<String>) -> Self {
-        ServerEvent::CatalogFileCompleted {
-            file_name: file_name.into(),
-        }
-    }
-
-    pub fn catalog_install_completed(object_count: usize) -> Self {
-        ServerEvent::CatalogInstallCompleted { object_count }
-    }
-
-    pub fn catalog_install_failed(error: impl Into<String>) -> Self {
-        ServerEvent::CatalogInstallFailed {
-            error: error.into(),
+    #[test]
+    fn the_broadcast_port_delivers_to_every_listener() {
+        let (sender, mut first) = broadcast::channel(4);
+        let mut second = sender.subscribe();
+        sender.emit(PushToEvent::CatalogInstallStarting);
+        for receiver in [&mut first, &mut second] {
+            assert!(matches!(receiver.try_recv(), Ok(ServerEvent::CatalogInstallStarting)));
         }
     }
 }

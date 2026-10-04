@@ -180,7 +180,7 @@ impl Frame {
     /// ASTAP. Once deleted as "dead code", which broke the Pro build: a dead-code claim
     /// about a `pub` item isn't verifiable from this repo alone; keep it, or update `night-amplifier-pro` together.
     ///
-    /// Distinct from the streaming encoder's box filter (`server::encoding`), which takes an
+    /// Distinct from the streaming encoder's box filter (`render::display`), which takes an
     /// arbitrary target size and emits `u8` — this takes an integer factor and stays f32 for
     /// solver precision. Trailing pixels are dropped: output is `width/factor` by `height/factor`.
     pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {

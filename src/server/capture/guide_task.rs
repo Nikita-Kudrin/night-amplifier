@@ -15,20 +15,21 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::stream_encoding::{encode_jpeg, ConversionCache, FailureReports};
 use super::solving::{self, SolveSource};
 use super::stage_config;
-use super::storage;
 use super::stall::{handle_stall, StallSite, StallTracker, StallVerdict};
+use super::storage;
+use super::stream_encoding::{encode_jpeg, ConversionCache, FailureReports};
 use super::watchdog::{capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome};
 use crate::camera::Camera;
-use crate::disk_writer::{OpenSession, WritingSessionType};
 use crate::camera::CameraStatus;
+use crate::disk_writer::{OpenSession, WritingSessionType};
+use crate::render::display::RenderReadyFrame;
 use crate::server::camera_session::ramp::RampState;
 use crate::server::error::ApiError;
 use crate::server::state::{
     AppState, CameraCaptureProfile, CameraOp, CameraRole, CaptureMode, CaptureSettings,
-    ConnectedCameraInfo, GuideLoopTicket, RawSessionResume, RenderReadyFrame, StreamKind,
+    ConnectedCameraInfo, GuideLoopTicket, RawSessionResume, StreamKind,
 };
 
 /// How long the loop waits before retrying after a recoverable capture error, so a

@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use super::QueueDepth;
+use crate::render::display::RenderReadyFrame;
 use crate::server::state::{
-    AppState, CaptureSettings, EyepieceStreamResolution, RenderReadyFrame, Resolution, StreamKind,
-    ViewerGuard,
+    AppState, CaptureSettings, EyepieceStreamResolution, Resolution, StreamKind, ViewerGuard,
 };
 
 /// Settings that make the preview pipeline a no-op, so a test observes only how frames
