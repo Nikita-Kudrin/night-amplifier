@@ -36,3 +36,4 @@ settings.json
 /license*
 # `vitepress build` output, embedded by `embedded_manual.rs`; every page, not a list of them.
 /manual/.vitepress/dist/
+/plans/
