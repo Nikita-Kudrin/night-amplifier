@@ -158,7 +158,11 @@ fn render(
     settings: &CaptureSettings,
 ) -> (Vec<u8>, usize, usize) {
     let rendered = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
-        &mut frame, settings, ctx, analysis,
+        &mut frame,
+        settings,
+        &night_amplifier::plugins::Plugins::installed(),
+        ctx,
+        analysis,
     )
     .unwrap();
     let ready = night_amplifier::render::display::RenderReadyFrame {
@@ -312,7 +316,7 @@ fn measure_temporal_stability_on_real_sessions() {
             reference.width(),
             reference.height(),
             reference.channels(),
-            &StackSettings::of(&subs.settings),
+            &StackSettings::of(&subs.settings, &night_amplifier::plugins::Plugins::installed()),
         )
         .unwrap();
         stack.initialize_with_reference(&reference).unwrap();

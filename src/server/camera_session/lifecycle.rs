@@ -284,7 +284,7 @@ pub(crate) async fn sync_solver_rig(state: &Arc<AppState>) {
     // old camera's focal length — and that resolve *discards* a remembered FOV whose
     // camera disagrees, so the intermediate state could delete the outgoing rig's
     // measurement on the way past. See `PushToSolverPlugin::set_rig`.
-    crate::server::services::PushToService::set_rig(camera_name, telescope).await;
+    crate::server::services::PushToService::set_rig(state, camera_name, telescope).await;
 }
 
 /// Build the `HashMap` key used to store per-camera capture profiles.

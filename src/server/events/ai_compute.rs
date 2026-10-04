@@ -7,17 +7,18 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 use super::ServerEvent;
+use crate::plugins::Plugins;
 use crate::render::denoise::ai;
 
 const POLL: Duration = Duration::from_millis(500);
 
-pub fn spawn_ai_compute_watcher(events: broadcast::Sender<ServerEvent>) {
+pub fn spawn_ai_compute_watcher(events: broadcast::Sender<ServerEvent>, plugins: Plugins) {
     tokio::spawn(async move {
-        let mut last = ai::compute_generation();
+        let mut last = ai::compute_generation(&plugins);
         let mut ticker = tokio::time::interval(POLL);
         loop {
             ticker.tick().await;
-            announce_if_changed(&mut last, ai::compute_generation(), &events);
+            announce_if_changed(&mut last, ai::compute_generation(&plugins), &events);
         }
     });
 }

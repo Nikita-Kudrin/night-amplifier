@@ -240,7 +240,7 @@ fn test_update_config_gating() {
     let pro_config = StackingConfig::default().with_rejection(RejectionMethod::SigmaClip);
     stack.update_config(pro_config);
 
-    // 3. Verify it fell back to None (since REJECTION_PLUGIN is None in tests)
+    // 3. Verify it fell back to None (no rejection plugin is installed in tests)
     assert_eq!(stack.config().rejection, RejectionMethod::None);
 }
 

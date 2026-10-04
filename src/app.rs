@@ -235,56 +235,27 @@ fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// Run the Night Amplifier server. Call `register_plugins` before logging is
-/// initialized, to register Pro plugin implementations into the global OnceLock
-/// registries — pass a no-op closure (or nothing) for the Community edition.
-///
-/// ```ignore
-/// night_amplifier::app::run(|| { BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok(); }).await;
-/// ```
 /// What the startup system report needs from the application (`system_info::AppContext`).
 fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_info::AppContext {
-    let plugins = [
-        ("push_to", crate::PUSH_TO_PLUGIN.get().is_some()),
-        (
-            "rejection",
-            crate::stacking::REJECTION_PLUGIN.get().is_some(),
-        ),
-        ("comet", crate::stacking::COMET_PLUGIN.get().is_some()),
-        (
-            "background",
-            crate::background::BACKGROUND_PLUGIN.get().is_some(),
-        ),
-        (
-            "planetary",
-            crate::planetary::PLANETARY_PLUGIN.get().is_some(),
-        ),
-        (
-            "saturation",
-            crate::render::SATURATION_PLUGIN.get().is_some(),
-        ),
-        ("denoise", crate::render::DENOISE_PLUGIN.get().is_some()),
-        ("ai_denoise", crate::render::AI_DENOISE_PLUGIN.get().is_some()),
-    ];
     crate::system_info::AppContext {
         port: args.port,
         static_dir: args.static_dir.clone(),
         log_dir,
         settings_file: crate::server::DEFAULT_SETTINGS_FILE.into(),
         pro_active: crate::license::is_pro_active(),
-        plugins: plugins
-            .into_iter()
-            .filter_map(|(name, registered)| registered.then_some(name))
-            .collect(),
+        plugins: crate::plugins::Plugins::installed().registered(),
         frame_queue_budget_bytes: crate::server::capture::channel::frame_queue_budget_bytes(),
     }
 }
 
-pub async fn run(register_plugins: impl FnOnce()) {
+/// Run the Night Amplifier server with `plugins` — [`Plugins::none`] for Community, Pro's
+/// set for Pro. Installed before anything else, so every later reader sees them.
+///
+/// [`Plugins::none`]: crate::plugins::Plugins::none
+pub async fn run(plugins: crate::plugins::Plugins) {
     let args = Args::parse();
 
-    // Register plugins before anything else
-    register_plugins();
+    crate::plugins::install(plugins);
 
     // Build logging configuration
     #[cfg(feature = "telemetry")]

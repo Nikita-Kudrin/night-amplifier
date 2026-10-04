@@ -766,7 +766,7 @@ mod tests {
         assert!(restored.focus_mode);
         assert!(restored.focus_mode_snapshot.is_some());
 
-        crate::server::state::focus_mode::set(&mut restored, false);
+        crate::server::state::focus_mode::set(&mut restored, false, &crate::plugins::Plugins::none());
         assert!(restored.sensor_correction.fpn_removal);
         assert!(restored.background_subtraction);
 

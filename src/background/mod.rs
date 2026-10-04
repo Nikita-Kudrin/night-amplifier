@@ -26,15 +26,11 @@ pub use target_disc::TargetDisc;
 
 use crate::error::Result;
 use crate::frame::Frame;
-use std::sync::OnceLock;
 
 /// Plugin trait for advanced background algorithms (implemented in Pro version)
 pub trait BackgroundAlgorithmPlugin: Send + Sync {
     fn estimate_rbf(&self, frame: &Frame, config: &BackgroundConfig) -> Result<BackgroundModel>;
 }
-
-/// Global registry for the background plugin
-pub static BACKGROUND_PLUGIN: OnceLock<Box<dyn BackgroundAlgorithmPlugin>> = OnceLock::new();
 
 /// Convenience function for background subtraction
 pub fn subtract_background(frame: &mut Frame) -> Result<()> {

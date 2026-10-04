@@ -193,7 +193,7 @@ fn with_stack(
         reference.width(),
         reference.height(),
         reference.channels(),
-        &StackSettings::of(&settings),
+        &StackSettings::of(&settings, &night_amplifier::plugins::Plugins::installed()),
     )
     .unwrap();
     ctx.initialize_with_reference(&reference).unwrap();
@@ -256,6 +256,7 @@ pub fn render_with(
     } = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
+        &night_amplifier::plugins::Plugins::installed(),
         AnalysisContext {
             showing_stack: stack_depth > 1,
             stack_depth,
@@ -1229,6 +1230,7 @@ pub fn preview_parts(
     let render = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
+        &night_amplifier::plugins::Plugins::installed(),
         AnalysisContext { showing_stack: stack_depth > 1, stack_depth },
         &mut PreviewAnalysis::new(),
     )

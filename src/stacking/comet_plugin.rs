@@ -5,6 +5,7 @@
 //! provides the interface but not the implementation.
 
 use super::StackingConfig;
+use crate::plugins::Plugins;
 use crate::error::Result;
 use crate::frame::Frame;
 use crate::planetary::AlignmentRoi;
@@ -17,6 +18,8 @@ pub struct CometSettings {
     /// The accumulator the observer asked for, rejection already reduced to what the
     /// live path runs.
     pub stacking: StackingConfig,
+    /// What the context's own accumulator runs with.
+    pub plugins: Plugins,
 }
 
 /// Comet centroid detection result

@@ -49,9 +49,11 @@ When designing new features or refactoring, adhere to the following architectura
 - Separation of Concerns: each module/class/function has one well-defined responsibility.
 - Asynchronous Communication: favor event-driven (Pub/Sub, queues) for long-running or cross-service work.
 - Design for Failure (Resilience).
-- Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`,
-  `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`, `DENOISE_PLUGIN`,
-  `AI_DENOISE_PLUGIN`) so Community works standalone.
+- Plugin system: performance-critical / Pro-only logic lives behind traits, collected in one `plugins::Plugins`
+  value (rejection, background, planetary, saturation, denoise, AI denoise, comet, and Push-To's solver, catalog and
+  installer) so Community works standalone. The binary `install`s its set via `app::run`; `AppState::plugins` carries
+  it to stacking, rendering and Push-To, so a test hands in its own set (`always_licensed` for fakes) instead of
+  filling process-wide slots. Accessors are licence-gated per call: a lapsed licence degrades the next frame.
 - Domain modules never name `crate::server` (`tests/layering_test.rs`; only `server` and `app.rs` may): plugin traits
   speak domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
   `render::denoise::DenoiseSettings` — and the server maps them to the wire. Pro imports `server` only in tests.
@@ -312,7 +314,7 @@ parameter → subtract black point → apply the stretch.
 
 Everything below runs in the streaming encoders at display resolution, not in the pipeline proper.
 
-**Spatial denoising** (Pro plugin behind `DENOISE_PLUGIN`): guided chroma + à trous wavelet luma, tuned in Pro
+**Spatial denoising** (Pro's denoise plugin): guided chroma + à trous wavelet luma, tuned in Pro
 (`plugins::denoise`). Community owns the boundary — `DenoiseConfig` (`Default` is always `OFF`, byte-identical
 output without the plugin) and the gates: Planetary is refused before the plugin is asked; the switch is unmanaged
 by Focus/Finder mode. The **grain-split dial** (`background_grain`) spends three levers in order — below the
@@ -321,7 +323,7 @@ the only mechanism reaching 16-64 px noise; the dial's own tone-curve split neve
 (1/8, not an even 1/4), since spending more there costs target brightness 1:1 with the grain removed. **Detail**
 (levels 2-4 local contrast) ships on by default, held off the sky/stars by the plugin.
 
-**The AI denoiser** (Pro plugin behind `AI_DENOISE_PLUGIN`) is display-referred, not linear — it runs after the
+**The AI denoiser** (Pro's AI denoise plugin) is display-referred, not linear — it runs after the
 stretch, before saturation/S-curve/floor (trained on stretched RGB; after the S-curve it over-softened stars).
 Gated like the classic filters; its compute-unit benchmark never runs under a capture (Pro AGENTS.md "AI compute").
 

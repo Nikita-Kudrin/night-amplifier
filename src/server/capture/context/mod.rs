@@ -21,9 +21,8 @@ use tracing::warn;
 use crate::frame::{Frame, NoiseField};
 use crate::planetary::AlignmentRoi;
 use crate::server::state::CaptureSettings;
-use crate::stacking::{
-    CometSettings, RejectionMethod, StackingConfig, StackingType, REJECTION_PLUGIN,
-};
+use crate::plugins::Plugins;
+use crate::stacking::{CometSettings, RejectionMethod, StackingConfig, StackingType};
 
 use super::frame_gate::FrameAdmission;
 
@@ -63,16 +62,19 @@ pub struct StackSettings {
     pub planetary_roi: Option<AlignmentRoi>,
     pub planetary_auto_tracking: bool,
     pub planetary_multi_point_alignment: bool,
+    /// What the stack runs: rejection, multi-point alignment, the comet nucleus.
+    pub plugins: Plugins,
 }
 
 impl StackSettings {
-    pub fn of(settings: &CaptureSettings) -> Self {
+    pub fn of(settings: &CaptureSettings, plugins: &Plugins) -> Self {
         Self {
-            config: stacking_config(settings),
+            config: stacking_config(settings, plugins),
             comet_roi: settings.comet_roi,
             planetary_roi: settings.planetary_roi,
             planetary_auto_tracking: settings.planetary_auto_tracking,
             planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
+            plugins: plugins.clone(),
         }
     }
 
@@ -81,6 +83,7 @@ impl StackSettings {
         CometSettings {
             roi: self.comet_roi,
             stacking: self.config.clone(),
+            plugins: self.plugins.clone(),
         }
     }
 }
@@ -116,9 +119,9 @@ pub struct StackingCarryover {
 /// The accumulator configuration every mode runs for `settings`, at session start and on
 /// every edit alike — planetary once started on licence state and then passed Min-Max
 /// straight through on the first edit.
-fn stacking_config(settings: &CaptureSettings) -> StackingConfig {
+fn stacking_config(settings: &CaptureSettings, plugins: &Plugins) -> StackingConfig {
     StackingConfig::default()
-        .with_rejection(resolve_rejection(settings))
+        .with_rejection(resolve_rejection(settings, plugins))
         .with_sigma(settings.rejection_sigma)
         .with_weighting(settings.weighting_preset.into())
 }
@@ -140,8 +143,8 @@ fn live_equivalent(method: RejectionMethod) -> RejectionMethod {
 
 /// The rejection method a session should run: what the observer asked for, reduced to
 /// what the live path can execute, or `None` when the Pro plugin is not loaded.
-fn resolve_rejection(settings: &CaptureSettings) -> RejectionMethod {
-    if crate::license::pro_plugin(&REJECTION_PLUGIN).is_none() {
+fn resolve_rejection(settings: &CaptureSettings, plugins: &Plugins) -> RejectionMethod {
+    if plugins.rejection().is_none() {
         return RejectionMethod::None;
     }
     let resolved = live_equivalent(settings.rejection_method);
@@ -158,6 +161,52 @@ fn resolve_rejection(settings: &CaptureSettings) -> RejectionMethod {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stacking::{IncrementalPixel, RejectionPlugin};
+    use std::sync::Arc;
+
+    /// Stands in for Pro's rejection plugin where only its presence matters.
+    struct FakeRejection;
+
+    impl RejectionPlugin for FakeRejection {
+        fn compute_rejection(
+            &self,
+            _: &[f32],
+            _: RejectionMethod,
+            _: &StackingConfig,
+        ) -> crate::error::Result<(f32, u32)> {
+            unreachable!("configuration only")
+        }
+
+        fn compute_weighted_rejection(
+            &self,
+            _: &[f32],
+            _: &[f32],
+            _: RejectionMethod,
+            _: &StackingConfig,
+        ) -> crate::error::Result<(f32, f32)> {
+            unreachable!("configuration only")
+        }
+
+        fn blend_incremental(
+            &self,
+            _: &mut [IncrementalPixel],
+            _: &[f32],
+            _: f32,
+            _: f32,
+            _: f32,
+            _: &StackingConfig,
+        ) -> crate::error::Result<()> {
+            unreachable!("configuration only")
+        }
+    }
+
+    fn community() -> Plugins {
+        Plugins::none().always_licensed()
+    }
+
+    fn pro() -> Plugins {
+        Plugins::none().with_rejection(Arc::new(FakeRejection)).always_licensed()
+    }
 
     /// Exhaustive: a new variant must be considered by every test here.
     const ALL_METHODS: [RejectionMethod; 4] = [
@@ -175,11 +224,33 @@ mod tests {
         for method in ALL_METHODS {
             settings.rejection_method = method;
             assert_eq!(
-                resolve_rejection(&settings),
+                resolve_rejection(&settings, &community()),
                 RejectionMethod::None,
                 "{method:?} resolved to something Community cannot run"
             );
         }
+    }
+
+    /// With the plugin, a session runs what was asked, reduced to what the live path runs.
+    #[test]
+    fn with_the_plugin_the_method_asked_for_runs() {
+        let mut settings = CaptureSettings::default();
+        for method in ALL_METHODS {
+            settings.rejection_method = method;
+            assert_eq!(resolve_rejection(&settings, &pro()), live_equivalent(method));
+        }
+    }
+
+    /// The licence gates the plugin: unlicensed, it resolves like Community. Nothing in
+    /// this test binary activates the process licence.
+    #[test]
+    fn an_unlicensed_plugin_resolves_like_community() {
+        let gated = Plugins::none().with_rejection(Arc::new(FakeRejection));
+        let settings = CaptureSettings {
+            rejection_method: RejectionMethod::SigmaClip,
+            ..CaptureSettings::default()
+        };
+        assert_eq!(resolve_rejection(&settings, &gated), RejectionMethod::None);
     }
 
     /// Every method must reduce to one the live accumulator actually routes to the
@@ -230,12 +301,12 @@ mod tests {
     /// after an edit — planetary used to differ on both.
     #[test]
     fn planetary_and_deep_sky_configure_the_stack_alike() {
-        for method in ALL_METHODS {
+        for (method, plugins) in ALL_METHODS.into_iter().flat_map(|m| [(m, community()), (m, pro())]) {
             let mut settings = CaptureSettings::default();
             settings.rejection_method = method;
             settings.rejection_sigma = 3.1;
 
-            let settings = StackSettings::of(&settings);
+            let settings = StackSettings::of(&settings, &plugins);
             let mut deep_sky = StackingContext::new(32, 32, 1, &settings).expect("builds");
             let mut planetary =
                 PlanetaryStackingContext::new(32, 32, 1, &settings).expect("builds");

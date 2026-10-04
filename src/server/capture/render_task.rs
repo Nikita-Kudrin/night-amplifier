@@ -117,6 +117,7 @@ pub fn run_render_task(
             match pipeline::process_preview_frame_with_analysis(
                 Arc::make_mut(&mut display_frame),
                 &settings,
+                &state.plugins,
                 AnalysisContext {
                     showing_stack,
                     stack_depth,
@@ -424,8 +425,8 @@ mod tests {
         let mut full = frame.clone();
         let mut binned = frame.downsample(2).unwrap();
 
-        let full_stretch = process_preview_frame(&mut full, &settings).unwrap().stretch_result;
-        let binned_stretch = process_preview_frame(&mut binned, &settings).unwrap().stretch_result;
+        let full_stretch = process_preview_frame(&mut full, &settings, &crate::plugins::Plugins::none()).unwrap().stretch_result;
+        let binned_stretch = process_preview_frame(&mut binned, &settings, &crate::plugins::Plugins::none()).unwrap().stretch_result;
 
         let full_lut = full_stretch.expect("full-resolution stretch").scale_lut;
         let binned_lut = binned_stretch.expect("binned stretch").scale_lut;

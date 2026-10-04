@@ -4,7 +4,8 @@
 //! of processing stages: background subtraction, autostretching, saturation boosting,
 //! and contrast adjustment.
 
-use crate::background::subtract_background_with_config;
+use crate::background::BackgroundExtractor;
+use crate::plugins::Plugins;
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use tracing::{debug, field, instrument, warn, Span};
@@ -111,9 +112,9 @@ impl RenderPipeline {
         // Stage 1: Background subtraction
         if self.config.background_subtraction {
             let _span = tracing::info_span!("background_subtraction").entered();
-            if let Err(e) =
-                subtract_background_with_config(frame, self.config.background_config.clone())
-            {
+            let extractor = BackgroundExtractor::new(self.config.background_config.clone())
+                .with_plugins(self.config.plugins.clone());
+            if let Err(e) = extractor.subtract(frame) {
                 warn!(error = %e, "Background subtraction failed");
             } else {
                 result.background_subtracted = true;
@@ -171,7 +172,7 @@ impl RenderPipeline {
             let mut sat_config = self.config.saturation_config;
             sat_config.enabled = true;
 
-            if let Err(e) = apply_shadow_saturation_boost(frame, &sat_config) {
+            if let Err(e) = apply_shadow_saturation_boost(frame, &sat_config, &self.config.plugins) {
                 warn!(error = %e, "Saturation boost failed");
             } else {
                 result.saturation_boosted = true;
@@ -266,9 +267,6 @@ mod tests {
         let result = pipeline.process(&mut frame).unwrap();
         assert!(result.background_subtracted);
         assert!(result.stretch_result.is_some());
-        assert_eq!(
-            result.saturation_boosted,
-            crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_some()
-        );
+        assert_eq!(result.saturation_boosted, Plugins::installed().saturation().is_some());
     }
 }

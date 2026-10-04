@@ -133,9 +133,12 @@ fn prepare_fixture_with(
         pipeline_config,
         stretch_result,
         ..
-    } =
-        night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame, &settings)
-            .ok()?;
+    } = night_amplifier::server::capture::pipeline::process_preview_frame(
+        &mut frame,
+        &settings,
+        &night_amplifier::plugins::Plugins::installed(),
+    )
+    .ok()?;
 
     Some(night_amplifier::render::display::RenderReadyFrame {
         noise: None,
@@ -378,7 +381,7 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn without_the_plugin_the_dial_does_not_move_the_picture() {
     assert!(
-        night_amplifier::license::pro_plugin(&night_amplifier::render::DENOISE_PLUGIN).is_none(),
+        night_amplifier::plugins::Plugins::installed().denoise().is_none(),
         "this is Community's guard and must run without the denoise plugin"
     );
     let render_at = |dial: f32| {

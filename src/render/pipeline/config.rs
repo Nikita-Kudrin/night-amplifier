@@ -2,6 +2,7 @@ use crate::background::BackgroundConfig;
 use crate::render::autostretch::AutoStretchConfig;
 use crate::render::denoise::DenoiseConfig;
 use crate::render::output::{ContrastConfig, DisplayOutput, ShadowFloorRequest};
+use crate::plugins::Plugins;
 use crate::render::stretch::SaturationBoostConfig;
 
 /// Configuration for the unified render pipeline
@@ -56,6 +57,10 @@ pub struct RenderPipelineConfig {
     /// of it costs 4.5x the memory traffic for no visible benefit, and the
     /// encoders' box downsample has already removed some of the noise by then.
     pub denoise: DenoiseConfig,
+
+    /// The plugins the stages and the encoders run: the process's
+    /// [installed](Plugins::installed) set unless the caller (the server) hands its own.
+    pub plugins: Plugins,
 }
 
 impl Default for RenderPipelineConfig {
@@ -74,6 +79,7 @@ impl Default for RenderPipelineConfig {
             display: DisplayOutput::PLAIN,
             shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
+            plugins: Plugins::installed(),
         }
     }
 }
@@ -167,6 +173,11 @@ impl RenderPipelineConfig {
         self
     }
 
+    pub fn with_plugins(mut self, plugins: Plugins) -> Self {
+        self.plugins = plugins;
+        self
+    }
+
     /// Preset for deep sky imaging (nebulae, galaxies)
     pub fn deep_sky() -> Self {
         Self {
@@ -188,6 +199,7 @@ impl RenderPipelineConfig {
             display: DisplayOutput::PLAIN,
             shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
+            plugins: Plugins::installed(),
         }
     }
 
@@ -207,6 +219,7 @@ impl RenderPipelineConfig {
             display: DisplayOutput::PLAIN,
             shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
+            plugins: Plugins::installed(),
         }
     }
 
@@ -226,6 +239,7 @@ impl RenderPipelineConfig {
             display: DisplayOutput::PLAIN,
             shadow_floor: ShadowFloorRequest::NONE,
             denoise: DenoiseConfig::OFF,
+            plugins: Plugins::installed(),
         }
     }
 }

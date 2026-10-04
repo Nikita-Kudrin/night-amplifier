@@ -6,7 +6,6 @@
 use crate::error::{Result, StackError};
 use crate::stacking::config::StackingConfig;
 use crate::stacking::incremental_pixel::IncrementalPixel;
-use std::sync::OnceLock;
 
 /// Rejection method for stacking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -28,7 +27,7 @@ impl RejectionMethod {
     /// run. Keyed on the build, not the licence, so a lapsed licence never rewrites a
     /// saved choice — the live path already resolves an unlicensed one to `None`.
     pub fn best_available() -> Self {
-        if REJECTION_PLUGIN.get().is_some() {
+        if crate::plugins::Plugins::installed().ships_rejection() {
             Self::SigmaClip
         } else {
             Self::None
@@ -67,6 +66,3 @@ pub trait RejectionPlugin: Send + Sync {
         config: &StackingConfig,
     ) -> Result<()>;
 }
-
-/// Global registry for the rejection plugin
-pub static REJECTION_PLUGIN: OnceLock<Box<dyn RejectionPlugin>> = OnceLock::new();

@@ -108,6 +108,9 @@ pub struct AppState {
     /// Where cameras are discovered and opened. A trait object so tests can script
     /// the USB bus — including one that reorders itself between two enumerations.
     pub device_catalog: Arc<dyn crate::camera::DeviceCatalog>,
+    /// The Pro plugins this server runs: the process's installed set, or a test's own.
+    /// Everything the server drives — stacking, rendering, Push-To — takes it from here.
+    pub plugins: crate::plugins::Plugins,
     /// One counter per provider for `CameraService`'s bounded enumerations: a refresh waits on
     /// a provider still inside its SDK instead of starting a second call behind it.
     pub discovery_calls: StdMutex<HashMap<String, Arc<camera_slot::InFlightCalls>>>,
@@ -219,6 +222,7 @@ impl AppState {
             camera_slots: std::array::from_fn(|_| CameraSlot::default()),
             camera_connect_lock: Mutex::new(()),
             device_catalog: Arc::new(crate::camera::RegistryCatalog::new()),
+            plugins: crate::plugins::Plugins::installed(),
             discovery_calls: StdMutex::new(HashMap::new()),
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
@@ -367,7 +371,7 @@ impl AppState {
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
-        crate::render::denoise::ai::start_benchmark();
+        crate::render::denoise::ai::start_benchmark(&self.plugins);
         true
     }
 
@@ -403,7 +407,7 @@ impl AppState {
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
         // A licence activated mid-session left the AI compute benchmark to here, when every
         // capture thread has been joined. Idempotent, so any other end does nothing.
-        crate::render::denoise::ai::start_benchmark();
+        crate::render::denoise::ai::start_benchmark(&self.plugins);
     }
 
     /// Increment frame count and broadcast event.

@@ -10,9 +10,7 @@ pub mod saturation;
 // Re-export public items to maintain API compatibility
 pub use asinh::{asinh, asinh_stretch, asinh_stretch_color_preserving, asinh_stretch_frame};
 pub use mtf::{mtf, mtf_stretch_color_preserving, mtf_stretch_frame, solve_mtf_midtone};
-pub use saturation::{
-    apply_shadow_saturation_boost, SaturationBoostConfig, SaturationPlugin, SATURATION_PLUGIN,
-};
+pub use saturation::{apply_shadow_saturation_boost, SaturationBoostConfig, SaturationPlugin};
 
 use crate::error::Result;
 use crate::render::output::ShadowFloor;

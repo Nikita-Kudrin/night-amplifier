@@ -19,7 +19,7 @@ pub use types::{
     PushToStatusResponse, TelescopeSettings,
 };
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::detection::StarDetector;
 use crate::frame::Frame;
@@ -343,23 +343,6 @@ pub trait PushToInstallerPlugin: Send + Sync {
         events: Arc<dyn PushToEvents>,
     ) -> PushToResult<()>;
 }
-
-/// Combined Push-To plugin trait for registration in the global OnceLock.
-///
-/// Implementors must provide all three sub-traits. The single OnceLock keeps
-/// the registration pattern simple while sub-traits let consumers depend only
-/// on the interface they need.
-pub trait PushToSystemPlugin:
-    PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin
-{
-}
-
-/// Blanket implementation: any type implementing all three sub-traits is a PushToSystemPlugin.
-impl<T: PushToSolverPlugin + PushToCatalogPlugin + PushToInstallerPlugin> PushToSystemPlugin for T {}
-
-/// Global registry for the Push-To plugin
-pub static PUSH_TO_PLUGIN: OnceLock<Box<dyn PushToSystemPlugin>> = OnceLock::new();
-
 
 #[cfg(test)]
 mod set_rig_tests {

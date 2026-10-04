@@ -2,19 +2,18 @@
 //! handed, that its output is what the rest of the tail renders, and every gate that keeps
 //! it from being called at all. The network itself is Pro's; its behaviour is tested there.
 //!
-//! Its own binary: the plugin registry is process-wide. Calls are recorded per thread,
-//! and the encoder calls the plugin on the thread that asked for the conversion.
+//! The stand-in is handed to the render as its own `Plugins` set, so nothing process-wide
+//! is touched. Calls are recorded per thread, and the encoder calls the plugin on the
+//! thread that asked for the conversion.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 
+use night_amplifier::plugins::Plugins;
 use night_amplifier::render::denoise::DenoiseSettings;
 use night_amplifier::render::display::frame_to_rgb8_downsampled;
 use night_amplifier::render::display::RenderReadyFrame;
-use night_amplifier::render::{
-    AiDenoiseConfig, AiDenoisePlugin, DenoiseScratch, AI_DENOISE_PLUGIN,
-};
+use night_amplifier::render::{AiDenoiseConfig, AiDenoisePlugin, DenoiseScratch};
 use night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis;
 use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
 use night_amplifier::server::state::CaptureSettings;
@@ -57,12 +56,11 @@ impl AiDenoisePlugin for StandIn {
 }
 
 fn register() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        AI_DENOISE_PLUGIN.set(Box::new(StandIn)).ok();
-        night_amplifier::license::PRO_LICENSE_ACTIVE.store(true, Ordering::SeqCst);
-    });
     CALLS.with(|calls| calls.borrow_mut().clear());
+}
+
+fn plugins() -> Plugins {
+    Plugins::none().with_ai_denoise(Arc::new(StandIn)).always_licensed()
 }
 
 fn calls() -> Vec<(usize, usize, f32)> {
@@ -112,6 +110,7 @@ fn render(settings: &CaptureSettings, showing_stack: bool) -> (RenderReadyFrame,
     let rendered = process_preview_frame_with_analysis(
         &mut frame,
         settings,
+        &plugins(),
         AnalysisContext {
             showing_stack,
             stack_depth: if showing_stack { 16 } else { 1 },
@@ -186,7 +185,7 @@ fn live_view_runs_the_network() {
 fn nothing_calls_the_network_through_a_shut_gate() {
     register();
     let mut focus = asking_for_the_network();
-    night_amplifier::server::state::focus_mode::set(&mut focus, true);
+    night_amplifier::server::state::focus_mode::set(&mut focus, true, &night_amplifier::plugins::Plugins::none());
     let mut planetary = asking_for_the_network();
     planetary.stacking_type = night_amplifier::stacking::StackingType::Planetary;
     let mut master_off = asking_for_the_network();

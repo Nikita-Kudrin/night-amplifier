@@ -78,7 +78,7 @@ pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool
         return false;
     }
 
-    if crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_none() {
+    if state.plugins.push_to_solver().is_none() {
         return false;
     }
 
@@ -130,7 +130,7 @@ pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         debug!(?source, "Plate solve watch skipped: no longer the active solve source");
         return;
     }
-    let Some(plugin) = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) else {
+    let Some(plugin) = state.plugins.push_to_solver() else {
         return;
     };
 
@@ -175,7 +175,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         return;
     }
 
-    let plugin = match crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) {
+    let plugin = match state.plugins.push_to_solver() {
         Some(p) => p,
         None => return,
     };
@@ -365,7 +365,7 @@ async fn announce_blocker(state: &Arc<AppState>, blocker: Option<PushToBlocker>)
 /// camera stalled and the pipeline shut down, with the latch held the whole time, so
 /// the restarted session could not solve either.
 pub async fn abandon_solve_on_shutdown(state: &Arc<AppState>) {
-    let Some(plugin) = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) else {
+    let Some(plugin) = state.plugins.push_to_solver() else {
         return;
     };
 

@@ -124,7 +124,7 @@ impl Server {
         let state_arc = Arc::new(state);
 
         // Initialize Push-To plugin if available
-        if let Some(plugin) = crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN) {
+        if let Some(plugin) = state_arc.plugins.push_to_solver() {
             plugin.init(Arc::new(state_arc.events.clone()));
         }
 
@@ -219,8 +219,11 @@ impl Server {
 
         // Before the listener: a stored result makes the first report already `Ready`,
         // and a fresh machine shows the benchmark overlay from the first page load.
-        crate::render::denoise::ai::start_benchmark();
-        crate::server::events::spawn_ai_compute_watcher(self.state.events.clone());
+        crate::render::denoise::ai::start_benchmark(&self.state.plugins);
+        crate::server::events::spawn_ai_compute_watcher(
+            self.state.events.clone(),
+            self.state.plugins.clone(),
+        );
 
         let app = self.build_router();
         let listener = tokio::net::TcpListener::bind(self.config.bind_addr)
@@ -249,7 +252,7 @@ impl Server {
     /// the slow blind fallback. `Server::new` cannot do it because reading settings is
     /// async; here it is, and settings are already loaded by `AppState::new`.
     async fn propagate_telescope_settings(&self) {
-        if crate::license::pro_plugin(&crate::push_to::PUSH_TO_PLUGIN).is_none() {
+        if self.state.plugins.push_to_solver().is_none() {
             return;
         }
 

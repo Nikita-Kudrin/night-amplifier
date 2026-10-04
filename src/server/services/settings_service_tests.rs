@@ -147,7 +147,7 @@ fn hardware_fields_land_on_the_camera_the_request_names() {
         ..Default::default()
     };
 
-    apply(request, &mut settings, &guide_camera());
+    apply(request, &mut settings, &guide_camera(), &Plugins::none());
 
     assert_eq!(settings.guide_camera.gain, 250);
     assert_eq!(settings.guide_camera.exposure_us, 500_000);
@@ -168,7 +168,7 @@ fn every_value_lands_inside_its_range() {
         ..Default::default()
     };
 
-    apply(request, &mut settings, &main_camera(CaptureState::Idle));
+    apply(request, &mut settings, &main_camera(CaptureState::Idle), &Plugins::none());
 
     assert_eq!(settings.rejection_sigma, 10.0);
     assert_eq!(settings.auto_stretch_intensity, 1.0);
@@ -190,7 +190,7 @@ fn the_delta_names_what_the_request_touched() {
             ..Default::default()
         },
         &mut CaptureSettings::default(),
-        &target,
+        &target, &Plugins::none(),
     );
     assert_eq!(quiet, SettingsDelta::default());
 
@@ -202,7 +202,7 @@ fn the_delta_names_what_the_request_touched() {
             ..Default::default()
         },
         &mut CaptureSettings::default(),
-        &target,
+        &target, &Plugins::none(),
     );
     assert!(busy.exposure && busy.cooler && busy.dew_heater);
     assert!(busy.optics.framing, "binning moves the field of view");
@@ -227,9 +227,9 @@ fn a_region_is_set_by_sending_it_and_kept_by_leaving_it_out() {
             ..Default::default()
         },
         &mut settings,
-        &target,
+        &target, &Plugins::none(),
     );
-    apply(UpdateSettingsRequest::default(), &mut settings, &target);
+    apply(UpdateSettingsRequest::default(), &mut settings, &target, &Plugins::none());
 
     assert_eq!(settings.comet_roi.map(|r| (r.x, r.width)), Some((1, 30)));
 }
@@ -251,7 +251,7 @@ fn the_focus_mode_toggle_wins_over_a_managed_setting_beside_it() {
             ..Default::default()
         },
         &mut settings,
-        &main_camera(CaptureState::Idle),
+        &main_camera(CaptureState::Idle), &Plugins::none(),
     );
 
     assert!(settings.focus_mode && settings.focus_mode_snapshot.is_some());
@@ -266,7 +266,7 @@ fn switching_a_running_live_view_to_stacking_leaves_focus_mode() {
         stacking: false,
         ..Default::default()
     };
-    focus_mode::set(&mut settings, true);
+    focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
 
     let delta = apply(
         UpdateSettingsRequest {
@@ -274,7 +274,7 @@ fn switching_a_running_live_view_to_stacking_leaves_focus_mode() {
             ..Default::default()
         },
         &mut settings,
-        &main_camera(CaptureState::Capturing),
+        &main_camera(CaptureState::Capturing), &Plugins::none(),
     );
 
     assert!(delta.left_focus_mode);

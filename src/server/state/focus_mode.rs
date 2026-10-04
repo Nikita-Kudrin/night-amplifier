@@ -10,6 +10,7 @@
 use super::capture_mode::CaptureMode;
 use super::settings::CaptureSettings;
 use super::types::CaptureState;
+use crate::plugins::Plugins;
 
 /// The six settings Focus/Finder mode forces off, as they were before it did. One is a
 /// strength not a boolean (`denoise_luma_strength`), hence `PartialEq` not `Eq`.
@@ -59,21 +60,17 @@ impl FocusModeSnapshot {
         }
     }
 
-    fn restore_into(self, settings: &mut CaptureSettings) {
+    fn restore_into(self, settings: &mut CaptureSettings, plugins: &Plugins) {
         settings.background_subtraction = self.background_subtraction;
         // Shadow saturation boost is Pro-gated at the API. A licence can lapse while
         // the mode is on, and restoring blind would hand back a Pro stage through a
         // request that never passed the check that guards it.
-        settings.saturation_boost = self.saturation_boost && saturation_boost_licensed();
+        settings.saturation_boost = self.saturation_boost && plugins.saturation().is_some();
         settings.sensor_correction.fpn_removal = self.fpn_removal;
         settings.denoise.chroma = self.denoise_chroma;
         settings.denoise.luma_strength = self.denoise_luma_strength;
         settings.eyepiece.dither = self.dither;
     }
-}
-
-fn saturation_boost_licensed() -> bool {
-    crate::license::pro_plugin(&crate::render::SATURATION_PLUGIN).is_some()
 }
 
 /// Whether the mode would damage a stack integrated by this capture.
@@ -118,11 +115,15 @@ pub fn in_conflict(settings: &CaptureSettings, capture_state: CaptureState) -> b
 /// running live view switched to stacking, which no start path sees. Live view keeps the
 /// mode — 2026-09-07 two live-view starts dropped it and the observer turned it back on by
 /// hand both times.
-pub fn leave_if_conflicting(settings: &mut CaptureSettings, capture_state: CaptureState) -> bool {
+pub fn leave_if_conflicting(
+    settings: &mut CaptureSettings,
+    capture_state: CaptureState,
+    plugins: &Plugins,
+) -> bool {
     if !in_conflict(settings, capture_state) {
         return false;
     }
-    set(settings, false);
+    set(settings, false, plugins);
     true
 }
 
@@ -130,7 +131,8 @@ impl super::AppState {
     /// [`leave_if_conflicting`] on the shared settings; when it left, persist them and move
     /// every client's toggle. Returns whether it left.
     pub async fn leave_focus_mode_if_conflicting(&self, capture_state: CaptureState) -> bool {
-        let left = leave_if_conflicting(&mut *self.settings.write().await, capture_state);
+        let left =
+            leave_if_conflicting(&mut *self.settings.write().await, capture_state, &self.plugins);
         if left {
             self.save_settings().await;
             let _ = self
@@ -184,8 +186,9 @@ fn force_off(settings: &mut CaptureSettings) {
 ///
 /// Idempotent in both directions, and that is the whole contract: entering while
 /// already entered must not re-snapshot, because by then every managed value is
-/// the forced `false` and taking it would destroy what the observer chose.
-pub fn set(settings: &mut CaptureSettings, on: bool) {
+/// the forced `false` and taking it would destroy what the observer chose. `plugins` decide
+/// what leaving may restore: a Pro stage only while its plugin is licensed.
+pub fn set(settings: &mut CaptureSettings, on: bool, plugins: &Plugins) {
     if on == settings.focus_mode {
         return;
     }
@@ -196,7 +199,7 @@ pub fn set(settings: &mut CaptureSettings, on: bool) {
         return;
     }
     if let Some(snapshot) = settings.focus_mode_snapshot.take() {
-        snapshot.restore_into(settings);
+        snapshot.restore_into(settings, plugins);
     }
     settings.focus_mode = false;
 }
@@ -275,7 +278,7 @@ mod tests {
     #[test]
     fn entering_forces_every_managed_setting_off() {
         let mut settings = mixed();
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
         assert!(settings.focus_mode);
         assert!(all_managed_off(&settings));
@@ -291,7 +294,7 @@ mod tests {
         settings.denoise.background_grain = 0.8;
         settings.stacking = true;
 
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
         assert!(settings.sensor_correction.superpixel_debayer);
         assert_eq!(settings.sensor_correction.hot_pixel_sigma, 7.5);
@@ -307,9 +310,9 @@ mod tests {
         let mut settings = mixed();
         let before = mixed();
 
-        set(&mut settings, true);
-        set(&mut settings, true);
-        set(&mut settings, false);
+        set(&mut settings, true, &Plugins::none());
+        set(&mut settings, true, &Plugins::none());
+        set(&mut settings, false, &Plugins::none());
 
         assert!(!settings.focus_mode);
         assert_eq!(
@@ -329,8 +332,8 @@ mod tests {
         let mut settings = mixed();
         let before = mixed();
 
-        set(&mut settings, true);
-        set(&mut settings, false);
+        set(&mut settings, true, &Plugins::none());
+        set(&mut settings, false, &Plugins::none());
 
         assert!(!settings.focus_mode);
         assert!(settings.focus_mode_snapshot.is_none());
@@ -353,7 +356,7 @@ mod tests {
         let mut settings = mixed();
         let before = mixed();
 
-        set(&mut settings, false);
+        set(&mut settings, false, &Plugins::none());
 
         assert!(!settings.focus_mode);
         assert_eq!(
@@ -363,11 +366,39 @@ mod tests {
         assert_eq!(settings.denoise.luma_strength, before.denoise.luma_strength);
     }
 
+    /// Shadow saturation boost is a Pro stage: leaving the mode restores it only while
+    /// its plugin is licensed, so a lapsed licence cannot hand it back.
+    #[test]
+    fn leaving_restores_saturation_boost_only_with_a_licensed_plugin() {
+        use crate::render::stretch::{SaturationBoostConfig, SaturationPlugin};
+        use std::sync::Arc;
+
+        struct Saturation;
+        impl SaturationPlugin for Saturation {
+            fn apply_boost(&self, _: &mut crate::frame::Frame, _: &SaturationBoostConfig) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn apply_boost_slice(&self, _: &mut [f32], _: &SaturationBoostConfig) {}
+        }
+
+        let licensed = Plugins::none().with_saturation(Arc::new(Saturation)).always_licensed();
+        let lapsed = Plugins::none().with_saturation(Arc::new(Saturation));
+        for (plugins, restored) in [(licensed, true), (lapsed, false), (Plugins::none(), false)] {
+            let mut settings = CaptureSettings {
+                saturation_boost: true,
+                ..mixed()
+            };
+            set(&mut settings, true, &plugins);
+            set(&mut settings, false, &plugins);
+            assert_eq!(settings.saturation_boost, restored, "{plugins:?}");
+        }
+    }
+
     #[test]
     fn reconcile_absorbs_a_drifted_value_into_the_snapshot() {
         let mut settings = CaptureSettings::default();
         settings.denoise.chroma = false;
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
         // A stale client re-enables it behind the mode's back.
         settings.denoise.chroma = true;
@@ -375,7 +406,7 @@ mod tests {
 
         assert!(!settings.denoise.chroma, "the mode must re-force it off");
 
-        set(&mut settings, false);
+        set(&mut settings, false, &Plugins::none());
         assert!(
             settings.denoise.chroma,
             "the write must survive as the restored value"
@@ -389,7 +420,7 @@ mod tests {
     fn reconcile_absorbs_a_drifted_strength_into_the_snapshot() {
         let mut settings = CaptureSettings::default();
         settings.denoise.luma_strength = 0.0;
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
         // A stale client sets a strength behind the mode's back.
         settings.denoise.luma_strength = 0.6;
@@ -399,7 +430,7 @@ mod tests {
             "the mode must hold the wavelet off"
         );
 
-        set(&mut settings, false);
+        set(&mut settings, false, &Plugins::none());
         assert_eq!(
             settings.denoise.luma_strength, 0.6,
             "the write must survive as the restored value, not fall back to the snapshot"
@@ -413,14 +444,14 @@ mod tests {
     fn the_background_grain_dial_is_never_managed() {
         let mut settings = CaptureSettings::default();
         settings.denoise.background_grain = 0.8;
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
         assert_eq!(settings.denoise.background_grain, 0.8, "entering moved the dial");
 
         settings.denoise.background_grain = 0.2;
         reconcile(&mut settings);
         assert_eq!(settings.denoise.background_grain, 0.2, "reconcile moved the dial");
 
-        set(&mut settings, false);
+        set(&mut settings, false, &Plugins::none());
         assert_eq!(
             settings.denoise.background_grain, 0.2,
             "leaving restored a dial position the observer had since changed"
@@ -430,7 +461,7 @@ mod tests {
     #[test]
     fn reconcile_leaves_unmanaged_siblings_untouched() {
         let mut settings = CaptureSettings::default();
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
         settings.denoise.chroma_strength = 0.75;
         settings.sensor_correction.hot_pixel_sigma = 9.0;
@@ -518,7 +549,7 @@ mod tests {
             settings.stacking = true;
             settings.stacking_type = stacking_type;
             settings.sensor_correction.fpn_removal = true;
-            set(&mut settings, true);
+            set(&mut settings, true, &Plugins::none());
         }
         (state, disk_writer)
     }
@@ -565,9 +596,9 @@ mod tests {
             ..mixed()
         };
         let before = mixed();
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
-        assert!(leave_if_conflicting(&mut settings, CaptureState::Starting));
+        assert!(leave_if_conflicting(&mut settings, CaptureState::Starting, &Plugins::none()));
 
         assert!(!settings.focus_mode);
         assert!(settings.focus_mode_snapshot.is_none());
@@ -584,16 +615,13 @@ mod tests {
             stacking: false,
             ..mixed()
         };
-        set(&mut settings, true);
+        set(&mut settings, true, &Plugins::none());
 
-        assert!(!leave_if_conflicting(
-            &mut settings,
-            CaptureState::Capturing
-        ));
+        assert!(!leave_if_conflicting(&mut settings, CaptureState::Capturing, &Plugins::none()));
         assert!(settings.focus_mode);
 
         settings.stacking = true;
-        assert!(!leave_if_conflicting(&mut settings, CaptureState::Idle));
+        assert!(!leave_if_conflicting(&mut settings, CaptureState::Idle, &Plugins::none()));
         assert!(settings.focus_mode);
         assert!(settings.focus_mode_snapshot.is_some());
     }

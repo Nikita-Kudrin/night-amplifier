@@ -14,11 +14,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use night_amplifier::detection::StarDetector;
 use night_amplifier::frame::Frame;
+use night_amplifier::plugins::Plugins;
 use night_amplifier::push_to::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, FrameOutcome, PushToCatalogPlugin, PushToDirectionResponse, PushToEvents,
-    PushToInstallerPlugin, PushToResult, PushToSolverPlugin, PushToStatusResponse,
-    TelescopeSettings, PUSH_TO_PLUGIN,
+    CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
+    PushToStatusResponse, TelescopeSettings,
 };
 use night_amplifier::server::capture::solving::{
     offer_plate_solve, plate_solve_available, SolveSource,
@@ -103,47 +102,6 @@ impl PushToSolverPlugin for BlockingPlugin {
     }
 }
 
-#[async_trait]
-impl PushToCatalogPlugin for BlockingPlugin {
-    async fn search_catalog(&self, _: &str, _: usize) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_by_type(&self, _: &str) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_name(&self, _: &str) -> PushToResult<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_coords(&self, _: f64, _: f64) -> PushToResult<CoordinateResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn clear_target(&self) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-    async fn load_database(&self, _: &str) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-}
-
-#[async_trait]
-impl PushToInstallerPlugin for BlockingPlugin {
-    async fn get_astap_status(&self) -> AstapStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_astap(&self, _: &[String], _: Arc<dyn PushToEvents>) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_status(&self) -> CatalogStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_catalog(&self, _: bool, _: Arc<dyn PushToEvents>) -> PushToResult<()> {
-        unreachable!("not exercised by this test")
-    }
-}
-
 /// `AppState::new` reads `settings.json` and `./captures` from the working directory.
 fn isolate_cwd() {
     let dir = std::env::temp_dir().join(format!(
@@ -158,21 +116,18 @@ fn isolate_cwd() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offers_never_queue_behind_busy_push_to_tasks() {
     isolate_cwd();
-    night_amplifier::license::PRO_LICENSE_ACTIVE.store(true, Ordering::SeqCst);
 
     let offered_at: OfferTimes = Arc::default();
     let worst_age = Arc::new(Mutex::new(Duration::ZERO));
     let watches = Arc::new(AtomicUsize::new(0));
-    PUSH_TO_PLUGIN
-        .set(Box::new(BlockingPlugin {
-            offered_at: Arc::clone(&offered_at),
-            worst_age: Arc::clone(&worst_age),
-            watches: Arc::clone(&watches),
-        }))
-        .ok()
-        .expect("this binary registers the plugin exactly once");
+    let plugin = BlockingPlugin {
+        offered_at: Arc::clone(&offered_at),
+        worst_age: Arc::clone(&worst_age),
+        watches: Arc::clone(&watches),
+    };
 
-    let (state, _disk_writer) = AppState::new();
+    let (mut state, _disk_writer) = AppState::new();
+    state.plugins = Plugins::none().with_push_to_solver(Arc::new(plugin)).always_licensed();
     let state = Arc::new(state);
     *state.push_to.write().await = Some(PushToState::default());
     state.set_push_to_has_target(true).await;

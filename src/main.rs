@@ -8,5 +8,5 @@ async fn main() {
     night_amplifier::app::APP_VERSION
         .set(version.to_string())
         .ok();
-    night_amplifier::app::run(|| {}).await;
+    night_amplifier::app::run(night_amplifier::plugins::Plugins::none()).await;
 }

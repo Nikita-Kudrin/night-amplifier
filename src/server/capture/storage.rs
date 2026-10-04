@@ -9,6 +9,7 @@ use super::drop_log::DropLog;
 use crate::camera::RawFrame;
 use crate::disk_writer::WritingSessionType;
 use crate::frame::Frame;
+use crate::plugins::Plugins;
 use crate::server::events::ServerEvent;
 use crate::server::state::{
     AppState, CaptureMode, CaptureSession, CaptureSettings, ConnectedCameraInfo,
@@ -468,7 +469,7 @@ mod tests {
         }
         let frame = crate::frame::Frame::from_f32_vec(data, 32, 32, 3).unwrap();
 
-        let (rgb8, width, _height) = render_stacked_png(frame, &settings, 1, None).unwrap();
+        let (rgb8, width, _height) = render_stacked_png(frame, &settings, &Plugins::none(), 1, None).unwrap();
 
         // A real auto-stretch targets a background around ~0.05-0.15 (see
         // `AutoStretchConfig::from_profile`); a ~0.02 input must end up well above
@@ -530,9 +531,9 @@ mod tests {
         settings.denoise.luma_strength = 0.0;
 
         settings.background_subtraction = false;
-        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
+        let (kept, w, h) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
         settings.background_subtraction = true;
-        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
+        let (removed, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
 
         let kept = edge_difference(&kept, w as usize, h as usize).abs();
         let removed = edge_difference(&removed, w as usize, h as usize).abs();
@@ -574,12 +575,13 @@ mod tests {
         settings.denoise.luma_strength = 1.0;
 
         let (exported, _, _) =
-            render_stacked_png(gradient_frame(), &settings, 40, Some(coverage.clone())).unwrap();
+            render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 40, Some(coverage.clone())).unwrap();
 
         let mut live = gradient_frame();
         let rendered = process_preview_frame_with_analysis(
             &mut live,
             &settings,
+            &Plugins::none(),
             AnalysisContext {
                 showing_stack: true,
                 stack_depth: 40,
@@ -615,8 +617,8 @@ mod tests {
         settings.denoise.chroma = false;
         settings.denoise.luma_strength = 0.0;
 
-        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, 1, None).unwrap();
-        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, 64, None).unwrap();
+        let (shallow, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 1, None).unwrap();
+        let (deep, _, _) = render_stacked_png(gradient_frame(), &settings, &Plugins::none(), 64, None).unwrap();
 
         assert!(
             shallow != deep,
@@ -636,6 +638,7 @@ mod tests {
 pub fn render_stacked_png(
     mut frame: Frame,
     settings: &CaptureSettings,
+    plugins: &Plugins,
     stack_depth: u32,
     coverage: Option<crate::frame::NoiseField>,
 ) -> crate::error::Result<(Vec<u8>, u32, u32)> {
@@ -651,6 +654,7 @@ pub fn render_stacked_png(
     let rendered = process_preview_frame_with_analysis(
         &mut frame,
         settings,
+        plugins,
         AnalysisContext {
             showing_stack: true,
             stack_depth,
@@ -702,7 +706,7 @@ pub async fn save_stacked_result(
             use super::pipeline::get_render_pipeline_config;
             use crate::render::RenderPipeline;
 
-            let pipeline_config = get_render_pipeline_config(&settings, true);
+            let pipeline_config = get_render_pipeline_config(&settings, &state.plugins, true);
             let pipeline = RenderPipeline::new(pipeline_config);
             if let Err(e) = pipeline.process(&mut fits_frame) {
                 warn!(error = %e, "Failed to apply background subtraction to FITS");
@@ -732,7 +736,7 @@ pub async fn save_stacked_result(
             warn!(error = %e, "Failed to queue stacked FITS frame for saving");
         }
 
-        match render_stacked_png(stacked_frame, &settings, stack_depth, coverage) {
+        match render_stacked_png(stacked_frame, &settings, &state.plugins, stack_depth, coverage) {
             Ok((rgb8, width, height)) => {
                 if let Err(e) = state.disk_writer.queue_stacked_png(
                     Arc::new(rgb8),

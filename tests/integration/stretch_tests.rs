@@ -189,6 +189,7 @@ fn test_eyepiece_intensity_metrics() {
 
         let res = night_amplifier::server::capture::pipeline::process_preview_frame(
             &mut frame, &settings,
+            &night_amplifier::plugins::Plugins::installed(),
         )
         .unwrap()
         .stretch_result
