@@ -22,6 +22,20 @@ pub enum RejectionMethod {
     MinMax,
 }
 
+impl RejectionMethod {
+    /// What a session asks for when the observer never chose: sigma clipping in a build
+    /// that ships the rejection plugin, `None` in Community, which has nothing else to
+    /// run. Keyed on the build, not the licence, so a lapsed licence never rewrites a
+    /// saved choice — the live path already resolves an unlicensed one to `None`.
+    pub fn best_available() -> Self {
+        if REJECTION_PLUGIN.get().is_some() {
+            Self::SigmaClip
+        } else {
+            Self::None
+        }
+    }
+}
+
 /// Plugin trait for advanced outlier rejection methods
 pub trait RejectionPlugin: Send + Sync {
     fn is_enabled(&self) -> bool {

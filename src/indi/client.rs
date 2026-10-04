@@ -164,38 +164,14 @@ impl IndiClient {
         self.send_message(&req).await
     }
 
-    pub async fn wait_for_blob(
-        &self,
-        device: &str,
-        property: &str,
-        timeout: Duration,
-    ) -> Result<crate::indi::xml::SetBlob> {
-        let mut rx = self.updates_tx.subscribe();
-
-        let wait_future = async {
-            loop {
-                match rx.recv().await {
-                    Ok(IndiMessage::SetBlobVector(v))
-                        if v.device == device && v.name == property =>
-                    {
-                        if let Some(blob) = v.elements.into_iter().next() {
-                            return Ok(blob);
-                        }
-                    }
-                    Ok(IndiMessage::Message(m)) if m.message == "Disconnected" => {
-                        return Err(IndiError::Disconnected);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        return Err(IndiError::Disconnected);
-                    }
-                    _ => {}
-                }
-            }
-        };
-
-        tokio::time::timeout(timeout, wait_future)
-            .await
-            .map_err(|_| IndiError::Timeout(format!("BLOB from {}.{}", device, property)))?
+    /// Every BLOB `device` sends on `property` from now on. Taken before an exposure is
+    /// triggered, so a frame that arrives before the first wait is not lost.
+    pub fn watch_blobs(&self, device: &str, property: &str) -> BlobWatch {
+        BlobWatch {
+            updates: self.updates_tx.subscribe(),
+            device: device.to_string(),
+            property: property.to_string(),
+        }
     }
 
     async fn update_device_state(
@@ -354,6 +330,43 @@ impl IndiClient {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// BLOBs from one property, from the moment [`IndiClient::watch_blobs`] was called.
+pub struct BlobWatch {
+    updates: broadcast::Receiver<IndiMessage>,
+    device: String,
+    property: String,
+}
+
+impl BlobWatch {
+    /// The next BLOB, or `None` if none arrived within `wait`. Nothing is lost to the
+    /// timeout: `broadcast::Receiver::recv` is cancel-safe.
+    pub async fn next(&mut self, wait: Duration) -> Result<Option<crate::indi::xml::SetBlob>> {
+        match tokio::time::timeout(wait, self.recv()).await {
+            Ok(blob) => blob.map(Some),
+            Err(_) => Ok(None),
+        }
+    }
+
+    async fn recv(&mut self) -> Result<crate::indi::xml::SetBlob> {
+        loop {
+            match self.updates.recv().await {
+                Ok(IndiMessage::SetBlobVector(v))
+                    if v.device == self.device && v.name == self.property =>
+                {
+                    if let Some(blob) = v.elements.into_iter().next() {
+                        return Ok(blob);
+                    }
+                }
+                Ok(IndiMessage::Message(m)) if m.message == "Disconnected" => {
+                    return Err(IndiError::Disconnected);
+                }
+                Err(broadcast::error::RecvError::Closed) => return Err(IndiError::Disconnected),
+                _ => {}
+            }
         }
     }
 }

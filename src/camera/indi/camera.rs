@@ -1,25 +1,34 @@
 //! INDI Camera Implementation
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
 
-use crate::camera::RawFrame;
-use crate::camera::{Camera, CameraError, CameraInfo, CameraResult, CameraStatus, CaptureConfig};
-use crate::indi::client::IndiClient;
+use tokio::runtime::Handle;
+
+use crate::camera::exposure::{Acquisition, ExposureLoop, Poll, Progress, SdkExposure};
+use crate::camera::{
+    BufferPool, Camera, CameraError, CameraInfo, CameraResult, CameraStatus, CaptureConfig,
+    RawFrame,
+};
+use crate::indi::client::{BlobWatch, IndiClient};
+use crate::indi::error::IndiError;
 use crate::indi::fits_decoder::FitsDecoder;
 use crate::indi::xml::{BlobEnable, SwitchState};
+
+/// The BLOB property an INDI CCD sends its frames on.
+const FRAME_BLOB: &str = "CCD1";
+
+/// How long one poll waits for a BLOB before checking for a cancel.
+const POLL_WAIT: Duration = Duration::from_millis(5);
 
 pub struct IndiCamera {
     client: IndiClient,
     device_name: String,
     info: CameraInfo,
-    cancel_flag: Arc<AtomicBool>,
+    exposure: ExposureLoop,
     decode_buffer: Vec<u8>,
-    last_applied_config: Option<CaptureConfig>,
-    stream_running: bool,
-    pool: crate::camera::BufferPool,
+    pool: BufferPool,
 }
 
 impl IndiCamera {
@@ -46,7 +55,7 @@ impl IndiCamera {
 
         // Ensure BLOBs are enabled for this connection
         client
-            .enable_blob(&device_name, Some("CCD1"), BlobEnable::Also)
+            .enable_blob(&device_name, Some(FRAME_BLOB), BlobEnable::Also)
             .await
             .map_err(|e| CameraError::OpenFailed(e.to_string()))?;
 
@@ -108,11 +117,9 @@ impl IndiCamera {
             client,
             device_name,
             info,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
+            exposure: ExposureLoop::new(),
             decode_buffer: Vec::new(),
-            last_applied_config: None,
-            stream_running: false,
-            pool: crate::camera::BufferPool::new(),
+            pool: BufferPool::new(),
         })
     }
 
@@ -168,240 +175,45 @@ impl Camera for IndiCamera {
     }
 
     fn capture(&mut self, config: &CaptureConfig) -> CameraResult<RawFrame> {
-        config.validate(&self.info)?;
-        self.cancel_flag.store(false, Ordering::SeqCst);
-
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                self.check_connection().await?;
-
-                let is_continuous = config.is_continuous();
-                let mut supports_video = false;
-                if let Some(dev) = self.client.get_device(&self.device_name).await {
-                    supports_video = dev.properties.contains_key("CCD_VIDEO_STREAM");
-                }
-
-                if config.should_reapply(self.last_applied_config.as_ref()) {
-                    if self.stream_running && supports_video {
-                        let _ = self
-                            .client
-                            .set_switch(
-                                &self.device_name,
-                                "CCD_VIDEO_STREAM",
-                                vec![
-                                    ("STREAM_ON", SwitchState::Off),
-                                    ("STREAM_OFF", SwitchState::On),
-                                ],
-                            )
-                            .await;
-                        self.stream_running = false;
-                    }
-                    // Set Frame Type
-                    let _ = self
-                        .client
-                        .set_switch(
-                            &self.device_name,
-                            "CCD_FRAME_TYPE",
-                            vec![
-                                ("FRAME_LIGHT", SwitchState::On),
-                                ("FRAME_BIAS", SwitchState::Off),
-                                ("FRAME_DARK", SwitchState::Off),
-                                ("FRAME_FLAT", SwitchState::Off),
-                            ],
-                        )
-                        .await;
-
-                    // Set Binning
-                    let bin = config.bin as f64;
-                    let _ = self
-                        .client
-                        .set_number(
-                            &self.device_name,
-                            "CCD_BINNING",
-                            vec![("HOR_BIN", bin), ("VER_BIN", bin)],
-                        )
-                        .await;
-
-                    // Set ROI
-                    if let Some((x, y, w, h)) = config.roi {
-                        let _ = self
-                            .client
-                            .set_number(
-                                &self.device_name,
-                                "CCD_FRAME",
-                                vec![
-                                    ("X", x as f64),
-                                    ("Y", y as f64),
-                                    ("WIDTH", w as f64),
-                                    ("HEIGHT", h as f64),
-                                ],
-                            )
-                            .await;
-                    } else {
-                        // Reset to full frame
-                        let _ = self
-                            .client
-                            .set_number(
-                                &self.device_name,
-                                "CCD_FRAME",
-                                vec![
-                                    ("X", 0.0),
-                                    ("Y", 0.0),
-                                    ("WIDTH", self.info.max_width as f64),
-                                    ("HEIGHT", self.info.max_height as f64),
-                                ],
-                            )
-                            .await;
-                    }
-
-                    // Set Gain
-                    let _ = self
-                        .client
-                        .set_number(
-                            &self.device_name,
-                            "CCD_GAIN",
-                            vec![("GAIN", config.gain as f64)],
-                        )
-                        .await;
-
-                    // Set Offset
-                    let _ = self
-                        .client
-                        .set_number(
-                            &self.device_name,
-                            "CCD_OFFSET",
-                            vec![("OFFSET", config.offset as f64)],
-                        )
-                        .await;
-
-                    self.last_applied_config = Some(config.clone());
-                }
-
-                let exp_s = config.exposure_us as f64 / 1_000_000.0;
-
-                if !is_continuous || !supports_video {
-                    if self.stream_running && supports_video {
-                        let _ = self
-                            .client
-                            .set_switch(
-                                &self.device_name,
-                                "CCD_VIDEO_STREAM",
-                                vec![
-                                    ("STREAM_ON", SwitchState::Off),
-                                    ("STREAM_OFF", SwitchState::On),
-                                ],
-                            )
-                            .await;
-                        self.stream_running = false;
-                    }
-                    // Trigger exposure
-                    self.client
-                        .set_number(
-                            &self.device_name,
-                            "CCD_EXPOSURE",
-                            vec![("CCD_EXPOSURE_VALUE", exp_s)],
-                        )
-                        .await
-                        .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
-                } else if !self.stream_running {
-                    let _ = self
-                        .client
-                        .set_switch(
-                            &self.device_name,
-                            "CCD_VIDEO_STREAM",
-                            vec![
-                                ("STREAM_ON", SwitchState::On),
-                                ("STREAM_OFF", SwitchState::Off),
-                            ],
-                        )
-                        .await;
-                    self.client
-                        .set_number(
-                            &self.device_name,
-                            "CCD_EXPOSURE",
-                            vec![("CCD_EXPOSURE_VALUE", exp_s)],
-                        )
-                        .await
-                        .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
-                    self.stream_running = true;
-                }
-
-                let timeout = Duration::from_micros(config.exposure_us) + Duration::from_secs(5);
-
-                // Wait for blob or cancellation
-                loop {
-                    if self.cancel_flag.load(Ordering::SeqCst) {
-                        // Abort exposure
-                        if self.stream_running && supports_video {
-                            let _ = self
-                                .client
-                                .set_switch(
-                                    &self.device_name,
-                                    "CCD_VIDEO_STREAM",
-                                    vec![
-                                        ("STREAM_ON", SwitchState::Off),
-                                        ("STREAM_OFF", SwitchState::On),
-                                    ],
-                                )
-                                .await;
-                            self.stream_running = false;
-                        }
-                        let _ = self
-                            .client
-                            .set_switch(
-                                &self.device_name,
-                                "CCD_ABORT_EXPOSURE",
-                                vec![("ABORT", SwitchState::On)],
-                            )
-                            .await;
-                        return Err(CameraError::Cancelled);
-                    }
-
-                    match tokio::time::timeout(
-                        Duration::from_millis(5),
-                        self.client
-                            .wait_for_blob(&self.device_name, "CCD1", timeout),
-                    )
-                    .await
-                    {
-                        Ok(Ok(blob)) => {
-                            // Decode blob using pre-allocated buffer
-                            FitsDecoder::decode_base64_blob(&blob.value, &mut self.decode_buffer)
-                                .map_err(|e| CameraError::ExposureFailed(e.to_string()))?;
-
-                            return FitsDecoder::parse_fits_buffer(
-                                &self.decode_buffer,
-                                &mut self.pool,
-                            )
-                            .map_err(|e| CameraError::ExposureFailed(e.to_string()));
-                        }
-                        Ok(Err(e)) => {
-                            if matches!(e, crate::indi::error::IndiError::Disconnected) {
-                                return Err(CameraError::Disconnected);
-                            }
-                            return Err(CameraError::ExposureFailed(e.to_string()));
-                        }
-                        Err(_) => {
-                            // Timeout in this iteration, check cancellation and loop again
-                            self.check_connection().await?;
-                            continue;
-                        }
-                    }
-                }
-            })
+            let runtime = Handle::current();
+            runtime.block_on(self.check_connection())?;
+            let supports_video = runtime
+                .block_on(self.client.get_device(&self.device_name))
+                .is_some_and(|device| device.properties.contains_key("CCD_VIDEO_STREAM"));
+            let Self {
+                client,
+                device_name,
+                info,
+                exposure,
+                decode_buffer,
+                pool,
+            } = self;
+            let mut sdk = IndiExposure {
+                client,
+                device: device_name,
+                info,
+                runtime,
+                supports_video,
+                exposure_s: config.exposure_us as f64 / 1_000_000.0,
+                decode_buffer,
+                pool,
+                blobs: None,
+            };
+            exposure.capture(&mut sdk, config)
         })
     }
 
     fn invalidate_config_cache(&mut self) {
-        self.last_applied_config = None;
+        self.exposure.invalidate();
     }
 
     fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
+        self.exposure.cancel();
     }
 
     fn cancel_token(&self) -> Arc<AtomicBool> {
-        self.cancel_flag.clone()
+        self.exposure.cancel_token()
     }
 
     fn close(&mut self) -> CameraResult<()> {
@@ -464,6 +276,151 @@ impl Camera for IndiCamera {
     }
 }
 
+/// INDI's calls for the shared [`ExposureLoop`]: properties over the client, frames as
+/// FITS BLOBs. Property writes that fail are ignored, as they always were — a driver
+/// without, say, `CCD_OFFSET` still exposes.
+struct IndiExposure<'a> {
+    client: &'a IndiClient,
+    device: &'a str,
+    info: &'a CameraInfo,
+    runtime: Handle,
+    supports_video: bool,
+    /// `CCD_EXPOSURE` both sets the length and triggers, so it is sent at start.
+    exposure_s: f64,
+    decode_buffer: &'a mut Vec<u8>,
+    pool: &'a mut BufferPool,
+    /// Taken before an exposure is triggered and dropped with the adapter, so a
+    /// stream's frames never queue up between captures — only one in flight is read.
+    blobs: Option<BlobWatch>,
+}
+
+impl IndiExposure<'_> {
+    fn set_switch(&self, property: &str, on: &str, off: &str) {
+        let elements = vec![(on, SwitchState::On), (off, SwitchState::Off)];
+        let _ = self
+            .runtime
+            .block_on(self.client.set_switch(self.device, property, elements));
+    }
+
+    fn set_numbers(&self, property: &str, elements: Vec<(&str, f64)>) {
+        let _ = self
+            .runtime
+            .block_on(self.client.set_number(self.device, property, elements));
+    }
+
+    fn decode(&mut self, blob: &str) -> CameraResult<RawFrame> {
+        FitsDecoder::decode_base64_blob(blob, self.decode_buffer)
+            .and_then(|()| FitsDecoder::parse_fits_buffer(self.decode_buffer, self.pool))
+            .map_err(|e| CameraError::ExposureFailed(e.to_string()))
+    }
+}
+
+impl SdkExposure for IndiExposure<'_> {
+    fn info(&self) -> &CameraInfo {
+        self.info
+    }
+
+    fn acquisition(&self, config: &CaptureConfig) -> Acquisition {
+        if config.is_continuous() && self.supports_video {
+            Acquisition::Stream
+        } else {
+            Acquisition::Single
+        }
+    }
+
+    fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()> {
+        let frame_type = vec![
+            ("FRAME_LIGHT", SwitchState::On),
+            ("FRAME_BIAS", SwitchState::Off),
+            ("FRAME_DARK", SwitchState::Off),
+            ("FRAME_FLAT", SwitchState::Off),
+        ];
+        let _ = self
+            .runtime
+            .block_on(self.client.set_switch(self.device, "CCD_FRAME_TYPE", frame_type));
+
+        let bin = f64::from(config.bin);
+        self.set_numbers("CCD_BINNING", vec![("HOR_BIN", bin), ("VER_BIN", bin)]);
+
+        let (x, y, w, h) = config
+            .roi
+            .unwrap_or((0, 0, self.info.max_width, self.info.max_height));
+        self.set_numbers(
+            "CCD_FRAME",
+            vec![
+                ("X", f64::from(x)),
+                ("Y", f64::from(y)),
+                ("WIDTH", f64::from(w)),
+                ("HEIGHT", f64::from(h)),
+            ],
+        );
+
+        self.set_numbers("CCD_GAIN", vec![("GAIN", f64::from(config.gain))]);
+        self.set_numbers("CCD_OFFSET", vec![("OFFSET", f64::from(config.offset))]);
+        Ok(())
+    }
+
+    /// Watches for the BLOB before anything can send one.
+    fn start(&mut self, acquisition: Acquisition) -> CameraResult<()> {
+        self.blobs = Some(self.client.watch_blobs(self.device, FRAME_BLOB));
+        if acquisition == Acquisition::Stream {
+            self.set_switch("CCD_VIDEO_STREAM", "STREAM_ON", "STREAM_OFF");
+        }
+        self.runtime
+            .block_on(self.client.set_number(
+                self.device,
+                "CCD_EXPOSURE",
+                vec![("CCD_EXPOSURE_VALUE", self.exposure_s)],
+            ))
+            .map_err(|e| CameraError::ExposureFailed(e.to_string()))
+    }
+
+    /// Stops the stream only: reconfiguring or switching to single exposures never
+    /// aborted an exposure.
+    fn end_stream(&mut self) {
+        self.set_switch("CCD_VIDEO_STREAM", "STREAM_OFF", "STREAM_ON");
+    }
+
+    fn abort(&mut self, acquisition: Acquisition) {
+        if acquisition == Acquisition::Stream {
+            self.end_stream();
+        }
+        let _ = self.runtime.block_on(self.client.set_switch(
+            self.device,
+            "CCD_ABORT_EXPOSURE",
+            vec![("ABORT", SwitchState::On)],
+        ));
+    }
+
+    /// INDI frames arrive self-describing; this is only the size the stall budget expects
+    /// — the same estimate the capture watchdog derives its own timeout from.
+    fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize> {
+        Ok(config.frame_bytes(self.info))
+    }
+
+    fn poll(&mut self, _progress: &Progress, _buffer: &mut [u8]) -> Poll {
+        let (client, device) = (self.client, self.device);
+        let blobs = self
+            .blobs
+            .get_or_insert_with(|| client.watch_blobs(device, FRAME_BLOB));
+        let failed = |error| Poll::Failed {
+            error,
+            stream_ended: false,
+        };
+        match self.runtime.block_on(blobs.next(POLL_WAIT)) {
+            Ok(Some(blob)) => {
+                match self.decode(&blob.value) {
+                    Ok(frame) => Poll::Delivered(frame),
+                    Err(error) => failed(error),
+                }
+            }
+            Ok(None) if self.runtime.block_on(client.is_connected()) => Poll::Pending,
+            Ok(None) | Err(IndiError::Disconnected) => failed(CameraError::Disconnected),
+            Err(e) => failed(CameraError::ExposureFailed(e.to_string())),
+        }
+    }
+}
+
 impl Drop for IndiCamera {
     fn drop(&mut self) {
         let mut client = self.client.clone();
@@ -472,3 +429,7 @@ impl Drop for IndiCamera {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "camera_tests.rs"]
+mod tests;

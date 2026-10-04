@@ -2,48 +2,14 @@
 
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
-use super::LiveStacker;
+use super::{stacking_config, LiveStacker};
 use crate::detection::{compute_median_fwhm, compute_median_snr, Star};
 use crate::frame::{Frame, NoiseField};
 use crate::registration::AdaptiveRegistration;
 use crate::server::state::CaptureSettings;
-use crate::stacking::{
-    FrameQuality, RejectionMethod, Stacker, StackingConfig, StackingType, REJECTION_PLUGIN,
-};
+use crate::stacking::{FrameQuality, Stacker, StackingType};
 
 use crate::server::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason};
-
-/// The nearest method the *live* accumulator can actually execute.
-///
-/// `MinMax` needs the min/max of a sample set nobody keeps — `MasterStack` holds 16
-/// bytes a pixel and no history, and two more floats would put a 3008x3008x3 stack at
-/// 650 MB. Only the batch `compute_rejection` implements it; the live path routes only
-/// the two clipping methods to the plugin and averages everything else, so passing
-/// `MinMax` through would leave the session with *no* rejection. Substituting the
-/// nearest method that does run is the honest reading of what was asked for.
-fn live_equivalent(method: RejectionMethod) -> RejectionMethod {
-    match method {
-        RejectionMethod::MinMax => RejectionMethod::SigmaClip,
-        other => other,
-    }
-}
-
-/// The rejection method a session should run: what the observer asked for, reduced to
-/// what the live path can execute, or `None` when the Pro plugin is not loaded.
-fn resolve_rejection(settings: &CaptureSettings) -> RejectionMethod {
-    if crate::license::pro_plugin(&REJECTION_PLUGIN).is_none() {
-        return RejectionMethod::None;
-    }
-    let resolved = live_equivalent(settings.rejection_method);
-    if resolved != settings.rejection_method {
-        warn!(
-            requested = ?settings.rejection_method,
-            using = ?resolved,
-            "Requested rejection method needs frame history the live stack does not keep"
-        );
-    }
-    resolved
-}
 
 pub struct StackingContext {
     pub stacker: Stacker,
@@ -370,74 +336,10 @@ impl LiveStacker for StackingContext {
     }
 }
 
-/// The accumulator's configuration for `settings`, at session start and on every edit.
-fn stacking_config(settings: &CaptureSettings) -> StackingConfig {
-    StackingConfig::default()
-        .with_rejection(resolve_rejection(settings))
-        .with_sigma(settings.rejection_sigma)
-        .with_weighting(settings.weighting_preset.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stacking::WeightingPreset;
-
-    /// Exhaustive: a new variant must be considered by every test here.
-    const ALL_METHODS: [RejectionMethod; 4] = [
-        RejectionMethod::None,
-        RejectionMethod::SigmaClip,
-        RejectionMethod::WinsorizedSigmaClip,
-        RejectionMethod::MinMax,
-    ];
-
-    /// Without the Pro plugin every method resolves to `None`, whatever the observer
-    /// asked for — Community has no implementation to run.
-    #[test]
-    fn rejection_needs_the_plugin() {
-        let mut settings = CaptureSettings::default();
-        for method in ALL_METHODS {
-            settings.rejection_method = method;
-            assert_eq!(
-                resolve_rejection(&settings),
-                RejectionMethod::None,
-                "{method:?} resolved to something Community cannot run"
-            );
-        }
-    }
-
-    /// Every method must reduce to one the live accumulator actually routes to the
-    /// plugin. `MasterStack` sends only the two clipping methods there and averages
-    /// everything else, so a method that survives this unchanged and is not in that pair
-    /// disables rejection silently — which is what choosing Min-Max used to do.
-    #[test]
-    fn every_method_reduces_to_one_the_live_stack_runs() {
-        for method in ALL_METHODS {
-            let resolved = live_equivalent(method);
-            assert!(
-                matches!(
-                    resolved,
-                    RejectionMethod::None
-                        | RejectionMethod::SigmaClip
-                        | RejectionMethod::WinsorizedSigmaClip
-                ),
-                "{method:?} reduces to {resolved:?}, which the live stack does not route \
-                 to the rejection plugin — it would silently average instead"
-            );
-        }
-    }
-
-    /// The substitution only applies where it has to.
-    #[test]
-    fn methods_the_live_stack_runs_are_left_alone() {
-        for method in [
-            RejectionMethod::None,
-            RejectionMethod::SigmaClip,
-            RejectionMethod::WinsorizedSigmaClip,
-        ] {
-            assert_eq!(live_equivalent(method), method);
-        }
-    }
+    use crate::stacking::{RejectionMethod, WeightingPreset};
 
     /// Starting a session and editing settings mid-session must agree.
     ///
@@ -473,16 +375,5 @@ mod tests {
                 assert_eq!(from_start.weighting, after_edit.weighting, "{preset:?}");
             }
         }
-    }
-
-    /// The shipped default has to name what a Pro session has always actually run, or
-    /// reading the field for the first time turns rejection off for every observer who
-    /// has no persisted setting.
-    #[test]
-    fn default_settings_ask_for_sigma_clipping() {
-        assert_eq!(
-            CaptureSettings::default().rejection_method,
-            RejectionMethod::SigmaClip
-        );
     }
 }

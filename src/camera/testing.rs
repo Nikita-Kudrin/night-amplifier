@@ -4,7 +4,8 @@
 //! count what they were asked to do. [`FakeCamera`] is all of those with a few knobs
 //! turned. Behaviour fixed at construction is set with the builder. Behaviour a test
 //! changes, or reads back, while the camera is boxed inside the server lives in the
-//! shared [`CameraControls`].
+//! shared [`CameraControls`]. [`FakeCatalog`] puts one on the bus the server connects
+//! through. Other crates get this module with the `test-support` feature.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -12,8 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::{
-    mark_device_lost, Camera, CameraError, CameraInfo, CameraResult, CameraStatus,
-    CaptureConfig, GainPresets, ImageFormat, RawFrame, SensorType,
+    mark_device_lost, Camera, CameraEntry, CameraError, CameraInfo, CameraResult, CameraStatus,
+    CaptureConfig, DeviceCatalog, DeviceIdentity, GainPresets, ImageFormat, OpenedCamera,
+    RawFrame, SensorType,
 };
 
 /// One scripted exposure, played in order before the camera falls back to frames.
@@ -373,6 +375,67 @@ impl Camera for FakeCamera {
 
     fn provider_name(&self) -> &'static str {
         self.provider
+    }
+}
+
+/// A bus holding one camera, under the provider [`FakeCatalog::PROVIDER`]: each `open`
+/// builds it afresh, so a reconnect gets a new handle the way a real one does.
+pub struct FakeCatalog {
+    info: CameraInfo,
+    make: Box<dyn Fn() -> FakeCamera + Send + Sync>,
+}
+
+impl FakeCatalog {
+    pub const PROVIDER: &'static str = "Fake";
+
+    pub fn with(make: impl Fn() -> FakeCamera + Send + Sync + 'static) -> Self {
+        Self {
+            info: make().info.clone(),
+            make: Box::new(make),
+        }
+    }
+
+    /// The id the server lists and connects the camera under.
+    pub fn camera_id(&self) -> String {
+        super::identity::camera_id(Self::PROVIDER, 0, self.info.serial.as_deref())
+    }
+
+    fn check(provider: &str) -> CameraResult<()> {
+        if provider.eq_ignore_ascii_case(Self::PROVIDER) {
+            return Ok(());
+        }
+        Err(CameraError::ProviderNotFound(provider.to_string()))
+    }
+}
+
+impl DeviceCatalog for FakeCatalog {
+    fn provider_names(&self, _use_simulated: bool) -> Vec<String> {
+        vec![Self::PROVIDER.to_string()]
+    }
+
+    fn list(&self, provider: &str, _use_simulated: bool) -> CameraResult<Vec<CameraEntry>> {
+        Self::check(provider)?;
+        Ok(vec![CameraEntry {
+            provider: Self::PROVIDER.to_string(),
+            index: 0,
+            info: self.info.clone(),
+        }])
+    }
+
+    fn identities(&self, provider: &str, _use_simulated: bool) -> CameraResult<Vec<DeviceIdentity>> {
+        Self::check(provider)?;
+        Ok(vec![DeviceIdentity::of(&self.info)])
+    }
+
+    fn open(&self, provider: &str, index: usize, _use_simulated: bool) -> CameraResult<OpenedCamera> {
+        Self::check(provider)?;
+        if index != 0 {
+            return Err(CameraError::InvalidCameraIndex { index, count: 1 });
+        }
+        Ok(OpenedCamera {
+            camera: Box::new((self.make)().provider(Self::PROVIDER)),
+            provider: Self::PROVIDER.to_string(),
+        })
     }
 }
 

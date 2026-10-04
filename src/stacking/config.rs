@@ -368,7 +368,7 @@ impl From<WeightingPreset> for WeightingConfig {
 }
 
 /// Configuration for the stacking algorithm.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StackingConfig {
     /// Rejection method to use
     pub rejection: RejectionMethod,

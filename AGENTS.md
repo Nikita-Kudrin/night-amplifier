@@ -64,7 +64,7 @@ If you can't fix a test, don't simplify it into not testing the idea. Tests can 
 `stack_depth_grain_tests::managed_session`, which **panics** rather than skip. Measurement instruments
 (`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. Server tests fake cameras with
 `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or count calls at runtime), not a
-hand-written `Camera` impl.
+hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and `AppState::new_for_testing` via `test-support`.
 
 ## Benchmark sizing
 
@@ -146,10 +146,12 @@ visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` sk
   camera; every close goes through `lease.begin_close()`, and an abandoned handle is never closed eagerly.
   `{provider}_{index}` ids follow USB enumeration order, so a guide reconnect can install the *imaging* camera —
   recovery keeps a device's **recorded id** even if the index moved.
-- **Vendor capture loops share `camera::exposure::ExposureLoop`**: a vendor implements `SdkExposure` (apply, start,
-  abort, poll, plus its quirks) and the loop owns re-apply, stream/single switching, cancel and stall. The stall clock
-  starts on entering `capture`, re-apply included (`CaptureConfig::stall_budget` says why); ToupTek and SVBony apply
-  before stopping a stream, kept as found until hardware says otherwise.
+- **Vendor capture loops share `camera::exposure::ExposureLoop`**, INDI's too: a vendor implements `SdkExposure`
+  (apply, start, abort, poll, plus its quirks) and the loop owns re-apply, stream/single switching, cancel and stall.
+  The stall clock starts on entering `capture`, re-apply included (`CaptureConfig::stall_budget` says why). A stream
+  is always stopped *before* a config is applied — SVBony's header demands it for the ROI, ToupTek's for the
+  resolution, and both INDI drivers do it. INDI frames arrive as self-describing FITS BLOBs (`Poll::Delivered`),
+  watched from before the exposure is triggered; its XML speaks the protocol's spelling (`Idle`, `On`, `Also`).
 - **Fault detection**: one detector with a per-role+name streak serves all watchdogs, so alternating faults still
   escalate. Recovery is a ladder (stream restart → quiet suspend → supervisor retry → give-up), silent before 20 s;
   a failed hand-off always resumes the monitor. Only a *named, different* camera discards the FOV cache, since a

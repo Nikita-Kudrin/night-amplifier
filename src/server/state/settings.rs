@@ -32,11 +32,8 @@ pub struct CaptureSettings {
     pub stacking: bool,
     /// Sigma for rejection during stacking
     pub rejection_sigma: f32,
-    /// Outlier rejection method (None, SigmaClip, etc.)
-    ///
-    /// A file from before this key existed has always loaded as `None`, not as the
-    /// `SigmaClip` a fresh install starts with; kept that way on purpose.
-    #[serde(default = "RejectionMethod::default")]
+    /// Outlier rejection method. A fresh install and a file without the key both start on
+    /// [`RejectionMethod::best_available`].
     pub rejection_method: RejectionMethod,
     /// Enable background subtraction
     pub background_subtraction: bool,
@@ -729,14 +726,10 @@ impl Default for CaptureSettings {
             auto_stretch: true,
             stacking: true,
             rejection_sigma: 2.5,
-            // Not `RejectionMethod::default()`, which is `None`. That is the right
-            // default for `StackingConfig`, which Community also builds, but this field
-            // describes what a session should *ask* for: every Pro session has run sigma
-            // clipping since the plugin existed, because `StackingContext::new` forced it
-            // and ignored this field. Now that it is read, the default has to say the same
-            // thing or wiring it up would silently turn rejection off for anyone without a
-            // persisted setting. Without the plugin it still resolves to `None`.
-            rejection_method: RejectionMethod::SigmaClip,
+            // Not `RejectionMethod::default()`, which is `None` — right for a
+            // `StackingConfig`, but this field is what a session *asks* for, and every Pro
+            // session has run sigma clipping since the plugin existed.
+            rejection_method: RejectionMethod::best_available(),
             background_subtraction: true,
             background_extraction_algorithm: BackgroundExtractionAlgorithm::default(),
             preview_resolution: DEFAULT_PREVIEW_RESOLUTION,
