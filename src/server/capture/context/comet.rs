@@ -2,10 +2,9 @@
 
 use tracing::{info, warn};
 
-use super::LiveStacker;
+use super::{LiveStacker, StackSettings};
 use crate::frame::{Frame, NoiseField};
 use crate::server::capture::frame_gate::FrameAdmission;
-use crate::server::state::CaptureSettings;
 use crate::stacking::{CometContext, StackingType, COMET_PLUGIN};
 
 /// A [`LiveStacker`] over the plugin's context, which owns the nucleus alignment.
@@ -17,11 +16,11 @@ impl CometStacker {
         width: usize,
         height: usize,
         channels: usize,
-        settings: &CaptureSettings,
+        settings: &StackSettings,
     ) -> Result<Self, String> {
         let plugin = crate::license::pro_plugin(&COMET_PLUGIN)
             .ok_or_else(|| "Comet stacking plugin not found (Pro feature)".to_string())?;
-        Ok(Self(plugin.create_context(width, height, channels, settings)))
+        Ok(Self(plugin.create_context(width, height, channels, &settings.comet())))
     }
 
     #[cfg(test)]
@@ -47,8 +46,8 @@ impl LiveStacker for CometStacker {
         self.0.frame_count() > 0
     }
 
-    fn apply_settings(&mut self, settings: &CaptureSettings) {
-        self.0.update_from_settings(settings);
+    fn apply_settings(&mut self, settings: &StackSettings) {
+        self.0.update_from_settings(&settings.comet());
         let Some(roi) = settings.comet_roi else {
             return;
         };
@@ -69,7 +68,7 @@ impl LiveStacker for CometStacker {
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, _settings: &CaptureSettings) -> Result<FrameAdmission, String> {
+    fn offer(&mut self, frame: &Frame, _settings: &StackSettings) -> Result<FrameAdmission, String> {
         // An error is a frame the nucleus could not be found in, not a broken stack:
         // the accumulated comet stays on screen.
         let added = match self.0.add_frame(frame) {
@@ -170,7 +169,7 @@ impl CometContext for StubComet {
         self.geometry.2
     }
 
-    fn update_from_settings(&mut self, _settings: &CaptureSettings) {}
+    fn update_from_settings(&mut self, _settings: &crate::stacking::CometSettings) {}
 
     fn get_roi(&self) -> crate::planetary::AlignmentRoi {
         self.roi
@@ -181,6 +180,7 @@ impl CometContext for StubComet {
 mod tests {
     use super::*;
     use crate::planetary::AlignmentRoi;
+    use crate::server::state::CaptureSettings;
 
     fn stacker(answers: Vec<crate::error::Result<bool>>) -> CometStacker {
         CometStacker::from_context(Box::new(StubComet::new(32, 32, 1).answering(answers)))
@@ -192,7 +192,8 @@ mod tests {
 
     #[test]
     fn without_the_plugin_there_is_no_comet_stack() {
-        let refused = CometStacker::new(32, 32, 1, &CaptureSettings::default());
+        let settings = StackSettings::of(&CaptureSettings::default());
+        let refused = CometStacker::new(32, 32, 1, &settings);
         assert!(refused.is_err(), "Community has no comet alignment to run");
     }
 
@@ -210,7 +211,7 @@ mod tests {
     /// accumulated comet has to stay on screen, so neither outcome is an `Err`.
     #[test]
     fn a_frame_the_nucleus_cannot_be_found_in_leaves_the_stack_alone() {
-        let settings = CaptureSettings::default();
+        let settings = StackSettings::of(&CaptureSettings::default());
         let mut comet = stacker(vec![
             Ok(false),
             Err(crate::error::StackError::Registration("lost the nucleus".into())),
@@ -239,7 +240,7 @@ mod tests {
         let stub = StubComet::new(32, 32, 1);
         let updates = std::sync::Arc::clone(&stub.roi_updates);
         let mut comet = CometStacker::from_context(Box::new(stub));
-        let mut settings = CaptureSettings::default();
+        let mut settings = StackSettings::of(&CaptureSettings::default());
 
         comet.apply_settings(&settings);
         assert_eq!(updates.load(Ordering::Relaxed), 0, "no ROI drawn, nothing to send");

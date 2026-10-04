@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::camera::CameraInfo;
+use crate::push_to::TelescopeSettings;
 use crate::server::capture::solving::{plate_solve_available, SolveSource};
 use crate::server::state::*;
 

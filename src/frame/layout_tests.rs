@@ -143,14 +143,14 @@ fn expand_to_rgb8_fused_is_interleaved() {
     config.contrast = false;
     config.auto_stretch = false;
     config.saturation_boost = false;
-    let ready = crate::server::state::RenderReadyFrame {
+    let ready = crate::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: config,
         stretch_result: None,
     };
     let (rgb8, w, h) =
-        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+        crate::render::display::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
     assert_interleaved_rgb8(
         &rgb8,
         w as usize,
@@ -171,7 +171,7 @@ fn expand_to_rgb8_fused_is_interleaved() {
 #[test]
 fn area_downsample_to_rgb8_fused_is_interleaved() {
     let ready = passthrough_ready(tricolour_frame(64, 32));
-    let (rgb8, w, h) = crate::server::encoding::frame_to_rgb8_downsampled(&ready, 32, 16).unwrap();
+    let (rgb8, w, h) = crate::render::display::frame_to_rgb8_downsampled(&ready, 32, 16).unwrap();
 
     assert!(
         (w as usize) < 64,
@@ -189,12 +189,12 @@ fn area_downsample_to_rgb8_fused_is_interleaved() {
 
 /// Builds the `RenderReadyFrame` the streaming encoders take, with every optional
 /// stage off so the only thing under test is the layout.
-fn passthrough_ready(frame: Frame) -> crate::server::state::RenderReadyFrame {
+fn passthrough_ready(frame: Frame) -> crate::render::display::RenderReadyFrame {
     let mut config = crate::render::RenderPipelineConfig::default();
     config.contrast = false;
     config.auto_stretch = false;
     config.saturation_boost = false;
-    crate::server::state::RenderReadyFrame {
+    crate::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: config,
@@ -758,7 +758,7 @@ fn display_transform_preserves_channel_order_in_both_fused_kernels() {
 
     // Expand traversal: frame fits the box, so it is sent at native size.
     let (expanded, w, h) =
-        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+        crate::render::display::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
     assert_eq!((w as usize, h as usize), (W, H));
     assert_interleaved_rgb8_within(
         &expanded,
@@ -775,7 +775,7 @@ fn display_transform_preserves_channel_order_in_both_fused_kernels() {
     let mut ready_big = passthrough_ready(big);
     ready_big.pipeline_config.display = display;
     let (reduced, rw, rh) =
-        crate::server::encoding::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
+        crate::render::display::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
     assert_interleaved_rgb8_within(
         &reduced,
         rw as usize,
@@ -808,7 +808,7 @@ fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
     let mut ready = passthrough_ready(tricolour_frame(W, H));
     ready.pipeline_config.denoise = denoise;
     let (expanded, w, h) =
-        crate::server::encoding::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
+        crate::render::display::frame_to_rgb8_downsampled(&ready, 3840, 2160).unwrap();
     assert_eq!((w as usize, h as usize), (W, H));
     assert_interleaved_rgb8_within(
         &expanded,
@@ -822,7 +822,7 @@ fn denoised_staged_traversal_preserves_channel_order_in_both_sources() {
     let mut ready_big = passthrough_ready(tricolour_frame(W * 4, H * 4));
     ready_big.pipeline_config.denoise = denoise;
     let (reduced, rw, rh) =
-        crate::server::encoding::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
+        crate::render::display::frame_to_rgb8_downsampled(&ready_big, W as u32, H as u32).unwrap();
     assert!((rw as usize) < W * 4, "fixture did not downsample");
     assert_interleaved_rgb8_within(
         &reduced,

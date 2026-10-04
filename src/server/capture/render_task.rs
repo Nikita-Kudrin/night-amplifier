@@ -2,7 +2,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::server::state::{AppState, RenderReadyFrame, Resolution, StreamKind};
+use crate::render::display::RenderReadyFrame;
+use crate::server::state::{AppState, Resolution, StreamKind};
 use crate::telemetry::metrics as telemetry_metrics;
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
@@ -139,7 +140,7 @@ pub fn run_render_task(
         // encoders changes it, so the map rides through untouched.
         let noise = noise.map(Arc::new);
 
-        let ready_frame = Arc::new(crate::server::state::RenderReadyFrame {
+        let ready_frame = Arc::new(crate::render::display::RenderReadyFrame {
             linear_frame: display_frame,
             pipeline_config: rendered.pipeline_config,
             stretch_result: rendered.stretch_result,
@@ -277,7 +278,7 @@ fn preview_bin_factor(width: usize, height: usize, target: (u32, u32)) -> usize 
     }
 
     let (out_w, out_h) =
-        crate::server::encoding::output_dimensions(width, height, target.0, target.1);
+        crate::render::display::output_dimensions(width, height, target.0, target.1);
 
     (1..=MAX_BIN)
         .rev()

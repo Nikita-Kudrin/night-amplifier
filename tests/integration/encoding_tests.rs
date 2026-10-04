@@ -1,11 +1,11 @@
 fn to_ready_frame(
     frame: &night_amplifier::frame::Frame,
-) -> night_amplifier::server::state::RenderReadyFrame {
+) -> night_amplifier::render::display::RenderReadyFrame {
     let mut config = night_amplifier::render::RenderPipelineConfig::default();
     config.contrast = false;
     config.auto_stretch = false;
     config.saturation_boost = false;
-    night_amplifier::server::state::RenderReadyFrame {
+    night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame.clone()),
         pipeline_config: config,

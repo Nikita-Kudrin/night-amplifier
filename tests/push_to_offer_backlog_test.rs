@@ -15,19 +15,16 @@ use async_trait::async_trait;
 use night_amplifier::detection::StarDetector;
 use night_amplifier::frame::Frame;
 use night_amplifier::push_to::{
-    FrameOutcome, PushToCatalogPlugin, PushToInstallerPlugin, PushToResult, PushToSolverPlugin,
-    PUSH_TO_PLUGIN,
+    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
+    DatabaseTypeResponse, FrameOutcome, PushToCatalogPlugin, PushToDirectionResponse, PushToEvents,
+    PushToInstallerPlugin, PushToResult, PushToSolverPlugin, PushToStatusResponse,
+    TelescopeSettings, PUSH_TO_PLUGIN,
 };
 use night_amplifier::server::capture::solving::{
     offer_plate_solve, plate_solve_available, SolveSource,
 };
 use night_amplifier::server::services::PushToState;
 use night_amplifier::server::state::AppState;
-use night_amplifier::server::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, PushToDirectionResponse, PushToStatusResponse, ServerEvent,
-    TelescopeSettings,
-};
 
 /// Slow detection on a busy board: longer than both cadence floors.
 const BLOCK: Duration = Duration::from_millis(2500);
@@ -98,10 +95,10 @@ impl PushToSolverPlugin for BlockingPlugin {
     async fn get_direction(&self) -> Option<PushToDirectionResponse> {
         None
     }
-    async fn set_fov(&self, _: f32) -> Result<(), String> {
+    async fn set_fov(&self, _: f32) -> PushToResult<()> {
         Ok(())
     }
-    async fn set_telescope_settings(&self, _: TelescopeSettings) -> Result<(), String> {
+    async fn set_telescope_settings(&self, _: TelescopeSettings) -> PushToResult<()> {
         Ok(())
     }
 }
@@ -114,16 +111,16 @@ impl PushToCatalogPlugin for BlockingPlugin {
     async fn get_catalog_by_type(&self, _: &str) -> Vec<CatalogEntryResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn set_target_by_name(&self, _: &str) -> Result<CatalogEntryResponse, String> {
+    async fn set_target_by_name(&self, _: &str) -> PushToResult<CatalogEntryResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn set_target_by_coords(&self, _: f64, _: f64) -> Result<CoordinateResponse, String> {
+    async fn set_target_by_coords(&self, _: f64, _: f64) -> PushToResult<CoordinateResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn clear_target(&self) -> Result<(), String> {
+    async fn clear_target(&self) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
-    async fn load_database(&self, _: &str) -> Result<(), String> {
+    async fn load_database(&self, _: &str) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
 }
@@ -136,13 +133,13 @@ impl PushToInstallerPlugin for BlockingPlugin {
     async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn install_astap(&self, _: &[String], _: tokio::sync::broadcast::Sender<ServerEvent>) -> Result<(), String> {
+    async fn install_astap(&self, _: &[String], _: Arc<dyn PushToEvents>) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
     async fn get_catalog_status(&self) -> CatalogStatusResponse {
         unreachable!("not exercised by this test")
     }
-    async fn install_catalog(&self, _: bool, _: tokio::sync::broadcast::Sender<ServerEvent>) -> Result<(), String> {
+    async fn install_catalog(&self, _: bool, _: Arc<dyn PushToEvents>) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
 }

@@ -1,17 +1,13 @@
-mod axis_taps;
+//! The wire formats: SA08/SA09 lossless RGB8 and SA10 JPEG, framed around the pixels
+//! `render::display` produces.
+
 pub mod format;
-pub mod fused;
 pub mod jpeg;
 pub mod lz4;
-pub mod png;
-mod sky_shadow_rows;
 
 #[cfg(test)]
 pub mod tests;
 
 pub use format::*;
-pub use fused::*;
 pub use jpeg::*;
 pub use lz4::*;
-// `self::`, because the module shares its name with the `png` crate it wraps.
-pub use self::png::*;

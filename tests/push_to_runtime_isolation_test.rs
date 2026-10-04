@@ -15,17 +15,14 @@ use async_trait::async_trait;
 use night_amplifier::detection::StarDetector;
 use night_amplifier::frame::Frame;
 use night_amplifier::push_to::{
-    FrameOutcome, PushToCatalogPlugin, PushToInstallerPlugin, PushToResult, PushToSolverPlugin,
-    PUSH_TO_PLUGIN,
+    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
+    DatabaseTypeResponse, FrameOutcome, PushToCatalogPlugin, PushToDirectionResponse, PushToEvents,
+    PushToInstallerPlugin, PushToResult, PushToSolverPlugin, PushToStatusResponse,
+    TelescopeSettings, PUSH_TO_PLUGIN,
 };
 use night_amplifier::server::capture::solving::{offer_plate_solve, SolveSource};
 use night_amplifier::server::services::PushToState;
 use night_amplifier::server::state::AppState;
-use night_amplifier::server::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, PushToDirectionResponse, PushToStatusResponse, ServerEvent,
-    TelescopeSettings,
-};
 
 /// How long the fake plugin holds its thread: a detection plus a FITS write on the Pi.
 const BLOCK: Duration = Duration::from_millis(600);
@@ -108,11 +105,11 @@ impl PushToSolverPlugin for BlockingPlugin {
         None
     }
 
-    async fn set_fov(&self, _fov: f32) -> Result<(), String> {
+    async fn set_fov(&self, _fov: f32) -> PushToResult<()> {
         Ok(())
     }
 
-    async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> Result<(), String> {
+    async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> PushToResult<()> {
         Ok(())
     }
 }
@@ -126,20 +123,20 @@ impl PushToCatalogPlugin for BlockingPlugin {
     async fn get_catalog_by_type(&self, _catalog_type: &str) -> Vec<CatalogEntryResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn set_target_by_name(&self, _name: &str) -> Result<CatalogEntryResponse, String> {
+    async fn set_target_by_name(&self, _name: &str) -> PushToResult<CatalogEntryResponse> {
         unreachable!("not exercised by this test")
     }
     async fn set_target_by_coords(
         &self,
         _ra: f64,
         _dec: f64,
-    ) -> Result<CoordinateResponse, String> {
+    ) -> PushToResult<CoordinateResponse> {
         unreachable!("not exercised by this test")
     }
-    async fn clear_target(&self) -> Result<(), String> {
+    async fn clear_target(&self) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
-    async fn load_database(&self, _path: &str) -> Result<(), String> {
+    async fn load_database(&self, _path: &str) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
 }
@@ -155,8 +152,8 @@ impl PushToInstallerPlugin for BlockingPlugin {
     async fn install_astap(
         &self,
         _database_types: &[String],
-        _events: tokio::sync::broadcast::Sender<ServerEvent>,
-    ) -> Result<(), String> {
+        _events: Arc<dyn PushToEvents>,
+    ) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
     async fn get_catalog_status(&self) -> CatalogStatusResponse {
@@ -165,8 +162,8 @@ impl PushToInstallerPlugin for BlockingPlugin {
     async fn install_catalog(
         &self,
         _include_stars: bool,
-        _events: tokio::sync::broadcast::Sender<ServerEvent>,
-    ) -> Result<(), String> {
+        _events: Arc<dyn PushToEvents>,
+    ) -> PushToResult<()> {
         unreachable!("not exercised by this test")
     }
 }

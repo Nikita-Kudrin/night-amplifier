@@ -1,6 +1,6 @@
 //! A coarse, per-channel map of how noisy each part of an image is. Produced
 //! by `stacking::MasterStack` from its accumulator, resampled onto an output
-//! grid by `server::encoding`, consumed by the denoise plugin — lives here,
+//! grid by `render::display`, consumed by the denoise plugin — lives here,
 //! not under any of the three, since none of them owns it. **Variance, never
 //! sigma**: every operation here combines contributions in quadrature (block
 //! reduction, resample, folding channels to luminance), and a sigma field
@@ -271,7 +271,7 @@ impl NoiseField {
 
     /// This field, resampled onto an output image of `target_width x target_height`.
     /// `column_scale`/`row_scale` are the per-output-index `sum(w^2)` for that
-    /// index's taps (built beside the weights by `server::encoding::AxisTaps` so
+    /// index's taps (built beside the weights by `render::display`'s `AxisTaps` so
     /// they can't drift apart). An output pixel is `sum(w_i*x_i)` with
     /// `sum(w_i)=1`, so its variance is `sum(w_i^2*sigma_i^2)` — since this field
     /// is deliberately coarse, `sigma^2` is constant over a 2-3 source-pixel tap

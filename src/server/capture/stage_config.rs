@@ -162,8 +162,8 @@ fn denoise_config(settings: &CaptureSettings) -> crate::render::DenoiseConfig {
 /// forcing `DenoiseSettings::ai` false: framing wants frame rate and the network is the
 /// costliest stage of a render, but the switch stays the observer's for when the mode
 /// ends. The classic filters then keep the scales they would have handed it.
-pub(crate) fn requested_denoise(settings: &CaptureSettings) -> crate::server::state::DenoiseSettings {
-    crate::server::state::DenoiseSettings {
+pub(crate) fn requested_denoise(settings: &CaptureSettings) -> crate::render::denoise::DenoiseSettings {
+    crate::render::denoise::DenoiseSettings {
         ai: settings.denoise.ai && !settings.focus_mode,
         ..settings.denoise.clone()
     }
@@ -322,8 +322,8 @@ pub fn get_render_pipeline_config(
 mod tests {
     use super::*;
     use crate::background::BackgroundExtractionAlgorithm;
+    use crate::cfa::SensorCorrectionSettings;
     use crate::frame::Frame;
-    use crate::server::state::SensorCorrectionSettings;
     use crate::stacking::StackingType;
 
     /// `NOMINAL_SKY_LEVEL` is where the shipped curve puts the sky, and the darker-sky
@@ -592,7 +592,7 @@ mod tests {
         assert!(!requested_denoise(&guide).ai);
         assert_eq!(
             guide.denoise,
-            crate::server::state::DenoiseSettings {
+            crate::render::denoise::DenoiseSettings {
                 ai: false,
                 ..settings.denoise
             }

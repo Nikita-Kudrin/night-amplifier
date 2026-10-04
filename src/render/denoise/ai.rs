@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use super::ai_compute::{AiComputePreference, AiComputeReport, BenchmarkState};
 use super::DenoiseScratch;
-use crate::server::state::DenoiseSettings;
+use super::DenoiseSettings;
 
 /// The network as the encoders see it. A data carrier: the plugin fills it.
 #[derive(Debug, Clone, Copy, PartialEq)]

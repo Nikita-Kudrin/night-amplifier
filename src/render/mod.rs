@@ -6,6 +6,7 @@
 pub mod autostretch;
 mod black_point;
 pub mod denoise;
+pub mod display;
 pub mod output;
 pub mod pipeline;
 pub mod scnr;
@@ -25,10 +26,10 @@ pub use black_point::{
     subtract_black_point_uniform, BackgroundEstimate, BlackPointConfig,
 };
 pub use denoise::{
-    AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin, BenchmarkProgress,
-    BenchmarkState, ChromaDenoiseConfig, ComputeRung, DenoiseConfig, DenoisePlugin, RungReport,
-    DenoiseScratch, LumaDenoiseConfig, take, MAX_LEVELS as MAX_WAVELET_LEVELS,
-    AI_DENOISE_PLUGIN, DENOISE_PLUGIN,
+    take, AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin,
+    BenchmarkProgress, BenchmarkState, ChromaDenoiseConfig, ComputeRung, DenoiseConfig,
+    DenoisePlugin, DenoiseScratch, DenoiseSettings, LumaDenoiseConfig, RungReport,
+    AI_DENOISE_PLUGIN, DENOISE_PLUGIN, MAX_LEVELS as MAX_WAVELET_LEVELS,
 };
 pub use output::{
     apply_contrast_frame, apply_s_curve, apply_shadow_floor_frame, finalize_for_display,

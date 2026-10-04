@@ -168,7 +168,7 @@ fn with_stack(
     mut snapshot: impl FnMut(&night_amplifier::server::capture::StackingContext) -> Frame,
 ) -> Vec<(usize, Frame)> {
     use night_amplifier::server::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
-    use night_amplifier::server::capture::StackingContext;
+    use night_amplifier::server::capture::{StackSettings, StackingContext};
 
     let settings = night_amplifier::server::state::CaptureSettings::default();
     let cfa_pipeline = build_cfa_pipeline(&settings);
@@ -193,7 +193,7 @@ fn with_stack(
         reference.width(),
         reference.height(),
         reference.channels(),
-        &settings,
+        &StackSettings::of(&settings),
     )
     .unwrap();
     ctx.initialize_with_reference(&reference).unwrap();
@@ -267,14 +267,14 @@ pub fn render_with(
         pipeline_config.denoise = night_amplifier::render::DenoiseConfig::OFF;
     }
     tweak(&mut pipeline_config);
-    let ready = night_amplifier::server::state::RenderReadyFrame {
+    let ready = night_amplifier::render::display::RenderReadyFrame {
         noise: noise.map(std::sync::Arc::new),
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,
     };
     let (bytes, w, h) =
-        night_amplifier::server::encoding::frame_to_rgb8_downsampled(&ready, max.0, max.1).unwrap();
+        night_amplifier::render::display::frame_to_rgb8_downsampled(&ready, max.0, max.1).unwrap();
     (bytes, w as usize, h as usize)
 }
 
@@ -1223,7 +1223,7 @@ pub fn preview_parts(
     stack: &Frame,
     settings: &night_amplifier::server::state::CaptureSettings,
     stack_depth: u32,
-) -> (Frame, night_amplifier::render::RenderPipelineConfig, Option<night_amplifier::server::state::StretchResult>) {
+) -> (Frame, night_amplifier::render::RenderPipelineConfig, Option<night_amplifier::render::display::StretchResult>) {
     use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
     let mut frame = stack.clone();
     let render = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
@@ -1240,9 +1240,9 @@ pub fn preview_parts(
 pub fn encode_preview(
     frame: Frame,
     pipeline_config: &night_amplifier::render::RenderPipelineConfig,
-    stretch_result: &Option<night_amplifier::server::state::StretchResult>,
+    stretch_result: &Option<night_amplifier::render::display::StretchResult>,
 ) -> (Vec<u8>, usize, usize) {
-    let ready = night_amplifier::server::state::RenderReadyFrame {
+    let ready = night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config: pipeline_config.clone(),
@@ -1250,14 +1250,14 @@ pub fn encode_preview(
     };
     let (max_w, max_h) = stream();
     let (bytes, w, h) =
-        night_amplifier::server::encoding::frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
+        night_amplifier::render::display::frame_to_rgb8_downsampled(&ready, max_w, max_h).unwrap();
     (bytes, w as usize, h as usize)
 }
 
 /// A render of [`preview_parts`]: its pipeline configuration and stretch.
 pub type PreviewRender<'a> = (
     &'a night_amplifier::render::RenderPipelineConfig,
-    &'a Option<night_amplifier::server::state::StretchResult>,
+    &'a Option<night_amplifier::render::display::StretchResult>,
 );
 
 /// What render `b` does to stars of `peak` injected on `frame` against render `a`, pooled

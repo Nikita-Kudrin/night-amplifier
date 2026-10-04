@@ -15,7 +15,9 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::Layer;
 
-use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis, StackingContext};
+use night_amplifier::server::capture::{
+    AnalysisContext, PreviewAnalysis, StackSettings, StackingContext,
+};
 use night_amplifier::server::state::CaptureSettings;
 use night_amplifier::Frame;
 
@@ -159,14 +161,14 @@ fn render(
         &mut frame, settings, ctx, analysis,
     )
     .unwrap();
-    let ready = night_amplifier::server::state::RenderReadyFrame {
+    let ready = night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: Arc::new(frame),
         pipeline_config: rendered.pipeline_config,
         stretch_result: rendered.stretch_result,
     };
     let (bytes, w, h) =
-        night_amplifier::server::encoding::frame_to_rgb8_downsampled(&ready, 1440, 1440).unwrap();
+        night_amplifier::render::display::frame_to_rgb8_downsampled(&ready, 1440, 1440).unwrap();
     (bytes, w as usize, h as usize)
 }
 
@@ -310,7 +312,7 @@ fn measure_temporal_stability_on_real_sessions() {
             reference.width(),
             reference.height(),
             reference.channels(),
-            &subs.settings,
+            &StackSettings::of(&subs.settings),
         )
         .unwrap();
         stack.initialize_with_reference(&reference).unwrap();

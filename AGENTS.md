@@ -52,6 +52,9 @@ When designing new features or refactoring, adhere to the following architectura
 - Plugin system: performance-critical / Pro-only logic lives behind traits (`REJECTION_PLUGIN`,
   `PUSH_TO_PLUGIN`, `COMET_PLUGIN`, `BACKGROUND_PLUGIN`, `PLANETARY_STACKER_PLUGIN`, `DENOISE_PLUGIN`,
   `AI_DENOISE_PLUGIN`) so Community works standalone.
+- Domain modules never name `crate::server` (`tests/layering_test.rs`; only `server` and `app.rs` may): plugin traits
+  speak domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
+  `render::denoise::DenoiseSettings` — and the server maps them to the wire. Pro imports `server` only in tests.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.
@@ -99,13 +102,13 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 | `fits/`            | FITS read/write; NAXIS layout                                                  |
 | `debayer/`         | RGGB/BGGR/GRBG/GBRG; Bilinear + VNG + Superpixel                               |
 | `cfa/`             | Raw-CFA stage before demosaic: hot pixels, row/column FPN                      |
-| `render/denoise/`  | Denoise plugin boundary: config data, buffer pool, `ai_compute`                |
+| `render/denoise/`  | Denoise plugin boundary: settings, config data, buffer pool, `ai_compute`      |
 | `calibration/`     | Master dark/flat: `(raw - dark) / flat`                                       |
 | `detection/`       | Star detection, CoM centroiding, FWHM/SNR                                      |
 | `registration/`    | Triangle matching + RANSAC → `AffineTransform`                                 |
 | `stacking/`        | `MasterStack` accumulator, rejection, warping                                  |
 | `background/`      | Grid-based gradient extraction                                                 |
-| `render/`          | Stretch, autostretch solver, white balance, S-curve, output; `statistics/` for robust median/MAD |
+| `render/`          | Stretch, autostretch solver, white balance, S-curve; `display/` the f32 → RGB8 kernels and PNG |
 | `camera/`          | Traits + vendor SDKs + simulator                                               |
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
 | `disk_writer/`     | Async bounded-queue frame writer                                               |
@@ -212,7 +215,7 @@ fallback.
 Magic "SA08" (4B) | Width u32 LE | Height u32 LE | Compressed size u32 LE | LZ4 RGB8 payload
 ```
 
-**Downsampling** area-averages down to the configured box (`encoding::axis_taps`: a 1 px tent per source sample,
+**Downsampling** area-averages down to the configured box (`render::display::axis_taps`: a 1 px tent per source sample,
 not a whole-pixel box, which once averaged a different sample count on different lines and left a visible
 lattice). WebGL needs `UNPACK_ALIGNMENT` 1 for the frontend's unpadded RGB rows.
 

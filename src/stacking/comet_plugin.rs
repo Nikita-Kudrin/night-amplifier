@@ -4,10 +4,20 @@
 //! comet stacking plugins. The community version of Night Amplifier
 //! provides the interface but not the implementation.
 
+use super::StackingConfig;
 use crate::error::Result;
 use crate::frame::Frame;
 use crate::planetary::AlignmentRoi;
-use crate::server::CaptureSettings;
+
+/// What a comet context reads from the session's settings.
+#[derive(Debug, Clone)]
+pub struct CometSettings {
+    /// The box the nucleus is searched in; `None` lets the plugin centre its own.
+    pub roi: Option<AlignmentRoi>,
+    /// The accumulator the observer asked for, rejection already reduced to what the
+    /// live path runs.
+    pub stacking: StackingConfig,
+}
 
 /// Comet centroid detection result
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
@@ -46,7 +56,7 @@ pub trait CometContext: Send + Sync {
     fn channels(&self) -> usize;
 
     /// Update stacking parameters from settings.
-    fn update_from_settings(&mut self, settings: &CaptureSettings);
+    fn update_from_settings(&mut self, settings: &CometSettings);
 
     /// Get current detector ROI (for UI/tracking)
     fn get_roi(&self) -> AlignmentRoi;
@@ -60,6 +70,6 @@ pub trait CometPlugin: Send + Sync {
         width: usize,
         height: usize,
         channels: usize,
-        settings: &CaptureSettings,
+        settings: &CometSettings,
     ) -> Box<dyn CometContext>;
 }

@@ -33,7 +33,9 @@ pub mod watchdog;
 pub mod watchdog_tests;
 
 pub use analysis::{AnalysisContext, PreviewAnalysis};
+pub use context::{
+    LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover, StackingContext,
+};
 pub use drop_log::DropLog;
-pub use context::{LiveStacker, PlanetaryStackingContext, StackingCarryover, StackingContext};
 pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
 pub use task::run_capture_loop;

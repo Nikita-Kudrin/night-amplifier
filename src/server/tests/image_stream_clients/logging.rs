@@ -55,7 +55,7 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
     server
         .state
         .main_stream
-        .set_latest_raw_frame(Arc::new(crate::server::state::RenderReadyFrame {
+        .set_latest_raw_frame(Arc::new(crate::render::display::RenderReadyFrame {
             noise: None,
             linear_frame: Arc::new(crate::frame::Frame::filled(IMX533.0, IMX533.1, 3, 0.25).unwrap()),
             pipeline_config: crate::render::RenderPipelineConfig {

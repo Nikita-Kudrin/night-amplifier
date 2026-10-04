@@ -2,11 +2,10 @@
 
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
-use super::{stacking_config, LiveStacker};
+use super::{LiveStacker, StackSettings};
 use crate::detection::{compute_median_fwhm, compute_median_snr, Star};
 use crate::frame::{Frame, NoiseField};
 use crate::registration::AdaptiveRegistration;
-use crate::server::state::CaptureSettings;
 use crate::stacking::{FrameQuality, Stacker, StackingType};
 
 use crate::server::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason};
@@ -25,13 +24,13 @@ impl StackingContext {
         width: usize,
         height: usize,
         channels: usize,
-        settings: &CaptureSettings,
+        settings: &StackSettings,
     ) -> Option<Self> {
         // Built the same way `update_from_settings` builds it, so a session does not
         // start on a different method than a no-op settings edit would give it. This
         // used to hardcode `SigmaClip`, which meant the observer's choice only took
         // effect if they happened to touch settings mid-session.
-        let stacker = match Stacker::new(width, height, channels, stacking_config(settings)) {
+        let stacker = match Stacker::new(width, height, channels, settings.config.clone()) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker");
@@ -271,8 +270,8 @@ impl StackingContext {
     }
 
     /// Update stacking parameters from current settings dynamically
-    pub fn update_from_settings(&mut self, settings: &CaptureSettings) {
-        self.stacker.update_config(stacking_config(settings));
+    pub fn update_from_settings(&mut self, settings: &StackSettings) {
+        self.stacker.update_config(settings.config.clone());
     }
 }
 
@@ -293,7 +292,7 @@ impl LiveStacker for StackingContext {
         self.is_initialized
     }
 
-    fn apply_settings(&mut self, settings: &CaptureSettings) {
+    fn apply_settings(&mut self, settings: &StackSettings) {
         self.update_from_settings(settings);
     }
 
@@ -303,7 +302,7 @@ impl LiveStacker for StackingContext {
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, _settings: &CaptureSettings) -> Result<FrameAdmission, String> {
+    fn offer(&mut self, frame: &Frame, _settings: &StackSettings) -> Result<FrameAdmission, String> {
         let admission = self.add_frame(frame)?;
         // `residual` as Debug, not the bare f32: NaN/inf are legitimate sentinels here
         // (see `FrameAdmission::mean_residual`), and OTel exports a bare f32 as a double
@@ -339,6 +338,7 @@ impl LiveStacker for StackingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::state::CaptureSettings;
     use crate::stacking::{RejectionMethod, WeightingPreset};
 
     /// Starting a session and editing settings mid-session must agree.
@@ -361,6 +361,7 @@ mod tests {
                 settings.rejection_method = method;
                 settings.weighting_preset = preset;
                 settings.rejection_sigma = sigma;
+                let settings = StackSettings::of(&settings);
 
                 let mut at_start =
                     StackingContext::new(64, 64, 3, &settings).expect("context builds");

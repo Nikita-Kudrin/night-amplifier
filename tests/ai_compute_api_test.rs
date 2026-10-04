@@ -9,11 +9,12 @@ use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use night_amplifier::license::{LicenseDetails, LICENSE_UPDATER, PRO_LICENSE_ACTIVE};
 use night_amplifier::render::denoise::ai;
+use night_amplifier::render::denoise::DenoiseSettings;
 use night_amplifier::render::{
     AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin, BenchmarkState,
     ComputeRung, DenoiseScratch, RungReport, AI_DENOISE_PLUGIN,
 };
-use night_amplifier::server::state::{CaptureState, DenoiseSettings};
+use night_amplifier::server::state::CaptureState;
 use night_amplifier::server::{Server, ServerConfig};
 use serde_json::Value;
 use serial_test::serial;

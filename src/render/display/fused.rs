@@ -15,9 +15,9 @@ use crate::render::denoise::{DenoiseConfig, DenoiseScratch};
 use crate::render::output::{
     apply_shadow_floor_slice, write_row_rgb8, DisplayOutput, ShadowFloorTable,
 };
-use crate::server::state::RenderReadyFrame;
 
 use super::axis_taps::AxisTaps;
+use super::RenderReadyFrame;
 
 thread_local! {
     /// One interleaved RGB row, reused across frames and payloads. The fused

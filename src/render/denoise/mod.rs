@@ -9,12 +9,14 @@
 
 pub mod ai;
 pub mod ai_compute;
+pub(crate) mod settings;
 
 pub use ai::{AiDenoiseConfig, AiDenoisePlugin, AI_DENOISE_PLUGIN};
 pub use ai_compute::{
     AiComputePreference, AiComputeReport, BenchmarkProgress, BenchmarkState, ComputeRung,
     RungReport,
 };
+pub use settings::{DenoiseSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL};
 
 use std::sync::OnceLock;
 
@@ -161,7 +163,7 @@ pub trait DenoisePlugin: Send + Sync {
     /// the returned `ai` off; Community fills it from [`AI_DENOISE_PLUGIN`].
     fn config(
         &self,
-        settings: &crate::server::state::DenoiseSettings,
+        settings: &DenoiseSettings,
         aggressiveness: crate::render::StretchAggressiveness,
     ) -> DenoiseConfig;
 
@@ -172,7 +174,7 @@ pub trait DenoisePlugin: Send + Sync {
     /// middle resolves to — so the tone curve renders identically either way and the
     /// whole difference is the filters. Only asked while the Denoise switch is on; off,
     /// Community pins the same value ([`grain_split_for`]).
-    fn grain_split(&self, settings: &crate::server::state::DenoiseSettings) -> f32;
+    fn grain_split(&self, settings: &DenoiseSettings) -> f32;
 
     /// Denoise one staged interleaved RGB f32 image in place, at output resolution, in
     /// linear light. `buf` is `width * height * 3` samples. `noise` is the stack's
@@ -288,13 +290,13 @@ pub fn denoise_rgb_interleaved_with(
 /// `cfa::fpn`, superpixel debayering and the black floor each state at their own site.
 /// So does Focus/Finder mode's hold on the network.
 pub fn config_for(
-    settings: &crate::server::state::DenoiseSettings,
+    settings: &DenoiseSettings,
     aggressiveness: crate::render::StretchAggressiveness,
 ) -> DenoiseConfig {
     let ai = ai::config_for(settings);
     // The classic filters give the network its scales only while it really runs: asked
     // for without a plugin to answer, they must keep today's picture.
-    let classic_settings = crate::server::state::DenoiseSettings {
+    let classic_settings = DenoiseSettings {
         ai: ai.is_enabled(),
         ..settings.clone()
     };
@@ -312,7 +314,7 @@ pub fn config_for(
 /// off gives exactly Community's picture. The UI greys the Background Grain dial out with
 /// the filters; a dial that still moved the curve would be a control nobody can reach
 /// (measured before this gate: 1/12 at 0 %, 1/8 at the middle, switch off).
-pub fn grain_split_for(settings: &crate::server::state::DenoiseSettings) -> f32 {
+pub fn grain_split_for(settings: &DenoiseSettings) -> f32 {
     if !settings.enabled {
         return crate::render::DEFAULT_GRAIN_SPLIT;
     }
@@ -376,12 +378,12 @@ mod tests {
 
     #[test]
     fn without_the_plugin_the_config_is_off_and_the_split_is_the_dials_middle() {
-        let settings = crate::server::state::DenoiseSettings::default();
+        let settings = DenoiseSettings::default();
         assert_eq!(
             config_for(&settings, crate::render::StretchAggressiveness::Medium),
             DenoiseConfig::OFF
         );
-        let asking_for_the_network = crate::server::state::DenoiseSettings {
+        let asking_for_the_network = DenoiseSettings {
             ai: true,
             ..Default::default()
         };

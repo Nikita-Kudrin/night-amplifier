@@ -19,8 +19,11 @@ pub use planetary::PlanetaryStackingContext;
 use tracing::warn;
 
 use crate::frame::{Frame, NoiseField};
+use crate::planetary::AlignmentRoi;
 use crate::server::state::CaptureSettings;
-use crate::stacking::{RejectionMethod, StackingConfig, StackingType, REJECTION_PLUGIN};
+use crate::stacking::{
+    CometSettings, RejectionMethod, StackingConfig, StackingType, REJECTION_PLUGIN,
+};
 
 use super::frame_gate::FrameAdmission;
 
@@ -38,24 +41,55 @@ pub trait LiveStacker: Send {
     fn has_reference(&self) -> bool;
 
     /// Re-reads the mode's parameters; called before every frame so an edit lands mid-stack.
-    fn apply_settings(&mut self, settings: &CaptureSettings);
+    fn apply_settings(&mut self, settings: &StackSettings);
 
     fn set_reference(&mut self, frame: &Frame) -> Result<(), String>;
 
     /// Offers a frame. `Err` means the stack could not take it at all, and the caller
     /// shows the raw sub; a frame merely not admitted is `Ok` with `added: false`.
-    fn offer(&mut self, frame: &Frame, settings: &CaptureSettings) -> Result<FrameAdmission, String>;
+    fn offer(&mut self, frame: &Frame, settings: &StackSettings) -> Result<FrameAdmission, String>;
 
     /// The stack for display, with its coverage map where the mode keeps one and it has
     /// something to say (see [`NoiseField::is_usable`]).
     fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String>;
 }
 
+/// What the live stackers read from the session's settings, taken once per frame.
+#[derive(Debug, Clone)]
+pub struct StackSettings {
+    /// The accumulator configuration, rejection already reduced to what the live path runs.
+    pub config: StackingConfig,
+    pub comet_roi: Option<AlignmentRoi>,
+    pub planetary_roi: Option<AlignmentRoi>,
+    pub planetary_auto_tracking: bool,
+    pub planetary_multi_point_alignment: bool,
+}
+
+impl StackSettings {
+    pub fn of(settings: &CaptureSettings) -> Self {
+        Self {
+            config: stacking_config(settings),
+            comet_roi: settings.comet_roi,
+            planetary_roi: settings.planetary_roi,
+            planetary_auto_tracking: settings.planetary_auto_tracking,
+            planetary_multi_point_alignment: settings.planetary_multi_point_alignment,
+        }
+    }
+
+    /// The comet plugin's view of these settings.
+    pub fn comet(&self) -> CometSettings {
+        CometSettings {
+            roi: self.comet_roi,
+            stacking: self.config.clone(),
+        }
+    }
+}
+
 /// Builds the accumulator for `kind`, sized to `frame`.
 pub fn create_live_stacker(
     kind: StackingType,
     frame: &Frame,
-    settings: &CaptureSettings,
+    settings: &StackSettings,
 ) -> Result<Box<dyn LiveStacker>, String> {
     let (width, height, channels) = (frame.width(), frame.height(), frame.channels());
     match kind {
@@ -79,10 +113,10 @@ pub struct StackingCarryover {
     pub stacker: Box<dyn LiveStacker>,
 }
 
-/// The accumulator configuration a deep-sky or planetary session runs for `settings`,
-/// at session start and on every edit alike — planetary once started on licence state
-/// and then passed Min-Max straight through on the first edit.
-pub(super) fn stacking_config(settings: &CaptureSettings) -> StackingConfig {
+/// The accumulator configuration every mode runs for `settings`, at session start and on
+/// every edit alike — planetary once started on licence state and then passed Min-Max
+/// straight through on the first edit.
+fn stacking_config(settings: &CaptureSettings) -> StackingConfig {
     StackingConfig::default()
         .with_rejection(resolve_rejection(settings))
         .with_sigma(settings.rejection_sigma)
@@ -201,6 +235,7 @@ mod tests {
             settings.rejection_method = method;
             settings.rejection_sigma = 3.1;
 
+            let settings = StackSettings::of(&settings);
             let mut deep_sky = StackingContext::new(32, 32, 1, &settings).expect("builds");
             let mut planetary =
                 PlanetaryStackingContext::new(32, 32, 1, &settings).expect("builds");

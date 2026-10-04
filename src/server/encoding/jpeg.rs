@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
+use crate::render::display::frame_to_rgb8_downsampled;
 use crate::server::encoding::format::*;
-use crate::server::encoding::fused::frame_to_rgb8_downsampled;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tracing::{debug, warn};
@@ -81,7 +81,7 @@ fn compress_rgb8_to_jpeg(
 /// The box is used verbatim: `(u32::MAX, u32::MAX)` streams the frame at its native size
 /// (see `Resolution::bounding_box`).
 pub fn encode_rgb8_jpeg_bounded(
-    ready_frame: &crate::server::state::RenderReadyFrame,
+    ready_frame: &crate::render::display::RenderReadyFrame,
     max_w: u32,
     max_h: u32,
 ) -> Result<Vec<u8>, String> {

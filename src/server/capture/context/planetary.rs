@@ -2,11 +2,10 @@
 
 use tracing::{debug, field, info, instrument, warn, Span};
 
-use super::{stacking_config, LiveStacker};
+use super::{LiveStacker, StackSettings};
 use crate::frame::{Frame, NoiseField};
 use crate::planetary::AlignmentRoi;
 use crate::server::capture::frame_gate::FrameAdmission;
-use crate::server::state::CaptureSettings;
 use crate::stacking::{FrameQuality, Stacker, StackingType};
 
 /// Holds state for planetary-based live stacking pipeline
@@ -21,9 +20,9 @@ impl PlanetaryStackingContext {
         width: usize,
         height: usize,
         channels: usize,
-        settings: &CaptureSettings,
+        settings: &StackSettings,
     ) -> Option<Self> {
-        let stacker = match Stacker::new(width, height, channels, stacking_config(settings)) {
+        let stacker = match Stacker::new(width, height, channels, settings.config.clone()) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker for planetary mode");
@@ -63,7 +62,7 @@ impl PlanetaryStackingContext {
         ncc = field::Empty,
         registered = field::Empty,
     ))]
-    pub fn add_frame(&mut self, frame: &Frame, settings: &CaptureSettings) -> Result<bool, String> {
+    pub fn add_frame(&mut self, frame: &Frame, settings: &StackSettings) -> Result<bool, String> {
         if !self.is_initialized {
             return Err("Planetary stacking context not initialized".to_string());
         }
@@ -177,8 +176,8 @@ impl PlanetaryStackingContext {
     }
 
     /// Update stacking parameters from current settings dynamically
-    pub fn update_from_settings(&mut self, settings: &CaptureSettings) {
-        self.stacker.update_config(stacking_config(settings));
+    pub fn update_from_settings(&mut self, settings: &StackSettings) {
+        self.stacker.update_config(settings.config.clone());
     }
 }
 
@@ -199,7 +198,7 @@ impl LiveStacker for PlanetaryStackingContext {
         self.is_initialized
     }
 
-    fn apply_settings(&mut self, settings: &CaptureSettings) {
+    fn apply_settings(&mut self, settings: &StackSettings) {
         self.update_from_settings(settings);
     }
 
@@ -209,7 +208,7 @@ impl LiveStacker for PlanetaryStackingContext {
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, settings: &CaptureSettings) -> Result<FrameAdmission, String> {
+    fn offer(&mut self, frame: &Frame, settings: &StackSettings) -> Result<FrameAdmission, String> {
         // An error leaves the accumulated stack on screen, as a failed alignment does.
         let added = match self.add_frame(frame, settings) {
             Ok(true) => {
@@ -242,9 +241,13 @@ mod tests {
     use crate::frame::Frame;
     use crate::server::state::CaptureSettings;
 
+    fn defaults() -> StackSettings {
+        StackSettings::of(&CaptureSettings::default())
+    }
+
     #[test]
     fn test_planetary_stacking_context_initialization() {
-        let settings = CaptureSettings::default();
+        let settings = defaults();
         let mut ctx = PlanetaryStackingContext::new(100, 100, 3, &settings).unwrap();
 
         let frame = Frame::zeros(100, 100, 3).unwrap();
@@ -256,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_planetary_stacking_context_add_frame() {
-        let settings = CaptureSettings::default();
+        let settings = defaults();
         let mut ctx = PlanetaryStackingContext::new(100, 100, 1, &settings).unwrap();
 
         // Create a reference frame with a "planet" (a square)

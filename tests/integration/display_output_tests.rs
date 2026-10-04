@@ -100,7 +100,7 @@ fn load_first_frame(dir: &Path) -> Option<night_amplifier::Frame> {
 fn prepare_fixture(
     fixture: &Fixture,
     intensity: f32,
-) -> Option<night_amplifier::server::state::RenderReadyFrame> {
+) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     prepare_fixture_with(fixture, |settings| settings.eyepiece.intensity = intensity)
 }
 
@@ -113,7 +113,7 @@ fn prepare_fixture(
 fn prepare_fixture_with(
     fixture: &Fixture,
     configure: impl FnOnce(&mut night_amplifier::server::state::CaptureSettings),
-) -> Option<night_amplifier::server::state::RenderReadyFrame> {
+) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     // Ensure fixtures are downloaded from Google Drive. Under nextest
     // partitioning this file may run in a shard with no other test that
     // downloads fixtures first, so it has to do it itself.
@@ -137,7 +137,7 @@ fn prepare_fixture_with(
         night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame, &settings)
             .ok()?;
 
-    Some(night_amplifier::server::state::RenderReadyFrame {
+    Some(night_amplifier::render::display::RenderReadyFrame {
         noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
@@ -149,12 +149,12 @@ fn prepare_fixture_with(
 const TIER_1440: (u32, u32) = (2560, 1440);
 
 fn encode(
-    ready: &night_amplifier::server::state::RenderReadyFrame,
+    ready: &night_amplifier::render::display::RenderReadyFrame,
     max_w: u32,
     max_h: u32,
 ) -> (Vec<u8>, usize, usize) {
     let (bytes, w, h) =
-        night_amplifier::server::encoding::frame_to_rgb8_downsampled(ready, max_w, max_h).unwrap();
+        night_amplifier::render::display::frame_to_rgb8_downsampled(ready, max_w, max_h).unwrap();
     (bytes, w as usize, h as usize)
 }
 
@@ -282,7 +282,7 @@ fn eyepiece_intensity_reduces_visible_sky_grain() {
         };
         measured += 1;
 
-        let sigma = |ready: &night_amplifier::server::state::RenderReadyFrame| {
+        let sigma = |ready: &night_amplifier::render::display::RenderReadyFrame| {
             let (bytes, _, _) = encode(ready, TIER_1440.0, TIER_1440.1);
             sky_sigma_levels(&bytes, 1)
         };
@@ -834,7 +834,7 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
         let (fused, deferred) = (prepare(false)?, prepare(true)?);
 
         // The split really did happen, or this measures nothing.
-        let floor_of = |r: &night_amplifier::server::state::RenderReadyFrame| {
+        let floor_of = |r: &night_amplifier::render::display::RenderReadyFrame| {
             r.stretch_result
                 .as_ref()
                 .unwrap()

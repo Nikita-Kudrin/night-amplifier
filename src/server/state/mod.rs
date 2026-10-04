@@ -35,18 +35,17 @@ pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
-pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use session::{
     CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
 };
 pub use settings::{
     default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
-    CaptureSettings, DenoiseSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
-    SensorCorrectionSettings, TelescopeSettings, DEFAULT_BACKGROUND_GRAIN, DEFAULT_DETAIL, DEFAULT_PREVIEW_RESOLUTION,
-    DEFAULT_STREAMING_RESOLUTION,
+    CaptureSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
+    DEFAULT_PREVIEW_RESOLUTION, DEFAULT_STREAMING_RESOLUTION,
 };
-pub use types::{CameraPhase, CameraRole, CaptureState, RenderReadyFrame, StretchResult};
+pub use stream_viewers::{StreamKind, ViewerGuard};
+pub use types::{CameraPhase, CameraRole, CaptureState};
 
 /// The main application state shared across all handlers
 pub struct AppState {

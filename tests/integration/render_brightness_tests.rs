@@ -182,7 +182,7 @@ fn measure_render_brightness_on_real_sessions() {
             settings.stretch_aggressiveness = aggressiveness;
             // The live settings file pins the denoise block; the defaults are what is
             // being measured, so they are restated rather than inherited.
-            settings.denoise = night_amplifier::server::state::DenoiseSettings::default();
+            settings.denoise = night_amplifier::render::denoise::DenoiseSettings::default();
             let (rgb8, w, h) = render(stack.clone(), &settings, true, stream(), depth);
             report(&format!("{name}/{profile_name}"), &rgb8, w, h, &a);
         }

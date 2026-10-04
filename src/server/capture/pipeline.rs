@@ -7,7 +7,7 @@
 use tracing::{instrument, warn};
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
-use super::context::{create_live_stacker, LiveStacker};
+use super::context::{create_live_stacker, LiveStacker, StackSettings};
 use super::frame_gate::RejectionReason;
 use crate::frame::Frame;
 use crate::server::state::CaptureSettings;
@@ -122,9 +122,10 @@ pub fn stack_frame(
     stacking_failed: &mut bool,
     want_display: bool,
 ) -> StackingOutcome {
+    let stack = StackSettings::of(settings);
     let stacker = match stacker {
         Some(stacker) => stacker,
-        None => match create_live_stacker(settings.stacking_type, frame, settings) {
+        None => match create_live_stacker(settings.stacking_type, frame, &stack) {
             Ok(created) => stacker.insert(created),
             Err(e) => {
                 warn!(error = %e, "Cannot stack, falling back to single-frame mode");
@@ -133,7 +134,7 @@ pub fn stack_frame(
             }
         },
     };
-    stacker.apply_settings(settings);
+    stacker.apply_settings(&stack);
 
     if !stacker.has_reference() {
         if let Err(e) = stacker.set_reference(frame) {
@@ -144,7 +145,7 @@ pub fn stack_frame(
         return StackingOutcome::single_frame(frame, true); // The reference always "joins"
     }
 
-    let admission = match stacker.offer(frame, settings) {
+    let admission = match stacker.offer(frame, &stack) {
         Ok(admission) => admission,
         Err(e) => {
             warn!(error = %e, "Error adding frame to stack");
@@ -183,7 +184,7 @@ pub fn stack_frame(
 /// half they read.
 pub struct PreviewRender {
     pub pipeline_config: crate::render::RenderPipelineConfig,
-    pub stretch_result: Option<crate::server::state::StretchResult>,
+    pub stretch_result: Option<crate::render::display::StretchResult>,
 }
 
 /// Process a frame for preview display using the unified render pipeline.
@@ -379,7 +380,7 @@ pub fn process_preview_frame_with_analysis(
                     pipeline_config.contrast = false;
                 }
 
-                Some(crate::server::state::StretchResult {
+                Some(crate::render::display::StretchResult {
                     black_point: res.black_point,
                     scale_lut,
                     color_intensity: pipeline_config.stretch_config.color_intensity,

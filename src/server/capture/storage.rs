@@ -553,10 +553,10 @@ mod tests {
     #[test]
     fn render_stacked_png_matches_the_live_render_with_every_stage_on() {
         use crate::render::denoise::DenoiseScratch;
+        use crate::render::display::frame_to_rgb8_downsampled_with;
+        use crate::render::display::RenderReadyFrame;
         use crate::server::capture::analysis::{AnalysisContext, PreviewAnalysis};
         use crate::server::capture::pipeline::process_preview_frame_with_analysis;
-        use crate::server::encoding::frame_to_rgb8_downsampled_with;
-        use crate::server::state::RenderReadyFrame;
 
         // A drifting session: the left quarter holds half the stack.
         let cells = 256 / crate::frame::NOISE_REDUCTION;
@@ -642,8 +642,8 @@ pub fn render_stacked_png(
     use super::analysis::{AnalysisContext, PreviewAnalysis};
     use super::pipeline::process_preview_frame_with_analysis;
     use crate::error::StackError;
-    use crate::server::encoding::frame_to_rgb8_downsampled;
-    use crate::server::state::RenderReadyFrame;
+    use crate::render::display::frame_to_rgb8_downsampled;
+    use crate::render::display::RenderReadyFrame;
 
     // The depth is part of the render, not bookkeeping: the stretch spends it on how
     // calm the sky is (`render::autostretch::depth_grain_gain`), so an export that left

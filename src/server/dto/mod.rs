@@ -13,13 +13,15 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::state::{
-    CameraCaptureProfile, CameraRole, CaptureSession, CaptureSettings, DenoiseSettings,
-    EyepieceSettings, Resolution, RawFrameSaving, SensorCorrectionSettings,
-    TelescopeSettings,
+    CameraCaptureProfile, CameraRole, CaptureSession, CaptureSettings, EyepieceSettings,
+    RawFrameSaving, Resolution,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
+use crate::cfa::SensorCorrectionSettings;
 use crate::planetary::AlignmentRoi;
+use crate::push_to::TelescopeSettings;
+use crate::render::denoise::DenoiseSettings;
 use crate::render::StretchAggressiveness;
 use crate::stacking::{RejectionMethod, StackingType, WeightingPreset};
 

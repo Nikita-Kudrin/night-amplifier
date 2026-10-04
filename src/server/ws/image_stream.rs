@@ -162,7 +162,7 @@ async fn describe_output(stream: &FrameStream, resolution: Resolution) -> String
         Some(frame) => {
             let (frame_w, frame_h) = (frame.linear_frame.width(), frame.linear_frame.height());
             let (max_w, max_h) = resolution.bounding_box();
-            let (w, h) = crate::server::encoding::output_dimensions(frame_w, frame_h, max_w, max_h);
+            let (w, h) = crate::render::display::output_dimensions(frame_w, frame_h, max_w, max_h);
             format!("{w}x{h} (frame {frame_w}x{frame_h})")
         }
         None => "no frame yet".to_owned(),
