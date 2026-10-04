@@ -104,6 +104,9 @@ indi = ["dep:quick-xml", "dep:base64"]
 # Bundle cfitsio from source (static link) for portable distribution.
 # Without this, the system libcfitsio-dev is required.
 bundled-cfitsio = ["fitsio/fitsio-src"]
+# Test doubles for other crates' tests (Pro's): `camera::testing` and
+# `AppState::new_for_testing`. Never enabled by a build that ships.
+test-support = []
 # OpenTelemetry support - enabled by default in debug builds via cfg
 telemetry = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing-opentelemetry"]
 

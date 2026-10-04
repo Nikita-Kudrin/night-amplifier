@@ -6,8 +6,7 @@ use super::*;
 use crate::camera::types::{AcquisitionMode, ImageFormat};
 
 /// An SDK that answers polls from a script and logs what the loop asked of it.
-/// `STOP_FIRST: false` is ToupTek's and SVBony's order: settings first, stream after.
-struct ScriptedSdk<const STOP_FIRST: bool = true> {
+struct ScriptedSdk {
     info: CameraInfo,
     polls: VecDeque<Poll>,
     calls: Vec<&'static str>,
@@ -15,7 +14,7 @@ struct ScriptedSdk<const STOP_FIRST: bool = true> {
     slow_apply: Duration,
 }
 
-impl<const STOP_FIRST: bool> ScriptedSdk<STOP_FIRST> {
+impl ScriptedSdk {
     fn new(polls: impl IntoIterator<Item = Poll>) -> Self {
         Self {
             info: CameraInfo {
@@ -36,9 +35,7 @@ impl<const STOP_FIRST: bool> ScriptedSdk<STOP_FIRST> {
     }
 }
 
-impl<const STOP_FIRST: bool> SdkExposure for ScriptedSdk<STOP_FIRST> {
-    const STOP_STREAM_BEFORE_APPLY: bool = STOP_FIRST;
-
+impl SdkExposure for ScriptedSdk {
     fn info(&self) -> &CameraInfo {
         &self.info
     }
@@ -114,7 +111,7 @@ fn snap(exposure_us: u64) -> CaptureConfig {
 
 #[test]
 fn a_stream_is_configured_and_started_once_then_only_read() {
-    let mut sdk = ScriptedSdk::<true>::new([ready(), ready()]);
+    let mut sdk = ScriptedSdk::new([ready(), ready()]);
     let mut exposure = ExposureLoop::new();
 
     let frame = exposure.capture(&mut sdk, &video(1_000)).unwrap();
@@ -125,9 +122,26 @@ fn a_stream_is_configured_and_started_once_then_only_read() {
     assert_eq!(sdk.take_calls(), ["poll"], "same config, stream already running");
 }
 
+/// A self-describing frame keeps the size and depth it arrived with, whatever the
+/// config asked for — INDI's driver, not the config, decides what a FITS BLOB holds.
+#[test]
+fn a_delivered_frame_is_returned_as_it_came() {
+    let delivered = RawFrame {
+        data: vec![1, 0, 2, 0].into(),
+        width: 2,
+        height: 1,
+        format: ImageFormat::Raw16,
+    };
+    let mut sdk = ScriptedSdk::new([Poll::Pending, Poll::Delivered(delivered)]);
+
+    let frame = ExposureLoop::new().capture(&mut sdk, &snap(1_000)).unwrap();
+    assert_eq!((frame.width, frame.height, frame.format), (2, 1, ImageFormat::Raw16));
+    assert_eq!(&frame.data[..], &[1, 0, 2, 0]);
+}
+
 #[test]
 fn a_changed_config_stops_the_stream_before_it_is_applied() {
-    let mut sdk = ScriptedSdk::<true>::new([ready(), ready()]);
+    let mut sdk = ScriptedSdk::new([ready(), ready()]);
     let mut exposure = ExposureLoop::new();
     exposure.capture(&mut sdk, &video(1_000)).unwrap();
     sdk.take_calls();
@@ -136,23 +150,11 @@ fn a_changed_config_stops_the_stream_before_it_is_applied() {
     assert_eq!(sdk.take_calls(), ["end_stream", "apply", "start_stream", "poll"]);
 }
 
-/// ToupTek's and SVBony's order, kept as found.
-#[test]
-fn an_apply_first_sdk_stops_its_stream_after_the_new_settings() {
-    let mut sdk = ScriptedSdk::<false>::new([ready(), ready()]);
-    let mut exposure = ExposureLoop::new();
-    exposure.capture(&mut sdk, &video(1_000)).unwrap();
-    sdk.take_calls();
-
-    exposure.capture(&mut sdk, &video(2_000)).unwrap();
-    assert_eq!(sdk.take_calls(), ["apply", "end_stream", "start_stream", "poll"]);
-}
-
 /// A config the camera refused is not remembered as applied, so the next capture tries
 /// it again instead of exposing with whatever the camera kept.
 #[test]
 fn a_refused_config_is_applied_again_next_time() {
-    let mut sdk = ScriptedSdk::<true>::new([ready()]);
+    let mut sdk = ScriptedSdk::new([ready()]);
     sdk.fail_apply = true;
     let mut exposure = ExposureLoop::new();
 
@@ -164,7 +166,7 @@ fn a_refused_config_is_applied_again_next_time() {
 
 #[test]
 fn invalidating_pushes_the_same_config_again() {
-    let mut sdk = ScriptedSdk::<true>::new([ready(), ready()]);
+    let mut sdk = ScriptedSdk::new([ready(), ready()]);
     let mut exposure = ExposureLoop::new();
     exposure.capture(&mut sdk, &snap(1_000)).unwrap();
     exposure.invalidate();
@@ -178,7 +180,7 @@ fn invalidating_pushes_the_same_config_again() {
 /// switching back starts it again.
 #[test]
 fn switching_to_single_exposures_ends_the_stream() {
-    let mut sdk = ScriptedSdk::<true>::new([ready(), ready(), ready()]);
+    let mut sdk = ScriptedSdk::new([ready(), ready(), ready()]);
     let mut exposure = ExposureLoop::new();
     let mut stream = video(1_000);
     stream.acquisition = AcquisitionMode::Auto;
@@ -201,7 +203,7 @@ fn switching_to_single_exposures_ends_the_stream() {
 
 #[test]
 fn polling_carries_on_until_the_frame_is_ready() {
-    let mut sdk = ScriptedSdk::<true>::new([Poll::Pending, Poll::Pending, ready()]);
+    let mut sdk = ScriptedSdk::new([Poll::Pending, Poll::Pending, ready()]);
     let mut exposure = ExposureLoop::new();
 
     exposure.capture(&mut sdk, &snap(1_000)).unwrap();
@@ -213,7 +215,7 @@ fn polling_carries_on_until_the_frame_is_ready() {
 #[test]
 fn a_cancel_aborts_the_exposure_in_flight() {
     for (config, abort) in [(video(1_000), "abort_stream"), (snap(1_000), "abort_single")] {
-        let mut sdk = ScriptedSdk::<true>::new([]);
+        let mut sdk = ScriptedSdk::new([]);
         let mut exposure = ExposureLoop::new();
         let token = exposure.cancel_token();
         let cancel = std::thread::spawn(move || {
@@ -228,7 +230,7 @@ fn a_cancel_aborts_the_exposure_in_flight() {
         assert_eq!(sdk.take_calls().last(), Some(&abort));
     }
 
-    let mut sdk = ScriptedSdk::<true>::new([ready()]);
+    let mut sdk = ScriptedSdk::new([ready()]);
     let mut exposure = ExposureLoop::new();
     exposure.cancel();
     assert!(exposure.capture(&mut sdk, &video(1_000)).is_ok(), "a capture starts uncancelled");
@@ -237,7 +239,7 @@ fn a_cancel_aborts_the_exposure_in_flight() {
 /// The stall hook runs before the abort, while the SDK still has its counters.
 #[test]
 fn a_stalled_exposure_times_out_and_is_aborted() {
-    let mut sdk = ScriptedSdk::<true>::new([]);
+    let mut sdk = ScriptedSdk::new([]);
     let mut exposure = ExposureLoop::new();
     let config = video(1_000);
     let budget = config.stall_budget(8 * 4);
@@ -262,7 +264,7 @@ fn a_stalled_exposure_times_out_and_is_aborted() {
 /// stall past the watchdog, which then abandoned the handle instead of one retry.
 #[test]
 fn a_slow_reapply_spends_the_frames_own_budget() {
-    let mut sdk = ScriptedSdk::<true>::new([]);
+    let mut sdk = ScriptedSdk::new([]);
     sdk.slow_apply = Duration::from_millis(800);
     let config = video(1_000);
     let budget = config.stall_budget(8 * 4);
@@ -285,7 +287,7 @@ fn a_failed_poll_ends_the_stream_only_when_the_sdk_says_so() {
             error: CameraError::Disconnected,
             stream_ended,
         };
-        let mut sdk = ScriptedSdk::<true>::new([failed, ready()]);
+        let mut sdk = ScriptedSdk::new([failed, ready()]);
         let mut exposure = ExposureLoop::new();
         let outcome = exposure.capture(&mut sdk, &video(1_000));
         assert!(matches!(outcome, Err(CameraError::Disconnected)));
@@ -301,7 +303,7 @@ fn a_failed_poll_ends_the_stream_only_when_the_sdk_says_so() {
 
 #[test]
 fn an_invalid_config_never_reaches_the_sdk() {
-    let mut sdk = ScriptedSdk::<true>::new([ready()]);
+    let mut sdk = ScriptedSdk::new([ready()]);
     sdk.info.max_exposure_us = 1_000;
     let mut exposure = ExposureLoop::new();
 

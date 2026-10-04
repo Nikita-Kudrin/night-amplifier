@@ -55,6 +55,13 @@ the incoming field no longer matching the reference. Frames that the checks abov
 *quality* — soft stars, a loose fit — do not count: the field is still the same field, so the stack
 keeps building and rides out the cloud rather than starting over.
 
+## Outlier Rejection (Pro)
+
+Satellite trails, aircraft and cosmic-ray hits are removed pixel by pixel: each new sample is
+compared with the spread that pixel has shown so far and clipped when it lies too far out. Pro
+starts on **Sigma Clipping**, with **Winsorized** as the gentler alternative; Community averages
+every sample. Deep-sky and planetary stacking both run the method you pick.
+
 ## Saving raw frames
 
 Raw sub-exposures are saved under **Settings → Storage → Save Raw Frames**, which lists the three

@@ -1,4 +1,4 @@
-//! The exposure loop every vendor SDK shares.
+//! The exposure loop every vendor SDK, and INDI, shares.
 //!
 //! Apply a config only when it changed, keep a free-running stream or trigger one exposure
 //! at a time, and give up on cancel or a stall. A vendor implements [`SdkExposure`] — the
@@ -45,6 +45,9 @@ impl Progress<'_> {
 pub(crate) enum Poll {
     /// The frame is in the buffer, at this size.
     Ready { width: u32, height: u32 },
+    /// The frame arrived self-describing — INDI's FITS BLOB carries its own size and
+    /// depth — so it comes as it is and the buffer goes unused.
+    Delivered(RawFrame),
     /// Not yet. The SDK call waited, or the backend slept, before saying so.
     Pending,
     /// The exposure failed. Any cleanup the SDK needs is already done; `stream_ended`
@@ -57,12 +60,17 @@ pub(crate) enum Poll {
 
 /// The calls one vendor's SDK makes for [`ExposureLoop`].
 pub(crate) trait SdkExposure {
-    /// Most SDKs refuse new settings mid-stream. ToupTek and SVBony have always applied
-    /// first and stopped the stream after; kept as found, since only hardware can say
-    /// whether stopping first is safe for them.
-    const STOP_STREAM_BEFORE_APPLY: bool = true;
-
     fn info(&self) -> &CameraInfo;
+
+    /// How `config`'s frames are taken. An SDK without a video stream overrides this to
+    /// take single exposures.
+    fn acquisition(&self, config: &CaptureConfig) -> Acquisition {
+        if config.is_continuous() {
+            Acquisition::Stream
+        } else {
+            Acquisition::Single
+        }
+    }
 
     /// Pushes a config that differs from the last one applied.
     fn apply(&mut self, config: &CaptureConfig) -> CameraResult<()>;
@@ -81,7 +89,8 @@ pub(crate) trait SdkExposure {
     fn on_stall(&mut self, _progress: &Progress) {}
 
     /// Bytes the frame takes — exactly, since `Frame::from_raw` refuses a buffer of any
-    /// other length. Asked once the exposure has started: some SDKs only know it then.
+    /// other length; for an SDK that delivers whole frames, the size the stall budget
+    /// expects. Asked once the exposure has started: some SDKs only know it then.
     fn frame_len(&mut self, config: &CaptureConfig) -> CameraResult<usize>;
 
     fn poll(&mut self, progress: &Progress, buffer: &mut [u8]) -> Poll;
@@ -130,20 +139,15 @@ impl ExposureLoop {
 
         if config.should_reapply(self.last_applied.as_ref()) {
             let _span = info_span!("configure_camera", sensor_mode = ?config.sensor_mode).entered();
-            if S::STOP_STREAM_BEFORE_APPLY {
-                self.end_stream(sdk);
-            }
+            // Every SDK wants its stream stopped first: SVBony's header says so for the
+            // ROI, ToupTek's for the resolution, and both INDI drivers stop around a change.
+            self.end_stream(sdk);
             sdk.apply(config)?;
             self.last_applied = Some(config.clone());
-            self.end_stream(sdk);
         }
 
         let _span = info_span!("read_frame").entered();
-        let acquisition = if config.is_continuous() {
-            Acquisition::Stream
-        } else {
-            Acquisition::Single
-        };
+        let acquisition = sdk.acquisition(config);
         match acquisition {
             Acquisition::Stream if self.streaming => {}
             Acquisition::Stream => {
@@ -159,7 +163,7 @@ impl ExposureLoop {
         let len = sdk.frame_len(config)?;
         let mut buffer = self.buffers.get(len);
         let budget = config.stall_budget(len);
-        let (width, height) = loop {
+        let frame = loop {
             if self.cancel_flag.load(Ordering::SeqCst) {
                 return Err(self.give_up(sdk, acquisition, CameraError::Cancelled));
             }
@@ -174,7 +178,15 @@ impl ExposureLoop {
                 return Err(self.give_up(sdk, acquisition, CameraError::ExposureTimeout(budget)));
             }
             match sdk.poll(&progress, &mut buffer) {
-                Poll::Ready { width, height } => break (width, height),
+                Poll::Ready { width, height } => {
+                    break RawFrame {
+                        data: buffer,
+                        width,
+                        height,
+                        format: config.format,
+                    }
+                }
+                Poll::Delivered(frame) => break frame,
                 Poll::Pending => {}
                 Poll::Failed {
                     error,
@@ -191,12 +203,7 @@ impl ExposureLoop {
         if acquisition == Acquisition::Single {
             sdk.finish_single()?;
         }
-        Ok(RawFrame {
-            data: buffer,
-            width,
-            height,
-            format: config.format,
-        })
+        Ok(frame)
     }
 
     fn end_stream<S: SdkExposure>(&mut self, sdk: &mut S) {

@@ -894,15 +894,20 @@ mod tests {
         assert_eq!(loaded.stacking_type, defaults.stacking_type);
     }
 
-    /// A file from before `rejection_method` existed has always loaded as `None`, unlike
-    /// a fresh install's `SigmaClip`; one schema for the file must not change that quietly.
+    /// A file from before `rejection_method` existed starts where a fresh install does:
+    /// the best method the build runs. It used to load `None` even in Pro, where a fresh
+    /// install got sigma clipping. Community registers no plugin, so `None` here; Pro's
+    /// `rejection_defaults` checks the other half.
     #[test]
-    fn a_file_without_a_rejection_method_loads_without_rejection() {
+    fn a_file_without_a_rejection_method_loads_the_builds_best_method() {
         let mut json = written(&CaptureSettings::default());
-        json.as_object_mut().unwrap().remove("rejection_method");
+        json["rejection_method"] = serde_json::json!("WinsorizedSigmaClip");
+        assert_eq!(read(json.clone()).rejection_method, RejectionMethod::WinsorizedSigmaClip);
 
-        assert_eq!(read(json).rejection_method, RejectionMethod::None);
-        assert_eq!(CaptureSettings::default().rejection_method, RejectionMethod::SigmaClip);
+        json.as_object_mut().unwrap().remove("rejection_method");
+        assert_eq!(read(json).rejection_method, RejectionMethod::best_available());
+        assert_eq!(RejectionMethod::best_available(), RejectionMethod::None);
+        assert_eq!(CaptureSettings::default().rejection_method, RejectionMethod::None);
     }
 
     /// A hand-edited file is held to the same ranges the API holds a request to, in every

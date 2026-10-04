@@ -314,7 +314,7 @@ impl AppState {
     /// dated directories in whatever tree the suite was run from. Cleanup is left to the
     /// OS: the paths outlive the call, and nothing here can say when a test is done with
     /// one.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new_for_testing() -> (Self, DiskWriter) {
         use std::sync::atomic::AtomicU64;
 

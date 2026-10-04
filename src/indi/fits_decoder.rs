@@ -11,7 +11,9 @@ pub struct FitsDecoder;
 
 impl FitsDecoder {
     /// Decodes a base64 INDI BLOB string into a raw binary buffer using a pre-allocated Vec.
+    /// indiserver writes the data on a line of its own, so the surrounding whitespace goes.
     pub fn decode_base64_blob(base64_str: &str, out_buffer: &mut Vec<u8>) -> Result<()> {
+        let base64_str = base64_str.trim();
         let expected_len = (base64_str.len() / 4) * 3;
         out_buffer.clear();
         out_buffer.reserve(expected_len);

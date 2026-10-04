@@ -249,8 +249,6 @@ struct TouptekExposure<'a> {
 }
 
 impl SdkExposure for TouptekExposure<'_> {
-    const STOP_STREAM_BEFORE_APPLY: bool = false;
-
     fn info(&self) -> &CameraInfo {
         self.info
     }

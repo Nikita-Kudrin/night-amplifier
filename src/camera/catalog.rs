@@ -48,7 +48,7 @@ impl RegistryCatalog {
 
     /// The simulator alone, so tests make no vendor SDK calls whatever the machine has
     /// installed — discovery used to open real cameras from parallel tests.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn simulator_only() -> Self {
         Self { vendors: false }
     }

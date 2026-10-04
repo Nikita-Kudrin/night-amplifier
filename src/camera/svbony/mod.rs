@@ -337,8 +337,6 @@ struct SvbonyExposure<'a> {
 }
 
 impl SdkExposure for SvbonyExposure<'_> {
-    const STOP_STREAM_BEFORE_APPLY: bool = false;
-
     fn info(&self) -> &CameraInfo {
         self.info
     }

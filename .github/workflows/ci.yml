@@ -236,7 +236,7 @@ jobs:
       - name: Test vendor providers
         env:
           RUSTFLAGS: -D warnings
-        run: cargo nextest run --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony -E 'test(/^camera::/)'
+        run: cargo nextest run --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony,indi -E 'test(/^camera::/) or test(/^indi::/)'
 
   # ToupTek's structs are UTF-16 on Windows; a const assertion in its FFI types fails the
   # build when their layout drifts from toupcam.h.
@@ -257,4 +257,4 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       - name: Check vendor providers
-        run: cargo check --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony
+        run: cargo check --lib --no-default-features --features playerone,zwo,qhy,touptek,svbony,indi

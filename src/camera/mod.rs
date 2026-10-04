@@ -27,8 +27,8 @@ mod types;
 
 #[cfg(test)]
 mod sdk_loading_tests;
-#[cfg(test)]
-pub(crate) mod testing;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;
 
 #[cfg(feature = "playerone")]
 mod playerone;

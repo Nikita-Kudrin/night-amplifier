@@ -2,15 +2,12 @@
 
 use tracing::{debug, field, info, instrument, warn, Span};
 
-use super::LiveStacker;
+use super::{stacking_config, LiveStacker};
 use crate::frame::{Frame, NoiseField};
 use crate::planetary::AlignmentRoi;
 use crate::server::capture::frame_gate::FrameAdmission;
 use crate::server::state::CaptureSettings;
-use crate::stacking::{
-    FrameQuality, RejectionMethod, Stacker, StackingConfig, StackingType, WeightingConfig,
-    REJECTION_PLUGIN,
-};
+use crate::stacking::{FrameQuality, Stacker, StackingType};
 
 /// Holds state for planetary-based live stacking pipeline
 pub struct PlanetaryStackingContext {
@@ -26,22 +23,7 @@ impl PlanetaryStackingContext {
         channels: usize,
         settings: &CaptureSettings,
     ) -> Option<Self> {
-        // Planetary stacking often uses mean or median without aggressive rejection
-        // but for live stacking, SigmaClip is usually safe and effective.
-        let weighting = WeightingConfig::from(settings.weighting_preset);
-
-        let rejection = if crate::license::pro_plugin(&REJECTION_PLUGIN).is_some() {
-            RejectionMethod::SigmaClip
-        } else {
-            RejectionMethod::None
-        };
-
-        let stacking_config = StackingConfig::default()
-            .with_rejection(rejection)
-            .with_sigma(settings.rejection_sigma)
-            .with_weighting(weighting);
-
-        let stacker = match Stacker::new(width, height, channels, stacking_config) {
+        let stacker = match Stacker::new(width, height, channels, stacking_config(settings)) {
             Ok(s) => s,
             Err(e) => {
                 warn!(error = %e, "Failed to create live stacker for planetary mode");
@@ -196,16 +178,7 @@ impl PlanetaryStackingContext {
 
     /// Update stacking parameters from current settings dynamically
     pub fn update_from_settings(&mut self, settings: &CaptureSettings) {
-        let weighting = WeightingConfig::from(settings.weighting_preset);
-
-        let rejection = settings.rejection_method;
-
-        let config = StackingConfig::default()
-            .with_rejection(rejection)
-            .with_sigma(settings.rejection_sigma)
-            .with_weighting(weighting);
-
-        self.stacker.update_config(config);
+        self.stacker.update_config(stacking_config(settings));
     }
 }
 

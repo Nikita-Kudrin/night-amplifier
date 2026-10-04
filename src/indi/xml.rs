@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+/// Spelled as the INDI protocol spells it, `Idle`/`Ok`/`Busy`/`Alert`: a lower-case
+/// spelling once failed every real `def*Vector`, so no device was ever discovered.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub enum PropertyState {
     #[default]
@@ -25,6 +26,19 @@ pub enum SwitchState {
 }
 
 // --- Incoming Messages (Definitions and Updates) ---
+//
+// An enum-valued element (a switch, a light) reads its value from `$text`: under
+// `$value` quick-xml expects a child element and rejected every real switch vector.
+
+/// A value a driver wrote on a line of its own, as indiserver does: `\nOff\n    `.
+fn trimmed<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let text = String::deserialize(deserializer)?;
+    T::deserialize(serde::de::value::StrDeserializer::<D::Error>::new(text.trim()))
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DefNumber {
@@ -82,7 +96,7 @@ pub struct DefSwitch {
     pub name: String,
     #[serde(rename = "@label", default)]
     pub label: String,
-    #[serde(rename = "$value")]
+    #[serde(rename = "$text", deserialize_with = "trimmed")]
     pub value: SwitchState,
 }
 
@@ -108,7 +122,7 @@ fn default_switch_rule() -> SwitchRule {
 pub struct SetSwitch {
     #[serde(rename = "@name")]
     pub name: String,
-    #[serde(rename = "$value")]
+    #[serde(rename = "$text", deserialize_with = "trimmed")]
     pub value: SwitchState,
 }
 
@@ -172,7 +186,7 @@ pub struct DefLight {
     pub name: String,
     #[serde(rename = "@label", default)]
     pub label: String,
-    #[serde(rename = "$value")]
+    #[serde(rename = "$text", deserialize_with = "trimmed")]
     pub value: PropertyState,
 }
 
@@ -192,7 +206,7 @@ pub struct DefLightVector {
 pub struct SetLight {
     #[serde(rename = "@name")]
     pub name: String,
-    #[serde(rename = "$value")]
+    #[serde(rename = "$text", deserialize_with = "trimmed")]
     pub value: PropertyState,
 }
 
@@ -324,7 +338,9 @@ pub struct NewNumberVector {
 pub struct NewSwitch {
     #[serde(rename = "@name")]
     pub name: String,
-    #[serde(rename = "$value")]
+    /// `$text`, not `$value`: an enum in `$value` serialises as an element, `<On/>`,
+    /// which no driver reads.
+    #[serde(rename = "$text")]
     pub value: SwitchState,
 }
 
@@ -359,7 +375,6 @@ pub struct NewTextVector {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub enum BlobEnable {
     Never,
     Also,
@@ -373,7 +388,7 @@ pub struct EnableBlob {
     pub device: String,
     #[serde(rename = "@name", skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(rename = "$value")]
+    #[serde(rename = "$text")]
     pub value: BlobEnable,
 }
 
@@ -385,4 +400,79 @@ pub fn parse_message(xml: &str) -> Result<IndiMessage, quick_xml::DeError> {
 // Helper to serialize an outgoing message
 pub fn serialize_message<T: Serialize>(msg: &T) -> Result<String, quick_xml::SeError> {
     quick_xml::se::to_string(msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drivers_property_state_parses() {
+        let xml = r#"<defNumberVector device="CCD Simulator" name="CCD_TEMPERATURE" state="Busy"><defNumber name="CCD_TEMPERATURE_VALUE" min="-50" max="50" step="0.1">-9.5</defNumber></defNumberVector>"#;
+        let Ok(IndiMessage::DefNumberVector(vector)) = parse_message(xml) else {
+            panic!("{:?}", parse_message(xml));
+        };
+        assert_eq!(vector.state, PropertyState::Busy);
+        assert_eq!(vector.elements[0].value, -9.5);
+    }
+
+    /// A driver indents its values; switches and lights are text, not elements.
+    #[test]
+    fn a_drivers_switch_and_light_vectors_parse() {
+        let xml = r#"<defSwitchVector device="CCD" name="CCD_VIDEO_STREAM" state="Idle" rule="OneOfMany">
+    <defSwitch name="STREAM_ON" label="Stream On">
+Off
+    </defSwitch>
+    <defSwitch name="STREAM_OFF" label="Stream Off">
+On
+    </defSwitch>
+</defSwitchVector>"#;
+        let Ok(IndiMessage::DefSwitchVector(vector)) = parse_message(xml) else {
+            panic!("{:?}", parse_message(xml));
+        };
+        assert_eq!(vector.elements[0].value, SwitchState::Off);
+        assert_eq!(vector.elements[1].value, SwitchState::On);
+
+        let xml = r#"<setLightVector device="CCD" name="STATUS" state="Ok"><oneLight name="LINK">Alert</oneLight></setLightVector>"#;
+        let Ok(IndiMessage::SetLightVector(vector)) = parse_message(xml) else {
+            panic!("{:?}", parse_message(xml));
+        };
+        assert_eq!(vector.elements[0].value, PropertyState::Alert);
+
+        let xml = r#"<defNumberVector device="CCD" name="CCD_EXPOSURE" state="Idle">
+    <defNumber name="CCD_EXPOSURE_VALUE" min="0.01" max="3600" step="1">
+1.5
+    </defNumber>
+</defNumberVector>"#;
+        let Ok(IndiMessage::DefNumberVector(vector)) = parse_message(xml) else {
+            panic!("{:?}", parse_message(xml));
+        };
+        assert_eq!(vector.elements[0].value, 1.5);
+    }
+
+    /// Element values go out as the protocol's text: `On`, `Also`.
+    #[test]
+    fn switches_and_blob_rules_are_sent_as_text() {
+        let switch = NewSwitchVector {
+            device: "CCD".into(),
+            name: "CCD_VIDEO_STREAM".into(),
+            elements: vec![NewSwitch {
+                name: "STREAM_ON".into(),
+                value: SwitchState::On,
+            }],
+        };
+        assert_eq!(
+            serialize_message(&switch).unwrap(),
+            r#"<newSwitchVector device="CCD" name="CCD_VIDEO_STREAM"><oneSwitch name="STREAM_ON">On</oneSwitch></newSwitchVector>"#
+        );
+        let blobs = EnableBlob {
+            device: "CCD".into(),
+            name: Some("CCD1".into()),
+            value: BlobEnable::Also,
+        };
+        assert_eq!(
+            serialize_message(&blobs).unwrap(),
+            r#"<enableBLOB device="CCD" name="CCD1">Also</enableBLOB>"#
+        );
+    }
 }
