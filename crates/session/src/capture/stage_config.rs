@@ -1,0 +1,840 @@
+//! Mapping `CaptureSettings` onto the configuration each capture stage takes.
+//!
+//! One direction only: settings in, stage configuration out. The one exception is
+//! [`convert_captured_frame`], which ties the raw-CFA stage together and so
+//! belongs with the builders that decide what's in it.
+//!
+//! Split out of `pipeline.rs` once it grew too large to read "what should this
+//! stage be configured as" and "run a frame through the stack" as one thing.
+
+use night_amplifier_core::background::BackgroundConfig;
+use night_amplifier_core::camera::{CameraInfo, CameraResult, RawFrame};
+use night_amplifier_core::cfa::{CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
+use night_amplifier_core::debayer::DebayerAlgorithm;
+use night_amplifier_core::frame::Frame;
+use night_amplifier_core::plugins::Plugins;
+use crate::state::CaptureSettings;
+
+/// The raw-CFA stage for the current settings.
+///
+/// Built when settings change rather than per frame — a stage may own
+/// precomputed state, and a master dark will be the first that does.
+pub fn build_cfa_pipeline(settings: &CaptureSettings) -> CfaPipeline {
+    let correction = &settings.sensor_correction;
+    let mut pipeline = CfaPipeline::new();
+
+    // Hot pixels first: a column carrying hundreds would drag its own median, and FPN would spread that across it.
+    //
+    // Unconditional, not user-switchable: the plate solver reads this stage's output.
+    // Without it, bilinear turns every hot pixel into a star-sized blob — on 0.5s
+    // gain-337 guide subs they outnumbered real stars 72 to 25 and ASTAP failed at
+    // any FOV, where the cleaned frame solved full-sky in 2-4s. Focus/Finder mode
+    // once switched it off for frame rate, precisely while hunting — kept on since,
+    // including for planetary (one-sided, isolation-gated: cannot bite a disc).
+    pipeline = pipeline.with_stage(Box::new(HotPixelFilter::new(HotPixelConfig {
+        sigma: correction.hot_pixel_sigma,
+        ..HotPixelConfig::default()
+    })));
+    // Per stacking type (not planetary — see `uses_fpn_removal`). Focus/Finder mode's
+    // stacking conflict reads the same capability, so the two cannot drift apart.
+    if correction.fpn_removal && settings.stacking_type.uses_fpn_removal() {
+        pipeline = pipeline.with_stage(Box::new(FpnFilter));
+    }
+    pipeline
+}
+
+/// The demosaic the raw stage ends with.
+///
+/// Superpixel is skipped for planetary for the same reason `cfa::fpn` and the
+/// denoisers are: it halves both dimensions, and resolution at the diffraction
+/// limit is the entire product of lucky imaging. Leaving the setting to apply
+/// there would quietly throw away three quarters of what the mode exists to
+/// capture, on a toggle the observer set for deep sky.
+pub fn debayer_algorithm(settings: &CaptureSettings) -> DebayerAlgorithm {
+    if settings.sensor_correction.superpixel_debayer
+        && settings.stacking_type != night_amplifier_core::stacking::StackingType::Planetary
+    {
+        DebayerAlgorithm::Superpixel
+    } else {
+        DebayerAlgorithm::Bilinear
+    }
+}
+
+/// Decode a captured buffer, run the pre-debayer corrections, and demosaic.
+///
+/// The whole raw-CFA stage in one call, so the probe frame that sizes the
+/// pipeline's channels and the frames that flow through them are produced the
+/// same way — with `superpixel_debayer` on they differ by 4x in memory.
+pub fn convert_captured_frame(
+    raw: &RawFrame,
+    info: &CameraInfo,
+    cfa_pipeline: &CfaPipeline,
+    algorithm: DebayerAlgorithm,
+) -> CameraResult<Frame> {
+    let mut cfa = raw.to_cfa_frame(info)?;
+    {
+        let _timer = night_amplifier_core::telemetry::metrics::time_stage(
+            night_amplifier_core::telemetry::metrics::FrameStage::CfaCorrection,
+        );
+        cfa_pipeline.apply(&mut cfa);
+    }
+    cfa.debayer(algorithm)
+        .map_err(|e| night_amplifier_core::camera::CameraError::ImageReadFailed(e.to_string()))
+}
+
+/// Helper to get background configuration from capture settings
+pub fn get_background_config(settings: &CaptureSettings) -> BackgroundConfig {
+    BackgroundConfig::from_stretch_profile(settings.stretch_aggressiveness)
+        .with_algorithm(settings.background_extraction_algorithm)
+}
+
+/// The sky level the black floor's percentage is quoted against.
+///
+/// Both slider halves read in fractions of full scale, but darkening anchors to
+/// the sky, not full scale — so `-0.045` is the post-contrast sky level at the
+/// shipped stretch settings (`sky_level_after_contrast(0.08, default)`), putting
+/// the floor at the sky under both a nominal and a brighter sky — the point of
+/// anchoring. *Derived*, not chosen: moved 0.052 -> 0.045 when `ContrastConfig`'s
+/// strength went to 1.0; `the_nominal_sky_level_matches_the_shipped_curve` guards it.
+const NOMINAL_SKY_LEVEL: f32 = 0.045;
+
+/// Pedestal held under the soft (spatial) darkening, in fractions of full scale.
+///
+/// About 1.5 output levels. The gain never takes a sky sample to zero, but the
+/// autostretch black point clamps ~0.8 % of them there before it — the speckle
+/// the lifting half of the slider exists to remove, which a darkened sky loses.
+const DARKENED_FLOOR_PEDESTAL: f32 = 0.006;
+
+/// Slider positions this close to zero mean zero.
+///
+/// The sign of `black_floor` picks between two different transforms against two
+/// different references, so it is an exact float test on a value that arrives
+/// over JSON. A range input stepping onto its own zero can land a few ULPs below
+/// it, and that would swap in the guard pedestal — one and a half output levels
+/// — for a floor of nothing.
+const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
+
+/// How far down the slider reaches, matching `BLACK_FLOOR_LIMITS` in the frontend
+/// — enforced here, not trusted, since `POST /api/settings` takes any `f32` with
+/// nowhere else to clamp a wild value. Stops at fraction 1.0 (= `NOMINAL_SKY_LEVEL`),
+/// where `ShadowFloor` clips at `fraction * sky`: past that, "Darker sky" eats into
+/// the target it exists to separate (measured: 1.11 cost 6% target excess, 34% of
+/// samples at pure black). The soft form's own ceiling sits further out
+/// (`MAX_DARKENING`, fraction 1.125), left unused here on purpose. Calibrated, not
+/// fixed — see `NOMINAL_SKY_LEVEL`'s history; pinned by the black-floor tests below.
+const MIN_BLACK_FLOOR: f32 = -NOMINAL_SKY_LEVEL;
+
+/// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
+/// lifting half is clamped in the same place as the darkening one.
+const MAX_BLACK_FLOOR: f32 = 0.5;
+
+/// How much of the eyepiece intensity slider's range actually reaches the
+/// stretch. The slider is a comfort control, not a full remap of the tone curve.
+const EYEPIECE_INTENSITY_SCALE: f32 = 0.4;
+
+/// Sky level the eyepiece view aims for at full intensity.
+const EYEPIECE_TARGET_BACKGROUND: f32 = 0.01;
+
+/// Black-point factor the eyepiece view aims for at full intensity. Higher than
+/// any stretch profile's default: trading faint-tail detail for a smoother sky
+/// is the whole point of the eyepiece view.
+const EYEPIECE_BLACK_POINT_SIGMA: f32 = 3.0;
+
+/// The denoise config the encoders read, with the gates Community owns.
+///
+/// Planetary is refused here, not in the plugin: it's a product rule, not tuning
+/// — the same asymmetry `cfa::fpn`, superpixel debayering, and the black floor
+/// each state at their own site. Lucky imaging exists to recover fine detail these
+/// filters remove, and a lunar disc is the low-contrast large-scale structure a
+/// wavelet threshold flattens. The master switch is refused here too, so "off"
+/// means off whatever a plugin would do.
+fn denoise_config(settings: &CaptureSettings, plugins: &Plugins) -> night_amplifier_core::render::DenoiseConfig {
+    if settings.stacking_type == night_amplifier_core::stacking::StackingType::Planetary
+        || !settings.denoise.enabled
+    {
+        return night_amplifier_core::render::DenoiseConfig::OFF;
+    }
+    night_amplifier_core::render::denoise::config_for(
+        plugins,
+        &requested_denoise(settings),
+        settings.stretch_aggressiveness,
+    )
+}
+
+/// The observer's denoise settings as this frame may use them.
+///
+/// Focus/Finder mode holds the network off here, at the frame's config, rather than by
+/// forcing `DenoiseSettings::ai` false: framing wants frame rate and the network is the
+/// costliest stage of a render, but the switch stays the observer's for when the mode
+/// ends. The classic filters then keep the scales they would have handed it.
+pub(crate) fn requested_denoise(settings: &CaptureSettings) -> night_amplifier_core::render::denoise::DenoiseSettings {
+    night_amplifier_core::render::denoise::DenoiseSettings {
+        ai: settings.denoise.ai && !settings.focus_mode,
+        ..settings.denoise.clone()
+    }
+}
+
+/// The settings the guide camera's stream renders with: the observer's, less the AI
+/// denoiser. Nothing stacks there, a frame arrives every second or two, and each pass
+/// would take its cores from the imaging camera's stacking.
+pub(crate) fn guide_render_settings(mut settings: CaptureSettings) -> CaptureSettings {
+    settings.denoise.ai = false;
+    settings
+}
+
+/// `black_floor` with the nonsense taken out: dead-banded at zero, clamped to
+/// the slider's own range, and finite.
+fn sanitized_black_floor(settings: &CaptureSettings) -> f32 {
+    let value = settings.eyepiece.black_floor;
+    if !value.is_finite() || value.abs() < BLACK_FLOOR_DEADBAND {
+        return 0.0;
+    }
+    value.clamp(MIN_BLACK_FLOOR, MAX_BLACK_FLOOR)
+}
+
+/// The slider's darkening half, or `None` when it's off or can't be honoured. Two
+/// conditions beyond the sign, since the floor anchors to a sky level something else
+/// must measure first: **auto-stretch must be on** (anchor is the solver's own
+/// `target_background`; without a solve, letting the request through leaves only the
+/// guard pedestal, which *raises* the sky — measured 2-3 output levels brighter on
+/// IMX533, a "darker" control making things brighter), and **not Planetary** (anchor
+/// is the frame's median, which on a lunar/planetary frame is the disc, not the sky
+/// — the same asymmetry `cfa::fpn`, superpixel debayering and both denoisers state).
+fn darkening_request(settings: &CaptureSettings) -> Option<night_amplifier_core::render::ShadowFloorRequest> {
+    let black_floor = sanitized_black_floor(settings);
+    if black_floor >= 0.0 {
+        return None;
+    }
+    if !settings.auto_stretch {
+        return None;
+    }
+    if settings.stacking_type == night_amplifier_core::stacking::StackingType::Planetary {
+        return None;
+    }
+    Some(night_amplifier_core::render::ShadowFloorRequest {
+        fraction: -black_floor / NOMINAL_SKY_LEVEL,
+        hard: settings.eyepiece.darker_sky,
+    })
+}
+
+pub fn get_render_pipeline_config(
+    settings: &CaptureSettings,
+    plugins: &Plugins,
+    for_fits: bool,
+) -> night_amplifier_core::render::RenderPipelineConfig {
+    use night_amplifier_core::render::{AutoStretchConfig, RenderPipelineConfig};
+
+    // Set configuration first, then explicit toggle last to override the config's auto-enable
+    let mut config = RenderPipelineConfig::new()
+        .with_plugins(plugins.clone())
+        .with_background_config(get_background_config(settings))
+        .with_background_subtraction(settings.background_subtraction);
+
+    if settings.stacking_type == night_amplifier_core::stacking::StackingType::DeepSky
+        || settings.stacking_type == night_amplifier_core::stacking::StackingType::Comet
+    {
+        config = config.with_scnr(true).with_scnr_amount(1.0);
+    }
+
+    if !for_fits {
+        let use_aggressive_stretch = settings.stacking_type.uses_aggressive_stretch();
+        let stretch_config = AutoStretchConfig::from_profile(
+            !use_aggressive_stretch,
+            settings.stretch_aggressiveness,
+        )
+        .with_color_intensity(1.0 + settings.auto_stretch_intensity)
+        // The expensive half of the Background Grain dial. It belongs here, with the
+        // profile, and not at `AutoStretchConfig::default()`: the default is what an
+        // export or a one-shot render uses, and those have no dial to read.
+        .with_grain_split(night_amplifier_core::render::denoise::grain_split_for(plugins, &settings.denoise));
+        let saturation_config = settings.saturation_boost_config();
+
+        // Similarly for auto-stretch and saturation boost: set config first, then explicit toggle
+        config = config
+            .with_stretch_config(stretch_config)
+            .with_auto_stretch(settings.auto_stretch)
+            .with_saturation_config(saturation_config)
+            .with_saturation_boost(settings.saturation_boost)
+            .with_contrast(settings.auto_stretch);
+
+        // The 8-bit conversion is not a pipeline stage; the encoders apply it
+        // where they write output bytes. It is set unconditionally because a
+        // zero pedestal with dithering off reproduces a plain conversion.
+        // One signed slider, two transforms. They are not the same operation
+        // with the sign flipped: the pedestal is a property of the panel, so it
+        // is an absolute fraction of full scale, while the floor is a property
+        // of the sky, so it is a fraction of wherever the sky landed. The
+        // resolve happens later, once the solver reports that level.
+        let darkening = darkening_request(settings);
+        let pedestal = match darkening {
+            // The point of the hard floor is reaching true black; guarding it
+            // off the panel's off state would undo exactly that.
+            Some(request) if request.hard => 0.0,
+            // The spatial gain keeps the sky off zero, but not what the black
+            // point already clamped there: roughly one and a half output levels.
+            Some(_) => DARKENED_FLOOR_PEDESTAL,
+            // The lifting half — or a darkening this frame cannot honour, in
+            // which case the pedestal must stay where a zero floor leaves it
+            // rather than becoming the only half of the request that lands.
+            None => sanitized_black_floor(settings).max(0.0),
+        };
+        config.display = night_amplifier_core::render::DisplayOutput::default()
+            .with_pedestal(pedestal)
+            .with_dither(settings.eyepiece.dither);
+
+        config.shadow_floor = darkening.unwrap_or(night_amplifier_core::render::ShadowFloorRequest::NONE);
+
+        config.denoise = denoise_config(settings, plugins);
+
+        // Apply eyepiece dark background enhancement
+        let intensity = settings.eyepiece.intensity.clamp(0.0, 1.0) * EYEPIECE_INTENSITY_SCALE;
+        if intensity > 0.0 && config.auto_stretch {
+            // Interpolate target_background down for a darker sky
+            config.stretch_config.target_background = config.stretch_config.target_background
+                * (1.0 - intensity)
+                + EYEPIECE_TARGET_BACKGROUND * intensity;
+
+            // Interpolate black_point_sigma *up*, which is what actually clips
+            // noise: the black point is `mode - sigma * black_point_sigma`, so a
+            // larger factor puts more of the sky's noise below black. This used
+            // to interpolate down toward 1.0 under a comment claiming it clipped
+            // noise, which had the opposite effect — at full intensity it left
+            // more grain visible (9.7 output levels against 6.0) *and* clamped
+            // more sky pixels to pure black (9.7 % against 1.8 %).
+            config.stretch_config.black_point_sigma = (config.stretch_config.black_point_sigma
+                * (1.0 - intensity)
+                + EYEPIECE_BLACK_POINT_SIGMA * intensity)
+                .clamp(0.5, 5.0);
+
+            // Enhance contrast to make objects pop
+            config.contrast = true;
+            config.contrast_config.strength =
+                config.contrast_config.strength * (1.0 - intensity) + 1.0 * intensity;
+        }
+    } else {
+        // `RenderPipelineConfig::default()` turns both of these on, and the block above
+        // is the only place that ever sets them deliberately — so skipping it left the
+        // saved FITS carrying an asinh stretch and a contrast S-curve, the one artefact
+        // that is meant to stay linear for PixInsight or Siril. Worse, the stretch is
+        // solved per frame, so no two saved stacks were even comparable.
+        //
+        // Background subtraction and SCNR stay: those are wanted on disk.
+        config = config.with_auto_stretch(false).with_contrast(false);
+    }
+
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use night_amplifier_core::background::BackgroundExtractionAlgorithm;
+    use night_amplifier_core::cfa::SensorCorrectionSettings;
+    use night_amplifier_core::frame::Frame;
+    use night_amplifier_core::stacking::StackingType;
+
+    /// `NOMINAL_SKY_LEVEL` is where the shipped curve puts the sky, and the darker-sky
+    /// slider's whole calibration hangs off it: a stale value scales every position of
+    /// the darkening half against a sky that is no longer there. It is a literal only
+    /// because the S-curve is not `const`.
+    #[test]
+    fn the_nominal_sky_level_matches_the_shipped_curve() {
+        let shipped = night_amplifier_core::render::output::ContrastConfig::default();
+        let actual = night_amplifier_core::render::sky_level_after_contrast(0.08, Some(&shipped));
+        assert!(
+            (NOMINAL_SKY_LEVEL - actual).abs() < 5e-4,
+            "NOMINAL_SKY_LEVEL is {NOMINAL_SKY_LEVEL}, but the shipped contrast curve \
+             puts an 0.08 sky at {actual} — the darker-sky slider is calibrated against \
+             a sky level the render no longer produces"
+        );
+    }
+
+    #[test]
+    fn test_get_render_pipeline_config_respects_toggles() {
+        let mut settings = CaptureSettings::default();
+
+        // Test 1: Both enabled
+        settings.background_subtraction = true;
+        settings.auto_stretch = true;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.background_subtraction);
+        assert!(config.auto_stretch);
+
+        // Test 2: Both disabled
+        settings.background_subtraction = false;
+        settings.auto_stretch = false;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(!config.background_subtraction);
+        assert!(!config.auto_stretch);
+
+        // Test 3: Mixed
+        settings.background_subtraction = true;
+        settings.auto_stretch = false;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.background_subtraction);
+        assert!(!config.auto_stretch);
+    }
+
+    #[test]
+    fn test_eyepiece_intensity_interpolation() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+
+        // Base config
+        settings.eyepiece.intensity = 0.0;
+        let base_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+
+        // Max intensity config (slider at 1.0, internal intensity 0.4)
+        settings.eyepiece.intensity = 1.0;
+        let max_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+
+        let blend = |base: f32, target: f32| base * 0.6 + target * 0.4;
+        let expected_bg = blend(
+            base_config.stretch_config.target_background,
+            EYEPIECE_TARGET_BACKGROUND,
+        );
+        let expected_sigma = blend(
+            base_config.stretch_config.black_point_sigma,
+            EYEPIECE_BLACK_POINT_SIGMA,
+        );
+        let expected_contrast = blend(base_config.contrast_config.strength, 1.0);
+
+        // Target background falls: a darker sky.
+        assert!(
+            max_config.stretch_config.target_background
+                < base_config.stretch_config.target_background
+        );
+        assert!((max_config.stretch_config.target_background - expected_bg).abs() < 1e-5);
+
+        // Black point sigma *rises*. The black point is `mode - sigma * factor`,
+        // so a larger factor pushes more of the sky's noise below black — which
+        // is what "clip noise" means. This assertion used to run the other way
+        // and pinned a slider that made the eyepiece view grainier the further
+        // it was pushed.
+        assert!(
+            max_config.stretch_config.black_point_sigma
+                > base_config.stretch_config.black_point_sigma,
+            "eyepiece intensity must raise black_point_sigma, got {} from {}",
+            max_config.stretch_config.black_point_sigma,
+            base_config.stretch_config.black_point_sigma
+        );
+        assert!((max_config.stretch_config.black_point_sigma - expected_sigma).abs() < 1e-5);
+
+        // Contrast should increase
+        assert!(max_config.contrast);
+        assert!((max_config.contrast_config.strength - expected_contrast).abs() < 1e-5);
+
+        // Half intensity config (slider at 0.5, internal intensity 0.2)
+        settings.eyepiece.intensity = 0.5;
+        let half_config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+
+        let expected_half_bg =
+            base_config.stretch_config.target_background * 0.8 + EYEPIECE_TARGET_BACKGROUND * 0.2;
+        assert!((half_config.stretch_config.target_background - expected_half_bg).abs() < 1e-5);
+    }
+
+    /// The slider must move monotonically toward a smoother sky across its whole
+    /// range, not just at the endpoints.
+    #[test]
+    fn eyepiece_intensity_monotonically_raises_the_black_point_factor() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+
+        let mut previous = f32::MIN;
+        for step in 0..=10 {
+            settings.eyepiece.intensity = step as f32 / 10.0;
+            let sigma = get_render_pipeline_config(&settings, &Plugins::none(), false)
+                .stretch_config
+                .black_point_sigma;
+            assert!(
+                sigma >= previous,
+                "black_point_sigma fell from {previous} to {sigma} at intensity {}",
+                settings.eyepiece.intensity
+            );
+            previous = sigma;
+        }
+    }
+
+    /// `black_point_sigma` is written directly rather than through
+    /// `with_black_point_sigma`, so it carries its own clamp; a profile starting
+    /// near the ceiling must not be pushed out of the solver's supported range.
+    #[test]
+    fn eyepiece_black_point_factor_stays_in_range() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = true;
+        for step in 0..=10 {
+            settings.eyepiece.intensity = step as f32 / 10.0;
+            let sigma = get_render_pipeline_config(&settings, &Plugins::none(), false)
+                .stretch_config
+                .black_point_sigma;
+            assert!(
+                (0.5..=5.0).contains(&sigma),
+                "black_point_sigma {sigma} outside the solver's range"
+            );
+        }
+    }
+
+    /// The display transform has to reach the encoders through the pipeline
+    /// config — it is the only channel between the settings and the fused
+    /// f32-to-u8 kernels.
+    #[test]
+    fn eyepiece_display_settings_reach_the_pipeline_config() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = 0.05;
+        settings.eyepiece.dither = true;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!((config.display.pedestal - 0.05).abs() < 1e-6);
+        assert!(config.display.dither);
+
+        settings.eyepiece.black_floor = 0.0;
+        settings.eyepiece.dither = false;
+        let plain = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(
+            plain.display.is_plain(),
+            "both settings off must reproduce a plain conversion"
+        );
+    }
+
+    /// The signed slider drives two different transforms against two different
+    /// references, and which one it reaches is decided here and nowhere else.
+    #[test]
+    fn a_negative_black_floor_darkens_instead_of_lifting() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -NOMINAL_SKY_LEVEL;
+        settings.eyepiece.darker_sky = false;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(
+            (config.shadow_floor.fraction - 1.0).abs() < 1e-5,
+            "a floor of one nominal sky level must resolve to a fraction of 1.0,              got {}",
+            config.shadow_floor.fraction
+        );
+        assert!(!config.shadow_floor.hard);
+        assert!(
+            (config.display.pedestal - DARKENED_FLOOR_PEDESTAL).abs() < 1e-6,
+            "the soft darkening must keep a pedestal under it, got {}",
+            config.display.pedestal
+        );
+
+        // And the positive half is untouched by any of it.
+        settings.eyepiece.black_floor = 0.05;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!((config.display.pedestal - 0.05).abs() < 1e-6);
+        assert!(config.shadow_floor.is_none());
+    }
+
+    /// "Darker sky" trades the spatial gain for a clip, and the pedestal has to go
+    /// with it — guarding the output off zero is precisely what it is asking not
+    /// to have done.
+    #[test]
+    fn darker_sky_clips_and_drops_the_guard_pedestal() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.darker_sky = true;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.hard);
+        assert_eq!(config.display.pedestal, 0.0);
+
+        // It says nothing while the slider is on its lifting half.
+        settings.eyepiece.black_floor = 0.04;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.is_none());
+        assert!((config.display.pedestal - 0.04).abs() < 1e-6);
+    }
+
+    /// The floor is anchored to the sky level the *solver* reports, and there is
+    /// no solver without auto-stretch — `process_preview_frame` produces no
+    /// `StretchResult` for the curve to travel on. Letting the request through
+    /// anyway left only the guard pedestal, which raises the sky: measured 2 to
+    /// 3 output levels on the IMX533 fixture, a control labelled "darker"
+    /// making the background brighter.
+    #[test]
+    fn a_negative_black_floor_is_inert_without_auto_stretch() {
+        let mut settings = CaptureSettings::default();
+        settings.auto_stretch = false;
+        settings.eyepiece.black_floor = -0.09;
+        settings.eyepiece.dither = false;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.is_plain(),
+            "the guard pedestal outlived the floor it was guarding: {}",
+            config.display.pedestal
+        );
+
+        // The same position with a solve behind it is the live feature.
+        settings.auto_stretch = true;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(!config.shadow_floor.is_none());
+    }
+
+    /// Focus/Finder mode holds the network off at the frame's config, and leaves the
+    /// observer's switch alone on the way in and on the way out.
+    #[test]
+    fn focus_mode_holds_the_network_off_without_touching_its_switch() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        assert!(requested_denoise(&settings).ai);
+
+        crate::state::focus_mode::set(&mut settings, true, &night_amplifier_core::plugins::Plugins::none());
+        assert!(!requested_denoise(&settings).ai, "framing must not pay for the network");
+        assert!(settings.denoise.ai, "the mode changed the observer's switch");
+
+        crate::state::focus_mode::set(&mut settings, false, &night_amplifier_core::plugins::Plugins::none());
+        assert!(requested_denoise(&settings).ai);
+    }
+
+    /// The guide stream never asks for the network, whatever the imaging settings say;
+    /// every other denoise setting reaches it unchanged.
+    #[test]
+    fn the_guide_stream_renders_without_the_network() {
+        let mut settings = CaptureSettings::default();
+        settings.denoise.ai = true;
+        settings.denoise.background_grain = 0.8;
+
+        let guide = guide_render_settings(settings.clone());
+        assert!(!requested_denoise(&guide).ai);
+        assert_eq!(
+            guide.denoise,
+            night_amplifier_core::render::denoise::DenoiseSettings {
+                ai: false,
+                ..settings.denoise
+            }
+        );
+    }
+
+    /// A lunar disc is most of its own frame, so the median the floor anchors to
+    /// is the subject rather than the sky. The same asymmetry `cfa::fpn`,
+    /// superpixel debayering and both denoisers each state at their own site.
+    #[test]
+    fn planetary_does_not_get_the_shadow_floor() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.dither = false;
+        settings.stacking_type = night_amplifier_core::stacking::StackingType::Planetary;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.is_plain(),
+            "planetary kept the guard pedestal without the floor: {}",
+            config.display.pedestal
+        );
+
+        for stacking_type in [
+            night_amplifier_core::stacking::StackingType::DeepSky,
+            night_amplifier_core::stacking::StackingType::Comet,
+        ] {
+            settings.stacking_type = stacking_type;
+            let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+            assert!(
+                !config.shadow_floor.is_none(),
+                "{stacking_type:?} lost the floor along with Planetary"
+            );
+        }
+    }
+
+    /// The sign of `black_floor` picks between two transforms against two
+    /// references, so it is an exact float test on a number that arrives over
+    /// JSON. A slider landing a few ULPs below its own zero must not swap in the
+    /// guard pedestal for a floor of nothing.
+    #[test]
+    fn a_black_floor_that_rounds_to_zero_is_zero() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.dither = false;
+
+        // `-0.09 + 9 * 0.01` in binary floating point, which is what a range
+        // input stepping onto zero can produce.
+        for value in [-1.3877788e-17f32, -0.0, 0.0, 5e-5, -5e-5] {
+            settings.eyepiece.black_floor = value;
+            let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+            assert!(
+                config.shadow_floor.is_none() && config.display.is_plain(),
+                "black_floor {value:e} was not treated as zero: floor {:?}, \
+                 pedestal {}",
+                config.shadow_floor,
+                config.display.pedestal
+            );
+        }
+    }
+
+    /// `POST /api/settings` takes any `f32`. The slider's own range is enforced
+    /// here rather than trusted, so one step of a wild value still means one
+    /// step.
+    #[test]
+    fn an_out_of_range_black_floor_is_clamped_to_the_sliders_travel() {
+        let mut settings = CaptureSettings::default();
+
+        settings.eyepiece.black_floor = -5.0;
+        let clamped = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
+        settings.eyepiece.black_floor = MIN_BLACK_FLOOR;
+        let end_stop = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
+        assert_eq!(clamped, end_stop);
+
+        settings.eyepiece.black_floor = f32::NAN;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.is_none());
+        assert!(
+            config.display.pedestal.is_finite(),
+            "a NaN setting reached the 8-bit conversion"
+        );
+
+        settings.eyepiece.black_floor = 10.0;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
+        assert!(config.shadow_floor.is_none());
+        assert!((config.display.pedestal - MAX_BLACK_FLOOR).abs() < 1e-6);
+    }
+
+    /// FITS is 32-bit linear data; the display transform is a property of the
+    /// 8-bit conversion and must not follow the frame onto disk.
+    #[test]
+    fn fits_output_never_carries_the_display_transform() {
+        let mut settings = CaptureSettings::default();
+        settings.eyepiece.black_floor = 0.05;
+        settings.eyepiece.dither = true;
+
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), true);
+        assert!(config.display.is_plain());
+
+        // Nor may the darkening half, which would bake a display curve into
+        // linear data that is meant to be re-stretched later.
+        settings.eyepiece.black_floor = -0.05;
+        settings.eyepiece.darker_sky = true;
+        let config = get_render_pipeline_config(&settings, &Plugins::none(), true);
+        assert!(config.display.is_plain());
+        assert!(config.shadow_floor.is_none());
+
+        // Nor the tone curve itself. `RenderPipelineConfig::default()` enables both of
+        // these, and only the `!for_fits` branch ever sets them, so for a long time the
+        // "linear" FITS was written asinh-stretched and contrast-curved — with a stretch
+        // factor solved per frame, which also made two saved stacks incomparable.
+        assert!(
+            !config.auto_stretch,
+            "saved FITS must be linear, not auto-stretched"
+        );
+        assert!(
+            !config.contrast,
+            "saved FITS must not carry the contrast S-curve"
+        );
+
+        // The two stages that are wanted on disk stay on, so this test cannot pass by
+        // disabling the whole pipeline.
+        assert!(config.background_subtraction);
+        assert!(config.scnr);
+    }
+
+    fn settings_with(
+        correction: SensorCorrectionSettings,
+        stacking_type: StackingType,
+    ) -> CaptureSettings {
+        CaptureSettings {
+            sensor_correction: correction,
+            stacking_type,
+            ..CaptureSettings::default()
+        }
+    }
+
+    #[test]
+    fn the_default_stage_list_corrects_hot_pixels_then_flattens_lines() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels", "row_column_fpn"]
+        );
+    }
+
+    #[test]
+    fn turning_fpn_off_still_rejects_hot_pixels() {
+        let settings = settings_with(
+            SensorCorrectionSettings {
+                fpn_removal: false,
+                ..SensorCorrectionSettings::default()
+            },
+            StackingType::DeepSky,
+        );
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
+    }
+
+    /// The 2026-09-09 failure: Finder mode switched hot-pixel rejection off, and the
+    /// guide frames it produced could not be plate-solved at any FOV. The mode may shed
+    /// every other stage, but not this one.
+    #[test]
+    fn finder_mode_cannot_take_hot_pixel_rejection_out_of_the_pipeline() {
+        let mut settings =
+            settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        crate::state::focus_mode::set(&mut settings, true, &night_amplifier_core::plugins::Plugins::none());
+
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
+    }
+
+    #[test]
+    fn planetary_keeps_hot_pixel_rejection_but_not_line_flattening() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::Planetary);
+        assert_eq!(
+            build_cfa_pipeline(&settings).stage_names(),
+            vec!["hot_pixels"]
+        );
+    }
+
+    /// Focus/Finder mode may run under a stack exactly when this pipeline has no line
+    /// flattening for it to take away — the rule and the pipeline must never drift apart.
+    #[test]
+    fn focus_mode_conflicts_exactly_where_the_pipeline_flattens_lines() {
+        use crate::state::{focus_mode, CaptureMode, CaptureState};
+
+        for &stacking_type in StackingType::all() {
+            let settings = settings_with(SensorCorrectionSettings::default(), stacking_type);
+            let flattens = build_cfa_pipeline(&settings)
+                .stage_names()
+                .contains(&"row_column_fpn");
+
+            assert_eq!(
+                focus_mode::conflicts_with_capture(
+                    CaptureMode::Stacking,
+                    stacking_type,
+                    CaptureState::Capturing
+                ),
+                flattens,
+                "{stacking_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn superpixel_is_opt_in() {
+        let settings = settings_with(SensorCorrectionSettings::default(), StackingType::DeepSky);
+        assert_eq!(debayer_algorithm(&settings), DebayerAlgorithm::Bilinear);
+
+        let settings = settings_with(
+            SensorCorrectionSettings {
+                superpixel_debayer: true,
+                ..SensorCorrectionSettings::default()
+            },
+            StackingType::DeepSky,
+        );
+        assert_eq!(debayer_algorithm(&settings), DebayerAlgorithm::Superpixel);
+    }
+
+    /// Halving both dimensions is the opposite of what lucky imaging is for, so
+    /// the setting does not follow the observer into planetary.
+    #[test]
+    fn superpixel_does_not_apply_to_planetary() {
+        let settings = settings_with(
+            SensorCorrectionSettings {
+                superpixel_debayer: true,
+                ..SensorCorrectionSettings::default()
+            },
+            StackingType::Planetary,
+        );
+        assert_eq!(debayer_algorithm(&settings), DebayerAlgorithm::Bilinear);
+    }
+}

@@ -1,19 +1,9 @@
 //! Server error types, and how a session's [`ApiError`] answers over HTTP.
 
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde::Serialize;
 use thiserror::Error;
 
 pub use crate::session::error::{ApiError, ApiResult};
-
-/// API error response body
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    success: bool,
-    error: String,
-}
 
 /// Server-level errors (startup, binding, etc.)
 #[derive(Debug, Clone, Error)]
@@ -25,14 +15,18 @@ pub enum ServerError {
     ServeFailed(String),
 }
 
-impl ApiError {
-    /// The HTTP status this error maps to.
-    ///
-    /// `pub(crate)` so handlers that build their own response body can still delegate
-    /// the status here. They used to keep parallel `match` arms instead, and those
-    /// drifted: `start_capture` had no arm for a role mismatch, so a conflict the
-    /// client could act on went out as a 500.
-    pub(crate) fn status_code(&self) -> StatusCode {
+/// How a session's [`ApiError`] answers over HTTP. A trait only because `ApiError` lives in
+/// the session crate.
+///
+/// Handlers that build their own response body delegate the status here. They used to keep
+/// parallel `match` arms instead, and those drifted: `start_capture` had no arm for a role
+/// mismatch, so a conflict the client could act on went out as a 500.
+pub(crate) trait HttpStatus {
+    fn status_code(&self) -> StatusCode;
+}
+
+impl HttpStatus for ApiError {
+    fn status_code(&self) -> StatusCode {
         match self {
             ApiError::NoCameraSelected => StatusCode::BAD_REQUEST,
             ApiError::CameraNotFound(_) => StatusCode::NOT_FOUND,
@@ -57,17 +51,6 @@ impl ApiError {
             ApiError::BenchmarkDuringCapture => StatusCode::CONFLICT,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let status = self.status_code();
-        let body = ErrorResponse {
-            success: false,
-            error: self.to_string(),
-        };
-        (status, Json(body)).into_response()
     }
 }
 

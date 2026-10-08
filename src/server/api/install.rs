@@ -61,7 +61,7 @@ pub async fn install_astap(
     let database_types = request.into_database_types();
     if let Some(plugin) = state.plugins.push_to_installer() {
         match plugin
-            .install_astap(&database_types, Arc::new(state.events.clone()))
+            .install_astap(&database_types, crate::session::events::push_to_events(&state.events))
             .await
         {
             Ok(_) => (
@@ -112,7 +112,7 @@ pub async fn install_catalog(
 ) -> impl IntoResponse {
     if let Some(plugin) = state.plugins.push_to_installer() {
         match plugin
-            .install_catalog(request.include_stars, Arc::new(state.events.clone()))
+            .install_catalog(request.include_stars, crate::session::events::push_to_events(&state.events))
             .await
         {
             Ok(_) => (

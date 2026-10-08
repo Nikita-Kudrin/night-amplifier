@@ -245,6 +245,13 @@ fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_in
         pro_active: crate::license::is_pro_active(),
         plugins: crate::plugins::Plugins::installed().registered(),
         frame_queue_budget_bytes: crate::session::capture::channel::frame_queue_budget_bytes(),
+        build: crate::system_info::BuildFacts {
+            version: env!("CARGO_PKG_VERSION"),
+            git: option_env!("NIGHT_AMPLIFIER_GIT_DESCRIBE").unwrap_or("unknown"),
+            target: option_env!("NIGHT_AMPLIFIER_TARGET").unwrap_or("unknown"),
+            target_cpu: option_env!("NIGHT_AMPLIFIER_TARGET_CPU").unwrap_or("unknown"),
+            rustc: option_env!("NIGHT_AMPLIFIER_RUSTC_VERSION").unwrap_or("unknown"),
+        },
     }
 }
 
