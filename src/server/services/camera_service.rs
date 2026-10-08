@@ -41,7 +41,7 @@ impl CameraService {
         }
 
         // Get current setting for simulated camera
-        let use_simulated = state.settings.read().await.use_simulated_camera;
+        let use_simulated = state.settings.snapshot().use_simulated_camera;
 
         for entry in Self::discover_cameras(state, use_simulated).await {
             let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
@@ -67,7 +67,7 @@ impl CameraService {
         }
 
         // Get INDI settings
-        let settings = state.settings.read().await;
+        let settings = state.settings.snapshot();
         let indi_host = settings.indi_server_host.clone();
         let indi_port = settings.indi_server_port;
         drop(settings);

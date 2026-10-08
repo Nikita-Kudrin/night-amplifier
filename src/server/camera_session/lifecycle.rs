@@ -204,7 +204,7 @@ pub async fn connect(
             role.label()
         )));
     }
-    let use_simulated = state.settings.read().await.use_simulated_camera;
+    let use_simulated = state.settings.snapshot().use_simulated_camera;
 
     let (index, listed) = install::locate(state, role, provider, &locator, use_simulated).await?;
     install::refuse_device_of_other_role(state, role, provider, index, &listed).await?;
@@ -274,7 +274,7 @@ pub(crate) async fn sync_solver_rig(state: &Arc<AppState>) {
     let camera_name = solve_camera.map(|info| info.info.name);
 
     let telescope = {
-        let settings = state.settings.read().await;
+        let settings = state.settings.snapshot();
         settings.solver_telescope(camera_name.as_deref())
     };
 
@@ -425,7 +425,7 @@ pub async fn disconnect(
         // It came back while we waited: disconnect it the ordinary way.
     }
 
-    let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
+    let fast = state.settings.snapshot().profile_for(role).cooler_fast_mode;
 
     if state.camera_phase(role).await == CameraPhase::WarmingUp {
         if warmup == WarmupPolicy::Skip {
@@ -451,7 +451,7 @@ pub async fn disconnect(
     // (current intent) OR the last status sample reported cooler_on, ramp
     // the TEC down before closing the handle. Relying on settings alone is
     // important because the monitor may not have polled yet on fresh connects.
-    let cooler_enabled_in_settings = state.settings.read().await.profile_for(role).cooler_enabled;
+    let cooler_enabled_in_settings = state.settings.snapshot().profile_for(role).cooler_enabled;
     let cooler_reported_on = state
         .get_camera_status(&camera_name)
         .await
@@ -665,7 +665,7 @@ pub async fn take_for_capture(
         debug!(camera_name, "Cancelling warmup: capture requested");
         send_monitor_cmd(state, role, MonitorCmd::CancelWarmup);
         state.slot(role).end_warmup();
-        let profile = state.settings.read().await.profile_for(role);
+        let profile = state.settings.snapshot().profile_for(role);
         if profile.cooler_enabled {
             let _ = with_camera(state, role, |cam| cam.set_cooler(true)).await;
             // Re-seed the cooldown ramp so that if capture exits quickly the
@@ -738,7 +738,7 @@ async fn abandon_hand_off(
     send_monitor_cmd(state, role, MonitorCmd::ResumeAfterCapture);
     if let Some(busy_for) = slot.monitor_call_age() {
         if phase == CameraPhase::WarmingUp {
-            let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
+            let fast = state.settings.snapshot().profile_for(role).cooler_fast_mode;
             begin_warmup(state, role, camera_name, fast).await;
         }
         warn!(camera_name, role = role.label(), ?busy_for, "The camera's status poll is still inside the driver");
@@ -807,7 +807,7 @@ pub async fn return_from_capture(
             // A Disconnect that outlasted this capture's wind-down left its warm-up waiting
             // for the handle. Only now can the monitor command the cooler.
             if state.slot(role).warmup().is_some() {
-                let fast = state.settings.read().await.profile_for(role).cooler_fast_mode;
+                let fast = state.settings.snapshot().profile_for(role).cooler_fast_mode;
                 send_monitor_cmd(state, role, MonitorCmd::ResumeAfterCapture);
                 send_monitor_cmd(state, role, MonitorCmd::StartWarmup { fast });
                 return;
@@ -816,7 +816,7 @@ pub async fn return_from_capture(
             // Decide phase: if cooling is enabled and we're not yet near target,
             // precooling; otherwise idle. We use the last cached status as a
             // cheap proxy — the monitor will correct it on the next poll.
-            let profile = state.settings.read().await.profile_for(role);
+            let profile = state.settings.snapshot().profile_for(role);
             let target = profile.target_temp_c;
             let cooler_enabled = profile.cooler_enabled;
             let fast = profile.cooler_fast_mode;
@@ -1017,7 +1017,7 @@ pub async fn apply_cooler_settings(state: &Arc<AppState>, role: CameraRole) {
     }
 
     let (enabled, target, fast) = {
-        let profile = state.settings.read().await.profile_for(role);
+        let profile = state.settings.snapshot().profile_for(role);
         (
             profile.cooler_enabled,
             profile.target_temp_c,
@@ -1089,7 +1089,7 @@ pub async fn apply_dew_heater_settings(state: &Arc<AppState>, role: CameraRole) 
 
     let phase = state.camera_phase(role).await;
     let (enabled, power) = {
-        let profile = state.settings.read().await.profile_for(role);
+        let profile = state.settings.snapshot().profile_for(role);
         (profile.dew_heater_enabled, profile.dew_heater_power)
     };
 

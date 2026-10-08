@@ -255,7 +255,7 @@ pub(super) fn run(
     let mut stalls = StallTracker::for_camera(state, CameraRole::Guide, &camera_info.info.name);
 
     while !cancel.load(Ordering::SeqCst) {
-        let settings = rt.block_on(state.settings.read()).clone();
+        let settings = state.settings.snapshot();
         let profile = settings.guide_camera.clone();
         let mut config = settings.to_capture_config_with(&profile, CameraRole::Guide);
 
@@ -567,10 +567,8 @@ fn render_and_publish(
 
     let stream = &state.guide_stream;
     // The live resolution, not `settings`: that snapshot predates the exposure.
-    let resolution = rt.block_on(async {
-        stream.set_latest_raw_frame(Arc::clone(&ready)).await;
-        state.settings.read().await.stream_resolution(StreamKind::Jpeg)
-    });
+    rt.block_on(stream.set_latest_raw_frame(Arc::clone(&ready)));
+    let resolution = state.settings.snapshot().stream_resolution(StreamKind::Jpeg);
     let counter = stream.begin_frame();
 
     // JPEG only: `/eyepiece_quality`, the one lossless endpoint, always shows the
@@ -812,14 +810,14 @@ mod tests {
     async fn a_resolution_change_during_an_exposure_applies_to_that_frame() {
         let (state, _dw) = AppState::new_for_testing();
         let state = Arc::new(state);
-        state.settings.write().await.streaming_resolution = Resolution::Native;
+        state.settings.update(|s| s.streaming_resolution = Resolution::Native);
         let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
 
         let stop = Arc::new(AtomicBool::new(false));
         let editor = Arc::clone(&state);
         let camera = counting_camera(1, Arc::clone(&stop));
         let camera = camera.sized(2400, 1600).during_exposure(move || {
-            editor.settings.blocking_write().streaming_resolution = Resolution::Hd1080;
+            editor.settings.update(|s| s.streaming_resolution = Resolution::Hd1080);
         });
         let info = guide_camera_info();
         let loop_state = Arc::clone(&state);
@@ -864,7 +862,7 @@ mod tests {
         let state = Arc::new(state);
         std::thread::spawn(move || disk_writer.run());
 
-        state.settings.write().await.raw_frame_saving.guide = true;
+        state.settings.update(|s| s.raw_frame_saving.guide = true);
 
         drive_guide_loop(&state, 3).await;
 
@@ -899,7 +897,7 @@ mod tests {
         let state = Arc::new(state);
         std::thread::spawn(move || disk_writer.run());
 
-        state.settings.write().await.raw_frame_saving.guide = true;
+        state.settings.update(|s| s.raw_frame_saving.guide = true);
 
         drive_guide_loop(&state, 3).await;
         let dir = guide_session_dir(&state)
@@ -1007,11 +1005,10 @@ mod tests {
     async fn the_cooler_setpoint_is_ramped_not_snapped() {
         let (state, _dw) = AppState::new_for_testing();
         let state = Arc::new(state);
-        {
-            let mut settings = state.settings.write().await;
+        state.settings.update(|settings| {
             settings.guide_camera.cooler_enabled = true;
             settings.guide_camera.target_temp_c = Some(-15.0);
-        }
+        });
 
         let log = drive_and_log(&state, 1).await;
 
@@ -1105,12 +1102,11 @@ mod tests {
     async fn fast_mode_leaves_the_target_alone() {
         let (state, _dw) = AppState::new_for_testing();
         let state = Arc::new(state);
-        {
-            let mut settings = state.settings.write().await;
+        state.settings.update(|settings| {
             settings.guide_camera.cooler_enabled = true;
             settings.guide_camera.target_temp_c = Some(-15.0);
             settings.guide_camera.cooler_fast_mode = true;
-        }
+        });
 
         let log = drive_and_log(&state, 1).await;
 
@@ -1192,7 +1188,7 @@ mod tests {
         let state = Arc::new(state);
         std::thread::spawn(move || disk_writer.run());
 
-        state.settings.write().await.raw_frame_saving.guide = true;
+        state.settings.update(|s| s.raw_frame_saving.guide = true);
         connect_and_start_guide(&state).await;
         wait_until_running(&state).await;
 
@@ -1227,7 +1223,7 @@ mod tests {
         let state = Arc::new(state);
         std::thread::spawn(move || disk_writer.run());
 
-        state.settings.write().await.raw_frame_saving.guide = true;
+        state.settings.update(|s| s.raw_frame_saving.guide = true);
         connect_and_start_guide(&state).await;
         wait_until_running(&state).await;
         let first = loop_until_session_dir(&state).await;
@@ -1303,12 +1299,11 @@ mod tests {
         let state = Arc::new(state);
 
         // Saving every imaging mode must not implicitly save guide frames.
-        {
-            let mut settings = state.settings.write().await;
+        state.settings.update(|settings| {
             settings.raw_frame_saving.live_view = true;
             settings.raw_frame_saving.wanderer = true;
             settings.raw_frame_saving.stacking = true;
-        }
+        });
 
         drive_guide_loop(&state, 2).await;
 

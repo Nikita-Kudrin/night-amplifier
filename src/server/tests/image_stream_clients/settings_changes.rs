@@ -51,7 +51,7 @@ async fn an_eyepiece_resolution_change_reaches_only_the_lossless_clients() {
     ];
     let mut live = server.connect_registered(LIVE_VIEW).await;
 
-    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.read().await.eyepiece).unwrap();
+    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
     eyepiece_settings["stream_resolution"] = json!("native");
     let response = server.post_settings(json!({"eyepiece": eyepiece_settings})).await;
     assert_eq!(response.status, 200, "{}", response.body);
@@ -73,7 +73,7 @@ async fn a_client_joining_after_a_change_matches_everyone_until_the_next_frame()
     server.render(IMX533, 0.25).await;
     let current = next_frame(&mut existing).await;
 
-    server.state.settings.write().await.streaming_resolution = Resolution::Uhd2160;
+    server.state.settings.update(|s| s.streaming_resolution = Resolution::Uhd2160);
     let mut joiner = server.connect(LIVE_VIEW).await;
     assert_eq!(next_frame(&mut joiner).await, current, "the joiner saw a different frame");
 
@@ -103,13 +103,13 @@ async fn only_the_last_of_several_changes_between_frames_applies() {
 #[parallel(image_stream_log)]
 async fn the_eyepiece_setting_refuses_1080p_and_accepts_every_offered_option() {
     let server = start_server().await;
-    let mut eyepiece = serde_json::to_value(&server.state.settings.read().await.eyepiece).unwrap();
+    let mut eyepiece = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
 
     eyepiece["stream_resolution"] = json!("hd1080");
     let response = server.post_settings(json!({"eyepiece": eyepiece})).await;
     assert!(response.status >= 400, "1080p was accepted: {}", response.body);
     assert_eq!(
-        server.state.settings.read().await.eyepiece.stream_resolution,
+        server.state.settings.snapshot().eyepiece.stream_resolution,
         EyepieceStreamResolution::Qhd1440
     );
 
@@ -121,12 +121,12 @@ async fn the_eyepiece_setting_refuses_1080p_and_accepts_every_offered_option() {
         eyepiece["stream_resolution"] = json!(value);
         let response = server.post_settings(json!({"eyepiece": eyepiece})).await;
         assert_eq!(response.status, 200, "{value}: {}", response.body);
-        assert_eq!(server.state.settings.read().await.eyepiece.stream_resolution, expected);
+        assert_eq!(server.state.settings.snapshot().eyepiece.stream_resolution, expected);
     }
 
     let response = server.post_settings(json!({"streaming_resolution": "hd1080"})).await;
     assert_eq!(response.status, 200, "{}", response.body);
-    assert_eq!(server.state.settings.read().await.streaming_resolution, Resolution::Hd1080);
+    assert_eq!(server.state.settings.snapshot().streaming_resolution, Resolution::Hd1080);
 }
 
 /// The capture loop snapshots settings when an exposure *starts*, and a resolution change
@@ -140,7 +140,7 @@ async fn a_change_during_an_exposure_applies_to_the_frame_that_exposure_renders(
     server.render(IMX533, 0.25).await;
     assert_jpeg(&next_frame(&mut client).await, (1440, 1440), "before the change");
 
-    let exposure_started_with = server.state.settings.read().await.clone();
+    let exposure_started_with = (*server.state.settings.snapshot()).clone();
     let response = server.post_settings(json!({"streaming_resolution": "hd1080"})).await;
     assert_eq!(response.status, 200, "{}", response.body);
 
@@ -158,8 +158,8 @@ async fn a_client_joining_during_an_exposure_never_sees_the_size_flip_back() {
     // Rendered with nobody on the lossless family, so no payload exists for it.
     server.render(IMX533, 0.25).await;
 
-    let exposure_started_with = server.state.settings.read().await.clone();
-    let mut eyepiece = serde_json::to_value(&server.state.settings.read().await.eyepiece).unwrap();
+    let exposure_started_with = (*server.state.settings.snapshot()).clone();
+    let mut eyepiece = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
     eyepiece["stream_resolution"] = json!("native");
     let response = server.post_settings(json!({"eyepiece": eyepiece})).await;
     assert_eq!(response.status, 200, "{}", response.body);

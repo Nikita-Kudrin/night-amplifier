@@ -11,7 +11,7 @@ use super::super::state::{AppState, StackingType};
 ///
 /// Get current capture settings
 pub async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     let response = SettingsResponse::from(&*settings);
     (StatusCode::OK, ApiResponse::ok(response))
 }
@@ -34,6 +34,6 @@ pub async fn update_settings(
     if let Err(refused) = SettingsService::update(&state, request).await {
         return (refused.status_code(), ApiResponse::err(refused.to_string()));
     }
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     (StatusCode::OK, ApiResponse::ok(SettingsResponse::from(&*settings)))
 }

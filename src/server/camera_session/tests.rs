@@ -228,11 +228,10 @@ async fn precool_settles_to_idle() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     // Configure settings so the monitor sees a target temperature.
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     // Already cooled to target so the monitor observes a settled temp.
     install_mock_camera(&state, 5.0, true, -10.0).await;
     // Bump initial temp near target right away by calling status() a few times.
@@ -277,11 +276,10 @@ async fn no_precool_when_cooler_disabled() {
 async fn warmup_finishes_and_disconnects() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let name = install_mock_camera(&state, 15.0, true, -10.0).await;
 
     // Put the sensor well below ambient so warmup has something to do.
@@ -344,11 +342,10 @@ async fn disconnect_with_cooler_off_is_synchronous() {
 async fn take_and_return_handle_during_precool() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let name = install_mock_camera(&state, 1.0, true, -10.0).await;
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Precooling);
 
@@ -383,11 +380,10 @@ async fn take_and_return_handle_during_precool() {
 async fn capture_during_warmup_cancels_warmup() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let name = install_mock_camera(&state, 1.0, true, -10.0).await;
 
     // User clicks Disconnect → warmup begins.
@@ -420,11 +416,10 @@ async fn live_target_temp_change_propagates_to_hardware() {
         c.target_temp_c = 1.0;
         c.current_temp_c = 1.0;
     }
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(1.0);
-    }
+    });
     let name = cam.info().name.clone();
     let connected_info = ConnectedCameraInfo {
         id: "mock_0".to_string(),
@@ -453,10 +448,9 @@ async fn live_target_temp_change_propagates_to_hardware() {
     );
     *state.slot(CameraRole::Main).monitor_tx.lock().unwrap() = Some(tx);
 
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.target_temp_c = Some(20.0);
-    }
+    });
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
     // Phase should flip back to Precooling immediately.
@@ -494,11 +488,10 @@ async fn live_cooler_disable_propagates_to_hardware() {
         c.target_temp_c = -5.0;
         c.current_temp_c = -5.0;
     }
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-5.0);
-    }
+    });
     let name = cam.info().name.clone();
     let connected_info = ConnectedCameraInfo {
         id: "mock_0".to_string(),
@@ -517,10 +510,9 @@ async fn live_cooler_disable_propagates_to_hardware() {
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
     state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
 
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = false;
-    }
+    });
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
     assert!(
@@ -545,11 +537,10 @@ async fn live_cooler_apply_is_skipped_during_warmup() {
         c.cooler_on = false; // Monitor disabled it at warmup start.
         c.target_temp_c = -10.0;
     }
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true; // Settings still say enabled (stale).
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let name = cam.info().name.clone();
     let connected_info = ConnectedCameraInfo {
         id: "mock_0".to_string(),
@@ -581,7 +572,7 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
     // With reconnect on, a lost handle suspends instead — see `recovery_tests`.
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
 
     // Simulate capture thread panicking: take the handle and drop it, then
@@ -602,7 +593,7 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
 async fn monitor_keeps_running_through_a_transient_stall() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
 
     let (cam, _) = MockCamera::new(true, 5.0);
     let fail_flag = Arc::clone(&cam.fail_next_status);
@@ -926,11 +917,10 @@ use crate::server::state::MonitorCmd;
 async fn cooldown_ramp_drives_setpoint_to_target() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-15.0);
-    }
+    });
     let (mut cam, cooler) = MockCamera::new(true, 5.0);
     {
         let mut c = cooler.lock().unwrap();
@@ -1002,11 +992,10 @@ async fn cooldown_ramp_drives_setpoint_to_target() {
 async fn warmup_keeps_cooler_on_during_ramp() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     // Small step so the mock doesn't instantly settle to the new warmup target
     // — gives us a window where cooler_on should still be true.
     install_mock_camera(&state, 1.0, true, -10.0).await;
@@ -1047,12 +1036,11 @@ async fn warmup_keeps_cooler_on_during_ramp() {
 async fn fast_mode_skips_cooldown_ramp() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-15.0);
         s.cooler_fast_mode = true;
-    }
+    });
     let (mut cam, cooler) = MockCamera::new(true, 5.0);
     {
         let mut c = cooler.lock().unwrap();
@@ -1125,12 +1113,11 @@ async fn fast_mode_skips_cooldown_ramp() {
 async fn fast_mode_warmup_disables_cooler_immediately() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
         s.cooler_fast_mode = true;
-    }
+    });
     install_mock_camera(&state, 5.0, true, -10.0).await;
 
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
@@ -1170,21 +1157,19 @@ async fn fast_mode_warmup_disables_cooler_immediately() {
 async fn target_change_mid_precool_restarts_ramp() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-15.0);
-    }
+    });
     let name = install_mock_camera(&state, 5.0, true, -15.0).await;
 
     // Let one tick pass so the monitor is engaged.
     tokio::time::sleep(PHASE_POLL_INTERVAL + Duration::from_millis(200)).await;
 
     // User raises the target to -5.
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.target_temp_c = Some(-5.0);
-    }
+    });
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
     // Phase should remain Precooling.
@@ -1301,7 +1286,7 @@ async fn a_lost_device_ends_the_session_instead_of_being_polled_forever() {
     let state = Arc::new(state);
     // Nothing to reconnect to in a unit test — the supervisor is covered
     // separately by `reconnect_is_not_attempted_*`.
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
 
     let (name, camera) = install_dead_camera(&state).await;
     let mut events = state.subscribe_events();
@@ -1346,7 +1331,7 @@ async fn a_lost_device_ends_the_session_instead_of_being_polled_forever() {
 async fn one_fault_does_not_end_the_session() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
 
     let (name, camera) = install_dead_camera(&state).await;
 
@@ -1370,7 +1355,7 @@ async fn one_fault_does_not_end_the_session() {
 async fn no_reconnect_when_the_camera_dies_during_warmup() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
 
     let (name, camera) = install_dead_camera(&state).await;
     state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp).await;
@@ -1403,7 +1388,7 @@ async fn no_reconnect_when_the_camera_dies_during_warmup() {
 async fn no_reconnect_when_the_setting_is_off() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
 
     let (name, _camera) = install_dead_camera(&state).await;
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::DeviceFault).await;
@@ -1427,7 +1412,7 @@ async fn no_reconnect_when_the_setting_is_off() {
 async fn reconnect_is_single_flight() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
 
     let (name, _camera) = install_dead_camera(&state).await;
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::DeviceFault).await;
@@ -1462,7 +1447,7 @@ async fn a_clean_stop_clears_the_resume_state() {
 
     *state.session_resume_plan.write().await = Some(SessionResumePlan {
         camera_id: "mock_0".to_string(),
-        settings: state.settings.read().await.clone(),
+        settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: None,
         next_frame: 1,
     });
@@ -1499,7 +1484,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
     for _ in 0..514 {
         state.stats.frame_captured(true, true);
     }
-    let settings = state.settings.read().await.clone();
+    let settings = (*state.settings.snapshot()).clone();
     *state.stacking_carryover.lock().unwrap() = Some(StackingCarryover {
         stacker: Box::new(
             crate::server::capture::StackingContext::new(
@@ -1514,7 +1499,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
 
     let plan = SessionResumePlan {
         camera_id: "mock_0".to_string(),
-        settings: state.settings.read().await.clone(),
+        settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: Some(session_dir.clone()),
         next_frame: 1,
     };
@@ -1858,11 +1843,10 @@ async fn a_guide_dew_heater_change_is_queued_for_the_loop() {
     )
     .await;
 
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.guide_camera.dew_heater_enabled = true;
         settings.guide_camera.dew_heater_power = 80;
-    }
+    });
 
     lifecycle::apply_dew_heater_settings(&state, CameraRole::Guide).await;
 
@@ -1938,7 +1922,7 @@ async fn a_guide_warmup_hands_plate_solving_back_to_the_imaging_camera() {
     let state = Arc::new(state);
     install_camera(&state, CameraRole::Main, "mock_0", "Imaging", CameraPhase::Idle).await;
     install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
-    state.settings.write().await.guide_camera.cooler_enabled = true;
+    state.settings.update(|s| s.guide_camera.cooler_enabled = true);
 
     lifecycle::disconnect(&state, "mock_1", lifecycle::WarmupPolicy::WhenPossible)
         .await
@@ -2035,11 +2019,10 @@ async fn a_late_handback_is_refused_and_the_handle_closed() {
 async fn cooled_rig() -> (Arc<AppState>, String) {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let name = install_mock_camera(&state, 15.0, true, -10.0).await;
     (state, name)
 }
@@ -2073,7 +2056,7 @@ async fn a_hand_off_the_monitor_is_still_holding_resumes_the_monitor_and_the_war
     assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
     // With the cooler switched off in settings the Start sends the monitor no cooler
     // target, whose sensor read would itself clear the call this test stands in for.
-    state.settings.write().await.cooler_enabled = false;
+    state.settings.update(|s| s.cooler_enabled = false);
 
     // The monitor is inside a status call that has not come back. Paused first, and given
     // a moment to finish the tick it is in, for the same reason.
@@ -2106,7 +2089,7 @@ async fn a_hand_off_the_monitor_is_still_holding_resumes_the_monitor_and_the_war
 #[tokio::test]
 async fn a_start_during_a_warmup_with_the_handle_lost_leaves_nothing_wedged() {
     let (state, name) = cooled_rig().await;
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
         .await
         .unwrap();
@@ -2139,7 +2122,7 @@ async fn a_start_during_a_warmup_with_the_handle_lost_leaves_nothing_wedged() {
 async fn a_hand_off_with_the_handle_lost_reopens_the_camera() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
     remove_handle(&state, CameraRole::Main).await;
 
@@ -2168,7 +2151,7 @@ async fn a_hand_off_with_the_handle_lost_reopens_the_camera() {
 async fn a_handle_another_capture_holds_is_busy_not_lost() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
     let held = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
 
@@ -2265,12 +2248,11 @@ async fn a_recently_faulted_camera_disconnects_without_a_warmup() {
 async fn a_device_lost_during_warmup_ends_it_at_once() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    {
-        let mut s = state.settings.write().await;
+    state.settings.update(|s| {
         s.auto_reconnect = true;
         s.cooler_enabled = true;
         s.target_temp_c = Some(-10.0);
-    }
+    });
     let (_name, camera) = install_dead_camera(&state).await;
     let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
         .await
@@ -2293,7 +2275,7 @@ async fn a_device_lost_during_warmup_ends_it_at_once() {
 async fn a_handle_missing_from_under_the_monitor_is_given_up() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
     install_mock_camera(&state, 5.0, false, 20.0).await;
 
     remove_handle(&state, CameraRole::Main).await;
@@ -2309,7 +2291,7 @@ async fn a_handle_missing_from_under_the_monitor_is_given_up() {
 async fn one_empty_poll_is_not_a_lost_handle() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
 
     let handle = remove_handle(&state, CameraRole::Main).await;
@@ -2333,7 +2315,7 @@ async fn one_empty_poll_is_not_a_lost_handle() {
 async fn a_guide_loop_that_finds_its_handle_lost_is_not_waited_on_by_its_own_teardown() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
     install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
     state.set_guide_loop_running(false);
     let info = state.camera_in_role(CameraRole::Guide).await.unwrap();
@@ -2360,7 +2342,7 @@ async fn a_guide_loop_that_finds_its_handle_lost_is_not_waited_on_by_its_own_tea
 async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    state.settings.write().await.auto_reconnect = false;
+    state.settings.update(|s| s.auto_reconnect = false);
     // `status()` panicking: the guide loop calls it on its own thread, outside any
     // watchdog, so a panic there ends the thread mid-loop.
     let camera = FakeCamera::new("Mock Cooled Camera")
@@ -2483,7 +2465,7 @@ async fn a_capture_slow_to_wind_down_hands_its_camera_to_the_warmup() {
 #[tokio::test]
 async fn a_handle_lost_while_its_warmup_waits_is_not_reopened() {
     let (state, name) = cooled_rig().await;
-    state.settings.write().await.auto_reconnect = true;
+    state.settings.update(|s| s.auto_reconnect = true);
     state.set_capture_state(CaptureState::Capturing).await;
     let _abandoned = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
     let pipeline = slow_pipeline(&state, &name, None);

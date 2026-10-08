@@ -81,7 +81,7 @@ pub async fn stop_capture(
 /// Get current capture status
 pub async fn get_capture_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let capture_state = state.capture_state().await;
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     let response = CaptureStatusResponse::new(capture_state, &state.stats, &settings);
     (StatusCode::OK, ApiResponse::ok(response))
 }

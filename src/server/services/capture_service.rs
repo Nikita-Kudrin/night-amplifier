@@ -197,7 +197,6 @@ impl CaptureService {
         // restored the plan's stacking mode (`reconnect::restore_settings`).
         if state
             .leave_focus_mode_if_conflicting(CaptureState::Starting)
-            .await
         {
             info!("Leaving Focus/Finder mode: a stacking capture is starting");
         }

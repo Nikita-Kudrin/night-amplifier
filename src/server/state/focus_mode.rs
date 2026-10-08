@@ -7,6 +7,8 @@
 //! against the frame rate this mode buys) and hot-pixel rejection, which has no
 //! switch — Push-To needs it to solve these frames.
 
+use std::sync::Arc;
+
 use super::capture_mode::CaptureMode;
 use super::settings::CaptureSettings;
 use super::types::CaptureState;
@@ -130,11 +132,12 @@ pub fn leave_if_conflicting(
 impl super::AppState {
     /// [`leave_if_conflicting`] on the shared settings; when it left, persist them and move
     /// every client's toggle. Returns whether it left.
-    pub async fn leave_focus_mode_if_conflicting(&self, capture_state: CaptureState) -> bool {
-        let left =
-            leave_if_conflicting(&mut *self.settings.write().await, capture_state, &self.plugins);
+    pub fn leave_focus_mode_if_conflicting(&self, capture_state: CaptureState) -> bool {
+        let left = self
+            .settings
+            .update(|settings| leave_if_conflicting(settings, capture_state, &self.plugins));
         if left {
-            self.save_settings().await;
+            self.save_settings();
             let _ = self
                 .events
                 .send(crate::server::events::ServerEvent::SettingsUpdated);
@@ -144,28 +147,23 @@ impl super::AppState {
 
     /// The settings a frame about to be exposed is captured and stacked with.
     ///
-    /// Last line of defence for the stacking conflict: `update_settings` must read the
-    /// capture state before taking the settings lock (lock order), so a Start landing in that
-    /// gap beside `stacking: true` would stack under the mode. The capture loop is taking
+    /// Last line of defence for the stacking conflict: `update_settings` reads the capture
+    /// state before its settings update, so a Start landing in that gap beside
+    /// `stacking: true` would stack under the mode. The capture loop is taking
     /// frames by definition, so a conflict found here is left before the snapshot. The
-    /// common path costs only the clone the loop always made.
-    pub async fn settings_for_new_frame(&self) -> CaptureSettings {
-        {
-            let settings = self.settings.read().await;
-            if !in_conflict(&settings, CaptureState::Capturing) {
-                return settings.clone();
-            }
+    /// common path costs one snapshot.
+    pub fn settings_for_new_frame(&self) -> Arc<CaptureSettings> {
+        let settings = self.settings.snapshot();
+        if !in_conflict(&settings, CaptureState::Capturing) {
+            return settings;
         }
-        if self
-            .leave_focus_mode_if_conflicting(CaptureState::Capturing)
-            .await
-        {
+        if self.leave_focus_mode_if_conflicting(CaptureState::Capturing) {
             tracing::warn!("Leaving Focus/Finder mode: the capture was about to stack under it");
             let _ = self
                 .events
                 .send(crate::server::events::ServerEvent::FocusModeLeft);
         }
-        self.settings.read().await.clone()
+        self.settings.snapshot()
     }
 }
 
@@ -544,13 +542,12 @@ mod tests {
         stacking_type: StackingType,
     ) -> (AppState, crate::disk_writer::DiskWriter) {
         let (state, disk_writer) = AppState::new_for_testing();
-        {
-            let mut settings = state.settings.write().await;
+        state.settings.update(|settings| {
             settings.stacking = true;
             settings.stacking_type = stacking_type;
             settings.sensor_correction.fpn_removal = true;
-            set(&mut settings, true, &Plugins::none());
-        }
+            set(settings, true, &Plugins::none());
+        });
         (state, disk_writer)
     }
 
@@ -561,11 +558,11 @@ mod tests {
         let (state, _disk_writer) = app_state_stacking_under_focus_mode(StackingType::DeepSky).await;
         let mut events = state.events.subscribe();
 
-        let snapshot = state.settings_for_new_frame().await;
+        let snapshot = state.settings_for_new_frame();
 
         assert!(!snapshot.focus_mode);
         assert!(snapshot.sensor_correction.fpn_removal);
-        assert!(!state.settings.read().await.focus_mode);
+        assert!(!state.settings.snapshot().focus_mode);
         let sent: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
         assert!(sent
             .iter()
@@ -581,10 +578,10 @@ mod tests {
             app_state_stacking_under_focus_mode(StackingType::Planetary).await;
         let mut events = state.events.subscribe();
 
-        let snapshot = state.settings_for_new_frame().await;
+        let snapshot = state.settings_for_new_frame();
 
         assert!(snapshot.focus_mode);
-        assert!(state.settings.read().await.focus_mode);
+        assert!(state.settings.snapshot().focus_mode);
         assert!(events.try_recv().is_err());
     }
 

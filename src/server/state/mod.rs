@@ -24,6 +24,7 @@ mod guide_loop;
 mod stream_viewers;
 mod session;
 mod settings;
+mod settings_store;
 mod types;
 
 pub use crate::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
@@ -44,6 +45,7 @@ pub use settings::{
     CaptureSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
     DEFAULT_PREVIEW_RESOLUTION, DEFAULT_STREAMING_RESOLUTION,
 };
+pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState};
 
@@ -57,8 +59,8 @@ pub struct AppState {
     pub capture: RwLock<CaptureState>,
     /// The session's frame counters, lock-free for the capture threads.
     pub stats: SessionStats,
-    /// Capture settings
-    pub settings: RwLock<CaptureSettings>,
+    /// Capture settings, read as snapshots.
+    pub settings: SettingsStore,
     /// The main camera's rendered image stream — what `/ws/stream` serves by default.
     pub main_stream: Arc<FrameStream>,
     /// The guide camera's rendered image stream — `/ws/stream?source=guide`.
@@ -200,7 +202,7 @@ impl AppState {
             selected_camera: RwLock::new(None),
             capture: RwLock::new(CaptureState::Idle),
             stats: SessionStats::default(),
-            settings: RwLock::new(settings),
+            settings: SettingsStore::new(settings),
             main_stream: Arc::new(FrameStream::default()),
             guide_stream: Arc::new(FrameStream::default()),
             cancel_flag: AtomicBool::new(false),
@@ -294,9 +296,8 @@ impl AppState {
     }
 
     /// Save current settings to disk
-    pub async fn save_settings(&self) {
-        let settings = self.settings.read().await;
-        if let Err(e) = self.settings_persistence.save(&settings) {
+    pub fn save_settings(&self) {
+        if let Err(e) = self.settings_persistence.save(&self.settings.snapshot()) {
             warn!("Failed to save settings: {}", e);
         }
     }

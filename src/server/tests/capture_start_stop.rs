@@ -222,7 +222,7 @@ async fn test_starting_a_capture_leaves_focus_mode_and_restores_the_settings() {
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode, "a capture must never begin under the mode");
     assert!(settings.focus_mode_snapshot.is_none());
     assert!(
@@ -253,7 +253,7 @@ async fn test_starting_live_view_keeps_focus_mode() {
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.stacking);
     assert!(
         settings.focus_mode,
@@ -288,7 +288,7 @@ async fn test_switching_live_view_to_stacking_leaves_focus_mode() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "stacking": true })).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(settings.stacking);
     assert!(
         !settings.focus_mode,
@@ -303,7 +303,7 @@ async fn test_switching_live_view_to_stacking_leaves_focus_mode() {
 async fn test_focus_mode_and_stacking_in_one_request_are_refused_during_live_view() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.settings.write().await.stacking = false;
+    state.settings.update(|s| s.stacking = false);
     state.set_capture_state(CaptureState::Capturing).await;
 
     let (status, _) = post_json(
@@ -314,7 +314,7 @@ async fn test_focus_mode_and_stacking_in_one_request_are_refused_during_live_vie
     .await;
 
     assert_eq!(status, StatusCode::CONFLICT);
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode);
     assert!(!settings.stacking, "a refused request applies nothing");
 }
@@ -325,7 +325,7 @@ async fn test_focus_mode_and_stacking_in_one_request_are_refused_during_live_vie
 async fn test_switching_to_live_view_and_entering_focus_mode_in_one_request_is_allowed() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.settings.write().await.stacking = true;
+    state.settings.update(|s| s.stacking = true);
     state.set_capture_state(CaptureState::Capturing).await;
 
     let (status, _) = post_json(
@@ -336,7 +336,7 @@ async fn test_switching_to_live_view_and_entering_focus_mode_in_one_request_is_a
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(settings.focus_mode);
     assert!(!settings.stacking);
 }
@@ -346,15 +346,14 @@ async fn resume_with_focus_mode_on(stacking: bool) -> Arc<AppState> {
 
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.stacking = stacking;
-        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
-    }
+        focus_mode::set(settings, true, &crate::plugins::Plugins::none());
+    });
     state.set_capture_state(CaptureState::Recovering).await;
     let plan = SessionResumePlan {
         camera_id: "mock_0".to_string(),
-        settings: state.settings.read().await.clone(),
+        settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: None,
         next_frame: 1,
     };
@@ -369,7 +368,7 @@ async fn resume_with_focus_mode_on(stacking: bool) -> Arc<AppState> {
 async fn test_resuming_live_view_keeps_focus_mode() {
     let state = resume_with_focus_mode_on(false).await;
 
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
     state.request_cancel();
 }
 
@@ -377,7 +376,7 @@ async fn test_resuming_live_view_keeps_focus_mode() {
 async fn test_resuming_a_stack_leaves_focus_mode() {
     let state = resume_with_focus_mode_on(true).await;
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode);
     assert!(settings.focus_mode_snapshot.is_none());
     drop(settings);
@@ -390,17 +389,16 @@ async fn test_resuming_a_stack_leaves_focus_mode() {
 async fn test_entering_focus_mode_is_allowed_during_a_planetary_capture() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.stacking = true;
         settings.stacking_type = StackingType::Planetary;
-    }
+    });
     state.set_capture_state(CaptureState::Capturing).await;
 
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
 }
 
 /// After Stop the capture loop checks `is_cancelled()` before it snapshots settings, so no
@@ -409,13 +407,13 @@ async fn test_entering_focus_mode_is_allowed_during_a_planetary_capture() {
 async fn test_entering_focus_mode_is_allowed_while_a_stack_is_stopping() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.settings.write().await.stacking = true;
+    state.settings.update(|s| s.stacking = true);
     state.set_capture_state(CaptureState::Stopping).await;
 
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
 }
 
 /// Planetary never runs the correction the mode drops, so a planetary stack starts under it.
@@ -424,28 +422,26 @@ async fn test_starting_a_planetary_stack_keeps_focus_mode() {
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
     let app = create_test_router(state.clone());
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.stacking = true;
         settings.stacking_type = StackingType::Planetary;
-        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
-    }
+        focus_mode::set(settings, true, &crate::plugins::Plugins::none());
+    });
 
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
     state.request_cancel();
 }
 
 async fn live_view_under_focus_mode(stacking_type: StackingType) -> Arc<AppState> {
     let state = create_test_state();
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.stacking = false;
         settings.stacking_type = stacking_type;
-        focus_mode::set(&mut settings, true, &crate::plugins::Plugins::none());
-    }
+        focus_mode::set(settings, true, &crate::plugins::Plugins::none());
+    });
     state.set_capture_state(CaptureState::Capturing).await;
     state
 }
@@ -465,7 +461,7 @@ async fn test_switching_live_view_to_planetary_stacking_keeps_focus_mode() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "stacking": true })).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
 }
 
 /// The toggle moves behind the observer's back here, unlike a Start they pressed — so the
@@ -491,7 +487,7 @@ async fn test_a_settings_write_that_keeps_focus_mode_announces_nothing() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "gain": 123 })).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(state.settings.read().await.focus_mode);
+    assert!(state.settings.snapshot().focus_mode);
     assert!(!focus_mode_left_announced(&mut events));
 }
 
@@ -513,7 +509,7 @@ async fn test_starting_a_capture_without_focus_mode_changes_nothing() {
     let (status, _) = post_json(&app, "/api/capture/start", json!({})).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode);
     assert!(
         !settings.background_subtraction,

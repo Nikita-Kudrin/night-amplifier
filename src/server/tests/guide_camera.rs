@@ -60,7 +60,7 @@ async fn guide_settings_do_not_disturb_the_main_camera() {
     assert_eq!(body["data"]["guide_camera"]["exposure_us"], 2_000_000);
     assert_eq!(body["data"]["guide_camera"]["gain"], 300);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert_eq!(settings.exposure_us, 60_000_000);
     assert_eq!(settings.guide_camera.exposure_us, 2_000_000);
 }
@@ -75,7 +75,7 @@ async fn a_settings_request_without_a_role_edits_the_main_camera() {
     let (status, _) = post_json(&app, "/api/settings", serde_json::json!({"gain": 42})).await;
     assert_eq!(status, axum::http::StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert_eq!(settings.gain, 42);
     assert_eq!(
         settings.guide_camera.gain, 0,

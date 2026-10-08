@@ -149,7 +149,7 @@ pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         }
     };
 
-    let wanderer_mode = state.settings.read().await.wanderer_mode;
+    let wanderer_mode = state.settings.snapshot().wanderer_mode;
     if !source.is_active(state.guide_holds_solving()) {
         debug!(?source, "Plate solve watch skipped: no longer the active solve source");
         return;
@@ -198,7 +198,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         }
     };
 
-    let wanderer_mode = state.settings.read().await.wanderer_mode;
+    let wanderer_mode = state.settings.snapshot().wanderer_mode;
     let push_to_status = plugin.get_status().await;
 
     let has_target = push_to_status.current_target.is_some();

@@ -13,7 +13,7 @@ use crate::server::state::{AppState, CaptureState};
 /// Resolved for the saved "AI compute" choice, so `effective` and `notice` describe what the
 /// observer has actually selected.
 pub async fn get_ai_compute(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let preference = state.settings.read().await.denoise.ai_compute;
+    let preference = state.settings.snapshot().denoise.ai_compute;
     (StatusCode::OK, ApiResponse::ok(ai::compute_report(&state.plugins, preference)))
 }
 
@@ -25,7 +25,7 @@ pub async fn remeasure(State(state): State<Arc<AppState>>) -> axum::response::Re
         return (e.status_code(), ApiResponse::err::<()>(e.to_string())).into_response();
     }
     ai::remeasure(&state.plugins);
-    let preference = state.settings.read().await.denoise.ai_compute;
+    let preference = state.settings.snapshot().denoise.ai_compute;
     (StatusCode::OK, ApiResponse::ok(ai::compute_report(&state.plugins, preference))).into_response()
 }
 

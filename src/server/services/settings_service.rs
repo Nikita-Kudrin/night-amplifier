@@ -1,10 +1,9 @@
 //! Applying a settings update: what it may not do, what it changes, and what has to
 //! follow from the change.
 //!
-//! [`check`] and [`apply`] are pure, so the rules are tested without a server; the
-//! reactions run after the write lock is released. Everything a reaction needs from
-//! another lock is read *before* `settings.write()`: elsewhere the order is cameras-first
-//! and session-before-settings, and taking either inside the guard could deadlock.
+//! [`check`] and [`apply`] are pure, so the rules are tested without a server; they run
+//! inside one `SettingsStore::update`, and the reactions after it. Everything a reaction
+//! needs from another lock is read *before* the update, which takes no lock of its own.
 
 use std::sync::Arc;
 
@@ -291,12 +290,11 @@ impl SettingsService {
             capture_state: state.capture_state().await,
         };
 
-        let (applied, delta) = {
-            let mut settings = state.settings.write().await;
-            check(&request, &settings, target.capture_state, ProFeatures::of(&state.plugins))?;
-            let delta = apply(request, &mut settings, &target, &state.plugins);
-            (settings.clone(), delta)
-        };
+        let (applied, delta) = state.settings.update(|settings| {
+            check(&request, settings, target.capture_state, ProFeatures::of(&state.plugins))?;
+            let delta = apply(request, settings, &target, &state.plugins);
+            ApiResult::Ok((settings.clone(), delta))
+        })?;
 
         Self::react(state, &target, delta, &applied).await;
         Ok(applied)
@@ -364,7 +362,7 @@ impl SettingsService {
             let _ = PushToService::restart_solve(state, "Equipment settings changed").await;
         }
 
-        state.save_settings().await;
+        state.save_settings();
     }
 }
 

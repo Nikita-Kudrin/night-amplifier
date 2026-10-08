@@ -250,7 +250,7 @@ pub struct CapturedFrame {
     /// Sequential frame number within the capture session.
     pub frame_number: u64,
     /// Snapshot of capture settings at the time of capture.
-    pub settings: CaptureSettings,
+    pub settings: Arc<CaptureSettings>,
     /// Camera info for metadata (disk saving, etc.).
     pub camera_info: ConnectedCameraInfo,
 }
@@ -276,7 +276,7 @@ pub struct StackedFrame {
     /// Sequential frame number within the capture session.
     pub frame_number: u64,
     /// Snapshot of capture settings (for render pipeline configuration).
-    pub settings: CaptureSettings,
+    pub settings: Arc<CaptureSettings>,
     /// Frames in the accumulated stack, or `0` when this is a single sub.
     ///
     /// The render task's analysis cache refreshes on proportional growth in this, not on

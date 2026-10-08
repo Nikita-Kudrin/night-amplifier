@@ -49,10 +49,9 @@ async fn a_stalled_client_does_not_hold_up_the_others() {
     let _stalled = server.connect_registered(LOSSLESS).await;
     let mut healthy = server.connect_registered(LOSSLESS).await;
     let mut live = server.connect_registered(LIVE_VIEW).await;
-    {
-        let mut settings = server.state.settings.write().await;
+    server.state.settings.update(|settings| {
         settings.eyepiece.stream_resolution = crate::server::state::EyepieceStreamResolution::Native;
-    }
+    });
 
     for seed in 1..=4 {
         server.render_noisy((2000, 2000), seed).await;

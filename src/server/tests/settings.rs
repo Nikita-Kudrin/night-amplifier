@@ -57,7 +57,7 @@ async fn test_update_streaming_resolution_leaves_the_other_resolutions_alone() {
     let (status, _) =
         post_json(&app, "/api/settings", json!({"streaming_resolution": "8k"})).await;
     assert!(status.is_client_error(), "an unknown resolution was accepted");
-    assert_eq!(state.settings.read().await.streaming_resolution, Resolution::Qhd1440);
+    assert_eq!(state.settings.snapshot().streaming_resolution, Resolution::Qhd1440);
 }
 
 #[tokio::test]
@@ -678,7 +678,7 @@ async fn test_settings_update_mirrors_to_active_profile() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     let profile = settings
         .camera_profiles
         .get("Mock/Test Camera")
@@ -697,7 +697,7 @@ async fn test_settings_update_with_no_camera_does_not_create_profile() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "gain": 250 })).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(
         settings.camera_profiles.is_empty(),
         "no camera connected → no profile should be created"
@@ -944,7 +944,7 @@ async fn test_focus_mode_is_off_by_default() {
     let (_, json) = get_json(&app, "/api/settings").await;
 
     assert_eq!(json["data"]["focus_mode"], false);
-    assert!(state.settings.read().await.focus_mode_snapshot.is_none());
+    assert!(state.settings.snapshot().focus_mode_snapshot.is_none());
 }
 
 /// Focus/Finder mode drops `fpn_removal`, which runs on the raw mosaic before demosaic —
@@ -961,7 +961,7 @@ async fn test_focus_mode_is_refused_while_stacking() {
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(json["success"], false);
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode);
     assert!(
         settings.sensor_correction.fpn_removal,
@@ -1048,7 +1048,7 @@ async fn test_focus_mode_is_refused_while_a_capture_is_starting() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(!state.settings.read().await.focus_mode);
+    assert!(!state.settings.snapshot().focus_mode);
 }
 
 /// Hot-pixel rejection lost its switch. A client built before that still posts

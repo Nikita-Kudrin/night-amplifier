@@ -162,7 +162,7 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
     let name = &recorded.info.name;
     let mut recorded = recorded.clone();
 
-    if !state.settings.read().await.auto_reconnect {
+    if !state.settings.snapshot().auto_reconnect {
         return Err(Stop::GaveUp {
             attempts: 0,
             reason: "automatic reconnect is switched off".to_string(),
@@ -178,7 +178,7 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
     let mut attempt = 0;
     loop {
         attempt += 1;
-        if !state.settings.read().await.auto_reconnect {
+        if !state.settings.snapshot().auto_reconnect {
             return Err(Stop::GaveUp {
                 attempts: attempt - 1,
                 reason: "automatic reconnect was switched off".to_string(),
@@ -242,7 +242,7 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
         state.end_paused_capture().await;
         return;
     };
-    if !state.settings.read().await.auto_resume_capture {
+    if !state.settings.snapshot().auto_resume_capture {
         info!(camera_id = %connected.id, "Not resuming capture — auto-resume is switched off");
         state.end_paused_capture().await;
         return;
@@ -290,8 +290,8 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
 /// once left clients showing values the resumed capture wasn't using. Hardware fields
 /// (cooler, dew heater, sensor mode) stay as the reopen set them; those belong to the device.
 async fn restore_settings(state: &Arc<AppState>, plan: &SessionResumePlan) {
-    restore_capture_fields(&mut *state.settings.write().await, plan);
-    state.save_settings().await;
+    state.settings.update(|settings| restore_capture_fields(settings, plan));
+    state.save_settings();
     let _ = state.events.send(ServerEvent::SettingsUpdated);
 }
 

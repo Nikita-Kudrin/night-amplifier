@@ -158,11 +158,9 @@ pub fn run_render_task(
         // both without also covering the work between them.
         let (counter, resolutions) = {
             let _span = tracing::info_span!("publish_state").entered();
-            // The live resolutions ride the same round trip rather than adding one.
-            let resolutions = rt.block_on(async {
-                state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame)).await;
-                StreamResolutions::of(&*state.settings.read().await)
-            });
+            rt.block_on(state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame)));
+            // The live resolutions, not the frame's snapshot: a size change lands next frame.
+            let resolutions = StreamResolutions::of(&state.settings.snapshot());
             // Claim the counter before encoding so every payload below is filed
             // under the same frame, then wake clients once they are all in place.
             (state.main_stream.begin_frame(), resolutions)
@@ -525,7 +523,7 @@ mod tests {
             showing_stack: true,
             was_stacked: true,
             frame_number: 1,
-            settings,
+            settings: settings.into(),
             stack_depth: 0,
         };
 
@@ -547,7 +545,7 @@ mod tests {
             showing_stack: false,
             was_stacked: false,
             frame_number: 0,
-            settings: settings.clone(),
+            settings: settings.clone().into(),
             stack_depth: 0,
         };
 
@@ -559,7 +557,7 @@ mod tests {
                 showing_stack: false,
                 was_stacked: false,
                 frame_number: n + 1,
-                settings: settings.clone(),
+                settings: settings.clone().into(),
                 stack_depth: 0,
             };
             tx.send(msg).unwrap();
@@ -571,7 +569,7 @@ mod tests {
             showing_stack: true,
             was_stacked: true,
             frame_number: 4,
-            settings: settings.clone(),
+            settings: settings.clone().into(),
             stack_depth: 0,
         };
         tx.send(last).unwrap();

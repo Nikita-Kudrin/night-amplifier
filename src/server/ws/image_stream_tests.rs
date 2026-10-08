@@ -75,11 +75,10 @@ async fn a_first_client_is_served_from_the_raw_frame_at_the_configured_size() {
 #[tokio::test]
 async fn on_demand_encodes_follow_each_familys_setting() {
     let state = test_state();
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Hd1080;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Native;
-    }
+    });
     with_frame(&state, 3008, 3008).await;
     let stream = Arc::clone(&state.main_stream);
 
@@ -125,7 +124,7 @@ async fn a_current_payload_is_reused_until_the_next_frame() {
     let state = test_state();
     let counter = with_frame(&state, 400, 300).await;
     state.main_stream.set_payload(StreamKind::Jpeg, counter, vec![0xab; 64]);
-    state.settings.write().await.streaming_resolution = Resolution::Hd1080;
+    state.settings.update(|s| s.streaming_resolution = Resolution::Hd1080);
 
     let (tag, payload) = payload_for_client(&state, &state.main_stream, StreamKind::Jpeg)
         .await
@@ -190,11 +189,10 @@ async fn configured_resolution_reads_each_familys_setting() {
     assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Qhd1440);
     assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Qhd1440);
 
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Native;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
-    }
+    });
     assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Native);
     assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Uhd2160);
 }

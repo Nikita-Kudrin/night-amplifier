@@ -336,14 +336,14 @@ pub async fn run(plugins: crate::plugins::Plugins) {
 
     // Apply CLI overrides for INDI if present
     if args.indi_host.is_some() || args.indi_port.is_some() {
-        let state = server.state();
-        let mut settings = state.settings.write().await;
-        if let Some(host) = args.indi_host {
-            settings.indi_server_host = host;
-        }
-        if let Some(port) = args.indi_port {
-            settings.indi_server_port = port;
-        }
+        server.state().settings.update(|settings| {
+            if let Some(host) = args.indi_host {
+                settings.indi_server_host = host;
+            }
+            if let Some(port) = args.indi_port {
+                settings.indi_server_port = port;
+            }
+        });
     }
 
     if let Err(e) = server.run().await {

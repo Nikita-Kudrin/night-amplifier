@@ -20,7 +20,8 @@ use crate::camera::{Camera, CameraInfo, CameraLocator, DeviceIdentity, OpenedCam
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::events::ServerEvent;
 use crate::server::state::{
-    AppState, BoundedCallError, CameraPhase, CameraRole, ConnectedCameraInfo, MonitorCmd,
+    AppState, BoundedCallError, CameraPhase, CameraRole, CaptureSettings, ConnectedCameraInfo,
+    MonitorCmd,
 };
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -207,7 +208,7 @@ impl HardwareSetup {
 
 /// Swap `role`'s per-camera profile into the live settings and read back what the
 /// hardware is to be seeded with.
-async fn apply_profile(
+fn apply_profile(
     state: &Arc<AppState>,
     provider: &str,
     info: &CameraInfo,
@@ -216,8 +217,16 @@ async fn apply_profile(
     // Before deciding precool — otherwise a cooled camera's `cooler_enabled` would leak
     // into the next-connected uncooled camera.
     let profile_key = camera_profile_key(provider, &info.name, role);
-    let mut settings = state.settings.write().await;
-    apply_camera_profile_on_connect(&mut settings, profile_key, role, info);
+    state.settings.update(|settings| profile_settings(settings, profile_key, role, info))
+}
+
+fn profile_settings(
+    settings: &mut CaptureSettings,
+    profile_key: String,
+    role: CameraRole,
+    info: &CameraInfo,
+) -> HardwareSetup {
+    apply_camera_profile_on_connect(settings, profile_key, role, info);
     // Give the solver a rig key that came from this sensor rather than from the flat
     // block, which describes whichever camera was configured last. Two unprofiled cameras
     // otherwise share one key and one remembered FOV — see
@@ -274,7 +283,7 @@ pub(super) async fn install_camera(
         "Camera specifications"
     );
 
-    let setup = apply_profile(state, &provider_registry_name, &info, role).await;
+    let setup = apply_profile(state, &provider_registry_name, &info, role);
     let (cooler_target, cooler_fast_mode) = (setup.cooler_target, setup.cooler_fast_mode);
     let (camera, cooler_applied) = state
         .slot(role)
@@ -366,7 +375,7 @@ pub(super) async fn install_camera(
     sync_solver_rig(state).await;
 
     // Persist the (possibly new / clamped) camera profile to disk.
-    state.save_settings().await;
+    state.save_settings();
 
     // The guide camera free-runs from the moment it connects: solving and its preview
     // must work while the user is still framing, before any capture has started.
