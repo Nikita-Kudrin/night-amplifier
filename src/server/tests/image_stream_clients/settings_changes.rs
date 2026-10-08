@@ -6,7 +6,7 @@ use serde_json::json;
 use serial_test::parallel;
 
 use super::*;
-use crate::server::state::{EyepieceStreamResolution, Resolution};
+use crate::session::state::{EyepieceStreamResolution, Resolution};
 
 /// Changing Streaming Resolution through the settings endpoint resizes every JPEG client
 /// on the next frame — not before — and leaves the eyepiece stream alone.

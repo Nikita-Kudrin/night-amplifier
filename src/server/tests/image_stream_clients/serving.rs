@@ -7,7 +7,7 @@ use serial_test::parallel;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::*;
-use crate::server::state::{EyepieceStreamResolution, Resolution, StreamKind};
+use crate::session::state::{EyepieceStreamResolution, Resolution, StreamKind};
 
 /// Clients of `/` and `/eyepiece` all receive the very same bytes at Streaming Resolution,
 /// whatever viewport an old frontend still reports.

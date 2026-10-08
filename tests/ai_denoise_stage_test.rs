@@ -14,9 +14,9 @@ use night_amplifier::render::denoise::DenoiseSettings;
 use night_amplifier::render::display::frame_to_rgb8_downsampled;
 use night_amplifier::render::display::RenderReadyFrame;
 use night_amplifier::render::{AiDenoiseConfig, AiDenoisePlugin, DenoiseScratch};
-use night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis;
-use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
-use night_amplifier::server::state::CaptureSettings;
+use night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis;
+use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
+use night_amplifier::session::state::CaptureSettings;
 use night_amplifier::Frame;
 
 thread_local! {
@@ -185,7 +185,7 @@ fn live_view_runs_the_network() {
 fn nothing_calls_the_network_through_a_shut_gate() {
     register();
     let mut focus = asking_for_the_network();
-    night_amplifier::server::state::focus_mode::set(&mut focus, true, &night_amplifier::plugins::Plugins::none());
+    night_amplifier::session::state::focus_mode::set(&mut focus, true, &night_amplifier::plugins::Plugins::none());
     let mut planetary = asking_for_the_network();
     planetary.stacking_type = night_amplifier::stacking::StackingType::Planetary;
     let mut master_off = asking_for_the_network();

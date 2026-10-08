@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use std::sync::Arc;
 
 use super::helpers::*;
-use crate::server::state::*;
+use crate::session::state::*;
 
 #[tokio::test]
 async fn test_capture_status_initial_state() {

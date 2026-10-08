@@ -11,11 +11,11 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingM
 use night_amplifier::background::BackgroundConfig;
 use night_amplifier::frame::Frame;
 use night_amplifier::plugins::Plugins;
-use night_amplifier::server::capture::pipeline::{
+use night_amplifier::session::capture::pipeline::{
     process_preview_frame, process_preview_frame_with_analysis,
 };
-use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
-use night_amplifier::server::state::CaptureSettings;
+use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
+use night_amplifier::session::state::CaptureSettings;
 use night_amplifier::{compute_image_stats, WhiteBalanceConfig};
 use std::hint::black_box;
 use std::time::Duration;
@@ -92,7 +92,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
     // whole of it.
     let focus_settings = {
         let mut s = CaptureSettings::default();
-        night_amplifier::server::state::focus_mode::set(&mut s, true, &plugins);
+        night_amplifier::session::state::focus_mode::set(&mut s, true, &plugins);
         s
     };
     group.bench_function(format!("focus_mode_x{}", REPS), |b| {

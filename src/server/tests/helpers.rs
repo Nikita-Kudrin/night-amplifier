@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 use crate::camera::{CameraInfo, ImageFormat, SensorType};
 use crate::server::api::*;
-use crate::server::state::*;
+use crate::session::state::*;
 use crate::CfaPattern;
 
 /// Create a test app state with default configuration (no settings persistence)

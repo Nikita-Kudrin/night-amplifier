@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::render::denoise::ai;
 use crate::server::dto::ApiResponse;
-use crate::server::error::ApiError;
-use crate::server::state::{AppState, CaptureState};
+use crate::session::error::ApiError;
+use crate::session::state::{AppState, CaptureState};
 
 /// Resolved for the saved "AI compute" choice, so `effective` and `notice` describe what the
 /// observer has actually selected.

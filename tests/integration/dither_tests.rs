@@ -133,7 +133,7 @@ fn the_dither_leaves_no_lattice_in_a_flat_sky() {
 /// A plane of output levels through the production JPEG encoder at `quality` and back,
 /// with the payload's size.
 fn through_jpeg(plane: &[f64], quality: i32) -> (Vec<f64>, usize) {
-    use night_amplifier::server::encoding::{encode_rgb8_jpeg_bounded_from_u8, SA10_HEADER_SIZE};
+    use night_amplifier::session::encoding::{encode_rgb8_jpeg_bounded_from_u8, SA10_HEADER_SIZE};
     let rgb8: Vec<u8> = plane.iter().flat_map(|&v| [v as u8; 3]).collect();
     let payload = encode_rgb8_jpeg_bounded_from_u8(&rgb8, SIDE as u32, SIDE as u32, quality).unwrap();
     let decoded = turbojpeg::decompress(&payload[SA10_HEADER_SIZE..], turbojpeg::PixelFormat::RGB).unwrap();
@@ -150,7 +150,7 @@ fn through_jpeg(plane: &[f64], quality: i32) -> (Vec<f64>, usize) {
 #[test]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn the_denoised_jpeg_quality_keeps_what_the_dither_carries() {
-    use night_amplifier::server::encoding::jpeg_quality;
+    use night_amplifier::session::encoding::jpeg_quality;
     let (plain_q, denoised_q) = (jpeg_quality(1440, 1440, false), jpeg_quality(1440, 1440, true));
     let region = (0, 0, SIDE, SIDE);
     type Sky = (&'static str, fn(usize) -> f64);
@@ -200,7 +200,7 @@ fn the_denoised_jpeg_quality_keeps_what_the_dither_carries() {
 #[serial]
 #[ignore = "diagnostic - run with: cargo test --release --test integration_pipeline dither -- --ignored --nocapture"]
 fn measure_the_dither_on_real_sessions() {
-    let settings = night_amplifier::server::state::CaptureSettings::default();
+    let settings = night_amplifier::session::state::CaptureSettings::default();
     for (name, dir) in requested_sessions() {
         let Some((stack, depth)) = cached_stack(name, dir) else {
             println!("{name}: not on this machine");

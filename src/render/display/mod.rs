@@ -1,7 +1,7 @@
 //! What a rendered frame looks like on a screen: the fused f32 -> RGB8 kernels every
 //! streamed and saved preview goes through, their area-averaging resampler, the sky
 //! shadow, and PNG encoding of the result. The server frames these bytes for the wire
-//! (`server::encoding`); the disk writer saves them — neither re-derives the pixels.
+//! (`session::encoding`); the disk writer saves them — neither re-derives the pixels.
 
 mod axis_taps;
 mod fused;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use super::super::dto::{ApiResponse, AstapInstallRequest, CatalogInstallRequest, MessageResponse};
-use super::super::state::AppState;
+use crate::session::state::AppState;
 use crate::push_to::{
     AstapStatusResponse, CatalogStatusResponse, DatabaseTypeResponse,
 };

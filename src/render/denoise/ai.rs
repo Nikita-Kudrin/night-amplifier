@@ -5,7 +5,7 @@
 //! classic filters' linear light — the model trained on stretched, background-compensated
 //! RGB, which linear light never matches. After the S-curve instead, it softened stars
 //! more (M27 excess at r=5px: +43% vs +26%), so the S-curve stays out of the fused scale
-//! LUT (`server::capture::pipeline`) and the encoder stages the stretch first.
+//! LUT (`session::capture::pipeline`) and the encoder stages the stretch first.
 
 use super::ai_compute::{AiComputePreference, AiComputeReport, BenchmarkState};
 use super::DenoiseScratch;
@@ -47,7 +47,7 @@ impl Default for AiDenoiseConfig {
 /// The network, and what the observer's settings mean for it.
 pub trait AiDenoisePlugin: Send + Sync {
     /// The tuned config. Only asked while the observer has the network switched on and
-    /// nothing holds it off (`server::capture::stage_config`).
+    /// nothing holds it off (`session::capture::stage_config`).
     fn config(&self, settings: &DenoiseSettings) -> AiDenoiseConfig;
 
     /// Denoise one staged interleaved RGB f32 image in place, at output resolution,

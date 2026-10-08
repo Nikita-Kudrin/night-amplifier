@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::helpers::*;
 use crate::camera::CameraInfo;
 use crate::push_to::TelescopeSettings;
-use crate::server::capture::solving::{plate_solve_available, SolveSource};
-use crate::server::state::*;
+use crate::session::capture::solving::{plate_solve_available, SolveSource};
+use crate::session::state::*;
 
 /// Install a connected camera in `role` without opening a device.
 async fn register_camera(state: &Arc<AppState>, role: CameraRole, id: &str, name: &str) {
@@ -184,7 +184,7 @@ async fn the_camera_list_reports_each_cameras_role() {
 /// would report a framing change that never happened (and restart a healthy solve).
 #[tokio::test]
 async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
-    use crate::server::services::optics_change;
+    use crate::session::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let mut settings = CaptureSettings {
@@ -212,7 +212,7 @@ async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
 /// when the shared telescope block is untouched.
 #[tokio::test]
 async fn rewriting_the_optics_profiles_counts_as_a_telescope_change() {
-    use crate::server::services::optics_change;
+    use crate::session::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let settings = CaptureSettings::default();
@@ -289,7 +289,7 @@ fn both_roles_start_from_the_same_hardware_defaults() {
 #[tokio::test]
 async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
     use crate::camera::{CameraInfo, ImageFormat, SensorType};
-    use crate::server::camera_session::lifecycle::apply_camera_profile_on_connect;
+    use crate::session::camera::lifecycle::apply_camera_profile_on_connect;
 
     let info = CameraInfo {
         name: "Dual Duty".to_string(),
@@ -300,7 +300,7 @@ async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
         ..Default::default()
     };
     let key = |role| {
-        crate::server::camera_session::lifecycle::camera_profile_key("Mock", "Dual Duty", role)
+        crate::session::camera::lifecycle::camera_profile_key("Mock", "Dual Duty", role)
     };
 
     let mut settings = CaptureSettings::default();
@@ -322,7 +322,7 @@ async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
 #[tokio::test]
 async fn a_zeroed_stored_profile_is_repaired_on_connect() {
     use crate::camera::{CameraInfo, ImageFormat, SensorType};
-    use crate::server::camera_session::lifecycle::{
+    use crate::session::camera::lifecycle::{
         apply_camera_profile_on_connect, camera_profile_key,
     };
 

@@ -8,13 +8,13 @@ use axum::{
 };
 use std::sync::Arc;
 
-use super::super::camera_session::lifecycle::{DisconnectOutcome, WarmupPolicy};
+use crate::session::camera::lifecycle::{DisconnectOutcome, WarmupPolicy};
 use super::super::dto::{
     ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, DisconnectCameraRequest,
     DisconnectResponse, MessageResponse,
 };
-use super::super::services::CameraService;
-use super::super::state::{AppState, CameraRole};
+use crate::session::services::CameraService;
+use crate::session::state::{AppState, CameraRole};
 use super::optional_body::OptionalBody;
 
 /// GET /api/cameras

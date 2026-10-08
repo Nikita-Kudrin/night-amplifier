@@ -6,8 +6,8 @@ use std::sync::Arc;
 use super::super::dto::{
     ApiResponse, MessageResponse, PushToConfigRequest, SearchCatalogRequest, SetTargetRequest,
 };
-use super::super::services::PushToService;
-use super::super::state::AppState;
+use crate::session::services::PushToService;
+use crate::session::state::AppState;
 // Removed CatalogType
 
 /// GET /api/push-to/status

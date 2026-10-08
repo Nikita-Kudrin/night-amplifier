@@ -21,7 +21,7 @@ use image::{
 };
 use night_amplifier::frame::Frame;
 use night_amplifier::render::display::frame_to_rgb8_downsampled;
-use night_amplifier::server::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
+use night_amplifier::session::encoding::{encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use std::fs;
 use std::hint::black_box;
 use std::io::Cursor;

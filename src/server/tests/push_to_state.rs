@@ -3,9 +3,9 @@
 
 use crate::push_to::TelescopeSettings;
 use crate::server::dto::UpdateSettingsRequest;
-use crate::server::services::PushToState;
-use crate::server::services::{optics_change, OpticsChange};
-use crate::server::state::{CameraRole, CaptureSettings};
+use crate::session::services::PushToState;
+use crate::session::services::{optics_change, OpticsChange};
+use crate::session::state::{CameraRole, CaptureSettings};
 use std::time::{Duration, Instant};
 
 /// No cadence floor, so the latch tests exercise the latch alone.

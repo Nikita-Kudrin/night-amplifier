@@ -75,7 +75,7 @@ pub trait Camera: Send {
     /// Reset any cached "last applied to hardware" state.
     ///
     /// Called once when a backend's handle is handed off for a new capture session (see
-    /// `server/capture/mod.rs`), so the first frame of every session always gets a full
+    /// `session/capture/mod.rs`), so the first frame of every session always gets a full
     /// `CaptureConfig` reapply regardless of any out-of-band mutation (cooler toggles, temperature ramps) that happened while idle.
     ///
     /// Default no-op: correct for implementations with no expensive per-frame SDK calls to

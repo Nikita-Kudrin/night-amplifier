@@ -20,7 +20,7 @@ use std::time::Instant;
 use lz4_flex::decompress_size_prepended;
 use night_amplifier::frame::Frame;
 use night_amplifier::render::{RenderPipeline, RenderPipelineConfig};
-use night_amplifier::server::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
+use night_amplifier::session::encoding::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use night_amplifier::PixelFormat;
 use serial_test::serial;
 
@@ -552,7 +552,7 @@ fn probe_jpeg_encoding_candidates() {
 #[ignore = "integration test - run with: cargo test --release --test integration_pipeline -- --ignored --test-threads=1"]
 fn probe_render_task_stage_breakdown() {
     use night_amplifier::render::{AutoStretchConfig, StretchAggressiveness};
-    use night_amplifier::server::encode_rgb8_jpeg_bounded;
+    use night_amplifier::session::encoding::encode_rgb8_jpeg_bounded;
 
     println!("\n=== Render Task Stage Breakdown (live view, per frame) ===\n");
 

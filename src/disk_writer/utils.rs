@@ -6,7 +6,7 @@ use std::path::Path;
 /// produced — the same conversion live view streams through (background, stretch,
 /// saturation, contrast, denoise, quantization). Re-deriving from a `Frame` here
 /// would reimplement that pipeline — exactly how PNG export used to drift and skip
-/// denoising entirely. See `server::capture::storage::render_stacked_png`.
+/// denoising entirely. See `session::capture::storage::render_stacked_png`.
 pub(crate) fn write_rgb8_png(
     rgb8: &[u8],
     width: u32,

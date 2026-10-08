@@ -178,7 +178,7 @@ fn measure_render_brightness_on_real_sessions() {
                     continue;
                 }
             }
-            let mut settings = night_amplifier::server::state::CaptureSettings::default();
+            let mut settings = night_amplifier::session::state::CaptureSettings::default();
             settings.stretch_aggressiveness = aggressiveness;
             // The live settings file pins the denoise block; the defaults are what is
             // being measured, so they are restated rather than inherited.

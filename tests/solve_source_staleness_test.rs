@@ -19,9 +19,9 @@ use night_amplifier::push_to::{
     CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
     PushToStatusResponse, TelescopeSettings,
 };
-use night_amplifier::server::capture::solving::{solve_frame, watch_frame, SolveSource};
-use night_amplifier::server::services::PushToState;
-use night_amplifier::server::state::AppState;
+use night_amplifier::session::capture::solving::{solve_frame, watch_frame, SolveSource};
+use night_amplifier::session::services::PushToState;
+use night_amplifier::session::state::AppState;
 
 /// Counts dispatches into the plugin. Every gating decision under test lives in
 /// `solving.rs`, not here — this only records whether it was reached.

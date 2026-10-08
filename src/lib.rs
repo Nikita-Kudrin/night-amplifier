@@ -46,6 +46,7 @@ pub mod telemetry;
 pub mod app;
 pub mod license;
 pub mod server;
+pub mod session;
 
 pub use background::{
     subtract_background, subtract_background_with_config, BackgroundConfig, BackgroundExtractor,

@@ -12,7 +12,7 @@ use crate::server::dto::{
     ApiResponse, CapabilitiesResponse, CometCapabilities, DeepSkyCapabilities,
     PlanetaryCapabilities, PushToCapabilities,
 };
-use crate::server::state::AppState;
+use crate::session::state::AppState;
 
 /// GET /api/capabilities
 ///

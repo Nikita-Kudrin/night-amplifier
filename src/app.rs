@@ -241,10 +241,10 @@ fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_in
         port: args.port,
         static_dir: args.static_dir.clone(),
         log_dir,
-        settings_file: crate::server::DEFAULT_SETTINGS_FILE.into(),
+        settings_file: crate::session::settings_persistence::DEFAULT_SETTINGS_FILE.into(),
         pro_active: crate::license::is_pro_active(),
         plugins: crate::plugins::Plugins::installed().registered(),
-        frame_queue_budget_bytes: crate::server::capture::channel::frame_queue_budget_bytes(),
+        frame_queue_budget_bytes: crate::session::capture::channel::frame_queue_budget_bytes(),
     }
 }
 

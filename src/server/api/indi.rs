@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::super::dto::ApiResponse;
-use super::super::state::AppState;
+use crate::session::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct IndiTestRequest {

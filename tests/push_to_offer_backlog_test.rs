@@ -19,11 +19,11 @@ use night_amplifier::push_to::{
     CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
     PushToStatusResponse, TelescopeSettings,
 };
-use night_amplifier::server::capture::solving::{
+use night_amplifier::session::capture::solving::{
     offer_plate_solve, plate_solve_available, SolveSource,
 };
-use night_amplifier::server::services::PushToState;
-use night_amplifier::server::state::AppState;
+use night_amplifier::session::services::PushToState;
+use night_amplifier::session::state::AppState;
 
 /// Slow detection on a busy board: longer than both cadence floors.
 const BLOCK: Duration = Duration::from_millis(2500);

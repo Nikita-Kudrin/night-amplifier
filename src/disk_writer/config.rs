@@ -32,7 +32,7 @@ pub enum FrameType {
     /// `crate::render::display::frame_to_rgb8_downsampled`, the same conversion the live
     /// view streams through, so the saved file matches on-screen output instead of
     /// skipping encoder-only stages (spatial denoise, display quantization) a bare
-    /// `Frame` render would miss. Rendering happens in `server::capture::storage` — a
+    /// `Frame` render would miss. Rendering happens in `session::capture::storage` — a
     /// server-layer concern — only the resulting bytes cross into this module, keeping `disk_writer` unaware of the render/encoding pipeline.
     StackedPng {
         rgb8: Arc<Vec<u8>>,

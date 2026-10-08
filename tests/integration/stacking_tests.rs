@@ -331,8 +331,8 @@ fn test_pipeline_rejects_corrupted_frame() {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn live_stacking_keeps_frames_and_aligns_them_well() {
-    use night_amplifier::server::capture::{StackSettings, StackingContext};
-    use night_amplifier::server::state::CaptureSettings;
+    use night_amplifier::session::capture::{StackSettings, StackingContext};
+    use night_amplifier::session::state::CaptureSettings;
 
     crate::integration::common::ensure_fixtures_sync();
 
@@ -507,8 +507,8 @@ fn managed_fixture_frames(name: &str) -> Option<Vec<night_amplifier::Frame>> {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
-    use night_amplifier::server::capture::{RejectionReason, StackSettings, StackingContext};
-    use night_amplifier::server::state::CaptureSettings;
+    use night_amplifier::session::capture::{RejectionReason, StackSettings, StackingContext};
+    use night_amplifier::session::state::CaptureSettings;
 
     crate::integration::common::ensure_fixtures_sync();
 
@@ -599,8 +599,8 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn wanderer_holds_the_stack_through_the_frames_a_session_dislikes() {
-    use night_amplifier::server::capture::{StackSettings, StackingContext};
-    use night_amplifier::server::state::CaptureSettings;
+    use night_amplifier::session::capture::{StackSettings, StackingContext};
+    use night_amplifier::session::state::CaptureSettings;
 
     crate::integration::common::ensure_fixtures_sync();
 
@@ -665,8 +665,8 @@ fn wanderer_holds_the_stack_through_the_frames_a_session_dislikes() {
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
 fn wanderer_reads_a_new_target_as_movement() {
-    use night_amplifier::server::capture::{StackSettings, StackingContext};
-    use night_amplifier::server::state::CaptureSettings;
+    use night_amplifier::session::capture::{StackSettings, StackingContext};
+    use night_amplifier::session::state::CaptureSettings;
 
     crate::integration::common::ensure_fixtures_sync();
 

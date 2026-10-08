@@ -10,9 +10,9 @@ use std::sync::Arc;
 use super::super::dto::{
     ApiResponse, CaptureStatusResponse, MessageResponse, StartCaptureRequest, StopCaptureRequest,
 };
-use super::super::error::ApiError;
-use super::super::services::CaptureService;
-use super::super::state::{AppState, CameraRole};
+use crate::session::error::ApiError;
+use crate::session::services::CaptureService;
+use crate::session::state::{AppState, CameraRole};
 use super::optional_body::OptionalBody;
 
 /// POST /api/capture/start
