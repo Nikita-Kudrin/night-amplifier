@@ -54,9 +54,10 @@ When designing new features or refactoring, adhere to the following architectura
   installer) so Community works standalone. The binary `install`s its set via `app::run`; `AppState::plugins` carries
   it to stacking, rendering and Push-To, so a test hands in its own set (`always_licensed` for fakes) instead of
   filling process-wide slots. Accessors are licence-gated per call: a lapsed licence degrades the next frame.
-- Layers: `server` (HTTP/WS adapter) → `session` (use cases, `AppState`, events) → domain. `tests/layering_test.rs`:
-  only `server`/`app.rs` name `crate::server`, only they and `session` name `crate::session`. Plugin traits speak
-  domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
+- Layers are crates, so Cargo enforces them: `night_amplifier` (root: `server`, `app.rs`, binary; re-exports the
+  others at their old paths) → `night_amplifier_session` (`crates/session`: use cases, `AppState`, events) →
+  `night_amplifier_core` (`crates/core`: the domain). A `cfg(test)` shortcut in session (e.g. `DISCOVERY_TIMEOUT`)
+  only exists for session's own tests — test it there, not through the server. Plugin traits speak domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
   `render::denoise::DenoiseSettings` — and the session maps them to `ServerEvent`. Pro never imports `server`, and
   `session` only in tests.
 - `AppState` is aggregates that keep their locks private (`CameraRoster`, `CaptureControl`, `SessionStats`,
@@ -91,7 +92,7 @@ per-stage.
 
 ```bash
 cargo build --release
-cargo test                                                          # fast unit tests
+cargo test                                                          # fast unit tests, all three crates
 cargo test --test integration_pipeline -- --ignored --test-threads=1 # integration (slow, ignored by default)
 cargo bench --bench <name> -- --noplot                              # see Benchmark sizing
 cargo run --release -- [port]
@@ -102,7 +103,7 @@ cargo run --release -- --span-timings                               # per-stage 
 Frontend commands (install/dev/build/lint/test) run from `web/` — see README. **Never `npm run format`** (rewrites
 the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 
-## Core Modules (src/)
+## Core Modules (crates/core/src/, crates/session/src/, src/)
 
 | Module             | Purpose                                                                       |
 |--------------------|--------------------------------------------------------------------------------|
@@ -121,7 +122,7 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 | `planetary/` / `ser/` | Correlation alignment + percentile stacking; SER video read/write           |
 | `disk_writer/`     | Async bounded-queue frame writer                                               |
 | `plugins/` / `push_to/` | Pro-delegated trait definitions, incl. Community-side Push-To (impl in Pro) |
-| `session/`         | Application layer: `AppState`, capture/guide threads, camera lifecycle, services, events |
+| `crates/session/`  | Application layer: `AppState`, capture/guide threads, camera lifecycle, services, events |
 | `server/`          | Axum REST + WebSocket adapter over `session` (api, ws, dto, assets)            |
 | `app.rs` / `parallel.rs` | Shared `app::run()`; `balanced_chunk_len` rayon partitioning, both shared with Pro |
 | `ffi_safety.rs` / `native_library.rs` | `catch_ffi_panic`; eager dlopen of vendor libraries             |
@@ -233,9 +234,9 @@ lattice). WebGL needs `UNPACK_ALIGNMENT` 1 for the frontend's unpadded RGB rows.
 
 ## Adding a Stacking Type / Settings Persistence
 
-Add a `StackingType` variant (`src/stacking/config.rs`), update `all()`, and implement its capability methods
+Add a `StackingType` variant (`crates/core/src/stacking/config.rs`), update `all()`, and implement its capability methods
 (`display_name`, `uses_star_registration`, `uses_fpn_removal`, etc.). A type with its own accumulator also gets a
-`LiveStacker` impl (`session/capture/context/`) and a `create_live_stacker` arm; the stacking task drives every mode
+`LiveStacker` impl (`crates/session/src/capture/context/`) and a `create_live_stacker` arm; the stacking task drives every mode
 through that trait, and a carried stack only resumes under its own `kind()`.
 
 **`CaptureSettings` is the one settings schema**: `settings.json` (in the server working directory, loaded on

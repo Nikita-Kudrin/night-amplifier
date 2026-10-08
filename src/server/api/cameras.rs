@@ -1,5 +1,6 @@
 //! Camera operations API handlers
 
+use crate::server::error::HttpStatus;
 use axum::{
     extract::{Path, State},
     http::StatusCode,

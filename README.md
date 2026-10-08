@@ -261,10 +261,10 @@ receives the same frame, so ten phones cost one encode per frame, and a stream n
 
 To add support for a new camera manufacturer:
 
-1. Create a new module in `src/camera/` (e.g., `zwo.rs`)
+1. Create a new module in `crates/core/src/camera/` (e.g., `zwo.rs`)
 2. Implement the `Camera` trait for your camera handle
 3. Implement the `CameraProvider` trait for discovery/factory
-4. Add the feature flag to `Cargo.toml`
+4. Add the feature flag to `crates/core/Cargo.toml`, forwarded from the root `Cargo.toml`
 5. Register in `CameraRegistry::register_defaults()`
 
 ### OpenTelemetry

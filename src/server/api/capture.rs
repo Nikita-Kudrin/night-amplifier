@@ -1,5 +1,6 @@
 //! Capture control API handlers
 
+use crate::server::error::HttpStatus;
 use axum::{
     extract::State,
     http::{header, StatusCode},

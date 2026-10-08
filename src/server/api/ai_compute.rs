@@ -2,6 +2,7 @@
 //! for the "Benchmarking hardware…" overlay and the "AI compute" selector.
 //! `POST /api/ai-compute/benchmark`: Measure again.
 
+use crate::server::error::HttpStatus;
 use axum::{extract::State, http::StatusCode, response::IntoResponse};
 use std::sync::Arc;
 
