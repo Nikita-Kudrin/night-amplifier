@@ -134,8 +134,11 @@ visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` sk
 
 ## Camera Notes
 
-- **Camera roles**: at most one `Main` and one `Guide`; every handle/monitor/cancel-token lives in
-  `AppState.camera_slots[role]`. `connect` to a taken role swaps while idle, else `CameraRoleBusy`.
+- **Camera roles**: at most one `Main` and one `Guide`, held per role by `AppState::roster` (`CameraRoster`):
+  entry, selection, phase, status and fault records under one `std` lock, so a disconnect is one transaction and
+  capture threads read a phase without `block_on`; a decision taken on an earlier read moves the phase with
+  `transition` (compare-and-set). Every handle/monitor/cancel-token lives in `slot(role)`. `connect` to a taken role
+  swaps while idle, else `CameraRoleBusy`.
 - **Cooler lifecycle**: `Precooling → Idle → Capturing|Guiding → WarmingUp`, ramped ≤5°C/min. **Disconnect** stops
   capture first and cuts an in-flight sub short (≤15 s, stack saved) before closing the cooler — Stop alone once let
   a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor.

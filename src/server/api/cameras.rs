@@ -72,7 +72,7 @@ pub async fn connect_camera(
 
     // Read before connecting: `connect` is idempotent and returns the existing info, so
     // asking afterwards cannot tell the two apart.
-    let was_already_connected = state.cameras.read().await.contains_key(&camera_id);
+    let was_already_connected = state.roster.contains(&camera_id);
 
     match CameraService::connect_camera(&state, &camera_id, role).await {
         Ok(cam_info) => {

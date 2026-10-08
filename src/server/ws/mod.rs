@@ -125,7 +125,7 @@ pub async fn events_handler(
 async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
     let snapshot = [
         ServerEvent::state_changed(state.capture_state().await),
-        state.camera_phases_event().await,
+        state.camera_phases_event(),
     ];
     for event in snapshot {
         if socket.send(Message::Text(event.to_json().into())).await.is_err() {

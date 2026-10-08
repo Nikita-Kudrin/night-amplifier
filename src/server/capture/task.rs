@@ -301,7 +301,6 @@ pub async fn run_capture_loop(
     let stacking_depth_capture = stacking_queue_depth.clone();
     let storage_depth_capture = storage_queue_depth.clone();
 
-    let rt_capture = rt_handle.clone();
     let rt_stacking = rt_handle.clone();
     let rt_render = rt_handle.clone();
     let rt_storage = rt_handle.clone();
@@ -321,7 +320,6 @@ pub async fn run_capture_loop(
                     capacities,
                 },
                 numbers_capture,
-                rt_capture,
             )
         })
         .expect("Failed to spawn capture thread");
@@ -475,7 +473,6 @@ pub(crate) fn run_capture_task(
     mut camera: Box<dyn crate::camera::Camera>,
     channels: CaptureChannels,
     numbers: FrameNumbers,
-    rt: tokio::runtime::Handle,
 ) -> Option<Box<dyn crate::camera::Camera>> {
     let CaptureChannels {
         stacking_tx,
@@ -502,14 +499,9 @@ pub(crate) fn run_capture_task(
         let settings = state.settings_for_new_frame();
         let mut capture_config = settings.to_capture_config();
 
-        // Get camera info
-        let camera_info = {
-            let cameras = rt.block_on(state.cameras.read());
-            cameras
-                .values()
-                .find(|c| c.info.name == camera.info().name)
-                .cloned()
-        };
+        let camera_info = state
+            .camera_in_role(CameraRole::Main)
+            .filter(|c| c.info.name == camera.info().name);
         let camera_info = match camera_info {
             Some(info) => info,
             None => {
@@ -600,7 +592,6 @@ pub(crate) fn run_capture_task(
                 &state,
                 CameraRole::Main,
                 settings.target_temp_c,
-                &rt,
             ) {
                 StatusPollOutcome::Completed(camera) => {
                     last_status_at = Instant::now();

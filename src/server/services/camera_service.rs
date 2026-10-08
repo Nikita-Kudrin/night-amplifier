@@ -21,23 +21,18 @@ impl CameraService {
     pub async fn list_cameras(state: &Arc<AppState>) -> Vec<CameraListItem> {
         let mut cameras_list = Vec::new();
 
-        // Add already connected cameras
-        {
-            let connected = state.cameras.read().await;
-            for (id, cam_info) in connected.iter() {
-                let slot = state.slot(cam_info.role);
-                cameras_list.push(CameraListItem {
-                    id: id.clone(),
-                    name: cam_info.info.name.clone(),
-                    connected: true,
-                    provider: Some(cam_info.provider.clone()),
-                    index: Some(cam_info.index),
-                    role: Some(cam_info.role),
-                    phase: Some(*slot.phase.read().await),
-                    warmup_remaining: slot.warmup_remaining(),
-                    info: cam_info.info.clone(),
-                });
-            }
+        for (cam_info, phase) in state.roster.connected_with_phases() {
+            cameras_list.push(CameraListItem {
+                id: cam_info.id,
+                name: cam_info.info.name.clone(),
+                connected: true,
+                provider: Some(cam_info.provider),
+                index: Some(cam_info.index),
+                role: Some(cam_info.role),
+                phase: Some(phase),
+                warmup_remaining: state.slot(cam_info.role).warmup_remaining(),
+                info: cam_info.info,
+            });
         }
 
         // Get current setting for simulated camera
@@ -46,12 +41,9 @@ impl CameraService {
         for entry in Self::discover_cameras(state, use_simulated).await {
             let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
 
-            // Skip if already connected
-            let connected = state.cameras.read().await;
-            if connected.values().any(|camera| is_same_device(camera, &entry)) {
+            if state.roster.connected().iter().any(|camera| is_same_device(camera, &entry)) {
                 continue;
             }
-            drop(connected);
 
             cameras_list.push(CameraListItem {
                 id,
@@ -84,12 +76,9 @@ impl CameraService {
                         let provider_name = "indi";
                         let id = format!("{}_{}", provider_name, cam.id);
 
-                        // Check if already connected
-                        let connected = state_arc.cameras.read().await;
-                        if connected.contains_key(&id) {
+                        if state_arc.roster.contains(&id) {
                             continue;
                         }
-                        drop(connected);
 
                         let entry = crate::server::dto::CameraListEntry {
                             id: id.clone(),
@@ -176,10 +165,9 @@ impl CameraService {
         state: &AppState,
         camera_id: &str,
     ) -> ApiResult<ConnectedCameraInfo> {
-        let cameras = state.cameras.read().await;
-        cameras
+        state
+            .roster
             .get(camera_id)
-            .cloned()
             .ok_or_else(|| ApiError::CameraNotFound(camera_id.to_string()))
     }
 

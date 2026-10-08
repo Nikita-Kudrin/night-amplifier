@@ -21,6 +21,7 @@ mod capture_mode;
 pub mod focus_mode;
 mod frame_stream;
 mod guide_loop;
+mod roster;
 mod stream_viewers;
 mod session;
 mod settings;
@@ -36,9 +37,9 @@ pub use capture_mode::{CaptureMode, RawFrameSaving};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
+pub use roster::{CameraRoster, ConnectedCameraInfo};
 pub use session::{
-    ConnectedCameraInfo, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
-    REJECTION_RATE_WINDOW,
+    FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD, REJECTION_RATE_WINDOW,
 };
 pub use settings::{
     default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
@@ -51,10 +52,9 @@ pub use types::{CameraPhase, CameraRole, CaptureState};
 
 /// The main application state shared across all handlers
 pub struct AppState {
-    /// Currently connected cameras info (camera_id -> info)
-    pub cameras: RwLock<HashMap<String, ConnectedCameraInfo>>,
-    /// Currently selected camera ID
-    pub selected_camera: RwLock<Option<String>>,
+    /// The connected cameras by role, their phases, statuses and fault records, and each
+    /// role's slot. Address a slot through [`AppState::slot`].
+    pub roster: CameraRoster,
     /// Where the capture session stands. Transitions are compare-and-set under this lock.
     pub capture: RwLock<CaptureState>,
     /// The session's frame counters, lock-free for the capture threads.
@@ -90,13 +90,8 @@ pub struct AppState {
     pub guide_loops: guide_loop::GuideLoops,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
-    /// Latest reported camera status keyed by camera name (for cooled cameras)
-    pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
-    /// One slot per [`CameraRole`], each owning that position's handle, monitor,
-    /// cancel token and reconnect guard. Address it through [`AppState::slot`].
-    pub camera_slots: [CameraSlot; CameraRole::COUNT],
     /// Serializes `camera_session::lifecycle::connect`. Its idempotency check
-    /// reads `cameras`, which `finalize_disconnect` clears first, so two
+    /// reads the roster, which `finalize_disconnect` clears first, so two
     /// concurrent connects for one id would both pass it, both open the
     /// device, and the second would displace — and so close — the first.
     pub camera_connect_lock: Mutex<()>,
@@ -119,20 +114,6 @@ pub struct AppState {
     /// it. Cleared whenever a capture starts fresh or stops cleanly — holding
     /// full-resolution accumulators between sessions would be pure waste.
     pub stacking_carryover: StdMutex<Option<crate::server::capture::StackingCarryover>>,
-    /// Consecutive camera faults keyed by role and camera name, with the instant the
-    /// streak was last extended. The role keeps two bodies of one model apart: a guide
-    /// twin's stall must not skip the imaging twin's warm-up. Every fault detector — the capture watchdog,
-    /// the status-poll watchdog and the monitor's cooler poll — feeds this one
-    /// counter, so evidence from any of them counts toward the same
-    /// escalation. Cleared by a call that succeeds, and aged out after
-    /// `camera_health::FAULT_STREAK_TTL` so an alternating fault cannot hide
-    /// behind the occasional success. See `camera_health`.
-    pub consecutive_watchdog_timeouts: StdMutex<HashMap<(CameraRole, String), (u32, Instant)>>,
-    /// Whether restarting a stalled stream in place has lately worked, per role and camera
-    /// name. Outlives the capture loop, whose next reopen it decides on. See
-    /// `camera_health::RestartHistory`.
-    pub(crate) restart_histories:
-        StdMutex<HashMap<(CameraRole, String), crate::server::camera_health::RestartHistory>>,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -198,8 +179,7 @@ impl AppState {
         let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
 
         let state = Self {
-            cameras: RwLock::new(HashMap::new()),
-            selected_camera: RwLock::new(None),
+            roster: CameraRoster::default(),
             capture: RwLock::new(CaptureState::Idle),
             stats: SessionStats::default(),
             settings: SettingsStore::new(settings),
@@ -212,16 +192,12 @@ impl AppState {
             push_to_tasks: std::sync::OnceLock::new(),
             guide_loops: guide_loop::GuideLoops::default(),
             settings_persistence,
-            latest_camera_status: RwLock::new(HashMap::new()),
-            camera_slots: std::array::from_fn(|_| CameraSlot::default()),
             camera_connect_lock: Mutex::new(()),
             device_catalog: Arc::new(crate::camera::RegistryCatalog::new()),
             plugins: crate::plugins::Plugins::installed(),
             discovery_calls: StdMutex::new(HashMap::new()),
             session_resume_plan: RwLock::new(None),
             stacking_carryover: StdMutex::new(None),
-            consecutive_watchdog_timeouts: StdMutex::new(HashMap::new()),
-            restart_histories: StdMutex::new(HashMap::new()),
         };
 
         (state, disk_writer)
@@ -229,7 +205,7 @@ impl AppState {
 
     /// The slot owning `role`'s handle, monitor and reconnect guard.
     pub fn slot(&self, role: CameraRole) -> &CameraSlot {
-        &self.camera_slots[role as usize]
+        self.roster.slot(role)
     }
 
     /// The in-flight counter for `provider`'s camera discovery, created on first use.
@@ -247,18 +223,13 @@ impl AppState {
     }
 
     /// The camera currently occupying `role`, if any.
-    pub async fn camera_in_role(&self, role: CameraRole) -> Option<ConnectedCameraInfo> {
-        self.cameras
-            .read()
-            .await
-            .values()
-            .find(|info| info.role == role)
-            .cloned()
+    pub fn camera_in_role(&self, role: CameraRole) -> Option<ConnectedCameraInfo> {
+        self.roster.in_role(role)
     }
 
     /// Which role a connected camera holds, by id.
-    pub async fn role_of(&self, camera_id: &str) -> Option<CameraRole> {
-        self.cameras.read().await.get(camera_id).map(|info| info.role)
+    pub fn role_of(&self, camera_id: &str) -> Option<CameraRole> {
+        self.roster.get(camera_id).map(|info| info.role)
     }
 
     /// The display name of a connected camera, by id.
@@ -267,12 +238,8 @@ impl AppState {
     /// Pro", or the fixture directory a simulator was pointed at — rather than the
     /// wire id. `simulator_0` is not something anyone chose or can recognise, and an
     /// id in a message is a message the reader has to translate before it helps.
-    pub async fn connected_camera_name(&self, camera_id: &str) -> Option<String> {
-        self.cameras
-            .read()
-            .await
-            .get(camera_id)
-            .map(|info| info.info.name.clone())
+    pub fn connected_camera_name(&self, camera_id: &str) -> Option<String> {
+        self.roster.get(camera_id).map(|info| info.info.name)
     }
 
     /// Whether the guide loop is exposing. An atomic load, so the stacking thread can
@@ -451,23 +418,6 @@ impl AppState {
             .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
-    /// Extend a camera's fault streak and return its new length. A streak
-    /// older than `ttl` has expired and restarts at 1.
-    pub fn bump_fault_streak(&self, role: CameraRole, camera_name: &str, ttl: Duration) -> u32 {
-        let now = Instant::now();
-        let mut counts = self
-            .consecutive_watchdog_timeouts
-            .lock()
-            .expect("consecutive_watchdog_timeouts mutex poisoned");
-        let entry = counts.entry((role, camera_name.to_string())).or_insert((0, now));
-        if now.duration_since(entry.1) > ttl {
-            entry.0 = 0;
-        }
-        entry.0 += 1;
-        entry.1 = now;
-        entry.0
-    }
-
     /// Send an error event
     pub fn send_error(&self, message: String) {
         let _ = self.events.send(ServerEvent::error(message));
@@ -522,7 +472,7 @@ impl AppState {
     }
 
     /// Cache the latest camera status sample and broadcast a status event.
-    pub async fn update_camera_status(
+    pub fn update_camera_status(
         &self,
         camera_name: &str,
         status: CameraStatus,
@@ -534,10 +484,7 @@ impl AppState {
             debug!(camera_name, temperature_c = status.temperature_c, "Ignoring an implausible sensor temperature");
             return;
         }
-        {
-            let mut map = self.latest_camera_status.write().await;
-            map.insert(camera_name.to_string(), status.clone());
-        }
+        self.roster.record_status(camera_name, status.clone());
         let _ = self.events.send(ServerEvent::camera_status_updated(
             camera_name,
             status.temperature_c,
@@ -549,18 +496,35 @@ impl AppState {
     }
 
     /// Get the latest cached camera status for the given camera name.
-    pub async fn get_camera_status(&self, camera_name: &str) -> Option<CameraStatus> {
-        self.latest_camera_status
-            .read()
-            .await
-            .get(camera_name)
-            .cloned()
+    pub fn get_camera_status(&self, camera_name: &str) -> Option<CameraStatus> {
+        self.roster.status(camera_name)
     }
 
     /// Set the lifecycle phase of `role`'s camera and broadcast `CameraPhaseChanged`,
     /// which names the camera for the UI.
-    pub async fn set_camera_phase(&self, role: CameraRole, camera_name: &str, phase: CameraPhase) {
-        *self.slot(role).phase.write().await = phase;
+    pub fn set_camera_phase(&self, role: CameraRole, camera_name: &str, phase: CameraPhase) {
+        self.roster.set_phase(role, phase);
+        self.announce_camera_phase(role, camera_name, phase);
+    }
+
+    /// [`Self::set_camera_phase`] only if `role` is still in `from` — see
+    /// [`CameraRoster::transition`]. Returns whether it moved.
+    pub fn transition_camera_phase(
+        &self,
+        role: CameraRole,
+        camera_name: &str,
+        from: CameraPhase,
+        to: CameraPhase,
+    ) -> bool {
+        let moved = self.roster.transition(role, from, to);
+        if moved {
+            self.announce_camera_phase(role, camera_name, to);
+        }
+        moved
+    }
+
+    /// Broadcast `CameraPhaseChanged` for a phase the roster already holds.
+    pub(crate) fn announce_camera_phase(&self, role: CameraRole, camera_name: &str, phase: CameraPhase) {
         // Every client's countdown, not only the one whose Disconnect started the warm-up.
         let warmup_remaining = match phase {
             CameraPhase::WarmingUp => self.slot(role).warmup_remaining(),
@@ -575,24 +539,26 @@ impl AppState {
     }
 
     /// The lifecycle phase of `role`'s camera; `Disconnected` when the slot is empty.
-    pub async fn camera_phase(&self, role: CameraRole) -> CameraPhase {
-        *self.slot(role).phase.read().await
+    pub fn camera_phase(&self, role: CameraRole) -> CameraPhase {
+        self.roster.phase(role)
     }
 
     /// Every connected camera's phase, as the event that replaces a client's copy.
-    pub async fn camera_phases_event(&self) -> ServerEvent {
-        let connected: Vec<ConnectedCameraInfo> =
-            self.cameras.read().await.values().cloned().collect();
-        let mut cameras = Vec::with_capacity(connected.len());
-        for camera in connected {
-            let slot = self.slot(camera.role);
-            cameras.push(super::events::CameraPhaseEntry {
+    pub fn camera_phases_event(&self) -> ServerEvent {
+        let cameras = self
+            .roster
+            .connected_with_phases()
+            .into_iter()
+            .map(|(camera, phase)| super::events::CameraPhaseEntry {
                 name: camera.info.name,
                 role: camera.role,
-                phase: (*slot.phase.read().await).into(),
-                warmup_remaining_s: slot.warmup_remaining().map(|left| left.as_secs()),
-            });
-        }
+                phase: phase.into(),
+                warmup_remaining_s: self
+                    .slot(camera.role)
+                    .warmup_remaining()
+                    .map(|left| left.as_secs()),
+            })
+            .collect();
         ServerEvent::CameraPhases { cameras }
     }
 
@@ -785,11 +751,9 @@ mod tests {
             dew_heater_on: false,
         };
 
-        state
-            .update_camera_status("Test Cam", status.clone(), Some(-10.0))
-            .await;
+        state.update_camera_status("Test Cam", status.clone(), Some(-10.0));
 
-        let cached = state.get_camera_status("Test Cam").await.unwrap();
+        let cached = state.get_camera_status("Test Cam").unwrap();
         assert_eq!(cached.temperature_c, -5.0);
         assert_eq!(cached.cooler_power, Some(60.0));
         assert!(cached.cooler_on);
@@ -826,8 +790,8 @@ mod tests {
             .slot(CameraRole::Main)
             .begin_warmup(Instant::now() + Duration::from_secs(120));
 
-        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::WarmingUp).await;
-        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::Idle).await;
+        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::WarmingUp);
+        state.set_camera_phase(CameraRole::Main, "Ares", CameraPhase::Idle);
 
         let left = |event| match event {
             ServerEvent::CameraPhaseChanged { warmup_remaining_s, .. } => warmup_remaining_s,
@@ -849,16 +813,16 @@ mod tests {
             ..Default::default()
         };
 
-        state.update_camera_status("Ares", glitch, Some(0.0)).await;
+        state.update_camera_status("Ares", glitch, Some(0.0));
 
-        assert!(state.get_camera_status("Ares").await.is_none());
+        assert!(state.get_camera_status("Ares").is_none());
         assert!(subscriber.try_recv().is_err(), "the glitch was broadcast");
     }
 
     #[tokio::test]
     async fn test_get_camera_status_returns_none_for_unknown() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        assert!(state.get_camera_status("Unknown").await.is_none());
+        assert!(state.get_camera_status("Unknown").is_none());
     }
 
     #[tokio::test]

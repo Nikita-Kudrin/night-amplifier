@@ -23,7 +23,6 @@ use crate::server::state::{
     AppState, BoundedCallError, CameraPhase, CameraRole, CaptureSettings, ConnectedCameraInfo,
     MonitorCmd,
 };
-use crate::telemetry::metrics as telemetry_metrics;
 
 /// A vendor stage that did not come back, as the error the caller reports.
 pub(super) fn stage_failed(stage: &str, error: BoundedCallError) -> ApiError {
@@ -79,7 +78,7 @@ pub(super) async fn refuse_device_of_other_role(
     index: usize,
     listed: &DeviceIdentity,
 ) -> ApiResult<()> {
-    let Some(other) = state.camera_in_role(role.other()).await else {
+    let Some(other) = state.camera_in_role(role.other()) else {
         return Ok(());
     };
     if !other.provider.eq_ignore_ascii_case(provider) {
@@ -309,16 +308,13 @@ pub(super) async fn install_camera(
         info,
     };
 
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert(camera_id.to_string(), connected_info.clone());
-        telemetry_metrics::record_cameras_count(cameras.len() as u64);
-    }
-    if role == CameraRole::Main && replaces.is_none() {
-        // The selection is what the settings panel is editing, and a freshly connected
-        // imaging camera is what the user is about to configure. A guide camera does not
-        // steal that focus, and a recovered one never lost it.
-        *state.selected_camera.write().await = Some(camera_id.to_string());
+    // The selection is what the settings panel is editing, and a freshly connected
+    // imaging camera is what the user is about to configure. A guide camera does not
+    // steal that focus, and a recovered one never lost it.
+    let select = role == CameraRole::Main && replaces.is_none();
+    let displaced = state.roster.install(connected_info.clone(), select);
+    if let Some(displaced) = displaced.filter(|displaced| displaced.id != camera_id) {
+        warn!(camera_id = %camera_id, displaced = %displaced.id, role = role.label(), "Registered over a camera vacate_role should have removed");
     }
     {
         let slot = state.slot(role);
@@ -335,7 +331,7 @@ pub(super) async fn install_camera(
     }
     state.slot(role).notify_handle_returned();
 
-    state.set_camera_phase(role, &camera_name, initial_phase).await;
+    state.set_camera_phase(role, &camera_name, initial_phase);
 
     // The monitor drives Precooling→Idle and emits `CameraStatusUpdated` every 2s for
     // any cooled camera.

@@ -177,14 +177,7 @@ async fn install_mock_camera(
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert("mock_0".to_string(), connected_info);
-    }
-    {
-        let mut selected = state.selected_camera.write().await;
-        *selected = Some("mock_0".to_string());
-    }
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
 
     let phase = if cooler_on {
@@ -192,7 +185,7 @@ async fn install_mock_camera(
     } else {
         CameraPhase::Idle
     };
-    state.set_camera_phase(CameraRole::Main, &name, phase).await;
+    state.set_camera_phase(CameraRole::Main, &name, phase);
 
     // Spawn the monitor thread.
     let tx = monitor::spawn(
@@ -215,7 +208,7 @@ async fn wait_for_phase(
 ) -> bool {
     let start = std::time::Instant::now();
     while start.elapsed() < timeout {
-        if state.camera_phase(role).await == target {
+        if state.camera_phase(role) == target {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -262,11 +255,11 @@ async fn no_precool_when_cooler_disabled() {
 
     // No cooler_enabled → monitor should stay in Idle forever; no Precooling event.
     let name = install_mock_camera(&state, 5.0, false, 20.0).await;
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Idle);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Idle);
 
     // Wait ~3s and verify it remains Idle (not flipping to something weird).
     tokio::time::sleep(PHASE_POLL_INTERVAL + Duration::from_millis(500)).await;
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Idle);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Idle);
 
     // Clean up.
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
@@ -297,7 +290,7 @@ async fn warmup_finishes_and_disconnects() {
     // Trigger warmup (as if user clicked Disconnect with cooler on).
     let result = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await;
     assert!(result.is_ok());
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
 
     // Monitor polls every 2s; with step 15.0 and a 60°C swing, 4-5 ticks to cross 10°C.
     let saw_disconnect = tokio::time::timeout(Duration::from_secs(20), async {
@@ -317,10 +310,9 @@ async fn warmup_finishes_and_disconnects() {
         "Expected CameraDisconnected event after warmup"
     );
 
-    let phase_after = state.camera_phase(CameraRole::Main).await;
+    let phase_after = state.camera_phase(CameraRole::Main);
     assert_eq!(phase_after, CameraPhase::Disconnected);
-    let cameras = state.cameras.read().await;
-    assert!(cameras.is_empty(), "Camera metadata should be cleared");
+    assert!(state.roster.is_empty(), "Camera metadata should be cleared");
 }
 
 #[tokio::test]
@@ -333,8 +325,8 @@ async fn disconnect_with_cooler_off_is_synchronous() {
     let result = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await;
     assert!(result.is_ok());
 
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
-    assert!(state.cameras.read().await.is_empty());
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
+    assert!(state.roster.is_empty());
     assert!(state.slot(CameraRole::Main).handle.lock().unwrap().is_none());
 }
 
@@ -347,16 +339,16 @@ async fn take_and_return_handle_during_precool() {
         s.target_temp_c = Some(-10.0);
     });
     let name = install_mock_camera(&state, 1.0, true, -10.0).await;
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Precooling);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Precooling);
 
     // Capture takes the handle.
     let cam = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Capturing);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Capturing);
     assert!(state.slot(CameraRole::Main).handle.lock().unwrap().is_none());
 
     // Return it.
     lifecycle::return_from_capture(&state, CameraRole::Main, &name, Some(cam)).await;
-    let phase_after = state.camera_phase(CameraRole::Main).await;
+    let phase_after = state.camera_phase(CameraRole::Main);
     assert!(
         matches!(phase_after, CameraPhase::Precooling | CameraPhase::Idle),
         "Expected Precooling/Idle after return, got {:?}",
@@ -388,11 +380,11 @@ async fn capture_during_warmup_cancels_warmup() {
 
     // User clicks Disconnect → warmup begins.
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
 
     // User immediately starts capture → warmup cancelled, phase → Capturing.
     let cam = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Capturing);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Capturing);
 
     // Return and clean up.
     lifecycle::return_from_capture(&state, CameraRole::Main, &name, Some(cam)).await;
@@ -430,14 +422,9 @@ async fn live_target_temp_change_propagates_to_hardware() {
     };
     let _ = cam.set_cooler(true);
     let _ = cam.set_target_temperature(1.0);
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
 
     // Spawn the monitor so it can process UpdateCoolerTarget.
     let tx = monitor::spawn(
@@ -454,7 +441,7 @@ async fn live_target_temp_change_propagates_to_hardware() {
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
     // Phase should flip back to Precooling immediately.
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Precooling);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Precooling);
 
     // Wait for the monitor to tick once and push the ramped setpoint.
     let deadline = std::time::Instant::now() + PHASE_POLL_INTERVAL + Duration::from_secs(2);
@@ -502,13 +489,9 @@ async fn live_cooler_disable_propagates_to_hardware() {
     };
     let _ = cam.set_cooler(true);
     let _ = cam.set_target_temperature(-5.0);
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
+    state.roster.install(connected_info, false);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
 
     state.settings.update(|s| {
         s.cooler_enabled = false;
@@ -549,13 +532,9 @@ async fn live_cooler_apply_is_skipped_during_warmup() {
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
+    state.roster.install(connected_info, false);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp);
 
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
@@ -564,7 +543,45 @@ async fn live_cooler_apply_is_skipped_during_warmup() {
 
     // Clean up without going through the monitor (no monitor was spawned).
     *state.slot(CameraRole::Main).handle.lock().unwrap() = None;
-    state.cameras.write().await.clear();
+    state.roster.remove(CameraRole::Main, &name);
+}
+
+/// A cooler edit sends an `Idle` camera back to `Precooling` — but not one a capture took
+/// while the edit waited for its handle: `Precooling` written over `Capturing` handed the
+/// cooler back to the monitor under a running capture.
+#[tokio::test]
+async fn a_cooler_edit_leaves_a_capture_that_started_meanwhile_alone() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let (cam, _cooler) = MockCamera::new(true, 5.0);
+    state.settings.update(|s| {
+        s.cooler_enabled = true;
+        s.target_temp_c = Some(-5.0);
+    });
+    let name = cam.info().name.clone();
+    let connected_info = ConnectedCameraInfo {
+        id: "mock_0".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role: CameraRole::Main,
+        info: cam.info().clone(),
+    };
+    state.roster.install(connected_info, true);
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
+
+    // The handle is out, so the edit reads `Idle` and parks waiting for it.
+    let edit = tokio::spawn({
+        let state = Arc::clone(&state);
+        async move { lifecycle::apply_cooler_settings(&state, CameraRole::Main).await }
+    });
+    tokio::task::yield_now().await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Capturing);
+    *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
+    state.slot(CameraRole::Main).notify_handle_returned();
+    edit.await.unwrap();
+
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Capturing);
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
 }
 
 #[tokio::test]
@@ -581,8 +598,8 @@ async fn return_from_capture_without_handle_finalizes_disconnect() {
 
     lifecycle::return_from_capture(&state, CameraRole::Main, &name, None).await;
 
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
-    assert!(state.cameras.read().await.is_empty());
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
+    assert!(state.roster.is_empty());
 }
 
 /// The recovery half of what used to be one test called
@@ -605,14 +622,9 @@ async fn monitor_keeps_running_through_a_transient_stall() {
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
 
     let tx = monitor::spawn(
         Arc::clone(&state),
@@ -629,11 +641,11 @@ async fn monitor_keeps_running_through_a_transient_stall() {
 
     tokio::time::sleep(PHASE_POLL_INTERVAL * 2).await;
     assert_eq!(
-        state.camera_phase(CameraRole::Main).await,
+        state.camera_phase(CameraRole::Main),
         CameraPhase::Idle,
         "a stall the camera recovers from must not end the session"
     );
-    assert!(!state.cameras.read().await.is_empty());
+    assert!(!state.roster.is_empty());
 
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
 }
@@ -656,13 +668,9 @@ async fn monitor_disconnects_after_a_persistent_stall() {
         info: cam.info().clone(),
     };
 
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert("mock_0".to_string(), connected_info);
-    }
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
 
     let mut rx = state.subscribe_events();
 
@@ -938,14 +946,9 @@ async fn cooldown_ramp_drives_setpoint_to_target() {
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Precooling).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Precooling);
 
     let tx = monitor::spawn(
         Arc::clone(&state),
@@ -1002,7 +1005,7 @@ async fn warmup_keeps_cooler_on_during_ramp() {
 
     // Kick off warmup.
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
 
     // Within the first tick window, cooler must still be ON (ramped warmup,
     // not kill-switch warmup).
@@ -1058,14 +1061,9 @@ async fn fast_mode_skips_cooldown_ramp() {
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Precooling).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Precooling);
 
     let tx = monitor::spawn(
         Arc::clone(&state),
@@ -1121,7 +1119,7 @@ async fn fast_mode_warmup_disables_cooler_immediately() {
     install_mock_camera(&state, 5.0, true, -10.0).await;
 
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
 
     // StartWarmup with fast=true should flip the cooler off right away.
     let deadline = std::time::Instant::now() + Duration::from_secs(1);
@@ -1173,7 +1171,7 @@ async fn target_change_mid_precool_restarts_ramp() {
     lifecycle::apply_cooler_settings(&state, CameraRole::Main).await;
 
     // Phase should remain Precooling.
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Precooling);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Precooling);
 
     // Monitor should install a new ramp that will push the hardware setpoint
     // to -5 on the next tick. The monitor legitimately checks the handle out
@@ -1199,7 +1197,7 @@ async fn target_change_mid_precool_restarts_ramp() {
         };
         // We can't directly read mock's target_temp_c without the Arc handle,
         // but we can check the camera_status cache that the monitor publishes.
-        if let Some(status) = state.get_camera_status(&name).await {
+        if let Some(status) = state.get_camera_status(&name) {
             // cooler should still be on and temperature should be tracking
             // toward the new target (above -15).
             if status.cooler_on && status.temperature_c > -14.0 {
@@ -1246,14 +1244,9 @@ async fn install_dead_camera(state: &Arc<AppState>) -> (String, Arc<CameraContro
         role: CameraRole::Main,
         info: cam.info().clone(),
     };
-    state
-        .cameras
-        .write()
-        .await
-        .insert("mock_0".to_string(), connected_info);
-    *state.selected_camera.write().await = Some("mock_0".to_string());
+    state.roster.install(connected_info, true);
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Idle);
 
     let tx = monitor::spawn(
         Arc::clone(state),
@@ -1311,11 +1304,7 @@ async fn a_lost_device_ends_the_session_instead_of_being_polled_forever() {
     assert!(
         eventually(
             || {
-                state
-                    .cameras
-                    .try_read()
-                    .map(|c| c.is_empty())
-                    .unwrap_or(false)
+                state.roster.is_empty()
             },
             Duration::from_secs(5)
         )
@@ -1342,7 +1331,7 @@ async fn one_fault_does_not_end_the_session() {
 
     tokio::time::sleep(PHASE_POLL_INTERVAL * 2).await;
     assert!(
-        !state.cameras.read().await.is_empty(),
+        !state.roster.is_empty(),
         "a single fault must not tear the session down"
     );
 
@@ -1358,17 +1347,13 @@ async fn no_reconnect_when_the_camera_dies_during_warmup() {
     state.settings.update(|s| s.auto_reconnect = true);
 
     let (name, camera) = install_dead_camera(&state).await;
-    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp).await;
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::WarmingUp);
     send_monitor_cmd_for_test(&state, MonitorCmd::StartWarmup { fast: false });
     camera.dead.store(true, Ordering::SeqCst);
 
     assert!(
         eventually(
-            || state
-                .cameras
-                .try_read()
-                .map(|c| c.is_empty())
-                .unwrap_or(false),
+            || state.roster.is_empty(),
             Duration::from_secs(20)
         )
         .await,
@@ -1403,7 +1388,7 @@ async fn no_reconnect_when_the_setting_is_off() {
         .await,
         "the supervisor should have stopped immediately"
     );
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
 }
 
 /// Only one supervisor at a time: a second dropout while one is already
@@ -1625,18 +1610,16 @@ async fn install_camera(
     info.name = name.to_string();
     info.has_dew_heater = true;
 
-    state.cameras.write().await.insert(
-        camera_id.to_string(),
-        ConnectedCameraInfo {
-            id: camera_id.to_string(),
-            provider: "Mock".to_string(),
-            index: 0,
-            role,
-            info,
-        },
-    );
+    let camera = ConnectedCameraInfo {
+        id: camera_id.to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role,
+        info,
+    };
+    state.roster.install(camera, false);
     *state.slot(role).handle.lock().unwrap() = Some(Box::new(cam));
-    state.set_camera_phase(role, name, phase).await;
+    state.set_camera_phase(role, name, phase);
     if role == CameraRole::Guide {
         state.set_guide_loop_running(true);
     }
@@ -1659,14 +1642,12 @@ async fn a_main_and_a_guide_camera_hold_independent_handles() {
     assert_eq!(
         state
             .camera_in_role(CameraRole::Main)
-            .await
             .map(|c| c.info.name),
         Some("Imaging".to_string())
     );
     assert_eq!(
         state
             .camera_in_role(CameraRole::Guide)
-            .await
             .map(|c| c.info.name),
         Some("Guiding".to_string())
     );
@@ -1683,7 +1664,7 @@ async fn an_idle_role_is_vacated_for_a_new_camera() {
         .await
         .expect("an idle camera should have been swapped out");
 
-    assert!(state.camera_in_role(CameraRole::Main).await.is_none());
+    assert!(state.camera_in_role(CameraRole::Main).is_none());
     assert!(!state.slot(CameraRole::Main).holds_handle());
 }
 
@@ -1727,13 +1708,13 @@ async fn disconnecting_the_guide_camera_leaves_the_main_one_alone() {
     )
     .await;
 
-    assert!(state.camera_in_role(CameraRole::Guide).await.is_none());
+    assert!(state.camera_in_role(CameraRole::Guide).is_none());
     assert!(!state.guide_loop_running());
     assert!(
         state.slot(CameraRole::Main).holds_handle(),
         "the imaging camera lost its handle to a guide disconnect"
     );
-    assert!(state.camera_in_role(CameraRole::Main).await.is_some());
+    assert!(state.camera_in_role(CameraRole::Main).is_some());
 }
 
 /// Each slot carries its own single-flight guard. One shared flag meant a guide dropout
@@ -1778,7 +1759,7 @@ async fn a_running_guide_loop_gets_its_own_phase() {
         .expect("the guide loop should have got its handle");
     std::mem::forget(camera); // the loop holds it for the whole connection
 
-    assert_eq!(state.camera_phase(CameraRole::Guide).await, CameraPhase::Guiding);
+    assert_eq!(state.camera_phase(CameraRole::Guide), CameraPhase::Guiding);
 
     // The imaging camera keeps the phase a bounded session deserves.
     install_camera(&state, CameraRole::Main, "mock_0", "Imaging", CameraPhase::Idle).await;
@@ -1786,7 +1767,7 @@ async fn a_running_guide_loop_gets_its_own_phase() {
         .await
         .unwrap();
     std::mem::forget(main);
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Capturing);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Capturing);
 }
 
 /// A guide loop never ends on its own, so refusing to vacate while one runs would mean
@@ -1808,7 +1789,7 @@ async fn a_guiding_camera_can_be_swapped_but_a_capturing_one_cannot() {
     lifecycle::vacate_role(&state, CameraRole::Guide)
         .await
         .expect("a guide camera must be replaceable");
-    assert!(state.camera_in_role(CameraRole::Guide).await.is_none());
+    assert!(state.camera_in_role(CameraRole::Guide).is_none());
 
     install_camera(
         &state,
@@ -1929,7 +1910,7 @@ async fn a_guide_warmup_hands_plate_solving_back_to_the_imaging_camera() {
         .expect("guide disconnect should be accepted");
 
     assert_eq!(
-        state.camera_phase(CameraRole::Guide).await,
+        state.camera_phase(CameraRole::Guide),
         CameraPhase::WarmingUp,
         "a cooled guide camera should warm up before its handle closes"
     );
@@ -1968,7 +1949,7 @@ async fn a_handback_that_a_reconnect_beat_is_refused() {
         state.slot(CameraRole::Guide).holds_handle(),
         "the reconnected handle must still be the one in the slot"
     );
-    assert_eq!(state.camera_phase(CameraRole::Guide).await, CameraPhase::Idle);
+    assert_eq!(state.camera_phase(CameraRole::Guide), CameraPhase::Idle);
 }
 
 /// `guide_task::stop` gives up after a budget and lets the disconnect proceed. The loop
@@ -1993,7 +1974,7 @@ async fn a_late_handback_is_refused_and_the_handle_closed() {
     )
     .await;
     assert_eq!(
-        state.camera_phase(CameraRole::Guide).await,
+        state.camera_phase(CameraRole::Guide),
         CameraPhase::Disconnected
     );
 
@@ -2001,7 +1982,7 @@ async fn a_late_handback_is_refused_and_the_handle_closed() {
     lifecycle::return_from_capture(&state, CameraRole::Guide, "Guiding", Some(camera)).await;
 
     assert_eq!(
-        state.camera_phase(CameraRole::Guide).await,
+        state.camera_phase(CameraRole::Guide),
         CameraPhase::Disconnected,
         "a late hand-back re-opened a camera the user disconnected"
     );
@@ -2038,7 +2019,7 @@ async fn remove_handle(state: &Arc<AppState>, role: CameraRole) -> Box<dyn crate
 
 async fn camera_gone(state: &Arc<AppState>, budget: Duration) -> bool {
     eventually(
-        || state.cameras.try_read().map(|c| c.is_empty()).unwrap_or(false),
+        || state.roster.is_empty(),
         budget,
     )
     .await
@@ -2053,7 +2034,7 @@ async fn a_hand_off_the_monitor_is_still_holding_resumes_the_monitor_and_the_war
     lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
         .await
         .unwrap();
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
     // With the cooler switched off in settings the Start sends the monitor no cooler
     // target, whose sensor read would itself clear the call this test stands in for.
     state.settings.update(|s| s.cooler_enabled = false);
@@ -2071,7 +2052,7 @@ async fn a_hand_off_the_monitor_is_still_holding_resumes_the_monitor_and_the_war
         .err()
         .expect("nothing could hand the handle over");
     assert!(err.to_string().contains("busy"), "{err}");
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
     assert!(slot.warmup().is_some(), "the cancelled warm-up must be timed again");
 
     // The call returns; a resumed monitor finishes the warm-up and the disconnect.
@@ -2106,13 +2087,13 @@ async fn a_start_during_a_warmup_with_the_handle_lost_leaves_nothing_wedged() {
     );
     // What the capture loop does with that answer.
     lifecycle::return_from_capture(&state, CameraRole::Main, &name, None).await;
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Recovering);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Recovering);
 
     let outcome = lifecycle::disconnect(&state, "mock_0", lifecycle::WarmupPolicy::WhenPossible)
         .await
         .unwrap();
     assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
 }
 
 /// The handle is gone and nothing holds it — what the Ares-C PRO's capture found after
@@ -2141,7 +2122,7 @@ async fn a_hand_off_with_the_handle_lost_reopens_the_camera() {
     );
     lifecycle::return_from_capture(&state, CameraRole::Main, &name, None).await;
     assert!(state.slot(CameraRole::Main).is_recovering());
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Recovering);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Recovering);
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
 }
 
@@ -2179,7 +2160,7 @@ async fn a_stalled_warmup_disconnects_at_its_deadline() {
     state.slot(CameraRole::Main).expire_warmup();
 
     assert!(camera_gone(&state, Duration::from_secs(3)).await, "the deadline did not end the warm-up");
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
     assert!(!state.slot(CameraRole::Main).holds_handle());
 }
 
@@ -2204,8 +2185,8 @@ async fn skipping_the_warmup_disconnects_a_warming_camera_at_once() {
         .await
         .unwrap();
     assert_eq!(forced, lifecycle::DisconnectOutcome::Disconnected);
-    assert!(state.cameras.read().await.is_empty());
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+    assert!(state.roster.is_empty());
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
 }
 
 /// Nothing can command the TEC of a camera with no handle, so there is no warm-up to wait
@@ -2221,7 +2202,7 @@ async fn a_cooled_camera_without_a_handle_disconnects_without_a_warmup() {
         .unwrap();
 
     assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
 }
 
 /// A camera whose last calls failed would fail every ramp step for minutes.
@@ -2299,7 +2280,7 @@ async fn one_empty_poll_is_not_a_lost_handle() {
     *state.slot(CameraRole::Main).handle.lock().unwrap() = Some(handle);
     tokio::time::sleep(PHASE_POLL_INTERVAL * 3).await;
 
-    assert!(!state.cameras.read().await.is_empty(), "a single empty poll ended the session");
+    assert!(!state.roster.is_empty(), "a single empty poll ended the session");
     lifecycle::finalize_disconnect(&state, CameraRole::Main, &name, DisconnectCause::Requested).await;
 }
 
@@ -2318,7 +2299,7 @@ async fn a_guide_loop_that_finds_its_handle_lost_is_not_waited_on_by_its_own_tea
     state.settings.update(|s| s.auto_reconnect = false);
     install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
     state.set_guide_loop_running(false);
-    let info = state.camera_in_role(CameraRole::Guide).await.unwrap();
+    let info = state.camera_in_role(CameraRole::Guide).unwrap();
     // Gone, and nothing holds it: the reopened Ares-C PRO of 2026-09-20.
     state.slot(CameraRole::Guide).handle.lock().unwrap().take();
 
@@ -2356,11 +2337,9 @@ async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
         role: CameraRole::Guide,
         info: camera.info().clone(),
     };
-    state.cameras.write().await.insert("mock_1".to_string(), info.clone());
+    state.roster.install(info.clone(), false);
     *state.slot(CameraRole::Guide).handle.lock().unwrap() = Some(Box::new(camera));
-    state
-        .set_camera_phase(CameraRole::Guide, &info.info.name, CameraPhase::Idle)
-        .await;
+    state.set_camera_phase(CameraRole::Guide, &info.info.name, CameraPhase::Idle);
 
     assert!(crate::server::capture::guide_task::start(&state, &info));
     assert!(
@@ -2374,7 +2353,7 @@ async fn a_guide_loop_that_panics_does_not_leave_the_camera_claimed() {
         Duration::from_secs(5),
     )
     .await;
-    let phase = state.camera_phase(CameraRole::Guide).await;
+    let phase = state.camera_phase(CameraRole::Guide);
 
     assert!(released, "a dead loop is still registered as running");
     assert_ne!(phase, CameraPhase::Guiding, "the slot still names a dead loop as its owner");
@@ -2448,9 +2427,9 @@ async fn a_capture_slow_to_wind_down_hands_its_camera_to_the_warmup() {
         matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { remaining: Some(_) }),
         "{outcome:?}"
     );
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::WarmingUp);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::WarmingUp);
     assert!(
-        state.cameras.read().await.contains_key("mock_0"),
+        state.roster.contains("mock_0"),
         "disconnected before the capture handed the camera back"
     );
     pipeline.await.unwrap();
@@ -2476,8 +2455,8 @@ async fn a_handle_lost_while_its_warmup_waits_is_not_reopened() {
     assert!(matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }), "{outcome:?}");
     pipeline.await.unwrap();
 
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
     assert!(!state.slot(CameraRole::Main).is_recovering());
     assert!(!state.slot(CameraRole::Main).reconnect_in_flight.load(Ordering::SeqCst));
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
 }

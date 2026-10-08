@@ -3,7 +3,7 @@
 //! through different paths, so a fault alternating between them is still one fault.
 //!
 //! Everything deciding "persistently unresponsive" lives here: the threshold, the
-//! per-camera streak (`AppState.consecutive_watchdog_timeouts`, keyed by role+name), and
+//! per-camera streak (kept in `CameraRoster`, keyed by role+name), and
 //! the escalation event — a counter per call site would let a camera failing every other
 //! poll stay "healthy". Also the per-camera `RestartHistory` of whether an in-place restart still works, deciding how soon a stall reopens the camera.
 
@@ -48,22 +48,16 @@ pub(crate) enum FaultKind {
 /// its budget and without a device-lost error, since that proves the camera is
 /// currently responding regardless of which call site observed it.
 pub(crate) fn clear_fault_streak(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
-    let mut counts = state
-        .consecutive_watchdog_timeouts
-        .lock()
-        .expect("consecutive_watchdog_timeouts mutex poisoned");
-    counts.remove(&(role, camera_name.to_string()));
+    state.roster.clear_fault_streak(role, camera_name);
 }
 
 /// Whether `camera_name`'s last calls failed, inside `FAULT_STREAK_TTL`. A camera in that
 /// state is not one to hold a five-minute warm-up on: the next call is likely to fail too.
 pub(crate) fn has_recent_fault(state: &AppState, role: CameraRole, camera_name: &str) -> bool {
     state
-        .consecutive_watchdog_timeouts
-        .lock()
-        .expect("consecutive_watchdog_timeouts mutex poisoned")
-        .get(&(role, camera_name.to_string()))
-        .is_some_and(|(count, at)| *count > 0 && at.elapsed() <= FAULT_STREAK_TTL)
+        .roster
+        .fault_streak(role, camera_name)
+        .is_some_and(|(count, at)| count > 0 && at.elapsed() <= FAULT_STREAK_TTL)
 }
 
 /// Record one fault against `camera_name` and report the resulting streak.
@@ -77,7 +71,8 @@ pub(crate) fn record_fault(
     camera_name: &str,
     kind: FaultKind,
 ) -> u32 {
-    let consecutive = state.bump_fault_streak(role, camera_name, FAULT_STREAK_TTL);
+    let consecutive =
+        state.roster.bump_fault_streak(role, camera_name, FAULT_STREAK_TTL, Instant::now());
 
     warn!(
         camera_name = %camera_name,
@@ -122,7 +117,7 @@ pub(crate) const RESTART_DISTRUST_AFTER: u32 = 2;
 pub(crate) const RESTART_HISTORY_TTL: Duration = Duration::from_secs(600);
 
 /// What restarting the stream in place has lately done for one camera. Kept in
-/// `AppState.restart_histories` rather than the loop's `StallTracker`, which the reopen
+/// the `CameraRoster` rather than the loop's `StallTracker`, which the reopen
 /// it is meant to shortcut rebuilds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RestartHistory {
@@ -163,16 +158,11 @@ pub(crate) fn record_restart_outcome(
     camera_name: &str,
     recovered: bool,
 ) {
-    let mut histories = state
-        .restart_histories
-        .lock()
-        .expect("restart_histories mutex poisoned");
-    let key = (role, camera_name.to_string());
     if recovered {
-        histories.remove(&key);
-        return;
+        state.roster.forget_restart_history(role, camera_name);
+    } else {
+        state.roster.restart_failed(role, camera_name, Instant::now());
     }
-    histories.entry(key).or_default().record_failure(Instant::now());
 }
 
 /// Forget what restarts did for a camera the observer is connecting: a reseated cable or
@@ -183,11 +173,7 @@ pub(crate) fn forget_restart_history(
     role: CameraRole,
     camera_name: &str,
 ) {
-    state
-        .restart_histories
-        .lock()
-        .expect("restart_histories mutex poisoned")
-        .remove(&(role, camera_name.to_string()));
+    state.roster.forget_restart_history(role, camera_name);
 }
 
 /// The failed restarts in a row behind skipping the next one, or `None` while restarting
@@ -198,9 +184,7 @@ pub(crate) fn distrusted_restarts(
     camera_name: &str,
 ) -> Option<u32> {
     state
-        .restart_histories
-        .lock()
-        .expect("restart_histories mutex poisoned")
-        .get(&(role, camera_name.to_string()))
+        .roster
+        .restart_history(role, camera_name)
         .and_then(|history| history.distrusted(Instant::now()))
 }

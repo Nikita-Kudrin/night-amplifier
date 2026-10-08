@@ -117,19 +117,12 @@ pub async fn add_mock_camera(state: &Arc<AppState>, camera_id: &str) {
         serial: None,
     };
 
-    let mut cameras = state.cameras.write().await;
-    cameras.insert(
-        camera_id.to_string(),
-        ConnectedCameraInfo {
-            id: camera_id.to_string(),
-            provider: "Mock".to_string(),
-            index: 0,
-            role: CameraRole::Main,
-            info,
-        },
-    );
-
-    // Set as selected camera
-    let mut selected = state.selected_camera.write().await;
-    *selected = Some(camera_id.to_string());
+    let camera = ConnectedCameraInfo {
+        id: camera_id.to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role: CameraRole::Main,
+        info,
+    };
+    state.roster.install(camera, true);
 }

@@ -146,24 +146,19 @@ async fn test_multiple_cameras_connected() {
     let state = create_test_state();
     add_mock_camera(&state, "camera_0").await;
 
-    // Add a second camera manually
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert(
-            "camera_1".to_string(),
-            ConnectedCameraInfo {
-                id: "camera_1".to_string(),
-                provider: "Mock".to_string(),
-                index: 1,
-                role: CameraRole::Main,
-                info: CameraInfo {
-                    name: "Second Camera".to_string(),
-                    sensor_type: SensorType::Mono,
-                    ..Default::default()
-                },
-            },
-        );
-    }
+    // Add a second camera manually, as the guide camera: a role holds one.
+    let guide = ConnectedCameraInfo {
+        id: "camera_1".to_string(),
+        provider: "Mock".to_string(),
+        index: 1,
+        role: CameraRole::Guide,
+        info: CameraInfo {
+            name: "Second Camera".to_string(),
+            sensor_type: SensorType::Mono,
+            ..Default::default()
+        },
+    };
+    state.roster.install(guide, false);
 
     let app = create_test_router(Arc::clone(&state));
 
@@ -294,8 +289,7 @@ async fn test_disconnect_camera_success() {
         .contains("disconnected"));
 
     // Verify camera was removed
-    let cameras = state.cameras.read().await;
-    assert!(!cameras.contains_key("mock_0"));
+    assert!(!state.roster.contains("mock_0"));
 }
 
 #[tokio::test]
@@ -335,7 +329,7 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_first() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["data"]["warming_up"], false);
     assert_eq!(state.capture_state().await, CaptureState::Idle);
-    assert!(!state.cameras.read().await.contains_key("mock_0"));
+    assert!(!state.roster.contains("mock_0"));
 }
 
 #[tokio::test]
@@ -345,15 +339,12 @@ async fn test_disconnect_camera_clears_selected() {
     let app = create_test_router(Arc::clone(&state));
 
     // Verify it's selected
-    assert_eq!(
-        state.selected_camera.read().await.as_deref(),
-        Some("mock_0")
-    );
+    assert_eq!(state.roster.selected().as_deref(), Some("mock_0"));
 
     post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
 
     // Verify selected was cleared
-    assert!(state.selected_camera.read().await.is_none());
+    assert!(state.roster.selected().is_none());
 }
 
 #[tokio::test]
@@ -411,9 +402,7 @@ fn test_connected_camera_info_clone() {
 
 /// Start a warm-up on the mock camera without a monitor, the state a Disconnect leaves it in.
 async fn warming_up(state: &Arc<AppState>) {
-    state
-        .set_camera_phase(CameraRole::Main, "Test Camera", CameraPhase::WarmingUp)
-        .await;
+    state.set_camera_phase(CameraRole::Main, "Test Camera", CameraPhase::WarmingUp);
     state
         .slot(CameraRole::Main)
         .begin_warmup(std::time::Instant::now() + std::time::Duration::from_secs(120));
@@ -455,7 +444,7 @@ async fn disconnect_during_a_warmup_reports_it_unless_told_to_skip_it() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["warming_up"], true);
     assert!(json["data"]["warmup_remaining_s"].as_u64().is_some());
-    assert!(state.cameras.read().await.contains_key("mock_0"));
+    assert!(state.roster.contains("mock_0"));
 
     let (status, json) = post_json(
         &app,
@@ -465,6 +454,6 @@ async fn disconnect_during_a_warmup_reports_it_unless_told_to_skip_it() {
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["data"]["warming_up"], false);
-    assert!(!state.cameras.read().await.contains_key("mock_0"));
-    assert_eq!(state.camera_phase(CameraRole::Main).await, CameraPhase::Disconnected);
+    assert!(!state.roster.contains("mock_0"));
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
 }

@@ -301,7 +301,7 @@ fn cancel_warmup(ctx: &mut MonitorCtx) {
 /// Run one polling iteration. Returns `false` when the monitor should stop
 /// (handle closed during warmup).
 fn tick(ctx: &mut MonitorCtx) -> bool {
-    let warming_up = ctx.rt.block_on(ctx.state.camera_phase(ctx.role)) == CameraPhase::WarmingUp;
+    let warming_up = ctx.state.camera_phase(ctx.role) == CameraPhase::WarmingUp;
     // Before the status read, which a camera that stopped answering never gets past.
     if warming_up && warmup_overran(ctx) {
         warn!(camera_name = %ctx.camera_name, "Warmup timed out; forcing disconnect");
@@ -333,12 +333,9 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
 
     // Broadcast the sample for the UI.
     let target = ctx.state.settings.snapshot().profile_for(ctx.role).target_temp_c;
-    ctx.rt.block_on(
-        ctx.state
-            .update_camera_status(&ctx.camera_name, status.clone(), target),
-    );
+    ctx.state.update_camera_status(&ctx.camera_name, status.clone(), target);
 
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
+    let phase = ctx.state.camera_phase(ctx.role);
 
     match phase {
         CameraPhase::Precooling => {
@@ -372,16 +369,22 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
                     ctx.settle_samples = ctx.settle_samples.saturating_add(1);
                     if ctx.settle_samples >= STABILITY_SAMPLE_COUNT {
                         ctx.cooldown_ramp = None;
-                        ctx.rt.block_on(
-                            ctx.state
-                                .set_camera_phase(ctx.role, &ctx.camera_name, CameraPhase::Idle),
+                        // A capture that took the handle since this tick read the phase
+                        // owns the cooler now, and must not read as settled.
+                        let settled = ctx.state.transition_camera_phase(
+                            ctx.role,
+                            &ctx.camera_name,
+                            CameraPhase::Precooling,
+                            CameraPhase::Idle,
                         );
-                        info!(
-                            camera_name = %ctx.camera_name,
-                            temp = status.temperature_c,
-                            target,
-                            "Precool complete"
-                        );
+                        if settled {
+                            info!(
+                                camera_name = %ctx.camera_name,
+                                temp = status.temperature_c,
+                                target,
+                                "Precool complete"
+                            );
+                        }
                     }
                 } else {
                     ctx.settle_samples = 0;
@@ -520,9 +523,7 @@ fn current_sensor_temp(ctx: &mut MonitorCtx) -> Option<f64> {
     if let Ok(status) = read_status(ctx) {
         return Some(status.temperature_c);
     }
-    ctx.rt
-        .block_on(ctx.state.get_camera_status(&ctx.camera_name))
-        .map(|s| s.temperature_c)
+    ctx.state.get_camera_status(&ctx.camera_name).map(|s| s.temperature_c)
 }
 
 /// Push the ramp's current integer setpoint to the camera. Best-effort: a
@@ -576,7 +577,7 @@ impl MonitorCtx {
 fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
     let state = Arc::clone(&ctx.state);
     let name = ctx.camera_name.clone();
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
+    let phase = ctx.state.camera_phase(ctx.role);
     let cause = if phase == CameraPhase::WarmingUp {
         DisconnectCause::Requested
     } else {
@@ -734,7 +735,7 @@ where
         return Err(CallError::Camera(CameraError::Disconnected));
     };
 
-    let phase = ctx.rt.block_on(ctx.state.camera_phase(ctx.role));
+    let phase = ctx.state.camera_phase(ctx.role);
     // A slot suspended while ours was out has no camera to give it back to, and the
     // reopen expects it empty.
     let recovering = slot.is_recovering();

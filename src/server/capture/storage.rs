@@ -144,9 +144,7 @@ impl StorageWarnings {
 
 /// Get camera info from state
 pub async fn get_camera_info(state: &AppState, camera_id: &str) -> Option<ConnectedCameraInfo> {
-    let cameras: RwLockReadGuard<'_, HashMap<String, ConnectedCameraInfo>> =
-        state.cameras.read().await;
-    cameras.get(camera_id).cloned()
+    state.roster.get(camera_id)
 }
 
 /// Initialize capture session (disk writer, etc.)
@@ -284,7 +282,7 @@ pub(crate) async fn raw_frame_metadata(
         if let Some(set_temp) = profile.target_temp_c {
             metadata = metadata.with_set_temp(set_temp);
         }
-        if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
+        if let Some(status) = state.get_camera_status(&camera_info.info.name) {
             metadata = metadata.with_temperature(status.temperature_c);
         }
     }
@@ -715,7 +713,7 @@ pub async fn save_stacked_result(
             if let Some(set_temp) = settings.target_temp_c {
                 metadata = metadata.with_set_temp(set_temp);
             }
-            if let Some(status) = state.get_camera_status(&camera_info.info.name).await {
+            if let Some(status) = state.get_camera_status(&camera_info.info.name) {
                 metadata = metadata.with_temperature(status.temperature_c);
             }
         }

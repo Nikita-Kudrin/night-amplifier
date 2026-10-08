@@ -175,7 +175,7 @@ struct StallContext {
     frames: u64,
     since_last_frame: Option<Duration>,
     solve_in_flight: Option<bool>,
-    other_camera: Option<CameraPhase>,
+    other_camera: CameraPhase,
     host: HostLoad,
 }
 
@@ -190,7 +190,7 @@ impl StallContext {
                 .try_read()
                 .ok()
                 .and_then(|push_to| push_to.as_ref().map(|pt| pt.is_solving())),
-            other_camera: state.slot(role.other()).phase.try_read().ok().map(|phase| *phase),
+            other_camera: state.camera_phase(role.other()),
             host: HostLoad::sample(),
         }
     }
@@ -205,7 +205,7 @@ impl fmt::Display for StallContext {
             self.since_last_frame.map(|d| format!("{:.1}s", d.as_secs_f32())),
         )?;
         field(f, "solve_in_flight", self.solve_in_flight)?;
-        field(f, "other_camera", self.other_camera.map(|phase| format!("{phase:?}")))?;
+        write!(f, " other_camera={:?}", self.other_camera)?;
         field(f, "load_1m", self.host.load_1m)?;
         field(f, "mem_available_mib", self.host.mem_available_mib)?;
         field(f, "soc_temp_c", self.host.soc_temp_c)
@@ -265,7 +265,7 @@ mod tests {
             frames: 2,
             since_last_frame: Some(Duration::from_millis(4_340)),
             solve_in_flight: None,
-            other_camera: Some(CameraPhase::Disconnected),
+            other_camera: CameraPhase::Disconnected,
             host: HostLoad {
                 load_1m: Some(3.5),
                 mem_available_mib: None,
@@ -299,7 +299,7 @@ mod tests {
             .try_begin_solve(Instant::now(), Duration::ZERO)
             .expect("a fresh state has nothing to contend with");
         *state.push_to.write().await = Some(push_to);
-        *state.slot(CameraRole::Main).phase.write().await = CameraPhase::Capturing;
+        state.roster.set_phase(CameraRole::Main, CameraPhase::Capturing);
 
         let mut stalls = StallTracker::default();
         stalls.frame_delivered();
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(context.frames, 1);
         assert!(context.since_last_frame.is_some());
         assert_eq!(context.solve_in_flight, Some(true));
-        assert_eq!(context.other_camera, Some(CameraPhase::Capturing));
+        assert_eq!(context.other_camera, CameraPhase::Capturing);
     }
 
     #[tokio::test]

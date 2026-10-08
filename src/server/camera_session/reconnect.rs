@@ -148,7 +148,7 @@ pub(super) async fn release_flight(state: &Arc<AppState>, role: CameraRole) {
     if state.slot(role).recovery() != Recovery::Suspended {
         return;
     }
-    let Some(orphan) = state.camera_in_role(role).await else {
+    let Some(orphan) = state.camera_in_role(role) else {
         return;
     };
     warn!(camera_id = %orphan.id, role = role.label(), "Camera failed again as its recovery ended; recovering it again");
@@ -195,7 +195,7 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
         }
 
         // A handle that failed during its install left the entry at its new position.
-        if let Some(current) = state.camera_in_role(role).await.filter(|c| c.id == recorded.id) {
+        if let Some(current) = state.camera_in_role(role).filter(|c| c.id == recorded.id) {
             recorded = current;
         }
         match recovery::reopen_for_recovery(state, &recorded).await {
