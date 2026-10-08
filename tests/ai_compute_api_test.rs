@@ -198,7 +198,7 @@ async fn activating_a_licence_during_a_capture_benchmarks_when_the_capture_ends(
         }))
         .ok();
     let server = Server::new(ServerConfig::new());
-    server.state().set_capture_state(CaptureState::Capturing).await;
+    server.state().set_capture_state(CaptureState::Capturing);
     let app = server.build_router();
 
     let before = STARTS.load(Ordering::SeqCst);
@@ -206,7 +206,7 @@ async fn activating_a_licence_during_a_capture_benchmarks_when_the_capture_ends(
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(STARTS.load(Ordering::SeqCst), before, "the benchmark started under a running capture");
 
-    server.state().end_capture_state().await;
+    server.state().end_capture_state();
     assert_eq!(STARTS.load(Ordering::SeqCst), before + 1, "the capture ended and the benchmark never started");
 
     // With nothing running it starts at once.
@@ -223,7 +223,7 @@ async fn measure_again_waits_for_the_capture_to_end() {
     install();
     BENCHMARKING.store(false, Ordering::SeqCst);
     let server = Server::new(ServerConfig::new());
-    server.state().set_capture_state(CaptureState::Recovering).await;
+    server.state().set_capture_state(CaptureState::Recovering);
     let app = server.build_router();
 
     let before = REMEASURES.load(Ordering::SeqCst);
@@ -232,7 +232,7 @@ async fn measure_again_waits_for_the_capture_to_end() {
     assert!(body["error"].as_str().unwrap().contains("Stop the capture"), "{body}");
     assert_eq!(REMEASURES.load(Ordering::SeqCst), before);
 
-    server.state().set_capture_state(CaptureState::Idle).await;
+    server.state().set_capture_state(CaptureState::Idle);
     let (status, _, body) = call(&app, "POST", "/api/ai-compute/benchmark").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"]["state"], "ready");

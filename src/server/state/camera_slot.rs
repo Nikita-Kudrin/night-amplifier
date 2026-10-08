@@ -66,7 +66,7 @@ pub struct CameraSlot {
     /// timestamped folders, together with the frame number to carry on from. Only the
     /// guide loop uses this; the main camera carries the equivalent on
     /// `SessionResumePlan`.
-    pub raw_session: RwLock<Option<RawSessionResume>>,
+    raw_session: StdMutex<Option<RawSessionResume>>,
     /// Hardware calls waiting for the handle's owner to run them. See [`CameraOp`].
     pending_ops: StdMutex<Vec<CameraOp>>,
     /// When the monitor checked the handle out for the call it is in, if it is in one.
@@ -148,7 +148,7 @@ impl Default for CameraSlot {
             recovery: StdMutex::new(Recovery::None),
             sdk_calls: Arc::new(InFlightCalls::default()),
             pending_opens: Arc::new(InFlightCalls::default()),
-            raw_session: RwLock::new(None),
+            raw_session: StdMutex::new(None),
             pending_ops: StdMutex::new(Vec::new()),
             monitor_call_since: StdMutex::new(None),
             warmup: StdMutex::new(None),
@@ -250,6 +250,15 @@ impl CameraSlot {
     /// Take everything queued. Called by the handle's owner between exposures.
     pub fn drain_ops(&self) -> Vec<CameraOp> {
         std::mem::take(&mut *self.pending_ops.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// The raw-frame directory a reconnect should rejoin, if one was parked.
+    pub fn raw_session(&self) -> Option<RawSessionResume> {
+        self.raw_session.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_raw_session(&self, session: Option<RawSessionResume>) {
+        *self.raw_session.lock().unwrap_or_else(|e| e.into_inner()) = session;
     }
 
     pub fn recovery(&self) -> Recovery {

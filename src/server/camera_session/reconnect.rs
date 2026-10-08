@@ -239,15 +239,15 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
     }
     let plan = state.resume.plan();
     let Some(plan) = plan.filter(|plan| plan.camera_id == connected.id) else {
-        state.end_paused_capture().await;
+        state.end_paused_capture();
         return;
     };
     if !state.settings.snapshot().auto_resume_capture {
         info!(camera_id = %connected.id, "Not resuming capture — auto-resume is switched off");
-        state.end_paused_capture().await;
+        state.end_paused_capture();
         return;
     }
-    if state.capture_state().await != CaptureState::Recovering {
+    if state.capture_state() != CaptureState::Recovering {
         return;
     }
 
@@ -272,7 +272,7 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
         }
         Err(e) => {
             warn!(camera_id = %connected.id, error = %e, "Could not resume capture after reconnect");
-            state.end_paused_capture().await;
+            state.end_paused_capture();
             state.send_error(format!(
                 "Camera '{}' is back, but the capture could not be resumed: {}",
                 connected.info.name, e

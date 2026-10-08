@@ -688,7 +688,7 @@ async fn stopping_a_guide_camera_that_is_not_running_says_so() {
 async fn stopping_the_guide_camera_leaves_the_capture_running() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(Arc::clone(&state));
 
     post_json(
@@ -698,7 +698,7 @@ async fn stopping_the_guide_camera_leaves_the_capture_running() {
     )
     .await;
 
-    assert_eq!(state.capture_state().await, CaptureState::Capturing);
+    assert_eq!(state.capture_state(), CaptureState::Capturing);
     assert!(!state.is_cancelled());
 }
 
@@ -708,7 +708,7 @@ async fn stopping_the_guide_camera_leaves_the_capture_running() {
 async fn a_stop_with_no_role_stops_the_capture_and_not_the_guide_camera() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(Arc::clone(&state));
 
     let (status, body) = post_json(&app, "/api/capture/stop", serde_json::json!({})).await;
@@ -718,7 +718,7 @@ async fn a_stop_with_no_role_stops_the_capture_and_not_the_guide_camera() {
         .as_str()
         .unwrap_or_default()
         .contains("Capture stopping"));
-    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+    assert_eq!(state.capture_state(), CaptureState::Stopping);
     assert!(
         state.guide_loop_running(),
         "stopping the capture stopped the guide camera with it"

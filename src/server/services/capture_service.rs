@@ -99,12 +99,12 @@ impl CaptureService {
         // Deliberately not inside `guide_task::stop` — the disconnect paths call that
         // too, and a dropout *must* keep the record so the reconnect rejoins one
         // session's frames into one folder.
-        *state.slot(CameraRole::Guide).raw_session.write().await = None;
+        state.slot(CameraRole::Guide).set_raw_session(None);
 
         // Nothing will refresh the guide preview until it is started again, so let go of
         // the last frame rather than leaving a viewer looking at a still image of a
         // camera that stopped.
-        state.guide_stream.clear().await;
+        state.guide_stream.clear();
         true
     }
 
@@ -118,11 +118,13 @@ impl CaptureService {
         }
 
         // Check if already capturing. A capture paused for recovery is still running.
-        let current_state = state.capture_state().await;
-        if matches!(
-            current_state,
-            CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering
-        ) {
+        let in_progress = |current| {
+            matches!(
+                current,
+                CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering
+            )
+        };
+        if in_progress(state.capture_state()) {
             return Err(ApiError::CaptureInProgress);
         }
 
@@ -157,13 +159,19 @@ impl CaptureService {
             None => return Err(ApiError::CameraNotConnected(camera_id)),
         }
 
-        // Reset state and start capture. A fresh start discards any stack a
-        // previous session parked for a reconnect — only `resume_capture`
-        // inherits one.
+        // The check above answers early; this one decides. A bare read lets two concurrent
+        // Starts both pass, each spawning a capture loop on the one camera.
+        state
+            .transition_capture_state(|current| {
+                (!in_progress(current)).then_some(CaptureState::Starting)
+            })
+            .map_err(|_| ApiError::CaptureInProgress)?;
+
+        // A fresh start discards any stack a previous session parked for a reconnect —
+        // only `resume_capture` inherits one.
         state.reset_cancel();
         state.reset_session();
         state.resume.clear_stack();
-        state.set_capture_state(CaptureState::Starting).await;
 
         // *After* the state moves off `Idle`, which is what closes the window: from here
         // `update_settings` refuses to enter the mode, so nothing can turn it back on
@@ -211,19 +219,14 @@ impl CaptureService {
         if !state.roster.contains(&plan.camera_id) {
             return Err(ApiError::CameraNotConnected(plan.camera_id.clone()));
         }
-        {
-            let mut capture = state.capture.write().await;
-            match *capture {
-                CaptureState::Recovering => *capture = CaptureState::Starting,
-                CaptureState::Capturing | CaptureState::Starting => {
-                    return Err(ApiError::CaptureInProgress)
-                }
-                _ => return Err(ApiError::CaptureNotPaused),
-            }
+        let paused =
+            |current| (current == CaptureState::Recovering).then_some(CaptureState::Starting);
+        if let Err(current) = state.transition_capture_state(paused) {
+            return Err(match current {
+                CaptureState::Capturing | CaptureState::Starting => ApiError::CaptureInProgress,
+                _ => ApiError::CaptureNotPaused,
+            });
         }
-        let _ = state
-            .events
-            .send(crate::server::events::ServerEvent::state_changed(CaptureState::Starting));
 
         state.reset_cancel();
 
@@ -245,20 +248,17 @@ impl CaptureService {
 
     /// Stop the current capture session
     pub async fn stop_capture(state: &Arc<AppState>) -> bool {
-        let current_state = state.capture_state().await;
-
-        if current_state == CaptureState::Idle {
+        let stopped = state.transition_capture_state(|current| match current {
+            CaptureState::Idle => None,
+            // A capture paused for recovery has no pipeline left to wind down and report
+            // `Idle` when it has; the camera keeps recovering, with nothing to resume.
+            CaptureState::Recovering => Some(CaptureState::Idle),
+            _ => Some(CaptureState::Stopping),
+        });
+        if stopped.is_err() {
             return false;
         }
-
         state.request_cancel();
-        // A capture paused for recovery has no pipeline left to wind down and report
-        // `Idle` when it has; the camera keeps recovering, with nothing to resume.
-        let next = match current_state {
-            CaptureState::Recovering => CaptureState::Idle,
-            _ => CaptureState::Stopping,
-        };
-        state.set_capture_state(next).await;
 
         // A deliberate stop is not something to recover from: drop the resume
         // plan and the parked stack rather than holding full-resolution

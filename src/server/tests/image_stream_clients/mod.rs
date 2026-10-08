@@ -139,10 +139,9 @@ impl TestServer {
         })
         .unwrap();
         drop(tx);
-        let rt = tokio::runtime::Handle::current();
         let state = Arc::clone(&self.state);
         tokio::task::spawn_blocking(move || {
-            crate::server::capture::run_render_task(state, rx, QueueDepth::default(), rt)
+            crate::server::capture::run_render_task(state, rx, QueueDepth::default())
         })
         .await
         .unwrap();

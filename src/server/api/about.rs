@@ -54,7 +54,7 @@ pub async fn update_license(
             Ok(details) => {
                 // A licence activated after startup: the benchmark did not run then. Under a
                 // running capture it waits for the capture's end (`end_capture_state`).
-                if !super::ai_compute::capture_running(state.capture_state().await) {
+                if !super::ai_compute::capture_running(state.capture_state()) {
                     crate::render::denoise::ai::start_benchmark(&state.plugins);
                 }
                 (

@@ -36,7 +36,7 @@ fn test_state() -> Arc<AppState> {
 }
 
 async fn with_frame(state: &AppState, width: usize, height: usize) -> u64 {
-    state.main_stream.set_latest_raw_frame(ready_frame(width, height)).await;
+    state.main_stream.set_latest_raw_frame(ready_frame(width, height));
     let counter = state.main_stream.begin_frame();
     state.main_stream.publish_frame();
     counter

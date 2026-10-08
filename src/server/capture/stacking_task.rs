@@ -326,7 +326,7 @@ pub fn run_stacking_task(
     }
 
     // Save stacked result before exiting
-    save_stacked_result(&state, stacker.as_deref(), &rt);
+    save_stacked_result(&state, stacker.as_deref());
 
     // Park the accumulator in case this capture is about to be resumed after a
     // reconnect. A fresh start or a clean stop clears it; see
@@ -413,7 +413,6 @@ fn final_stack(stacker: Option<&dyn LiveStacker>) -> Option<FinalStack> {
 fn save_stacked_result(
     state: &Arc<AppState>,
     stacker: Option<&dyn LiveStacker>,
-    rt: &tokio::runtime::Handle,
 ) {
     if let Some(stack) = final_stack(stacker) {
         // The imaging camera specifically: it is the one whose frames are in this
@@ -421,13 +420,13 @@ fn save_stacked_result(
         // the wrong instrument in the FITS header.
         let camera_info = state.camera_in_role(CameraRole::Main);
         if let Some(info) = camera_info {
-            rt.block_on(storage::save_stacked_result(
+            storage::save_stacked_result(
                 state,
                 Some(stack.frame),
                 stack.depth as u32,
                 stack.coverage,
                 &info,
-            ));
+            );
         }
     }
 }

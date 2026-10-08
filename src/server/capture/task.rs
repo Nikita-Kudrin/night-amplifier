@@ -36,8 +36,7 @@ pub async fn run_capture_loop(
 
     debug!(camera_id = %camera_id, resumed = resume.is_some(), "Capture pipeline starting");
 
-    // Capture the tokio runtime handle — this will be passed to all spawned
-    // OS threads so they can call handle.block_on() and handle.spawn().
+    // The stacking thread offers frames to Push-To's async tasks through this.
     let rt_handle = tokio::runtime::Handle::current();
 
     // Get camera info for opening
@@ -46,7 +45,7 @@ pub async fn run_capture_loop(
         None => {
             error!(camera_id = %camera_id, "Camera not found in capture loop");
             state.send_error("Camera not found".to_string());
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
     };
@@ -56,14 +55,14 @@ pub async fn run_capture_loop(
     if let Err(e) = storage::initialize_capture_session(&state, resume_dir).await {
         error!(error = %e, "Failed to initialize capture session");
         state.send_error(e);
-        state.end_capture_state().await;
+        state.end_capture_state();
         return;
     }
 
     // Only now, with the session directory in place. `sync_disk_session` opens no
     // directory unless a capture is active, so flipping this earlier let a settings
     // update land on a capture whose directory did not exist yet.
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     // Snapshot what a resume would need, now that the disk session exists and
     // the settings for this run are fixed. Recorded for every capture, because
@@ -101,7 +100,7 @@ pub async fn run_capture_loop(
         // the capture stays paused for the recovery under way, which resumes it.
         Err(e @ ApiError::CameraRecovering { .. }) => {
             warn!(camera_id = %camera_id, error = %e, "Camera is recovering; the capture stays paused");
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
         // Recovered like a handle a running capture lost: the capture pauses for the reopen,
@@ -109,13 +108,13 @@ pub async fn run_capture_loop(
         Err(e @ ApiError::CameraHandleLost { .. }) => {
             warn!(camera_id = %camera_id, error = %e, "No camera handle to start the capture with");
             lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
         Err(e) => {
             error!(camera_id = %camera_id, error = %e, "Failed to take camera handle for capture");
             state.send_error(format!("Failed to take camera handle: {}", e));
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
     };
@@ -131,7 +130,7 @@ pub async fn run_capture_loop(
         debug!(camera_id = %camera_id, "Capture stopped before its first frame");
         state.clear_camera_token(CameraRole::Main).await;
         lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
-        state.end_capture_state().await;
+        state.end_capture_state();
         return;
     }
 
@@ -201,7 +200,7 @@ pub async fn run_capture_loop(
                     lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
                 }
             }
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
     };
@@ -220,7 +219,7 @@ pub async fn run_capture_loop(
             state.send_error(format!("Failed to decode initial frame: {}", e));
             state.clear_camera_token(CameraRole::Main).await;
             lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, Some(camera)).await;
-            state.end_capture_state().await;
+            state.end_capture_state();
             return;
         }
     };
@@ -302,8 +301,6 @@ pub async fn run_capture_loop(
     let storage_depth_capture = storage_queue_depth.clone();
 
     let rt_stacking = rt_handle.clone();
-    let rt_render = rt_handle.clone();
-    let rt_storage = rt_handle.clone();
     let numbers_capture = numbers.clone();
 
     let capture_handle = std::thread::Builder::new()
@@ -349,14 +346,14 @@ pub async fn run_capture_loop(
     let render_handle = std::thread::Builder::new()
         .name("render-task".into())
         .spawn(move || {
-            run_render_task(state_render, render_rx, depth_render, rt_render);
+            run_render_task(state_render, render_rx, depth_render);
         })
         .expect("Failed to spawn render thread");
 
     let storage_handle = std::thread::Builder::new()
         .name("storage-task".into())
         .spawn(move || {
-            storage::run_storage_task(state_storage, storage_rx, storage_queue_depth, rt_storage);
+            storage::run_storage_task(state_storage, storage_rx, storage_queue_depth);
         })
         .expect("Failed to spawn storage thread");
 
@@ -409,7 +406,7 @@ pub async fn run_capture_loop(
     // Return the camera handle to the session (or finalize disconnect if lost).
     state.clear_camera_token(CameraRole::Main).await;
     lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, returned_camera).await;
-    state.end_capture_state().await;
+    state.end_capture_state();
 }
 
 // =============================================================================

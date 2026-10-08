@@ -158,7 +158,7 @@ pub async fn serve(
 
 /// The size the latest frame streams at under `resolution`, as a log string.
 async fn describe_output(stream: &FrameStream, resolution: Resolution) -> String {
-    match stream.get_latest_raw_frame().await {
+    match stream.get_latest_raw_frame() {
         Some(frame) => {
             let (frame_w, frame_h) = (frame.linear_frame.width(), frame.linear_frame.height());
             let (max_w, max_h) = resolution.bounding_box();
@@ -193,7 +193,7 @@ pub(super) async fn payload_for_client(
         return Some((counter, payload));
     }
 
-    let frame = stream.get_latest_raw_frame().await?;
+    let frame = stream.get_latest_raw_frame()?;
     let (max_w, max_h) = configured_resolution(state, kind).await.bounding_box();
     // Single LZ4 chunk: this borrows a blocking thread while the render task may be
     // mid-frame, and one client's first frame is not worth taking cores off the stack.

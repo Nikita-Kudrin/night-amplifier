@@ -124,7 +124,7 @@ pub async fn events_handler(
 /// camera's phase. Returns `false` once the socket is gone.
 async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
     let snapshot = [
-        ServerEvent::state_changed(state.capture_state().await),
+        ServerEvent::state_changed(state.capture_state()),
         state.camera_phases_event(),
     ];
     for event in snapshot {

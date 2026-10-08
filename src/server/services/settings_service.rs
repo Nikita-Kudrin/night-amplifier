@@ -286,7 +286,7 @@ impl SettingsService {
             profile_key: state
                 .camera_in_role(role)
                 .map(|camera| camera_profile_key(&camera.provider, &camera.info.name, role)),
-            capture_state: state.capture_state().await,
+            capture_state: state.capture_state(),
         };
 
         let (applied, delta) = state.settings.update(|settings| {

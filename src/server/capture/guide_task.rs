@@ -130,7 +130,7 @@ async fn spawn_loop(
     // Rejoin the folder a dropout interrupted, so one guide session stays in one
     // directory across a reconnect — the same reason `SessionResumePlan` carries the
     // imaging camera's.
-    let resume = state.slot(CameraRole::Guide).raw_session.read().await.clone();
+    let resume = state.slot(CameraRole::Guide).raw_session();
 
     let loop_state = Arc::clone(state);
     let loop_info = camera_info.clone();
@@ -349,7 +349,7 @@ pub(super) fn run(
 
         // Above both gates below: an unwatched guide camera with no solve target is
         // still saving subs if the user asked it to.
-        disk.write(state, &settings, &raw_frame, frame_number, camera_info, rt);
+        disk.write(state, &settings, &raw_frame, frame_number, camera_info);
 
         let watched = state.guide_stream.has_viewers();
         let solving_wanted = solving::plate_solve_available(state, SolveSource::Guide);
@@ -393,7 +393,6 @@ pub(super) fn run(
             &mut conversions,
             &mut failures,
             &mut analysis,
-            rt,
         );
     }
 
@@ -529,7 +528,6 @@ fn render_and_publish(
     conversions: &mut ConversionCache,
     failures: &mut FailureReports,
     analysis: &mut PreviewAnalysis,
-    rt: &tokio::runtime::Handle,
 ) {
     let _span = tracing::info_span!("guide_render").entered();
 
@@ -562,7 +560,7 @@ fn render_and_publish(
 
     let stream = &state.guide_stream;
     // The live resolution, not `settings`: that snapshot predates the exposure.
-    rt.block_on(stream.set_latest_raw_frame(Arc::clone(&ready)));
+    stream.set_latest_raw_frame(Arc::clone(&ready));
     let resolution = state.settings.snapshot().stream_resolution(StreamKind::Jpeg);
     let counter = stream.begin_frame();
 
@@ -610,13 +608,10 @@ impl GuideDiskSession {
         raw: &Arc<crate::camera::RawFrame>,
         frame_number: u64,
         camera_info: &ConnectedCameraInfo,
-        rt: &tokio::runtime::Handle,
     ) {
         if !settings.saves_guide_raw_frames() {
             if self.session.take().is_some() {
-                rt.block_on(async {
-                    *state.slot(CameraRole::Guide).raw_session.write().await = None;
-                });
+                state.slot(CameraRole::Guide).set_raw_session(None);
             }
             return;
         }
@@ -655,17 +650,10 @@ impl GuideDiskSession {
                 dir: session.dir.clone(),
                 next_frame: frame_number + 1,
             };
-            rt.block_on(async {
-                *state.slot(CameraRole::Guide).raw_session.write().await = Some(resume);
-            });
+            state.slot(CameraRole::Guide).set_raw_session(Some(resume));
         }
 
-        let metadata = rt.block_on(storage::guide_frame_metadata(
-            state,
-            settings,
-            camera_info,
-            frame_number,
-        ));
+        let metadata = storage::guide_frame_metadata(state, settings, camera_info, frame_number);
         if let Err(e) = state.disk_writer.queue_raw_frame_in(
             self.session.clone(),
             Arc::clone(raw),
@@ -761,7 +749,7 @@ mod tests {
             "the guide stream advanced a frame with nobody watching"
         );
         assert!(
-            state.guide_stream.get_latest_raw_frame().await.is_none(),
+            state.guide_stream.get_latest_raw_frame().is_none(),
             "an unwatched guide stream published a rendered frame"
         );
         for kind in StreamKind::all() {
@@ -789,7 +777,7 @@ mod tests {
             3,
             "a watched guide stream must publish every frame it captures"
         );
-        assert!(state.guide_stream.get_latest_raw_frame().await.is_some());
+        assert!(state.guide_stream.get_latest_raw_frame().is_some());
         let payload = state
             .guide_stream
             .payload(StreamKind::Jpeg, 3)
@@ -846,7 +834,7 @@ mod tests {
         drive_guide_loop(&state, 2).await;
 
         assert_eq!(state.main_stream.frame_counter(), 0);
-        assert!(state.main_stream.get_latest_raw_frame().await.is_none());
+        assert!(state.main_stream.get_latest_raw_frame().is_none());
     }
 
     /// Raw saving sits above both early exits: an unwatched guide camera with no solve
@@ -901,12 +889,7 @@ mod tests {
         wait_for_files(&dir, 3).await;
 
         // Second run, resuming the way `spawn_loop` does — from what the slot parked.
-        let resume = state
-            .slot(CameraRole::Guide)
-            .raw_session
-            .read()
-            .await
-            .clone();
+        let resume = state.slot(CameraRole::Guide).raw_session();
         assert_eq!(
             resume.as_ref().map(|r| r.next_frame),
             Some(4),
@@ -1109,13 +1092,7 @@ mod tests {
 
     /// The directory the guide loop is currently filling, if any.
     async fn guide_session_dir(state: &Arc<AppState>) -> Option<std::path::PathBuf> {
-        state
-            .slot(CameraRole::Guide)
-            .raw_session
-            .read()
-            .await
-            .as_ref()
-            .map(|r| r.dir.clone())
+        state.slot(CameraRole::Guide).raw_session().map(|r| r.dir)
     }
 
     async fn wait_for_files(dir: &std::path::Path, want: usize) {
@@ -1259,7 +1236,7 @@ mod tests {
         let state = Arc::new(state);
         connect_and_start_guide(&state).await;
         wait_until_running(&state).await;
-        state.set_capture_state(CaptureState::Capturing).await;
+        state.set_capture_state(CaptureState::Capturing);
 
         assert!(CaptureService::stop(&state, CameraRole::Main).await);
 

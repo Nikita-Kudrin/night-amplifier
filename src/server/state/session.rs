@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::settings::CaptureSettings;
+use super::CaptureState;
 use crate::server::capture::StackingCarryover;
 
 /// Sliding window used by [`SessionStats::record_failure`] to detect a
@@ -244,6 +245,16 @@ mod tests {
     }
 
     #[test]
+    fn a_declined_capture_transition_reports_the_state_it_found() {
+        let capture = CaptureControl::default();
+        let start = |current| (current == CaptureState::Idle).then_some(CaptureState::Starting);
+
+        assert_eq!(capture.transition(start), Ok(CaptureState::Starting));
+        assert_eq!(capture.transition(start), Err(CaptureState::Starting), "a second Start");
+        assert_eq!(capture.state(), CaptureState::Starting);
+    }
+
+    #[test]
     fn a_resume_plan_follows_its_capture_until_cleared() {
         let resume = CaptureResume::default();
         resume.edit_plan(|_| panic!("no plan to edit"));
@@ -349,3 +360,49 @@ impl CaptureResume {
         let _parked = std::mem::take(&mut *self.lock());
     }
 }
+
+/// Where the capture session stands, and the switch that stops its loops.
+///
+/// A std lock, never held across an `await`: every change is one [`Self::transition`],
+/// so a Start racing a Start, or a resume racing a Stop, cannot both pass a check
+/// made before the other's write.
+#[derive(Debug, Default)]
+pub struct CaptureControl {
+    state: Mutex<CaptureState>,
+    cancel: AtomicBool,
+}
+
+impl CaptureControl {
+    pub fn state(&self) -> CaptureState {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn set(&self, state: CaptureState) {
+        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    }
+
+    /// Move to whatever `next` makes of the current state, in one step. `Err` carries
+    /// the state `next` declined to leave.
+    pub fn transition(
+        &self,
+        next: impl FnOnce(CaptureState) -> Option<CaptureState>,
+    ) -> Result<CaptureState, CaptureState> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let moved = next(*state).ok_or(*state)?;
+        *state = moved;
+        Ok(moved)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
+    pub fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    pub fn reset_cancel(&self) {
+        self.cancel.store(false, Ordering::SeqCst);
+    }
+}
+

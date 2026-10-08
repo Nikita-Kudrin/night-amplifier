@@ -26,7 +26,6 @@ pub fn run_storage_task(
     state: Arc<AppState>,
     storage_rx: mpsc::Receiver<CapturedFrame>,
     storage_depth: QueueDepth,
-    rt: tokio::runtime::Handle,
 ) {
     debug!("Storage task started");
 
@@ -49,14 +48,7 @@ pub fn run_storage_task(
             continue;
         }
 
-        rt.block_on(save_frame_to_disk(
-            &state,
-            &frame,
-            frame_number,
-            &settings,
-            &camera_info,
-            &mut warnings,
-        ));
+        save_frame_to_disk(&state, &frame, frame_number, &settings, &camera_info, &mut warnings);
     }
 
     warnings.finish(&state);
@@ -259,7 +251,7 @@ pub async fn sync_disk_session(
 /// Takes the camera's own hardware profile rather than the flat settings: with a guide
 /// camera connected the two cameras have different exposures and gains, and a guide sub
 /// stamped with the imaging camera's `EXPTIME` is a file that lies about itself.
-pub(crate) async fn raw_frame_metadata(
+pub(crate) fn raw_frame_metadata(
     state: &AppState,
     profile: &crate::server::state::CameraCaptureProfile,
     camera_info: &ConnectedCameraInfo,
@@ -290,17 +282,17 @@ pub(crate) async fn raw_frame_metadata(
 }
 
 /// The FITS header for a guide-camera sub.
-pub(crate) async fn guide_frame_metadata(
+pub(crate) fn guide_frame_metadata(
     state: &AppState,
     settings: &CaptureSettings,
     camera_info: &ConnectedCameraInfo,
     frame_number: u64,
 ) -> crate::fits::FitsMetadata {
-    raw_frame_metadata(state, &settings.guide_camera, camera_info, frame_number).await
+    raw_frame_metadata(state, &settings.guide_camera, camera_info, frame_number)
 }
 
 /// Save a frame to disk and handle queue warnings
-async fn save_frame_to_disk(
+fn save_frame_to_disk(
     state: &AppState,
     frame: &Arc<RawFrame>,
     frame_number: u64,
@@ -309,13 +301,8 @@ async fn save_frame_to_disk(
     warnings: &mut StorageWarnings,
 ) {
     let raw_frame = Arc::clone(frame);
-    let metadata = raw_frame_metadata(
-        state,
-        &settings.main_camera_profile(),
-        camera_info,
-        frame_number,
-    )
-    .await;
+    let metadata =
+        raw_frame_metadata(state, &settings.main_camera_profile(), camera_info, frame_number);
 
     if let Err(e) = state.disk_writer.queue_raw_frame(
         raw_frame,
@@ -665,7 +652,7 @@ pub fn render_stacked_png(
 /// Save stacked result if stacking was enabled and we have frames.
 ///
 /// `coverage` travels with the frame for the PNG — see [`render_stacked_png`].
-pub async fn save_stacked_result(
+pub fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
     stack_depth: u32,
