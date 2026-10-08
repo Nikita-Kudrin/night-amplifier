@@ -158,7 +158,7 @@ pub async fn initialize_capture_session(
     state: &AppState,
     resume_dir: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
-    let settings: RwLockReadGuard<'_, CaptureSettings> = state.settings.read().await;
+    let settings = state.settings.snapshot();
     let enabled = settings.disk_writing_enabled();
     state.disk_writer.set_enabled(enabled);
 
@@ -201,10 +201,8 @@ pub fn session_type_for(settings: &CaptureSettings) -> WritingSessionType {
 /// `initialize_capture_session` ran: enabled flag, open session, and
 /// name-matches-mode are one decision. Rolls the directory on a mode change —
 /// Live view then Stacking without stopping is ordinary, and `ensure_session`
-/// alone would leave stacked subs in a folder named `-live`.
-///
-/// Locking: args are passed in, not read here, since `frame_processed` takes
-/// `session` *then* `settings` — reading either under a settings guard would invert that order.
+/// alone would leave stacked subs in a folder named `-live`. The caller passes the
+/// settings and capture state it decided on, so all three agree.
 pub async fn sync_disk_session(
     state: &AppState,
     settings: &CaptureSettings,
@@ -396,10 +394,12 @@ mod tests {
     #[tokio::test]
     async fn initialize_capture_session_opens_a_directory_of_its_own() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        state.settings.write().await.raw_frame_saving = crate::server::state::RawFrameSaving {
-            stacking: true,
-            ..Default::default()
-        };
+        state.settings.update(|s| {
+            s.raw_frame_saving = crate::server::state::RawFrameSaving {
+                stacking: true,
+                ..Default::default()
+            }
+        });
         state
             .disk_writer
             .start_session(WritingSessionType::IndividualFrames, "-live")
@@ -678,7 +678,7 @@ pub async fn save_stacked_result(
     use crate::fits::FitsMetadata;
     use chrono::Utc;
 
-    let settings: RwLockReadGuard<'_, CaptureSettings> = state.settings.read().await;
+    let settings = state.settings.snapshot();
     if !settings.saves_stacked_image() {
         return;
     }

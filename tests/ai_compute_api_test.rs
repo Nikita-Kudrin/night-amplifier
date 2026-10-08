@@ -116,7 +116,7 @@ async fn the_report_and_the_capture_gate_follow_the_plugin() {
     GENERATION.store(41, Ordering::SeqCst);
 
     let server = Server::new(ServerConfig::new());
-    server.state().settings.write().await.denoise.ai_compute = AiComputePreference::IntegratedGpu;
+    server.state().settings.update(|s| s.denoise.ai_compute = AiComputePreference::IntegratedGpu);
     let app = server.build_router();
 
     // The report is resolved for the saved choice.

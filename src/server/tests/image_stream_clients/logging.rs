@@ -97,7 +97,7 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
     assert_eq!(changed.len(), 1, "{changed:#?}");
     assert!(changed[0].contains("from=\"1440p\"") && changed[0].contains("to=\"4K\""), "{}", changed[0]);
 
-    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.read().await.eyepiece).unwrap();
+    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
     eyepiece_settings["intensity"] = json!(0.5);
     server.post_settings(json!({"eyepiece": eyepiece_settings.clone()})).await;
     assert!(log.lines_containing("Eyepiece streaming resolution changed").is_empty());

@@ -90,7 +90,7 @@ async fn test_concurrent_settings_updates() {
     }
 
     // Verify state is consistent (one of the values should have won)
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(settings.gain >= 0 && settings.gain < 10);
 }
 

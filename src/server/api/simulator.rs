@@ -40,7 +40,7 @@ pub async fn configure_simulator(
                 );
 
                 // Persist the updated list
-                state.save_settings().await;
+                state.save_settings();
 
                 "Simulated camera added"
             } else {
@@ -117,7 +117,7 @@ pub async fn remove_simulator(
             );
 
             // Persist the updated list
-            state.save_settings().await;
+            state.save_settings();
 
             let dirs = get_simulated_directories();
             let total_files: usize = dirs.iter().filter_map(|d| count_image_files(d)).sum();

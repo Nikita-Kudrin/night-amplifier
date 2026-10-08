@@ -183,9 +183,10 @@ fn build_rig(catalog: &Arc<FakeCatalog>, run_disk_writer: bool) -> Arc<AppState>
     let settings = Arc::clone(&state);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let mut settings = settings.settings.write().await;
-            settings.auto_reconnect = true;
-            settings.indi_server_host.clear();
+            settings.settings.update(|settings| {
+                settings.auto_reconnect = true;
+                settings.indi_server_host.clear();
+            });
         })
     });
     state
@@ -507,7 +508,7 @@ async fn disconnecting_during_recovery_stops_it_quietly() {
 async fn start_capture_plan(state: &Arc<AppState>, device: &FakeDevice) {
     *state.session_resume_plan.write().await = Some(SessionResumePlan {
         camera_id: id_of(device),
-        settings: state.settings.read().await.clone(),
+        settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: None,
         next_frame: 1,
     });
@@ -1209,8 +1210,9 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
 
     let catalog = FakeCatalog::with(&[NEPTUNE]);
     let state = rig_with_disk_writer(&catalog);
-    state.settings.write().await.raw_frame_saving =
-        RawFrameSaving { live_view: true, wanderer: true, stacking: true, guide: false };
+    state.settings.update(|s| {
+        s.raw_frame_saving = RawFrameSaving { live_view: true, wanderer: true, stacking: true, guide: false }
+    });
     connect(&state, &NEPTUNE, CameraRole::Main).await;
 
     CaptureService::start_capture(&state, None).await.unwrap();
@@ -1309,7 +1311,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     start_capture_plan(&state, &NEPTUNE).await;
-    let started_with = state.settings.read().await.exposure_us;
+    let started_with = state.settings.snapshot().exposure_us;
     let edited = started_with + 250_000;
 
     catalog.set(&[]);
@@ -1327,7 +1329,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
         Duration::from_secs(5),
     )
     .await;
-    let exposure = state.settings.read().await.exposure_us;
+    let exposure = state.settings.snapshot().exposure_us;
     let announced = drain(&mut events).iter().any(|e| matches!(e, ServerEvent::SettingsUpdated));
 
     CaptureService::stop_capture(&state).await;
@@ -1417,11 +1419,10 @@ async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status()
     let catalog = FakeCatalog::with(&[ARES]);
     catalog.cooled.store(true, Ordering::SeqCst);
     let state = rig(&catalog);
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.cooler_enabled = true;
         settings.target_temp_c = Some(0.0);
-    }
+    });
     connect(&state, &ARES, CameraRole::Main).await;
     // Under the scaled-down OPEN_TIMEOUT, so the reopen's own probe still passes.
     catalog.camera.status_delay_ms.store(150, Ordering::SeqCst);
@@ -1462,11 +1463,10 @@ async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
     let catalog = FakeCatalog::with(&[ARES]);
     catalog.cooled.store(true, Ordering::SeqCst);
     let state = rig(&catalog);
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.cooler_enabled = true;
         settings.target_temp_c = Some(-10.0);
-    }
+    });
     connect(&state, &ARES, CameraRole::Main).await;
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
@@ -1474,7 +1474,7 @@ async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
         "the capture never got going"
     );
     // Every sub from here on is a minute long, and the watchdog knows it.
-    state.settings.write().await.exposure_us = 60_000_000;
+    state.settings.update(|s| s.exposure_us = 60_000_000);
     catalog.camera.exposure_ms.store(60_000, Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1505,12 +1505,11 @@ async fn disconnecting_during_the_first_long_exposure_neither_waits_it_out_nor_r
     let catalog = FakeCatalog::with(&[ARES]);
     catalog.cooled.store(true, Ordering::SeqCst);
     let state = rig(&catalog);
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.cooler_enabled = true;
         settings.target_temp_c = Some(-10.0);
         settings.exposure_us = 60_000_000;
-    }
+    });
     connect(&state, &ARES, CameraRole::Main).await;
     catalog.camera.exposure_ms.store(60_000, Ordering::SeqCst);
     let mut events = state.subscribe_events();

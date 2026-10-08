@@ -28,7 +28,7 @@ use crate::server::state::{
 /// it. Returns `false` when the fault should instead end the session: automatic
 /// reconnect is off, or the camera is no longer the one in that role.
 pub(super) async fn suspend(state: &Arc<AppState>, role: CameraRole, camera_name: &str) -> bool {
-    if !state.settings.read().await.auto_reconnect {
+    if !state.settings.snapshot().auto_reconnect {
         return false;
     }
     let Some(recorded) = state
@@ -167,7 +167,7 @@ pub(super) async fn reopen_for_recovery(
         .await
         .filter(|other| other.provider.eq_ignore_ascii_case(&recorded.provider))
         .map(|other| DeviceIdentity::of(&other.info).with_device_id(other.info.id));
-    let use_simulated = state.settings.read().await.use_simulated_camera;
+    let use_simulated = state.settings.snapshot().use_simulated_camera;
     let catalog = Arc::clone(&state.device_catalog);
     let expected = recorded.clone();
 

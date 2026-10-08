@@ -118,7 +118,7 @@ impl TestServer {
     }
 
     async fn render_frame(&self, frame: Frame) {
-        let settings = self.state.settings.read().await.clone();
+        let settings = (*self.state.settings.snapshot()).clone();
         self.render_frame_with(frame, settings).await;
     }
 
@@ -134,7 +134,7 @@ impl TestServer {
             showing_stack: false,
             was_stacked: false,
             frame_number: 1,
-            settings,
+            settings: Arc::new(settings),
             stack_depth: 0,
         })
         .unwrap();

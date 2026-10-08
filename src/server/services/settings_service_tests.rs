@@ -115,7 +115,7 @@ fn pro_features_need_their_plugin() {
 async fn a_refused_request_changes_nothing() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    let before = state.settings.read().await.clone();
+    let before = (*state.settings.snapshot()).clone();
 
     let refused = SettingsService::update(
         &state,
@@ -129,7 +129,7 @@ async fn a_refused_request_changes_nothing() {
     .await;
 
     assert!(matches!(refused, Err(ApiError::ProFeatureRequired(_))));
-    let after = state.settings.read().await;
+    let after = state.settings.snapshot();
     assert_eq!(after.gain, before.gain);
     assert_eq!(after.auto_stretch, before.auto_stretch);
 }

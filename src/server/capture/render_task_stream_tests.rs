@@ -27,7 +27,7 @@ fn stacked_frame(frame: Arc<crate::frame::Frame>, settings: CaptureSettings) -> 
         showing_stack: false,
         was_stacked: false,
         frame_number: 1,
-        settings,
+        settings: settings.into(),
         stack_depth: 0,
     }
 }
@@ -193,9 +193,10 @@ async fn the_live_setting_wins_over_the_frames_snapshot() {
 }
 
 async fn set_resolutions(state: &AppState, streaming: Resolution, eyepiece: EyepieceStreamResolution) {
-    let mut settings = state.settings.write().await;
-    settings.streaming_resolution = streaming;
-    settings.eyepiece.stream_resolution = eyepiece;
+    state.settings.update(|settings| {
+        settings.streaming_resolution = streaming;
+        settings.eyepiece.stream_resolution = eyepiece;
+    });
 }
 
 /// A viewer leaving mid-session stops its family being encoded on the very next frame,

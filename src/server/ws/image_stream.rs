@@ -81,7 +81,7 @@ pub struct StreamClient {
 
 /// The resolution a family streams at now — the same live setting the producers read.
 pub(super) async fn configured_resolution(state: &AppState, kind: StreamKind) -> Resolution {
-    state.settings.read().await.stream_resolution(kind)
+    state.settings.snapshot().stream_resolution(kind)
 }
 
 /// Serve one image stream connection until the client leaves.

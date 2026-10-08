@@ -256,7 +256,7 @@ impl Server {
             return;
         }
 
-        let telescope = self.state.settings.read().await.telescope.clone();
+        let telescope = self.state.settings.snapshot().telescope.clone();
         if let Err(e) =
             crate::server::services::PushToService::set_telescope_settings(&self.state, telescope)
                 .await

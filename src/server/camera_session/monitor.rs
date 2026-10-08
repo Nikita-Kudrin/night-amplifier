@@ -332,11 +332,7 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
     ctx.missing_handle_ticks = 0;
 
     // Broadcast the sample for the UI.
-    let target = ctx
-        .rt
-        .block_on(ctx.state.settings.read())
-        .profile_for(ctx.role)
-        .target_temp_c;
+    let target = ctx.state.settings.snapshot().profile_for(ctx.role).target_temp_c;
     ctx.rt.block_on(
         ctx.state
             .update_camera_status(&ctx.camera_name, status.clone(), target),

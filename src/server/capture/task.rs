@@ -70,7 +70,7 @@ pub async fn run_capture_loop(
     // a dropout can happen in any of them.
     let numbers = FrameNumbers::starting_at(resume.as_ref().map_or(1, |plan| plan.next_frame));
     let settings = {
-        let settings = state.settings.read().await.clone();
+        let settings = crate::server::state::CaptureSettings::clone(&state.settings.snapshot());
         *state.session_resume_plan.write().await = Some(SessionResumePlan {
             camera_id: camera_id.clone(),
             settings: settings.clone(),
@@ -141,7 +141,7 @@ pub async fn run_capture_loop(
     camera.invalidate_config_cache();
 
     // Capture a probe frame to determine dimensions and channel capacities
-    let settings = state.settings_for_new_frame().await;
+    let settings = state.settings_for_new_frame();
     let mut capture_config = settings.to_capture_config();
     apply_best_raw_format(&mut capture_config, &camera_info.info, &camera_name);
     apply_cooler_support_override(&mut capture_config, &camera_info.info, &camera_name);
@@ -499,7 +499,7 @@ pub(crate) fn run_capture_task(
         }
 
         // Read settings snapshot for this frame
-        let settings = rt.block_on(state.settings_for_new_frame());
+        let settings = state.settings_for_new_frame();
         let mut capture_config = settings.to_capture_config();
 
         // Get camera info
