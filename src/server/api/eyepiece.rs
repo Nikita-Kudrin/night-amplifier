@@ -59,7 +59,7 @@ pub async fn get_snapshot(
 
     // Not 503: nothing has been rendered yet, and no amount of retrying changes
     // that until a capture produces a frame. The client says so and stops.
-    let Some(frame) = state.main_stream.get_latest_raw_frame().await else {
+    let Some(frame) = state.main_stream.get_latest_raw_frame() else {
         return (
             StatusCode::NOT_FOUND,
             ApiResponse::err::<()>("No rendered frame available yet"),

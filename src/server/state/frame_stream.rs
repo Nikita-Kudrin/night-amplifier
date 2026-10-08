@@ -18,7 +18,7 @@ use crate::telemetry::metrics as telemetry_metrics;
 /// Everything singular about one stream of rendered frames.
 pub struct FrameStream {
     /// Latest frame in linear form, for encoding a payload on demand.
-    latest_raw_frame: RwLock<Option<Arc<RenderReadyFrame>>>,
+    latest_raw_frame: StdRwLock<Option<Arc<RenderReadyFrame>>>,
     /// Versions every payload. Claimed by [`Self::begin_frame`] before the payloads are
     /// stored and published by [`Self::publish_frame`] once they are, so a woken client
     /// never observes a counter whose payloads are still missing.
@@ -44,7 +44,7 @@ pub struct FrameStream {
 impl Default for FrameStream {
     fn default() -> Self {
         Self {
-            latest_raw_frame: RwLock::new(None),
+            latest_raw_frame: StdRwLock::new(None),
             frame_counter: AtomicU64::new(0),
             frame_ready: watch::channel(0).0,
             viewers: std::array::from_fn(|_| AtomicUsize::new(0)),
@@ -84,15 +84,15 @@ impl FrameStream {
     }
 
     /// Set the latest linear frame for on-demand encoding.
-    pub async fn set_latest_raw_frame(&self, frame: Arc<RenderReadyFrame>) {
-        *self.latest_raw_frame.write().await = Some(frame);
+    pub fn set_latest_raw_frame(&self, frame: Arc<RenderReadyFrame>) {
+        *self.latest_raw_frame.write().unwrap_or_else(|e| e.into_inner()) = Some(frame);
     }
 
     /// The most recently rendered linear frame, if any: the live preview immediately
     /// before encoding, used to serve a newly-connected client without waiting for the
     /// next exposure.
-    pub async fn get_latest_raw_frame(&self) -> Option<Arc<RenderReadyFrame>> {
-        self.latest_raw_frame.read().await.clone()
+    pub fn get_latest_raw_frame(&self) -> Option<Arc<RenderReadyFrame>> {
+        self.latest_raw_frame.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub(super) fn viewer_counter(&self, kind: StreamKind) -> &AtomicUsize {
@@ -149,8 +149,8 @@ impl FrameStream {
 
     /// Drop every payload and forget the frame. Called when a stream's producer stops,
     /// so a reconnecting client is not served a frame from a camera that has gone.
-    pub async fn clear(&self) {
-        *self.latest_raw_frame.write().await = None;
+    pub fn clear(&self) {
+        *self.latest_raw_frame.write().unwrap_or_else(|e| e.into_inner()) = None;
         for slot in &self.payloads {
             *slot.write().unwrap_or_else(|e| e.into_inner()) = None;
         }
@@ -299,9 +299,9 @@ mod tests {
             stream.set_payload(kind, counter, vec![1]);
         }
 
-        stream.clear().await;
+        stream.clear();
 
-        assert!(stream.get_latest_raw_frame().await.is_none());
+        assert!(stream.get_latest_raw_frame().is_none());
         for kind in StreamKind::all() {
             assert!(stream.payload(kind, counter).is_none());
         }

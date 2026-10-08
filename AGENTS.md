@@ -57,6 +57,10 @@ When designing new features or refactoring, adhere to the following architectura
 - Domain modules never name `crate::server` (`tests/layering_test.rs`; only `server` and `app.rs` may): plugin traits
   speak domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
   `render::denoise::DenoiseSettings` — and the server maps them to the wire. Pro imports `server` only in tests.
+- `AppState` is aggregates that keep their locks private (`CameraRoster`, `CaptureControl`, `SessionStats`,
+  `SettingsStore`, `CaptureResume`, `PushToState`): std locks never held across an `await`, so capture threads read
+  without `block_on`, and a decision taken on an earlier read goes through the aggregate's `transition`
+  (compare-and-set): a bare read lets two concurrent Starts both pass. Bare locks stay private.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.

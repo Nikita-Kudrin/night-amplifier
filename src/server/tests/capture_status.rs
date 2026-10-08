@@ -27,7 +27,7 @@ async fn test_capture_status_after_state_change() {
     let app = create_test_router(Arc::clone(&state));
 
     // Change state to Capturing
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     let (status, json) = get_json(&app, "/api/capture/status").await;
 

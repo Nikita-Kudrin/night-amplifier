@@ -1436,7 +1436,7 @@ async fn a_clean_stop_clears_the_resume_state() {
         disk_session_dir: None,
         next_frame: 1,
     });
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     assert!(CaptureService::stop_capture(&state).await);
     assert!(
@@ -1494,7 +1494,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
     // anything on the way to refusing.
     let refused = CaptureService::resume_capture(&state, &plan).await;
     assert!(refused.is_err(), "no camera is connected");
-    state.set_capture_state(CaptureState::Idle).await;
+    state.set_capture_state(CaptureState::Idle);
 
     assert_eq!(
         state.stats.counts().stacked,
@@ -2401,12 +2401,12 @@ fn slow_pipeline(
     let state = Arc::clone(state);
     let name = name.to_string();
     tokio::spawn(async move {
-        while state.capture_state().await != CaptureState::Stopping {
+        while state.capture_state() != CaptureState::Stopping {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         tokio::time::sleep(lifecycle::CAPTURE_STOP_WAIT + Duration::from_secs(1)).await;
         lifecycle::return_from_capture(&state, CameraRole::Main, &name, handle).await;
-        state.end_capture_state().await;
+        state.end_capture_state();
     })
 }
 
@@ -2415,7 +2415,7 @@ fn slow_pipeline(
 #[tokio::test]
 async fn a_capture_slow_to_wind_down_hands_its_camera_to_the_warmup() {
     let (state, name) = cooled_rig().await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let handle = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
     let pipeline = slow_pipeline(&state, &name, Some(handle));
 
@@ -2445,7 +2445,7 @@ async fn a_capture_slow_to_wind_down_hands_its_camera_to_the_warmup() {
 async fn a_handle_lost_while_its_warmup_waits_is_not_reopened() {
     let (state, name) = cooled_rig().await;
     state.settings.update(|s| s.auto_reconnect = true);
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let _abandoned = lifecycle::take_for_capture(&state, CameraRole::Main, &name).await.unwrap();
     let pipeline = slow_pipeline(&state, &name, None);
 

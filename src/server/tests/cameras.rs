@@ -310,15 +310,15 @@ async fn test_disconnect_camera_not_connected() {
 async fn disconnecting_a_capturing_camera_stops_the_capture_first() {
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     // Stands in for the capture pipeline: it winds down once asked to stop.
     let pipeline = {
         let state = Arc::clone(&state);
         tokio::spawn(async move {
-            while state.capture_state().await != CaptureState::Stopping {
+            while state.capture_state() != CaptureState::Stopping {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            state.end_capture_state().await;
+            state.end_capture_state();
         })
     };
     let app = create_test_router(Arc::clone(&state));
@@ -328,7 +328,7 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_first() {
 
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["data"]["warming_up"], false);
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
     assert!(!state.roster.contains("mock_0"));
 }
 

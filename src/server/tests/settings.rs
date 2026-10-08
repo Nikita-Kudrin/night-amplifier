@@ -569,7 +569,7 @@ async fn test_no_session_directory_is_opened_while_idle() {
 async fn test_session_directory_rolls_when_the_capture_mode_changes() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -609,7 +609,7 @@ async fn test_session_directory_rolls_when_the_capture_mode_changes() {
 async fn rolling_back_within_a_second_opens_a_separate_directory() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -644,7 +644,7 @@ async fn rolling_back_within_a_second_opens_a_separate_directory() {
 async fn test_unrelated_settings_updates_keep_the_same_session_directory() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -954,7 +954,7 @@ async fn test_focus_mode_is_off_by_default() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_while_stacking() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
 
     let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
@@ -974,7 +974,7 @@ async fn test_focus_mode_is_refused_while_stacking() {
 #[tokio::test]
 async fn test_focus_mode_is_allowed_during_live_view() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
     let (status, _) = post_json(&app, "/api/settings", json!({ "stacking": false })).await;
     assert_eq!(status, StatusCode::OK);
@@ -990,7 +990,7 @@ async fn test_focus_mode_is_allowed_during_live_view() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_in_wanderer_mode() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
     let (status, _) = post_json(
         &app,
@@ -1014,7 +1014,7 @@ async fn test_leaving_focus_mode_is_allowed_while_stacking() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
     assert_eq!(status, StatusCode::OK);
 
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -1027,7 +1027,7 @@ async fn test_leaving_focus_mode_is_allowed_while_stacking() {
 #[tokio::test]
 async fn test_an_ordinary_settings_write_is_unaffected_while_stacking() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state);
 
     let (status, json) = post_json(&app, "/api/settings", json!({ "gain": 123 })).await;
@@ -1042,7 +1042,7 @@ async fn test_an_ordinary_settings_write_is_unaffected_while_stacking() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_while_a_capture_is_starting() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Starting).await;
+    state.set_capture_state(CaptureState::Starting);
     let app = create_test_router(state.clone());
 
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;

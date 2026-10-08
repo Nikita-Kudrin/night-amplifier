@@ -226,7 +226,7 @@ pub(crate) async fn vacate_role(state: &Arc<AppState>, role: CameraRole) -> ApiR
     };
 
     let phase = state.camera_phase(role);
-    let capture_state = state.capture_state().await;
+    let capture_state = state.capture_state();
     let busy_capturing = role == CameraRole::Main
         && matches!(
             capture_state,
@@ -525,7 +525,7 @@ async fn end_capture_for_disconnect(state: &Arc<AppState>, camera_name: &str) ->
     // A capture paused for recovery ends with the same compare-and-set a resume makes:
     // checked only, a reopen finishing meanwhile resumed the capture on the camera this
     // disconnect was warming up, and cancelled the warm-up.
-    if state.end_paused_capture().await {
+    if state.end_paused_capture() {
         return false;
     }
     let running = |capture: CaptureState| {
@@ -534,7 +534,7 @@ async fn end_capture_for_disconnect(state: &Arc<AppState>, camera_name: &str) ->
             CaptureState::Starting | CaptureState::Capturing | CaptureState::Stopping
         )
     };
-    if !running(state.capture_state().await) {
+    if !running(state.capture_state()) {
         return false;
     }
     info!(camera_name, "Disconnect requested during a capture; stopping the capture first");
@@ -542,7 +542,7 @@ async fn end_capture_for_disconnect(state: &Arc<AppState>, camera_name: &str) ->
     state.cancel_active_exposure(CameraRole::Main).await;
 
     let deadline = tokio::time::Instant::now() + CAPTURE_STOP_WAIT;
-    while running(state.capture_state().await) {
+    while running(state.capture_state()) {
         if tokio::time::Instant::now() >= deadline {
             warn!(camera_name, "The capture is still stopping; the camera disconnects once it has");
             return true;
@@ -897,7 +897,7 @@ pub async fn finalize_disconnect(
     // path `disconnect` already stopped it; on a device fault this is where it stops.
     if role == CameraRole::Guide {
         crate::server::capture::guide_task::stop(state).await;
-        state.guide_stream.clear().await;
+        state.guide_stream.clear();
     }
 
     // Close and drop the handle.
@@ -935,14 +935,14 @@ pub async fn finalize_disconnect(
     info!(camera_name, role = role.label(), "Camera disconnected");
 
     if was_recovering && role == CameraRole::Main {
-        state.end_paused_capture().await;
+        state.end_paused_capture();
     }
 
     if !cause.should_attempt_reconnect() {
         // A deliberate disconnect ends the observation, so the folder it was filling is
         // not something a later session should rejoin.
         if cause == DisconnectCause::Requested {
-            *state.slot(role).raw_session.write().await = None;
+            state.slot(role).set_raw_session(None);
         }
         return;
     }

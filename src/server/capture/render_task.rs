@@ -23,7 +23,6 @@ pub fn run_render_task(
     state: Arc<AppState>,
     render_rx: mpsc::Receiver<StackedFrame>,
     render_depth: QueueDepth,
-    rt: tokio::runtime::Handle,
 ) {
     debug!("Render task started");
 
@@ -158,7 +157,7 @@ pub fn run_render_task(
         // both without also covering the work between them.
         let (counter, resolutions) = {
             let _span = tracing::info_span!("publish_state").entered();
-            rt.block_on(state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame)));
+            state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame));
             // The live resolutions, not the frame's snapshot: a size change lands next frame.
             let resolutions = StreamResolutions::of(&state.settings.snapshot());
             // Claim the counter before encoding so every payload below is filed

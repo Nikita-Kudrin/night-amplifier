@@ -515,7 +515,7 @@ async fn start_capture_plan(state: &Arc<AppState>, device: &FakeDevice) {
     for _ in 0..514 {
         state.stats.frame_captured(true, true);
     }
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -528,19 +528,14 @@ async fn a_capture_is_paused_through_recovery_and_resumed_after_it() {
 
     catalog.set(&[]);
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
-    let paused = state.capture_state().await;
+    let paused = state.capture_state();
     // The pipeline ending after the fault must not mark the session over.
-    state.end_capture_state().await;
-    let still_paused = state.capture_state().await;
+    state.end_capture_state();
+    let still_paused = state.capture_state();
 
     catalog.set(&[NEPTUNE]);
     let resumed = eventually(
-        || {
-            matches!(
-                state.capture.try_read().map(|s| *s),
-                Ok(CaptureState::Capturing)
-            )
-        },
+        || matches!(state.capture_state(), CaptureState::Capturing),
         Duration::from_secs(5),
     )
     .await;
@@ -550,7 +545,7 @@ async fn a_capture_is_paused_through_recovery_and_resumed_after_it() {
     // shutdown instead of reporting the failure.
     CaptureService::stop_capture(&state).await;
     let stopped = eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -574,13 +569,13 @@ async fn stopping_during_recovery_leaves_nothing_to_resume() {
     catalog.set(&[]);
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
     assert!(CaptureService::stop_capture(&state).await);
-    assert_eq!(state.capture_state().await, CaptureState::Idle, "no pipeline left to wind down");
+    assert_eq!(state.capture_state(), CaptureState::Idle, "no pipeline left to wind down");
     assert!(!state.resume.has_plan());
 
     catalog.set(&[NEPTUNE]);
     assert!(wait_recovered(&state, CameraRole::Main).await, "the camera still comes back");
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(state.capture_state().await, CaptureState::Idle, "but the capture does not");
+    assert_eq!(state.capture_state(), CaptureState::Idle, "but the capture does not");
     teardown(&state).await;
 }
 
@@ -769,7 +764,7 @@ async fn a_stalled_first_frame_does_not_end_the_capture() {
     let capturing = eventually(
         || {
             state.stats.delivered() >= 2
-                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
+                && matches!(state.capture_state(), CaptureState::Capturing)
         },
         Duration::from_secs(5),
     )
@@ -781,7 +776,7 @@ async fn a_stalled_first_frame_does_not_end_the_capture() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -804,7 +799,7 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
         eventually(
-            || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+            || matches!(state.capture_state(), CaptureState::Idle),
             Duration::from_secs(5)
         )
         .await,
@@ -820,14 +815,14 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
     assert!(wait_recovered(&state, CameraRole::Main).await);
     let restarted = eventually(
-        || !matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || !matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_millis(500),
     )
     .await;
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -932,7 +927,7 @@ async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
     let resumed = eventually(
         || {
             state.stats.delivered() >= 2
-                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
+                && matches!(state.capture_state(), CaptureState::Capturing)
         },
         Duration::from_secs(5),
     )
@@ -945,7 +940,7 @@ async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -1147,21 +1142,18 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
     let settled = eventually(
         || {
             state.slot(CameraRole::Main).is_recovering()
-                && matches!(
-                    state.capture.try_read().map(|s| *s),
-                    Ok(CaptureState::Idle | CaptureState::Recovering)
-                )
+                && matches!(state.capture_state(), CaptureState::Idle | CaptureState::Recovering)
         },
         Duration::from_secs(6),
     )
     .await;
-    let after = state.capture_state().await;
+    let after = state.capture_state();
     let plan_kept = state.resume.has_plan();
 
     reconnect::release_flight(&state, CameraRole::Main).await;
     wait_recovered(&state, CameraRole::Main).await;
     let resumed = eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing)),
+        || matches!(state.capture_state(), CaptureState::Capturing),
         Duration::from_secs(3),
     )
     .await;
@@ -1172,7 +1164,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -1236,7 +1228,7 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
     let resumed = eventually(
         || {
             state.stats.delivered() >= before + 5
-                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
+                && matches!(state.capture_state(), CaptureState::Capturing)
         },
         Duration::from_secs(8),
     )
@@ -1245,7 +1237,7 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -1267,10 +1259,10 @@ async fn disconnecting_the_camera_of_a_paused_capture_ends_the_capture() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     start_capture_plan(&state, &NEPTUNE).await;
-    state.set_capture_state(CaptureState::Recovering).await;
+    state.set_capture_state(CaptureState::Recovering);
 
     let answer = lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await;
-    let capture = state.capture_state().await;
+    let capture = state.capture_state();
     let plan_left = state.resume.has_plan();
     teardown(&state).await;
 
@@ -1288,10 +1280,10 @@ async fn a_resume_finds_nothing_to_restart_once_the_pause_was_ended() {
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     start_capture_plan(&state, &NEPTUNE).await;
     let plan = state.resume.plan().unwrap();
-    state.set_capture_state(CaptureState::Idle).await;
+    state.set_capture_state(CaptureState::Idle);
 
     let resumed = CaptureService::resume_capture(&state, &plan).await;
-    let capture = state.capture_state().await;
+    let capture = state.capture_state();
     teardown(&state).await;
 
     assert!(
@@ -1325,7 +1317,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
 
     catalog.set(&[NEPTUNE]);
     let resumed = eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing)),
+        || matches!(state.capture_state(), CaptureState::Capturing),
         Duration::from_secs(5),
     )
     .await;
@@ -1334,7 +1326,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await;
@@ -1378,7 +1370,7 @@ async fn a_manual_reconnect_forgets_restarts_that_did_not_work() {
 
 async fn wait_idle(state: &Arc<AppState>) -> bool {
     eventually(
-        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
+        || matches!(state.capture_state(), CaptureState::Idle),
         Duration::from_secs(10),
     )
     .await
@@ -1402,7 +1394,7 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_and_disconnects() {
         .expect("disconnect during a capture");
 
     assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
     assert!(state.camera_in_role(CameraRole::Main).is_none());
     assert_eq!(phase_of(&state, CameraRole::Main).await, CameraPhase::Disconnected);
 }
@@ -1433,7 +1425,7 @@ async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status()
     let resumed = eventually(
         || {
             state.stats.delivered() >= delivered_before + 2
-                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
+                && matches!(state.capture_state(), CaptureState::Capturing)
         },
         Duration::from_secs(8),
     )
@@ -1552,7 +1544,7 @@ async fn a_capture_started_on_a_lost_handle_is_recovered_and_resumed() {
     let resumed = eventually(
         || {
             state.stats.delivered() >= 2
-                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
+                && matches!(state.capture_state(), CaptureState::Capturing)
         },
         Duration::from_secs(15),
     )

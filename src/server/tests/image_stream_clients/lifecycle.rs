@@ -126,7 +126,7 @@ async fn a_stopped_stream_serves_nothing_until_the_next_session() {
     server.render(IMX533, 0.25).await;
     next_frame(&mut before).await;
 
-    server.state.main_stream.clear().await;
+    server.state.main_stream.clear();
     let mut during = server.connect_registered(LIVE_VIEW).await;
     assert_no_frame(&mut during, Duration::from_millis(300), "joined a stopped stream").await;
 

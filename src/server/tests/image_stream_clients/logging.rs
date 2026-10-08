@@ -65,8 +65,7 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
                 ..Default::default()
             },
             stretch_result: None,
-        }))
-        .await;
+        }));
     server.state.main_stream.begin_frame();
     server.state.main_stream.publish_frame();
 

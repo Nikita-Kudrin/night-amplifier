@@ -18,7 +18,7 @@ async fn test_app_state_event_subscription() {
     let mut rx1 = state.subscribe_events();
     let mut rx2 = state.subscribe_events();
 
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     // Both receivers should get the event
     let event1 = rx1.recv().await.unwrap();
@@ -126,27 +126,27 @@ async fn test_capture_state_transitions() {
     let state = create_test_state();
 
     // Initial state
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
 
     // Transition to Starting
-    state.set_capture_state(CaptureState::Starting).await;
-    assert_eq!(state.capture_state().await, CaptureState::Starting);
+    state.set_capture_state(CaptureState::Starting);
+    assert_eq!(state.capture_state(), CaptureState::Starting);
 
     // Transition to Capturing
-    state.set_capture_state(CaptureState::Capturing).await;
-    assert_eq!(state.capture_state().await, CaptureState::Capturing);
+    state.set_capture_state(CaptureState::Capturing);
+    assert_eq!(state.capture_state(), CaptureState::Capturing);
 
     // Transition to Stopping
-    state.set_capture_state(CaptureState::Stopping).await;
-    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+    state.set_capture_state(CaptureState::Stopping);
+    assert_eq!(state.capture_state(), CaptureState::Stopping);
 
     // Transition to Idle
-    state.set_capture_state(CaptureState::Idle).await;
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    state.set_capture_state(CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
 
     // Transition to Error
-    state.set_capture_state(CaptureState::Error).await;
-    assert_eq!(state.capture_state().await, CaptureState::Error);
+    state.set_capture_state(CaptureState::Error);
+    assert_eq!(state.capture_state(), CaptureState::Error);
 }
 
 #[tokio::test]
@@ -155,7 +155,7 @@ async fn test_capture_state_broadcasts_events() {
     let mut events_rx = state.subscribe_events();
 
     // Set state
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     // Should receive event
     let event = events_rx.recv().await.unwrap();

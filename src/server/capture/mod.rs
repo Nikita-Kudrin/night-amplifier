@@ -2,10 +2,11 @@
 //! bounded MPSC channels — **CaptureTask** (acquires), **StorageTask** (saves raw),
 //! **StackingTask** (registration + accumulation), **RenderTask** (preview + encode).
 //! `Arc<Frame>` gives zero-copy sharing; capacities derive from a memory budget over
-//! actual frame size. Each thread holds a `tokio::runtime::Handle` for
-//! `block_on()`/`spawn()`. **Push-To** is two more thread tasks over one-slot channels
-//! that drop rather than queue (`push_to_tasks`). The guide camera bypasses all this:
-//! **GuideTask** is one thread, no channels — nothing it produces is stacked or queued.
+//! actual frame size. The threads read shared state synchronously; only stacking holds a
+//! `tokio::runtime::Handle`, to offer frames to Push-To. **Push-To** is two more thread
+//! tasks over one-slot channels that drop rather than queue (`push_to_tasks`). The guide
+//! camera bypasses all this: **GuideTask** is one thread, no channels — nothing it
+//! produces is stacked or queued.
 
 pub mod analysis;
 pub mod channel;

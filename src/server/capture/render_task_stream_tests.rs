@@ -39,9 +39,8 @@ async fn render(state: &Arc<AppState>, frames: Vec<super::StackedFrame>) {
         tx.send(frame).unwrap();
     }
     drop(tx);
-    let rt = tokio::runtime::Handle::current();
     let state = Arc::clone(state);
-    tokio::task::spawn_blocking(move || super::run_render_task(state, rx, QueueDepth::default(), rt))
+    tokio::task::spawn_blocking(move || super::run_render_task(state, rx, QueueDepth::default()))
         .await
         .unwrap();
 }
@@ -91,7 +90,6 @@ async fn render_and_report_buffer_addr(
     let addr_out = state
         .main_stream
         .get_latest_raw_frame()
-        .await
         .expect("render task published a frame")
         .linear_frame
         .data()
@@ -127,7 +125,7 @@ async fn an_unwatched_stream_publishes_the_frame_but_encodes_nothing() {
 
     let counter = state.main_stream.frame_counter();
     assert_eq!(counter, 1, "the frame counter did not advance with no viewers");
-    assert!(state.main_stream.get_latest_raw_frame().await.is_some());
+    assert!(state.main_stream.get_latest_raw_frame().is_some());
     for kind in StreamKind::all() {
         assert!(state.main_stream.payload(kind, counter).is_none(), "{kind:?} encoded for nobody");
     }

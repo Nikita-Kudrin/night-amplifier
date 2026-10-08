@@ -20,7 +20,7 @@ pub async fn get_ai_compute(State(state): State<Arc<AppState>>) -> impl IntoResp
 /// Measure again, refused while a capture runs. Answers with the report as it stands; the
 /// overlay follows the benchmark through `ai_compute_changed`.
 pub async fn remeasure(State(state): State<Arc<AppState>>) -> axum::response::Response {
-    if capture_running(state.capture_state().await) {
+    if capture_running(state.capture_state()) {
         let e = ApiError::BenchmarkDuringCapture;
         return (e.status_code(), ApiResponse::err::<()>(e.to_string())).into_response();
     }
