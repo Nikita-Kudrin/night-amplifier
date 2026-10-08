@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::state::{
-    CameraCaptureProfile, CameraRole, CaptureSession, CaptureSettings, EyepieceSettings,
-    RawFrameSaving, Resolution,
+    CameraCaptureProfile, CameraRole, CaptureSettings, CaptureState, EyepieceSettings,
+    RawFrameSaving, Resolution, SessionStats,
 };
 use crate::background::BackgroundExtractionAlgorithm;
 use crate::camera::{CameraInfo, DualSamplingMode, SensorMode};
@@ -111,17 +111,20 @@ pub struct CaptureStatusResponse {
     pub gain: i32,
 }
 
-impl From<&CaptureSession> for CaptureStatusResponse {
-    fn from(session: &CaptureSession) -> Self {
+impl CaptureStatusResponse {
+    /// `exposure_us` and `gain` are the imaging camera's settings; nothing records a
+    /// `last_error`, so it is always `None`.
+    pub fn new(state: CaptureState, stats: &SessionStats, settings: &CaptureSettings) -> Self {
+        let counts = stats.counts();
         Self {
-            state: format!("{:?}", session.state),
-            frame_count: session.frame_count,
-            stacked_count: session.stacked_count,
-            rejected_count: session.rejected_count,
-            last_error: session.last_error.clone(),
-            started_at: session.started_at,
-            exposure_us: session.exposure_us,
-            gain: session.gain,
+            state: format!("{:?}", state),
+            frame_count: counts.frames,
+            stacked_count: counts.stacked,
+            rejected_count: counts.rejected,
+            last_error: None,
+            started_at: stats.started_at(),
+            exposure_us: settings.exposure_us,
+            gain: settings.gain,
         }
     }
 }
@@ -536,18 +539,24 @@ mod tests {
         assert!(everything.focus_mode_snapshot.is_some(), "the snapshot was there to leak");
     }
 
+    /// The counters as the stats hold them, and the exposure and gain the imaging camera
+    /// is set to — the answer once carried a default 1 s and gain 0 nothing ever updated.
     #[test]
-    fn test_capture_status_response_from_session() {
-        let session = CaptureSession {
-            frame_count: 10,
-            stacked_count: 8,
-            rejected_count: 2,
-            ..Default::default()
+    fn the_capture_status_reports_the_counters_and_the_cameras_settings() {
+        let stats = SessionStats::default();
+        for stacked in [true, true, false] {
+            stats.frame_captured(stacked, true);
+        }
+        let settings = CaptureSettings {
+            exposure_us: 30_000_000,
+            gain: 120,
+            ..CaptureSettings::default()
         };
 
-        let response = CaptureStatusResponse::from(&session);
-        assert_eq!(response.frame_count, 10);
-        assert_eq!(response.stacked_count, 8);
-        assert_eq!(response.rejected_count, 2);
+        let response = CaptureStatusResponse::new(CaptureState::Capturing, &stats, &settings);
+        assert_eq!(response.state, "Capturing");
+        assert_eq!((response.frame_count, response.stacked_count, response.rejected_count), (3, 2, 1));
+        assert_eq!((response.exposure_us, response.gain), (30_000_000, 120));
+        assert_eq!(response.last_error, None);
     }
 }

@@ -225,10 +225,7 @@ async fn an_encode_failure_is_reported_once_and_is_not_a_camera_rejection() {
     let _jpeg = ViewerGuard::new(Arc::clone(&state.main_stream), StreamKind::Jpeg);
     let _lossless = ViewerGuard::new(Arc::clone(&state.main_stream), StreamKind::Lossless);
     let mut events = state.subscribe_events();
-    let (frames_before, rejected_before) = {
-        let session = state.session.read().await;
-        (session.frame_count, session.rejected_count)
-    };
+    let before = state.stats.counts();
 
     let unsupported = Arc::new(RenderReadyFrame {
         noise: None,
@@ -269,11 +266,8 @@ async fn an_encode_failure_is_reported_once_and_is_not_a_camera_rejection() {
     .await
     .unwrap();
 
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, frames_before);
-    assert_eq!(session.rejected_count, rejected_before);
-    assert!(!session.rejection_rate_exceeded());
-    drop(session);
+    assert_eq!(state.stats.counts(), before);
+    assert!(!state.stats.failing());
 
     let mut errors = Vec::new();
     while let Ok(event) = events.try_recv() {

@@ -255,7 +255,7 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
 
     // Read the live counter rather than a number snapshotted at capture start:
     // what the observer wants to know is how much of the integration survived.
-    let stacked_count = state.session.read().await.stacked_count;
+    let stacked_count = state.stats.counts().stacked;
 
     match crate::server::services::CaptureService::resume_capture(state, &plan).await {
         Ok(()) => {

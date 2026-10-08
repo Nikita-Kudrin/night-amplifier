@@ -86,12 +86,11 @@ pub(super) async fn detach(state: &Arc<AppState>, role: CameraRole, camera_name:
 async fn pause_capture_for_recovery(state: &Arc<AppState>) {
     let resumable = state.session_resume_plan.read().await.is_some();
     {
-        let mut session = state.session.write().await;
-        if !resumable || !matches!(session.state, CaptureState::Capturing | CaptureState::Starting)
-        {
+        let mut capture = state.capture.write().await;
+        if !resumable || !matches!(*capture, CaptureState::Capturing | CaptureState::Starting) {
             return;
         }
-        session.state = CaptureState::Recovering;
+        *capture = CaptureState::Recovering;
     }
     let _ = state
         .events

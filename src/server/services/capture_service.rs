@@ -164,7 +164,7 @@ impl CaptureService {
         // previous session parked for a reconnect — only `resume_capture`
         // inherits one.
         state.reset_cancel();
-        state.reset_session().await;
+        state.reset_session();
         state.clear_stacking_carryover();
         state.set_capture_state(CaptureState::Starting).await;
 
@@ -219,9 +219,9 @@ impl CaptureService {
             }
         }
         {
-            let mut session = state.session.write().await;
-            match session.state {
-                CaptureState::Recovering => session.state = CaptureState::Starting,
+            let mut capture = state.capture.write().await;
+            match *capture {
+                CaptureState::Recovering => *capture = CaptureState::Starting,
                 CaptureState::Capturing | CaptureState::Starting => {
                     return Err(ApiError::CaptureInProgress)
                 }

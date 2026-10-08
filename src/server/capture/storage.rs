@@ -12,7 +12,7 @@ use crate::frame::Frame;
 use crate::plugins::Plugins;
 use crate::server::events::ServerEvent;
 use crate::server::state::{
-    AppState, CaptureMode, CaptureSession, CaptureSettings, ConnectedCameraInfo,
+    AppState, CaptureMode, CaptureSettings, ConnectedCameraInfo,
 };
 use crate::stacking::StackingType;
 
@@ -337,14 +337,13 @@ async fn save_frame_to_disk(
 
 /// Check if we should stop due to a burst of *current* camera-capture failures.
 ///
-/// Uses a sliding window (`CaptureSession::record_rejection`) rather than the
+/// Uses a sliding window (`SessionStats::record_failure`) rather than the
 /// lifetime-cumulative `rejected_count`, so a camera that failed sporadically
 /// across an otherwise-healthy multi-hour session never trips this — only a
 /// real, currently-active failure burst does (e.g. ~10 capture failures within
 /// a second, consistent with a genuine disconnect rather than a hiccup).
-pub async fn should_stop_on_errors(state: &AppState) -> bool {
-    let session: RwLockReadGuard<'_, CaptureSession> = state.session.read().await;
-    session.rejection_rate_exceeded() && session.stacked_count == 0
+pub fn should_stop_on_errors(state: &AppState) -> bool {
+    state.stats.failing() && state.stats.counts().stacked == 0
 }
 
 #[cfg(test)]
@@ -356,20 +355,17 @@ mod tests {
     #[tokio::test]
     async fn should_stop_on_errors_false_when_healthy() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        assert!(!should_stop_on_errors(&state).await);
+        assert!(!should_stop_on_errors(&state));
     }
 
     #[tokio::test]
     async fn should_stop_on_errors_true_on_burst_with_no_stacked_frames() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        {
-            let mut session = state.session.write().await;
-            let now = Instant::now();
-            for i in 0..REJECTION_RATE_THRESHOLD {
-                session.record_rejection(now + Duration::from_millis(i as u64));
-            }
+        let now = Instant::now();
+        for i in 0..REJECTION_RATE_THRESHOLD {
+            state.stats.record_failure(now + Duration::from_millis(i as u64));
         }
-        assert!(should_stop_on_errors(&state).await);
+        assert!(should_stop_on_errors(&state));
     }
 
     /// A capture must not inherit whatever directory happened to be open. A settings
@@ -426,15 +422,12 @@ mod tests {
     #[tokio::test]
     async fn should_stop_on_errors_false_once_a_frame_has_stacked() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        {
-            let mut session = state.session.write().await;
-            let now = Instant::now();
-            for i in 0..REJECTION_RATE_THRESHOLD {
-                session.record_rejection(now + Duration::from_millis(i as u64));
-            }
-            session.stacked_count = 1;
+        let now = Instant::now();
+        for i in 0..REJECTION_RATE_THRESHOLD {
+            state.stats.record_failure(now + Duration::from_millis(i as u64));
         }
-        assert!(!should_stop_on_errors(&state).await);
+        state.stats.frame_captured(true, true);
+        assert!(!should_stop_on_errors(&state));
     }
 
     /// Regression guard: the stacked-PNG export path must apply the full tone-curve
@@ -690,9 +683,7 @@ pub async fn save_stacked_result(
         return;
     }
 
-    let session: RwLockReadGuard<'_, CaptureSession> = state.session.read().await;
-    let stacked_count = session.stacked_count;
-    drop(session);
+    let stacked_count = state.stats.counts().stacked;
 
     if stacked_count == 0 {
         return;
