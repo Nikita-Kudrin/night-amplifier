@@ -1,6 +1,6 @@
 <script setup>
 import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
-import {useImageStream} from '../composables/useWebSocket.js'
+import {useImageStream} from '../composables/useImageStream.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../composables/usePanZoom.js'

@@ -5,7 +5,6 @@
 //! and contrast adjustment.
 
 use crate::background::BackgroundExtractor;
-use crate::plugins::Plugins;
 use crate::error::{Result, StackError};
 use crate::frame::Frame;
 use tracing::{debug, field, instrument, warn, Span};
@@ -18,7 +17,6 @@ use super::output::apply_contrast_frame;
 use super::scnr::apply_scnr;
 use super::stretch::apply_shadow_saturation_boost;
 use super::white_balance::{compute_white_balance_grid, neutralize_background};
-use crate::statistics::compute_image_stats;
 
 /// Result from processing a frame through the pipeline
 #[derive(Debug, Clone)]
@@ -234,9 +232,7 @@ pub fn process_frame_planetary(frame: &mut Frame) -> Result<PipelineResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::autostretch::AutoStretchConfig;
-    use crate::render::output::ContrastConfig;
-    use crate::render::stretch::SaturationBoostConfig;
+    use crate::plugins::Plugins;
 
     #[test]
     fn test_pipeline_config_presets() {

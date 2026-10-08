@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::indi::xml::{
-    DefBlob, DefLight, DefNumber, DefSwitch, DefText, PropertyState, SwitchRule, SwitchState,
+    DefBlob, DefLight, DefNumber, DefSwitch, DefText, PropertyState, SwitchRule,
 };
 
 #[derive(Debug, Clone)]

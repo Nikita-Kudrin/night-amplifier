@@ -1,11 +1,10 @@
 //! INDI Connection
 
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Mutex};
-use tracing::{debug, error, warn};
+use tokio::sync::mpsc;
+use tracing::{error, warn};
 
 use crate::indi::error::{IndiError, Result};
 use crate::indi::xml::{parse_message, serialize_message, IndiMessage};

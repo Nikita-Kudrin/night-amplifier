@@ -2,7 +2,7 @@
 use dlopen2::wrapper::{Container, WrapperApi};
 use std::os::raw::{c_char, c_int, c_short, c_uint, c_ushort, c_void};
 use std::sync::OnceLock;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::ffi_types::*;
 

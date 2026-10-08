@@ -1,8 +1,5 @@
-use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_long, c_uchar};
+use std::os::raw::{c_int, c_long};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tracing::{debug, warn};
 
 use super::ffi_types::*;
 use super::sdk::{check_error, SvbonySdk};

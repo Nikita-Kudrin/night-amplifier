@@ -12,7 +12,7 @@ use rayon::prelude::*;
 use crate::error::{Result, StackError};
 use crate::statistics::fast_median;
 
-use super::{CfaFrame, CfaPlanes, CfaStage};
+use super::{CfaFrame, CfaStage};
 
 /// Samples drawn from the centre crop to estimate one site's background and noise, per
 /// frame. See the module docs for why 4,096 and why it is not cached.

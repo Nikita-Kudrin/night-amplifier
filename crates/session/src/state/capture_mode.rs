@@ -84,6 +84,7 @@ impl CaptureMode {
 /// it is an occasion that runs *alongside* the other three rather than instead of them,
 /// so a night can be saving imaging subs and guide subs at once, into separate folders.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct RawFrameSaving {
     #[serde(default)]
     pub live_view: bool,

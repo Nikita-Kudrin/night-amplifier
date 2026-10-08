@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 
-// Mock useWebSocket composables
-vi.mock('../../composables/useWebSocket.js', () => ({
+// Mock the image stream composable
+vi.mock('../../composables/useImageStream.js', () => ({
   useImageStream: vi.fn(() => ({
     connected: ref(true),
     frameData: ref(null),
@@ -47,7 +47,7 @@ vi.mock('../../composables/useAppState.js', () => ({
   getAppState: () => ({ capabilities: mockCapabilities }),
 }))
 
-import { useImageStream } from '../../composables/useWebSocket.js'
+import { useImageStream } from '../../composables/useImageStream.js'
 import { fetchEyepieceSnapshot } from '../../composables/api.js'
 import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility.js'
 

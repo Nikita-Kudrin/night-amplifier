@@ -9,6 +9,7 @@
 //! produces is stacked or queued.
 
 pub mod analysis;
+pub(crate) mod capture_thread;
 pub mod channel;
 mod context;
 mod drop_log;
@@ -36,7 +37,8 @@ pub mod watchdog_tests;
 
 pub use analysis::{AnalysisContext, PreviewAnalysis};
 pub use context::{
-    LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover, StackingContext,
+    LiveStackError, LiveStacker, PlanetaryStackingContext, StackSettings, StackingCarryover,
+    StackingContext,
 };
 pub use drop_log::DropLog;
 pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};

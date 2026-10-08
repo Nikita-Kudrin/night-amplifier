@@ -8,7 +8,7 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -203,14 +203,14 @@ async fn check_otlp_reachable(endpoint: &str) {
     let connect = tokio::net::TcpStream::connect((host.as_str(), port));
     match tokio::time::timeout(std::time::Duration::from_millis(500), connect).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => warn!(
+        Ok(Err(e)) => tracing::warn!(
             endpoint,
             error = %e,
             "OTLP collector unreachable — traces/metrics will not export until it is. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
              than this app (the default only works when both are on the same machine)."
         ),
-        Err(_) => warn!(
+        Err(_) => tracing::warn!(
             endpoint,
             "OTLP collector did not respond within 500ms — traces/metrics may not export. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \

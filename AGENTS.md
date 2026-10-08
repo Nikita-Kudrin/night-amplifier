@@ -34,7 +34,9 @@ SOLID Principles:
   wire-format/byte-layout tables, and other structured reference data (tables, one-fact-per-line lists) — tighten
   wording there without breaking the structure that makes them scannable.
 - Avoid expensive operations; never run extremely heavy ones on the fly.
-- Optimize imports and remove unused code you created.
+- Optimize imports and remove unused code you created. No crate-wide lint `allow`s (in both repos): `dead_code` and
+  `unused_imports` are allowed only on vendored SDK binding modules, and an import only a `#[cfg(test)] use super::*`
+  child needs belongs in that child, or the non-test build warns. CI's vendor job builds with `-D warnings`.
 - Avoid deep nesting — use if+return to simplify.
 - ALWAYS prefer editing an existing file over creating a new one.
 - Update docs (*.md, especially the VitePress manual in `manual/`) after code changes, concisely.
@@ -60,6 +62,9 @@ When designing new features or refactoring, adhere to the following architectura
   only exists for session's own tests — test it there, not through the server. Plugin traits speak domain types — `push_to::{types, events}` (the `PushToEvents` port), `stacking::CometSettings`,
   `render::denoise::DenoiseSettings` — and the session maps them to `ServerEvent`. Pro never imports `server`, and
   `session` only in tests.
+- Errors at a boundary are typed: plugin traits return `StackError`/`PushToError`, `LiveStacker` a `LiveStackError`,
+  use cases an `ApiError` (Push-To's a `PushToError`), and the server maps each to HTTP once (`HttpStatus`). Routes used to pick
+  their own status, so a missing Push-To plugin was a 404 on one route and a 500 on the next; it is 403 everywhere.
 - `AppState` is aggregates that keep their locks private (`CameraRoster`, `CaptureControl`, `SessionStats`,
   `SettingsStore`, `CaptureResume`, `PushToState`): std locks never held across an `await`, so capture threads read
   without `block_on`, and a decision taken on an earlier read goes through the aggregate's `transition`
@@ -98,6 +103,7 @@ cargo bench --bench <name> -- --noplot                              # see Benchm
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 cargo run --release -- --span-timings                               # per-stage durations on span close
+UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.types.js
 ```
 
 Frontend commands (install/dev/build/lint/test) run from `web/` — see README. **Never `npm run format`** (rewrites
@@ -139,6 +145,10 @@ Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG), `/ws/eyepiece_qual
 Vue 3 SPA, mobile-first, dark theme, proxying `/api`/`/ws` to `localhost:9955` in dev. Pro-only controls stay
 visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` skips a programmatic query by
 *value*, never a one-shot flag — a flag-based version once left M1-M9 unfindable after clearing a 1-character query.
+Sockets: `useWebSocket` (reconnect, ping), `useEventStream` (a table from event type to state), `useImageStream`.
+**`api.types.js` is generated** from the Rust wire types (`tests/api_types.rs`, feature `api-schema`, which derives
+`schemars::JsonSchema` only in that build); CI fails a stale one. A settings panel section is its own component that
+mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one that must await the save takes it as a prop.
 
 ## Camera Notes
 

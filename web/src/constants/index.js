@@ -77,7 +77,7 @@ export const BLACK_LEVEL_LIMITS = {
 // The darkening half is anchored to the sky, so its reach is only meaningful against
 // where the sky actually renders. -6% is where the spatial darkening saturates (a tenth
 // of the sky left); further travel would do nothing. Mirrors `MIN_BLACK_FLOOR` in
-// `server/capture/stage_config.rs`, which clamps it server-side.
+// `crates/session/src/capture/stage_config.rs`, which clamps it server-side.
 export const BLACK_FLOOR_LIMITS = {
     min: -0.045,
     max: 0.15,
@@ -114,7 +114,7 @@ export const BACKGROUND_GRAIN_LIMITS = {
 
 // Local contrast on the target's own structure. 50% is the default the Pro plugin's
 // measurements passed on every test target; 100% is where the first faint ring shows.
-// Mirrors `DEFAULT_DETAIL` in src/server/state/settings.rs.
+// Mirrors `DEFAULT_DETAIL` in crates/core/src/render/denoise/settings.rs.
 export const DETAIL_LIMITS = {
     min: 0.0,
     max: 1.0,
@@ -124,7 +124,7 @@ export const DETAIL_LIMITS = {
 
 // How far above its brightest same-colour neighbour a sample must sit to be
 // treated as a hot pixel
-// Mirrors `HOT_PIXEL_SIGMA_RANGE` in src/server/state/settings.rs, which enforces it.
+// Mirrors `HOT_PIXEL_SIGMA_RANGE` in crates/core/src/cfa/mod.rs, which enforces it.
 export const HOT_PIXEL_SIGMA_LIMITS = {
     min: 3.0,
     max: 12.0,

@@ -6,9 +6,6 @@
 //! The events and the few wire types they carry live here too: they are what a session
 //! reports, and `server` only serializes them.
 
-// See the core crate's root for why `unused_imports` stays allowed.
-#![allow(unused_imports)]
-
 pub mod camera;
 pub mod capture;
 pub mod encoding;

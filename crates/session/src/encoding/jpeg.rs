@@ -1,10 +1,5 @@
-use std::cell::RefCell;
-
 use night_amplifier_core::render::display::frame_to_rgb8_downsampled;
 use crate::encoding::format::*;
-
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tracing::{debug, warn};
 
 /// JPEG quality for an output of this size, and whether the denoisers ran on it.
 ///

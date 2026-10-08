@@ -12,7 +12,6 @@ use crate::camera::error::{CameraError, CameraResult};
 use crate::camera::traits::Camera;
 use crate::camera::types::{
     BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
-    SensorType,
 };
 use crate::Frame;
 

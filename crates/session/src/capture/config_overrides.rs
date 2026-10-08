@@ -1,8 +1,5 @@
-use night_amplifier_core::camera::{Camera, ImageFormat, SensorMode};
-use crate::state::CaptureSettings;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
+
 /// Override the capture format with the best raw format advertised by the
 /// camera (`Raw16` preferred, `Raw8` as fallback). Leaves the config untouched
 /// if neither is advertised, letting the provider surface a clear SDK error.

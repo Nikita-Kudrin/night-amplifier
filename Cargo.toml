@@ -47,6 +47,7 @@ process-wrap = { version = "9.1.0", features = ["std", "tokio1"] }
 quick-xml = { version = "0.41.0", features = ["serialize"] }
 rayon = "1.12.0"
 rust-embed = "8.12"
+schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
@@ -94,6 +95,8 @@ tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# JSON Schema of the wire types, for `api-schema` only
+schemars = { workspace = true, optional = true }
 
 [features]
 default = ["playerone", "zwo", "indi", "qhy", "touptek", "svbony"]
@@ -111,6 +114,14 @@ bundled-cfitsio = ["night_amplifier_core/bundled-cfitsio"]
 test-support = ["night_amplifier_core/test-support", "night_amplifier_session/test-support"]
 # OpenTelemetry support - enabled by default in debug builds via cfg
 telemetry = ["night_amplifier_core/telemetry", "night_amplifier_session/telemetry"]
+# JSON Schema for the wire types, from which `tests/api_types.rs` writes the frontend's
+# `api.types.js`. Never enabled by a build that ships.
+api-schema = [
+    "dep:schemars",
+    "schemars/preserve_order",
+    "night_amplifier_core/api-schema",
+    "night_amplifier_session/api-schema",
+]
 
 [dev-dependencies]
 night_amplifier_core = { workspace = true, features = ["test-support"] }

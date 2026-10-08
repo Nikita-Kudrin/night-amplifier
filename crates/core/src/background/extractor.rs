@@ -6,7 +6,7 @@ use tracing::{debug, instrument, warn};
 
 use super::config::{BackgroundConfig, BackgroundExtractionAlgorithm};
 use super::grid::{
-    compute_box_size, extract_node_value, mad, median, prune_nebulosity, GridNode, PruneConfig,
+    compute_box_size, extract_node_value, median, prune_nebulosity, GridNode, PruneConfig,
 };
 use super::model::BackgroundModel;
 

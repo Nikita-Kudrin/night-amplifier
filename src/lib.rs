@@ -7,9 +7,6 @@
 //! (`night_amplifier_core`) at the root and the application layer as [`session`], so
 //! every `night_amplifier::…` path Pro and the tests use is unchanged.
 
-// See the core crate's root for why `unused_imports` stays allowed.
-#![allow(unused_imports)]
-
 pub use night_amplifier_core::*;
 pub use night_amplifier_session as session;
 

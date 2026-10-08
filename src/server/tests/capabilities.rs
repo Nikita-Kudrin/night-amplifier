@@ -1,7 +1,6 @@
 //! Tests for capabilities endpoint
 
 use axum::http::StatusCode;
-use std::sync::Arc;
 
 use super::helpers::*;
 

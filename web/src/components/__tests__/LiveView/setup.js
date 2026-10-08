@@ -2,7 +2,7 @@ import {ref, shallowRef} from 'vue'
 import {mount} from '@vue/test-utils'
 
 // Mock useImageStream
-vi.mock('../../../composables/useWebSocket.js', () => ({
+vi.mock('../../../composables/useImageStream.js', () => ({
     useImageStream: vi.fn(),
 }))
 
@@ -21,7 +21,7 @@ vi.mock('../../../composables/usePanZoom.js', () => ({
     usePanZoom: vi.fn(),
 }))
 
-import {useImageStream} from '../../../composables/useWebSocket.js'
+import {useImageStream} from '../../../composables/useImageStream.js'
 import {useWebGLRenderer} from '../../../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../../../composables/usePanZoom.js'

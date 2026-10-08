@@ -6,6 +6,17 @@
 //! `WARMUP_THRESHOLD_C` and ≤5% duty disables the cooler and closes the handle.
 //! Rate-limited to `RAMP_RATE_C_PER_MIN` (5°C/min): the SDK call fires only when
 //! the rounded setpoint changes (~one call per 12s); mid-ramp capture aborts it.
+//!
+//! The cooler and warm-up steps live in `cooler`, the bounded vendor calls in `ffi_worker`.
+
+mod cooler;
+mod ffi_worker;
+
+use cooler::{
+    cancel_warmup, finish_warmup, handle_update_cooler_target, push_setpoint, start_warmup,
+    warmup_overran,
+};
+use ffi_worker::{with_camera_bounded, CallError, FfiWorker, FFI_CALL_TIMEOUT};
 
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -14,14 +25,8 @@ use tracing::{debug, error, info, warn};
 
 use super::lifecycle::{self, DisconnectCause};
 use super::{
-    PHASE_POLL_INTERVAL, PRECOOL_TOLERANCE_C, RAMP_RATE_C_PER_MIN, STABILITY_SAMPLE_COUNT,
-    WARMUP_RAMP_TARGET_C, WARMUP_THRESHOLD_C, WARMUP_TIMEOUT,
+    PHASE_POLL_INTERVAL, PRECOOL_TOLERANCE_C, STABILITY_SAMPLE_COUNT, WARMUP_THRESHOLD_C,
 };
-
-/// Budget for a single camera call made from the monitor. Matches the capture
-/// path's `STATUS_POLL_TIMEOUT`: both bound the same class of vendor call, and
-/// a camera that needs longer than this to answer a status read is stalled.
-const FFI_CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Polls in a row that find the slot empty, with nobody else entitled to the handle,
 /// before it is declared lost. One is a race with a capture taking it while its hand-off
@@ -80,31 +85,6 @@ struct MonitorCtx {
     /// Polls in a row that found the slot empty while unpaused. See
     /// [`MISSING_HANDLE_TICKS`].
     missing_handle_ticks: u32,
-}
-
-/// Why a monitor call produced no result.
-#[derive(Debug)]
-enum CallError {
-    /// The slot was empty: somebody else has the handle, or nobody does.
-    NoHandle,
-    /// The call ran and failed, or overran its budget and was abandoned.
-    Camera(CameraError),
-}
-
-impl CallError {
-    /// The device said it is gone, or stopped answering and its handle was abandoned.
-    fn is_device_lost(&self) -> bool {
-        matches!(self, CallError::Camera(e) if e.is_sdk_disconnected())
-    }
-}
-
-impl std::fmt::Display for CallError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CallError::NoHandle => f.write_str("no camera handle in the slot"),
-            CallError::Camera(e) => e.fmt(f),
-        }
-    }
 }
 
 fn run(
@@ -192,110 +172,6 @@ fn run(
     }
 
     debug!(camera_name = %ctx.camera_name, "Camera monitor thread exited");
-}
-
-fn handle_update_cooler_target(
-    ctx: &mut MonitorCtx,
-    enabled: bool,
-    target: Option<f64>,
-    fast: bool,
-) {
-    if !enabled {
-        ctx.cooldown_ramp = None;
-        ctx.settle_samples = 0;
-        return;
-    }
-    let Some(final_target) = target else {
-        ctx.cooldown_ramp = None;
-        return;
-    };
-
-    if fast {
-        // Fast mode: snap the hardware setpoint to the final target and
-        // leave no ramp installed. The monitor's Precooling tick treats
-        // "no cooldown_ramp" as "ramp already done" and will transition to
-        // Idle once the sensor settles within tolerance.
-        if !push_raw_setpoint(ctx, final_target) {
-            return;
-        }
-        ctx.cooldown_ramp = None;
-        ctx.settle_samples = 0;
-        debug!(
-            camera_name = %ctx.camera_name,
-            final_target_c = final_target,
-            "Installed fast-mode cooldown (no ramp)"
-        );
-        return;
-    }
-
-    // Seed the ramp start from the freshest sensor reading we can get. If
-    // everything fails we fall back to the final target (ramp becomes a
-    // no-op, which is the old behavior).
-    let start = current_sensor_temp(ctx).unwrap_or(final_target);
-    let ramp = RampState::new_from_current(start, final_target, Instant::now());
-    debug!(
-        camera_name = %ctx.camera_name,
-        start_c = start,
-        final_target_c = final_target,
-        "Installed cooldown ramp"
-    );
-    ctx.cooldown_ramp = Some(ramp);
-    ctx.settle_samples = 0;
-}
-
-fn start_warmup(ctx: &mut MonitorCtx, fast: bool) {
-    if ctx.warming_up {
-        return;
-    }
-    ctx.warming_up = true;
-    ctx.warmup_started_at = Some(Instant::now());
-    ctx.warm_samples = 0;
-    // Cooldown ramp is no longer relevant while warming up.
-    ctx.cooldown_ramp = None;
-
-    if fast {
-        // Fast mode: disable the TEC immediately and let the sensor rise
-        // naturally. The WarmingUp tick branch still watches for the
-        // warm-enough predicate before closing the handle.
-        ctx.warmup_ramp = None;
-        let result = with_camera_bounded(ctx, FFI_CALL_TIMEOUT, |cam| cam.set_cooler(false));
-        if let Err(e) = result {
-            warn!(error = %e, "Failed to disable cooler at fast-warmup start");
-        }
-        info!(camera_name = %ctx.camera_name, "Warmup started (fast — cooler disabled)");
-        return;
-    }
-
-    // Seed the warmup ramp from the current sensor temperature so the first
-    // commanded setpoint matches the PID's current operating point and we
-    // avoid a jump up to ambient.
-    let start = current_sensor_temp(ctx).unwrap_or(WARMUP_RAMP_TARGET_C);
-    let ramp = RampState::new_from_current(start, WARMUP_RAMP_TARGET_C, Instant::now());
-
-    // Push the initial integer setpoint so the TEC starts coasting up.
-    // Keep the cooler ON — the user requirement is that duty falls naturally
-    // as setpoint rises past ambient.
-    if !push_setpoint(ctx, &ramp) {
-        return;
-    }
-    ctx.warmup_ramp = Some(ramp);
-    info!(
-        camera_name = %ctx.camera_name,
-        start_c = start,
-        final_target_c = WARMUP_RAMP_TARGET_C,
-        "Warmup started (ramped)"
-    );
-}
-
-fn cancel_warmup(ctx: &mut MonitorCtx) {
-    if !ctx.warming_up {
-        return;
-    }
-    ctx.warming_up = false;
-    ctx.warmup_started_at = None;
-    ctx.warm_samples = 0;
-    ctx.warmup_ramp = None;
-    info!(camera_name = %ctx.camera_name, "Warmup cancelled");
 }
 
 /// Run one polling iteration. Returns `false` when the monitor should stop
@@ -448,33 +324,6 @@ fn tick(ctx: &mut MonitorCtx) -> bool {
     true
 }
 
-/// Whether the warm-up has run past `WARMUP_TIMEOUT`.
-fn warmup_overran(ctx: &MonitorCtx) -> bool {
-    ctx.warmup_started_at
-        .is_some_and(|started| started.elapsed() >= WARMUP_TIMEOUT)
-}
-
-/// End a warm-up — complete or out of time — and the session with it.
-fn finish_warmup(ctx: &mut MonitorCtx) {
-    // Disable the cooler here (moved from start_warmup). By this point the setpoint is at
-    // or past ambient so duty is already near 0 % — this just latches it off before we
-    // close.
-    let result = with_camera_bounded(ctx, FFI_CALL_TIMEOUT, |cam| cam.set_cooler(false));
-    if let Err(e) = result {
-        warn!(error = %e, "Failed to disable cooler at warmup finalize");
-    }
-    ctx.warmup_ramp = None;
-
-    // Finalize disconnect from the monitor thread. `finalize_disconnect` will clear this
-    // slot's monitor sender (ours) and close the handle.
-    let state = Arc::clone(&ctx.state);
-    let name = ctx.camera_name.clone();
-    let role = ctx.role;
-    ctx.rt.block_on(async move {
-        lifecycle::finalize_disconnect(&state, role, &name, DisconnectCause::Requested).await;
-    });
-}
-
 /// Count a poll that found the slot empty. The monitor is not paused, so nothing but the
 /// monitor itself is entitled to the handle: past `MISSING_HANDLE_TICKS` it is lost, and
 /// only a reopen gives the camera one again. On 2026-09-20 an Ares-C PRO sat four
@@ -516,49 +365,6 @@ fn read_status(ctx: &mut MonitorCtx) -> Result<CameraStatus, CallError> {
     Ok(status)
 }
 
-/// Read the current sensor temperature for ramp seeding. Prefers a fresh
-/// hardware sample, falling back to the last cached status if the handle is
-/// unavailable (e.g. momentarily held by another path).
-fn current_sensor_temp(ctx: &mut MonitorCtx) -> Option<f64> {
-    if let Ok(status) = read_status(ctx) {
-        return Some(status.temperature_c);
-    }
-    ctx.state.get_camera_status(&ctx.camera_name).map(|s| s.temperature_c)
-}
-
-/// Push the ramp's current integer setpoint to the camera. Best-effort: a
-/// failed SDK call is logged but does not abort the ramp — the next tick will
-/// retry.
-fn push_setpoint(ctx: &mut MonitorCtx, ramp: &RampState) -> bool {
-    push_raw_setpoint(ctx, ramp.current_setpoint_c)
-}
-
-/// Push an arbitrary setpoint (°C) to the camera, bypassing any ramp. Used
-/// by the fast-mode path and by `push_setpoint` above.
-fn push_raw_setpoint(ctx: &mut MonitorCtx, temp_c: f64) -> bool {
-    let result = with_camera_bounded(ctx, FFI_CALL_TIMEOUT, move |cam| {
-        cam.set_target_temperature(temp_c)
-    });
-
-    let Err(e) = result else {
-        return true;
-    };
-
-    warn!(
-        camera_name = %ctx.camera_name,
-        setpoint = temp_c,
-        error = %e,
-        "Failed to push setpoint"
-    );
-
-    // A warm-up ends on the first sign the device is gone; see `tick`.
-    if !e.is_device_lost() || !(ctx.fault_is_persistent || ctx.warming_up) {
-        return true; // Transient, or not yet conclusive; the next tick retries.
-    }
-    give_up_on_camera(ctx, FaultKind::DeviceLost);
-    false
-}
-
 impl MonitorCtx {
     /// Report one camera fault to the shared detector and remember its verdict.
     fn record(&mut self, kind: FaultKind) {
@@ -592,193 +398,4 @@ fn give_up_on_camera(ctx: &mut MonitorCtx, kind: FaultKind) {
     ctx.rt.block_on(async move {
         lifecycle::finalize_disconnect(&state, role, &name, cause).await;
     });
-}
-
-/// A reusable thread for the monitor's camera FFI calls. Must not block
-/// indefinitely inside a vendor call — the phase machine would stop, a warmup could
-/// never finalize, and `take_for_capture` couldn't get the handle — but it polls
-/// every `PHASE_POLL_INTERVAL`, so a thread per call meant ~1,800 spawns/hour while
-/// connected (real cost on a Pi 5 for a near-instant call). One thread serves every
-/// call instead: a call overrunning its budget is abandoned with its thread (no way
-/// to cancel a stuck synchronous FFI call), and the next call spawns a replacement —
-/// one thread for the monitor's lifetime, plus one per actual stall.
-struct FfiWorker {
-    /// `None` until the first call, and again after a stall abandons a worker.
-    jobs: Option<mpsc::Sender<Job>>,
-}
-
-type Job = Box<dyn FnOnce() + Send + 'static>;
-
-impl FfiWorker {
-    fn new() -> Self {
-        Self { jobs: None }
-    }
-
-    /// Run `f` on the worker thread, waiting at most `timeout`.
-    ///
-    /// `None` means it did not return in time. Whatever `f` owns — including a
-    /// camera handle — stays with the abandoned thread and is dropped there
-    /// when the SDK finally returns; `DeviceLease` is what keeps that late drop
-    /// from closing a device a reconnect has since opened.
-    fn run<T: Send + 'static>(
-        &mut self,
-        timeout: Duration,
-        f: impl FnOnce() -> T + Send + 'static,
-    ) -> Option<T> {
-        let (done_tx, done_rx) = mpsc::channel();
-        let job: Job = Box::new(move || {
-            let _ = done_tx.send(f());
-        });
-
-        if !self.dispatch(job) {
-            return None;
-        }
-
-        match done_rx.recv_timeout(timeout) {
-            Ok(value) => Some(value),
-            Err(_) => {
-                // The worker is still inside the SDK. Drop our end of its job
-                // channel so it exits once it unwinds, and start fresh.
-                self.jobs = None;
-                None
-            }
-        }
-    }
-
-    /// Send `job` to the worker, spawning or replacing it as needed.
-    fn dispatch(&mut self, job: Job) -> bool {
-        if self.jobs.is_none() {
-            self.jobs = Self::spawn();
-        }
-        let Some(tx) = self.jobs.as_ref() else {
-            return false;
-        };
-        let Err(returned) = tx.send(job) else {
-            return true;
-        };
-
-        // The worker exited between calls. One retry with a fresh thread.
-        self.jobs = Self::spawn();
-        let Some(tx) = self.jobs.as_ref() else {
-            return false;
-        };
-        tx.send(returned.0).is_ok()
-    }
-
-    fn spawn() -> Option<mpsc::Sender<Job>> {
-        let (tx, rx) = mpsc::channel::<Job>();
-        let spawned = std::thread::Builder::new()
-            .name("camera-monitor-ffi".into())
-            .spawn(move || {
-                while let Ok(job) = rx.recv() {
-                    job();
-                }
-            });
-        match spawned {
-            Ok(_) => Some(tx),
-            Err(e) => {
-                error!(error = %e, "Failed to spawn the camera monitor FFI worker");
-                None
-            }
-        }
-    }
-}
-
-/// Run one camera operation with the handle checked out of this monitor's slot.
-///
-/// The handle has to leave the mutex for the call's duration: a `Box<dyn
-/// Camera>` can only be used by one caller at a time, and holding the
-/// `std::sync::Mutex` across a vendor call that might hang would block async
-/// readers on a runtime worker. While it is out, the slot's handle reads
-/// as `None` — every other reader waits on `handle_returned` rather than
-/// treating that as "no camera" (see `lifecycle::with_camera`).
-fn with_camera_bounded<T, F>(
-    ctx: &mut MonitorCtx,
-    timeout: Duration,
-    f: F,
-) -> Result<T, CallError>
-where
-    F: FnOnce(&mut Box<dyn night_amplifier_core::camera::Camera>) -> Result<T, night_amplifier_core::camera::CameraError>
-        + Send
-        + 'static,
-    T: Send + 'static,
-{
-    let state = Arc::clone(&ctx.state);
-    let slot = state.slot(ctx.role);
-    // Marked before the handle leaves the slot and cleared after it is back, so at no
-    // instant does a reader see neither — which is what "lost" means to them.
-    slot.set_monitor_call(Some(Instant::now()));
-    let camera_opt = {
-        let mut guard = slot.handle.lock().expect("camera handle mutex poisoned");
-        guard.take()
-    };
-    let Some(camera) = camera_opt else {
-        slot.set_monitor_call(None);
-        return Err(CallError::NoHandle);
-    };
-
-    let outcome = ctx.ffi.run(timeout, move || {
-        let mut camera = camera;
-        let result = f(&mut camera);
-        (camera, result)
-    });
-
-    let Some((mut camera, result)) = outcome else {
-        error!(
-            camera_name = %ctx.camera_name,
-            ?timeout,
-            "Camera call did not return in time — abandoning handle (suspected USB stall)"
-        );
-        slot.set_monitor_call(None);
-        ctx.record(FaultKind::Timeout);
-        slot.notify_handle_returned();
-        return Err(CallError::Camera(CameraError::Disconnected));
-    };
-
-    let phase = ctx.state.camera_phase(ctx.role);
-    // A slot suspended while ours was out has no camera to give it back to, and the
-    // reopen expects it empty.
-    let recovering = slot.is_recovering();
-    if phase == CameraPhase::Disconnected || recovering {
-        warn!(
-            camera_name = %ctx.camera_name,
-            ?phase,
-            recovering,
-            "Closing the handle a status call brought back: its slot was torn down or suspended meanwhile"
-        );
-        let _ = camera.close();
-    } else {
-        let mut guard = slot.handle.lock().expect("camera handle mutex poisoned");
-        match guard.as_ref() {
-            // A reconnect installed a new handle while ours was out. Ours is
-            // the stale one; `DeviceLease` makes closing it a no-op against the
-            // live device.
-            Some(_) => {
-                warn!(camera_name = %ctx.camera_name, "Camera replaced during poll; dropping the superseded handle");
-                let _ = camera.close();
-            }
-            None => *guard = Some(camera),
-        }
-    }
-    // Cleared once the handle is back, never before: a failed hand-off reading "no call,
-    // no handle" in between would declare a healthy handle lost.
-    slot.set_monitor_call(None);
-    slot.notify_handle_returned();
-
-    match &result {
-        Err(e) if e.is_sdk_disconnected() => ctx.record(FaultKind::DeviceLost),
-        _ => {
-            camera_health::clear_fault_streak(&ctx.state, ctx.role, &ctx.camera_name);
-            ctx.fault_is_persistent = false;
-        }
-    }
-
-    result.map_err(CallError::Camera)
-}
-
-#[cfg(test)]
-mod ramp_tests {
-    use super::*;
-    use std::time::Duration;
-
 }

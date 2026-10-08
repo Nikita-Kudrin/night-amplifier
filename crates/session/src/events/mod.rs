@@ -323,6 +323,7 @@ pub struct CameraPhaseEntry {
 
 /// DTO for CameraPhase serialization (snake_case to match JS event handling).
 #[derive(Debug, Clone, Copy, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum CameraPhaseDto {
     Disconnected,

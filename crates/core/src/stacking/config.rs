@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Available stacking types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StackingType {
     /// Deep Sky Object stacking (star-based registration, sigma clipping)
@@ -133,6 +134,7 @@ pub struct StackingTypeInfo {
 
 /// Weighting preset for quality-based frame weighting during stacking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum WeightingPreset {
     /// Equal weight for all frames (disabled)

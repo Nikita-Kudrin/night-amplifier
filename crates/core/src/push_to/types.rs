@@ -10,6 +10,7 @@ use serde::Serialize;
 /// rather than one that was merely present in the request. Every field feeds the
 /// FOV, so any difference matters and a whole-struct comparison is the right test.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct TelescopeSettings {
     /// Telescope focal length in mm
     #[serde(default)]
@@ -59,6 +60,7 @@ pub struct PushToPositionResponse {
 
 /// Push-To direction response
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PushToDirectionResponse {
     /// Angle to push in degrees, in the image frame:
     /// 0 = screen up, 90 = screen right, rotation is clockwise.
@@ -82,6 +84,7 @@ pub struct PushToDirectionResponse {
 
 /// Coordinate response (simplified)
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CoordinateResponse {
     pub ra_degrees: f64,
     pub dec_degrees: f64,
@@ -91,6 +94,7 @@ pub struct CoordinateResponse {
 
 /// Catalog entry response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CatalogEntryResponse {
     pub designation: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,6 +118,7 @@ pub struct CatalogEntryResponse {
 
 /// Push-To status response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PushToStatusResponse {
     /// Whether the solver database is loaded
     pub solver_ready: bool,
@@ -129,6 +134,7 @@ pub struct PushToStatusResponse {
 
 /// ASTAP installation status response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct AstapStatusResponse {
     /// Whether ASTAP CLI binary is installed and executable
     pub binary_installed: bool,
@@ -151,6 +157,7 @@ pub struct AstapStatusResponse {
 
 /// Information about a single installed database
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct InstalledDatabaseInfo {
     /// Database identifier (D80, G05, W08)
     pub id: String,
@@ -164,6 +171,7 @@ pub struct InstalledDatabaseInfo {
 
 /// Available database types for installation
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct DatabaseTypeResponse {
     /// Database identifier (D80, G05, W08)
     pub id: String,
@@ -181,6 +189,7 @@ pub struct DatabaseTypeResponse {
 
 /// Catalog installation status response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CatalogStatusResponse {
     /// Whether the catalog is installed
     pub installed: bool,

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::handle::{DiskWriterHandle, OpenSession};
+use super::handle::OpenSession;
 use crate::camera::RawFrame;
 use crate::fits::FitsMetadata;
 use crate::frame::Frame;

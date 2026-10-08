@@ -2,7 +2,7 @@
 
 use tracing::{debug, field, info, instrument, warn, Span};
 
-use super::{LiveStacker, StackSettings};
+use super::{LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::planetary::AlignmentRoi;
 use night_amplifier_core::plugins::Plugins;
@@ -24,17 +24,12 @@ impl PlanetaryStackingContext {
         height: usize,
         channels: usize,
         settings: &StackSettings,
-    ) -> Option<Self> {
+    ) -> Result<Self, LiveStackError> {
         let config = settings.config.clone();
-        let stacker = match Stacker::with_plugins(width, height, channels, config, settings.plugins.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to create live stacker for planetary mode");
-                return None;
-            }
-        };
+        let stacker =
+            Stacker::with_plugins(width, height, channels, config, settings.plugins.clone())?;
 
-        Some(Self {
+        Ok(Self {
             stacker,
             is_initialized: false,
             reference_frame: None,
@@ -43,7 +38,7 @@ impl PlanetaryStackingContext {
     }
 
     #[instrument(skip(self, frame))]
-    pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), String> {
+    pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
         self.reference_frame = Some(frame.clone());
 
         if let Some(plugin) = self.plugins.planetary() {
@@ -53,9 +48,7 @@ impl PlanetaryStackingContext {
         // Add reference frame with default quality
         let quality = FrameQuality::default();
 
-        self.stacker
-            .add_reference_with_quality(frame, quality)
-            .map_err(|e| format!("Failed to add reference frame: {}", e))?;
+        self.stacker.add_reference_with_quality(frame, quality)?;
 
         self.is_initialized = true;
         Ok(())
@@ -67,9 +60,13 @@ impl PlanetaryStackingContext {
         ncc = field::Empty,
         registered = field::Empty,
     ))]
-    pub fn add_frame(&mut self, frame: &Frame, settings: &StackSettings) -> Result<bool, String> {
+    pub fn add_frame(
+        &mut self,
+        frame: &Frame,
+        settings: &StackSettings,
+    ) -> Result<bool, LiveStackError> {
         if !self.is_initialized {
-            return Err("Planetary stacking context not initialized".to_string());
+            return Err(LiveStackError::NoReference);
         }
 
         let reference = self.reference_frame.as_ref().unwrap();
@@ -158,10 +155,8 @@ impl PlanetaryStackingContext {
     }
 
     #[instrument(skip(self), fields(frame_count = self.frame_count()))]
-    pub fn compute(&self) -> Result<Frame, String> {
-        self.stacker
-            .compute()
-            .map_err(|e| format!("Failed to compute planetary stack: {}", e))
+    pub fn compute(&self) -> Result<Frame, LiveStackError> {
+        Ok(self.stacker.compute()?)
     }
 
     pub fn frame_count(&self) -> usize {
@@ -207,13 +202,17 @@ impl LiveStacker for PlanetaryStackingContext {
         self.update_from_settings(settings);
     }
 
-    fn set_reference(&mut self, frame: &Frame) -> Result<(), String> {
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
         self.initialize_with_reference(frame)?;
         info!("Planetary stacking initialized with reference frame");
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, settings: &StackSettings) -> Result<FrameAdmission, String> {
+    fn offer(
+        &mut self,
+        frame: &Frame,
+        settings: &StackSettings,
+    ) -> Result<FrameAdmission, LiveStackError> {
         // An error leaves the accumulated stack on screen, as a failed alignment does.
         let added = match self.add_frame(frame, settings) {
             Ok(true) => {
@@ -235,7 +234,7 @@ impl LiveStacker for PlanetaryStackingContext {
         Ok(FrameAdmission::unreasoned(added))
     }
 
-    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String> {
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), LiveStackError> {
         self.compute().map(|frame| (frame, None))
     }
 }
@@ -248,6 +247,14 @@ mod tests {
 
     fn defaults() -> StackSettings {
         StackSettings::of(&CaptureSettings::default(), &Plugins::none())
+    }
+
+    #[test]
+    fn a_frame_before_the_reference_is_refused() {
+        let settings = defaults();
+        let mut ctx = PlanetaryStackingContext::new(100, 100, 1, &settings).unwrap();
+        let frame = Frame::zeros(100, 100, 1).unwrap();
+        assert_eq!(ctx.add_frame(&frame, &settings), Err(LiveStackError::NoReference));
     }
 
     #[test]

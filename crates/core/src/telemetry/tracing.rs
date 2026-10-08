@@ -1,5 +1,4 @@
 use super::{TelemetryConfig, TelemetryError};
-use crate::error::Result;
 
 #[cfg(feature = "telemetry")]
 use opentelemetry::trace::TracerProvider as _;

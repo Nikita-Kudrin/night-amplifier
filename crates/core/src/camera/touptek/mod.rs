@@ -8,7 +8,6 @@ pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{CfaPattern, Frame, PixelFormat};
 use shim::{enumerate_devices, parse_fourcc_bayer, TouptekHandle};
 
 use super::device_lost::tolerate_unsupported;

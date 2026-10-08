@@ -10,7 +10,7 @@ use super::super::events::ServerEvent;
 use super::super::state::AppState;
 use night_amplifier_core::push_to::{
     CatalogEntryResponse, CoordinateResponse, PushToBlocker, PushToDirectionResponse, PushToError,
-    PushToStatusResponse, TelescopeSettings,
+    PushToResult, PushToStatusResponse, TelescopeSettings,
 };
 
 /// Push-To navigation service
@@ -46,12 +46,12 @@ impl PushToService {
     /// the telescope block rendered as "Failed to find M31" in the status bar, and
     /// a cancel is not a failure in any case — reporting it as one made a still-good
     /// last position look untrustworthy.
-    pub async fn cancel_solve(state: &AppState) -> Result<bool, String> {
+    pub async fn cancel_solve(state: &AppState) -> PushToResult<bool> {
         let Some(plugin) = state.plugins.push_to_solver() else {
-            return Err("Push-To navigation requires Night Amplifier Pro".to_string());
+            return Err(PushToError::PluginRequired);
         };
 
-        let was_solving = plugin.cancel_solve().await.map_err(|e| e.to_string())?;
+        let was_solving = plugin.cancel_solve().await?;
         if was_solving {
             let _ = state.events.send(ServerEvent::plate_solving_cancelled());
         }
@@ -64,12 +64,12 @@ impl PushToService {
     /// sensor, binning. A bare cancel is not enough: the star field has not changed,
     /// so the movement detector would report `Idle` on every later frame and nothing
     /// would ever re-solve against the new optics.
-    pub async fn restart_solve(state: &AppState, reason: &str) -> Result<(), String> {
+    pub async fn restart_solve(state: &AppState, reason: &str) -> PushToResult<()> {
         let Some(plugin) = state.plugins.push_to_solver() else {
             return Ok(()); // No plugin available; nothing to restart.
         };
 
-        plugin.restart_solve().await.map_err(|e| e.to_string())?;
+        plugin.restart_solve().await?;
         let _ = state
             .events
             .send(ServerEvent::plate_solving_restarted(reason));
@@ -119,9 +119,9 @@ impl PushToService {
     pub async fn set_target_by_name(
         state: &AppState,
         name: &str,
-    ) -> Result<CatalogEntryResponse, String> {
+    ) -> PushToResult<CatalogEntryResponse> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
-            let result = plugin.set_target_by_name(name).await.map_err(|e| e.to_string())?;
+            let result = plugin.set_target_by_name(name).await?;
             state.push_to_target_changed(true);
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
@@ -131,7 +131,7 @@ impl PushToService {
             ));
             Ok(result)
         } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+            Err(PushToError::PluginRequired)
         }
     }
 
@@ -140,12 +140,9 @@ impl PushToService {
         state: &AppState,
         ra_degrees: f64,
         dec_degrees: f64,
-    ) -> Result<CoordinateResponse, String> {
+    ) -> PushToResult<CoordinateResponse> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
-            let result = plugin
-                .set_target_by_coords(ra_degrees, dec_degrees)
-                .await
-                .map_err(|e| e.to_string())?;
+            let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
             state.push_to_target_changed(true);
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
@@ -156,14 +153,14 @@ impl PushToService {
             ));
             Ok(result)
         } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+            Err(PushToError::PluginRequired)
         }
     }
 
     /// Clear the current target
-    pub async fn clear_target(state: &AppState) -> Result<(), String> {
+    pub async fn clear_target(state: &AppState) -> PushToResult<()> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
-            let result = plugin.clear_target().await.map_err(|e| e.to_string());
+            let result = plugin.clear_target().await;
             // Only mirror a clear that actually happened — a failed clear leaves
             // the plugin holding the target, and claiming otherwise would stop
             // plate solving for a target that is still set.
@@ -173,7 +170,7 @@ impl PushToService {
             let _ = state.events.send(ServerEvent::target_cleared());
             result
         } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+            Err(PushToError::PluginRequired)
         }
     }
 
@@ -187,11 +184,11 @@ impl PushToService {
     }
 
     /// Update the FOV hint for the solver
-    pub async fn set_fov(state: &AppState, fov_degrees: f32) -> Result<(), String> {
+    pub async fn set_fov(state: &AppState, fov_degrees: f32) -> PushToResult<()> {
         if let Some(plugin) = state.plugins.push_to_solver() {
-            plugin.set_fov(fov_degrees).await.map_err(|e| e.to_string())
+            plugin.set_fov(fov_degrees).await
         } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+            Err(PushToError::PluginRequired)
         }
     }
 
@@ -199,23 +196,20 @@ impl PushToService {
     pub async fn set_telescope_settings(
         state: &AppState,
         settings: TelescopeSettings,
-    ) -> Result<(), String> {
+    ) -> PushToResult<()> {
         if let Some(plugin) = state.plugins.push_to_solver() {
-            plugin
-                .set_telescope_settings(settings)
-                .await
-                .map_err(|e| e.to_string())
+            plugin.set_telescope_settings(settings).await
         } else {
             Ok(()) // No plugin available; not an error
         }
     }
 
     /// Load a solver database
-    pub async fn load_database(state: &AppState, path: &str) -> Result<(), String> {
+    pub async fn load_database(state: &AppState, path: &str) -> PushToResult<()> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
-            plugin.load_database(path).await.map_err(|e| e.to_string())
+            plugin.load_database(path).await
         } else {
-            Err("Push-To navigation requires Night Amplifier Pro".to_string())
+            Err(PushToError::PluginRequired)
         }
     }
 }

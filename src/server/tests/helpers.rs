@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::camera::{CameraInfo, ImageFormat, SensorType};
-use crate::server::api::*;
+use crate::server::api::{cameras::*, capabilities::*, capture::*, settings::*};
 use crate::session::state::*;
 use crate::CfaPattern;
 

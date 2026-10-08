@@ -32,6 +32,7 @@ impl ComputeRung {
 
 /// The "AI compute" setting: let the benchmark decide, or force one rung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AiComputePreference {
     #[default]

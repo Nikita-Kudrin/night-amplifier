@@ -10,7 +10,7 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useImageStream as originalUseImageStream} from '../useWebSocket.js'
+import {useImageStream as originalUseImageStream} from '../useImageStream.js'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;

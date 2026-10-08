@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub enum BackgroundExtractionAlgorithm {
     /// Grid-based median with bilinear interpolation (fast, stable)
     #[default]

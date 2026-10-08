@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 use dlopen2::wrapper::{Container, WrapperApi};
-use std::os::raw::{c_char, c_int, c_long, c_uchar};
+use std::os::raw::{c_int, c_long, c_uchar};
 use std::sync::OnceLock;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::ffi_types::*;
 

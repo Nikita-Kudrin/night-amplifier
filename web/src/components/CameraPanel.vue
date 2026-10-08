@@ -1,5 +1,5 @@
 <script setup>
-import {ref, inject, computed, watch, onMounted, onUnmounted} from 'vue'
+import {ref, inject, computed, watch, onMounted} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -7,8 +7,10 @@ import {
   getSimulatorConfig,
   removeSimulatedCamera,
 } from '../composables/api.js'
+import {useCameraBadges} from '../composables/useCameraBadges.js'
 import {useError} from '../composables/useError.js'
 import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
+import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
 import {isCaptureRunning} from '../constants'
 
 const cameras = inject('cameras')
@@ -22,6 +24,8 @@ const warmupEndsAt = inject('warmupEndsAt', ref({}))
 const settings = inject('settings', ref(null))
 
 const {error, clearError, withErrorHandling} = useError()
+const {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill} =
+    useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings})
 
 const isSimulatorEnabled = computed(() => simulatorEnabledRef?.value ?? false)
 
@@ -32,7 +36,6 @@ const camerasCollapsed = ref(false)
 const simulatorConfig = ref({configured: false, directory: null, file_count: null})
 const configuringSimulator = ref(false)
 const showDirectoryInput = ref(false)
-const directoryPath = ref('')
 
 onMounted(async () => {
   try {
@@ -61,12 +64,6 @@ const hasGuideCamera = computed(() => connectedCameras.value.some((c) => c.role 
 const connectOptions = computed(() => [
   {value: 'guide', label: 'As guide', disabled: hasGuideCamera.value},
 ])
-
-function roleLabel(cam) {
-  if (cam.role === 'guide') return 'Guide'
-  if (cam.role === 'main') return 'Main'
-  return null
-}
 
 const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.connected))
 
@@ -176,94 +173,16 @@ function selectCamera(cameraId) {
   selectedCamera.value = cameraId
 }
 
-function formatResolution(cam) {
-  const {max_width: width, max_height: height} = cam?.info ?? {}
-  // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.
-  return width && height ? `${width}x${height}` : '—'
-}
-
-function temperaturePill(cam) {
-  if (!cam?.info?.has_cooler) return null
-  const status = cameraStatus.value?.[cam.name]
-  if (!status) return null
-  return `${status.temperature_c.toFixed(1)}°C`
-}
-
-function phaseOf(cam) {
-  return cameraPhase.value?.[cam?.name] || null
-}
-
-function isWarmingUp(cam) {
-  return phaseOf(cam) === 'warming_up'
-}
-
-// Minute resolution is enough for a countdown of a few minutes; ticks only while a
-// warm-up has a known deadline.
-const now = ref(Date.now())
-let clock = null
-watch(
-    () => Object.keys(warmupEndsAt.value ?? {}).length > 0,
-    (counting) => {
-      clearInterval(clock)
-      clock = counting ? setInterval(() => (now.value = Date.now()), 15000) : null
-    },
-    {immediate: true}
-)
-onUnmounted(() => clearInterval(clock))
-
-/** "up to N min" until the server cuts the warm-up short, when it said when. */
-function warmupLeft(cam) {
-  const endsAt = warmupEndsAt.value?.[cam?.name]
-  if (!endsAt) return null
-  return `up to ${Math.max(1, Math.ceil((endsAt - now.value) / 60000))} min`
-}
-
-function phaseLabel(cam) {
-  const phase = phaseOf(cam)
-  if (phase === 'precooling') return 'Precooling'
-  if (phase === 'warming_up') {
-    const left = warmupLeft(cam)
-    return left ? `Warming up, ${left}` : 'Warming up'
-  }
-  // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
-  // and the green role badge next to it already says so.
-  return null
-}
-
-function sensorModePill(cam) {
-  const modes = cam?.info?.sensor_modes
-  if (!modes || modes.length === 0) return null
-  const isGuide = cam?.role === 'guide'
-  const override = isGuide
-      ? settings.value?.guide_camera?.sensor_mode_override
-      : settings.value?.sensor_mode_override
-  // Mirrors the backend's `is_actively_stacking` gate in
-  // `to_capture_config_with()` (server/state/settings.rs): Low Noise only
-  // pays its frame-rate cost while frames are being integrated.
-  // `stacking_type !== 'planetary'` stands for "DeepSky or Comet" since
-  // `StackingType::supports_stacking()` is true for every variant today.
-  // `wanderer_mode` need not appear: the UI always pairs `stacking: true`
-  // with it (see `applyStackingMode` in CaptureControls.vue). Never true
-  // for the guide camera: nothing it produces is stacked.
-  const isActivelyStacking =
-      !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
-  const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
-  const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
-  const match = modes.find((m) => needle.test(m.name))
-  return (match ?? modes[0]).name
-}
-
-async function handleConfigureSimulator() {
-  if (!directoryPath.value.trim()) {
+async function handleConfigureSimulator(path) {
+  if (!path) {
     error.value = 'Please enter a directory path'
     return
   }
 
   configuringSimulator.value = true
   await withErrorHandling(async () => {
-    simulatorConfig.value = await configureSimulator(directoryPath.value.trim())
+    simulatorConfig.value = await configureSimulator(path)
     showDirectoryInput.value = false
-    directoryPath.value = ''
     await refreshCameras()
   })
   configuringSimulator.value = false
@@ -298,7 +217,6 @@ async function handleRemoveSimulatedCamera(cam) {
 const HELP = {
   cameras:
       'Choose the camera to configure. One imaging camera and one guide camera can be connected at once — use the arrow next to Connect to attach a guide camera.',
-  simulator_dir: 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).',
 }
 </script>
 
@@ -345,34 +263,12 @@ const HELP = {
       {{ error }}
     </BaseAlert>
 
-    <div v-if="showDirectoryInput" class="simulator-config">
-      <div class="config-header">
-        <span>
-          Configure Simulator Directory
-          <BaseInfoIcon :message="HELP.simulator_dir"/>
-        </span>
-        <button class="btn-close" @click="showDirectoryInput = false">&times;</button>
-      </div>
-      <div class="config-body">
-        <input
-            v-model="directoryPath"
-            type="text"
-            placeholder="Enter path to image directory..."
-            class="directory-input"
-            @keyup.enter="handleConfigureSimulator"
-        />
-        <button
-            class="btn btn-sm btn-primary"
-            :disabled="configuringSimulator"
-            @click="handleConfigureSimulator"
-        >
-          {{ configuringSimulator ? '...' : 'Set' }}
-        </button>
-      </div>
-      <div class="config-hint">
-        Enter the full path to a directory containing FITS, TIFF, or PNG files
-      </div>
-    </div>
+    <SimulatorDirectoryInput
+        v-if="showDirectoryInput"
+        :busy="configuringSimulator"
+        @submit="handleConfigureSimulator"
+        @close="showDirectoryInput = false"
+    />
 
     <!-- Collapsible camera sections -->
     <div v-show="!camerasCollapsed" class="cameras-container">
@@ -724,55 +620,6 @@ const HELP = {
 }
 
 /* empty-state and btn-close now in main.css */
-
-.simulator-config {
-  background: var(--surface-elevated);
-  border-radius: 6px;
-  padding: 0.5rem;
-  margin-bottom: 0.375rem;
-}
-
-.config-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 0.375rem;
-}
-
-.config-body {
-  display: flex;
-  gap: 0.375rem;
-  align-items: center;
-}
-
-.directory-input {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  min-width: 0;
-}
-
-.directory-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.directory-input::placeholder {
-  color: var(--text-muted);
-}
-
-.config-hint {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
-}
 
 .simulator-add {
   display: flex;

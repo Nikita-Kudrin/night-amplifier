@@ -312,6 +312,9 @@ npm run lint      # check for issues (npm run lint:fix: auto-fix)
 npm run format    # format with Prettier
 ```
 
+`src/composables/api.types.js` (JSDoc types of the server's answers) is generated from the Rust types; after
+changing one, run `UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types` from the repository root.
+
 ## License
 
 Copyright (c) 2026- Nikita Kudrin (+ Night Amplifier contributors)

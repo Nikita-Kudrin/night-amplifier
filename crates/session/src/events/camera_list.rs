@@ -8,6 +8,7 @@ use crate::state::CameraRole;
 
 /// Camera sensor mode DTO (dual sampling mode slot)
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SensorModeDto {
     pub index: u32,
     pub name: String,
@@ -27,6 +28,7 @@ impl From<&SensorMode> for SensorModeDto {
 
 /// Camera info response
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CameraInfoResponse {
     pub id: String,
     pub name: String,
@@ -77,6 +79,7 @@ impl CameraInfoResponse {
 
 /// Camera list entry
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CameraListEntry {
     pub id: String,
     pub name: String,

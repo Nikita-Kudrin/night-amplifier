@@ -1,9 +1,7 @@
 <script setup>
 import {ref, inject, watch, computed, unref} from 'vue'
-import {remeasureAiCompute, updateSettings} from '../composables/api.js'
+import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {useAiCompute} from '../composables/useAiCompute.js'
-import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute.js'
 import {
   BasePanel,
   BaseToggle,
@@ -13,9 +11,12 @@ import {
   BaseInfoIcon,
   BaseProLock,
 } from './ui'
+import AiComputeSettings from './AiComputeSettings.vue'
 import CoolerControl from './CoolerControl.vue'
 import DewHeaterControl from './DewHeaterControl.vue'
+import EyepieceSettings from './EyepieceSettings.vue'
 import ImageQualitySettings from './ImageQualitySettings.vue'
+import StackingSettings from './StackingSettings.vue'
 import {
   SATURATION_BOOST_LIMITS,
   AUTO_STRETCH_INTENSITY,
@@ -23,12 +24,9 @@ import {
     BLACK_FLOOR_LIMITS,
   BINNING_OPTIONS,
   DEFAULT_SETTINGS,
-  EYEPIECE_STREAM_RESOLUTION_OPTIONS,
   defaultSettings,
   RAW_FRAME_SAVING_MODES,
-  WEIGHTING_PRESET_OPTIONS,
   BACKGROUND_ALGORITHM_OPTIONS,
-  REJECTION_METHOD_OPTIONS,
   SIMULATED_PRELOAD_LIMITS,
   HELP_TEXTS,
 } from '../constants'
@@ -67,51 +65,8 @@ const simulatorEnabled = computed({
 
 const localSettings = ref(defaultSettings())
 
-/**
- * The network is Pro, needs the Denoise switch, and Focus/Finder mode holds it off. The
- * mode never changes the switch itself: it stays the observer's for when the mode ends.
- */
+/** The AI denoiser is Pro; its switch and compute unit live in `AiComputeSettings`. */
 const aiDenoiseAvailable = computed(() => unref(capabilities)?.deep_sky?.ai_denoise ?? false)
-const aiDenoiseLocked = computed(
-    () => !aiDenoiseAvailable.value || !localSettings.value.denoise.enabled || focusMode.value
-)
-const aiDenoiseHeldOff = computed(() => {
-  if (!aiDenoiseAvailable.value || !localSettings.value.denoise.ai) return ''
-  if (!localSettings.value.denoise.enabled) return 'Held off while Denoise is off.'
-  if (focusMode.value) return 'Held off by Focus/Finder mode.'
-  return ''
-})
-
-/**
- * Where the network runs, from the server's one-time benchmark. A hardware choice, not a
- * picture control: it stays usable while the AI switch is off, so the observer can pick
- * before switching it on.
- */
-const {report: aiComputeReport, refresh: refreshAiCompute} = useAiCompute()
-const aiComputeOptionList = computed(() => aiComputeOptions(aiComputeReport.value))
-const aiComputeHint = computed(() => aiComputeSummary(aiComputeReport.value))
-const aiComputeUnusable = computed(() => unusableRungs(aiComputeReport.value))
-const aiComputeLocked = computed(() => !aiDenoiseAvailable.value || !isReady(aiComputeReport.value))
-
-async function applyAiCompute(value) {
-  await applyGroup('denoise', {...localSettings.value.denoise, ai_compute: value})
-  refreshAiCompute()
-}
-
-/**
- * Measure again: after a new driver or runtime, or to retry a unit recorded as crashing.
- * The server refuses while a capture runs; its message lands in the panel's error.
- */
-const remeasuring = ref(false)
-async function remeasure() {
-  remeasuring.value = true
-  try {
-    await withErrorHandling(() => remeasureAiCompute())
-    await refreshAiCompute()
-  } finally {
-    remeasuring.value = false
-  }
-}
 
 watch(
     settings,
@@ -430,258 +385,20 @@ const HELP = HELP_TEXTS
       </div>
     </div>
 
-    <!-- Eyepiece settings -->
-    <div class="settings-section">
-      <h3 class="section-title">Eyepiece</h3>
+    <EyepieceSettings :eyepiece="localSettings.eyepiece" @apply="applyGroup"/>
 
-      <div class="control-group">
-        <div class="control-row">
-          <BaseToggle
-              v-model="localSettings.eyepiece.binoview"
-              label="Binoview"
-              size="small"
-              :help="HELP.eyepiece_binoview"
-              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-          />
-          <BaseToggle
-              v-model="localSettings.eyepiece.circular_view"
-              label="Circular view"
-              size="small"
-              :help="HELP.eyepiece_circular_view"
-              @update:model-value="applySetting('eyepiece', localSettings.eyepiece)"
-          />
-        </div>
-      </div>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Eyepiece Streaming Resolution
-            <BaseInfoIcon :message="HELP.eyepiece_stream_resolution"/>
-          </label>
-          <select
-              id="eyepiece-stream-resolution-select"
-              v-model="localSettings.eyepiece.stream_resolution"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('eyepiece', localSettings.eyepiece)"
-          >
-            <option
-                v-for="opt in EYEPIECE_STREAM_RESOLUTION_OPTIONS"
-                :key="opt.value"
-                :value="opt.value"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div
-          v-if="localSettings.eyepiece.binoview"
-          class="control-group"
-          style="flex-direction: column; align-items: stretch; margin-top: 0.5rem"
-      >
-        <label class="control-label" style="margin-bottom: 0.5rem">
-          Screen settings
-          <BaseInfoIcon :message="HELP.eyepiece_screen_settings"/>
-        </label>
-
-        <div class="control-row" style="justify-content: flex-start; margin-bottom: 0.5rem">
-          <input
-              v-model.number="localSettings.eyepiece.screen_width"
-              type="number"
-              min="1"
-              step="0.1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Width"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <span style="margin: 0 4px">x</span>
-          <input
-              v-model.number="localSettings.eyepiece.screen_height"
-              type="number"
-              min="1"
-              step="0.1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Height"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <select
-              v-model="localSettings.eyepiece.screen_measurement"
-              style="
-              margin-left: 8px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              @change="applySetting('eyepiece', localSettings.eyepiece)"
-          >
-            <option value="mm">mm</option>
-            <option value="inches">inches</option>
-          </select>
-        </div>
-
-        <div class="control-row" style="justify-content: flex-start">
-          <label style="margin-right: 8px; font-size: 0.9em; color: var(--text-secondary)"
-          >Resolution</label
-          >
-          <input
-              v-model.number="localSettings.eyepiece.screen_resolution_x"
-              type="number"
-              min="1"
-              step="1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Resolution X"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-          <span style="margin: 0 4px">x</span>
-          <input
-              v-model.number="localSettings.eyepiece.screen_resolution_y"
-              type="number"
-              min="1"
-              step="1"
-              style="
-              width: 70px;
-              background: var(--surface);
-              color: var(--text-primary);
-              border: 1px solid var(--border);
-              border-radius: 4px;
-              padding: 4px;
-            "
-              title="Resolution Y"
-              @change="debouncedApply('eyepiece', localSettings.eyepiece)"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- Stacking settings -->
-    <div v-if="localSettings.stacking" class="settings-section">
-      <h3 class="section-title">Stacking</h3>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Frame Weighting
-            <BaseInfoIcon :message="HELP.weighting_preset"/>
-          </label>
-          <select
-              id="weighting-preset-select"
-              v-model="localSettings.weighting_preset"
-              class="select"
-              style="width: 120px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('weighting_preset', $event.target.value)"
-          >
-            <option v-for="opt in WEIGHTING_PRESET_OPTIONS" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div class="control-group">
-        <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
-            Rejection Method
-            <BaseProLock
-                v-if="!capabilities.deep_sky.advanced_rejection"
-                feature="Advanced Rejection"
-            />
-            <BaseInfoIcon :message="HELP.rejection_method"/>
-          </label>
-          <select
-              id="rejection-method-select"
-              v-model="localSettings.rejection_method"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
-              @change="applySetting('rejection_method', $event.target.value)"
-          >
-            <option
-                v-for="opt in REJECTION_METHOD_OPTIONS"
-                :key="opt.value"
-                :value="opt.value"
-                :disabled="opt.pro && !capabilities.deep_sky.advanced_rejection"
-            >
-              {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.advanced_rejection ? '🔒' : '' }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <BaseSlider
-          v-if="localSettings.rejection_method !== 'None'"
-          v-model="localSettings.rejection_sigma"
-          label="Rejection Sigma"
-          :min="0.5"
-          :max="10.0"
-          :step="0.1"
-          :disabled="!capabilities.deep_sky.advanced_rejection"
-          :help="HELP.rejection_sigma"
-          @change="debouncedApply('rejection_sigma', localSettings.rejection_sigma)"
-      >
-        <template #label-extra>
-          <BaseProLock
-              v-if="!capabilities.deep_sky.advanced_rejection"
-              feature="Advanced Rejection"
-          />
-        </template>
-      </BaseSlider>
-    </div>
-
-    <!-- Planetary-specific settings -->
-    <div v-if="localSettings.stacking && settings?.stacking_type === 'planetary'" class="settings-section">
-      <h3 class="section-title">Planetary</h3>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.planetary_auto_tracking"
-            label="Auto Tracking"
-            help="Automatically track the planet's centroid in the ROI to prevent drift."
-            @update:model-value="applySetting('planetary_auto_tracking', $event)"
-        />
-      </div>
-
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.planetary_multi_point_alignment"
-            label="Multi-Point Alignment"
-            help="Use Inverse Distance Weighting on multiple surface points to combat seeing distortion."
-            :disabled="!capabilities.planetary.advanced_stacking"
-            @update:model-value="applySetting('planetary_multi_point_alignment', $event)"
-        >
-          <template #label-extra>
-            <BaseProLock
-                v-if="!capabilities.planetary.advanced_stacking"
-                feature="Multi-Point Alignment"
-            />
-          </template>
-        </BaseToggle>
-      </div>
-    </div>
+    <StackingSettings
+        v-if="localSettings.stacking"
+        :weighting-preset="localSettings.weighting_preset"
+        :rejection-method="localSettings.rejection_method"
+        :rejection-sigma="localSettings.rejection_sigma"
+        :planetary-auto-tracking="localSettings.planetary_auto_tracking"
+        :planetary-multi-point-alignment="localSettings.planetary_multi_point_alignment"
+        :planetary="settings?.stacking_type === 'planetary'"
+        :advanced-rejection-available="capabilities.deep_sky.advanced_rejection"
+        :advanced-planetary-available="capabilities.planetary.advanced_stacking"
+        @apply="applyGroup"
+    />
 
     <!-- Advanced settings -->
     <div class="settings-section">
@@ -701,69 +418,13 @@ const HELP = HELP_TEXTS
         </div>
       </div>
 
-      <div class="control-group">
-        <BaseToggle
-            v-model="localSettings.denoise.ai"
-            label="AI denoising"
-            data-test="ai-denoise-toggle"
-            :help="HELP.denoise_ai"
-            :disabled="aiDenoiseLocked"
-            @update:model-value="applyGroup('denoise', {...localSettings.denoise, ai: $event})"
-        >
-          <template #label-extra>
-            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
-          </template>
-        </BaseToggle>
-        <span v-if="aiDenoiseHeldOff" class="hint">{{ aiDenoiseHeldOff }}</span>
-      </div>
-
-      <div class="control-group" data-test="ai-compute">
-        <div class="control-row">
-          <label class="control-label" for="ai-compute-select" style="margin-bottom: 0; flex: 1">
-            AI compute
-            <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
-            <BaseInfoIcon :message="HELP.ai_compute"/>
-          </label>
-          <select
-              id="ai-compute-select"
-              v-model="localSettings.denoise.ai_compute"
-              class="select ai-compute-select"
-              data-test="ai-compute-select"
-              :disabled="aiComputeLocked"
-              @change="applyAiCompute($event.target.value)"
-          >
-            <option
-                v-for="opt in aiComputeOptionList"
-                :key="opt.value"
-                :value="opt.value"
-                :disabled="opt.disabled"
-                :title="opt.reason || undefined"
-            >
-              {{ opt.label }}
-            </option>
-          </select>
-        </div>
-        <span v-if="aiDenoiseAvailable && aiComputeHint" class="hint" data-test="ai-compute-hint">{{ aiComputeHint }}</span>
-        <div v-if="aiDenoiseAvailable && !aiComputeLocked" class="ai-compute-remeasure">
-          <button
-              type="button"
-              class="btn btn-sm btn-secondary"
-              data-test="ai-compute-remeasure"
-              :disabled="remeasuring"
-              @click="remeasure"
-          >
-            Measure again
-          </button>
-          <BaseInfoIcon :message="HELP.ai_compute_remeasure"/>
-        </div>
-        <ul v-if="aiDenoiseAvailable && aiComputeUnusable.length" class="hint ai-compute-reasons" data-test="ai-compute-reasons">
-          <li v-for="rung in aiComputeUnusable" :key="rung.rung">
-            <strong>{{ rung.label }}:</strong>
-            {{ rung.device ? `${rung.device} — ` : '' }}{{ rung.reason }}
-            <a v-if="rung.installable" :href="SYSTEM_DEPENDENCIES_URL" target="_blank" rel="noopener">How to install</a>
-          </li>
-        </ul>
-      </div>
+      <AiComputeSettings
+          :denoise="localSettings.denoise"
+          :ai-denoise-available="aiDenoiseAvailable"
+          :focus-mode="focusMode"
+          :save="applyGroup"
+          :guard="withErrorHandling"
+      />
 
       <div class="control-group">
         <BaseToggle
@@ -833,27 +494,5 @@ const HELP = HELP_TEXTS
 .storage-mode-toggle {
   margin-left: 0.75rem;
   margin-top: 0.25rem;
-}
-
-.ai-compute-select {
-  width: 190px;
-  padding: 0.25rem 2rem 0.25rem 0.5rem;
-  height: 32px;
-}
-
-.ai-compute-remeasure {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.375rem;
-}
-
-.ai-compute-reasons {
-  margin: 0.375rem 0 0;
-  padding-left: 1rem;
-}
-
-.ai-compute-reasons a {
-  color: var(--primary);
 }
 </style>

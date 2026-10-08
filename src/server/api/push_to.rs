@@ -6,9 +6,9 @@ use std::sync::Arc;
 use super::super::dto::{
     ApiResponse, MessageResponse, PushToConfigRequest, SearchCatalogRequest, SetTargetRequest,
 };
+use crate::server::error::HttpStatus;
 use crate::session::services::PushToService;
 use crate::session::state::AppState;
-// Removed CatalogType
 
 /// GET /api/push-to/status
 ///
@@ -39,10 +39,10 @@ pub async fn set_push_to_target(
             }
             Err(e) => {
                 return (
-                    StatusCode::NOT_FOUND,
+                    e.status_code(),
                     Json(serde_json::json!({
                         "success": false,
-                        "error": e
+                        "error": e.to_string()
                     })),
                 )
             }
@@ -63,10 +63,10 @@ pub async fn set_push_to_target(
             }
             Err(e) => {
                 return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                    e.status_code(),
                     Json(serde_json::json!({
                         "success": false,
-                        "error": e
+                        "error": e.to_string()
                     })),
                 )
             }
@@ -94,7 +94,7 @@ pub async fn clear_push_to_target(State(state): State<Arc<AppState>>) -> impl In
                 camera_id: None,
             }),
         ),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }
 
@@ -114,7 +114,7 @@ pub async fn cancel_push_to_solve(State(state): State<Arc<AppState>>) -> impl In
                 camera_id: None,
             }),
         ),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }
 
@@ -177,14 +177,14 @@ pub async fn update_push_to_config(
     // Update FOV if provided
     if let Some(fov) = request.fov_degrees {
         if let Err(e) = PushToService::set_fov(&state, fov).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e));
+            return (e.status_code(), ApiResponse::err(e.to_string()));
         }
     }
 
     // Load database if path provided
     if let Some(ref path) = request.database_path {
         if let Err(e) = PushToService::load_database(&state, path).await {
-            return (StatusCode::BAD_REQUEST, ApiResponse::err(e));
+            return (e.status_code(), ApiResponse::err(e.to_string()));
         }
     }
 

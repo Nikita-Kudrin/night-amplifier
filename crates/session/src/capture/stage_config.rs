@@ -328,9 +328,7 @@ pub fn get_render_pipeline_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use night_amplifier_core::background::BackgroundExtractionAlgorithm;
     use night_amplifier_core::cfa::SensorCorrectionSettings;
-    use night_amplifier_core::frame::Frame;
     use night_amplifier_core::stacking::StackingType;
 
     /// `NOMINAL_SKY_LEVEL` is where the shipped curve puts the sky, and the darker-sky

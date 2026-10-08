@@ -1,19 +1,19 @@
 <script setup>
-import {ref, onMounted, onUnmounted, inject, computed, watch} from 'vue'
+import {ref, onMounted, inject, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
-import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
-import {useCoordinateInput, formatRA, formatDec} from '../composables/useCoordinates.js'
-import {BaseAlert, BaseToggle, BaseProLock, BaseInfoIcon, BasePanel, BaseSpinner} from './ui'
+import {formatRA, formatDec} from '../composables/useCoordinates.js'
+import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
+import CatalogSearch from './CatalogSearch.vue'
 import EquipmentSection from './EquipmentSection.vue'
+import ManualCoordinates from './ManualCoordinates.vue'
 import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
 // Panel state
 const collapsed = ref(false)
-const manualCoordsEnabled = ref(false)
 const showDatabaseManager = ref(false)
 const calculatedFov = ref(null)
 
@@ -93,10 +93,6 @@ const fovWarning = computed(() => {
   }
 })
 
-// Catalog search
-const {searchQuery, searchResults, searching, showResults, setQueryWithoutSearch, hideResults, revealResults} =
-    useCatalogSearch()
-
 const eventStream = inject('eventStream')
 const cameras = inject('cameras', ref([]))
 const selectedCamera = inject('selectedCamera', ref(null))
@@ -116,9 +112,6 @@ const {currentTarget, selectTargetByName, clearTarget, isSolving, cancelSolve} =
   eventStream,
 })
 
-// Coordinate input
-const {raInput, decInput, coordError, validateCoordinates, clearInputs} = useCoordinateInput()
-
 // Connected camera info for auto-fill and profile switching
 const connectedCameraInfo = computed(() => {
   if (!selectedCamera?.value || !cameras?.value) return null
@@ -131,37 +124,17 @@ function formatFov(deg) {
   return `${(deg * 60).toFixed(1)}'`
 }
 
-async function selectTarget(entry) {
-  setQueryWithoutSearch(entry.name || entry.designation)
-  await selectTargetByName(entry.designation)
-}
-
-async function setCoordinateTarget() {
-  const coords = validateCoordinates()
-  if (!coords) return
-
-  await withErrorHandling(async () => {
+/** Resolves `true` once the target took, so `ManualCoordinates` can clear its fields. */
+async function setCoordinateTarget(coords) {
+  return withErrorHandling(async () => {
     const {setTargetByCoordinates} = await import('../composables/api.js')
     const result = await setTargetByCoordinates(coords.ra, coords.dec)
     currentTarget.value = result.target
-    clearInputs()
+    return true
   })
 }
 
-function handleClickOutside(event) {
-  if (!event.target.closest('.search-container')) {
-    hideResults()
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-  fetchAstapStatus()
-})
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-})
+onMounted(fetchAstapStatus)
 </script>
 
 <template>
@@ -242,96 +215,9 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <CatalogSearch :solving="isSolving" @select="selectTargetByName" @cancel="cancelSolve"/>
 
-      <!-- Object Search -->
-      <div class="search-container">
-        <input
-            v-model="searchQuery"
-            type="text"
-            placeholder="Search Messier, NGC, Stars..."
-            class="search-input"
-            :disabled="isSolving"
-            @focus="revealResults"
-        />
-        <div v-if="searching || isSolving" class="search-spinner-wrapper">
-          <BaseSpinner size="sm" />
-        </div>
-        <button
-            v-if="isSolving"
-            class="btn-cancel-solve"
-            title="Cancel solving"
-            @click="cancelSolve"
-        >
-          Cancel
-        </button>
-
-        <!-- Search Results Dropdown -->
-        <div v-if="showResults && searchResults.length > 0" class="search-results">
-          <div
-              v-for="entry in searchResults"
-              :key="entry.designation"
-              class="search-result-item"
-              @click="selectTarget(entry)"
-          >
-            <div class="result-main">
-              <span v-if="messierLabel(entry)" class="catalog-badge badge-messier">
-                {{ messierLabel(entry) }}
-              </span>
-              <span :class="['catalog-badge', getCatalogClass(entry.catalog_type)]">
-                {{ entry.designation }}
-              </span>
-              <span class="result-name">{{ entry.name }}</span>
-            </div>
-            <div v-if="entry.matched_name" class="result-matched">Matched: {{ entry.matched_name }}</div>
-            <div class="result-details">
-              <span class="result-type">{{ entry.object_type }}</span>
-              <span class="result-constellation">{{ entry.constellation }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Manual Coordinates -->
-      <div class="section manual-coords-section">
-        <div class="manual-coords-header">
-          <h3 class="section-title">Manual Coordinates</h3>
-          <BaseToggle
-              :model-value="manualCoordsEnabled"
-              size="small"
-              @update:model-value="manualCoordsEnabled = $event"
-          />
-        </div>
-        <div v-if="manualCoordsEnabled" class="manual-coords-content">
-          <div class="coord-inputs">
-            <div class="coord-field">
-              <label>RA</label>
-              <input
-                  v-model="raInput"
-                  type="text"
-                  placeholder="HH:MM:SS or degrees"
-                  class="coord-input"
-              />
-            </div>
-            <div class="coord-field">
-              <label>Dec</label>
-              <input
-                  v-model="decInput"
-                  type="text"
-                  placeholder="DD:MM:SS or degrees"
-                  class="coord-input"
-              />
-            </div>
-          </div>
-          <div v-if="coordError" class="coord-error">{{ coordError }}</div>
-          <button
-              class="btn btn-sm btn-primary set-coords-btn"
-              :disabled="!raInput || !decInput"
-              @click="setCoordinateTarget"
-          >
-            Set Target
-          </button>
-        </div>
-      </div>
+      <ManualCoordinates :submit="setCoordinateTarget"/>
 
       <!-- Equipment -->
       <EquipmentSection
@@ -434,203 +320,6 @@ onUnmounted(() => {
   margin-top: 0.25rem;
 }
 
-.section-title {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  margin-bottom: 0.375rem;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
-.manual-coords-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 0.375rem;
-}
-
-.manual-coords-header .section-title {
-  margin-bottom: 0;
-}
-
-.manual-coords-content {
-  margin-top: 0.375rem;
-}
-
-.search-container {
-  position: relative;
-}
-
-.search-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.search-input::placeholder {
-  color: var(--text-muted);
-}
-
-.search-spinner-wrapper {
-  position: absolute;
-  right: 0.5rem;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-}
-
-.search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 0.25rem;
-  max-height: 200px;
-  overflow-y: auto;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.search-result-item {
-  padding: 0.5rem;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
-}
-
-.search-result-item:last-child {
-  border-bottom: none;
-}
-
-.search-result-item:hover {
-  background: var(--surface-hover);
-}
-
-.result-main {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.125rem;
-}
-
-.catalog-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  padding: 0.125rem 0.375rem;
-  border-radius: 4px;
-}
-
-.badge-messier {
-  background: #4a9eff30;
-  color: #4a9eff;
-}
-
-.badge-ngc {
-  background: #ff9f4a30;
-  color: #ff9f4a;
-}
-
-.badge-ic {
-  background: #9f4aff30;
-  color: #9f4aff;
-}
-
-.badge-star {
-  background: #facc1530;
-  color: #facc15;
-}
-
-.badge-other {
-  background: var(--surface);
-  color: var(--text-secondary);
-}
-
-.result-name {
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.result-matched {
-  font-size: 0.65rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-bottom: 0.125rem;
-}
-
-.result-details {
-  display: flex;
-  gap: 0.5rem;
-  font-size: 0.65rem;
-  color: var(--text-muted);
-}
-
-.coord-inputs {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.375rem;
-}
-
-.coord-field {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-}
-
-.coord-field label {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-}
-
-.coord-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.375rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  font-family: monospace;
-}
-
-.coord-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.coord-input::placeholder {
-  color: var(--text-muted);
-  font-family: inherit;
-}
-
-.coord-error {
-  font-size: 0.65rem;
-  color: var(--danger);
-  margin-bottom: 0.25rem;
-}
-
-.set_coords-btn {
-  width: 100%;
-}
-
 .pro-overlay {
   position: absolute;
   top: 0;
@@ -659,27 +348,6 @@ onUnmounted(() => {
   font-size: 0.8rem;
   color: var(--text-secondary);
   margin-bottom: 1rem;
-}
-
-.btn-cancel-solve {
-  position: absolute;
-  right: 2rem;
-  top: 50%;
-  transform: translateY(-50%);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.65rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  z-index: 5;
-}
-
-.btn-cancel-solve:hover {
-  background: var(--surface-hover);
-  color: var(--danger);
-  border-color: var(--danger);
 }
 
 .btn-manage-databases {

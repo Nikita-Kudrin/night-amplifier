@@ -1,15 +1,12 @@
-use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_long};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tracing::warn;
 
 pub mod ffi_types;
 pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{CfaPattern, Frame, PixelFormat};
 use shim::{
     enumerate_devices, get_camera_property, get_camera_property_ex, parse_fourcc_bayer,
     SvbonyHandle,
