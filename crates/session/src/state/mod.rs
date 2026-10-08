@@ -13,8 +13,10 @@ use night_amplifier_core::camera::CameraStatus;
 use night_amplifier_core::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
+mod camera_profile;
 mod camera_slot;
 mod capture_mode;
+mod display_settings;
 pub mod focus_mode;
 mod frame_stream;
 mod guide_loop;
@@ -26,11 +28,17 @@ mod settings_store;
 mod types;
 
 pub use night_amplifier_core::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
+pub use camera_profile::CameraCaptureProfile;
 pub use camera_slot::{
     BoundedCallError, CameraOp, CameraSlot, InstallOutcome, RawSessionResume, Recovery,
     SuspendVerdict,
 };
 pub use capture_mode::{CaptureMode, RawFrameSaving};
+pub use display_settings::{
+    default_preview_resolution, default_streaming_resolution, EyepieceSettings,
+    EyepieceStreamResolution, Resolution, DEFAULT_PREVIEW_RESOLUTION,
+    DEFAULT_STREAMING_RESOLUTION,
+};
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
@@ -39,11 +47,7 @@ pub use session::{
     CaptureControl, CaptureResume, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
 };
-pub use settings::{
-    default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
-    CaptureSettings, EyepieceSettings, EyepieceStreamResolution, Resolution,
-    DEFAULT_PREVIEW_RESOLUTION, DEFAULT_STREAMING_RESOLUTION,
-};
+pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState};

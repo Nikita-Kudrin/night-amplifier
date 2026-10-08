@@ -7,7 +7,7 @@ use tracing::{debug, error, info, instrument, warn};
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
 use super::utils::write_rgb8_png;
-use crate::fits::{write_fits, write_fits_from_raw, write_fits_u16};
+use crate::fits::{write_fits, write_fits_from_raw};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
 

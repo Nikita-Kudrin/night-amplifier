@@ -44,8 +44,8 @@ pub(super) async fn start_server() -> TestServer {
         .nest("/ws", crate::server::ws::routes())
         .route(
             "/api/settings",
-            axum::routing::get(crate::server::api::get_settings)
-                .post(crate::server::api::update_settings),
+            axum::routing::get(crate::server::api::settings::get_settings)
+                .post(crate::server::api::settings::update_settings),
         )
         .with_state(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

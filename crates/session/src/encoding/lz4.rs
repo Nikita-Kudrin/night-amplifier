@@ -1,5 +1,3 @@
-use lz4_flex::compress_prepend_size;
-
 use night_amplifier_core::render::display::frame_to_rgb8_downsampled;
 use crate::encoding::format::*;
 
@@ -44,8 +42,6 @@ pub fn encode_rgb8_lz4_chunked(
     max_w: u32,
     max_h: u32,
 ) -> Result<Vec<u8>, String> {
-    use rayon::prelude::*;
-
     let chunk_count = chunk_count.max(1);
     let (rgb8_data, width, height) = {
         let _span = tracing::info_span!("frame_to_rgb8").entered();

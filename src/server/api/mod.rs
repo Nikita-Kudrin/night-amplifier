@@ -17,21 +17,7 @@ pub mod push_to;
 pub mod settings;
 pub mod simulator;
 
-// Re-export all handlers to maintain backward compatibility for existing router definitions
-pub use about::*;
-pub use cameras::*;
-pub use capabilities::*;
-pub use capture::*;
-pub use eyepiece::*;
-pub use indi::*;
-pub use install::*;
-pub use optional_body::OptionalBody;
-pub use push_to::*;
-pub use settings::*;
-pub use simulator::*;
-
 use crate::session::state::AppState;
-use axum::body::Body;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use std::sync::Arc;

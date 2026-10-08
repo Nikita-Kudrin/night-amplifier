@@ -8,7 +8,7 @@ then curated to only the types/constants needed by the night-amplifier integrati
     clippy::upper_case_acronyms
 )]
 
-use std::os::raw::{c_int, c_short, c_uint, c_ulonglong, c_ushort, c_void};
+use std::os::raw::{c_int, c_uint, c_ulonglong, c_ushort, c_void};
 
 // ── HRESULT (Windows-style, >= 0 is success, < 0 is failure) ────────────────
 pub type HRESULT = c_int;

@@ -3,8 +3,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::Frame;
-
 use super::error::{CameraError, CameraResult};
 use super::traits::{Camera, CameraProvider};
 use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};

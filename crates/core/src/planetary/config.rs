@@ -121,6 +121,7 @@ impl PlanetaryConfig {
 
 /// Region of interest for alignment
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct AlignmentRoi {
     /// X coordinate of top-left corner
     pub x: usize,

@@ -26,7 +26,7 @@ vi.mock('./composables/useAppState.js', () => ({
   }))
 }))
 
-vi.mock('./composables/useWebSocket.js', () => ({
+vi.mock('./composables/useEventStream.js', () => ({
   useEventStream: vi.fn(() => ({
     lastEvent: ref(null),
   }))
@@ -152,7 +152,7 @@ describe('App.vue Routing', () => {
     window.location = { ...originalLocation, pathname: '/' }
     const App = (await import('./App.vue')).default
     const { useAppState } = await import('./composables/useAppState.js')
-    const { useEventStream } = await import('./composables/useWebSocket.js')
+    const { useEventStream } = await import('./composables/useEventStream.js')
     mount(App, { global: { stubs: { StatusBar: true, LiveView: true, CameraPanel: true, CaptureControls: true, SettingsPanel: true } } })
     const appState = useAppState.mock.results.at(-1).value
     const events = useEventStream.mock.results.at(-1).value

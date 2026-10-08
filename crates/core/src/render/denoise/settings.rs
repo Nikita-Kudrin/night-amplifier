@@ -11,6 +11,7 @@ use super::AiComputePreference;
 /// `StackingType::Planetary`, where the fine detail lucky imaging exists to
 /// recover is exactly what a denoiser removes.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct DenoiseSettings {
     /// The master switch, and a Pro control like the rest of this block. Off gives
     /// `DenoiseConfig::OFF`, which the encoders guarantee is *byte-identical* to the

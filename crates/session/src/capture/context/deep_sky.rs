@@ -2,7 +2,7 @@
 
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
-use super::{LiveStacker, StackSettings};
+use super::{LiveStackError, LiveStacker, StackSettings, MIN_REFERENCE_STARS};
 use night_amplifier_core::detection::{compute_median_fwhm, compute_median_snr, Star};
 use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::registration::AdaptiveRegistration;
@@ -25,24 +25,19 @@ impl StackingContext {
         height: usize,
         channels: usize,
         settings: &StackSettings,
-    ) -> Option<Self> {
+    ) -> Result<Self, LiveStackError> {
         // Built the same way `update_from_settings` builds it, so a session does not
         // start on a different method than a no-op settings edit would give it. This
         // used to hardcode `SigmaClip`, which meant the observer's choice only took
         // effect if they happened to touch settings mid-session.
         let config = settings.config.clone();
-        let stacker = match Stacker::with_plugins(width, height, channels, config, settings.plugins.clone()) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "Failed to create live stacker");
-                return None;
-            }
-        };
+        let stacker =
+            Stacker::with_plugins(width, height, channels, config, settings.plugins.clone())?;
 
         // Use adaptive registration which tries multiple strategies
         let adaptive_registration = AdaptiveRegistration::new();
 
-        Some(Self {
+        Ok(Self {
             stacker,
             adaptive_registration,
             reference_stars: Vec::new(),
@@ -54,19 +49,17 @@ impl StackingContext {
     #[instrument(skip(self, frame), fields(
         star_count = field::Empty,
     ))]
-    pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<usize, String> {
+    pub fn initialize_with_reference(&mut self, frame: &Frame) -> Result<usize, LiveStackError> {
         // Try adaptive detection first for best results
         self.reference_stars = {
             let _span = info_span!("detect_stars").entered();
-            night_amplifier_core::detection::detect_stars_adaptive(frame)
-                .map_err(|e| format!("Star detection failed: {}", e))?
+            night_amplifier_core::detection::detect_stars_adaptive(frame)?
         };
 
-        if self.reference_stars.len() < 3 {
-            return Err(format!(
-                "Too few stars detected ({}) for registration, need at least 3",
-                self.reference_stars.len()
-            ));
+        if self.reference_stars.len() < MIN_REFERENCE_STARS {
+            return Err(LiveStackError::TooFewStars {
+                found: self.reference_stars.len(),
+            });
         }
 
         // Compute quality metrics from detected stars
@@ -75,9 +68,7 @@ impl StackingContext {
             snr: compute_median_snr(&self.reference_stars),
         };
 
-        self.stacker
-            .add_reference_with_quality(frame, quality)
-            .map_err(|e| format!("Failed to add reference frame: {}", e))?;
+        self.stacker.add_reference_with_quality(frame, quality)?;
 
         self.gate.set_reference(quality.fwhm);
         self.is_initialized = true;
@@ -98,9 +89,9 @@ impl StackingContext {
         matched_stars = field::Empty,
         residual = field::Empty,
     ))]
-    pub fn add_frame(&mut self, frame: &Frame) -> Result<FrameAdmission, String> {
+    pub fn add_frame(&mut self, frame: &Frame) -> Result<FrameAdmission, LiveStackError> {
         if !self.is_initialized {
-            return Err("Stacking context not initialized".to_string());
+            return Err(LiveStackError::NoReference);
         }
 
         self.gate.frame_offered();
@@ -121,7 +112,7 @@ impl StackingContext {
             }
         };
 
-        if target_stars.len() < 3 {
+        if target_stars.len() < MIN_REFERENCE_STARS {
             Span::current().record("registered", false);
             return Ok(FrameAdmission::rejected(
                 RejectionReason::TooFewStars,
@@ -229,29 +220,23 @@ impl StackingContext {
         frame: &Frame,
         target_stars: Vec<Star>,
         quality: FrameQuality,
-    ) -> Result<(), String> {
+    ) -> Result<(), LiveStackError> {
         self.stacker.clear();
-        self.stacker
-            .add_reference_with_quality(frame, quality)
-            .map_err(|e| format!("Failed to re-base stack on new reference: {}", e))?;
+        self.stacker.add_reference_with_quality(frame, quality)?;
         self.reference_stars = target_stars;
         self.gate.set_reference(quality.fwhm);
         Ok(())
     }
 
     #[instrument(skip(self), fields(frame_count = self.frame_count()))]
-    pub fn compute(&self) -> Result<Frame, String> {
-        self.stacker
-            .compute()
-            .map_err(|e| format!("Failed to compute stack: {}", e))
+    pub fn compute(&self) -> Result<Frame, LiveStackError> {
+        Ok(self.stacker.compute()?)
     }
 
     /// The stacked result and its coverage map, from one read of the accumulator.
     #[instrument(skip(self), fields(frame_count = self.frame_count()))]
-    pub fn compute_with_coverage(&self) -> Result<(Frame, night_amplifier_core::frame::NoiseField), String> {
-        self.stacker
-            .compute_with_coverage()
-            .map_err(|e| format!("Failed to compute stack: {}", e))
+    pub fn compute_with_coverage(&self) -> Result<(Frame, NoiseField), LiveStackError> {
+        Ok(self.stacker.compute_with_coverage()?)
     }
 
     pub fn frame_count(&self) -> usize {
@@ -297,13 +282,17 @@ impl LiveStacker for StackingContext {
         self.update_from_settings(settings);
     }
 
-    fn set_reference(&mut self, frame: &Frame) -> Result<(), String> {
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
         let star_count = self.initialize_with_reference(frame)?;
         info!(star_count, "Stacking initialized with reference frame");
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, _settings: &StackSettings) -> Result<FrameAdmission, String> {
+    fn offer(
+        &mut self,
+        frame: &Frame,
+        _settings: &StackSettings,
+    ) -> Result<FrameAdmission, LiveStackError> {
         let admission = self.add_frame(frame)?;
         // `residual` as Debug, not the bare f32: NaN/inf are legitimate sentinels here
         // (see `FrameAdmission::mean_residual`), and OTel exports a bare f32 as a double
@@ -330,7 +319,7 @@ impl LiveStacker for StackingContext {
     /// One read of the 434 MB accumulator for both the display copy and the coverage
     /// map; see `MasterStack::compute_with_coverage`. A stack every sub covered
     /// completely — the common case — carries no map, so it costs the encoders nothing.
-    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String> {
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), LiveStackError> {
         let (frame, coverage) = self.compute_with_coverage()?;
         Ok((frame, coverage.is_usable().then_some(coverage)))
     }
@@ -340,7 +329,30 @@ impl LiveStacker for StackingContext {
 mod tests {
     use super::*;
     use crate::state::CaptureSettings;
+    use night_amplifier_core::plugins::Plugins;
     use night_amplifier_core::stacking::{RejectionMethod, WeightingPreset};
+
+    fn context() -> StackingContext {
+        let settings = StackSettings::of(&CaptureSettings::default(), &Plugins::none());
+        StackingContext::new(64, 64, 1, &settings).expect("context builds")
+    }
+
+    /// A starless reference cannot anchor registration, and says so by count rather than
+    /// as a generic stack failure.
+    #[test]
+    fn a_starless_reference_is_too_few_stars() {
+        let blank = Frame::filled(64, 64, 1, 0.1).unwrap();
+        assert_eq!(
+            context().initialize_with_reference(&blank),
+            Err(LiveStackError::TooFewStars { found: 0 })
+        );
+    }
+
+    #[test]
+    fn a_frame_before_the_reference_is_refused() {
+        let frame = Frame::filled(64, 64, 1, 0.1).unwrap();
+        assert_eq!(context().add_frame(&frame).err(), Some(LiveStackError::NoReference));
+    }
 
     /// Starting a session and editing settings mid-session must agree.
     ///

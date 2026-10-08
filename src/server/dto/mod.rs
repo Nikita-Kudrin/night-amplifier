@@ -90,6 +90,7 @@ impl ApiResponse<()> {
 
 /// Capture status response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CaptureStatusResponse {
     pub state: String,
     pub frame_count: u64,
@@ -124,6 +125,7 @@ impl CaptureStatusResponse {
 /// Except the Focus/Finder snapshot: it is the server's record of what to restore, and a
 /// client that could read it would be tempted to write it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SettingsResponse {
     #[serde(flatten)]
     pub settings: CaptureSettings,
@@ -180,6 +182,7 @@ pub struct MessageResponse {
 
 /// Simulated camera configuration response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SimulatorConfigResponse {
     pub configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

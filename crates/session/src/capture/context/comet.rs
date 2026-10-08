@@ -2,7 +2,7 @@
 
 use tracing::{info, warn};
 
-use super::{LiveStacker, StackSettings};
+use super::{LiveStackError, LiveStacker, StackSettings};
 use night_amplifier_core::frame::{Frame, NoiseField};
 use crate::capture::frame_gate::FrameAdmission;
 use night_amplifier_core::stacking::{CometContext, StackingType};
@@ -17,11 +17,11 @@ impl CometStacker {
         height: usize,
         channels: usize,
         settings: &StackSettings,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, LiveStackError> {
         let plugin = settings
             .plugins
             .comet()
-            .ok_or_else(|| "Comet stacking plugin not found (Pro feature)".to_string())?;
+            .ok_or(LiveStackError::PluginMissing(StackingType::Comet))?;
         Ok(Self(plugin.create_context(width, height, channels, &settings.comet())))
     }
 
@@ -64,13 +64,17 @@ impl LiveStacker for CometStacker {
         }
     }
 
-    fn set_reference(&mut self, frame: &Frame) -> Result<(), String> {
-        self.0.initialize_with_reference(frame).map_err(|e| e.to_string())?;
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError> {
+        self.0.initialize_with_reference(frame)?;
         info!("Comet stacking initialized with reference frame");
         Ok(())
     }
 
-    fn offer(&mut self, frame: &Frame, _settings: &StackSettings) -> Result<FrameAdmission, String> {
+    fn offer(
+        &mut self,
+        frame: &Frame,
+        _settings: &StackSettings,
+    ) -> Result<FrameAdmission, LiveStackError> {
         // An error is a frame the nucleus could not be found in, not a broken stack:
         // the accumulated comet stays on screen.
         let added = match self.0.add_frame(frame) {
@@ -93,8 +97,8 @@ impl LiveStacker for CometStacker {
         Ok(FrameAdmission::unreasoned(added))
     }
 
-    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String> {
-        self.0.compute().map(|frame| (frame, None)).map_err(|e| e.to_string())
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), LiveStackError> {
+        Ok((self.0.compute()?, None))
     }
 }
 
@@ -195,8 +199,12 @@ mod tests {
     #[test]
     fn without_the_plugin_there_is_no_comet_stack() {
         let settings = StackSettings::of(&CaptureSettings::default(), &night_amplifier_core::plugins::Plugins::none());
-        let refused = CometStacker::new(32, 32, 1, &settings);
-        assert!(refused.is_err(), "Community has no comet alignment to run");
+        let refused = CometStacker::new(32, 32, 1, &settings).err();
+        assert_eq!(
+            refused,
+            Some(LiveStackError::PluginMissing(StackingType::Comet)),
+            "Community has no comet alignment to run"
+        );
     }
 
     #[test]

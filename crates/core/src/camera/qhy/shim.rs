@@ -2,7 +2,6 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tracing::warn;
 
 use super::ffi_types::*;
 use super::sdk::QhySdk;

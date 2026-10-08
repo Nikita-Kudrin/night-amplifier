@@ -9,7 +9,7 @@ pub mod sdk;
 pub mod shim;
 
 use crate::ffi_safety::catch_ffi_panic;
-use crate::{CfaPattern, Frame, PixelFormat};
+use crate::CfaPattern;
 use ffi_types::ControlId;
 use shim::{scan_cameras, QhyHandle};
 

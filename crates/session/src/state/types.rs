@@ -1,5 +1,3 @@
-use night_amplifier_core::stacking::{StackingType, WeightingPreset};
-
 /// What a connected camera is for.
 ///
 /// The rig holds at most one of each: the imaging camera on the main scope, and an
@@ -10,6 +8,7 @@ use night_amplifier_core::stacking::{StackingType, WeightingPreset};
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
 )]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum CameraRole {
     /// Imaging camera: drives the capture pipeline, the stack and the disk session.

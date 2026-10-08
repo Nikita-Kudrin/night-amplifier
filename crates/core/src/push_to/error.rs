@@ -12,7 +12,7 @@ pub enum PushToError {
     #[error("{0}")]
     InvalidRequest(String),
 
-    #[error("Push-To plugin not found. This feature requires Night Amplifier Pro.")]
+    #[error("Push-To navigation requires Night Amplifier Pro")]
     PluginRequired,
 
     #[error("Detection failed: {0}")]

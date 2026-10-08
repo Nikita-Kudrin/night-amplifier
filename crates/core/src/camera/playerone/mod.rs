@@ -4,7 +4,7 @@ pub mod ffi_types;
 pub mod sdk;
 pub mod shim;
 
-use shim::{Camera as POACamera, CameraDescription};
+use shim::Camera as POACamera;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -14,13 +14,12 @@ use super::traits::{Camera, CameraProvider};
 use super::exposure::ExposureLoop;
 use super::types::{CameraInfo, CameraStatus, CaptureConfig, GainPresets, RawFrame};
 use crate::ffi_safety::catch_ffi_panic;
-use crate::Frame;
 
 mod capture;
 mod properties;
 mod sensor_mode;
 
-pub use properties::{camera_info_from_description, camera_info_from_properties};
+pub use properties::camera_info_from_description;
 
 /// Apply the `USB_BANDWIDTH_ENV` field switch, then read the limit back. The read-back is
 /// `info` while the switch is set: a field log at the default level must say what the

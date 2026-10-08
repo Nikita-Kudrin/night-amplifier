@@ -22,10 +22,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 # JPEG compression for high-speed dynamic resolution streaming
 turbojpeg = { workspace = true }
+# JSON Schema of the wire types (`api-schema`)
+schemars = { workspace = true, optional = true }
 
 [features]
 test-support = ["night_amplifier_core/test-support"]
 telemetry = ["night_amplifier_core/telemetry"]
+api-schema = ["dep:schemars", "night_amplifier_core/api-schema"]
 
 [dev-dependencies]
 night_amplifier_core = { workspace = true, features = ["test-support"] }

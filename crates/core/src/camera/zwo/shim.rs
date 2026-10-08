@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_long, c_uchar};
-use tracing::warn;
+use std::os::raw::{c_int, c_long};
 
 use super::ffi_types::*;
 use super::sdk::ZwoSdk;

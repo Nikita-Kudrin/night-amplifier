@@ -1,7 +1,5 @@
 //! Tests for API response types
 
-use axum::http::StatusCode;
-
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
 use crate::session::state::{

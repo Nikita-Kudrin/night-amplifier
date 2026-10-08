@@ -16,8 +16,10 @@ pub(crate) use comet::StubComet;
 pub use deep_sky::StackingContext;
 pub use planetary::PlanetaryStackingContext;
 
+use thiserror::Error;
 use tracing::warn;
 
+use night_amplifier_core::error::StackError;
 use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::planetary::AlignmentRoi;
 use crate::state::CaptureSettings;
@@ -25,6 +27,29 @@ use night_amplifier_core::plugins::Plugins;
 use night_amplifier_core::stacking::{CometSettings, RejectionMethod, StackingConfig, StackingType};
 
 use super::frame_gate::FrameAdmission;
+
+/// Reference stars star registration needs: one triangle.
+pub const MIN_REFERENCE_STARS: usize = 3;
+
+/// Why a live stack could not be built, started or read. A frame the stack merely did not
+/// admit is not one of these: that is a [`FrameAdmission`].
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum LiveStackError {
+    /// The mode runs on a Pro plugin this build or licence does not have.
+    #[error("{} stacking needs Night Amplifier Pro", .0.display_name())]
+    PluginMissing(StackingType),
+
+    #[error("Too few stars detected ({found}) for registration, need at least {MIN_REFERENCE_STARS}")]
+    TooFewStars { found: usize },
+
+    /// A frame was offered before the reference that starts the stack.
+    #[error("The stack has no reference frame yet")]
+    NoReference,
+
+    /// The accumulator, star detection or the mode's plugin failed.
+    #[error(transparent)]
+    Stack(#[from] StackError),
+}
 
 /// One stacking mode's accumulator, as the stacking task drives it frame by frame.
 pub trait LiveStacker: Send {
@@ -42,15 +67,19 @@ pub trait LiveStacker: Send {
     /// Re-reads the mode's parameters; called before every frame so an edit lands mid-stack.
     fn apply_settings(&mut self, settings: &StackSettings);
 
-    fn set_reference(&mut self, frame: &Frame) -> Result<(), String>;
+    fn set_reference(&mut self, frame: &Frame) -> Result<(), LiveStackError>;
 
     /// Offers a frame. `Err` means the stack could not take it at all, and the caller
     /// shows the raw sub; a frame merely not admitted is `Ok` with `added: false`.
-    fn offer(&mut self, frame: &Frame, settings: &StackSettings) -> Result<FrameAdmission, String>;
+    fn offer(
+        &mut self,
+        frame: &Frame,
+        settings: &StackSettings,
+    ) -> Result<FrameAdmission, LiveStackError>;
 
     /// The stack for display, with its coverage map where the mode keeps one and it has
     /// something to say (see [`NoiseField::is_usable`]).
-    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), String>;
+    fn snapshot(&self) -> Result<(Frame, Option<NoiseField>), LiveStackError>;
 }
 
 /// What the live stackers read from the session's settings, taken once per frame.
@@ -93,18 +122,15 @@ pub fn create_live_stacker(
     kind: StackingType,
     frame: &Frame,
     settings: &StackSettings,
-) -> Result<Box<dyn LiveStacker>, String> {
+) -> Result<Box<dyn LiveStacker>, LiveStackError> {
     let (width, height, channels) = (frame.width(), frame.height(), frame.channels());
-    match kind {
-        StackingType::DeepSky => StackingContext::new(width, height, channels, settings)
-            .map(|ctx| Box::new(ctx) as Box<dyn LiveStacker>)
-            .ok_or_else(|| "Failed to create stacking context".to_string()),
-        StackingType::Planetary => PlanetaryStackingContext::new(width, height, channels, settings)
-            .map(|ctx| Box::new(ctx) as Box<dyn LiveStacker>)
-            .ok_or_else(|| "Failed to create planetary stacking context".to_string()),
-        StackingType::Comet => CometStacker::new(width, height, channels, settings)
-            .map(|ctx| Box::new(ctx) as Box<dyn LiveStacker>),
-    }
+    Ok(match kind {
+        StackingType::DeepSky => Box::new(StackingContext::new(width, height, channels, settings)?),
+        StackingType::Planetary => {
+            Box::new(PlanetaryStackingContext::new(width, height, channels, settings)?)
+        }
+        StackingType::Comet => Box::new(CometStacker::new(width, height, channels, settings)?),
+    })
 }
 
 /// The stacking state a capture leaves behind when it ends unexpectedly — a dropout

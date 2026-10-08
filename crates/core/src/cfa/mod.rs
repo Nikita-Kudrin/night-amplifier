@@ -249,6 +249,7 @@ impl std::fmt::Debug for CfaPipeline {
 /// Hot-pixel rejection has no switch: it always runs, `hot_pixel_sigma` is its only
 /// tuning. See `stage_config::build_cfa_pipeline` for why.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SensorCorrectionSettings {
     /// How far above its brightest same-colour neighbour a sample must sit to
     /// count as hot, in sigmas of that colour site's own noise.

@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use thiserror::Error;
 
 pub use crate::session::error::{ApiError, ApiResult};
+use crate::push_to::PushToError;
 
 /// Server-level errors (startup, binding, etc.)
 #[derive(Debug, Clone, Error)]
@@ -54,6 +55,30 @@ impl HttpStatus for ApiError {
     }
 }
 
+/// The Push-To routes answer through here. Each used to pick its own status, so the same
+/// missing plugin was a 404 on one route, a 400 on another and a 500 on the rest.
+impl HttpStatus for PushToError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            PushToError::PluginRequired => StatusCode::FORBIDDEN,
+            PushToError::TargetNotFound(_) => StatusCode::NOT_FOUND,
+            PushToError::ConfigError(_)
+            | PushToError::InvalidRequest(_)
+            | PushToError::DatabaseLoadFailed(_) => StatusCode::BAD_REQUEST,
+            PushToError::Cancelled => StatusCode::CONFLICT,
+            PushToError::DetectionFailed(_)
+            | PushToError::SolveFailed(_)
+            | PushToError::NotEnoughStars { .. }
+            | PushToError::PoorFrameQuality(_)
+            | PushToError::NotSettled(_)
+            | PushToError::InstallFailed(_)
+            | PushToError::ExtractionFailed(_)
+            | PushToError::ChecksumMismatch { .. }
+            | PushToError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +120,24 @@ mod tests {
             }
             .status_code(),
             StatusCode::CONFLICT
+        );
+    }
+
+    #[test]
+    fn push_to_error_status_codes() {
+        assert_eq!(PushToError::PluginRequired.status_code(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            PushToError::TargetNotFound("M200".into()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        // A path the client sent that holds no database is the client's to fix.
+        assert_eq!(
+            PushToError::DatabaseLoadFailed("no d80 files".into()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            PushToError::SolveFailed("x".into()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 }

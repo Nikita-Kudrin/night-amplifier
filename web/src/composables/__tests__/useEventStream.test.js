@@ -13,7 +13,7 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useEventStream as originalUseEventStream} from '../useWebSocket.js'
+import {useEventStream as originalUseEventStream} from '../useEventStream.js'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;

@@ -4,15 +4,12 @@
 //! The bottom layer. It depends on neither the application layer
 //! (`night_amplifier_session`) nor the server, and Cargo enforces that.
 
-// `unused_imports` stays allowed crate-wide: clearing the ~60 stale ones is separate
-// work and the lint has never caught a real defect here. `dead_code` is deliberately
-// *not* allowed crate-wide any more — a blanket allow let the raw-CFA migration leave
-// a live-looking `buffer_to_frame` in two camera shims, still debayering with no
-// caller and no warning; it's allowed only on the two modules wrapping vendored SDK
-// bindings, where the 200-odd unused items actually live. `unused_variables` and
-// `unused_assignments` are deliberately not allowed either — suppressing them let the
-// planar migration ship three half-converted call sites whose only symptom was a local computed and never read.
-#![allow(unused_imports)]
+// No crate-wide lint allows. `dead_code` is allowed only on the two modules wrapping vendored
+// SDK bindings, where the 200-odd unused items live: a blanket allow once let the raw-CFA
+// migration leave a live-looking `buffer_to_frame` in two camera shims, still debayering with
+// no caller. A blanket `unused_variables` let the planar migration ship three half-converted
+// call sites whose only symptom was a local never read. An import only a `#[cfg(test)] use
+// super::*` child needs belongs in that child, or the non-test build warns.
 
 pub mod background;
 pub mod calibration;

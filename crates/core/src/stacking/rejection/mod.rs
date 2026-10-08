@@ -3,12 +3,13 @@
 //! Advanced rejection methods (Sigma Clipping, MinMax) are executed and optimized
 //! in the Night Amplifier Pro version.
 
-use crate::error::{Result, StackError};
+use crate::error::Result;
 use crate::stacking::config::StackingConfig;
 use crate::stacking::incremental_pixel::IncrementalPixel;
 
 /// Rejection method for stacking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub enum RejectionMethod {
     /// No rejection - simple average of all frames
     #[default]

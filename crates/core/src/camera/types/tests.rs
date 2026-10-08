@@ -1,5 +1,7 @@
 use super::*;
+use crate::camera::error::CameraError;
 use crate::CfaPattern;
+use std::time::Duration;
 
 #[test]
 fn test_capture_config_defaults() {

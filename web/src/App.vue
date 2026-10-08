@@ -1,6 +1,6 @@
 <script setup>
 import {ref, provide, onMounted, watch} from 'vue'
-import {useEventStream} from './composables/useWebSocket.js'
+import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
 import {useAiCompute} from './composables/useAiCompute.js'
 import {getAstapStatus, getCatalogStatus} from './composables/api.js'

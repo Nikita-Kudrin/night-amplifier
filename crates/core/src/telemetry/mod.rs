@@ -110,8 +110,6 @@ impl TelemetryGuard {
 #[cfg(feature = "telemetry")]
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
-        use opentelemetry::metrics::MeterProvider;
-        use opentelemetry::trace::TracerProvider;
         if let Some(provider) = self._trace_provider.take() {
             let _ = provider.shutdown();
         }
@@ -147,7 +145,6 @@ pub fn init_telemetry(config: TelemetryConfig) -> Result<TelemetryGuard, Telemet
         return Ok(TelemetryGuard::new(None, None));
     }
 
-    use opentelemetry::trace::TracerProvider;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::metrics::PeriodicReader;
     use opentelemetry_sdk::trace::Sampler;

@@ -1,10 +1,11 @@
 <script setup>
 import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
-import {useImageStream} from '../composables/useWebSocket.js'
+import {useImageStream} from '../composables/useImageStream.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
+import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
 import {getAppState} from '../composables/useAppState.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
 import {saveBlob} from '../utils/saveBlob.js'
@@ -156,44 +157,11 @@ watch(isBinoview, () => {
   }, 10)
 })
 
-let initialDist = 0
-let initialScale = 1
-let initialCx = 0
-let initialCy = 0
-let initialPanX = 0
-let initialPanY = 0
-
 const isZoomAllowed = computed(() => routePath === '/eyepiece')
-const zoomScale = ref(1)
-const panX = ref(0)
-const panY = ref(0)
-const isPinching = ref(false)
-
-const zoomStyle = computed(() => {
-  if (zoomScale.value === 1) return {}
-  return {
-    transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoomScale.value})`,
-    transformOrigin: '0 0',
-  }
-})
-
-function clampPan(x, y, scale) {
-  if (scale <= 1) return { x: 0, y: 0 }
-  const W = window.innerWidth
-  const H = window.innerHeight
-  const minX = W * (1 - scale)
-  const minY = H * (1 - scale)
-  return {
-    x: Math.min(0, Math.max(minX, x)),
-    y: Math.min(0, Math.max(minY, y))
-  }
-}
-
-function resetZoom() {
-  zoomScale.value = 1
-  panX.value = 0
-  panY.value = 0
-}
+const zoom = useEyepieceZoom(() => isZoomAllowed.value && effectiveHasFrame.value)
+const zoomScale = zoom.scale
+const zoomStyle = zoom.style
+const resetZoom = zoom.reset
 
 const rootRef = ref(null)
 
@@ -268,116 +236,27 @@ async function downloadSnapshot(circular) {
 
 function handleWheel(e) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  const zoomSensitivity = 0.001
-  const delta = -e.deltaY * zoomSensitivity
-  
-  const oldScale = zoomScale.value
-  let newScale = oldScale + delta
-  newScale = Math.min(2, Math.max(1, newScale))
-  
-  if (newScale === oldScale) return
-
-  const cx = e.clientX
-  const cy = e.clientY
-  
-  let newX = cx - (cx - panX.value) * (newScale / oldScale)
-  let newY = cy - (cy - panY.value) * (newScale / oldScale)
-  
-  const clamped = clampPan(newX, newY, newScale)
-  panX.value = clamped.x
-  panY.value = clamped.y
-  zoomScale.value = newScale
-}
-
-function getDist(touches) {
-  const dx = touches[0].clientX - touches[1].clientX
-  const dy = touches[0].clientY - touches[1].clientY
-  return Math.sqrt(dx * dx + dy * dy)
-}
-
-function getCenter(touches) {
-  if (touches.length === 1) {
-    return { x: touches[0].clientX, y: touches[0].clientY }
-  }
-  return {
-    x: (touches[0].clientX + touches[1].clientX) / 2,
-    y: (touches[0].clientY + touches[1].clientY) / 2
-  }
+  zoom.wheel(e)
 }
 
 function handleTouchStart(e) {
   handlePressStart(e)
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2) {
-    isPinching.value = true
-    initialDist = getDist(e.touches)
-    initialScale = zoomScale.value
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  } else if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
+  zoom.touchStart(e)
 }
 
 function handleTouchMove(e) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2 && isPinching.value) {
-    const currentDist = getDist(e.touches)
-    const scaleRatio = currentDist / initialDist
-    let newScale = initialScale * scaleRatio
-    newScale = Math.min(2, Math.max(1, newScale))
-    
-    const currentCenter = getCenter(e.touches)
-    let newX = currentCenter.x - (initialCx - initialPanX) * (newScale / initialScale)
-    let newY = currentCenter.y - (initialCy - initialPanY) * (newScale / initialScale)
-    
-    const clamped = clampPan(newX, newY, newScale)
-    panX.value = clamped.x
-    panY.value = clamped.y
-    zoomScale.value = newScale
-  } else if (e.touches.length === 1 && zoomScale.value > 1 && !isPinching.value) {
-    const currentCenter = getCenter(e.touches)
-    const dx = currentCenter.x - initialCx
-    const dy = currentCenter.y - initialCy
-    
-    let newX = initialPanX + dx
-    let newY = initialPanY + dy
-    
-    const clamped = clampPan(newX, newY, zoomScale.value)
-    panX.value = clamped.x
-    panY.value = clamped.y
-  }
+  zoom.touchMove(e)
 }
 
 function handleTouchCancel(e) {
   cancelPress(e)
-  isPinching.value = false
+  zoom.touchCancel()
 }
 
 function handleTouchEnd(e) {
   handlePressEnd(e)
-  if (e.touches.length < 2) {
-    isPinching.value = false
-  }
-  if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
+  zoom.touchEnd(e)
 }
 
 let resizeObserver = null

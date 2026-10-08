@@ -5,7 +5,6 @@
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
-use tracing::info;
 
 use super::super::dto::{ApiResponse, AstapInstallRequest, CatalogInstallRequest, MessageResponse};
 use crate::session::state::AppState;

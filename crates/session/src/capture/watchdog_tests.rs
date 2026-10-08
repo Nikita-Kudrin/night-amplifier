@@ -8,7 +8,7 @@ use night_amplifier_core::camera::{
 };
 use crate::capture::channel::{PipelineCapacities, QueueDepth};
 use crate::capture::stall::{EscalationReason, StallTracker, StallVerdict, STALL_ESCALATION};
-use crate::capture::task::{run_capture_task, CaptureChannels, FrameNumbers};
+use crate::capture::capture_thread::{run_capture_task, CaptureChannels, FrameNumbers};
 use crate::capture::watchdog::*;
 use crate::events::ServerEvent;
 use crate::state::{AppState, CameraRole, ConnectedCameraInfo};

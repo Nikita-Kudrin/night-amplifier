@@ -1,13 +1,10 @@
 //! INDI Camera Provider Implementation
 
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::debug;
 
-use crate::camera::{
-    Camera, CameraEntry, CameraInfo, CameraProvider, CameraResult, ImageFormat, SensorType,
-};
+use crate::camera::{Camera, CameraInfo, CameraProvider, CameraResult, ImageFormat, SensorType};
 use crate::indi::client::IndiClient;
-use crate::indi::xml::PropertyState;
 
 pub struct IndiProvider {
     pub host: String,
