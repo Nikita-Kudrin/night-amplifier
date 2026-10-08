@@ -98,23 +98,20 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
     use tokio_tungstenite::tungstenite::Message;
 
     let server = super::image_stream_clients::start_server().await;
-    server.state.cameras.write().await.insert(
-        "mock_1".to_string(),
-        crate::server::state::ConnectedCameraInfo {
-            id: "mock_1".to_string(),
-            provider: "Mock".to_string(),
-            index: 0,
-            role: CameraRole::Guide,
-            info: crate::camera::CameraInfo {
-                name: "Guiding".to_string(),
-                ..Default::default()
-            },
+    let camera = crate::server::state::ConnectedCameraInfo {
+        id: "mock_1".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role: CameraRole::Guide,
+        info: crate::camera::CameraInfo {
+            name: "Guiding".to_string(),
+            ..Default::default()
         },
-    );
+    };
+    server.state.roster.install(camera, false);
     server
         .state
-        .set_camera_phase(CameraRole::Guide, "Guiding", crate::server::state::CameraPhase::Guiding)
-        .await;
+        .set_camera_phase(CameraRole::Guide, "Guiding", crate::server::state::CameraPhase::Guiding);
 
     let mut client = server.connect("/ws/events").await;
     let mut events = Vec::new();

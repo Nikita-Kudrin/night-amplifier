@@ -11,22 +11,20 @@ use crate::server::state::*;
 
 /// Install a connected camera in `role` without opening a device.
 async fn register_camera(state: &Arc<AppState>, role: CameraRole, id: &str, name: &str) {
-    state.cameras.write().await.insert(
-        id.to_string(),
-        ConnectedCameraInfo {
-            id: id.to_string(),
-            provider: "Mock".to_string(),
-            index: 0,
-            role,
-            info: CameraInfo {
-                name: name.to_string(),
-                has_cooler: true,
-                min_temp_c: Some(-40.0),
-                max_temp_c: Some(20.0),
-                ..Default::default()
-            },
+    let camera = ConnectedCameraInfo {
+        id: id.to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role,
+        info: CameraInfo {
+            name: name.to_string(),
+            has_cooler: true,
+            min_temp_c: Some(-40.0),
+            max_temp_c: Some(20.0),
+            ..Default::default()
         },
-    );
+    };
+    state.roster.install(camera, false);
     if role == CameraRole::Guide {
         state.set_guide_loop_running(true);
     }
@@ -554,14 +552,14 @@ async fn the_name_lookup_answers_only_for_connected_cameras() {
     register_camera(&state, CameraRole::Main, "mock_0", "Imaging").await;
 
     assert_eq!(
-        state.connected_camera_name("mock_1").await.as_deref(),
+        state.connected_camera_name("mock_1").as_deref(),
         Some("Guiding")
     );
     assert_eq!(
-        state.connected_camera_name("mock_0").await.as_deref(),
+        state.connected_camera_name("mock_0").as_deref(),
         Some("Imaging")
     );
-    assert_eq!(state.connected_camera_name("mock_missing").await, None);
+    assert_eq!(state.connected_camera_name("mock_missing"), None);
 }
 
 // ============================================================================

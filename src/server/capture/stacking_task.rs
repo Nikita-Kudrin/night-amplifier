@@ -422,7 +422,7 @@ fn save_stacked_result(
         // The imaging camera specifically: it is the one whose frames are in this
         // stack, and with a guide camera connected an arbitrary map entry could name
         // the wrong instrument in the FITS header.
-        let camera_info = rt.block_on(state.camera_in_role(CameraRole::Main));
+        let camera_info = state.camera_in_role(CameraRole::Main);
         if let Some(info) = camera_info {
             rt.block_on(storage::save_stacked_result(
                 state,

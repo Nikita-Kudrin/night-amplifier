@@ -62,7 +62,6 @@ pub(crate) fn poll_camera_status_bounded(
     state: &Arc<AppState>,
     role: CameraRole,
     target_temp_c: Option<f64>,
-    rt: &tokio::runtime::Handle,
 ) -> StatusPollOutcome {
     let (tx, rx) = mpsc::channel();
     let camera_name = camera.info().name.clone();
@@ -108,7 +107,7 @@ pub(crate) fn poll_camera_status_bounded(
             }
             match result {
                 Ok(status) => {
-                    rt.block_on(state.update_camera_status(&camera_name, status, target_temp_c));
+                    state.update_camera_status(&camera_name, status, target_temp_c);
                 }
                 Err(e) => debug!(error = %e, "Failed to read camera status"),
             }
@@ -282,11 +281,10 @@ mod watchdog_tests {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
         let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(Duration::ZERO));
-        let rt = tokio::runtime::Handle::current();
 
         let outcome = tokio::task::spawn_blocking({
             let state = Arc::clone(&state);
-            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt)
+            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None)
         })
         .await
         .unwrap();
@@ -307,12 +305,11 @@ mod watchdog_tests {
         let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(
             STATUS_POLL_TIMEOUT + Duration::from_secs(5),
         ));
-        let rt = tokio::runtime::Handle::current();
 
         let start = Instant::now();
         let outcome = tokio::task::spawn_blocking({
             let state = Arc::clone(&state);
-            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt)
+            move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None)
         })
         .await
         .unwrap();
@@ -330,13 +327,12 @@ mod watchdog_tests {
     /// Run one bounded status poll against a camera that never responds in
     /// time, returning once the call has been dispatched (it will show up as
     /// a `TimedOut` outcome, same as the dedicated timeout test above).
-    async fn stuck_poll(state: &Arc<AppState>, rt: &tokio::runtime::Handle) {
+    async fn stuck_poll(state: &Arc<AppState>) {
         let camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(
             STATUS_POLL_TIMEOUT + Duration::from_secs(5),
         ));
         let state = Arc::clone(state);
-        let rt = rt.clone();
-        tokio::task::spawn_blocking(move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None, &rt))
+        tokio::task::spawn_blocking(move || poll_camera_status_bounded(camera, &state, CameraRole::Main, None))
             .await
             .unwrap();
     }
@@ -345,11 +341,10 @@ mod watchdog_tests {
     pub(crate) async fn poll_camera_status_bounded_escalates_after_persistent_timeouts() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let rt = tokio::runtime::Handle::current();
 
         for i in 1..=PERSISTENT_FAULT_THRESHOLD {
             let mut subscriber = state.subscribe_events();
-            stuck_poll(&state, &rt).await;
+            stuck_poll(&state).await;
 
             let mut saw_persistent = false;
             while let Ok(event) = subscriber.try_recv() {
@@ -378,20 +373,18 @@ mod watchdog_tests {
     pub(crate) async fn poll_camera_status_bounded_resets_streak_on_success() {
         let (state, _disk_writer) = AppState::new_for_testing();
         let state = Arc::new(state);
-        let rt = tokio::runtime::Handle::current();
 
         // One timeout short of the threshold.
         for _ in 0..(PERSISTENT_FAULT_THRESHOLD - 1) {
-            stuck_poll(&state, &rt).await;
+            stuck_poll(&state).await;
         }
 
         // A fast, successful poll should clear the streak.
         let fast_camera: Box<dyn crate::camera::Camera> = Box::new(slow_status_camera(Duration::ZERO));
         let outcome = {
             let state = Arc::clone(&state);
-            let rt = rt.clone();
             tokio::task::spawn_blocking(move || {
-                poll_camera_status_bounded(fast_camera, &state, CameraRole::Main, None, &rt)
+                poll_camera_status_bounded(fast_camera, &state, CameraRole::Main, None)
             })
             .await
             .unwrap()
@@ -401,7 +394,7 @@ mod watchdog_tests {
         // One more timeout after the reset must look like "1 consecutive,"
         // not continue the earlier streak — must not escalate.
         let mut subscriber = state.subscribe_events();
-        stuck_poll(&state, &rt).await;
+        stuck_poll(&state).await;
 
         let mut saw_persistent = false;
         while let Ok(event) = subscriber.try_recv() {

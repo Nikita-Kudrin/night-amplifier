@@ -226,7 +226,7 @@ fn is_loud(event: &ServerEvent) -> bool {
 }
 
 async fn phase_of(state: &Arc<AppState>, role: CameraRole) -> CameraPhase {
-    state.camera_phase(role).await
+    state.camera_phase(role)
 }
 
 /// Back, and finished coming back: the phase turns before the install has let go of
@@ -246,7 +246,7 @@ async fn wait_recovered(state: &Arc<AppState>, role: CameraRole) -> bool {
 
 async fn teardown(state: &Arc<AppState>) {
     for role in CameraRole::all() {
-        if let Some(camera) = state.camera_in_role(role).await {
+        if let Some(camera) = state.camera_in_role(role) {
             lifecycle::finalize_disconnect(state, role, &camera.info.name, DisconnectCause::Requested).await;
         }
     }
@@ -262,7 +262,7 @@ async fn a_serial_id_opens_the_device_wherever_it_is_listed() {
     connect(&state, &NEPTUNE, CameraRole::Main).await;
 
     assert_eq!(catalog.opened(), vec!["Neptune-C II"]);
-    let main = state.camera_in_role(CameraRole::Main).await.unwrap();
+    let main = state.camera_in_role(CameraRole::Main).unwrap();
     assert_eq!(main.id, "fake_sn-NEP123");
     assert_eq!(main.index, 1);
     teardown(&state).await;
@@ -281,7 +281,7 @@ async fn a_serial_that_opens_as_another_camera_is_refused_and_closed() {
         "got {result:?}"
     );
     assert_eq!(catalog.camera.drops.load(Ordering::SeqCst), 1, "the wrong camera is closed again");
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
     assert!(!state.slot(CameraRole::Main).holds_handle());
 }
 
@@ -321,10 +321,10 @@ async fn the_guide_camera_comes_back_as_itself_after_the_list_reorders() {
         ["Neptune-C II"],
         "recovery must open only the guide camera's own device"
     );
-    let guide = state.camera_in_role(CameraRole::Guide).await.unwrap();
+    let guide = state.camera_in_role(CameraRole::Guide).unwrap();
     assert_eq!(guide.info.name, NEPTUNE.name);
     assert_eq!(guide.index, 1);
-    let main = state.camera_in_role(CameraRole::Main).await.unwrap();
+    let main = state.camera_in_role(CameraRole::Main).unwrap();
     assert_eq!(main.info.name, ARES.name, "the imaging camera is untouched");
     assert!(state.slot(CameraRole::Main).holds_handle());
     teardown(&state).await;
@@ -351,13 +351,13 @@ async fn two_bodies_of_one_model_recover_without_swapping() {
         )
         .await
     );
-    let guide = state.camera_in_role(CameraRole::Guide).await.unwrap();
+    let guide = state.camera_in_role(CameraRole::Guide).unwrap();
     assert_eq!(guide.info.id, GUIDE_BODY.device_id);
     assert_eq!(guide.index, 0, "found at its new position");
     assert_eq!(guide.id, "fake_1", "but kept under its own id: `fake_0` is the imaging camera's key");
-    let main = state.camera_in_role(CameraRole::Main).await.unwrap();
+    let main = state.camera_in_role(CameraRole::Main).unwrap();
     assert_eq!(main.info.id, MAIN_BODY.device_id);
-    assert_eq!(state.cameras.read().await.len(), 2);
+    assert_eq!(state.roster.len(), 2);
     teardown(&state).await;
 }
 
@@ -374,8 +374,8 @@ async fn a_fault_suspends_the_camera_instead_of_disconnecting_it() {
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
 
     assert_eq!(phase_of(&state, CameraRole::Main).await, CameraPhase::Recovering);
-    assert!(state.cameras.read().await.contains_key(&id_of(&NEPTUNE)));
-    assert_eq!(state.selected_camera.read().await.as_deref(), Some(id_of(&NEPTUNE).as_str()));
+    assert!(state.roster.contains(&id_of(&NEPTUNE)));
+    assert_eq!(state.roster.selected().as_deref(), Some(id_of(&NEPTUNE).as_str()));
     assert!(state.slot(CameraRole::Main).is_recovering());
     assert!(!state.slot(CameraRole::Main).holds_handle());
     let loud: Vec<_> = drain(&mut events).into_iter().filter(is_loud).collect();
@@ -437,7 +437,7 @@ async fn giving_up_ends_the_session_and_says_why() {
 
     assert!(
         eventually(
-            || state.cameras.try_read().map(|c| c.is_empty()).unwrap_or(false),
+            || state.roster.is_empty(),
             reconnect::TOTAL_BUDGET + Duration::from_secs(3)
         )
         .await,
@@ -497,7 +497,7 @@ async fn disconnecting_during_recovery_stops_it_quietly() {
         .await,
         "the supervisor should stop"
     );
-    assert!(state.cameras.read().await.is_empty());
+    assert!(state.roster.is_empty());
     assert_eq!(catalog.opened().len(), opened_before, "nothing reopened after the disconnect");
     assert!(
         !drain(&mut events).iter().any(|e| matches!(e, ServerEvent::CameraReconnectFailed { .. })),
@@ -667,7 +667,7 @@ async fn a_disconnect_during_a_reopen_is_not_undone() {
         )
         .await
     );
-    let still_registered = state.cameras.read().await.len();
+    let still_registered = state.roster.len();
     let holds_handle = state.slot(CameraRole::Main).holds_handle();
     teardown(&state).await;
     assert_eq!(still_registered, 0, "the observer disconnected this camera; recovery brought it back");
@@ -885,7 +885,7 @@ async fn a_late_fault_for_a_replaced_camera_leaves_the_replacement_alone() {
 
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
 
-    let main = state.camera_in_role(CameraRole::Main).await.map(|c| c.info.name);
+    let main = state.camera_in_role(CameraRole::Main).map(|c| c.info.name);
     let holds_handle = state.slot(CameraRole::Main).holds_handle();
     let phase = phase_of(&state, CameraRole::Main).await;
     teardown(&state).await;
@@ -1016,7 +1016,7 @@ async fn a_disconnect_waiting_on_a_successful_reopen_still_disconnects() {
         )
         .await
     );
-    let registered = state.cameras.read().await.len();
+    let registered = state.roster.len();
     let holds_handle = state.slot(CameraRole::Main).holds_handle();
     teardown(&state).await;
     assert!(answer.is_ok(), "{answer:?}");
@@ -1077,7 +1077,7 @@ async fn recover_imaging_camera_past_a_free_one(catalog: &Arc<FakeCatalog>, stat
     catalog.set(&[FREE_BODY, MAIN_REENUMERATED]);
     lifecycle::finalize_disconnect(state, CameraRole::Main, MAIN_BODY.name, DisconnectCause::DeviceFault).await;
     assert!(wait_recovered(state, CameraRole::Main).await, "the imaging camera never came back");
-    let main = state.camera_in_role(CameraRole::Main).await.unwrap();
+    let main = state.camera_in_role(CameraRole::Main).unwrap();
     assert_eq!((main.id.as_str(), main.index), ("fake_0", 1), "precondition: kept its id, moved its index");
 }
 
@@ -1111,10 +1111,10 @@ async fn connecting_the_offered_position_never_opens_the_other_roles_device() {
     let catalog = FakeCatalog::with(&[MAIN_BODY, FREE_BODY]);
     let state = rig(&catalog);
     recover_imaging_camera_past_a_free_one(&catalog, &state).await;
-    let main_device = state.camera_in_role(CameraRole::Main).await.unwrap().info.id;
+    let main_device = state.camera_in_role(CameraRole::Main).unwrap().info.id;
 
     let result = lifecycle::connect(&state, "fake_1", CameraRole::Guide).await;
-    let guide_device = state.camera_in_role(CameraRole::Guide).await.map(|c| c.info.id);
+    let guide_device = state.camera_in_role(CameraRole::Guide).map(|c| c.info.id);
     teardown(&state).await;
 
     assert_ne!(
@@ -1403,7 +1403,7 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_and_disconnects() {
 
     assert_eq!(outcome, lifecycle::DisconnectOutcome::Disconnected);
     assert_eq!(state.capture_state().await, CaptureState::Idle);
-    assert!(state.camera_in_role(CameraRole::Main).await.is_none());
+    assert!(state.camera_in_role(CameraRole::Main).is_none());
     assert_eq!(phase_of(&state, CameraRole::Main).await, CameraPhase::Disconnected);
 }
 

@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::settings::CaptureSettings;
-use crate::camera::CameraInfo;
 
 /// Sliding window used by [`SessionStats::record_failure`] to detect a
 /// *current* burst of camera-capture failures, rather than a lifetime-
@@ -242,22 +241,6 @@ mod tests {
         fresh.frame_dropped();
         assert_eq!(fresh.drop_rate(), 0.0, "a drop with nothing delivered divides by nothing");
     }
-}
-
-/// Connected camera information
-#[derive(Debug, Clone)]
-pub struct ConnectedCameraInfo {
-    /// Camera ID
-    pub id: String,
-    /// Provider name
-    pub provider: String,
-    /// Provider index
-    pub index: usize,
-    /// Which position this camera occupies. At most one camera holds each role, and
-    /// the role decides which slot owns its handle and which stream it feeds.
-    pub role: super::CameraRole,
-    /// Camera info
-    pub info: CameraInfo,
 }
 
 /// Everything an interrupted capture needs to pick up where it left off.

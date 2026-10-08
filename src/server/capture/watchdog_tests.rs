@@ -285,11 +285,7 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Exposure>, extra_fr
         scripted(steps).then_frames(extra_frames, move || state.request_cancel())
     };
     let controls = camera.controls();
-    state
-        .cameras
-        .write()
-        .await
-        .insert("scripted_0".to_string(), connected(camera.info(), CameraRole::Main));
+    state.roster.install(connected(camera.info(), CameraRole::Main), false);
     let name = camera.info().name.clone();
 
     let (stacking_tx, stacking_rx) = mpsc::sync_channel(64);
@@ -307,9 +303,8 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Exposure>, extra_fr
     };
     let returned = {
         let state = Arc::clone(&state);
-        let rt = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
-            run_capture_task(state, Box::new(camera), channels, FrameNumbers::starting_at(1), rt)
+            run_capture_task(state, Box::new(camera), channels, FrameNumbers::starting_at(1))
         })
         .await
         .unwrap()
@@ -320,12 +315,7 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Exposure>, extra_fr
     while let Ok(event) = events.try_recv() {
         seen.push(event);
     }
-    let fault_streak = state
-        .consecutive_watchdog_timeouts
-        .lock()
-        .unwrap()
-        .get(&(CameraRole::Main, name.clone()))
-        .map(|(count, _)| *count);
+    let fault_streak = state.roster.fault_streak(CameraRole::Main, &name).map(|(count, _)| count);
     MainLoopRun {
         returned_handle: returned.is_some(),
         frames: controls.frames.load(Ordering::SeqCst),
@@ -402,11 +392,7 @@ async fn an_escalated_stall_does_not_wait_on_a_hung_close() {
     let release = Arc::new(AtomicBool::new(false));
     let camera = scripted((0..STALL_ESCALATION).map(|_| Exposure::Stall).collect())
         .close_blocks_until(Arc::clone(&release));
-    state
-        .cameras
-        .write()
-        .await
-        .insert("scripted_0".to_string(), connected(camera.info(), CameraRole::Main));
+    state.roster.install(connected(camera.info(), CameraRole::Main), false);
 
     let (stacking_tx, _stacking_rx) = mpsc::sync_channel(4);
     let (storage_tx, _storage_rx) = mpsc::sync_channel(4);
@@ -417,10 +403,9 @@ async fn an_escalated_stall_does_not_wait_on_a_hung_close() {
         storage_depth: QueueDepth::default(),
         capacities: PipelineCapacities { stacking: 4, storage: 4, render: 1 },
     };
-    let rt = tokio::runtime::Handle::current();
     let task = tokio::task::spawn_blocking({
         let state = Arc::clone(&state);
-        move || run_capture_task(state, Box::new(camera), channels, FrameNumbers::starting_at(1), rt)
+        move || run_capture_task(state, Box::new(camera), channels, FrameNumbers::starting_at(1))
     });
 
     let ended = tokio::time::timeout(Duration::from_secs(2), task).await;

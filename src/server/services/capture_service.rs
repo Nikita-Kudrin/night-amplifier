@@ -48,16 +48,15 @@ impl CaptureService {
     async fn start_guide(state: &Arc<AppState>, camera_id: Option<String>) -> ApiResult<String> {
         let camera = state
             .camera_in_role(CameraRole::Guide)
-            .await
             .ok_or(ApiError::NoGuideCameraConnected)?;
 
         // A client that named a camera gets told when it named the wrong one, rather
         // than silently starting the camera it did not ask for.
         if let Some(id) = camera_id {
             if id != camera.id {
-                return match state.role_of(&id).await {
+                return match state.role_of(&id) {
                     Some(role) => Err(ApiError::CameraRoleMismatch {
-                        camera: state.connected_camera_name(&id).await.unwrap_or(id),
+                        camera: state.connected_camera_name(&id).unwrap_or(id),
                         held: role.label(),
                         requested: CameraRole::Guide.label(),
                     }),
@@ -127,14 +126,13 @@ impl CaptureService {
             return Err(ApiError::CaptureInProgress);
         }
 
-        // A capture always runs on the imaging camera. `selected_camera` is what the
+        // A capture always runs on the imaging camera. The roster's selection is what the
         // settings panel is editing, which since roles exist can be the guide camera —
         // resolving through it would start a stacking session on the guide scope.
         let camera_id = match camera_id {
             Some(id) => id,
             None => state
                 .camera_in_role(CameraRole::Main)
-                .await
                 .map(|info| info.id)
                 .ok_or(ApiError::NoCameraSelected)?,
         };
@@ -145,12 +143,11 @@ impl CaptureService {
         // not something the reader recognises. A camera that is not connected has no
         // name to look up, so that arm falls back to the id — which is the honest
         // answer there, since nothing in the rig claims it.
-        match state.role_of(&camera_id).await {
+        match state.role_of(&camera_id) {
             Some(CameraRole::Main) => {}
             Some(role) => {
                 let camera = state
                     .connected_camera_name(&camera_id)
-                    .await
                     .unwrap_or(camera_id);
                 return Err(ApiError::CaptureCameraIsNotMain {
                     camera,
@@ -211,11 +208,8 @@ impl CaptureService {
     /// compare-and-set: a Stop or Disconnect that ends the pause first makes this
     /// `CaptureNotPaused` instead of a capture restarted behind the observer's back.
     pub async fn resume_capture(state: &Arc<AppState>, plan: &SessionResumePlan) -> ApiResult<()> {
-        {
-            let cameras = state.cameras.read().await;
-            if !cameras.contains_key(&plan.camera_id) {
-                return Err(ApiError::CameraNotConnected(plan.camera_id.clone()));
-            }
+        if !state.roster.contains(&plan.camera_id) {
+            return Err(ApiError::CameraNotConnected(plan.camera_id.clone()));
         }
         {
             let mut capture = state.capture.write().await;

@@ -266,7 +266,7 @@ pub(super) fn run(
         for op in state.slot(CameraRole::Guide).drain_ops() {
             apply_op(camera.as_mut(), op, &camera_info.info.name);
         }
-        sensor.sample(camera.as_ref(), state, camera_info, &profile, rt);
+        sensor.sample(camera.as_ref(), state, camera_info, &profile);
         if let Some(setpoint) =
             cooler.setpoint(&profile, sensor.temperature_c, std::time::Instant::now())
         {
@@ -439,7 +439,6 @@ impl SensorReadout {
         state: &Arc<AppState>,
         camera_info: &ConnectedCameraInfo,
         profile: &CameraCaptureProfile,
-        rt: &tokio::runtime::Handle,
     ) {
         let now = std::time::Instant::now();
         let due = self
@@ -460,11 +459,7 @@ impl SensorReadout {
         if status.has_plausible_temperature() {
             self.temperature_c = Some(status.temperature_c);
         }
-        rt.block_on(state.update_camera_status(
-            &camera_info.info.name,
-            status,
-            profile.target_temp_c,
-        ));
+        state.update_camera_status(&camera_info.info.name, status, profile.target_temp_c);
     }
 }
 
@@ -993,7 +988,6 @@ mod tests {
         );
         let status = state
             .get_camera_status("Mock Guide Camera")
-            .await
             .expect("no status was broadcast for the guide camera");
         assert_eq!(status.temperature_c, 20.0);
     }
@@ -1149,11 +1143,7 @@ mod tests {
         let camera = counting_camera(usize::MAX, never_stops).stuck_for(Duration::from_millis(20));
         let info = guide_camera_info();
 
-        state
-            .cameras
-            .write()
-            .await
-            .insert(info.id.clone(), info.clone());
+        state.roster.install(info.clone(), false);
         *state
             .slot(CameraRole::Guide)
             .handle

@@ -33,7 +33,6 @@ pub(super) async fn suspend(state: &Arc<AppState>, role: CameraRole, camera_name
     }
     let Some(recorded) = state
         .camera_in_role(role)
-        .await
         .filter(|camera| camera.info.name == camera_name)
     else {
         return false;
@@ -73,7 +72,7 @@ pub(super) async fn detach(state: &Arc<AppState>, role: CameraRole, camera_name:
     state.clear_camera_token(role).await;
     slot.drain_ops();
 
-    state.set_camera_phase(role, camera_name, CameraPhase::Recovering).await;
+    state.set_camera_phase(role, camera_name, CameraPhase::Recovering);
     if role == CameraRole::Main {
         pause_capture_for_recovery(state).await;
     }
@@ -106,7 +105,6 @@ pub(super) async fn is_recovering(state: &Arc<AppState>, recorded: &ConnectedCam
     }
     state
         .camera_in_role(recorded.role)
-        .await
         .is_some_and(|camera| camera.id == recorded.id && camera.info.name == recorded.info.name)
 }
 
@@ -164,7 +162,6 @@ pub(super) async fn reopen_for_recovery(
 
     let other_role = state
         .camera_in_role(recorded.role.other())
-        .await
         .filter(|other| other.provider.eq_ignore_ascii_case(&recorded.provider))
         .map(|other| DeviceIdentity::of(&other.info).with_device_id(other.info.id));
     let use_simulated = state.settings.snapshot().use_simulated_camera;

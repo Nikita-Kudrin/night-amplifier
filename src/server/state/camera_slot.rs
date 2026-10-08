@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Notify, RwLock};
 
-use super::{CameraPhase, MonitorCmd};
+use super::MonitorCmd;
 use crate::camera::Camera;
 
 /// A hardware call queued for whoever currently owns a slot's handle.
@@ -52,10 +52,6 @@ pub struct CameraSlot {
     /// Where this slot is in quiet recovery. Read through [`Self::recovery`]; only
     /// `camera_session` moves it.
     recovery: StdMutex<Recovery>,
-    /// Lifecycle phase of the camera in this slot. Per slot, not per model name: two
-    /// bodies of one model otherwise shared one phase, and the imaging camera starting a
-    /// capture read as the guide camera's recovery having ended.
-    pub phase: RwLock<CameraPhase>,
     /// Bounded SDK calls against this slot's device that have not returned yet —
     /// including ones a watchdog gave up on. A reconnect waits for this to drain before
     /// reopening, so it does not open the device while an abandoned call is still inside
@@ -150,7 +146,6 @@ impl Default for CameraSlot {
             cancel_token: RwLock::new(None),
             reconnect_in_flight: Arc::new(AtomicBool::new(false)),
             recovery: StdMutex::new(Recovery::None),
-            phase: RwLock::new(CameraPhase::Disconnected),
             sdk_calls: Arc::new(InFlightCalls::default()),
             pending_opens: Arc::new(InFlightCalls::default()),
             raw_session: RwLock::new(None),
