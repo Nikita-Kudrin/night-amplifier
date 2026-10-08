@@ -237,7 +237,7 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
         info!(camera_id = %connected.id, "Camera failed again before its capture could resume");
         return;
     }
-    let plan = state.session_resume_plan.read().await.clone();
+    let plan = state.resume.plan();
     let Some(plan) = plan.filter(|plan| plan.camera_id == connected.id) else {
         state.end_paused_capture().await;
         return;

@@ -1430,7 +1430,7 @@ async fn a_clean_stop_clears_the_resume_state() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
 
-    *state.session_resume_plan.write().await = Some(SessionResumePlan {
+    state.resume.record(SessionResumePlan {
         camera_id: "mock_0".to_string(),
         settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: None,
@@ -1440,10 +1440,10 @@ async fn a_clean_stop_clears_the_resume_state() {
 
     assert!(CaptureService::stop_capture(&state).await);
     assert!(
-        state.session_resume_plan.read().await.is_none(),
+        !state.resume.has_plan(),
         "a deliberate stop is not something to recover from"
     );
-    assert!(state.stacking_carryover.lock().unwrap().is_none());
+    assert!(!state.resume.has_stack());
 }
 
 /// A resume must inherit the interrupted session's stack and its raw-frame
@@ -1470,7 +1470,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
         state.stats.frame_captured(true, true);
     }
     let settings = (*state.settings.snapshot()).clone();
-    *state.stacking_carryover.lock().unwrap() = Some(StackingCarryover {
+    state.resume.park_stack(Some(StackingCarryover {
         stacker: Box::new(
             crate::server::capture::StackingContext::new(
                 16,
@@ -1480,7 +1480,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
             )
             .expect("context"),
         ),
-    });
+    }));
 
     let plan = SessionResumePlan {
         camera_id: "mock_0".to_string(),
@@ -1488,7 +1488,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
         disk_session_dir: Some(session_dir.clone()),
         next_frame: 1,
     };
-    *state.session_resume_plan.write().await = Some(plan.clone());
+    state.resume.record(plan.clone());
 
     // Resuming without a connected camera is refused, but must not have reset
     // anything on the way to refusing.
@@ -1507,7 +1507,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
         "resume must rejoin the folder rather than opening a new one"
     );
     assert!(
-        state.stacking_carryover.lock().unwrap().is_some(),
+        state.resume.has_stack(),
         "the parked stack must survive until the resumed capture takes it"
     );
 }

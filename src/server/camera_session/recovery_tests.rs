@@ -506,7 +506,7 @@ async fn disconnecting_during_recovery_stops_it_quietly() {
 }
 
 async fn start_capture_plan(state: &Arc<AppState>, device: &FakeDevice) {
-    *state.session_resume_plan.write().await = Some(SessionResumePlan {
+    state.resume.record(SessionResumePlan {
         camera_id: id_of(device),
         settings: (*state.settings.snapshot()).clone(),
         disk_session_dir: None,
@@ -575,7 +575,7 @@ async fn stopping_during_recovery_leaves_nothing_to_resume() {
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
     assert!(CaptureService::stop_capture(&state).await);
     assert_eq!(state.capture_state().await, CaptureState::Idle, "no pipeline left to wind down");
-    assert!(state.session_resume_plan.read().await.is_none());
+    assert!(!state.resume.has_plan());
 
     catalog.set(&[NEPTUNE]);
     assert!(wait_recovered(&state, CameraRole::Main).await, "the camera still comes back");
@@ -811,9 +811,9 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
         "the failed first frame should have ended the capture"
     );
 
-    assert!(state.session_resume_plan.read().await.is_none(), "an ended capture kept its resume plan");
+    assert!(!state.resume.has_plan(), "an ended capture kept its resume plan");
     assert!(
-        state.stacking_carryover.lock().unwrap().is_none(),
+        !state.resume.has_stack(),
         "an ended capture kept its parked stack"
     );
 
@@ -1139,7 +1139,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
     // supervisor is refused while it is still in flight.
     state.slot(CameraRole::Main).reconnect_in_flight.store(true, Ordering::SeqCst);
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
-    let plan = state.session_resume_plan.read().await.clone().expect("a paused capture has a plan");
+    let plan = state.resume.plan().expect("a paused capture has a plan");
     let mut events = state.subscribe_events();
 
     // ... and now makes the resume call it had already decided on.
@@ -1156,7 +1156,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
     )
     .await;
     let after = state.capture_state().await;
-    let plan_kept = state.session_resume_plan.read().await.is_some();
+    let plan_kept = state.resume.has_plan();
 
     reconnect::release_flight(&state, CameraRole::Main).await;
     wait_recovered(&state, CameraRole::Main).await;
@@ -1271,7 +1271,7 @@ async fn disconnecting_the_camera_of_a_paused_capture_ends_the_capture() {
 
     let answer = lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await;
     let capture = state.capture_state().await;
-    let plan_left = state.session_resume_plan.read().await.is_some();
+    let plan_left = state.resume.has_plan();
     teardown(&state).await;
 
     assert!(answer.is_ok(), "{answer:?}");
@@ -1287,7 +1287,7 @@ async fn a_resume_finds_nothing_to_restart_once_the_pause_was_ended() {
     let state = rig(&catalog);
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     start_capture_plan(&state, &NEPTUNE).await;
-    let plan = state.session_resume_plan.read().await.clone().unwrap();
+    let plan = state.resume.plan().unwrap();
     state.set_capture_state(CaptureState::Idle).await;
 
     let resumed = CaptureService::resume_capture(&state, &plan).await;

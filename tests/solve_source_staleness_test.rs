@@ -135,7 +135,6 @@ async fn state_mid_solve(plugins: &Plugins) -> Arc<AppState> {
     // nothing needs it running.
     let (mut state, _disk_writer) = AppState::new();
     state.plugins = plugins.clone();
-    let state = Arc::new(state);
 
     let push_to = PushToState::default();
     let latch = push_to
@@ -145,17 +144,16 @@ async fn state_mid_solve(plugins: &Plugins) -> Arc<AppState> {
     // releases the slot, and this state must read as "solving" for as long as the
     // test holds onto it, which outlives this function's own scope.
     std::mem::forget(latch);
-    *state.push_to.write().await = Some(push_to);
-    state
+    state.push_to = Some(push_to);
+    Arc::new(state)
 }
 
 /// A fresh app state with nothing running yet, so `solve_frame` starts a solve.
 async fn state_ready_to_solve(plugins: &Plugins) -> Arc<AppState> {
     let (mut state, _disk_writer) = AppState::new();
     state.plugins = plugins.clone();
-    let state = Arc::new(state);
-    *state.push_to.write().await = Some(PushToState::default());
-    state
+    state.push_to = Some(PushToState::default());
+    Arc::new(state)
 }
 
 /// Poll for up to a second for a dispatch count to be reached.

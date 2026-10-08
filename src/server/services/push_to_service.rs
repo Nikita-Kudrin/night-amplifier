@@ -122,7 +122,7 @@ impl PushToService {
     ) -> Result<CatalogEntryResponse, String> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.set_target_by_name(name).await.map_err(|e| e.to_string())?;
-            state.push_to_target_changed(true).await;
+            state.push_to_target_changed(true);
             let _ = state.events.send(ServerEvent::target_changed(
                 result.name.clone(),
                 Some(result.designation.clone()),
@@ -146,7 +146,7 @@ impl PushToService {
                 .set_target_by_coords(ra_degrees, dec_degrees)
                 .await
                 .map_err(|e| e.to_string())?;
-            state.push_to_target_changed(true).await;
+            state.push_to_target_changed(true);
             // For custom coordinates, name is usually the coordinate string
             let _ = state.events.send(ServerEvent::target_changed(
                 Some(result.ra_string.clone() + " " + &result.dec_string),
@@ -168,7 +168,7 @@ impl PushToService {
             // the plugin holding the target, and claiming otherwise would stop
             // plate solving for a target that is still set.
             if result.is_ok() {
-                state.push_to_target_changed(false).await;
+                state.push_to_target_changed(false);
             }
             let _ = state.events.send(ServerEvent::target_cleared());
             result
@@ -222,12 +222,14 @@ impl PushToService {
 
 /// Server-side mirror of the Push-To plugin, so the stacking thread can decide whether
 /// a plate solve is worth preparing a frame for without awaiting the plugin's own
-/// locks. The first two fields are caches, not the source of truth (the plugin is) —
-/// they exist only to keep `capture::solving::plate_solve_available` synchronous and
-/// cheap; every consequential check repeats against the plugin inside `solve_frame`.
-/// Write `has_target` through [`AppState::set_push_to_has_target`]. The last two are
-/// event de-duplication state, owned here since they're about what this server already
+/// locks. `has_target` is a cache, not the source of truth (the plugin is) — it exists
+/// only to keep `capture::solving::plate_solve_available` synchronous and cheap; every
+/// consequential check repeats against the plugin inside `solve_frame`. `announced` is
+/// event de-duplication state, owned here since it is about what this server already
 /// told clients, which the plugin has no view of.
+///
+/// Synchronized field by field, so `AppState` holds it without a lock: the capture
+/// threads read it per frame and never wait.
 #[derive(Default)]
 pub struct PushToState {
     /// Latch owned by `solve_frame`: raised before a solve is dispatched, cleared
@@ -250,13 +252,18 @@ pub struct PushToState {
     last_watch: std::sync::Mutex<Option<Instant>>,
     /// Whether the plugin currently holds a target. Written by the target
     /// mutations in [`PushToService`] and re-synced from `solve_frame`.
-    pub has_target: bool,
-    /// Last push direction announced to clients, rounded — see
-    /// [`PushToState::direction_is_news`].
-    last_direction_key: Option<DirectionKey>,
-    /// Last blocker announced to clients. The outer `Option` distinguishes "never
-    /// reported" from "reported that nothing is blocking".
-    last_blocker: Option<Option<PushToBlocker>>,
+    has_target: AtomicBool,
+    announced: std::sync::Mutex<Announced>,
+}
+
+/// What clients were last told, so a repeat is not sent again.
+#[derive(Default)]
+struct Announced {
+    /// Last push direction, rounded — see [`PushToState::direction_is_news`].
+    direction: Option<DirectionKey>,
+    /// Last blocker. The outer `Option` distinguishes "never reported" from "reported
+    /// that nothing is blocking".
+    blocker: Option<Option<PushToBlocker>>,
 }
 
 /// A push direction rounded to the precision a person can act on.
@@ -271,6 +278,18 @@ impl PushToState {
     /// Whether a solve is running right now.
     pub fn is_solving(&self) -> bool {
         self.solving.load(Ordering::SeqCst)
+    }
+
+    pub fn has_target(&self) -> bool {
+        self.has_target.load(Ordering::SeqCst)
+    }
+
+    pub fn set_has_target(&self, has_target: bool) {
+        self.has_target.store(has_target, Ordering::SeqCst);
+    }
+
+    fn announced(&self) -> std::sync::MutexGuard<'_, Announced> {
+        self.announced.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Claim the solve slot, or `None` if one is already running or the previous
@@ -348,35 +367,27 @@ impl PushToState {
     /// Push direction only really changes when the position or the target changes,
     /// but it was recomputed and broadcast on every captured frame regardless — one
     /// WebSocket message per frame per client, saying the same thing.
-    pub fn direction_is_news(&mut self, angle_deg: f64, distance_deg: f64, is_close: bool) -> bool {
+    pub fn direction_is_news(&self, angle_deg: f64, distance_deg: f64, is_close: bool) -> bool {
         let key = (
             (angle_deg * 10.0).round() as i64,
             (distance_deg * 1000.0).round() as i64,
             is_close,
         );
-        if self.last_direction_key == Some(key) {
-            return false;
-        }
-        self.last_direction_key = Some(key);
-        true
+        self.announced().direction.replace(key) != Some(key)
     }
 
     /// Forget the last announced direction, so the next one is sent even if it is
     /// numerically identical. Used when the target changes: the arrow means something
     /// different now even when it points the same way.
-    pub fn forget_direction(&mut self) {
-        self.last_direction_key = None;
+    pub fn forget_direction(&self) {
+        self.announced().direction = None;
     }
 
     /// Whether this blocker differs from the last one announced, updating the record
     /// if it does. Keeps the "why is nothing happening" notice to one event per
     /// transition instead of one per frame.
-    pub fn blocker_is_news(&mut self, blocker: Option<PushToBlocker>) -> bool {
-        if self.last_blocker == Some(blocker) {
-            return false;
-        }
-        self.last_blocker = Some(blocker);
-        true
+    pub fn blocker_is_news(&self, blocker: Option<PushToBlocker>) -> bool {
+        self.announced().blocker.replace(blocker) != Some(blocker)
     }
 }
 

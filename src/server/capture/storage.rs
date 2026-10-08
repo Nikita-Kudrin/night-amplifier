@@ -250,9 +250,8 @@ pub async fn sync_disk_session(
 
     // A reconnect rejoins the directory recorded in the resume plan. Left stale, it would
     // rejoin the folder this call just abandoned.
-    if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
-        plan.disk_session_dir = state.disk_writer.session_dir();
-    }
+    let dir = state.disk_writer.session_dir();
+    state.resume.edit_plan(|plan| plan.disk_session_dir = dir);
 }
 
 /// Build the FITS header for one raw frame.

@@ -82,18 +82,12 @@ pub fn plate_solve_available(state: &Arc<AppState>, source: SolveSource) -> bool
         return false;
     }
 
-    // `try_read`: this runs on the capture threads. A writer holds it for microseconds,
-    // and declining one frame then is cheaper than waiting.
-    //
     // A solve in flight is deliberately *not* a reason to decline: the frame goes to the
     // movement watch, which must see a slew to abandon a search working on sky we left.
-    let Ok(guard) = state.push_to.try_read() else {
+    let Some(pt) = &state.push_to else {
         return false;
     };
-    let Some(pt) = guard.as_ref() else {
-        return false;
-    };
-    pt.has_target
+    pt.has_target()
         && pt.offer_is_due(Instant::now(), MIN_SOLVE_ATTEMPT_INTERVAL, MIN_WATCH_INTERVAL)
         && push_to_tasks::is_idle(state, Lane::for_solving(pt.is_solving()))
 }
@@ -107,13 +101,10 @@ pub fn offer_plate_solve(
     frame: Arc<Frame>,
     source: SolveSource,
 ) -> bool {
-    let lane = match state.push_to.try_read() {
-        Ok(guard) => match guard.as_ref() {
-            Some(pt) => Lane::for_solving(pt.is_solving()),
-            None => return false,
-        },
-        Err(_) => return false,
+    let Some(pt) = &state.push_to else {
+        return false;
     };
+    let lane = Lane::for_solving(pt.is_solving());
     push_to_tasks::offer(state, rt, lane, frame, source)
 }
 
@@ -135,8 +126,7 @@ pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
     };
 
     let _watch = {
-        let push_to_guard = state.push_to.read().await;
-        let Some(ref pt) = *push_to_guard else {
+        let Some(pt) = &state.push_to else {
             return;
         };
         if !pt.is_solving() {
@@ -158,7 +148,7 @@ pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         .observe_frame(&frame, solve_detector(), wanderer_mode)
         .await
     {
-        Ok(outcome) => announce_blocker(state, outcome.blocker).await,
+        Ok(outcome) => announce_blocker(state, outcome.blocker),
         Err(e) => debug!(error = %e, "Movement watch failed on this frame"),
     }
 }
@@ -184,8 +174,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
     // frames arriving together cannot both start a solve. Held until this returns,
     // however it returns — a stranded latch disables plate solving for good.
     let _latch = {
-        let push_to_guard = state.push_to.read().await;
-        let Some(ref pt) = *push_to_guard else {
+        let Some(pt) = &state.push_to else {
             debug!("Plate solving skipped: Push-To state not initialized in AppState");
             return;
         };
@@ -207,7 +196,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
     // This is the authoritative read of the plugin's target state, so use it to
     // correct the cached flag `plate_solve_available` gates on. Without this the
     // mirror could only ever be repaired by an API call.
-    state.set_push_to_has_target(has_target).await;
+    state.set_push_to_has_target(has_target);
 
     // Say *why* nothing is happening. Every one of these branches used to log at
     // `debug!` and return, which is what "I installed ASTAP and nothing happens"
@@ -220,7 +209,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
     } else {
         None
     };
-    announce_blocker(state, blocker).await;
+    announce_blocker(state, blocker);
 
     if let Some(blocker) = blocker {
         debug!(reason = blocker.reason(), "Plate solving skipped");
@@ -291,18 +280,15 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
             // the view to settle" — through the same de-duplication as every
             // other blocker, so a state that holds for a hundred frames costs one
             // event. A solve that ran clears it by reporting `None`.
-            announce_blocker(state, outcome.blocker).await;
+            announce_blocker(state, outcome.blocker);
 
             if let Some(dir) = outcome.direction {
                 // The direction is recomputed every frame but only changes when
                 // the position or target does, so send it only when it is
                 // actually different.
-                let is_news = {
-                    let mut guard = state.push_to.write().await;
-                    guard.as_mut().is_none_or(|pt| {
-                        pt.direction_is_news(dir.angle_deg, dir.distance_deg, dir.is_close)
-                    })
-                };
+                let is_news = state.push_to.as_ref().is_none_or(|pt| {
+                    pt.direction_is_news(dir.angle_deg, dir.distance_deg, dir.is_close)
+                });
 
                 if is_news {
                     info!(
@@ -340,14 +326,8 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
 }
 
 /// Broadcast a change in why Push-To is idle, ignoring repeats.
-async fn announce_blocker(state: &Arc<AppState>, blocker: Option<PushToBlocker>) {
-    let is_news = {
-        let mut guard = state.push_to.write().await;
-        match guard.as_mut() {
-            Some(pt) => pt.blocker_is_news(blocker),
-            None => false,
-        }
-    };
+fn announce_blocker(state: &Arc<AppState>, blocker: Option<PushToBlocker>) {
+    let is_news = state.push_to.as_ref().is_some_and(|pt| pt.blocker_is_news(blocker));
     if is_news {
         let _ = state
             .events
@@ -375,7 +355,7 @@ pub async fn abandon_solve_on_shutdown(state: &Arc<AppState>) {
     // updated the server's idea of what clients had been told without telling them
     // anything, so the last blocker stayed on screen until the next transition —
     // and a blocker now outranks the last solve verdict in the UI.
-    announce_blocker(state, None).await;
+    announce_blocker(state, None);
 
     match plugin.cancel_solve().await {
         Ok(true) => info!("Capture ended; abandoned the plate solve that was in flight"),
@@ -390,10 +370,9 @@ mod tests {
     use crate::server::services::PushToState;
 
     async fn state_with_push_to() -> Arc<AppState> {
-        let (state, _disk_writer) = AppState::new_for_testing();
-        let state = Arc::new(state);
-        *state.push_to.write().await = Some(PushToState::default());
-        state
+        let (mut state, _disk_writer) = AppState::new_for_testing();
+        state.push_to = Some(PushToState::default());
+        Arc::new(state)
     }
 
     #[tokio::test]
@@ -405,13 +384,13 @@ mod tests {
         let state = state_with_push_to().await;
         let mut events = state.events.subscribe();
 
-        announce_blocker(&state, Some(PushToBlocker::TelescopeMoving)).await;
+        announce_blocker(&state, Some(PushToBlocker::TelescopeMoving));
         assert!(matches!(
             events.try_recv(),
             Ok(ServerEvent::PushToBlocked { .. })
         ));
 
-        announce_blocker(&state, None).await;
+        announce_blocker(&state, None);
         match events.try_recv() {
             Ok(ServerEvent::PushToBlocked { reason }) => assert_eq!(reason, None),
             other => panic!("the clear must reach the bus, got {other:?}"),
@@ -423,11 +402,11 @@ mod tests {
         let state = state_with_push_to().await;
         let mut events = state.events.subscribe();
 
-        announce_blocker(&state, Some(PushToBlocker::Settling)).await;
+        announce_blocker(&state, Some(PushToBlocker::Settling));
         let _ = events.try_recv().expect("the first one is news");
 
         for _ in 0..5 {
-            announce_blocker(&state, Some(PushToBlocker::Settling)).await;
+            announce_blocker(&state, Some(PushToBlocker::Settling));
         }
         assert!(
             events.try_recv().is_err(),
