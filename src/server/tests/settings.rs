@@ -5,8 +5,8 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::helpers::*;
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 #[tokio::test]
 async fn test_get_settings_default() {

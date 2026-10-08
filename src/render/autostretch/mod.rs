@@ -164,7 +164,7 @@ pub fn prepare_auto_stretch_frame(
 
 /// [`prepare_auto_stretch_frame`] against statistics the caller already holds. Splitting
 /// measurement from the solve lets the render task reuse one set of statistics across
-/// several frames of the same stack; see `server::capture::analysis` for when that's sound.
+/// several frames of the same stack; see `session::capture::analysis` for when that's sound.
 ///
 /// **Statistics must describe the frame as it is now** — after neutralisation, background
 /// subtraction and SCNR — since the black point they yield is subtracted from it;
@@ -237,7 +237,7 @@ mod tests {
     fn test_auto_stretch_frame_end_to_end() {
         let background = 0.03;
         // `set_pixel`, not index arithmetic: a fixture that encodes the layout cannot
-        // detect a layout bug. The identical fixture in `server::capture::storage` was
+        // detect a layout bug. The identical fixture in `session::capture::storage` was
         // converted during the planar migration and this one was missed.
         let mut frame = Frame::zeros(64, 64, 3).unwrap();
 

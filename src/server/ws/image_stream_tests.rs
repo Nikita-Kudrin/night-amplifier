@@ -1,7 +1,7 @@
 use super::*;
 use crate::frame::Frame;
 use crate::render::display::RenderReadyFrame;
-use crate::server::state::EyepieceStreamResolution;
+use crate::session::state::EyepieceStreamResolution;
 
 /// A frame the encoder can run on without a stretch solve behind it.
 fn ready_frame(width: usize, height: usize) -> Arc<RenderReadyFrame> {
@@ -52,8 +52,8 @@ async fn a_first_client_is_served_from_the_raw_frame_at_the_configured_size() {
     let stream = Arc::clone(&state.main_stream);
 
     for (kind, expected_magic) in [
-        (StreamKind::Jpeg, crate::server::encoding::JPEG_MAGIC),
-        (StreamKind::Lossless, crate::server::encoding::RGB8_CHUNKED_MAGIC),
+        (StreamKind::Jpeg, crate::session::encoding::JPEG_MAGIC),
+        (StreamKind::Lossless, crate::session::encoding::RGB8_CHUNKED_MAGIC),
     ] {
         assert!(stream.payload(kind, counter).is_none());
         let (tag, payload) = payload_for_client(&state, &stream, kind)

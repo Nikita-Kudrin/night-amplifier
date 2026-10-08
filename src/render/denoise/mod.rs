@@ -285,7 +285,7 @@ pub fn denoise_rgb_interleaved_with(
 
 /// The denoise config for these settings, or [`DenoiseConfig::OFF`] without the plugins.
 ///
-/// The Planetary gate lives at the call site in `server::capture::stage_config`, not
+/// The Planetary gate lives at the call site in `session::capture::stage_config`, not
 /// here: it is a product rule rather than tuning, and it sits beside the same asymmetry
 /// `cfa::fpn`, superpixel debayering and the black floor each state at their own site.
 /// So does Focus/Finder mode's hold on the network.

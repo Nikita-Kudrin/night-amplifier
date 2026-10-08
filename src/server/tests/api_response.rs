@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
-use crate::server::state::{
+use crate::session::state::{
     CaptureSettings, CaptureState, RawFrameSaving, SessionStats, StackingType,
 };
 use crate::server::{CameraInfoResponse, CaptureStatusResponse, SettingsResponse};

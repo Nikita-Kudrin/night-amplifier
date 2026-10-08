@@ -165,12 +165,12 @@ fn with_stack(
     files: &[PathBuf],
     depths: &[usize],
     load: &dyn Fn(&Path) -> RawSub,
-    mut snapshot: impl FnMut(&night_amplifier::server::capture::StackingContext) -> Frame,
+    mut snapshot: impl FnMut(&night_amplifier::session::capture::StackingContext) -> Frame,
 ) -> Vec<(usize, Frame)> {
-    use night_amplifier::server::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
-    use night_amplifier::server::capture::{StackSettings, StackingContext};
+    use night_amplifier::session::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
+    use night_amplifier::session::capture::{StackSettings, StackingContext};
 
-    let settings = night_amplifier::server::state::CaptureSettings::default();
+    let settings = night_amplifier::session::state::CaptureSettings::default();
     let cfa_pipeline = build_cfa_pipeline(&settings);
     let algorithm = debayer_algorithm(&settings);
 
@@ -225,7 +225,7 @@ fn with_stack(
 /// single-frame tone curve over a deep stack.
 pub fn render(
     frame: Frame,
-    settings: &night_amplifier::server::state::CaptureSettings,
+    settings: &night_amplifier::session::state::CaptureSettings,
     denoise: bool,
     max: (u32, u32),
     stack_depth: u32,
@@ -241,19 +241,19 @@ pub fn render(
 /// filters; passing `None` is how the global-estimate path stays reachable for an A/B.
 pub fn render_with(
     mut frame: Frame,
-    settings: &night_amplifier::server::state::CaptureSettings,
+    settings: &night_amplifier::session::state::CaptureSettings,
     denoise: bool,
     max: (u32, u32),
     stack_depth: u32,
     noise: Option<night_amplifier::NoiseField>,
     tweak: impl FnOnce(&mut night_amplifier::render::RenderPipelineConfig),
 ) -> (Vec<u8>, usize, usize) {
-    use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
+    use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
 
-    let night_amplifier::server::capture::pipeline::PreviewRender {
+    let night_amplifier::session::capture::pipeline::PreviewRender {
         mut pipeline_config,
         stretch_result,
-    } = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
+    } = night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
         &night_amplifier::plugins::Plugins::installed(),
@@ -284,7 +284,7 @@ pub fn render_with(
 /// renders the mean alone guards a picture no observer sees.
 pub fn render_snapshot(
     snapshot: &AccumulatorSnapshot,
-    settings: &night_amplifier::server::state::CaptureSettings,
+    settings: &night_amplifier::session::state::CaptureSettings,
     denoise: bool,
     max: (u32, u32),
 ) -> (Vec<u8>, usize, usize) {
@@ -1222,12 +1222,12 @@ pub fn median_rings(rings: &[[f64; 25]]) -> [f64; 25] {
 /// the two — [`add_stars`] after the solve, so the stars cannot move the tone curve.
 pub fn preview_parts(
     stack: &Frame,
-    settings: &night_amplifier::server::state::CaptureSettings,
+    settings: &night_amplifier::session::state::CaptureSettings,
     stack_depth: u32,
 ) -> (Frame, night_amplifier::render::RenderPipelineConfig, Option<night_amplifier::render::display::StretchResult>) {
-    use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
+    use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
     let mut frame = stack.clone();
-    let render = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
+    let render = night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
         &night_amplifier::plugins::Plugins::installed(),
@@ -1504,7 +1504,7 @@ pub fn anchors(name: &str, stack: &night_amplifier::Frame, depth: u32) -> Anchor
             return a;
         }
     }
-    let settings = night_amplifier::server::state::CaptureSettings::default();
+    let settings = night_amplifier::session::state::CaptureSettings::default();
     let (rgb8, w, h) = render(stack.clone(), &settings, false, STREAM, depth);
     let (plane, pw, ph) = green_region(&rgb8, w, (0, 0, w, h));
     let (object, sky_box) = locate_object(&plane, pw, ph);
@@ -1663,7 +1663,7 @@ pub fn measure_real_session(
             .with_test_writer()
             .try_init();
     }
-    let settings = night_amplifier::server::state::CaptureSettings::default();
+    let settings = night_amplifier::session::state::CaptureSettings::default();
     // The accumulator at every depth, so the filtered half renders with the noise map the
     // render task would attach. With denoising off the map has nothing to act on.
     let snapshots = accumulator_snapshots(files, depths, load);

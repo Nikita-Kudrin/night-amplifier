@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 // ============================================================================
 // Camera List Endpoint Tests

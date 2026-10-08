@@ -15,7 +15,7 @@ use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
 use tracing::info;
 
-use crate::server::state::{AppState, CameraRole, FrameStream, Resolution, StreamKind, ViewerGuard};
+use crate::session::state::{AppState, CameraRole, FrameStream, Resolution, StreamKind, ViewerGuard};
 
 /// The WebSocket endpoints that stream rendered frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,9 +198,9 @@ pub(super) async fn payload_for_client(
     // Single LZ4 chunk: this borrows a blocking thread while the render task may be
     // mid-frame, and one client's first frame is not worth taking cores off the stack.
     let encoded = tokio::task::spawn_blocking(move || match kind {
-        StreamKind::Jpeg => crate::server::encoding::encode_rgb8_jpeg_bounded(&frame, max_w, max_h),
+        StreamKind::Jpeg => crate::session::encoding::encode_rgb8_jpeg_bounded(&frame, max_w, max_h),
         StreamKind::Lossless => {
-            crate::server::encoding::encode_rgb8_lz4_chunked(&frame, 1, max_w, max_h)
+            crate::session::encoding::encode_rgb8_lz4_chunked(&frame, 1, max_w, max_h)
         }
     })
     .await

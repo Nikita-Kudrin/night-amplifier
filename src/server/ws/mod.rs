@@ -18,8 +18,8 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::events::ServerEvent;
-use super::state::{AppState, CameraRole};
+use crate::session::events::ServerEvent;
+use crate::session::state::{AppState, CameraRole};
 pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint};
 
 /// Every WebSocket route, relative to the `/ws` nest.

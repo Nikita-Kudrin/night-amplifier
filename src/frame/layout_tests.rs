@@ -211,17 +211,17 @@ fn passthrough_ready(frame: Frame) -> crate::render::display::RenderReadyFrame {
 #[test]
 fn jpeg_sa10_payload_is_interleaved() {
     let ready = passthrough_ready(tricolour_frame(64, 32));
-    let payload = crate::server::encoding::encode_rgb8_jpeg_bounded(&ready, 3840, 2160).unwrap();
+    let payload = crate::session::encoding::encode_rgb8_jpeg_bounded(&ready, 3840, 2160).unwrap();
 
     assert_eq!(
         u32::from_le_bytes(payload[0..4].try_into().unwrap()),
-        crate::server::encoding::JPEG_MAGIC
+        crate::session::encoding::JPEG_MAGIC
     );
     let width = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
     let height = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
     assert_eq!((width, height), (64, 32));
 
-    let jpeg = &payload[crate::server::encoding::SA10_HEADER_SIZE..];
+    let jpeg = &payload[crate::session::encoding::SA10_HEADER_SIZE..];
     let decoded: image::RgbImage =
         image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg)
             .expect("SA10 payload is not decodable JPEG")
@@ -249,11 +249,11 @@ fn lz4_sa09_payload_is_interleaved() {
     const CHUNKS: usize = 4;
     let ready = passthrough_ready(tricolour_frame(W, H));
     let payload =
-        crate::server::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS, 3840, 2160).unwrap();
+        crate::session::encoding::encode_rgb8_lz4_chunked(&ready, CHUNKS, 3840, 2160).unwrap();
 
     assert_eq!(
         u32::from_le_bytes(payload[0..4].try_into().unwrap()),
-        crate::server::encoding::RGB8_CHUNKED_MAGIC
+        crate::session::encoding::RGB8_CHUNKED_MAGIC
     );
     let width = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
     let height = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
@@ -261,8 +261,8 @@ fn lz4_sa09_payload_is_interleaved() {
     assert_eq!((width, height), (W, H));
     assert_eq!(chunk_count, CHUNKS);
 
-    let desc_size = crate::server::encoding::SA09_CHUNK_DESCRIPTOR_SIZE;
-    let mut desc = crate::server::encoding::SA09_HEADER_SIZE;
+    let desc_size = crate::session::encoding::SA09_CHUNK_DESCRIPTOR_SIZE;
+    let mut desc = crate::session::encoding::SA09_HEADER_SIZE;
     let mut data = desc + chunk_count * desc_size;
     let mut rgb8 = Vec::with_capacity(width * height * 3);
 

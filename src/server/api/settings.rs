@@ -4,8 +4,8 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
 
 use super::super::dto::{ApiResponse, SettingsResponse, UpdateSettingsRequest};
-use super::super::services::SettingsService;
-use super::super::state::{AppState, StackingType};
+use crate::session::services::SettingsService;
+use crate::session::state::{AppState, StackingType};
 
 /// GET /api/settings
 ///

@@ -15,7 +15,7 @@ use night_amplifier::render::{
     AiComputePreference, AiComputeReport, AiDenoiseConfig, AiDenoisePlugin, BenchmarkState,
     ComputeRung, DenoiseScratch, RungReport,
 };
-use night_amplifier::server::state::CaptureState;
+use night_amplifier::session::state::CaptureState;
 use night_amplifier::server::{Server, ServerConfig};
 use serde_json::Value;
 use serial_test::serial;

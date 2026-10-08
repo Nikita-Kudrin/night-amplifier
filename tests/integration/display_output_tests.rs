@@ -112,7 +112,7 @@ fn prepare_fixture(
 /// testing a curve the product cannot produce.
 fn prepare_fixture_with(
     fixture: &Fixture,
-    configure: impl FnOnce(&mut night_amplifier::server::state::CaptureSettings),
+    configure: impl FnOnce(&mut night_amplifier::session::state::CaptureSettings),
 ) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     // Ensure fixtures are downloaded from Google Drive. Under nextest
     // partitioning this file may run in a shard with no other test that
@@ -125,15 +125,15 @@ fn prepare_fixture_with(
         frame = night_amplifier::debayer_auto(&frame).ok()?.0;
     }
 
-    let mut settings = night_amplifier::server::state::CaptureSettings::default();
+    let mut settings = night_amplifier::session::state::CaptureSettings::default();
     settings.auto_stretch = true;
     configure(&mut settings);
 
-    let night_amplifier::server::capture::pipeline::PreviewRender {
+    let night_amplifier::session::capture::pipeline::PreviewRender {
         pipeline_config,
         stretch_result,
         ..
-    } = night_amplifier::server::capture::pipeline::process_preview_frame(
+    } = night_amplifier::session::capture::pipeline::process_preview_frame(
         &mut frame,
         &settings,
         &night_amplifier::plugins::Plugins::installed(),

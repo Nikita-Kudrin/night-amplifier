@@ -12,18 +12,10 @@
 //! ```
 
 mod api;
-mod camera_health;
-mod camera_session;
-pub mod capture;
 mod dto;
 mod embedded_assets;
 mod embedded_manual;
-pub mod encoding;
 pub mod error;
-pub mod events;
-pub mod services;
-mod settings_persistence;
-pub mod state;
 mod util;
 mod ws;
 
@@ -32,16 +24,10 @@ mod ws;
 mod tests;
 
 pub use dto::*;
-pub use encoding::{
-    encode_rgb8_jpeg_bounded, encode_rgb8_lz4, encode_rgb8_lz4_chunked, JPEG_MAGIC,
-    RGB8_CHUNKED_MAGIC, RGB8_MAGIC,
-};
-pub use error::{ApiError, ApiResult, ServerError};
-pub use events::ServerEvent;
-pub use services::{CameraService, CaptureService};
-pub use settings_persistence::{SettingsPersistence, DEFAULT_SETTINGS_FILE};
-pub use state::*;
+pub use error::ServerError;
 pub use ws::*;
+
+use crate::session::state::AppState;
 
 use axum::{
     routing::{get, post},
@@ -220,7 +206,7 @@ impl Server {
         // Before the listener: a stored result makes the first report already `Ready`,
         // and a fresh machine shows the benchmark overlay from the first page load.
         crate::render::denoise::ai::start_benchmark(&self.state.plugins);
-        crate::server::events::spawn_ai_compute_watcher(
+        crate::session::events::spawn_ai_compute_watcher(
             self.state.events.clone(),
             self.state.plugins.clone(),
         );
@@ -258,7 +244,7 @@ impl Server {
 
         let telescope = self.state.settings.snapshot().telescope.clone();
         if let Err(e) =
-            crate::server::services::PushToService::set_telescope_settings(&self.state, telescope)
+            crate::session::services::PushToService::set_telescope_settings(&self.state, telescope)
                 .await
         {
             warn!(error = %e, "Could not apply telescope settings to the Push-To solver at startup");

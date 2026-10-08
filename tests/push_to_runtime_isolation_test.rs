@@ -18,9 +18,9 @@ use night_amplifier::push_to::{
     CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
     PushToStatusResponse, TelescopeSettings,
 };
-use night_amplifier::server::capture::solving::{offer_plate_solve, SolveSource};
-use night_amplifier::server::services::PushToState;
-use night_amplifier::server::state::AppState;
+use night_amplifier::session::capture::solving::{offer_plate_solve, SolveSource};
+use night_amplifier::session::services::PushToState;
+use night_amplifier::session::state::AppState;
 
 /// How long the fake plugin holds its thread: a detection plus a FITS write on the Pi.
 const BLOCK: Duration = Duration::from_millis(600);

@@ -1,7 +1,7 @@
 //! Tests for WebSocket events
 
-use crate::server::events::ServerEvent;
-use crate::server::state::{CameraRole, CaptureState};
+use crate::session::events::ServerEvent;
+use crate::session::state::{CameraRole, CaptureState};
 
 #[tokio::test]
 async fn test_event_to_json_all_variants() {
@@ -98,7 +98,7 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
     use tokio_tungstenite::tungstenite::Message;
 
     let server = super::image_stream_clients::start_server().await;
-    let camera = crate::server::state::ConnectedCameraInfo {
+    let camera = crate::session::state::ConnectedCameraInfo {
         id: "mock_1".to_string(),
         provider: "Mock".to_string(),
         index: 0,
@@ -111,7 +111,7 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
     server.state.roster.install(camera, false);
     server
         .state
-        .set_camera_phase(CameraRole::Guide, "Guiding", crate::server::state::CameraPhase::Guiding);
+        .set_camera_phase(CameraRole::Guide, "Guiding", crate::session::state::CameraPhase::Guiding);
 
     let mut client = server.connect("/ws/events").await;
     let mut events = Vec::new();

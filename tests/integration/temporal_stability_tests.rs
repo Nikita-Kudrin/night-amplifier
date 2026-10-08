@@ -15,10 +15,10 @@ use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::Layer;
 
-use night_amplifier::server::capture::{
+use night_amplifier::session::capture::{
     AnalysisContext, PreviewAnalysis, StackSettings, StackingContext,
 };
-use night_amplifier::server::state::CaptureSettings;
+use night_amplifier::session::state::CaptureSettings;
 use night_amplifier::Frame;
 
 use crate::integration::instruments::{load_sub, requested_sessions, session_frames};
@@ -157,7 +157,7 @@ fn render(
     analysis: &mut PreviewAnalysis,
     settings: &CaptureSettings,
 ) -> (Vec<u8>, usize, usize) {
-    let rendered = night_amplifier::server::capture::pipeline::process_preview_frame_with_analysis(
+    let rendered = night_amplifier::session::capture::pipeline::process_preview_frame_with_analysis(
         &mut frame,
         settings,
         &night_amplifier::plugins::Plugins::installed(),
@@ -186,7 +186,7 @@ struct Subs {
 
 impl Subs {
     fn get(&mut self, index: usize) -> Frame {
-        use night_amplifier::server::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
+        use night_amplifier::session::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
         let sub = load_sub(&self.files[index]);
         if !sub.is_bayer {
             return sub.frame;

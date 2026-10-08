@@ -19,7 +19,7 @@ use crate::render::display::encode_rgb8_png;
 use crate::render::display::frame_to_rgb8_downsampled;
 use crate::render::display::RenderReadyFrame;
 use crate::server::dto::ApiResponse;
-use crate::server::state::AppState;
+use crate::session::state::AppState;
 
 /// One snapshot render at a time, process-wide.
 ///

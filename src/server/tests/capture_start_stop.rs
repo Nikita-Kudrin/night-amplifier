@@ -5,7 +5,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::helpers::*;
-use crate::server::state::*;
+use crate::session::state::*;
 
 // ============================================================================
 // Capture Start Endpoint Tests
@@ -342,7 +342,7 @@ async fn test_switching_to_live_view_and_entering_focus_mode_in_one_request_is_a
 }
 
 async fn resume_with_focus_mode_on(stacking: bool) -> Arc<AppState> {
-    use crate::server::services::CaptureService;
+    use crate::session::services::CaptureService;
 
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
@@ -447,10 +447,10 @@ async fn live_view_under_focus_mode(stacking_type: StackingType) -> Arc<AppState
 }
 
 fn focus_mode_left_announced(
-    events: &mut tokio::sync::broadcast::Receiver<crate::server::events::ServerEvent>,
+    events: &mut tokio::sync::broadcast::Receiver<crate::session::events::ServerEvent>,
 ) -> bool {
     std::iter::from_fn(|| events.try_recv().ok())
-        .any(|event| matches!(event, crate::server::events::ServerEvent::FocusModeLeft))
+        .any(|event| matches!(event, crate::session::events::ServerEvent::FocusModeLeft))
 }
 
 #[tokio::test]

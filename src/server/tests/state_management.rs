@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::disk_writer::DiskWriterConfig;
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 // ============================================================================
 // State Management Tests
@@ -245,7 +245,7 @@ async fn a_gate_rejection_carries_its_reason_without_arming_the_abort_detector()
         other => panic!("Expected FrameCaptured event, got {other:?}"),
     }
 
-    for _ in 1..crate::server::state::REJECTION_RATE_THRESHOLD {
+    for _ in 1..crate::session::state::REJECTION_RATE_THRESHOLD {
         state.frame_captured(false, true, Some("stars far larger than the session median"));
     }
     assert!(

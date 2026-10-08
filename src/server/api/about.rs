@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::license::{LicenseStatus, LICENSE_UPDATER, PRO_LICENSE_DATA};
 use crate::server::dto::ApiResponse;
-use crate::server::state::AppState;
+use crate::session::state::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateLicenseRequest {

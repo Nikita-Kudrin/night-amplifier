@@ -5,7 +5,7 @@ use std::time::Duration;
 use serial_test::parallel;
 
 use super::*;
-use crate::server::state::StreamKind;
+use crate::session::state::StreamKind;
 
 /// Leaving — cleanly or by dropping the connection — releases the viewer, and the
 /// remaining clients keep receiving frames. A family whose last viewer left is no longer
@@ -50,7 +50,7 @@ async fn a_stalled_client_does_not_hold_up_the_others() {
     let mut healthy = server.connect_registered(LOSSLESS).await;
     let mut live = server.connect_registered(LIVE_VIEW).await;
     server.state.settings.update(|settings| {
-        settings.eyepiece.stream_resolution = crate::server::state::EyepieceStreamResolution::Native;
+        settings.eyepiece.stream_resolution = crate::session::state::EyepieceStreamResolution::Native;
     });
 
     for seed in 1..=4 {
