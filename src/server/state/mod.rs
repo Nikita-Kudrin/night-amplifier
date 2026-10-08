@@ -39,7 +39,8 @@ pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
 pub use roster::{CameraRoster, ConnectedCameraInfo};
 pub use session::{
-    FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD, REJECTION_RATE_WINDOW,
+    CaptureResume, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
+    REJECTION_RATE_WINDOW,
 };
 pub use settings::{
     default_preview_resolution, default_streaming_resolution, CameraCaptureProfile,
@@ -75,8 +76,9 @@ pub struct AppState {
     pub events: broadcast::Sender<ServerEvent>,
     /// Disk writer handle for saving frames
     pub disk_writer: DiskWriterHandle,
-    /// Push-To navigation state
-    pub push_to: RwLock<Option<PushToState>>,
+    /// Push-To's solve bookkeeping; `None` for a server without it. Synchronized inside,
+    /// so the capture threads read it without a lock.
+    pub push_to: Option<PushToState>,
     /// Push-To's solve and watch consumer threads, started by the first frame offered.
     pub(crate) push_to_tasks: std::sync::OnceLock<crate::server::capture::push_to_tasks::PushToTasks>,
     /// The guide camera's free-running loop: whether one is registered, whether it is
@@ -104,16 +106,10 @@ pub struct AppState {
     /// One counter per provider for `CameraService`'s bounded enumerations: a refresh waits on
     /// a provider still inside its SDK instead of starting a second call behind it.
     pub discovery_calls: StdMutex<HashMap<String, Arc<camera_slot::InFlightCalls>>>,
-    /// What an interrupted capture needs in order to pick up where it left
-    /// off. Recorded when a capture starts, consumed by the reconnect
-    /// supervisor, cleared on a clean stop. Main camera only — for the guide
-    /// camera, reconnecting *is* resuming, since its loop is started by `connect`.
-    pub session_resume_plan: RwLock<Option<SessionResumePlan>>,
-    /// Stacking state parked by a capture that ended unexpectedly, so a
-    /// resumed capture continues the same integration instead of restarting
-    /// it. Cleared whenever a capture starts fresh or stops cleanly — holding
-    /// full-resolution accumulators between sessions would be pure waste.
-    pub stacking_carryover: StdMutex<Option<crate::server::capture::StackingCarryover>>,
+    /// What an interrupted capture needs in order to pick up where it left off: the
+    /// plan recorded when it started, and the stack it parked. Consumed by the reconnect
+    /// supervisor, cleared on a clean stop or a fresh start.
+    pub resume: CaptureResume,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -188,7 +184,7 @@ impl AppState {
             cancel_flag: AtomicBool::new(false),
             events: events_tx,
             disk_writer: disk_writer_handle,
-            push_to: RwLock::new(push_to),
+            push_to,
             push_to_tasks: std::sync::OnceLock::new(),
             guide_loops: guide_loop::GuideLoops::default(),
             settings_persistence,
@@ -196,8 +192,7 @@ impl AppState {
             device_catalog: Arc::new(crate::camera::RegistryCatalog::new()),
             plugins: crate::plugins::Plugins::installed(),
             discovery_calls: StdMutex::new(HashMap::new()),
-            session_resume_plan: RwLock::new(None),
-            stacking_carryover: StdMutex::new(None),
+            resume: CaptureResume::default(),
         };
 
         (state, disk_writer)
@@ -325,8 +320,7 @@ impl AppState {
             }
             *capture = CaptureState::Idle;
         }
-        *self.session_resume_plan.write().await = None;
-        self.clear_stacking_carryover();
+        self.resume.clear();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
         crate::render::denoise::ai::start_benchmark(&self.plugins);
         true
@@ -341,8 +335,7 @@ impl AppState {
     /// end is final, so the resume plan and parked stack go with it: left behind, the
     /// next quiet recovery of the idle camera restarted a capture the observer saw end.
     pub async fn end_capture_state(&self) {
-        let recovering = self.slot(CameraRole::Main).is_recovering()
-            && self.session_resume_plan.read().await.is_some();
+        let recovering = self.slot(CameraRole::Main).is_recovering() && self.resume.has_plan();
         {
             let mut capture = self.capture.write().await;
             if *capture == CaptureState::Recovering {
@@ -359,8 +352,7 @@ impl AppState {
             }
             *capture = CaptureState::Idle;
         }
-        *self.session_resume_plan.write().await = None;
-        self.clear_stacking_carryover();
+        self.resume.clear();
         let _ = self.events.send(ServerEvent::state_changed(CaptureState::Idle));
         // A licence activated mid-session left the AI compute benchmark to here, when every
         // capture thread has been joined. Idempotent, so any other end does nothing.
@@ -408,14 +400,6 @@ impl AppState {
         let receiver = self.events.subscribe();
         telemetry_metrics::record_event_subscribers(self.events.receiver_count() as u64);
         receiver
-    }
-
-    /// Discard any stacking accumulators parked for a resume.
-    pub fn clear_stacking_carryover(&self) {
-        *self
-            .stacking_carryover
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Send an error event
@@ -567,9 +551,9 @@ impl AppState {
     /// A cache, not the source of truth — see [`PushToState`]. Written by the
     /// target mutations in `PushToService` and re-synced from `solve_frame`,
     /// so that the stacking thread can gate plate solving synchronously.
-    pub async fn set_push_to_has_target(&self, has_target: bool) {
-        if let Some(ref mut pt) = *self.push_to.write().await {
-            pt.has_target = has_target;
+    pub fn set_push_to_has_target(&self, has_target: bool) {
+        if let Some(pt) = &self.push_to {
+            pt.set_has_target(has_target);
         }
     }
 
@@ -579,10 +563,10 @@ impl AppState {
     /// The direction is only re-broadcast when its numbers change, so without this a
     /// new target whose arrow happens to point the same way would leave the client
     /// showing a distance and heading computed for the *old* target.
-    pub async fn push_to_target_changed(&self, has_target: bool) {
-        if let Some(ref mut pt) = *self.push_to.write().await {
-            pt.has_target = has_target;
+    pub fn push_to_target_changed(&self, has_target: bool) {
+        if let Some(pt) = &self.push_to {
             pt.forget_direction();
+            pt.set_has_target(has_target);
         }
     }
 

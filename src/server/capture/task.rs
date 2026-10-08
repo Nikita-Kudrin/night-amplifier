@@ -71,7 +71,7 @@ pub async fn run_capture_loop(
     let numbers = FrameNumbers::starting_at(resume.as_ref().map_or(1, |plan| plan.next_frame));
     let settings = {
         let settings = crate::server::state::CaptureSettings::clone(&state.settings.snapshot());
-        *state.session_resume_plan.write().await = Some(SessionResumePlan {
+        state.resume.record(SessionResumePlan {
             camera_id: camera_id.clone(),
             settings: settings.clone(),
             disk_session_dir: state.disk_writer.session_dir(),
@@ -326,15 +326,7 @@ pub async fn run_capture_loop(
 
     // On a resume, hand the parked accumulators to the new stacking task; on a
     // fresh start `CaptureService` has already cleared them.
-    let carryover = if resume.is_some() {
-        state
-            .stacking_carryover
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-    } else {
-        None
-    };
+    let carryover = if resume.is_some() { state.resume.take_stack() } else { None };
 
     let stacking_handle = std::thread::Builder::new()
         .name("stacking-task".into())
@@ -412,9 +404,7 @@ pub async fn run_capture_loop(
     info!(camera_id = %camera_id, "Capture pipeline ended");
 
     // Before the handle goes back: a fault hands it to recovery, which may resume at once.
-    if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
-        plan.next_frame = numbers.peek();
-    }
+    state.resume.edit_plan(|plan| plan.next_frame = numbers.peek());
 
     // Return the camera handle to the session (or finalize disconnect if lost).
     state.clear_camera_token(CameraRole::Main).await;

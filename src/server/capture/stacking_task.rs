@@ -331,10 +331,7 @@ pub fn run_stacking_task(
     // Park the accumulator in case this capture is about to be resumed after a
     // reconnect. A fresh start or a clean stop clears it; see
     // `CaptureService::start_capture` and `stop_capture`.
-    *state
-        .stacking_carryover
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) = stacker.map(|stacker| StackingCarryover { stacker });
+    state.resume.park_stack(stacker.map(|stacker| StackingCarryover { stacker }));
 
     debug!("Stacking task ended");
 }

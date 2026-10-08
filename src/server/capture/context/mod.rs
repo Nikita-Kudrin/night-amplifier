@@ -108,7 +108,7 @@ pub fn create_live_stacker(
 }
 
 /// The stacking state a capture leaves behind when it ends unexpectedly — a dropout
-/// mid-session must not cost the whole two hours. Parked in `AppState.stacking_carryover`
+/// mid-session must not cost the whole two hours. Parked in `AppState::resume`
 /// when a reconnect will resume the session, and handed to the next stacking task.
 /// Only valid for a resume at the same frame geometry and mode — discarded by the
 /// stacking task's reset checks otherwise, same as a mid-session binning change.

@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::settings::CaptureSettings;
+use crate::server::capture::StackingCarryover;
 
 /// Sliding window used by [`SessionStats::record_failure`] to detect a
 /// *current* burst of camera-capture failures, rather than a lifetime-
@@ -241,6 +242,25 @@ mod tests {
         fresh.frame_dropped();
         assert_eq!(fresh.drop_rate(), 0.0, "a drop with nothing delivered divides by nothing");
     }
+
+    #[test]
+    fn a_resume_plan_follows_its_capture_until_cleared() {
+        let resume = CaptureResume::default();
+        resume.edit_plan(|_| panic!("no plan to edit"));
+
+        resume.record(SessionResumePlan {
+            camera_id: "mock_0".to_string(),
+            settings: CaptureSettings::default(),
+            disk_session_dir: None,
+            next_frame: 1,
+        });
+        resume.edit_plan(|plan| plan.next_frame = 42);
+        assert_eq!(resume.plan().map(|plan| plan.next_frame), Some(42));
+
+        resume.clear();
+        assert!(!resume.has_plan());
+        assert!(!resume.has_stack());
+    }
 }
 
 /// Everything an interrupted capture needs to pick up where it left off.
@@ -263,4 +283,69 @@ pub struct SessionResumePlan {
     /// `frame_{:06}.fits` and replaces one that exists, so a resume that numbered from 1
     /// again overwrote the subs its folder already held.
     pub next_frame: u64,
+}
+
+/// What an interrupted capture leaves for its resume: the plan, and the stack its
+/// stacking task parked. One std lock, so ending a capture drops both in one step and a
+/// resume never finds one without the other's latest word.
+///
+/// Main camera only — for the guide camera, reconnecting *is* resuming, since its loop
+/// is started by `connect`. The parked stack is full-resolution accumulators, which is
+/// why every final end clears it rather than holding it between sessions.
+#[derive(Default)]
+pub struct CaptureResume(Mutex<Parked>);
+
+#[derive(Default)]
+struct Parked {
+    plan: Option<SessionResumePlan>,
+    stack: Option<StackingCarryover>,
+}
+
+impl CaptureResume {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Parked> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn plan(&self) -> Option<SessionResumePlan> {
+        self.lock().plan.clone()
+    }
+
+    pub fn has_plan(&self) -> bool {
+        self.lock().plan.is_some()
+    }
+
+    /// Record what a capture starting now would need to resume.
+    pub fn record(&self, plan: SessionResumePlan) {
+        self.lock().plan = Some(plan);
+    }
+
+    /// Keep the plan current as the capture moves on. No-op without one.
+    pub fn edit_plan(&self, edit: impl FnOnce(&mut SessionResumePlan)) {
+        if let Some(plan) = self.lock().plan.as_mut() {
+            edit(plan);
+        }
+    }
+
+    /// Every stack replaced here is freed outside the lock: it is full-resolution
+    /// accumulators.
+    pub fn park_stack(&self, stack: Option<StackingCarryover>) {
+        let _replaced = std::mem::replace(&mut self.lock().stack, stack);
+    }
+
+    pub fn take_stack(&self) -> Option<StackingCarryover> {
+        self.lock().stack.take()
+    }
+
+    pub fn has_stack(&self) -> bool {
+        self.lock().stack.is_some()
+    }
+
+    pub fn clear_stack(&self) {
+        let _parked = self.lock().stack.take();
+    }
+
+    /// Drop the plan and the parked stack: the capture ended for good.
+    pub fn clear(&self) {
+        let _parked = std::mem::take(&mut *self.lock());
+    }
 }

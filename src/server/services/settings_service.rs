@@ -331,9 +331,7 @@ impl SettingsService {
         // A resume restores the plan's settings. An edit made while the capture runs, or
         // while it is paused for a reconnect, is what the observer wants it to resume
         // with — the snapshot from capture start silently undid it.
-        if let Some(plan) = state.session_resume_plan.write().await.as_mut() {
-            plan.settings = applied.clone();
-        }
+        state.resume.edit_plan(|plan| plan.settings = applied.clone());
 
         let _ = state.events.send(ServerEvent::SettingsUpdated);
 

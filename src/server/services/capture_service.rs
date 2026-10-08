@@ -162,7 +162,7 @@ impl CaptureService {
         // inherits one.
         state.reset_cancel();
         state.reset_session();
-        state.clear_stacking_carryover();
+        state.resume.clear_stack();
         state.set_capture_state(CaptureState::Starting).await;
 
         // *After* the state moves off `Idle`, which is what closes the window: from here
@@ -263,8 +263,7 @@ impl CaptureService {
         // A deliberate stop is not something to recover from: drop the resume
         // plan and the parked stack rather than holding full-resolution
         // accumulators until the next session.
-        *state.session_resume_plan.write().await = None;
-        state.clear_stacking_carryover();
+        state.resume.clear();
 
         // Clear Push-To target when capture is stopped
         let _ = super::PushToService::clear_target(state).await;

@@ -128,9 +128,9 @@ async fn offers_never_queue_behind_busy_push_to_tasks() {
 
     let (mut state, _disk_writer) = AppState::new();
     state.plugins = Plugins::none().with_push_to_solver(Arc::new(plugin)).always_licensed();
+    state.push_to = Some(PushToState::default());
     let state = Arc::new(state);
-    *state.push_to.write().await = Some(PushToState::default());
-    state.set_push_to_has_target(true).await;
+    state.set_push_to_has_target(true);
 
     let rt = tokio::runtime::Handle::current();
     let mut live: Vec<Weak<Frame>> = Vec::new();

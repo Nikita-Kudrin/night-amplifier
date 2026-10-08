@@ -236,7 +236,7 @@ fn an_unchanged_direction_is_only_announced_once() {
     // The direction is recomputed on every captured frame but only changes when the
     // position or target does. Broadcasting it regardless was one WebSocket message
     // per frame per client, all saying the same thing.
-    let mut state = PushToState::default();
+    let state = PushToState::default();
 
     assert!(state.direction_is_news(122.68, 4.512, false));
     assert!(!state.direction_is_news(122.68, 4.512, false));
@@ -247,7 +247,7 @@ fn an_unchanged_direction_is_only_announced_once() {
 fn floating_point_jitter_does_not_count_as_a_change() {
     // Spherical geometry recomputed from scratch each frame is not bit-stable, so an
     // exact comparison would let the per-frame spam straight back through.
-    let mut state = PushToState::default();
+    let state = PushToState::default();
 
     assert!(state.direction_is_news(122.680_000, 4.512_000, false));
     assert!(!state.direction_is_news(122.680_004, 4.512_000_2, false));
@@ -255,7 +255,7 @@ fn floating_point_jitter_does_not_count_as_a_change() {
 
 #[test]
 fn a_direction_the_user_could_act_on_is_announced() {
-    let mut state = PushToState::default();
+    let state = PushToState::default();
     assert!(state.direction_is_news(122.6, 4.5, false));
 
     assert!(
@@ -277,7 +277,7 @@ fn a_new_target_re_announces_even_an_identical_direction() {
     // Two targets can happen to lie in the same direction at the same distance. If
     // the record were not cleared, the client would keep showing numbers computed for
     // the target the user just moved away from.
-    let mut state = PushToState::default();
+    let state = PushToState::default();
     assert!(state.direction_is_news(90.0, 2.0, false));
 
     state.forget_direction();
@@ -294,7 +294,7 @@ fn a_new_target_re_announces_even_an_identical_direction() {
 fn a_blocker_is_announced_on_each_transition_and_not_between() {
     use crate::push_to::PushToBlocker;
 
-    let mut state = PushToState::default();
+    let state = PushToState::default();
 
     assert!(
         state.blocker_is_news(Some(PushToBlocker::SolverNotReady)),
@@ -317,7 +317,7 @@ fn a_blocker_is_announced_on_each_transition_and_not_between() {
 fn the_absence_of_a_blocker_is_reported_the_first_time() {
     // The outer Option exists to tell "never reported" from "reported that nothing is
     // wrong"; without it the very first healthy poll would be swallowed.
-    let mut state = PushToState::default();
+    let state = PushToState::default();
     assert!(state.blocker_is_news(None));
 }
 

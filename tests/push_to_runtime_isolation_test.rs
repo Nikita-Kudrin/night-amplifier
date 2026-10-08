@@ -138,8 +138,8 @@ async fn push_to_work_never_holds_the_servers_runtime() {
 
     let (mut state, _disk_writer) = AppState::new();
     state.plugins = Plugins::none().with_push_to_solver(Arc::new(plugin)).always_licensed();
+    state.push_to = Some(PushToState::default());
     let state = Arc::new(state);
-    *state.push_to.write().await = Some(PushToState::default());
 
     let heartbeat = tokio::spawn(async {
         let mut worst = Duration::ZERO;

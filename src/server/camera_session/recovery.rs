@@ -83,7 +83,7 @@ pub(super) async fn detach(state: &Arc<AppState>, role: CameraRole, camera_name:
 /// session and the supervisor resumes it. A capture the observer was already stopping
 /// has no resume plan and is left to end.
 async fn pause_capture_for_recovery(state: &Arc<AppState>) {
-    let resumable = state.session_resume_plan.read().await.is_some();
+    let resumable = state.resume.has_plan();
     {
         let mut capture = state.capture.write().await;
         if !resumable || !matches!(*capture, CaptureState::Capturing | CaptureState::Starting) {

@@ -180,16 +180,12 @@ struct StallContext {
 }
 
 impl StallContext {
-    /// Never waits: the loops are not async, and a lock someone holds reads as unknown.
+    /// Never waits: the loops are not async, and nothing read here is behind an async lock.
     fn gather(state: &AppState, role: CameraRole, stalls: &StallTracker) -> Self {
         Self {
             frames: stalls.frames,
             since_last_frame: stalls.last_frame_at.map(|at| at.elapsed()),
-            solve_in_flight: state
-                .push_to
-                .try_read()
-                .ok()
-                .and_then(|push_to| push_to.as_ref().map(|pt| pt.is_solving())),
+            solve_in_flight: state.push_to.as_ref().map(|pt| pt.is_solving()),
             other_camera: state.camera_phase(role.other()),
             host: HostLoad::sample(),
         }
@@ -293,12 +289,13 @@ mod tests {
     /// what was the other camera doing?
     #[tokio::test]
     async fn the_context_reads_push_to_and_the_other_camera() {
-        let (state, _dw) = AppState::new_for_testing();
-        let push_to = PushToState::default();
-        let _solving = push_to
-            .try_begin_solve(Instant::now(), Duration::ZERO)
+        let (mut state, _dw) = AppState::new_for_testing();
+        state.push_to = Some(PushToState::default());
+        let _solving = state
+            .push_to
+            .as_ref()
+            .and_then(|pt| pt.try_begin_solve(Instant::now(), Duration::ZERO))
             .expect("a fresh state has nothing to contend with");
-        *state.push_to.write().await = Some(push_to);
         state.roster.set_phase(CameraRole::Main, CameraPhase::Capturing);
 
         let mut stalls = StallTracker::default();
@@ -312,10 +309,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_held_lock_reads_as_unknown_instead_of_blocking_the_loop() {
+    async fn without_push_to_the_solve_reads_as_unknown() {
         let (state, _dw) = AppState::new_for_testing();
-        *state.push_to.write().await = Some(PushToState::default());
-        let _held = state.push_to.write().await;
 
         let context = StallContext::gather(&state, CameraRole::Main, &StallTracker::default());
 
