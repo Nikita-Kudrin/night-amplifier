@@ -1,13 +1,13 @@
-use std::path::PathBuf;
-
-use super::settings::CaptureSettings;
 use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use super::types::CaptureState;
+use super::settings::CaptureSettings;
 use crate::camera::CameraInfo;
 
-/// Sliding window used by [`CaptureSession::record_rejection`] to detect a
+/// Sliding window used by [`SessionStats::record_failure`] to detect a
 /// *current* burst of camera-capture failures, rather than a lifetime-
 /// cumulative count that could trip hours into an otherwise-healthy session.
 pub const REJECTION_RATE_WINDOW: Duration = Duration::from_secs(1);
@@ -16,71 +16,135 @@ pub const REJECTION_RATE_WINDOW: Duration = Duration::from_secs(1);
 /// opposed to an occasional, recoverable hiccup spread across a long session.
 pub const REJECTION_RATE_THRESHOLD: usize = 10;
 
-/// Current capture session information
-#[derive(Debug, Clone)]
-pub struct CaptureSession {
-    /// Current state
-    pub state: CaptureState,
-    /// Number of frames captured
-    pub frame_count: u64,
-    /// Number of frames successfully stacked
-    pub stacked_count: u64,
-    /// Number of frames rejected (bad quality, failed alignment, or capture
-    /// failure) — a lifetime-of-session stat kept for UI/reporting.
-    pub rejected_count: u64,
-    /// Timestamps of recent *camera-capture* failures (not stacking-quality
-    /// rejections), pruned to the last `REJECTION_RATE_WINDOW`. Used by
-    /// `should_stop_on_errors` to detect a current failure burst — independent
-    /// of `rejected_count`, which never decays and mixes in stacking rejects.
-    pub rejection_timestamps: VecDeque<Instant>,
-    /// Last error message (if any)
-    pub last_error: Option<String>,
-    /// Capture start time (Unix timestamp ms)
-    pub started_at: Option<u64>,
-    /// Current exposure time in microseconds
-    pub exposure_us: u64,
-    /// Current gain
-    pub gain: i32,
+/// The capture session's frame counters.
+///
+/// Atomics, so the capture and stacking threads count without a lock or a `block_on`;
+/// only the failure-burst window sits behind a mutex, and it is touched on failures alone.
+/// The counters move independently, so a reader racing a frame can see one counter a frame
+/// ahead of another — they only ever feed the UI's tallies.
+#[derive(Debug, Default)]
+pub struct SessionStats {
+    frames: AtomicU64,
+    stacked: AtomicU64,
+    /// Bad quality, failed alignment or a capture failure, counted only while stacking — a
+    /// lifetime-of-session tally for the UI, never decaying.
+    rejected: AtomicU64,
+    /// Frames the camera handed the pipeline, the denominator the drop count needs.
+    delivered: AtomicU64,
+    /// Frames the pipeline's back-pressure dropped.
+    dropped: AtomicU64,
+    /// Unix milliseconds the session started; 0 before the first start.
+    started_at_ms: AtomicU64,
+    /// Recent *camera-capture* failures, pruned to [`REJECTION_RATE_WINDOW`]: a current
+    /// failure burst, independent of `rejected`, which mixes in stacking rejects.
+    failures: Mutex<VecDeque<Instant>>,
 }
 
-impl Default for CaptureSession {
-    fn default() -> Self {
-        Self {
-            state: CaptureState::Idle,
-            frame_count: 0,
-            stacked_count: 0,
-            rejected_count: 0,
-            rejection_timestamps: VecDeque::new(),
-            last_error: None,
-            started_at: None,
-            exposure_us: 1_000_000,
-            gain: 0,
+/// One reading of the frame counters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FrameCounts {
+    pub frames: u64,
+    pub stacked: u64,
+    pub rejected: u64,
+}
+
+impl SessionStats {
+    pub fn counts(&self) -> FrameCounts {
+        FrameCounts {
+            frames: self.frames.load(Ordering::SeqCst),
+            stacked: self.stacked.load(Ordering::SeqCst),
+            rejected: self.rejected.load(Ordering::SeqCst),
         }
     }
-}
 
-impl CaptureSession {
-    /// Record a camera-capture failure at `now`, prune entries older than
-    /// `REJECTION_RATE_WINDOW`, and return whether the rate within the window
-    /// has reached `REJECTION_RATE_THRESHOLD`.
-    ///
-    /// `now` is a parameter rather than calling `Instant::now()` internally so
-    /// this is unit-testable without real sleeps.
-    pub fn record_rejection(&mut self, now: Instant) -> bool {
-        self.rejection_timestamps.push_back(now);
-        while self
-            .rejection_timestamps
+    /// When the session started, Unix milliseconds.
+    pub fn started_at(&self) -> Option<u64> {
+        Some(self.started_at_ms.load(Ordering::SeqCst)).filter(|&ms| ms != 0)
+    }
+
+    /// A frame the stack decided on. An unstacked one counts as rejected only while
+    /// `stacking`: live view drops nothing.
+    pub fn frame_captured(&self, stacked: bool, stacking: bool) -> FrameCounts {
+        self.frames.fetch_add(1, Ordering::SeqCst);
+        if stacked {
+            self.stacked.fetch_add(1, Ordering::SeqCst);
+        } else if stacking {
+            self.rejected.fetch_add(1, Ordering::SeqCst);
+        }
+        self.counts()
+    }
+
+    /// A frame the camera failed to deliver, at `now`: counted like a rejected frame, and
+    /// recorded in the failure-burst window whatever `stacking` says — that window is about
+    /// whether the camera responds.
+    pub fn frame_failed(&self, stacking: bool, now: Instant) -> FrameCounts {
+        self.frames.fetch_add(1, Ordering::SeqCst);
+        if stacking {
+            self.rejected.fetch_add(1, Ordering::SeqCst);
+        }
+        self.record_failure(now);
+        self.counts()
+    }
+
+    /// Records a camera-capture failure at `now`, prunes the window, and returns whether
+    /// the failures within it reached [`REJECTION_RATE_THRESHOLD`]. `now` is a parameter so
+    /// the window is testable without real sleeps.
+    pub fn record_failure(&self, now: Instant) -> bool {
+        let mut failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
+        failures.push_back(now);
+        while failures
             .front()
             .is_some_and(|t| now.duration_since(*t) > REJECTION_RATE_WINDOW)
         {
-            self.rejection_timestamps.pop_front();
+            failures.pop_front();
         }
-        self.rejection_rate_exceeded()
+        failures.len() >= REJECTION_RATE_THRESHOLD
     }
 
-    /// Whether the current rejection rate indicates an active failure burst.
-    pub fn rejection_rate_exceeded(&self) -> bool {
-        self.rejection_timestamps.len() >= REJECTION_RATE_THRESHOLD
+    /// Whether the camera is failing right now: a burst within the window.
+    pub fn failing(&self) -> bool {
+        self.failures.lock().unwrap_or_else(|e| e.into_inner()).len() >= REJECTION_RATE_THRESHOLD
+    }
+
+    /// Zeroes the counters, keeping the start time: a stack reset, not a new session.
+    pub fn reset_counters(&self) {
+        for counter in [&self.frames, &self.stacked, &self.rejected, &self.delivered, &self.dropped] {
+            counter.store(0, Ordering::SeqCst);
+        }
+        self.failures.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// A new session starting at `now_ms` (Unix milliseconds).
+    pub fn start(&self, now_ms: u64) {
+        self.reset_counters();
+        self.started_at_ms.store(now_ms, Ordering::SeqCst);
+    }
+
+    /// A frame the camera handed the pipeline, dropped or not. Returns the running total.
+    pub fn frame_delivered(&self) -> u64 {
+        self.delivered.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// A frame back-pressure dropped. Returns the running total.
+    pub fn frame_dropped(&self) -> u64 {
+        self.dropped.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    pub fn delivered(&self) -> u64 {
+        self.delivered.load(Ordering::SeqCst)
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::SeqCst)
+    }
+
+    /// Share of delivered frames the pipeline could not take, `0.0..=1.0`; `0.0` before any
+    /// frame was delivered — no frames is no evidence, not a perfect session.
+    pub fn drop_rate(&self) -> f64 {
+        match self.delivered() {
+            0 => 0.0,
+            delivered => self.dropped() as f64 / delivered as f64,
+        }
     }
 }
 
@@ -89,64 +153,94 @@ mod tests {
     use super::*;
 
     #[test]
-    fn record_rejection_trips_on_burst_within_window() {
-        let mut session = CaptureSession::default();
+    fn a_burst_within_the_window_trips() {
+        let stats = SessionStats::default();
         let base = Instant::now();
         let mut tripped = false;
         for i in 0..REJECTION_RATE_THRESHOLD {
-            tripped = session.record_rejection(base + Duration::from_millis(i as u64 * 10));
+            tripped = stats.record_failure(base + Duration::from_millis(i as u64 * 10));
         }
-        assert!(
-            tripped,
-            "threshold rejections within the window should trip"
-        );
+        assert!(tripped, "threshold failures within the window should trip");
+        assert!(stats.failing());
     }
 
     #[test]
-    fn record_rejection_does_not_trip_when_spread_out() {
-        let mut session = CaptureSession::default();
+    fn failures_spread_beyond_the_window_never_trip() {
+        let stats = SessionStats::default();
         let base = Instant::now();
-        let mut tripped = false;
-        // One every 2s — by the time the Nth lands, everything before the
-        // window start has already been pruned, so the count never reaches
-        // the threshold no matter how many we record.
+        // One every 2 s: by the time the Nth lands everything before the window start is
+        // pruned, so the count never reaches the threshold.
         for i in 0..(REJECTION_RATE_THRESHOLD * 3) {
-            tripped = session.record_rejection(base + Duration::from_secs(i as u64 * 2));
+            assert!(!stats.record_failure(base + Duration::from_secs(i as u64 * 2)));
         }
-        assert!(
-            !tripped,
-            "rejections spread beyond the window should not trip"
+        assert!(!stats.failing());
+    }
+
+    #[test]
+    fn a_gap_longer_than_the_window_prunes_every_earlier_failure() {
+        let stats = SessionStats::default();
+        let base = Instant::now();
+        for i in 0..(REJECTION_RATE_THRESHOLD as u64 - 1) {
+            stats.record_failure(base + Duration::from_millis(i * 10));
+        }
+        let later = base + REJECTION_RATE_WINDOW + Duration::from_secs(1);
+        for i in 0..(REJECTION_RATE_THRESHOLD as u64 - 1) {
+            assert!(!stats.record_failure(later + Duration::from_millis(i)), "pruned, not summed");
+        }
+    }
+
+    /// Live view rejects nothing: only a stacking session counts an unstacked frame.
+    #[test]
+    fn an_unstacked_frame_counts_as_rejected_only_while_stacking() {
+        let stats = SessionStats::default();
+        stats.frame_captured(true, true);
+        stats.frame_captured(false, true);
+        stats.frame_captured(false, false);
+        let now = Instant::now();
+        stats.frame_failed(true, now);
+        stats.frame_failed(false, now);
+        assert_eq!(
+            stats.counts(),
+            FrameCounts {
+                frames: 5,
+                stacked: 1,
+                rejected: 2
+            }
         );
     }
 
     #[test]
-    fn record_rejection_prunes_stale_entries() {
-        let mut session = CaptureSession::default();
-        let base = Instant::now();
-        for i in 0..5u64 {
-            session.record_rejection(base + Duration::from_millis(i * 10));
-        }
-        assert_eq!(session.rejection_timestamps.len(), 5);
+    fn a_counter_reset_keeps_the_start_and_a_start_resets_everything() {
+        let stats = SessionStats::default();
+        assert_eq!(stats.started_at(), None);
+        stats.start(1_700_000_000_000);
+        stats.frame_captured(true, true);
+        stats.frame_delivered();
+        stats.frame_dropped();
 
-        // A gap longer than the window — the next record should prune every
-        // prior entry, leaving only itself.
-        session.record_rejection(base + REJECTION_RATE_WINDOW + Duration::from_secs(1));
-        assert_eq!(session.rejection_timestamps.len(), 1);
+        stats.reset_counters();
+        assert_eq!(stats.counts(), FrameCounts::default());
+        assert_eq!((stats.delivered(), stats.dropped()), (0, 0));
+        assert_eq!(stats.started_at(), Some(1_700_000_000_000));
     }
 
+    /// The count alone is not the number an observer needs: 40 drops is a ruined evening
+    /// at 30 s subs and a rounding error at 100 ms.
     #[test]
-    fn rejection_rate_exceeded_matches_record_rejection_return() {
-        let mut session = CaptureSession::default();
-        let base = Instant::now();
-        for i in 0..(REJECTION_RATE_THRESHOLD - 1) {
-            session.record_rejection(base + Duration::from_millis(i as u64));
+    fn the_drop_rate_is_a_share_of_what_the_camera_delivered() {
+        let stats = SessionStats::default();
+        assert_eq!(stats.drop_rate(), 0.0, "no frames is no evidence");
+        for _ in 0..100 {
+            stats.frame_delivered();
         }
-        assert!(!session.rejection_rate_exceeded());
+        for _ in 0..35 {
+            stats.frame_dropped();
+        }
+        assert!((stats.drop_rate() - 0.35).abs() < 1e-9);
 
-        let tripped =
-            session.record_rejection(base + Duration::from_millis(REJECTION_RATE_THRESHOLD as u64));
-        assert!(tripped);
-        assert!(session.rejection_rate_exceeded());
+        let fresh = SessionStats::default();
+        fresh.frame_dropped();
+        assert_eq!(fresh.drop_rate(), 0.0, "a drop with nothing delivered divides by nothing");
     }
 }
 

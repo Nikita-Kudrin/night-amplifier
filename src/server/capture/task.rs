@@ -573,13 +573,13 @@ pub(crate) fn run_capture_task(
                         camera_ok = false;
                         break;
                     }
-                    rt.block_on(state.frame_rejected(format!("Frame stalled after {budget:?}")));
+                    state.frame_rejected(settings.stacking, format!("Frame stalled after {budget:?}"));
                     continue;
                 }
 
                 warn!(error = %e, "Frame capture failed");
-                rt.block_on(state.frame_rejected(format!("Capture failed: {}", e)));
-                if rt.block_on(storage::should_stop_on_errors(&state)) {
+                state.frame_rejected(settings.stacking, format!("Capture failed: {}", e));
+                if storage::should_stop_on_errors(&state) {
                     error!("Too many capture failures, stopping");
                     state.send_error("Too many capture failures, stopping".to_string());
                     break;

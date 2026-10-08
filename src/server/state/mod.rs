@@ -36,7 +36,7 @@ pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
 pub use session::{
-    CaptureSession, ConnectedCameraInfo, SessionResumePlan, REJECTION_RATE_THRESHOLD,
+    ConnectedCameraInfo, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,
 };
 pub use settings::{
@@ -53,8 +53,10 @@ pub struct AppState {
     pub cameras: RwLock<HashMap<String, ConnectedCameraInfo>>,
     /// Currently selected camera ID
     pub selected_camera: RwLock<Option<String>>,
-    /// Current capture session info
-    pub session: RwLock<CaptureSession>,
+    /// Where the capture session stands. Transitions are compare-and-set under this lock.
+    pub capture: RwLock<CaptureState>,
+    /// The session's frame counters, lock-free for the capture threads.
+    pub stats: SessionStats,
     /// Capture settings
     pub settings: RwLock<CaptureSettings>,
     /// The main camera's rendered image stream — what `/ws/stream` serves by default.
@@ -86,15 +88,6 @@ pub struct AppState {
     pub guide_loops: guide_loop::GuideLoops,
     /// Settings persistence manager
     pub settings_persistence: SettingsPersistence,
-    /// Counter for frames dropped due to pipeline back-pressure
-    pub dropped_frames: AtomicU64,
-    /// Frames the camera actually handed the pipeline this session.
-    ///
-    /// The denominator [`Self::dropped_frames`] needs. A drop *count* grows all night
-    /// and says nothing on its own — 40 drops is a bad evening at 30 s subs and a
-    /// rounding error at 100 ms. The rate is what tells an observer they are integrating
-    /// at 65 % of the cadence their settings imply.
-    pub delivered_frames: AtomicU64,
     /// Latest reported camera status keyed by camera name (for cooled cameras)
     pub latest_camera_status: RwLock<HashMap<String, CameraStatus>>,
     /// One slot per [`CameraRole`], each owning that position's handle, monitor,
@@ -205,7 +198,8 @@ impl AppState {
         let state = Self {
             cameras: RwLock::new(HashMap::new()),
             selected_camera: RwLock::new(None),
-            session: RwLock::new(CaptureSession::default()),
+            capture: RwLock::new(CaptureState::Idle),
+            stats: SessionStats::default(),
             settings: RwLock::new(settings),
             main_stream: Arc::new(FrameStream::default()),
             guide_stream: Arc::new(FrameStream::default()),
@@ -216,8 +210,6 @@ impl AppState {
             push_to_tasks: std::sync::OnceLock::new(),
             guide_loops: guide_loop::GuideLoops::default(),
             settings_persistence,
-            dropped_frames: AtomicU64::new(0),
-            delivered_frames: AtomicU64::new(0),
             latest_camera_status: RwLock::new(HashMap::new()),
             camera_slots: std::array::from_fn(|_| CameraSlot::default()),
             camera_connect_lock: Mutex::new(()),
@@ -342,15 +334,12 @@ impl AppState {
 
     /// Get the current capture state
     pub async fn capture_state(&self) -> CaptureState {
-        self.session.read().await.state
+        *self.capture.read().await
     }
 
     /// Update capture state and broadcast event
     pub async fn set_capture_state(&self, state: CaptureState) {
-        {
-            let mut session = self.session.write().await;
-            session.state = state;
-        }
+        *self.capture.write().await = state;
         let _ = self.events.send(ServerEvent::state_changed(state));
     }
 
@@ -362,11 +351,11 @@ impl AppState {
     /// can no longer both act on one pause.
     pub async fn end_paused_capture(&self) -> bool {
         {
-            let mut session = self.session.write().await;
-            if session.state != CaptureState::Recovering {
+            let mut capture = self.capture.write().await;
+            if *capture != CaptureState::Recovering {
                 return false;
             }
-            session.state = CaptureState::Idle;
+            *capture = CaptureState::Idle;
         }
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
@@ -387,20 +376,20 @@ impl AppState {
         let recovering = self.slot(CameraRole::Main).is_recovering()
             && self.session_resume_plan.read().await.is_some();
         {
-            let mut session = self.session.write().await;
-            if session.state == CaptureState::Recovering {
+            let mut capture = self.capture.write().await;
+            if *capture == CaptureState::Recovering {
                 return;
             }
             // `Stopping` is the observer's Stop, which a recovery must not undo.
-            if recovering && session.state != CaptureState::Stopping {
-                session.state = CaptureState::Recovering;
-                drop(session);
+            if recovering && *capture != CaptureState::Stopping {
+                *capture = CaptureState::Recovering;
+                drop(capture);
                 let _ = self
                     .events
                     .send(ServerEvent::state_changed(CaptureState::Recovering));
                 return;
             }
-            session.state = CaptureState::Idle;
+            *capture = CaptureState::Idle;
         }
         *self.session_resume_plan.write().await = None;
         self.clear_stacking_carryover();
@@ -410,7 +399,8 @@ impl AppState {
         crate::render::denoise::ai::start_benchmark(&self.plugins);
     }
 
-    /// Increment frame count and broadcast event.
+    /// Count a frame the stack decided on and broadcast it. `stacking` is the frame's
+    /// own setting: an unstacked frame counts as rejected only while stacking.
     ///
     /// `rejection_reason` says why the frame did not join the stack and is only
     /// meaningful when `stacked` is false. It rides on the `frame_captured`
@@ -418,64 +408,29 @@ impl AppState {
     /// for a camera that failed to deliver a frame and feeds the capture-abort
     /// burst detector — a frame that arrived fine and merely aligned badly must
     /// never reach that.
-    pub async fn frame_captured(&self, stacked: bool, rejection_reason: Option<&str>) {
+    pub fn frame_captured(&self, stacked: bool, stacking: bool, rejection_reason: Option<&str>) {
         debug_assert!(
             !(stacked && rejection_reason.is_some()),
             "a stacked frame has no rejection reason"
         );
-        let (frame_number, stacked_count, rejected_count) = {
-            let mut session = self.session.write().await;
-            session.frame_count += 1;
-            if stacked {
-                session.stacked_count += 1;
-            } else {
-                let settings = self.settings.read().await;
-                if settings.stacking {
-                    session.rejected_count += 1;
-                }
-            }
-            (
-                session.frame_count,
-                session.stacked_count,
-                session.rejected_count,
-            )
-        };
+        let counts = self.stats.frame_captured(stacked, stacking);
         let _ = self.events.send(ServerEvent::frame_captured(
-            frame_number,
-            stacked_count,
-            rejected_count,
+            counts.frames,
+            counts.stacked,
+            counts.rejected,
             rejection_reason,
         ));
     }
 
-    /// Record a rejected frame (a camera-capture failure — see
-    /// [`CaptureSession::record_rejection`] for how this feeds the
-    /// current-failure-burst detection used by `should_stop_on_errors`).
-    pub async fn frame_rejected(&self, reason: String) {
-        let (frame_number, stacked_count, rejected_count) = {
-            let mut session = self.session.write().await;
-            session.frame_count += 1;
-
-            let settings = self.settings.read().await;
-            if settings.stacking {
-                session.rejected_count += 1;
-            }
-            drop(settings);
-
-            // Tracked regardless of `settings.stacking` — this is about
-            // whether the camera itself is responding, not about stacking.
-            session.record_rejection(std::time::Instant::now());
-
-            (
-                session.frame_count,
-                session.stacked_count,
-                session.rejected_count,
-            )
-        };
+    /// Count a frame the camera failed to deliver and broadcast it — see
+    /// [`SessionStats::frame_failed`] for how this feeds the current-failure-burst
+    /// detection `should_stop_on_errors` uses.
+    pub fn frame_rejected(&self, stacking: bool, reason: String) {
+        let counts = self.stats.frame_failed(stacking, std::time::Instant::now());
         let _ = self.events.send(ServerEvent::frame_rejected(
-            frame_number,
-            stacked_count,
-            rejected_count,
+            counts.frames,
+            counts.stacked,
+            counts.rejected,
             reason,
         ));
     }
@@ -532,35 +487,17 @@ impl AppState {
         self.cancel_flag.store(false, Ordering::SeqCst);
     }
 
-    /// Reset session for new capture
-    pub async fn reset_session(&self) {
-        let mut session = self.session.write().await;
-        session.frame_count = 0;
-        session.stacked_count = 0;
-        session.rejected_count = 0;
-        session.rejection_timestamps.clear();
-        session.last_error = None;
-        session.started_at = Some(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
-        );
-        drop(session);
-        self.dropped_frames.store(0, Ordering::SeqCst);
-        self.delivered_frames.store(0, Ordering::SeqCst);
+    /// Reset the counters for a new capture, and stamp its start.
+    pub fn reset_session(&self) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as u64);
+        self.stats.start(now_ms);
     }
 
     /// Reset frame counters without resetting session start time
-    pub async fn reset_counters(&self) {
-        let mut session = self.session.write().await;
-        session.frame_count = 0;
-        session.stacked_count = 0;
-        session.rejected_count = 0;
-        session.rejection_timestamps.clear();
-        drop(session);
-        self.dropped_frames.store(0, Ordering::SeqCst);
-        self.delivered_frames.store(0, Ordering::SeqCst);
+    pub fn reset_counters(&self) {
+        self.stats.reset_counters();
     }
 
     /// Set a slot's camera cancel token
@@ -688,71 +625,23 @@ impl AppState {
     /// frame that never reached a channel is exactly the one the rate has to account
     /// for.
     pub fn frame_delivered(&self) -> u64 {
-        self.delivered_frames.fetch_add(1, Ordering::SeqCst) + 1
+        self.stats.frame_delivered()
     }
 
     /// Record a dropped frame (pipeline back-pressure) and broadcast event
     pub fn frame_dropped(&self) -> u64 {
         telemetry_metrics::record_frame_dropped();
-        let count = self.dropped_frames.fetch_add(1, Ordering::SeqCst) + 1;
-        let _ = self.events.send(ServerEvent::frame_dropped(
-            count,
-            self.delivered_frames.load(Ordering::SeqCst),
-        ));
+        let count = self.stats.frame_dropped();
+        let _ = self
+            .events
+            .send(ServerEvent::frame_dropped(count, self.stats.delivered()));
         count
-    }
-
-    /// Get the current dropped frames count
-    pub fn dropped_count(&self) -> u64 {
-        self.dropped_frames.load(Ordering::SeqCst)
-    }
-
-    /// Share of delivered frames the pipeline could not take, `0.0..=1.0`.
-    ///
-    /// `0.0` before any frame has been delivered rather than a division by zero: no
-    /// frames means no evidence, not a perfect session.
-    pub fn drop_rate(&self) -> f64 {
-        let delivered = self.delivered_frames.load(Ordering::SeqCst);
-        if delivered == 0 {
-            return 0.0;
-        }
-        self.dropped_frames.load(Ordering::SeqCst) as f64 / delivered as f64
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The count alone is not the number an observer needs.
-    ///
-    /// 40 drops is a ruined evening at 30 s subs and a rounding error at 100 ms, so the
-    /// rate is what says "you are integrating at 65 % of the cadence you set".
-    #[test]
-    fn the_drop_rate_is_a_share_of_what_the_camera_delivered() {
-        let (state, _disk_writer) = AppState::new_for_testing();
-
-        assert_eq!(state.drop_rate(), 0.0, "no frames is no evidence");
-
-        for _ in 0..100 {
-            state.frame_delivered();
-        }
-        assert_eq!(state.drop_rate(), 0.0);
-
-        for _ in 0..35 {
-            state.frame_dropped();
-        }
-        assert!(
-            (state.drop_rate() - 0.35).abs() < 1e-9,
-            "35 of 100 delivered frames is {}",
-            state.drop_rate()
-        );
-
-        // A drop with no delivery behind it must not divide by zero or exceed 1.
-        let (fresh, _fresh_writer) = AppState::new_for_testing();
-        fresh.frame_dropped();
-        assert_eq!(fresh.drop_rate(), 0.0);
-    }
 
     #[test]
     fn test_capture_state_default() {
@@ -804,18 +693,19 @@ mod tests {
         assert_eq!(state.capture_state().await, CaptureState::Idle);
     }
 
-    #[tokio::test]
-    async fn test_app_state_frame_tracking() {
+    #[test]
+    fn test_app_state_frame_tracking() {
         let (state, _disk_writer) = AppState::new_for_testing();
-        state.reset_session().await;
+        state.reset_session();
 
-        state.frame_captured(true, None).await;
-        state.frame_captured(true, None).await;
-        state.frame_captured(false, None).await;
+        state.frame_captured(true, true, None);
+        state.frame_captured(true, true, None);
+        state.frame_captured(false, true, None);
 
-        let session = state.session.read().await;
-        assert_eq!(session.frame_count, 3);
-        assert_eq!(session.stacked_count, 2);
+        let counts = state.stats.counts();
+        assert_eq!(counts.frames, 3);
+        assert_eq!(counts.stacked, 2);
+        assert!(state.stats.started_at().is_some());
     }
 
     #[tokio::test]

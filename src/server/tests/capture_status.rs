@@ -41,11 +41,11 @@ async fn test_capture_status_with_frame_counts() {
     let app = create_test_router(Arc::clone(&state));
 
     // Simulate some frame captures
-    state.reset_session().await;
-    state.frame_captured(true, None).await;
-    state.frame_captured(true, None).await;
-    state.frame_captured(false, None).await;
-    state.frame_rejected("Test rejection".to_string()).await;
+    state.reset_session();
+    state.frame_captured(true, true, None);
+    state.frame_captured(true, true, None);
+    state.frame_captured(false, true, None);
+    state.frame_rejected(true, "Test rejection".to_string());
 
     let (status, json) = get_json(&app, "/api/capture/status").await;
 

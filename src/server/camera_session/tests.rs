@@ -1496,9 +1496,8 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
         .disk_writer
         .start_session(WritingSessionType::IndividualFrames, "")
         .expect("session dir");
-    {
-        let mut session = state.session.write().await;
-        session.stacked_count = 514;
+    for _ in 0..514 {
+        state.stats.frame_captured(true, true);
     }
     let settings = state.settings.read().await.clone();
     *state.stacking_carryover.lock().unwrap() = Some(StackingCarryover {
@@ -1528,7 +1527,7 @@ async fn a_resume_keeps_the_stack_and_the_session_folder() {
     state.set_capture_state(CaptureState::Idle).await;
 
     assert_eq!(
-        state.session.read().await.stacked_count,
+        state.stats.counts().stacked,
         514,
         "resume must not reset the session counters the way a fresh start does"
     );

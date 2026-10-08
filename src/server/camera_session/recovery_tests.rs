@@ -511,7 +511,9 @@ async fn start_capture_plan(state: &Arc<AppState>, device: &FakeDevice) {
         disk_session_dir: None,
         next_frame: 1,
     });
-    state.session.write().await.stacked_count = 514;
+    for _ in 0..514 {
+        state.stats.frame_captured(true, true);
+    }
     state.set_capture_state(CaptureState::Capturing).await;
 }
 
@@ -534,7 +536,7 @@ async fn a_capture_is_paused_through_recovery_and_resumed_after_it() {
     let resumed = eventually(
         || {
             matches!(
-                state.session.try_read().map(|s| s.state),
+                state.capture.try_read().map(|s| *s),
                 Ok(CaptureState::Capturing)
             )
         },
@@ -547,7 +549,7 @@ async fn a_capture_is_paused_through_recovery_and_resumed_after_it() {
     // shutdown instead of reporting the failure.
     CaptureService::stop_capture(&state).await;
     let stopped = eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -765,8 +767,8 @@ async fn a_stalled_first_frame_does_not_end_the_capture() {
     CaptureService::start_capture(&state, None).await.unwrap();
     let capturing = eventually(
         || {
-            state.delivered_frames.load(Ordering::SeqCst) >= 2
-                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+            state.stats.delivered() >= 2
+                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
         },
         Duration::from_secs(5),
     )
@@ -778,7 +780,7 @@ async fn a_stalled_first_frame_does_not_end_the_capture() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -801,7 +803,7 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
         eventually(
-            || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+            || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
             Duration::from_secs(5)
         )
         .await,
@@ -817,14 +819,14 @@ async fn a_capture_that_ended_on_its_own_is_not_resumed_by_a_later_recovery() {
     lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
     assert!(wait_recovered(&state, CameraRole::Main).await);
     let restarted = eventually(
-        || !matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || !matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_millis(500),
     )
     .await;
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -928,8 +930,8 @@ async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
     CaptureService::start_capture(&state, None).await.unwrap();
     let resumed = eventually(
         || {
-            state.delivered_frames.load(Ordering::SeqCst) >= 2
-                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+            state.stats.delivered() >= 2
+                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
         },
         Duration::from_secs(5),
     )
@@ -942,7 +944,7 @@ async fn a_first_frame_that_never_comes_hands_the_capture_to_recovery() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -1145,7 +1147,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
         || {
             state.slot(CameraRole::Main).is_recovering()
                 && matches!(
-                    state.session.try_read().map(|s| s.state),
+                    state.capture.try_read().map(|s| *s),
                     Ok(CaptureState::Idle | CaptureState::Recovering)
                 )
         },
@@ -1158,7 +1160,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
     reconnect::release_flight(&state, CameraRole::Main).await;
     wait_recovered(&state, CameraRole::Main).await;
     let resumed = eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing)),
         Duration::from_secs(3),
     )
     .await;
@@ -1169,7 +1171,7 @@ async fn a_resume_that_races_a_new_fault_leaves_the_capture_paused() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -1226,13 +1228,13 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
     };
     let first = dir.join("frame_000001.fits");
     let first_written = std::fs::metadata(&first).and_then(|m| m.modified()).unwrap();
-    let before = state.delivered_frames.load(Ordering::SeqCst);
+    let before = state.stats.delivered();
 
     catalog.camera.lost.store(1, Ordering::SeqCst);
     let resumed = eventually(
         || {
-            state.delivered_frames.load(Ordering::SeqCst) >= before + 5
-                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+            state.stats.delivered() >= before + 5
+                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
         },
         Duration::from_secs(8),
     )
@@ -1241,7 +1243,7 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -1321,7 +1323,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
 
     catalog.set(&[NEPTUNE]);
     let resumed = eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing)),
         Duration::from_secs(5),
     )
     .await;
@@ -1330,7 +1332,7 @@ async fn a_settings_edit_during_the_pause_is_what_the_capture_resumes_with() {
 
     CaptureService::stop_capture(&state).await;
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await;
@@ -1374,7 +1376,7 @@ async fn a_manual_reconnect_forgets_restarts_that_did_not_work() {
 
 async fn wait_idle(state: &Arc<AppState>) -> bool {
     eventually(
-        || matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Idle)),
+        || matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Idle)),
         Duration::from_secs(10),
     )
     .await
@@ -1389,7 +1391,7 @@ async fn disconnecting_a_capturing_camera_stops_the_capture_and_disconnects() {
     connect(&state, &NEPTUNE, CameraRole::Main).await;
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
-        eventually(|| state.delivered_frames.load(Ordering::SeqCst) >= 2, Duration::from_secs(5)).await,
+        eventually(|| state.stats.delivered() >= 2, Duration::from_secs(5)).await,
         "the capture never got going"
     );
 
@@ -1426,11 +1428,11 @@ async fn a_cooled_camera_resumes_after_a_stall_reopen_with_a_slow_first_status()
     catalog.camera.stalls.store(STALL_ESCALATION as usize, Ordering::SeqCst);
 
     CaptureService::start_capture(&state, None).await.unwrap();
-    let delivered_before = state.delivered_frames.load(Ordering::SeqCst);
+    let delivered_before = state.stats.delivered();
     let resumed = eventually(
         || {
-            state.delivered_frames.load(Ordering::SeqCst) >= delivered_before + 2
-                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+            state.stats.delivered() >= delivered_before + 2
+                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
         },
         Duration::from_secs(8),
     )
@@ -1468,7 +1470,7 @@ async fn disconnecting_during_a_long_exposure_still_warms_the_camera_up() {
     connect(&state, &ARES, CameraRole::Main).await;
     CaptureService::start_capture(&state, None).await.unwrap();
     assert!(
-        eventually(|| state.delivered_frames.load(Ordering::SeqCst) >= 2, Duration::from_secs(5)).await,
+        eventually(|| state.stats.delivered() >= 2, Duration::from_secs(5)).await,
         "the capture never got going"
     );
     // Every sub from here on is a minute long, and the watchdog knows it.
@@ -1550,8 +1552,8 @@ async fn a_capture_started_on_a_lost_handle_is_recovered_and_resumed() {
     CaptureService::start_capture(&state, None).await.unwrap();
     let resumed = eventually(
         || {
-            state.delivered_frames.load(Ordering::SeqCst) >= 2
-                && matches!(state.session.try_read().map(|s| s.state), Ok(CaptureState::Capturing))
+            state.stats.delivered() >= 2
+                && matches!(state.capture.try_read().map(|s| *s), Ok(CaptureState::Capturing))
         },
         Duration::from_secs(15),
     )

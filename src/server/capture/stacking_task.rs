@@ -110,7 +110,7 @@ pub fn run_stacking_task(
                 Ok(f) => Arc::new(f),
                 Err(e) => {
                     tracing::warn!(error = %e, "Frame conversion failed");
-                    rt.block_on(state.frame_rejected(format!("Conversion failed: {}", e)));
+                    state.frame_rejected(settings.stacking, format!("Conversion failed: {}", e));
                     continue;
                 }
             }
@@ -132,7 +132,7 @@ pub fn run_stacking_task(
         if must_reset_stack(stacking_enabled, was_stacking_enabled, stacking_type_changed) {
             stacker = None;
             stacking_failed = false;
-            rt.block_on(state.reset_counters());
+            state.reset_counters();
             info!(
                 stacking_type = ?settings.stacking_type,
                 "Live stacking enabled/changed, resetting context and counters"
@@ -145,7 +145,7 @@ pub fn run_stacking_task(
         if check_dimension_mismatch(&frame, stacker.as_deref()) {
             info!("Frame dimensions changed (likely due to binning change), resetting stack");
             stacker = None;
-            rt.block_on(state.reset_counters());
+            state.reset_counters();
         }
 
         // Process frame through stacking pipeline
@@ -202,7 +202,7 @@ pub fn run_stacking_task(
         // The stack restarted on a sharper reference, so the integration the
         // counters describe no longer exists.
         if stack_reset {
-            rt.block_on(state.reset_counters());
+            state.reset_counters();
         }
 
         // Note there is deliberately no raw-frame fallback for a frame that
@@ -220,7 +220,7 @@ pub fn run_stacking_task(
                 "Wanderer mode: movement detected, resetting stack"
             );
             stacker = None;
-            rt.block_on(state.reset_counters());
+            state.reset_counters();
             // Always displayed, even when the compute above was skipped: the stack this
             // frame was measured against no longer exists, so the view must stop showing
             // it. The raw sub is a handle clone, not a copy.
@@ -262,16 +262,16 @@ pub fn run_stacking_task(
         // `frame_rejected` — that one feeds the capture-abort burst detector and
         // is for a camera that failed to deliver a frame at all.
         //
-        // Spanned for the same reason as the render task's `publish_state`: this is an
-        // async lock reached by `rt.block_on` from a non-tokio thread, and it is part of
-        // the 8.7 ms of `stacking_iteration` self time that had no name. On the thread
-        // that is dropping camera frames, 8.7 ms is worth being able to see.
+        // Spanned for the same reason as the render task's `publish_state`. Lock-free
+        // since the counters became atomics; it once was an async lock reached by
+        // `rt.block_on`, part of 8.7 ms of `stacking_iteration` self time with no name.
         {
             let _span = tracing::info_span!("publish_state").entered();
-            rt.block_on(state.frame_captured(
+            state.frame_captured(
                 was_stacked,
+                settings.stacking,
                 rejected_because.map(|reason| reason.describe()),
-            ));
+            );
         }
 
         // Release our handle on the captured frame before handing the display

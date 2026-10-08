@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
 use crate::server::state::{
-    CaptureSession, CaptureSettings, CaptureState, RawFrameSaving, StackingType,
+    CaptureSettings, CaptureState, RawFrameSaving, SessionStats, StackingType,
 };
 use crate::server::{CameraInfoResponse, CaptureStatusResponse, SettingsResponse};
 
@@ -85,25 +85,24 @@ fn test_camera_info_response_from_info() {
 
 #[test]
 fn test_capture_status_response_from_session() {
-    let session = CaptureSession {
-        state: CaptureState::Capturing,
-        frame_count: 100,
-        stacked_count: 95,
-        rejected_count: 5,
-        last_error: Some("Test error".to_string()),
-        started_at: Some(1234567890),
+    let stats = SessionStats::default();
+    stats.start(1234567890);
+    for stacked in (0..100).map(|i| i < 95) {
+        stats.frame_captured(stacked, true);
+    }
+    let settings = CaptureSettings {
         exposure_us: 2_000_000,
         gain: 150,
         ..Default::default()
     };
 
-    let response = CaptureStatusResponse::from(&session);
+    let response = CaptureStatusResponse::new(CaptureState::Capturing, &stats, &settings);
 
     assert_eq!(response.state, "Capturing");
     assert_eq!(response.frame_count, 100);
     assert_eq!(response.stacked_count, 95);
     assert_eq!(response.rejected_count, 5);
-    assert_eq!(response.last_error, Some("Test error".to_string()));
+    assert_eq!(response.last_error, None);
     assert_eq!(response.started_at, Some(1234567890));
     assert_eq!(response.exposure_us, 2_000_000);
     assert_eq!(response.gain, 150);

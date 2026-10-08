@@ -329,7 +329,7 @@ async fn drive_main_loop_on(state: Arc<AppState>, steps: Vec<Exposure>, extra_fr
     MainLoopRun {
         returned_handle: returned.is_some(),
         frames: controls.frames.load(Ordering::SeqCst),
-        delivered: state.delivered_frames.load(Ordering::SeqCst),
+        delivered: state.stats.delivered(),
         events: seen,
         fault_streak,
     }
