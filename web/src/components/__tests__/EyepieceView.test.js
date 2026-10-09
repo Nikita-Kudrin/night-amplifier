@@ -59,7 +59,9 @@ function mountEyepiece(settings = { binoview: true, circular_view: true }, overr
         eventStream: {
           pushDirection: ref(null),
           currentTarget: ref(null),
+          ...overrides.eventStream,
         },
+        ...overrides.provide,
       },
     },
   })
@@ -794,5 +796,151 @@ describe('EyepieceView.vue Overlay auto-hide', () => {
     const arrow = wrapper.findComponent({ name: 'GuideArrow' })
     expect(arrow.exists()).toBe(true)
     expect(arrow.classes()).not.toContain('overlay-hidden')
+  })
+})
+
+/**
+ * The viewers follow the operator's Guide toggle on `/` and have no control of their own:
+ * the server switches their socket, so the page only reflects what it is shown.
+ */
+describe('EyepieceView.vue follows the operator', () => {
+  let originalLocation
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    originalLocation = window.location
+    delete window.location
+    global.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  })
+
+  afterEach(() => {
+    window.location = originalLocation
+    mockCapabilities.value = { debug_logging: false }
+    vi.resetModules()
+  })
+
+  for (const [route, socket] of [['/eyepiece', '/ws/eyepiece'], ['/eyepiece_quality', '/ws/eyepiece_quality']]) {
+    it(`offers no camera control and names no source on ${route}`, async () => {
+      window.location = { ...originalLocation, pathname: route }
+      await loadEyepieceView()
+      const wrapper = mountEyepiece(undefined, { eventStream: { viewedCamera: ref('guide') } })
+      await landFrame()
+
+      expect(useImageStream).toHaveBeenCalledWith({ endpoint: socket })
+      expect(wrapper.find('.guide-toggle').exists()).toBe(false)
+      const buttons = wrapper.findAll('button').map((b) => b.text())
+      expect(buttons.some((text) => /guide|camera/i.test(text))).toBe(false)
+    })
+  }
+
+  it('notes the guide camera in the readout while it is viewed', async () => {
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
+    mockCapabilities.value = { debug_logging: true }
+    await loadEyepieceView()
+    const viewedCamera = ref('main')
+    const wrapper = mountEyepiece(undefined, { eventStream: { viewedCamera } })
+    await landFrame()
+    expect(wrapper.find('.debug-overlay').text()).not.toContain('Guide camera')
+
+    viewedCamera.value = 'guide'
+    await nextTick()
+
+    expect(wrapper.find('.debug-overlay').text()).toContain('Guide camera')
+  })
+
+  it("places the arrow against the guide camera's field while it is viewed", async () => {
+    window.location = { ...originalLocation, pathname: '/eyepiece' }
+    await loadEyepieceView()
+    const guideOptics = { focal_length_mm: 120, pixel_size_y_um: 2.9, sensor_height_px: 1080 }
+    const imagingOptics = { focal_length_mm: 400, pixel_size_y_um: 3.76, sensor_height_px: 3008 }
+    const viewedCamera = ref('guide')
+    const wrapper = mountEyepiece(undefined, {
+      settings: { telescope: imagingOptics, camera_telescope_profiles: { 'Guide Cam': guideOptics } },
+      eventStream: {
+        viewedCamera,
+        pushDirection: ref({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE', fovDeg: 0.5 }),
+        currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
+      },
+      provide: {
+        guideCamera: ref({ name: 'Guide Cam' }),
+        mainCamera: ref({ name: 'Imaging Cam' }),
+      },
+    })
+    const field = ({ focal_length_mm: fl, pixel_size_y_um: py, sensor_height_px: h }) =>
+      (2 * Math.atan((h * py) / 1000 / (2 * fl)) * 180) / Math.PI
+    const arrowFov = () => wrapper.findComponent({ name: 'GuideArrow' }).props('fovDeg')
+
+    expect(arrowFov()).toBeCloseTo(field(guideOptics), 6)
+    viewedCamera.value = 'main'
+    await nextTick()
+    expect(arrowFov()).toBeCloseTo(field(imagingOptics), 6)
+  })
+
+  /**
+   * Off the circular view the canvas takes the frame's own aspect, so the guide camera's
+   * 16:9 picture after a square imaging frame moves the canvas inside an eye that stays the
+   * same size. The eye's ResizeObserver never fires; the arrow must still follow.
+   */
+  for (const jpeg of [false, true]) it(`re-measures the arrow bounds when a switch changes the frame size (${jpeg ? 'JPEG' : 'LZ4'})`, async () => {
+    window.location = { ...originalLocation, pathname: '/eyepiece' }
+    await loadEyepieceView()
+    // JPEG draws once the bitmap decodes, later than the frame lands.
+    const savedBitmap = window.createImageBitmap
+    window.createImageBitmap = async () => {
+      const { width, height } = stream.dimensions.value
+      return { width, height, close() {} }
+    }
+    let stream
+    let box = { left: 0, top: 0, width: 800, height: 800 }
+    const props = {
+      offsetLeft: () => box.left,
+      offsetTop: () => box.top,
+      offsetWidth: () => box.width,
+      offsetHeight: () => box.height,
+    }
+    const saved = {}
+    for (const [name, get] of Object.entries(props)) {
+      saved[name] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)
+      Object.defineProperty(HTMLCanvasElement.prototype, name, { configurable: true, get })
+    }
+    try {
+      const wrapper = mountEyepiece({ binoview: false, circular_view: false }, {
+        eventStream: {
+          viewedCamera: ref('main'),
+          pushDirection: ref({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE', fovDeg: 1 }),
+          currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
+        },
+      })
+      stream = useImageStream.mock.results.at(-1).value
+      stream.isJpeg.value = jpeg
+      const arrowBox = () => {
+        // The last arrow is the single view's; the binoview pair stays mounted, hidden.
+        const p = wrapper.findAllComponents({ name: 'GuideArrow' }).at(-1).props()
+        return { left: p.imageLeft, top: p.imageTop, width: p.imageWidth, height: p.imageHeight }
+      }
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
+
+      stream.dimensions.value = { width: 3008, height: 3008 }
+      stream.frameData.value = new Uint8Array(4)
+      await settle()
+      expect(arrowBox()).toEqual(box)
+
+      // The guide camera's first frame arrives on the same socket.
+      box = { left: 0, top: 175, width: 800, height: 450 }
+      stream.dimensions.value = { width: 1920, height: 1080 }
+      stream.frameData.value = new Uint8Array(4)
+      await settle()
+      expect(arrowBox()).toEqual(box)
+    } finally {
+      window.createImageBitmap = savedBitmap
+      for (const name of Object.keys(props)) {
+        delete HTMLCanvasElement.prototype[name]
+        if (saved[name]) Object.defineProperty(HTMLElement.prototype, name, saved[name])
+      }
+    }
   })
 })

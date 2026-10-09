@@ -39,6 +39,7 @@ impl HttpStatus for ApiError {
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CaptureCameraIsNotMain { .. } => StatusCode::CONFLICT,
             ApiError::NoGuideCameraConnected => StatusCode::BAD_REQUEST,
+            ApiError::NoGuideCameraToView => StatusCode::CONFLICT,
             ApiError::StackingTypeChangeNotAllowed => StatusCode::CONFLICT,
             ApiError::FocusModeWhileStacking => StatusCode::CONFLICT,
             ApiError::ProFeatureRequired(_) => StatusCode::FORBIDDEN,

@@ -25,18 +25,18 @@ use crate::state::{
 const PROVIDER: &str = "Fake";
 
 #[derive(Clone)]
-struct FakeDevice {
-    name: &'static str,
+pub(super) struct FakeDevice {
+    pub(super) name: &'static str,
     serial: Option<&'static str>,
     device_id: i32,
 }
 
-const NEPTUNE: FakeDevice = FakeDevice {
+pub(super) const NEPTUNE: FakeDevice = FakeDevice {
     name: "Neptune-C II",
     serial: Some("NEP123"),
     device_id: 10,
 };
-const ARES: FakeDevice = FakeDevice {
+pub(super) const ARES: FakeDevice = FakeDevice {
     name: "Ares-C PRO",
     serial: Some("ARE456"),
     device_id: 11,
@@ -44,7 +44,7 @@ const ARES: FakeDevice = FakeDevice {
 
 /// A USB bus a test can rearrange. `open` records every index it was asked for.
 #[derive(Default)]
-struct FakeCatalog {
+pub(super) struct FakeCatalog {
     devices: Mutex<Vec<FakeDevice>>,
     opened: Mutex<Vec<&'static str>>,
     /// Makes `open` hand back this device instead of the listed one, the way a list
@@ -63,13 +63,13 @@ struct FakeCatalog {
 }
 
 impl FakeCatalog {
-    fn with(devices: &[FakeDevice]) -> Arc<Self> {
+    pub(super) fn with(devices: &[FakeDevice]) -> Arc<Self> {
         let catalog = Self::default();
         *catalog.devices.lock().unwrap() = devices.to_vec();
         Arc::new(catalog)
     }
 
-    fn set(&self, devices: &[FakeDevice]) {
+    pub(super) fn set(&self, devices: &[FakeDevice]) {
         *self.devices.lock().unwrap() = devices.to_vec();
     }
 
@@ -164,7 +164,7 @@ impl DeviceCatalog for FakeCatalog {
     }
 }
 
-fn rig(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
+pub(super) fn rig(catalog: &Arc<FakeCatalog>) -> Arc<AppState> {
     build_rig(catalog, false)
 }
 
@@ -192,17 +192,17 @@ fn build_rig(catalog: &Arc<FakeCatalog>, run_disk_writer: bool) -> Arc<AppState>
     state
 }
 
-fn id_of(device: &FakeDevice) -> String {
+pub(super) fn id_of(device: &FakeDevice) -> String {
     night_amplifier_core::camera::identity::camera_id(PROVIDER, 0, device.serial)
 }
 
-async fn connect(state: &Arc<AppState>, device: &FakeDevice, role: CameraRole) {
+pub(super) async fn connect(state: &Arc<AppState>, device: &FakeDevice, role: CameraRole) {
     lifecycle::connect(state, &id_of(device), role)
         .await
         .unwrap_or_else(|e| panic!("connecting {} failed: {e}", device.name));
 }
 
-fn drain(events: &mut tokio::sync::broadcast::Receiver<ServerEvent>) -> Vec<ServerEvent> {
+pub(super) fn drain(events: &mut tokio::sync::broadcast::Receiver<ServerEvent>) -> Vec<ServerEvent> {
     use tokio::sync::broadcast::error::TryRecvError;
     let mut seen = Vec::new();
     loop {
@@ -231,7 +231,7 @@ async fn phase_of(state: &Arc<AppState>, role: CameraRole) -> CameraPhase {
 
 /// Back, and finished coming back: the phase turns before the install has let go of
 /// the slot's recovery state.
-async fn wait_recovered(state: &Arc<AppState>, role: CameraRole) -> bool {
+pub(super) async fn wait_recovered(state: &Arc<AppState>, role: CameraRole) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < deadline {
         let phase = phase_of(state, role).await;
@@ -244,7 +244,7 @@ async fn wait_recovered(state: &Arc<AppState>, role: CameraRole) -> bool {
     false
 }
 
-async fn teardown(state: &Arc<AppState>) {
+pub(super) async fn teardown(state: &Arc<AppState>) {
     for role in CameraRole::all() {
         if let Some(camera) = state.camera_in_role(role) {
             lifecycle::finalize_disconnect(state, role, &camera.info.name, DisconnectCause::Requested).await;

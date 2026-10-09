@@ -137,6 +137,15 @@ impl CameraRoster {
         self.lock().connected[role as usize].clone()
     }
 
+    /// Whether `role` holds a camera that can still deliver frames: one warming up to
+    /// disconnect has stopped for good. Entry and phase are read together, so a caller
+    /// deciding on this cannot interleave with the move to `WarmingUp` or the removal.
+    pub fn delivers_frames(&self, role: CameraRole) -> bool {
+        let entries = self.lock();
+        entries.connected[role as usize].is_some()
+            && entries.phases[role as usize] != CameraPhase::WarmingUp
+    }
+
     /// A connected camera, by id.
     pub fn get(&self, camera_id: &str) -> Option<ConnectedCameraInfo> {
         self.lock().by_id(camera_id).cloned()
@@ -318,6 +327,20 @@ mod tests {
         assert_eq!(roster.selected(), None);
         assert!(roster.status("Ares").is_none());
         assert_eq!(roster.phase(CameraRole::Main), CameraPhase::Disconnected);
+    }
+
+    #[test]
+    fn a_camera_delivers_frames_until_it_warms_up_to_leave() {
+        let roster = CameraRoster::default();
+        assert!(!roster.delivers_frames(CameraRole::Guide), "empty role");
+
+        roster.install(camera("mock_1", "Neptune", CameraRole::Guide), false);
+        for phase in [CameraPhase::Idle, CameraPhase::Guiding, CameraPhase::Recovering] {
+            roster.set_phase(CameraRole::Guide, phase);
+            assert!(roster.delivers_frames(CameraRole::Guide), "{phase:?}");
+        }
+        roster.set_phase(CameraRole::Guide, CameraPhase::WarmingUp);
+        assert!(!roster.delivers_frames(CameraRole::Guide));
     }
 
     /// A late report about a camera the role no longer holds leaves its successor alone.

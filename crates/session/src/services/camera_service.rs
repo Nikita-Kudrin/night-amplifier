@@ -11,7 +11,7 @@ use night_amplifier_core::camera::identity::{self, DeviceIdentity};
 use night_amplifier_core::camera::CameraEntry;
 use crate::camera::lifecycle;
 use crate::error::{ApiError, ApiResult};
-use crate::state::{AppState, CameraPhase, CameraRole, ConnectedCameraInfo};
+use crate::state::{AppState, CameraPhase, CameraRole, ConnectedCameraInfo, ViewSelection};
 
 /// Service for managing camera operations
 pub struct CameraService;
@@ -189,6 +189,17 @@ impl CameraService {
         warmup: lifecycle::WarmupPolicy,
     ) -> ApiResult<lifecycle::DisconnectOutcome> {
         lifecycle::disconnect(state, camera_id, warmup).await
+    }
+
+    /// Show `role`'s camera on the eyepiece pages; a change reaches every client as an event.
+    pub fn select_viewed_camera(state: &AppState, role: CameraRole) -> ApiResult<()> {
+        match state
+            .viewed_camera
+            .select(role, |role| state.roster.delivers_frames(role))
+        {
+            ViewSelection::Changed | ViewSelection::Unchanged => Ok(()),
+            ViewSelection::Refused => Err(ApiError::NoGuideCameraToView),
+        }
     }
 }
 

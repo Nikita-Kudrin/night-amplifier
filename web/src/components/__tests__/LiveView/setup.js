@@ -294,6 +294,8 @@ export function createMockProvides(overrides = {}) {
             pushDirection: ref(overrides.pushDirection ?? null),
             currentTarget: ref(overrides.currentTarget ?? null),
             plateSolving: ref(overrides.plateSolving ?? {inProgress: false, targetName: null, lastResult: null}),
+            viewedCamera: ref(overrides.viewedCamera ?? 'main'),
+            viewedCameraRevision: ref(0),
             ...overrides.eventStream,
         },
         settings: ref({

@@ -55,6 +55,9 @@ pub enum ApiError {
     #[error("No guide camera is connected. Connect one before starting it.")]
     NoGuideCameraConnected,
 
+    #[error("No guide camera is connected, or it is disconnecting, so there is nothing to show from it")]
+    NoGuideCameraToView,
+
     #[error("Cannot change stacking type while capturing")]
     StackingTypeChangeNotAllowed,
 

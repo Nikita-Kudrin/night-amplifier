@@ -1,15 +1,16 @@
-//! Where a guide frame goes besides the solver: the live view, while somebody watches,
-//! and the guide camera's own raw-frame session.
+//! Where a guide frame goes besides the solver: the live view and the eyepiece pages,
+//! while somebody watches, and the guide camera's own raw-frame session.
 
 use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::capture::analysis::{AnalysisContext, PreviewAnalysis};
-use crate::capture::stream_encoding::{encode_jpeg, ConversionCache, FailureReports};
+use crate::capture::stream_encoding::{
+    encode_watched, ConversionCache, FailureReports, StreamResolutions, StreamTarget,
+};
 use crate::capture::{pipeline, stage_config, storage};
 use crate::state::{
     AppState, CameraRole, CaptureMode, CaptureSettings, ConnectedCameraInfo, RawSessionResume,
-    StreamKind,
 };
 use night_amplifier_core::disk_writer::{OpenSession, WritingSessionType};
 use night_amplifier_core::render::display::RenderReadyFrame;
@@ -55,17 +56,14 @@ pub(super) fn render_and_publish(
     });
 
     let stream = &state.guide_stream;
-    // The live resolution, not `settings`: that snapshot predates the exposure.
     stream.set_latest_raw_frame(Arc::clone(&ready));
-    let resolution = state.settings.snapshot().stream_resolution(StreamKind::Jpeg);
+    // The live resolutions, not `settings`: that snapshot predates the exposure.
+    let resolutions = StreamResolutions::of(&state.settings.snapshot());
     let counter = stream.begin_frame();
 
-    // JPEG only: `/eyepiece_quality`, the one lossless endpoint, always shows the
-    // imaging camera.
-    conversions.begin_frame();
-    let result = encode_jpeg(stream, &ready, counter, conversions, resolution);
-    if let Some(e) = failures.to_report(StreamKind::Jpeg, result) {
-        warn!(error = %e, "Guide stream encoding failed");
+    let target = StreamTarget::guide(stream);
+    for error in encode_watched(target, &ready, counter, resolutions, conversions, failures) {
+        warn!(error = %error, "Guide stream encoding failed");
     }
     stream.publish_frame();
 }

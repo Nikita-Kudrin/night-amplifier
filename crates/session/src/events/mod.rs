@@ -86,6 +86,10 @@ pub enum ServerEvent {
     /// changes, and a page that missed one showed "Start guide" for a running loop.
     CameraPhases { cameras: Vec<CameraPhaseEntry> },
 
+    /// The camera the eyepiece pages show. Also sent when a client connects and after it
+    /// fell behind, since `/` derives its Guide toggle from it.
+    ViewedCameraChanged { camera: CameraRole },
+
     /// The camera hit a run of consecutive status-poll watchdog timeouts across
     /// reconnects — likely a persistent hardware/USB fault rather than an
     /// isolated hiccup. Sent in addition to (not instead of) the ordinary

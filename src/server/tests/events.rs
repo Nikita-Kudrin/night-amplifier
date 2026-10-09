@@ -90,10 +90,10 @@ async fn test_event_to_json_all_variants() {
 
 
 /// A client that connects later — a reloaded page, a phone waking up — gets every camera's
-/// phase straight away. Phases otherwise arrive only as changes, and on 2026-09-20 a page
+/// phase and the viewed camera straight away. Phases otherwise arrive only as changes, and on 2026-09-20 a page
 /// that had missed one offered "Start guide" for a loop that was running.
 #[tokio::test]
-async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase() {
+async fn the_events_socket_opens_with_the_capture_state_phases_and_viewed_camera() {
     use futures_util::StreamExt;
     use tokio_tungstenite::tungstenite::Message;
 
@@ -115,7 +115,7 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
 
     let mut client = server.connect("/ws/events").await;
     let mut events = Vec::new();
-    for _ in 0..2 {
+    for _ in 0..3 {
         match tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 events.push(serde_json::from_str::<serde_json::Value>(&text).unwrap())
@@ -124,7 +124,7 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
         }
     }
 
-    let (state, phases) = (&events[0], &events[1]);
+    let (state, phases, viewed) = (&events[0], &events[1], &events[2]);
     assert_eq!(state["type"], "state_changed");
     assert_eq!(state["state"], "Idle");
     assert_eq!(phases["type"], "camera_phases");
@@ -132,4 +132,5 @@ async fn the_events_socket_opens_with_the_capture_state_and_every_cameras_phase(
         phases["cameras"],
         serde_json::json!([{"name": "Guiding", "role": "guide", "phase": "guiding"}])
     );
+    assert_eq!(*viewed, serde_json::json!({"type": "viewed_camera_changed", "camera": "main"}));
 }

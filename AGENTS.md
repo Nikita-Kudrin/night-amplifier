@@ -143,8 +143,13 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 ### Server & Web Frontend (src/server/, web/)
 
 Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless LZ4), `/ws/events`
-(JSON). `/ws/events` opens with `state_changed` + `camera_phases` and resends both after a `Lagged` client; `GET
-/api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+(JSON). `/ws/events` opens with `state_changed` + `camera_phases` + `viewed_camera_changed` and resends them after
+a `Lagged` client; `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+**Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
+show `AppState::viewed_camera` (set by `/`'s Guide toggle via `PUT /api/view/camera`, snapshot route too) and switch
+in place; their viewers have no control. A guide *disconnect* falls back to Main only after the roster says so
+(`WarmingUp`, else the entry gone — before it, a racing select strands the view); a recovered fault keeps it.
+`ViewedCamera` announces each change from under its lock, so racing toggles reach clients in order.
 `GET /api/eyepiece/snapshot?circular=` is the only REST route returning image bytes; native size is costly, so
 `SNAPSHOT_SLOT` *refuses* rather than queues (503 + `Retry-After`).
 
@@ -173,7 +178,8 @@ mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one th
   process at first call. C `long` is 32-bit on Windows, widen with `i64::from`.
 - **Guide camera is one thread, not the pipeline**: nothing stacked/queued, started by `connect` so solving/preview
   work *while* framing. Post-processing runs only while `guide_stream.has_viewers()`; solving/raw saving sit above
-  both early exits. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's.
+  both early exits. Two `FrameStream`s, two counters, so one camera's payloads can't invalidate the other's; both
+  encode JPEG and lossless per watched family (`stream_encoding::encode_watched`).
 - **Vendor closes take a device *index*, not a handle** — a stuck call's late `Drop` can close a reconnected
   camera; every close goes through `lease.begin_close()`, and an abandoned handle is never closed eagerly.
   `{provider}_{index}` ids follow USB enumeration order, so a guide reconnect can install the *imaging* camera —
@@ -230,6 +236,9 @@ and denoiser add.
 ```
 Magic "SA10" (4B) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG bytes
 ```
+
+An eyepiece socket switched to a camera with no frame yet gets the text `no_frame` (on the image socket, so ordered
+with frames), or the old camera's picture would stay up as the new one's.
 
 **Streaming resolution is a setting, not negotiated**: every client of a family gets the **same payload**
 (`streaming_resolution` / `eyepiece.stream_resolution`, both default 1440p) — per-viewport tiers were tried and

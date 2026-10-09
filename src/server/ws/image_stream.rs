@@ -1,5 +1,6 @@
 //! Image streams: `/ws/stream`, `/ws/eyepiece` (JPEG) and `/ws/eyepiece_quality`
-//! (RGB8+LZ4). One handler serves all three; they differ only in the payload family.
+//! (RGB8+LZ4). One handler serves all three; they differ only in the payload family and
+//! in whose camera they show (see [`StreamSource`]).
 //!
 //! The size is a setting, not negotiated: every client of a family receives the same
 //! bytes, at Streaming Resolution (JPEG) or Eyepiece Streaming Resolution (lossless). A
@@ -16,6 +17,10 @@ use axum::http::request::Parts;
 use tracing::info;
 
 use crate::session::state::{AppState, CameraRole, FrameStream, Resolution, StreamKind, ViewerGuard};
+
+/// Sent as text when an eyepiece socket switches to a camera with no frame yet: drop the
+/// picture on screen. On the image socket, not `/ws/events`, so it is ordered with frames.
+pub const NO_FRAME: &str = "no_frame";
 
 /// The WebSocket endpoints that stream rendered frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,12 +76,48 @@ impl<S: Send + Sync> FromRequestParts<S> for PeerAddr {
     }
 }
 
+/// Which camera's stream a connection serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamSource {
+    /// One camera for the connection's whole life: `/ws/stream?source=`, the operator's view.
+    Fixed(CameraRole),
+    /// Whichever camera the operator views, switched in place on the open socket: the
+    /// eyepiece pages, whose viewers have no control of their own.
+    Viewed,
+}
+
 /// Who is on the other end of a stream connection, for logging.
 #[derive(Debug, Clone, Copy)]
 pub struct StreamClient {
     pub endpoint: StreamEndpoint,
-    pub camera: CameraRole,
+    pub source: StreamSource,
     pub peer: Option<SocketAddr>,
+}
+
+/// The stream a connection is attached to: its viewer registration and frame wake-ups.
+struct Attachment {
+    camera: CameraRole,
+    stream: Arc<FrameStream>,
+    frames: tokio::sync::watch::Receiver<u64>,
+    /// Registered before anything is sent, so a frame the producer renders from here on
+    /// includes this family. Dropped — and decremented — even if the handler unwinds.
+    _viewer: ViewerGuard,
+}
+
+impl Attachment {
+    /// Subscribed before the first send, so a frame published while that send is in
+    /// flight is latched rather than lost.
+    fn new(state: &AppState, camera: CameraRole, kind: StreamKind) -> Self {
+        let stream = Arc::clone(state.stream(camera));
+        let viewer = ViewerGuard::new(Arc::clone(&stream), kind);
+        let frames = stream.subscribe_frames();
+        Self {
+            camera,
+            stream,
+            frames,
+            _viewer: viewer,
+        }
+    }
 }
 
 /// The resolution a family streams at now — the same live setting the producers read.
@@ -85,38 +126,32 @@ pub(super) async fn configured_resolution(state: &AppState, kind: StreamKind) ->
 }
 
 /// Serve one image stream connection until the client leaves.
-pub async fn serve(
-    mut socket: WebSocket,
-    state: Arc<AppState>,
-    stream: Arc<FrameStream>,
-    client: StreamClient,
-) {
+pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamClient) {
     let kind = client.endpoint.kind();
-    // Registered before anything is sent, so a frame the producer renders from here on
-    // includes this family. Dropped — and decremented — even if this handler unwinds.
-    let _viewer = ViewerGuard::new(Arc::clone(&stream), kind);
+    let follows_view = client.source == StreamSource::Viewed;
+    let mut viewed = state.viewed_camera.subscribe();
+    let camera = match client.source {
+        StreamSource::Fixed(camera) => camera,
+        StreamSource::Viewed => *viewed.borrow_and_update(),
+    };
+    let mut attached = Attachment::new(&state, camera, kind);
 
     let resolution = configured_resolution(&state, kind).await;
-    let output = describe_output(&stream, resolution).await;
+    let output = describe_output(&attached.stream, resolution).await;
     info!(
         page = client.endpoint.page(),
         socket = client.endpoint.socket_path(),
-        camera = ?client.camera,
-        peer = %client.peer.map_or_else(|| "unknown".to_owned(), |p| p.to_string()),
+        camera = ?camera,
+        follows_view,
+        peer = %describe_peer(client.peer),
         resolution = resolution.label(),
         output = %output,
         "Image stream client connected"
     );
 
-    // Subscribed before the first send, so a frame published while that send is in
-    // flight is latched rather than lost.
-    let mut frames = stream.subscribe_frames();
     let mut last_sent: u64 = 0;
-    if let Some((counter, payload)) = payload_for_client(&state, &stream, kind).await {
-        if socket.send(Message::Binary(payload)).await.is_err() {
-            return;
-        }
-        last_sent = counter;
+    if send_current(&mut socket, &state, &attached.stream, kind, &mut last_sent).await == Delivery::Closed {
+        return;
     }
 
     loop {
@@ -133,18 +168,18 @@ pub async fn serve(
                 }
             }
 
-            changed = frames.changed() => {
+            changed = attached.frames.changed() => {
                 // Only the producer holds the sender, and it outlives every handler.
                 if changed.is_err() {
                     break;
                 }
-                let current = *frames.borrow_and_update();
+                let current = *attached.frames.borrow_and_update();
                 if current <= last_sent {
                     continue;
                 }
                 // Missing when the producer moved on to a newer frame before this client
                 // woke; that frame's own publication follows.
-                let Some(payload) = stream.payload(kind, current) else {
+                let Some(payload) = attached.stream.payload(kind, current) else {
                     continue;
                 };
                 if socket.send(Message::Binary(payload)).await.is_err() {
@@ -152,8 +187,71 @@ pub async fn serve(
                 }
                 last_sent = current;
             }
+
+            switched = viewed.changed(), if follows_view => {
+                // `AppState` holds the sender for as long as any handler runs.
+                if switched.is_err() {
+                    break;
+                }
+                let camera = *viewed.borrow_and_update();
+                if camera == attached.camera {
+                    continue;
+                }
+                // The new viewer registers before the old one is dropped, so neither
+                // producer sees a gap it would read as "nobody watching".
+                attached = Attachment::new(&state, camera, kind);
+                last_sent = 0;
+                info!(
+                    page = client.endpoint.page(),
+                    camera = ?camera,
+                    peer = %describe_peer(client.peer),
+                    "Image stream client switched camera"
+                );
+                let delivery = send_current(&mut socket, &state, &attached.stream, kind, &mut last_sent).await;
+                // The client still shows the previous camera's picture, and with nothing to
+                // replace it would go on showing it as this camera's, indefinitely.
+                if delivery == Delivery::NothingToSend
+                    && socket.send(Message::Text(NO_FRAME.into())).await.is_err()
+                {
+                    break;
+                }
+                if delivery == Delivery::Closed {
+                    break;
+                }
+            }
         }
     }
+}
+
+/// What [`send_current`] managed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    Sent,
+    /// The stream holds no frame: none rendered yet, or cleared with its camera.
+    NothingToSend,
+    Closed,
+}
+
+/// Send the frame `stream` shows now, if it has one.
+async fn send_current(
+    socket: &mut WebSocket,
+    state: &AppState,
+    stream: &Arc<FrameStream>,
+    kind: StreamKind,
+    last_sent: &mut u64,
+) -> Delivery {
+    let Some((counter, payload)) = payload_for_client(state, stream, kind).await else {
+        return Delivery::NothingToSend;
+    };
+    if socket.send(Message::Binary(payload)).await.is_err() {
+        return Delivery::Closed;
+    }
+    *last_sent = counter;
+    Delivery::Sent
+}
+
+fn describe_peer(peer: Option<SocketAddr>) -> String {
+    peer.map_or_else(|| "unknown".to_owned(), |p| p.to_string())
 }
 
 /// The size the latest frame streams at under `resolution`, as a log string.
