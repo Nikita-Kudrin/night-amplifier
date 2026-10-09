@@ -53,11 +53,8 @@ impl QueueDepth {
     /// Saturating, because the count is advisory and a decrement racing a reset must not
     /// wrap into billions and pin the stacking task into never computing again.
     pub fn taken(&self) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                Some(n.saturating_sub(1))
-            });
+        self.0
+            .update(Ordering::Relaxed, Ordering::Relaxed, |n| n.saturating_sub(1));
     }
 }
 

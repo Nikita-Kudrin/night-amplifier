@@ -80,7 +80,7 @@ impl CameraControls {
 /// Spends one unit of a "the next N calls" counter; `usize::MAX` never runs out.
 fn take_one(counter: &AtomicUsize) -> bool {
     counter
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| match left {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| match left {
             0 => None,
             usize::MAX => Some(usize::MAX),
             left => Some(left - 1),
