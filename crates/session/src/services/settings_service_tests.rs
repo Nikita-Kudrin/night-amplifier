@@ -115,7 +115,8 @@ fn pro_features_need_their_plugin() {
 async fn a_refused_request_changes_nothing() {
     let (state, _dw) = AppState::new_for_testing();
     let state = Arc::new(state);
-    let before = (*state.settings.snapshot()).clone();
+    let snapshot = state.settings.snapshot();
+    let before = (*snapshot).clone();
 
     let refused = SettingsService::update(
         &state,
@@ -132,6 +133,37 @@ async fn a_refused_request_changes_nothing() {
     let after = state.settings.snapshot();
     assert_eq!(after.gain, before.gain);
     assert_eq!(after.auto_stretch, before.auto_stretch);
+    assert!(Arc::ptr_eq(&snapshot, &after), "a refusal still replaced the settings in force");
+}
+
+/// A request's reactions run after awaits, so a later request can land between its update
+/// and them. The resume plan then takes the settings in force: the late request's own
+/// copy put the earlier edit back, and a resume after a reconnect undid the later one.
+#[tokio::test]
+async fn a_late_reaction_leaves_the_newer_settings_in_the_resume_plan() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.resume.record(crate::state::SessionResumePlan {
+        camera_id: "mock_0".to_string(),
+        settings: (*state.settings.snapshot()).clone(),
+        disk_session_dir: None,
+        next_frame: 1,
+    });
+    let target = main_camera(CaptureState::Idle);
+    // Request A applied; request B lands before A's reactions run.
+    let request_a = UpdateSettingsRequest {
+        gain: Some(111),
+        ..Default::default()
+    };
+    let delta = state
+        .settings
+        .update(|settings| apply(request_a, settings, &target, &state.plugins));
+    state.settings.update(|settings| settings.gain = 222);
+
+    SettingsService::react(&state, &target, delta).await;
+
+    let planned = state.resume.plan().map(|plan| plan.settings.gain);
+    assert_eq!(planned, Some(222), "the late reaction put the older request back");
 }
 
 /// A guide request edits the guide camera's own profile and leaves the imaging camera's

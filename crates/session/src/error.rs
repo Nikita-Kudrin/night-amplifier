@@ -18,6 +18,11 @@ pub enum ApiError {
     #[error("Capture already in progress")]
     CaptureInProgress,
 
+    /// The previous capture is still finishing its sub. A Start now would reset the
+    /// cancel flag that capture is polling, and leave it running behind an `Idle` state.
+    #[error("The previous capture is still stopping; start again once it has")]
+    CaptureStillStopping,
+
     /// A resume found no capture paused for recovery — it was stopped or disconnected.
     #[error("There is no paused capture to resume")]
     CaptureNotPaused,

@@ -54,8 +54,16 @@ pub async fn run_capture_loop(
 
     // Only now, with the session directory in place. `sync_disk_session` opens no
     // directory unless a capture is active, so flipping this earlier let a settings
-    // update land on a capture whose directory did not exist yet.
-    state.set_capture_state(CaptureState::Capturing);
+    // update land on a capture whose directory did not exist yet. Compare-and-set: a
+    // Stop that landed during startup left `Stopping`, which a plain write overwrote.
+    let started = |current| (current == CaptureState::Starting).then_some(CaptureState::Capturing);
+    if let Err(current) = state.transition_capture_state(started) {
+        debug!(camera_id = %camera_id, state = ?current, "Capture stopped during startup");
+        // Nothing was queued into it, so there is nothing for `end_session` to wait out.
+        state.disk_writer.abandon_session();
+        state.end_capture_state();
+        return;
+    }
 
     // Snapshot what a resume would need, now that the disk session exists and
     // the settings for this run are fixed. Recorded for every capture, because

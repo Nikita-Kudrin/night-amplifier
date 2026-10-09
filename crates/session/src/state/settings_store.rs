@@ -1,6 +1,6 @@
 //! The settings in force, shared as immutable snapshots.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use super::CaptureSettings;
 
@@ -9,52 +9,43 @@ use super::CaptureSettings;
 /// Readers take a [`snapshot`](Self::snapshot) — an `Arc`, never a guard held across work —
 /// so a capture thread never waits on a writer, never `block_on`s to read, and never sees
 /// half an edit. Writers [`update`](Self::update) a copy under one write lock; a reader
-/// still holding the previous snapshot keeps it. Every update bumps the
-/// [`version`](Self::version), so a per-frame cache can tell "unchanged" without comparing.
+/// still holding the previous snapshot keeps it.
 pub struct SettingsStore {
-    current: RwLock<Versioned>,
-}
-
-struct Versioned {
-    version: u64,
-    settings: Arc<CaptureSettings>,
+    current: RwLock<Arc<CaptureSettings>>,
 }
 
 impl SettingsStore {
     pub fn new(settings: CaptureSettings) -> Self {
         Self {
-            current: RwLock::new(Versioned {
-                version: 0,
-                settings: Arc::new(settings),
-            }),
+            current: RwLock::new(Arc::new(settings)),
         }
     }
 
     pub fn snapshot(&self) -> Arc<CaptureSettings> {
-        Arc::clone(&self.read().settings)
-    }
-
-    /// The snapshot with the version it carries.
-    pub fn versioned(&self) -> (u64, Arc<CaptureSettings>) {
-        let current = self.read();
-        (current.version, Arc::clone(&current.settings))
-    }
-
-    pub fn version(&self) -> u64 {
-        self.read().version
+        Arc::clone(&self.current.read().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Edits the settings every later snapshot sees, returning what `edit` returns. `edit`
     /// runs under the write lock: keep I/O, awaits and other locks out of it.
     pub fn update<R>(&self, edit: impl FnOnce(&mut CaptureSettings) -> R) -> R {
-        let mut current = self.current.write().unwrap_or_else(|e| e.into_inner());
-        let result = edit(Arc::make_mut(&mut current.settings));
-        current.version += 1;
-        result
+        edit(Arc::make_mut(&mut self.write()))
     }
 
-    fn read(&self) -> std::sync::RwLockReadGuard<'_, Versioned> {
-        self.current.read().unwrap_or_else(|e| e.into_inner())
+    /// [`Self::update`] for an edit that may refuse: on `Err` the settings in force are
+    /// left exactly as they were, however far `edit` got.
+    pub fn try_update<R, E>(
+        &self,
+        edit: impl FnOnce(&mut CaptureSettings) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut current = self.write();
+        let mut edited = CaptureSettings::clone(&current);
+        let result = edit(&mut edited)?;
+        *current = Arc::new(edited);
+        Ok(result)
+    }
+
+    fn write(&self) -> RwLockWriteGuard<'_, Arc<CaptureSettings>> {
+        self.current.write().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -69,25 +60,32 @@ mod tests {
         let before = store.snapshot();
         let gain = before.gain;
 
-        store.update(|settings| settings.gain = gain + 7);
+        let returned = store.update(|settings| {
+            settings.gain = gain + 7;
+            "edited"
+        });
 
+        assert_eq!(returned, "edited");
         assert_eq!(before.gain, gain);
         assert_eq!(store.snapshot().gain, gain + 7);
     }
 
+    /// A refused edit is not half-applied: the store keeps the very snapshot it held.
     #[test]
-    fn every_update_bumps_the_version_the_snapshot_carries() {
+    fn a_refused_edit_leaves_the_settings_in_force() {
         let store = SettingsStore::new(CaptureSettings::default());
-        let (first, _) = store.versioned();
-        let returned = store.update(|settings| {
-            settings.bin = 2;
-            "edited"
-        });
-        let (second, settings) = store.versioned();
+        let before = store.snapshot();
 
-        assert_eq!(returned, "edited");
-        assert_eq!(second, first + 1);
-        assert_eq!(settings.bin, 2);
-        assert_eq!(store.version(), second);
+        let refused: Result<(), &str> = store.try_update(|settings| {
+            settings.gain += 7;
+            Err("refused")
+        });
+
+        assert_eq!(refused, Err("refused"));
+        assert!(Arc::ptr_eq(&before, &store.snapshot()), "a refusal replaced the snapshot");
+
+        store.try_update(|settings| Ok::<_, ()>(settings.bin = 2)).unwrap();
+        assert_eq!(store.snapshot().bin, 2);
+        assert_eq!(before.bin, CaptureSettings::default().bin);
     }
 }

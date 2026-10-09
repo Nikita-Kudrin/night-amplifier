@@ -117,15 +117,17 @@ impl CaptureService {
             return Err(ApiError::HardwareBenchmarkRunning);
         }
 
-        // Check if already capturing. A capture paused for recovery is still running.
-        let in_progress = |current| {
-            matches!(
-                current,
-                CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering
-            )
+        // A capture paused for recovery is still running. One still stopping polls the
+        // cancel flag this Start would reset, and would capture on behind an `Idle` state.
+        let refusal = |current| match current {
+            CaptureState::Capturing | CaptureState::Starting | CaptureState::Recovering => {
+                Some(ApiError::CaptureInProgress)
+            }
+            CaptureState::Stopping => Some(ApiError::CaptureStillStopping),
+            CaptureState::Idle | CaptureState::Error => None,
         };
-        if in_progress(state.capture_state()) {
-            return Err(ApiError::CaptureInProgress);
+        if let Some(refused) = refusal(state.capture_state()) {
+            return Err(refused);
         }
 
         // A capture always runs on the imaging camera. The roster's selection is what the
@@ -163,9 +165,9 @@ impl CaptureService {
         // Starts both pass, each spawning a capture loop on the one camera.
         state
             .transition_capture_state(|current| {
-                (!in_progress(current)).then_some(CaptureState::Starting)
+                refusal(current).is_none().then_some(CaptureState::Starting)
             })
-            .map_err(|_| ApiError::CaptureInProgress)?;
+            .map_err(|current| refusal(current).unwrap_or(ApiError::CaptureInProgress))?;
 
         // A fresh start discards any stack a previous session parked for a reconnect —
         // only `resume_capture` inherits one.

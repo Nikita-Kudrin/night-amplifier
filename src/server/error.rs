@@ -33,6 +33,7 @@ impl HttpStatus for ApiError {
             ApiError::CameraNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
             ApiError::CaptureInProgress => StatusCode::CONFLICT,
+            ApiError::CaptureStillStopping => StatusCode::CONFLICT,
             ApiError::CaptureNotPaused => StatusCode::CONFLICT,
             ApiError::CameraRoleBusy { .. } => StatusCode::CONFLICT,
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
