@@ -7,7 +7,7 @@
 //! parameter rather than by calling `common` — the instruments do not need to know how
 //! the frames got onto the disk.
 //!
-//! Nine instruments, and each exists because a single number misled a real fix:
+//! Ten instruments, and each exists because a single number misled a real fix:
 //!
 //! 1. **Octave-band sky noise** ([`octave_bands`]). One global grain figure misled three
 //!    consecutive changes; an observer reads grain at 8-128 px and the bands either side
@@ -30,6 +30,9 @@
 //!    isolated one does not, and the radial profile only finds isolated stars.
 //! 9. **Target signal and noise** ([`signal_and_noise`]). Instrument 7 counts the grain
 //!    riding on a target as structure; two half-stacks tell them apart.
+//! 10. **Star size** ([`half_flux_radius`]). `compute_median_fwhm` counts pixels above half
+//!     maximum and read 2.3 px on subs whose stars hold half their flux inside 3.7; a
+//!     misaligned or doubled sub only shows as width in the stack, corners first.
 
 #![allow(dead_code)]
 
@@ -114,6 +117,122 @@ pub fn session_files(dir: &Path) -> Option<Vec<PathBuf>> {
     Some(files)
 }
 
+// ---------------------------------------------------------------------------
+// Replaying a session through the application
+// ---------------------------------------------------------------------------
+
+/// A fixture directory replayed the way the application runs a simulator session.
+///
+/// The simulated camera captures, `convert_captured_frame` runs the raw-CFA stage and the
+/// demosaic, and `stack_frame` offers the result to the live stack: the three calls the
+/// capture and stacking tasks make, so whatever a test reads here is production's verdict,
+/// not a re-implementation of it. The one departure is a 1 µs exposure, so the camera does
+/// not sleep through the real one.
+pub struct Replay {
+    camera: night_amplifier::camera::SimulatedCamera,
+    capture: night_amplifier::camera::CaptureConfig,
+    settings: night_amplifier::session::state::CaptureSettings,
+    plugins: night_amplifier::plugins::Plugins,
+    cfa_pipeline: night_amplifier::cfa::CfaPipeline,
+    algorithm: night_amplifier::DebayerAlgorithm,
+    stacker: Option<Box<dyn night_amplifier::session::capture::LiveStacker>>,
+    stacking_failed: bool,
+    captured: usize,
+}
+
+impl Replay {
+    /// A deep-sky stacking session at the shipped settings, with the installed plugins.
+    pub fn open(dir: &Path) -> Self {
+        let mut settings = night_amplifier::session::state::CaptureSettings::default();
+        settings.stacking = true;
+        Self::with_settings(dir, settings)
+    }
+
+    pub fn with_settings(dir: &Path, settings: night_amplifier::session::state::CaptureSettings) -> Self {
+        use night_amplifier::session::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
+        let camera = night_amplifier::camera::SimulatedCamera::new(dir.to_path_buf())
+            .unwrap_or_else(|e| panic!("cannot replay {dir:?}: {e}"));
+        let capture = settings.to_capture_config().with_exposure_us(1);
+        Self {
+            camera,
+            capture,
+            cfa_pipeline: build_cfa_pipeline(&settings),
+            algorithm: debayer_algorithm(&settings),
+            plugins: night_amplifier::plugins::Plugins::installed(),
+            settings,
+            stacker: None,
+            stacking_failed: false,
+            captured: 0,
+        }
+    }
+
+    /// Subs in the session, the reference included.
+    pub fn subs(&self) -> usize {
+        self.camera.frame_count()
+    }
+
+    /// The next sub as the stacking task receives it; `None` once every sub has been
+    /// played (the camera itself would wrap to the first again).
+    pub fn capture(&mut self) -> Option<Frame> {
+        use night_amplifier::camera::Camera;
+        if self.captured == self.subs() {
+            return None;
+        }
+        self.captured += 1;
+        let raw = self.camera.capture(&self.capture).expect("the simulator captures");
+        let frame = night_amplifier::session::capture::pipeline::convert_captured_frame(
+            &raw,
+            self.camera.info(),
+            &self.cfa_pipeline,
+            self.algorithm,
+        )
+        .expect("a replayed sub converts");
+        Some(frame)
+    }
+
+    /// Offers `frame` to the session's stack, as the stacking task does.
+    pub fn stack(
+        &mut self,
+        frame: &Frame,
+        want_display: bool,
+    ) -> night_amplifier::session::capture::pipeline::StackingOutcome {
+        night_amplifier::session::capture::pipeline::stack_frame(
+            frame,
+            &self.settings,
+            &self.plugins,
+            &mut self.stacker,
+            &mut self.stacking_failed,
+            want_display,
+        )
+    }
+
+    /// Captures the next sub and stacks it, without a display copy.
+    pub fn step(&mut self) -> Option<night_amplifier::session::capture::pipeline::StackingOutcome> {
+        let frame = self.capture()?;
+        Some(self.stack(&frame, false))
+    }
+
+    /// Plays every remaining sub, handing back each outcome in order (the reference's first).
+    pub fn run(&mut self) -> Vec<night_amplifier::session::capture::pipeline::StackingOutcome> {
+        std::iter::from_fn(|| self.step()).collect()
+    }
+
+    /// Frames in the stack, the reference included.
+    pub fn depth(&self) -> usize {
+        self.stacker.as_ref().map_or(0, |s| s.depth())
+    }
+
+    /// The stack as the render task would receive it.
+    pub fn snapshot(&self) -> Frame {
+        self.stacker
+            .as_ref()
+            .expect("a stack exists once a reference has been taken")
+            .snapshot()
+            .expect("the stack reads")
+            .0
+    }
+}
+
 /// Stacks a real session, handing back `(depth, stack)` at each requested depth.
 ///
 /// Frames go through the capture path's raw-CFA stage (hot pixels, row/column FPN) and
@@ -161,16 +280,23 @@ pub fn accumulator_snapshots(
     out
 }
 
+/// Drives a `StackingContext` through the calls `stack_frame` makes (`set_reference`,
+/// `apply_settings`, `offer`), holding the concrete context so `snapshot` can read the
+/// accumulator diagnostics the `LiveStacker` trait hides. Subs come from `load` rather
+/// than the simulated camera so callers can stack any subset of a session.
 fn with_stack(
     files: &[PathBuf],
     depths: &[usize],
     load: &dyn Fn(&Path) -> RawSub,
     mut snapshot: impl FnMut(&night_amplifier::session::capture::StackingContext) -> Frame,
 ) -> Vec<(usize, Frame)> {
-    use night_amplifier::session::capture::pipeline::{build_cfa_pipeline, debayer_algorithm};
-    use night_amplifier::session::capture::{StackSettings, StackingContext};
+    use night_amplifier::session::capture::pipeline::{
+        build_cfa_pipeline, correct_and_demosaic, debayer_algorithm,
+    };
+    use night_amplifier::session::capture::{LiveStacker, StackSettings, StackingContext};
 
     let settings = night_amplifier::session::state::CaptureSettings::default();
+    let stack_settings = StackSettings::of(&settings, &night_amplifier::plugins::Plugins::installed());
     let cfa_pipeline = build_cfa_pipeline(&settings);
     let algorithm = debayer_algorithm(&settings);
 
@@ -183,9 +309,8 @@ fn with_stack(
         let p = *pattern.get_or_insert_with(|| {
             night_amplifier::debayer::detect_cfa_pattern(&img.frame).unwrap().pattern
         });
-        let mut cfa = night_amplifier::CfaFrame::mosaic(img.frame, p).unwrap();
-        cfa_pipeline.apply(&mut cfa);
-        cfa.debayer(algorithm).unwrap()
+        let cfa = night_amplifier::CfaFrame::mosaic(img.frame, p).unwrap();
+        correct_and_demosaic(cfa, &cfa_pipeline, algorithm).unwrap()
     };
 
     let reference = prepare(&files[0]);
@@ -193,10 +318,10 @@ fn with_stack(
         reference.width(),
         reference.height(),
         reference.channels(),
-        &StackSettings::of(&settings, &night_amplifier::plugins::Plugins::installed()),
+        &stack_settings,
     )
     .unwrap();
-    ctx.initialize_with_reference(&reference).unwrap();
+    ctx.set_reference(&reference).unwrap();
     drop(reference);
 
     let mut snapshots = Vec::new();
@@ -206,7 +331,18 @@ fn with_stack(
             snapshots.push((ctx.frame_count(), snapshot(&ctx)));
             next += 1;
         }
-        let _ = ctx.add_frame(&prepare(path));
+        ctx.apply_settings(&stack_settings);
+        match ctx.offer(&prepare(path), &stack_settings) {
+            Ok(a) if !a.added => println!(
+                "  {} not stacked: {:?} ({} stars matched, residual {:.1} px)",
+                path.display(),
+                a.rejected_because,
+                a.matched_stars,
+                a.mean_residual
+            ),
+            Err(e) => println!("  {} not stacked: {e}", path.display()),
+            Ok(_) => {}
+        }
     }
     if snapshots.last().map(|s| s.0) != Some(ctx.frame_count()) {
         snapshots.push((ctx.frame_count(), snapshot(&ctx)));
@@ -1792,5 +1928,176 @@ pub fn measure_real_session(
             "{label}: the sky level jumped {worst:.0} output levels between two stack \
              updates — the background pumps as the stack deepens"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 10. Star size
+// ---------------------------------------------------------------------------
+
+/// Median half-flux radius of a frame's stars, whole frame and two zones.
+#[derive(Debug, Clone, Copy)]
+pub struct StarSize {
+    pub all: f32,
+    /// Within 35 % of the way from the centre to a corner, where a rotation error does least.
+    pub centre: f32,
+    /// Beyond 60 % of the way to a corner (~43 % of the frame): a rotation error grows
+    /// with distance from the centre, so it shows here first.
+    pub corners: f32,
+    pub stars: usize,
+    pub centre_stars: usize,
+    pub corner_stars: usize,
+}
+
+/// [`half_flux_radii`] at the frame's own [`measurable_stars`], summarised by zone.
+pub fn half_flux_radius(frame: &Frame) -> StarSize {
+    let at = measurable_stars(frame);
+    let radii = half_flux_radii(frame, &at);
+    StarSize::of(&radii, &at, frame.width(), frame.height())
+}
+
+/// Window radius the flux is gathered over, and the sky ring's width outside it.
+const HFR_WINDOW: i32 = 10;
+const HFR_RING: i32 = 3;
+
+/// The brightest unsaturated stars (≤ 120) with no neighbour inside 25 px.
+pub fn measurable_stars(frame: &Frame) -> Vec<(f32, f32)> {
+    let stars = night_amplifier::detection::detect_stars_adaptive(frame).unwrap_or_default();
+    stars
+        .iter()
+        .filter(|s| s.peak < 0.7)
+        .take(120)
+        .filter(|s| !stars.iter().any(|o| o != *s && o.distance_to(s) < 2.5 * HFR_WINDOW as f32))
+        .map(|s| (s.x, s.y))
+        .collect()
+}
+
+/// Radius holding half of the background-subtracted flux around each star near `at`, on
+/// mean luminance; `None` where the window leaves the frame or holds no flux.
+///
+/// Measured about the star's own centroid, found near `at`, not about `at` itself: a
+/// position off by a pixel would read as width, and a caller placing stars by a
+/// registration transform would then see that transform's error on both sides of a
+/// comparison and never notice it.
+///
+/// Half-flux, not FWHM or a second moment: a moment weights by r² and so reads the sky
+/// noise inside the window as width (a single sub measured 7 px by moments against 3.7 by
+/// half-flux), which buries the fraction of a pixel a registration change moves.
+pub fn half_flux_radii(frame: &Frame, at: &[(f32, f32)]) -> Vec<Option<f32>> {
+    let lum = night_amplifier::detection::mean_luminance(frame);
+    let (w, h) = (frame.width(), frame.height());
+    at.iter()
+        .map(|&(x, y)| {
+            let (cx, cy) = star_window(&lum, w, h, x, y)?.centroid();
+            star_window(&lum, w, h, cx, cy)?.half_flux_radius()
+        })
+        .collect()
+}
+
+/// The sky-subtracted samples within [`HFR_WINDOW`] of a position, as `(dx, dy, value)`
+/// relative to it.
+struct StarWindow {
+    samples: Vec<(f32, f32, f32)>,
+    x: f32,
+    y: f32,
+}
+
+fn star_window(lum: &[f32], w: usize, h: usize, x: f32, y: f32) -> Option<StarWindow> {
+    const R: i32 = HFR_WINDOW;
+    let margin = R + HFR_RING;
+    let (cx, cy) = (x.round() as i32, y.round() as i32);
+    if cx < margin || cy < margin || cx >= w as i32 - margin || cy >= h as i32 - margin {
+        return None;
+    }
+    let sample = |dx: i32, dy: i32| lum[(cy + dy) as usize * w + (cx + dx) as usize];
+    let mut ring = Vec::new();
+    for dy in -margin..=margin {
+        for dx in -margin..=margin {
+            let r2 = dx * dx + dy * dy;
+            if r2 > R * R && r2 <= margin * margin {
+                ring.push(sample(dx, dy));
+            }
+        }
+    }
+    ring.sort_by(f32::total_cmp);
+    let sky = ring[ring.len() / 2];
+    let mut samples = Vec::new();
+    for dy in -R..=R {
+        for dx in -R..=R {
+            let (ox, oy) = (cx as f32 + dx as f32 - x, cy as f32 + dy as f32 - y);
+            if ox.hypot(oy) <= R as f32 {
+                samples.push((ox, oy, sample(dx, dy) - sky));
+            }
+        }
+    }
+    Some(StarWindow { samples, x, y })
+}
+
+impl StarWindow {
+    /// Flux-weighted centre of the window's positive samples.
+    fn centroid(&self) -> (f32, f32) {
+        let (mut m0, mut mx, mut my) = (0.0, 0.0, 0.0);
+        for &(dx, dy, v) in self.samples.iter().filter(|s| s.2 > 0.0) {
+            m0 += v;
+            mx += v * dx;
+            my += v * dy;
+        }
+        if m0 <= 0.0 {
+            return (self.x, self.y);
+        }
+        (self.x + mx / m0, self.y + my / m0)
+    }
+
+    fn half_flux_radius(&self) -> Option<f32> {
+        let total: f32 = self.samples.iter().map(|s| s.2).sum();
+        if total <= 0.0 {
+            return None;
+        }
+        let mut by_radius: Vec<(f32, f32)> =
+            self.samples.iter().map(|&(dx, dy, v)| (dx.hypot(dy), v)).collect();
+        by_radius.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut held = 0.0;
+        by_radius
+            .iter()
+            .find(|p| {
+                held += p.1;
+                held >= 0.5 * total
+            })
+            .map(|p| p.0)
+    }
+}
+
+impl StarSize {
+    /// Medians of `radii` over the whole frame and its zones, placing each star by `at`
+    /// in a `width` x `height` frame.
+    pub fn of(radii: &[Option<f32>], at: &[(f32, f32)], width: usize, height: usize) -> Self {
+        let (mut all, mut centre, mut corners) = (Vec::new(), Vec::new(), Vec::new());
+        for (radius, &(x, y)) in radii.iter().zip(at) {
+            let Some(radius) = *radius else { continue };
+            all.push(radius);
+            let (dx, dy) = (x - width as f32 / 2.0, y - height as f32 / 2.0);
+            let reach = dx.hypot(dy) / (width as f32 / 2.0).hypot(height as f32 / 2.0);
+            if reach < 0.35 {
+                centre.push(radius);
+            }
+            if reach > 0.6 {
+                corners.push(radius);
+            }
+        }
+        let median = |mut v: Vec<f32>| {
+            if v.is_empty() {
+                return f32::NAN;
+            }
+            v.sort_by(f32::total_cmp);
+            v[v.len() / 2]
+        };
+        Self {
+            stars: all.len(),
+            centre_stars: centre.len(),
+            corner_stars: corners.len(),
+            all: median(all),
+            centre: median(centre),
+            corners: median(corners),
+        }
     }
 }

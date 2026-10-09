@@ -1,7 +1,6 @@
 mod comet_plugin;
 mod config;
 mod incremental_pixel;
-mod pipeline;
 mod quality_baseline;
 mod rejection;
 mod stack;
@@ -21,7 +20,6 @@ pub use incremental_pixel::{
     COLLAPSED_SCALE_MARGIN, MEAN_ERROR_TABLE_LEN, SCALE_FLOOR, SCALE_GUARD_MIN_OBSERVATIONS,
     SCALE_WINDOW, WARMUP_SIGMA_GUARD,
 };
-pub use pipeline::{FrameProcessingResult, PipelineConfig, StackingPipeline, StackingStats};
 pub use rejection::RejectionMethod;
 pub use stack::MasterStack;
 pub use stacker::Stacker;

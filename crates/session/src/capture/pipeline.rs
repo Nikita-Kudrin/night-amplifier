@@ -9,13 +9,13 @@ use tracing::{instrument, warn};
 use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::context::{create_live_stacker, LiveStacker, StackSettings};
 use night_amplifier_core::plugins::Plugins;
-use super::frame_gate::RejectionReason;
+use super::frame_gate::{FrameAdmission, RejectionReason};
 use night_amplifier_core::frame::Frame;
 use crate::state::CaptureSettings;
 
 pub use super::stage_config::{
-    build_cfa_pipeline, convert_captured_frame, debayer_algorithm, get_background_config,
-    get_render_pipeline_config,
+    build_cfa_pipeline, convert_captured_frame, correct_and_demosaic, debayer_algorithm,
+    get_background_config, get_render_pipeline_config,
 };
 
 /// What one pass through a stacking pipeline produced. `showing_stack` and
@@ -41,9 +41,9 @@ pub struct StackingOutcome {
     /// The stack was discarded and restarted during this pass, so the session
     /// counters no longer describe what is on screen.
     pub stack_reset: bool,
-    /// Why the frame did not join the stack, when it did not. `None` when it
-    /// did, or when the mode does not report a reason.
-    pub rejected_because: Option<RejectionReason>,
+    /// The stack's verdict on this frame: what joined, why not, how well it aligned.
+    /// `None` for the reference and wherever no offer was made.
+    pub admission: Option<FrameAdmission>,
     /// Frames in the accumulated stack after this pass. `0` when there is no stack.
     ///
     /// Carried so the render task can tell how much the statistics it caches have
@@ -62,6 +62,12 @@ pub struct StackingOutcome {
 }
 
 impl StackingOutcome {
+    /// Why the frame did not join the stack, when it did not. `None` when it did, or
+    /// when the mode does not report a reason.
+    pub fn rejected_because(&self) -> Option<RejectionReason> {
+        self.admission.as_ref().and_then(|a| a.rejected_because)
+    }
+
     /// A single sub standing in for a stack that does not exist yet.
     fn single_frame(frame: &Frame, frame_added: bool) -> Self {
         Self {
@@ -69,7 +75,7 @@ impl StackingOutcome {
             showing_stack: false,
             frame_added,
             stack_reset: false,
-            rejected_because: None,
+            admission: None,
             stack_depth: 0,
             noise: None,
         }
@@ -82,7 +88,7 @@ impl StackingOutcome {
             showing_stack: true,
             frame_added,
             stack_reset: false,
-            rejected_because: None,
+            admission: None,
             stack_depth,
             noise: None,
         }
@@ -99,7 +105,7 @@ impl StackingOutcome {
             showing_stack: true,
             frame_added,
             stack_reset: false,
-            rejected_because: None,
+            admission: None,
             stack_depth,
             noise: None,
         }
@@ -157,7 +163,7 @@ pub fn stack_frame(
     let depth = stacker.depth() as u32;
     let with_verdict = |outcome: StackingOutcome| StackingOutcome {
         stack_reset: admission.rebased,
-        rejected_because: admission.rejected_because,
+        admission: Some(admission),
         ..outcome
     };
 
@@ -504,7 +510,7 @@ mod tests {
         let outcome = stack_frame(&blank, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         let reason = outcome
-            .rejected_because
+            .rejected_because()
             .expect("a rejected frame must say why");
         assert!(
             !reason.describe().is_empty(),
@@ -515,6 +521,28 @@ mod tests {
             "a starless frame could not be placed against the reference at all, \
              which is exactly the signal Wanderer resets on: {reason:?}"
         );
+    }
+
+    /// A sub of nothing but NaN (a corrupt read) is refused without touching the stack:
+    /// one NaN folded into a running mean never leaves it again.
+    #[test]
+    fn a_corrupt_frame_leaves_the_stack_untouched() {
+        let settings = CaptureSettings::default();
+        let mut ctx = None;
+        let mut failed = false;
+
+        let reference = starfield(150, 150, 0.0);
+        stack_frame(&reference, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
+
+        let corrupt = Frame::from_f32_vec(vec![f32::NAN; 150 * 150], 150, 150, 1).unwrap();
+        let outcome =
+            stack_frame(&corrupt, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
+
+        assert!(!outcome.frame_added);
+        assert!(!failed, "one corrupt sub must not end stacking for the session");
+        assert_eq!(outcome.stack_depth, 1);
+        let shown = outcome.display_frame.expect("the stack is still displayed");
+        assert!(shown.data().iter().all(|v| v.is_finite()));
     }
 
     /// Wanderer mode restarts the stack whenever a frame does not join it, so
@@ -544,13 +572,13 @@ mod tests {
             stack_frame(&defocused, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert_eq!(
-            outcome.rejected_because,
+            outcome.rejected_because(),
             Some(RejectionReason::StarsTooLarge),
             "a field with every star in place but twice as wide is a soft frame"
         );
         assert!(
             !outcome
-                .rejected_because
+                .rejected_because()
                 .expect("just asserted")
                 .means_the_sky_moved(),
             "Wanderer would have thrown away the whole stack for one soft frame"
@@ -577,7 +605,7 @@ mod tests {
         let outcome = stack_frame(&shifted, &settings, &Plugins::none(), &mut ctx, &mut failed, true);
 
         assert!(outcome.frame_added);
-        assert_eq!(outcome.rejected_because, None);
+        assert_eq!(outcome.rejected_because(), None);
         assert!(!outcome.stack_reset);
     }
 
@@ -691,7 +719,7 @@ mod tests {
         let lost = stack_frame(&sub, &settings, &Plugins::none(), &mut stacker, &mut failed, true);
         assert!(!lost.frame_added);
         assert!(lost.showing_stack, "the comet stack stays on screen");
-        assert_eq!(lost.rejected_because, None);
+        assert_eq!(lost.rejected_because(), None);
         let shown = lost.display_frame.expect("a display copy was asked for");
         assert!((shown.get_pixel(0, 0, 0) - 0.02).abs() < 1e-6, "the stack, not the sub");
         assert!(!failed);

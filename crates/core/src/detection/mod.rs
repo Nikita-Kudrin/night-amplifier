@@ -11,6 +11,7 @@ mod adaptive;
 mod background;
 mod config;
 mod detector;
+mod doubling;
 pub mod luminance;
 mod star;
 
@@ -18,6 +19,7 @@ pub use adaptive::{detect_stars_adaptive, detect_stars_adaptive_thorough};
 pub use background::BackgroundStats;
 pub use config::DetectionConfig;
 pub use detector::StarDetector;
+pub use doubling::{collapse_doubles, doubled_star_share, dominant_companion_offset};
 pub use luminance::{luminance_frame, mean_luminance};
 pub use star::Star;
 

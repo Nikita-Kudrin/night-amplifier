@@ -9,7 +9,7 @@
 
 use night_amplifier_core::background::BackgroundConfig;
 use night_amplifier_core::camera::{CameraInfo, CameraResult, RawFrame};
-use night_amplifier_core::cfa::{CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
+use night_amplifier_core::cfa::{CfaFrame, CfaPipeline, FpnFilter, HotPixelConfig, HotPixelFilter};
 use night_amplifier_core::debayer::DebayerAlgorithm;
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::plugins::Plugins;
@@ -71,7 +71,18 @@ pub fn convert_captured_frame(
     cfa_pipeline: &CfaPipeline,
     algorithm: DebayerAlgorithm,
 ) -> CameraResult<Frame> {
-    let mut cfa = raw.to_cfa_frame(info)?;
+    let cfa = raw.to_cfa_frame(info)?;
+    correct_and_demosaic(cfa, cfa_pipeline, algorithm)
+        .map_err(|e| night_amplifier_core::camera::CameraError::ImageReadFailed(e.to_string()))
+}
+
+/// [`convert_captured_frame`] after the decode: a mosaic that came from somewhere other
+/// than a camera buffer (a replayed sub, a test fixture) takes the same stage from here.
+pub fn correct_and_demosaic(
+    mut cfa: CfaFrame,
+    cfa_pipeline: &CfaPipeline,
+    algorithm: DebayerAlgorithm,
+) -> night_amplifier_core::error::Result<Frame> {
     {
         let _timer = night_amplifier_core::telemetry::metrics::time_stage(
             night_amplifier_core::telemetry::metrics::FrameStage::CfaCorrection,
@@ -79,7 +90,6 @@ pub fn convert_captured_frame(
         cfa_pipeline.apply(&mut cfa);
     }
     cfa.debayer(algorithm)
-        .map_err(|e| night_amplifier_core::camera::CameraError::ImageReadFailed(e.to_string()))
 }
 
 /// Helper to get background configuration from capture settings

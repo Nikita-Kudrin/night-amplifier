@@ -177,6 +177,27 @@ fn a_deep_session_gets_calmer_with_depth() {
     measure_real_session(DEEP_SET, &files, &[1, 2, 4, 8, 16, 32, 64, 106], &[false], &load_sub);
 }
 
+/// Other targets and tones than M27: a faint emission nebula and two galaxies, IMX533,
+/// full frame. The curve was tuned on one bright nebula; these are what it must also hold on.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn a_faint_nebula_session_gets_calmer_with_depth() {
+    const SET: &str = "ic-59-ghost-of-cassiopeia-nebula";
+    let files = managed_session(SET);
+    measure_real_session(SET, &files, &[1, 2, 4, 8, 15], &[false], &load_sub);
+}
+
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn a_galaxy_session_gets_calmer_with_depth() {
+    for set in ["m33-triangulum-galaxy-imx533", "m101-pinwheel-galaxy-imx533"] {
+        let files = managed_session(set);
+        measure_real_session(set, &files, &[1, 2, 4, 8, 16, 32], &[false], &load_sub);
+    }
+}
+
 /// A managed fixture set's frames, downloading it if this machine does not have it.
 ///
 /// Panics rather than skipping when it cannot be had: a depth assertion that silently

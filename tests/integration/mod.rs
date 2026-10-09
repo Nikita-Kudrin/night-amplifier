@@ -66,6 +66,7 @@ pub mod prefetch;
 pub mod render_brightness_tests;
 pub mod sky_estimate_tests;
 pub mod stack_depth_grain_tests;
+pub mod stack_quality_tests;
 pub mod stacking_tests;
 pub mod stretch_tests;
 pub mod temporal_stability_tests;

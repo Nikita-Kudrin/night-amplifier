@@ -5,8 +5,12 @@
 //! `MasterStack::add_frame` without rejection is Community's per-frame stacking kernel, and
 //! also what Pro runs with rejection set to None. Pro's `rejection_benchmark` covers the
 //! clipping kernel; nothing measured this one, so its non-finite skip was priced by hand.
+//!
+//! `registration` prices the all-star refit every registered sub pays after the ladder.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
+use night_amplifier::detection::Star;
+use night_amplifier::registration::{refine_transform, AffineTransform};
 use night_amplifier::stacking::{MasterStack, RejectionMethod, StackingConfig};
 use night_amplifier::Frame;
 use std::hint::black_box;
@@ -91,5 +95,51 @@ fn plain_mean_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, plain_mean_benchmark);
+/// Stars per list: `detect_stars_adaptive`'s cap, which every dense field reaches.
+const STARS: usize = 200;
+
+/// Refits per measured iteration: one is ~26 us on x86, so 4000 clear the ~100 ms floor.
+const REFINE_REPS: usize = 4000;
+
+/// `STARS` stars scattered over the sensor from a fixed seed, as detection hands them over.
+fn star_field() -> Vec<Star> {
+    let mut state = 0x2545_F491_u64;
+    let mut next = move || {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (state >> 33) as f32 / (1u64 << 31) as f32
+    };
+    (0..STARS)
+        .map(|_| Star::new(next() * WIDTH as f32, next() * HEIGHT as f32, 100.0, 0.5, 30.0))
+        .collect()
+}
+
+/// A sub drifted and rotated against the reference, refined from a guess as far off as
+/// the ladder's on a real session (0.03 degrees, a pixel).
+fn refine_benchmark(c: &mut Criterion) {
+    let reference = star_field();
+    let truth = AffineTransform::new(0.0008, 1.0, -142.0, 110.0);
+    let target: Vec<Star> = reference
+        .iter()
+        .map(|s| {
+            let (x, y) = truth.inverse_transform_point(s.x, s.y);
+            Star::new(x, y, s.flux, s.peak, s.snr)
+        })
+        .collect();
+    let rough = AffineTransform::new(0.0013, 1.0, -141.0, 110.6);
+
+    let mut group = c.benchmark_group("registration");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(500));
+    group.measurement_time(Duration::from_secs(3));
+    group.bench_function(format!("refine_{STARS}_stars_x{REFINE_REPS}"), |b| {
+        b.iter(|| {
+            for _ in 0..REFINE_REPS {
+                black_box(refine_transform(black_box(&reference), black_box(&target), &rough));
+            }
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, plain_mean_benchmark, refine_benchmark);
 criterion_main!(benches);

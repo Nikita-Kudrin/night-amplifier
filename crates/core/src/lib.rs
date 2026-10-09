@@ -80,8 +80,7 @@ pub use render::{
     ToneMappingAlgorithm, WhiteBalanceConfig,
 };
 pub use stacking::{
-    warp_frame, warp_frame_into, FrameProcessingResult, MasterStack, PipelineConfig,
-    RejectionMethod, Stacker, StackingConfig, StackingPipeline, StackingStats,
+    warp_frame, warp_frame_into, MasterStack, RejectionMethod, Stacker, StackingConfig,
 };
 pub use statistics::{
     compute_image_stats, compute_image_stats_with_config, compute_luminance_stats, ChannelStats,

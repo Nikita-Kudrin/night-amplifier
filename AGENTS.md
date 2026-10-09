@@ -81,9 +81,12 @@ If you can't fix a test, don't simplify it into not testing the idea. Tests can 
 **Never run benchmarks alongside other tests/tasks** — it skews the numbers. Real-data fixtures live in
 `DEFAULT_FIXTURES` (`tests/integration/common.rs`), download on demand; a test wanting one calls
 `stack_depth_grain_tests::managed_session`, which **panics** rather than skip. Measurement instruments
-(`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. Server tests fake cameras with
-`camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or count calls at runtime), not a
-hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and `AppState::new_for_testing` via `test-support`.
+(`tests/integration/instruments.rs`) are shared with Pro via `#[path]` — no `crate::`. A stacking test replays a
+fixture through `instruments::Replay` (simulated camera → `convert_captured_frame` → `stack_frame`), never a
+re-wired copy of the pipeline: the old batch `StackingPipeline` scored 59 % on a set production stacks at 87 %.
+Server tests fake cameras with `camera::testing::FakeCamera` (builder, plus shared `CameraControls` to script or
+count calls at runtime), not a hand-written `Camera` impl; Pro's tests get it, `FakeCatalog` and
+`AppState::new_for_testing` via `test-support`.
 
 ## Benchmark sizing
 
@@ -305,9 +308,20 @@ locates sub-pixel coordinates via Center of Mass, and computes FWHM/SNR.
 
 ### Phase 4: Image Registration (Alignment)
 
-**Deep Sky**: scale/rotation-invariant triangle patterns + RANSAC → `AffineTransform`. **Planetary**: surface
-feature cross-correlation in an ROI (no stars needed). **Comet** [Pro]: centroids the nucleus so stars trail while
-the comet stacks sharp.
+**Deep Sky**: scale/rotation-invariant triangle patterns + RANSAC → `AffineTransform`, then **refit over every
+detected star** (`registration::refine`): the ladder fits from ≤30 stars with 6–8 px inlier slack, which left
+corners 1–4 px off and a stack's corner stars up to 19 % fatter. `FrameGate` still judges the **ladder's** fit: the
+refit locks onto one image of a multi-image sub, which then slipped past the residual gate and lit the sky around
+every star. **Planetary**: surface feature cross-correlation in
+an ROI (no stars needed). **Comet** [Pro]: centroids the nucleus so stars trail while the comet stacks sharp.
+
+A sub that **will not register** is explained before it is called movement (`FrameGate::explain_unregistered`):
+doubled stars (a bump: companion offsets that *agree*, `detection::doubled_star_share`, judged against the
+session's own baseline — a dense field scores ~55 % on every sub) or bloated ones are soft verdicts Wanderer holds
+through. The baseline is the share's **lower quartile**, so a rough night's doubled subs can't become its normal.
+Doubled needs same-field proof (collapsed, the sub registers); bloated has none, so `BLOATED_RUN_LIMIT` (5) in a row
+is movement — nothing unregistered updates the star size, and a new field of fatter stars held the stack forever.
+Registered doubled subs still stack: dropping them cost 6.6 % sky noise for 2.5 % smaller stars.
 
 ### Phase 5: Live Stacking & Rejection
 
