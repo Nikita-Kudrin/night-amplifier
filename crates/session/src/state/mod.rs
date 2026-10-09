@@ -302,7 +302,10 @@ impl AppState {
         self.capture.state()
     }
 
-    /// Update capture state and broadcast event
+    /// Put the capture in `state` unconditionally, broadcasting it. Tests only: production
+    /// moves go through [`Self::transition_capture_state`], since a plain write overwrote a
+    /// Stop that landed during startup.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_capture_state(&self, state: CaptureState) {
         self.capture.set(state);
         let _ = self.events.send(ServerEvent::state_changed(state));

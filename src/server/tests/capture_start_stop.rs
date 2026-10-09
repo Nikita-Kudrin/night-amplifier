@@ -116,12 +116,17 @@ async fn test_capture_start_while_stopping() {
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
     state.set_capture_state(CaptureState::Stopping);
-    let app = create_test_router(state);
+    state.request_cancel();
+    let app = create_test_router(Arc::clone(&state));
 
-    let (status, _json) = post_json(&app, "/api/capture/start", json!({})).await;
+    let (status, json) = post_json(&app, "/api/capture/start", json!({})).await;
 
-    // Should allow starting when in Stopping state
-    assert_eq!(status, StatusCode::OK);
+    // Refused: a Start here reset the cancel flag the stopping capture still polls, and
+    // that capture ran on behind an `Idle` state (recovery_tests has the end-to-end case).
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(json["error"].as_str().unwrap().contains("still stopping"));
+    assert_eq!(state.capture_state(), CaptureState::Stopping);
+    assert!(state.is_cancelled(), "the stopping capture must still see its cancel");
 }
 
 // ============================================================================

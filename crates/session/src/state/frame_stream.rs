@@ -85,7 +85,14 @@ impl FrameStream {
 
     /// Set the latest linear frame for on-demand encoding.
     pub fn set_latest_raw_frame(&self, frame: Arc<RenderReadyFrame>) {
-        *self.latest_raw_frame.write().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+        drop(self.replace_raw_frame(Some(frame)));
+    }
+
+    /// Swaps the frame, handing the previous one back to be dropped once the lock is
+    /// released: often its last reference, ~108 MB of f32 at 3008²x3, and every image
+    /// client reads this lock on a runtime worker.
+    fn replace_raw_frame(&self, frame: Option<Arc<RenderReadyFrame>>) -> Option<Arc<RenderReadyFrame>> {
+        std::mem::replace(&mut *self.latest_raw_frame.write().unwrap_or_else(|e| e.into_inner()), frame)
     }
 
     /// The most recently rendered linear frame, if any: the live preview immediately
@@ -150,7 +157,7 @@ impl FrameStream {
     /// Drop every payload and forget the frame. Called when a stream's producer stops,
     /// so a reconnecting client is not served a frame from a camera that has gone.
     pub fn clear(&self) {
-        *self.latest_raw_frame.write().unwrap_or_else(|e| e.into_inner()) = None;
+        drop(self.replace_raw_frame(None));
         for slot in &self.payloads {
             *slot.write().unwrap_or_else(|e| e.into_inner()) = None;
         }

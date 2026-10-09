@@ -1588,3 +1588,71 @@ async fn a_guide_loop_that_panics_is_reopened_and_runs_again() {
     assert!(back, "the guide loop did not come back after its panic");
     assert_eq!(phase, CameraPhase::Guiding);
 }
+
+/// A Stop that lands while the capture loop is still opening its session leaves the
+/// state at `Stopping`. The loop's way out must not pass through `Capturing`: every
+/// client would show a running capture for a session the observer already stopped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_during_startup_never_reports_capturing() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    let camera_id = state.camera_in_role(CameraRole::Main).unwrap().id;
+    // Where Start leaves the state, then the Stop, both before the loop runs a line.
+    state.transition_capture_state(|_| Some(CaptureState::Starting)).unwrap();
+    assert!(CaptureService::stop_capture(&state).await);
+    let mut events = state.subscribe_events();
+
+    crate::capture::run_capture_loop(Arc::clone(&state), camera_id, None).await;
+
+    let reported: Vec<String> = drain(&mut events)
+        .into_iter()
+        .filter_map(|event| match event {
+            ServerEvent::StateChanged { state } => Some(format!("{state:?}")),
+            _ => None,
+        })
+        .collect();
+    let ended = state.capture_state();
+    teardown(&state).await;
+    assert_eq!(ended, CaptureState::Idle);
+    assert!(!reported.iter().any(|s| s == "Capturing"), "reported {reported:?}");
+}
+
+/// A Start while a Stop winds down — the stopping pipeline is still finishing its sub —
+/// used to reset the cancel flag that pipeline polls. The new loop could not take the
+/// handle and reported `Idle`, and the old pipeline captured on unseen: Stop answered "no
+/// capture in progress" from then on, and only a Disconnect ended it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_while_stopping_leaves_no_pipeline_running_behind_an_idle_state() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    catalog.camera.exposure_ms.store(300, Ordering::SeqCst);
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let capturing = eventually(
+        || state.stats.delivered() >= 1 && state.capture_state() == CaptureState::Capturing,
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(capturing, "the first capture never got going");
+    assert!(CaptureService::stop_capture(&state).await);
+    // A second client whose page still shows the capture stopped.
+    let second = CaptureService::start_capture(&state, None).await;
+
+    let stopped = eventually(|| state.capture_state() == CaptureState::Idle, Duration::from_secs(6)).await;
+    let before = catalog.camera.frames.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let delivered = catalog.camera.frames.load(Ordering::SeqCst) - before;
+    let ended = state.capture_state();
+
+    state.request_cancel();
+    teardown(&state).await;
+    assert!(
+        matches!(second, Err(crate::error::ApiError::CaptureStillStopping)),
+        "{second:?}"
+    );
+    assert!(stopped, "the stopped capture never reached Idle");
+    assert_eq!(ended, CaptureState::Idle);
+    assert_eq!(delivered, 0, "the camera kept delivering frames behind an Idle state");
+}

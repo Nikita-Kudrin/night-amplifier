@@ -68,7 +68,9 @@ When designing new features or refactoring, adhere to the following architectura
 - `AppState` is aggregates that keep their locks private (`CameraRoster`, `CaptureControl`, `SessionStats`,
   `SettingsStore`, `CaptureResume`, `PushToState`): std locks never held across an `await`, so capture threads read
   without `block_on`, and a decision taken on an earlier read goes through the aggregate's `transition`
-  (compare-and-set): a bare read lets two concurrent Starts both pass. Bare locks stay private.
+  (compare-and-set): a bare read lets two concurrent Starts both pass. Bare locks stay private. The capture state
+  has no plain setter outside tests (a Stop during startup was overwritten by `Capturing`), and Start refuses
+  `Stopping`: it reset the cancel flag the stopping pipeline polls, which then captured on behind `Idle`.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.

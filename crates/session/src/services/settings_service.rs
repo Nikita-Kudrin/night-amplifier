@@ -2,7 +2,8 @@
 //! follow from the change.
 //!
 //! [`check`] and [`apply`] are pure, so the rules are tested without a server; they run
-//! inside one `SettingsStore::update`, and the reactions after it. Everything a reaction
+//! inside one `SettingsStore::try_update`, so a refused request changes nothing, and the
+//! reactions after it. Everything a reaction
 //! needs from another lock is read *before* the update, which takes no lock of its own.
 
 use std::sync::Arc;
@@ -289,13 +290,13 @@ impl SettingsService {
             capture_state: state.capture_state(),
         };
 
-        let (applied, delta) = state.settings.update(|settings| {
+        let (applied, delta) = state.settings.try_update(|settings| {
             check(&request, settings, target.capture_state, ProFeatures::of(&state.plugins))?;
             let delta = apply(request, settings, &target, &state.plugins);
             ApiResult::Ok((settings.clone(), delta))
         })?;
 
-        Self::react(state, &target, delta, &applied).await;
+        Self::react(state, &target, delta).await;
         Ok(applied)
     }
 
@@ -303,7 +304,6 @@ impl SettingsService {
         state: &Arc<AppState>,
         target: &UpdateTarget,
         delta: SettingsDelta,
-        applied: &CaptureSettings,
     ) {
         if delta.left_focus_mode {
             info!("Leaving Focus/Finder mode: the capture switched to stacking");
@@ -327,11 +327,14 @@ impl SettingsService {
             state.cancel_active_exposure(target.role).await;
         }
 
-        storage::sync_disk_session(state, applied, capturing).await;
+        // The settings in force, not this request's own result: the awaits above let a
+        // later request land first, and its folder and plan must not be rolled back.
+        let current = state.settings.snapshot();
+        storage::sync_disk_session(state, &current, capturing).await;
         // A resume restores the plan's settings. An edit made while the capture runs, or
         // while it is paused for a reconnect, is what the observer wants it to resume
         // with — the snapshot from capture start silently undid it.
-        state.resume.edit_plan(|plan| plan.settings = applied.clone());
+        state.resume.edit_plan(|plan| plan.settings = CaptureSettings::clone(&current));
 
         let _ = state.events.send(ServerEvent::SettingsUpdated);
 
