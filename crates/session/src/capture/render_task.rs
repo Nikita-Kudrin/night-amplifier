@@ -3,15 +3,13 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 use night_amplifier_core::render::display::RenderReadyFrame;
-use crate::state::{AppState, Resolution, StreamKind};
+use crate::state::{AppState, Resolution};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::channel::{QueueDepth, StackedFrame};
 use super::pipeline;
-use super::stream_encoding::{
-    encode_jpeg, encode_lossless, ConversionCache, FailureReports, StreamResolutions,
-};
+use super::stream_encoding::{encode_watched, ConversionCache, FailureReports, StreamResolutions, StreamTarget};
 
 /// Preview rendering and encoding, on a dedicated OS thread. Drains the channel to
 /// the latest frame for UI responsiveness, runs `process_preview_frame()`, then
@@ -181,8 +179,6 @@ pub fn run_render_task(
     debug!("Render task ended");
 }
 
-/// Encode both families of the imaging stream at their settings' resolutions.
-///
 /// A failure is a display problem, not a camera one: it is logged and reported to the UI,
 /// and deliberately *not* passed to `frame_rejected`, which would count it towards the
 /// session's rejection rate — the signal that decides whether the camera still responds.
@@ -195,21 +191,9 @@ fn encode_payloads(
     failures: &mut FailureReports,
     chunk_count: usize,
 ) {
-    // One RGB8 conversion per distinct output size: with both families at the same
-    // resolution the denoised conversion (~5x the encode) happens once.
-    conversions.begin_frame();
-    let stream = &state.main_stream;
-
-    let lossless = if stream.viewer_count(StreamKind::Lossless) > 0 {
-        let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::EncodeLz4);
-        encode_lossless(stream, frame, counter, conversions, resolutions.lossless, chunk_count)
-    } else {
-        Ok(())
-    };
-    let jpeg = encode_jpeg(stream, frame, counter, conversions, resolutions.jpeg);
-
-    let results = [(StreamKind::Lossless, lossless), (StreamKind::Jpeg, jpeg)];
-    for error in results.into_iter().filter_map(|(kind, result)| failures.to_report(kind, result)) {
+    let target = StreamTarget::imaging(&state.main_stream, chunk_count);
+    let errors = encode_watched(target, frame, counter, resolutions, conversions, failures);
+    for error in errors {
         warn!(error = %error, "Stream payload encoding failed");
         state.send_error(error);
     }

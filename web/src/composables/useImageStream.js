@@ -2,6 +2,9 @@ import {ref, onUnmounted, shallowRef, toValue, watch} from 'vue'
 import {decodeFrame} from '../utils/frameDecoder.js'
 import {useWebSocket} from './useWebSocket.js'
 
+/** Text the server sends when an eyepiece socket switches to a camera with no frame yet. */
+export const NO_FRAME = 'no_frame'
+
 /**
  * WebSocket composable for the image streams: receives JPEG (SA10) or RGB8+LZ4 (SA09)
  * frames, exposing `frameData`/`dimensions`. The server decides size from the Streaming
@@ -29,6 +32,8 @@ export function useImageStream(options = {}) {
 
     let framesSinceLastFPS = 0
     let fpsTimer = null
+    // Bumped by every `NO_FRAME`, so a Blob still being read when one arrives is dropped.
+    let clearGeneration = 0
 
     /**
      * Clear frame data to reset the live view
@@ -70,13 +75,24 @@ export function useImageStream(options = {}) {
         onMessage: async (event) => {
             let buffer
 
+            if (event.data === NO_FRAME) {
+                // The server switched this socket to a camera with nothing to show yet: the
+                // picture on screen is the other camera's.
+                clearGeneration++
+                clearFrameData()
+                return
+            }
+
             // Convert Blob to ArrayBuffer if needed
             if (event.data instanceof Blob) {
+                const generation = clearGeneration
                 buffer = await event.data.arrayBuffer()
+                // A frame that arrived before the marker must not land after it.
+                if (generation !== clearGeneration) return
             } else if (event.data instanceof ArrayBuffer) {
                 buffer = event.data
             } else {
-                return // Ignore non-binary messages
+                return // Ignore other text
             }
 
             // Decode frame (dispatches by magic number)

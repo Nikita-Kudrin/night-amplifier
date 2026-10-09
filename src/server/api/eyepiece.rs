@@ -1,8 +1,8 @@
 //! Eyepiece snapshot download.
 //!
-//! Serves the frame the render task last published, as a PNG. Two shapes: the
-//! round eyepiece image the view shows, and the uncropped frame behind it — the
-//! same picture the stacked PNG export stores.
+//! Serves the frame last published for the camera the eyepiece pages show, as a PNG.
+//! Two shapes: the round eyepiece image the view shows, and the uncropped frame behind
+//! it — the same picture the stacked PNG export stores.
 
 use axum::{
     extract::{Query, State},
@@ -59,7 +59,8 @@ pub async fn get_snapshot(
 
     // Not 503: nothing has been rendered yet, and no amount of retrying changes
     // that until a capture produces a frame. The client says so and stops.
-    let Some(frame) = state.main_stream.get_latest_raw_frame() else {
+    // The viewed camera's, so a viewer saves the picture they are looking at.
+    let Some(frame) = state.stream(state.viewed_camera.get()).get_latest_raw_frame() else {
         return (
             StatusCode::NOT_FOUND,
             ApiResponse::err::<()>("No rendered frame available yet"),

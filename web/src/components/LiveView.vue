@@ -12,6 +12,8 @@ import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {getAppState} from '../composables/useAppState.js'
+import {useDisplayedFov} from '../composables/useDisplayedFov.js'
+import {setViewedCamera} from '../composables/api.js'
 
 /**
  * How long to wait before fitting after a frame changes the image's size. Viewport
@@ -27,14 +29,27 @@ const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const guideCamera = inject('guideCamera', computed(() => null))
 const mainCamera = inject('mainCamera', computed(() => null))
 
-/** Off by default: the imaging camera is what an observer is here to look at. */
-const showGuide = ref(false)
+/**
+ * The operator's Guide toggle, held by the server rather than this tab: the eyepiece
+ * pages show the same camera, and a reloaded page finds it where it was left. The server
+ * falls back to the imaging camera when the guide camera goes away.
+ */
+const showGuide = computed(() => hasGuideCamera.value && eventStream.viewedCamera?.value === 'guide')
 
-// Falls back the moment the guide camera goes away, so the view is never left showing a
-// stream nothing is producing.
-watch(hasGuideCamera, (present) => {
-  if (!present) showGuide.value = false
-})
+async function setShowGuide(show) {
+  const revision = eventStream.viewedCameraRevision?.value
+  try {
+    const answer = await setViewedCamera(show ? 'guide' : 'main')
+    // The event follows, but this tab need not wait for it to move its own view — unless
+    // one already arrived: it may be another operator's later toggle, which this older
+    // answer must not undo while every eyepiece shows the other camera.
+    if (eventStream.viewedCamera && eventStream.viewedCameraRevision?.value === revision) {
+      eventStream.viewedCamera.value = answer.camera
+    }
+  } catch (e) {
+    appState.setGlobalError(e.message)
+  }
+}
 
 const streamEndpoint = computed(() =>
     showGuide.value ? '/ws/stream?source=guide' : '/ws/stream'
@@ -49,29 +64,8 @@ const displayedCamera = computed(() =>
     showGuide.value ? guideCamera.value : mainCamera.value
 )
 
-/**
- * Field of view of the camera being *displayed*, in degrees of image height.
- *
- * The solve reports the field it was planned against, which with a guide camera
- * connected is the guide scope's — a different focal length from the imaging scope. The
- * chevron uses this only to place an off-target arrow against the frame edge, so it has
- * to describe the picture the arrow is drawn over, not the one that solved.
- */
-const displayedFovDeg = computed(() => {
-  const profiles = settings?.value?.camera_telescope_profiles
-  const name = displayedCamera.value?.name
-  const optics = (name && profiles?.[name]) || settings?.value?.telescope
-  const fl = optics?.focal_length_mm
-  const py = optics?.pixel_size_y_um
-  const h = optics?.sensor_height_px
-  if (!fl || !py || !h) return pushDirection.value?.fovDeg || 0
-
-  const effectiveFl = fl * (optics.barlow_coeff || 1)
-  const sensorHeightMm = (h * py) / 1000
-  return (2 * Math.atan(sensorHeightMm / (2 * effectiveFl)) * 180) / Math.PI
-})
-
 const pushDirection = computed(() => eventStream.pushDirection.value)
+const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const currentTarget = computed(() => eventStream.currentTarget.value)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
@@ -464,7 +458,7 @@ const backendLabel = computed(() => {
         :is-selecting-comet-roi="isSelectingCometRoi"
         :has-guide-camera="hasGuideCamera"
         :show-guide="showGuide"
-        @update:show-guide="showGuide = $event"
+        @update:show-guide="setShowGuide"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
         @fit-to-view="fitToView"

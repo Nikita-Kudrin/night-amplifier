@@ -50,13 +50,16 @@ What changes once a guide camera is attached:
   shows Live view.
 - **A "Guide camera" switch appears** next to the zoom controls over the live view. Turn
   it on to watch the guide camera instead of the imaging one. Push-To arrows are drawn
-  over whichever view you are on.
+  over whichever view you are on. The switch is the operator's: every
+  [eyepiece view](/eyepiece-display#whose-camera-it-shows) follows it, and every open live
+  view shows where it stands. Disconnecting the guide camera turns it off; a dropout the
+  camera recovers from does not.
 - **Its raw frames have their own switch**, under **Settings → Storage → Save Raw
   Frames**, and go to a folder of their own ending `-guide`. Turning the switch off stops
   the writing on the next frame; so does stopping the camera. A stop ends that folder —
   starting again opens a new one.
 
-The guide camera is only rendered while you are looking at it. With the switch off it
+The guide camera is only rendered while someone is looking at it. With the switch off it
 still exposes and still solves, but nothing is processed or encoded for the browser.
 
 ## Focus/Finder mode

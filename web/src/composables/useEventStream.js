@@ -25,6 +25,11 @@ export function useEventStream() {
     const resumeNotice = ref(null)
     // Why the server switched Focus/Finder mode off on its own; stays until dismissed.
     const focusModeNotice = ref(null)
+    // The camera the eyepiece pages show, chosen by the Guide toggle on `/`. The server
+    // sends it on connect, so a reloaded page shows the toggle where it was left.
+    const viewedCamera = ref('main')
+    // Counts `viewed_camera_changed`, so a PUT's answer can tell an event overtook it.
+    const viewedCameraRevision = ref(0)
 
     // Push-To state
     const pushDirection = ref(null)
@@ -112,6 +117,10 @@ export function useEventStream() {
                 deliveredCount.value = 0
                 lastRejectionReason.value = null
             }
+        },
+        viewed_camera_changed(data) {
+            viewedCamera.value = data.camera
+            viewedCameraRevision.value++
         },
         frame_captured: handleFrameEvent,
         frame_rejected: handleFrameEvent,
@@ -380,6 +389,8 @@ export function useEventStream() {
         unresponsiveWarning,
         resumeNotice,
         focusModeNotice,
+        viewedCamera,
+        viewedCameraRevision,
         pushDirection,
         currentTarget,
         plateSolving,

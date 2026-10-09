@@ -268,6 +268,19 @@ export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
     })
 }
 
+/**
+ * Choose the camera `/eyepiece` and `/eyepiece_quality` show — the Guide toggle on `/`.
+ * Every client hears the change as `viewed_camera_changed`.
+ * @param {'main'|'guide'} camera
+ * @returns {Promise<{camera: 'main'|'guide'}>}
+ */
+export async function setViewedCamera(camera) {
+    return request('/view/camera', {
+        method: 'PUT',
+        body: {camera},
+    })
+}
+
 // ============================================================================
 // Simulated Camera
 // ============================================================================

@@ -18,7 +18,7 @@ pub mod settings;
 pub mod simulator;
 
 use crate::session::state::AppState;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use std::sync::Arc;
 
@@ -64,6 +64,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
             "/cameras/{camera_id}/disconnect",
             post(cameras::disconnect_camera),
         )
+        .route("/view/camera", put(cameras::select_viewed_camera))
         // INDI
         .route("/indi/test", post(indi::test_connection))
         // Simulator

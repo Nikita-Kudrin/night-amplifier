@@ -7,6 +7,7 @@ mod lifecycle;
 mod logging;
 mod serving;
 mod settings_changes;
+mod viewed_camera;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -47,6 +48,10 @@ pub(super) async fn start_server() -> TestServer {
             axum::routing::get(crate::server::api::settings::get_settings)
                 .post(crate::server::api::settings::update_settings),
         )
+        .route(
+            "/api/view/camera",
+            axum::routing::put(crate::server::api::cameras::select_viewed_camera),
+        )
         .with_state(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -70,11 +75,14 @@ impl TestServer {
     /// follows is guaranteed to include this client's family.
     pub async fn connect_registered(&self, path: &str) -> Client {
         let kind = kind_of(path);
-        let stream = if path.contains("source=guide") {
-            Arc::clone(&self.state.guide_stream)
+        let camera = if !path.starts_with(LIVE_VIEW) {
+            self.state.viewed_camera.get()
+        } else if path.contains("source=guide") {
+            crate::session::state::CameraRole::Guide
         } else {
-            Arc::clone(&self.state.main_stream)
+            crate::session::state::CameraRole::Main
         };
+        let stream = Arc::clone(self.state.stream(camera));
         let before = stream.viewer_count(kind);
         let client = self.connect(path).await;
         eventually("the viewer to register", || stream.viewer_count(kind) > before).await;
@@ -84,6 +92,12 @@ impl TestServer {
     /// POST a partial settings update the way the settings panel does.
     pub async fn post_settings(&self, body: serde_json::Value) -> reqwest_like::Response {
         reqwest_like::post_json(self.addr, "/api/settings", body).await
+    }
+
+    /// Flip the operator's Guide toggle the way `/` does.
+    pub async fn view(&self, camera: &str) -> reqwest_like::Response {
+        let body = serde_json::json!({ "camera": camera });
+        reqwest_like::send_json(self.addr, "PUT", "/api/view/camera", body).await
     }
 
     /// Render one frame through the real render task, carrying the live settings — the
@@ -267,9 +281,13 @@ pub(super) mod reqwest_like {
     }
 
     pub async fn post_json(addr: SocketAddr, path: &str, body: serde_json::Value) -> Response {
+        send_json(addr, "POST", path, body).await
+    }
+
+    pub async fn send_json(addr: SocketAddr, method: &str, path: &str, body: serde_json::Value) -> Response {
         let body = body.to_string();
         let request = format!(
-            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );

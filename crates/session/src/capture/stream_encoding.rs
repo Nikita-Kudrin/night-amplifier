@@ -89,6 +89,65 @@ impl ConversionCache {
     }
 }
 
+/// The stream a producer encodes into, and how.
+#[derive(Clone, Copy)]
+pub(super) struct StreamTarget<'a> {
+    stream: &'a FrameStream,
+    /// LZ4 chunks, compressed in parallel.
+    chunk_count: usize,
+    /// The pipeline stage the LZ4 encode is timed under, if any.
+    lz4_stage: Option<telemetry_metrics::FrameStage>,
+}
+
+impl<'a> StreamTarget<'a> {
+    /// The imaging camera's stream, whose LZ4 encode is a stage of the frame pipeline.
+    pub(super) fn imaging(stream: &'a FrameStream, chunk_count: usize) -> Self {
+        Self {
+            stream,
+            chunk_count,
+            lz4_stage: Some(telemetry_metrics::FrameStage::EncodeLz4),
+        }
+    }
+
+    /// The guide camera's stream. One chunk: its thread runs beside the stacking task, and
+    /// a guide frame is small. Untimed, or its small frames would dilute the imaging
+    /// pipeline's `EncodeLz4` figures.
+    pub(super) fn guide(stream: &'a FrameStream) -> Self {
+        Self {
+            stream,
+            chunk_count: 1,
+            lz4_stage: None,
+        }
+    }
+}
+
+/// Encode every watched family of `target` for frame `counter`, returning the failures
+/// worth reporting (see [`FailureReports`]). One RGB8 conversion serves both families when
+/// their resolutions resolve to the same size, so the denoised conversion runs once.
+pub(super) fn encode_watched(
+    target: StreamTarget,
+    frame: &RenderReadyFrame,
+    counter: u64,
+    resolutions: StreamResolutions,
+    conversions: &mut ConversionCache,
+    failures: &mut FailureReports,
+) -> Vec<String> {
+    let stream = target.stream;
+    conversions.begin_frame();
+    let lossless = if stream.viewer_count(StreamKind::Lossless) > 0 {
+        let _timer = target.lz4_stage.map(telemetry_metrics::time_stage);
+        encode_lossless(stream, frame, counter, conversions, resolutions.lossless, target.chunk_count)
+    } else {
+        Ok(())
+    };
+    let jpeg = encode_jpeg(stream, frame, counter, conversions, resolutions.jpeg);
+
+    [(StreamKind::Lossless, lossless), (StreamKind::Jpeg, jpeg)]
+        .into_iter()
+        .filter_map(|(kind, result)| failures.to_report(kind, result))
+        .collect()
+}
+
 /// Encode the JPEG payload at `resolution`, if anyone watches the JPEG family.
 pub(super) fn encode_jpeg(
     stream: &FrameStream,

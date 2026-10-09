@@ -8,6 +8,7 @@ import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
 import {getAppState} from '../composables/useAppState.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
+import {useDisplayedFov} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
@@ -17,7 +18,12 @@ const settings = inject('settings')
 const appState = getAppState()
 const capabilities = appState.capabilities
 
+const mainCamera = inject('mainCamera', computed(() => null))
+const guideCamera = inject('guideCamera', computed(() => null))
+
 const routePath = window.location.pathname
+// No source in the URL: the server streams whichever camera the operator views on `/`,
+// switching this socket in place.
 const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
@@ -45,6 +51,10 @@ const singleViewBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
 const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+
+const showsGuideCamera = computed(() => eventStream?.viewedCamera?.value === 'guide')
+const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
+const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
@@ -89,7 +99,8 @@ const backendLabel = computed(() => {
     none: 'No renderer',
     unknown: '...',
   }
-  return labels[renderBackend.value] || renderBackend.value
+  const label = labels[renderBackend.value] || renderBackend.value
+  return showsGuideCamera.value ? `${label} · Guide camera` : label
 })
 
 function initRenderer() {
@@ -102,6 +113,19 @@ function initRenderer() {
   if (canvasSingleRef.value) {
     if (!webglSingle.init(canvasSingleRef.value)) canvas2dSingle.init(canvasSingleRef.value)
   }
+}
+
+/** The size last drawn, so a change of it — a camera switch — re-measures the arrows. */
+let drawnSize = null
+
+/**
+ * Off the circular view the canvas takes the frame's own aspect, so a new size moves it
+ * inside an eye that stays put, and the eye's ResizeObserver never fires.
+ */
+function noteDrawnSize(width, height) {
+  if (drawnSize?.width === width && drawnSize?.height === height) return
+  drawnSize = {width, height}
+  updateBounds()
 }
 
 function renderFrame() {
@@ -120,6 +144,7 @@ function renderFrame() {
         if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
         else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
       }
+      noteDrawnSize(bitmap.width, bitmap.height)
       bitmap.close()
     }).catch(() => { /* frame was replaced before decode finished */ })
     return
@@ -135,6 +160,7 @@ function renderFrame() {
     if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, frameData.value, width, height)
     else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, frameData.value, width, height)
   }
+  noteDrawnSize(width, height)
 }
 
 function cleanupRenderer() {
@@ -368,7 +394,7 @@ onUnmounted(() => {
             :image-top="leftEyeBounds.top"
             :image-width="leftEyeBounds.width"
             :image-height="leftEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
+            :fov-deg="displayedFovDeg"
             :is-circular="isCircularView"
           />
         </div>
@@ -384,7 +410,7 @@ onUnmounted(() => {
             :image-top="rightEyeBounds.top"
             :image-width="rightEyeBounds.width"
             :image-height="rightEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
+            :fov-deg="displayedFovDeg"
             :is-circular="isCircularView"
           />
         </div>
@@ -402,7 +428,7 @@ onUnmounted(() => {
           :image-top="singleViewBounds.top"
           :image-width="singleViewBounds.width"
           :image-height="singleViewBounds.height"
-          :fov-deg="pushDirection.fovDeg || 0"
+          :fov-deg="displayedFovDeg"
           :is-circular="isCircularView"
         />
       </div>

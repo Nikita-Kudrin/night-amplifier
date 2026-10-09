@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::session::camera::lifecycle::{DisconnectOutcome, WarmupPolicy};
 use super::super::dto::{
     ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, DisconnectCameraRequest,
-    DisconnectResponse, MessageResponse,
+    DisconnectResponse, MessageResponse, ViewedCameraBody,
 };
 use crate::session::services::CameraService;
 use crate::session::state::{AppState, CameraRole};
@@ -136,5 +136,24 @@ pub async fn disconnect_camera(
                 .into_response()
         }
         Err(e) => (e.status_code(), ApiResponse::err::<()>(e.to_string())).into_response(),
+    }
+}
+
+/// PUT /api/view/camera
+///
+/// The operator's Guide toggle on `/`: which camera `/eyepiece` and `/eyepiece_quality`
+/// show. Every client hears the change as `viewed_camera_changed`.
+pub async fn select_viewed_camera(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ViewedCameraBody>,
+) -> impl IntoResponse {
+    match CameraService::select_viewed_camera(&state, request.camera) {
+        Ok(()) => (
+            StatusCode::OK,
+            ApiResponse::ok(ViewedCameraBody {
+                camera: state.viewed_camera.get(),
+            }),
+        ),
+        Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),
     }
 }

@@ -261,6 +261,12 @@ pub(super) async fn begin_warmup(state: &Arc<AppState>, role: CameraRole, camera
 async fn track_warmup(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
     let warmup = state.slot(role).begin_warmup(Instant::now() + WARMUP_DEADLINE);
     state.set_camera_phase(role, camera_name, CameraPhase::WarmingUp);
+    // The guide loop has stopped, and the close is minutes away: the viewers would sit on
+    // a frozen frame. After the phase moves, for the reason `finalize_disconnect` removes
+    // the entry first (see `ViewedCamera::select`).
+    if role == CameraRole::Guide {
+        state.fall_back_to_main_view();
+    }
 
     let state = Arc::clone(state);
     let camera_name = camera_name.to_string();
@@ -392,6 +398,11 @@ pub async fn finalize_disconnect(
     // follow only after `sync_solver_rig`, and a monitor call returning in that window
     // parked its handle in the emptied slot instead of closing it.
     let removed = state.roster.remove(role, camera_name);
+    // After the removal, never before: see `ViewedCamera::select`. A fault that recovery
+    // suspended returned above, so a USB hiccup keeps the viewers on the guide camera.
+    if role == CameraRole::Guide {
+        state.fall_back_to_main_view();
+    }
 
     state.slot(role).notify_handle_returned();
     // Re-point the solver: losing the guide camera hands solving back to the main one,

@@ -113,6 +113,10 @@ async fn a_watched_guide_stream_renders_every_frame() {
         .expect("a watched guide stream published no JPEG");
     let height = u32::from_le_bytes(payload[8..12].try_into().unwrap());
     assert!(height <= 1440, "the guide JPEG ignored Streaming Resolution: height {height}");
+    assert!(
+        state.guide_stream.payload(StreamKind::Lossless, 3).is_none(),
+        "SA09 encoded with only a JPEG viewer"
+    );
 }
 
 /// The loop snapshots settings before it exposes, so a Streaming Resolution change made
@@ -164,6 +168,97 @@ async fn the_guide_loop_never_touches_the_main_stream() {
 
     assert_eq!(state.main_stream.frame_counter(), 0);
     assert!(state.main_stream.get_latest_raw_frame().is_none());
+}
+
+fn payload_size(payload: &[u8]) -> (u32, u32) {
+    (
+        u32::from_le_bytes(payload[4..8].try_into().unwrap()),
+        u32::from_le_bytes(payload[8..12].try_into().unwrap()),
+    )
+}
+
+/// The RGB8 behind a single-chunk SA09 payload — the guide loop always encodes one chunk.
+fn decode_single_chunk_sa09(payload: &[u8]) -> Vec<u8> {
+    use crate::encoding::{RGB8_CHUNKED_MAGIC, SA09_CHUNK_DESCRIPTOR_SIZE, SA09_HEADER_SIZE};
+    assert_eq!(u32::from_le_bytes(payload[0..4].try_into().unwrap()), RGB8_CHUNKED_MAGIC, "not SA09");
+    assert_eq!(u32::from_le_bytes(payload[16..20].try_into().unwrap()), 1, "chunk count");
+    let descriptor = &payload[SA09_HEADER_SIZE..SA09_HEADER_SIZE + SA09_CHUNK_DESCRIPTOR_SIZE];
+    let compressed = u32::from_le_bytes(descriptor[0..4].try_into().unwrap()) as usize;
+    let decompressed = u32::from_le_bytes(descriptor[4..8].try_into().unwrap()) as usize;
+    let start = SA09_HEADER_SIZE + SA09_CHUNK_DESCRIPTOR_SIZE;
+    lz4_flex::decompress(&payload[start..start + compressed], decompressed).unwrap()
+}
+
+/// The eyepiece quality view on the guide camera: a lossless viewer alone gets SA09, and
+/// the JPEG nobody watches is not encoded. The camera is mono, so the payload must still
+/// be complete RGB8 — the viewer's WebGL path knows no other layout.
+#[tokio::test]
+async fn a_lossless_viewer_gets_rgb8_from_a_mono_guide_camera() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Lossless);
+
+    drive_guide_loop(&state, 2).await;
+
+    assert_eq!(state.guide_stream.frame_counter(), 2);
+    assert!(state.guide_stream.payload(StreamKind::Jpeg, 2).is_none(), "JPEG encoded for nobody");
+    let payload = state
+        .guide_stream
+        .payload(StreamKind::Lossless, 2)
+        .expect("a lossless viewer of the guide stream got no payload");
+    let (w, h) = payload_size(&payload);
+    let frame = state.guide_stream.get_latest_raw_frame().unwrap();
+    assert_eq!((w as usize, h as usize), (frame.linear_frame.width(), frame.linear_frame.height()));
+    assert_eq!(decode_single_chunk_sa09(&payload).len(), w as usize * h as usize * 3);
+}
+
+/// Both families watched at once — the `/` operator and an eyepiece viewer — get one
+/// payload each from the same frame.
+#[tokio::test]
+async fn both_families_are_encoded_when_both_are_watched() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let _jpeg = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Jpeg);
+    let _lossless = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Lossless);
+
+    drive_guide_loop(&state, 1).await;
+
+    let jpeg = state.guide_stream.payload(StreamKind::Jpeg, 1).expect("no JPEG");
+    let lossless = state.guide_stream.payload(StreamKind::Lossless, 1).expect("no SA09");
+    assert_eq!(payload_size(&jpeg), payload_size(&lossless));
+}
+
+/// The lossless family follows Eyepiece Streaming Resolution, read live: a change made
+/// during the exposure applies to the frame it renders, as it does for the JPEG.
+#[tokio::test]
+async fn an_eyepiece_resolution_change_during_an_exposure_applies_to_that_frame() {
+    use crate::state::EyepieceStreamResolution;
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    state.settings.update(|s| s.eyepiece.stream_resolution = EyepieceStreamResolution::Native);
+    let _viewer = ViewerGuard::new(Arc::clone(&state.guide_stream), StreamKind::Lossless);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let editor = Arc::clone(&state);
+    let camera = counting_camera(1, Arc::clone(&stop))
+        .sized(2400, 1600)
+        .during_exposure(move || {
+            editor.settings.update(|s| s.eyepiece.stream_resolution = EyepieceStreamResolution::Qhd1440);
+        });
+    let info = guide_camera_info();
+    let loop_state = Arc::clone(&state);
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        run(&loop_state, &info, Box::new(camera), &stop, None, &rt);
+    })
+    .await
+    .expect("guide loop panicked");
+
+    let payload = state
+        .guide_stream
+        .payload(StreamKind::Lossless, 1)
+        .expect("a watched guide stream published no SA09");
+    assert_eq!(payload_size(&payload), (2160, 1440), "the guide SA09 followed the exposure's snapshot");
 }
 
 /// Raw saving sits above both early exits: an unwatched guide camera with no solve

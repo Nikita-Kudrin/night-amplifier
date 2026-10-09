@@ -31,6 +31,20 @@ big enough that only one runs at a time: if somebody on another device is alread
 saving one, the button keeps spinning and retries for up to fifteen seconds before
 telling you the server is busy.
 
+## Whose camera it shows
+
+Both `/eyepiece` and `/eyepiece_quality` show the camera the operator picks with the
+**Guide camera** switch over the live view on `/` — the imaging camera unless that switch
+is on. The eyepiece pages have no switch of their own: the person at the eyepiece sees
+what the operator chooses, and the open view changes camera without reconnecting. If the
+camera switched to has not produced a picture yet, the view says *Waiting for frames*
+rather than keep the other camera's. If the guide camera disconnects — or starts warming
+up to disconnect — the eyepiece returns to the imaging camera; if it drops out and
+recovers on its own, the eyepiece waits for it.
+
+Push-To arrows and **Download** follow too: the arrows are placed against the guide
+scope's field, and the download saves the guide camera's frame.
+
 ## Running it as a dedicated display
 
 A tablet or a small panel left on `/eyepiece_quality` all night needs nothing from

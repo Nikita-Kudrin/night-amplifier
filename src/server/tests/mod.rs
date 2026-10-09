@@ -20,3 +20,4 @@ mod push_to_state;
 mod server_config;
 mod settings;
 mod state_management;
+mod viewed_camera;

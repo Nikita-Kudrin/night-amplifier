@@ -1597,7 +1597,7 @@ async fn an_intermittent_fault_still_escalates() {
 // ---------------------------------------------------------------------------
 
 /// Install a camera into `role` the way `connect` would, without opening a device.
-async fn install_camera(
+pub(super) async fn install_camera(
     state: &Arc<AppState>,
     role: CameraRole,
     camera_id: &str,

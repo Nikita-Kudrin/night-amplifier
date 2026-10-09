@@ -39,7 +39,7 @@ defineProps({
     type: Boolean,
     default: false
   },
-  /** True while the view is showing the guide camera rather than the imaging one. */
+  /** True while the server views the guide camera — here and on the eyepiece pages. */
   showGuide: {
     type: Boolean,
     default: false
@@ -79,7 +79,7 @@ defineEmits([
         :class="{ active: showGuide }"
         type="button"
         :aria-pressed="showGuide ? 'true' : 'false'"
-        title="Show the guide camera's view instead of the imaging camera's"
+        title="Show the guide camera's view instead of the imaging camera's, here and on the eyepiece pages"
         @click="$emit('update:showGuide', !showGuide)"
     >
       Guide camera

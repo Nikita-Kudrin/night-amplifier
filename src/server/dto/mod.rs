@@ -152,6 +152,12 @@ pub struct ConnectCameraRequest {
     pub role: Option<CameraRole>,
 }
 
+/// Body and answer of `PUT /api/view/camera`: the camera the eyepiece pages show.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ViewedCameraBody {
+    pub camera: CameraRole,
+}
+
 /// Body of `POST /api/cameras/{id}/disconnect`. Absent means an ordinary Disconnect.
 #[derive(Debug, Default, Deserialize)]
 pub struct DisconnectCameraRequest {

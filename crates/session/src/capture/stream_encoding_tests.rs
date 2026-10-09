@@ -249,3 +249,17 @@ fn a_denoised_frame_is_streamed_at_the_denoised_quality_on_both_paths() {
 fn jpeg_quality_at_1440(denoised: bool) -> i32 {
     crate::encoding::jpeg_quality(1440, 1440, denoised)
 }
+
+/// Both producers share `encode_watched`, but only the imaging camera's LZ4 encode is a
+/// stage of the frame pipeline: the guide's small frames would read as a faster pipeline.
+#[test]
+fn only_the_imaging_stream_is_timed_as_a_pipeline_stage() {
+    let stream = FrameStream::default();
+    let imaging = StreamTarget::imaging(&stream, 4);
+    let guide = StreamTarget::guide(&stream);
+
+    assert_eq!(imaging.lz4_stage, Some(telemetry_metrics::FrameStage::EncodeLz4));
+    assert_eq!(imaging.chunk_count, 4);
+    assert_eq!(guide.lz4_stage, None);
+    assert_eq!(guide.chunk_count, 1, "the guide thread runs beside the stacking task");
+}

@@ -228,6 +228,19 @@ describe('useEventStream', () => {
             expect(focusModeNotice.value).toBe(null)
         })
 
+        it('follows the viewed camera, starting on the imaging camera', async () => {
+            const {viewedCamera, viewedCameraRevision} = useEventStream()
+            expect(viewedCamera.value).toBe('main')
+
+            await openWebSocket()
+            await sendEvent({type: 'viewed_camera_changed', camera: 'guide'})
+            expect(viewedCamera.value).toBe('guide')
+
+            await sendEvent({type: 'viewed_camera_changed', camera: 'main'})
+            expect(viewedCamera.value).toBe('main')
+            expect(viewedCameraRevision.value).toBe(2)
+        })
+
         it('handles malformed JSON gracefully', async () => {
             const {lastEvent} = useEventStream()
             const consoleSpy = suppressConsoleErrors()

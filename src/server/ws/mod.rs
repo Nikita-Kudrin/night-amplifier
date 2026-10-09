@@ -1,7 +1,9 @@
 //! WebSocket handlers for real-time image streaming and events
 //!
-//! - `/ws/stream`, `/ws/eyepiece`: dynamic JPEG (SA10), `?source=guide` for the guide camera
-//! - `/ws/eyepiece_quality`: lossless RGB8+LZ4 (SA09), always the imaging camera
+//! - `/ws/stream`: dynamic JPEG (SA10) for the operator on `/`, `?source=guide` for the
+//!   guide camera
+//! - `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless RGB8+LZ4, SA09): whichever
+//!   camera the operator views, switched on the open socket
 //! - `/ws/events`: JSON event notifications
 
 mod image_stream;
@@ -20,7 +22,7 @@ use std::sync::Arc;
 
 use crate::session::events::ServerEvent;
 use crate::session::state::{AppState, CameraRole};
-pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint};
+pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint, StreamSource, NO_FRAME};
 
 /// Every WebSocket route, relative to the `/ws` nest.
 pub fn routes() -> Router<Arc<AppState>> {
@@ -32,20 +34,24 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 /// Lossless RGB8+LZ4 frames for the eyepiece quality view, at Eyepiece Streaming
-/// Resolution. Always the imaging camera: the guide scope has neither the focal length nor
-/// the field the view is built around.
+/// Resolution, from the camera the operator views. A `?source=` is ignored: the viewers
+/// have no say in it.
 pub async fn eyepiece_quality_handler(
     ws: WebSocketUpgrade,
     PeerAddr(peer): PeerAddr,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let stream = Arc::clone(&state.main_stream);
-    let client = StreamClient {
-        endpoint: StreamEndpoint::EyepieceQuality,
-        camera: CameraRole::Main,
-        peer,
-    };
-    ws.on_upgrade(move |socket| image_stream::serve(socket, state, stream, client))
+    image_stream_socket(ws, StreamEndpoint::EyepieceQuality, StreamSource::Viewed, peer, state)
+}
+
+/// JPEG at Streaming Resolution for the eyepiece overlay page, from the camera the
+/// operator views, like [`eyepiece_quality_handler`].
+pub async fn eyepiece_handler(
+    ws: WebSocketUpgrade,
+    PeerAddr(peer): PeerAddr,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    image_stream_socket(ws, StreamEndpoint::Eyepiece, StreamSource::Viewed, peer, state)
 }
 
 /// JPEG at Streaming Resolution for the live view page.
@@ -55,36 +61,26 @@ pub async fn stream_handler(
     PeerAddr(peer): PeerAddr,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    jpeg_stream(ws, StreamEndpoint::LiveView, source.role(), peer, state)
+    let source = StreamSource::Fixed(source.role());
+    image_stream_socket(ws, StreamEndpoint::LiveView, source, peer, state)
 }
 
-/// JPEG at Streaming Resolution for the eyepiece overlay page.
-pub async fn eyepiece_handler(
-    ws: WebSocketUpgrade,
-    Query(source): Query<StreamSourceQuery>,
-    PeerAddr(peer): PeerAddr,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    jpeg_stream(ws, StreamEndpoint::Eyepiece, source.role(), peer, state)
-}
-
-fn jpeg_stream(
+fn image_stream_socket(
     ws: WebSocketUpgrade,
     endpoint: StreamEndpoint,
-    camera: CameraRole,
+    source: StreamSource,
     peer: Option<std::net::SocketAddr>,
     state: Arc<AppState>,
 ) -> impl IntoResponse {
-    let stream = Arc::clone(state.stream(camera));
     let client = StreamClient {
         endpoint,
-        camera,
+        source,
         peer,
     };
-    ws.on_upgrade(move |socket| image_stream::serve(socket, state, stream, client))
+    ws.on_upgrade(move |socket| image_stream::serve(socket, state, client))
 }
 
-/// Which camera's stream a client asked for, as `?source=main|guide`.
+/// Which camera's stream the live view asked for, as `?source=main|guide`.
 ///
 /// A query parameter rather than a second route: the protocol is byte-for-byte the
 /// same, and the frontend swaps the source on one socket when the *Guide camera* toggle
@@ -120,12 +116,13 @@ pub async fn events_handler(
     ws.on_upgrade(move |socket| handle_events(socket, state))
 }
 
-/// Send the state a client cannot rebuild from changes alone: the capture state and every
-/// camera's phase. Returns `false` once the socket is gone.
+/// Send the state a client cannot rebuild from changes alone: the capture state, every
+/// camera's phase and the viewed camera. Returns `false` once the socket is gone.
 async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
     let snapshot = [
         ServerEvent::state_changed(state.capture_state()),
         state.camera_phases_event(),
+        state.viewed_camera.event(),
     ];
     for event in snapshot {
         if socket.send(Message::Text(event.to_json().into())).await.is_err() {
