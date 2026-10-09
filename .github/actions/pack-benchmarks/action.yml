@@ -1,0 +1,34 @@
+name: Pack benchmarks
+description: Upload the release-built benchmark binaries as an artifact, for run-benchmarks in a later job.
+inputs:
+  artifact:
+    description: Artifact name.
+    required: true
+  working-directory:
+    description: Cargo workspace root holding target/.
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Archive benchmark binaries
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        mkdir -p bench-binaries
+        for bin in target/release/deps/*benchmark*; do
+          if [ -x "$bin" ] && [ ! -d "$bin" ] && [[ ! "$bin" == *.d ]]; then
+            cp "$bin" bench-binaries/
+          fi
+        done
+        tar czf bench-binaries.tar.gz bench-binaries/
+    - name: Upload benchmark binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ inputs.working-directory }}/bench-binaries.tar.gz
+        retention-days: 1
+    # Uploaded already; leave the space to rust-cache's save
+    - name: Drop uploaded archive
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: rm -rf bench-binaries bench-binaries.tar.gz

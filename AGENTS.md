@@ -108,6 +108,10 @@ cargo run --release -- --span-timings                               # per-stage 
 UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.types.js
 ```
 
+**CI steps both repos repeat are composite actions in `.github/actions/`** (system deps, npm, benchmarks, disk
+space); Pro runs them from its Community checkout (branch of the same name, else `main`), so a change to one lands
+in Community first. Pro's own `checkout-siblings` does that checkout; step timeouts stay at the call site.
+
 Frontend commands (install/dev/build/lint/test) run from `web/` — see README. **Never `npm run format`** (rewrites
 the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 
