@@ -179,7 +179,7 @@ pub fn run_stacking_task(
             registration_succeeded = outcome.frame_added;
             showing_stack = outcome.showing_stack;
             stack_reset = outcome.stack_reset;
-            rejected_because = outcome.rejected_because;
+            rejected_because = outcome.rejected_because();
             stack_depth = outcome.stack_depth;
             noise = outcome.noise;
             outcome.display_frame.map(Arc::new)

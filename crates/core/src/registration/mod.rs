@@ -5,13 +5,16 @@
 //! solves the affine transform (θ, tx/ty — no scaling). [`adaptive`] also handles field
 //! rotation, cloud cover, satellite trails, brightness/FOV differences.
 //!
-//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`], [`adaptive`], [`engine`].
+//! [`adaptive`] then refits the winning transform over every detected star ([`refine`]).
+//!
+//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`], [`adaptive`], [`engine`], [`refine`].
 
 mod adaptive;
 mod config;
 mod engine;
 mod matcher;
 mod ransac;
+mod refine;
 mod transform;
 mod triangle;
 
@@ -22,6 +25,7 @@ pub use adaptive::{
 pub use config::RegistrationConfig;
 pub use engine::ImageRegistration;
 pub use matcher::TriangleMatcher;
+pub use refine::refine_transform;
 pub use transform::AffineTransform;
 pub use triangle::Triangle;
 

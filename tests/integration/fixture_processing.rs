@@ -1,397 +1,102 @@
-//! Tests for processing all fixture subdirectories.
+//! Every fixture set on disk, replayed through the application and rendered.
 //!
-//! These are longer-running integration tests that process complete image sets.
+//! Longer-running: each set goes through the simulated camera, the raw-CFA stage and the
+//! live stack exactly as a simulator session would (`instruments::Replay`), then through
+//! the deep-sky render pipeline, and the result is saved for a human to look at.
 
 use std::io::{self, Write};
 use std::path::Path;
 
-use night_amplifier::camera::CaptureConfig;
-use night_amplifier::camera::{Camera, SimulatedCamera};
-use night_amplifier::{
-    compute_image_stats, debayer_auto, detect_cfa_pattern, CfaPattern, DebayerAlgorithm,
-    DebayerConfig, DetectionConfig, Frame, PipelineConfig, StackingPipeline, StarDetector,
-};
+use night_amplifier::{compute_image_stats, debayer_auto, DetectionConfig, StarDetector};
 use serial_test::serial;
 
 use crate::integration::common::{
-    find_fixture_sets, prepare_test_output_dir, FixtureSet, LoadedImage, MAX_STRETCH_FACTOR,
-    MIN_ACCEPTABLE_SNR, MIN_FRAMES_FOR_STACKING, MIN_STACKING_SUCCESS_RATE, MIN_STRETCH_FACTOR,
-    STACKED_OUTPUT_DIR,
+    find_fixture_sets, prepare_test_output_dir, FixtureSet, MAX_STRETCH_FACTOR,
+    MIN_FRAMES_FOR_STACKING, MIN_STRETCH_FACTOR, STACKED_OUTPUT_DIR,
 };
-use crate::integration::image_loading::{
-    load_image, load_images_from_paths, save_processed_frame_to_dir,
-};
+use crate::integration::image_loading::{load_image, save_processed_frame_to_dir};
+use crate::integration::instruments::Replay;
 
-/// Process all fixture subdirectories and save results
-/// This is the main test that processes each fixture set and outputs stacked/stretched images
+/// Stacks and renders every fixture set, saving each result under `processed/stacked/`.
 ///
-/// TODO: This test can be used as a performance/benchmark test for future algorithm optimizations.
-/// Consider adding timing measurements and comparison against baseline performance metrics.
+/// Every set must render a converged, colour-neutral stretch. How many subs each keeps is
+/// reported, not asserted: a re-base legitimately discards early subs (the globular set
+/// keeps 8 of 12 that way), and retention is held where the sets' shapes are known —
+/// `stacking_tests` and `stack_quality_tests`.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
-fn test_process_all_fixture_sets() {
-    println!("\n=== Processing All Fixture Sets ===\n");
-
-    // Ensure fixtures are downloaded from Google Drive
+fn every_fixture_set_stacks_and_renders() {
     crate::integration::common::ensure_fixtures_sync();
 
-    // Prepare dedicated output directory (clears only this test's directory)
-    let output_dir = match prepare_test_output_dir(STACKED_OUTPUT_DIR) {
-        Ok(dir) => {
-            println!("Output directory: {}", dir.display());
-            dir
-        }
-        Err(e) => {
-            eprintln!("Warning: Failed to prepare output directory: {}", e);
-            return;
-        }
-    };
-
-    let fixture_sets = find_fixture_sets();
-
-    if fixture_sets.is_empty() {
-        println!("No fixture subdirectories found in tests/fixtures.");
-        println!("To run this test, create subdirectories with TIFF or FITS files.");
-        println!("Skipping test.\n");
-        return;
-    }
-
-    println!("Found {} fixture set(s) to process.\n", fixture_sets.len());
-
-    let mut processed_count = 0;
-
-    // Refresh fixture sets after downloading
-    let fixture_sets = find_fixture_sets();
+    let output_dir = prepare_test_output_dir(STACKED_OUTPUT_DIR)
+        .unwrap_or_else(|e| panic!("cannot prepare the output directory: {e}"));
+    let fixture_sets: Vec<FixtureSet> = find_fixture_sets()
+        .into_iter()
+        .filter(|set| set.files.len() >= MIN_FRAMES_FOR_STACKING)
+        .collect();
+    assert!(!fixture_sets.is_empty(), "no fixture set to process");
 
     for fixture_set in &fixture_sets {
-        if process_fixture_set(fixture_set, &output_dir) {
-            processed_count += 1;
-        }
-    }
-
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!(
-        "=== Processing Complete: {}/{} sets processed ===\n",
-        processed_count,
-        fixture_sets.len()
-    );
-
-    // VALIDATION: At least one fixture set should be successfully processed
-    if !fixture_sets.is_empty() {
-        assert!(
-            processed_count > 0,
-            "VALIDATION FAILED: No fixture sets were successfully processed out of {}. \
-             Check star detection, registration, or image quality.",
-            fixture_sets.len()
-        );
-
-        // Report overall success rate
-        let overall_success_rate = processed_count as f64 / fixture_sets.len() as f64;
-        println!(
-            "Overall fixture set processing rate: {:.1}%",
-            overall_success_rate * 100.0
-        );
+        process_fixture_set(fixture_set, &output_dir);
     }
 }
 
-/// Process a single fixture set. Returns true if successful.
-fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) -> bool {
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!(
-        "Processing: {} ({} files)",
-        fixture_set.name,
-        fixture_set.files.len()
-    );
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    let _ = io::stdout().flush();
+fn process_fixture_set(fixture_set: &FixtureSet, output_dir: &Path) {
+    let name = fixture_set.name.as_str();
+    println!("\n━━━ {name} ({} files) ━━━", fixture_set.files.len());
 
-    if fixture_set.files.len() < MIN_FRAMES_FOR_STACKING {
-        println!(
-            "  Only {} file(s), need at least {} for stacking. Skipping.\n",
-            fixture_set.files.len(),
-            MIN_FRAMES_FOR_STACKING
-        );
-        return false;
-    }
-
-    // Load images from this fixture set
-    let images = load_images_from_paths(&fixture_set.files);
-
-    if images.len() < MIN_FRAMES_FOR_STACKING {
-        println!(
-            "  Only {} image(s) loaded successfully, need at least {}. Skipping.\n",
-            images.len(),
-            MIN_FRAMES_FOR_STACKING
-        );
-        return false;
-    }
-
-    // Check if images need debayering
-    let needs_debayer = images.iter().any(|img| img.is_bayer);
-
-    // Detect CFA pattern once for all images (if needed)
-    let detected_pattern: Option<CfaPattern> = if needs_debayer {
-        images
-            .iter()
-            .find(|img| img.is_bayer && img.frame.channels() == 1)
-            .and_then(|img| detect_cfa_pattern(&img.frame).ok())
-            .map(|detection| {
-                println!("\n  Auto-detected CFA pattern: {:?}", detection.pattern);
-                detection.pattern
-            })
-    } else {
-        None
-    };
-
-    // Helper to load and debayer a single frame (streaming approach)
-    let load_frame = |img: &LoadedImage| -> Option<Frame> {
-        if img.is_bayer && img.frame.channels() == 1 {
-            let config = detected_pattern
-                .map(|p| DebayerConfig::new(p).with_algorithm(DebayerAlgorithm::Bilinear))
-                .unwrap_or_else(|| {
-                    DebayerConfig::new(CfaPattern::Rggb).with_algorithm(DebayerAlgorithm::Bilinear)
-                });
-            night_amplifier::debayer_with_config(&img.frame, config).ok()
-        } else {
-            Some(img.frame.clone())
-        }
-    };
-
-    // Load and process reference frame first
-    let ref_frame = match load_frame(&images[0]) {
-        Some(f) => f,
-        None => {
-            println!("  Failed to load reference frame. Skipping.\n");
-            return false;
-        }
-    };
-
-    let (ref_width, ref_height, ref_channels) =
-        (ref_frame.width(), ref_frame.height(), ref_frame.channels());
-
-    let step_offset = if needs_debayer { 1 } else { 0 };
-    let total_steps = if needs_debayer { 7 } else { 6 };
-
-    println!(
-        "\n  All frames: {}x{} with {} channel(s)\n",
-        ref_width, ref_height, ref_channels
-    );
-
-    // Initialize StackingPipeline with reference frame
-    println!(
-        "  [{}/{}] Initializing stacking pipeline...",
-        1 + step_offset,
-        total_steps
-    );
-
-    let pipeline_config = PipelineConfig::fast();
-
-    let mut pipeline = match StackingPipeline::new(&ref_frame, pipeline_config) {
-        Ok(p) => p,
-        Err(e) => {
-            println!("        Failed: {}. Skipping set.\n", e);
-            return false;
-        }
-    };
-
-    let ref_stars = pipeline.reference_stars();
-    println!("        Found {} stars in reference", ref_stars.len());
-
-    // Calculate and report average SNR
-    let avg_snr: f32 = if ref_stars.is_empty() {
-        0.0
-    } else {
-        ref_stars.iter().map(|s| s.snr).sum::<f32>() / ref_stars.len() as f32
-    };
-    println!("        Average star SNR: {:.1}", avg_snr);
-
-    if avg_snr < MIN_ACCEPTABLE_SNR {
-        println!(
-            "        WARNING: Average SNR ({:.1}) is below minimum ({:.1})",
-            avg_snr, MIN_ACCEPTABLE_SNR
-        );
-    }
-
-    // Drop reference frame to free memory
-    drop(ref_frame);
-
-    // Process frames using parallel prefetcher + StackingPipeline
-    let num_cpus = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    println!(
-        "  [{}/{}] Processing {} frames (parallel prefetch, {} CPUs)...",
-        2 + step_offset,
-        total_steps,
-        images.len() - 1,
-        num_cpus
-    );
-
-    let total_frames = images.len();
-    let mut frames_processed = 0;
-
-    // Create production simulated camera
-    let mut camera =
-        SimulatedCamera::new(fixture_set.path.clone()).expect("Failed to create simulated camera");
-
-    // Use 1 microsecond exposure (per requirements)
-    let capture_config = CaptureConfig::default().with_exposure_us(1);
-
-    // Consume the first frame (which we already processed as reference)
-    let _ = camera
-        .capture(&capture_config)
-        .expect("Failed to capture reference frame from simulated camera");
-
-    // Process remainder of frames
-    for _ in 0..(images.len() - 1) {
-        let raw_frame = match camera.capture(&capture_config) {
-            Ok(f) => f,
-            Err(e) => {
-                println!("        Failed to capture frame: {}", e);
-                break;
-            }
-        };
-
-        let frame = raw_frame.to_frame(camera.info()).unwrap();
-
-        // Process through the pipeline
-        let _result = pipeline.process_frame(&frame);
-
-        frames_processed += 1;
-
-        // Progress indicator
-        if frames_processed % 20 == 0 || frames_processed == images.len() - 1 {
+    let mut replay = Replay::open(&fixture_set.path);
+    let offered = replay.subs();
+    for (n, outcome) in replay.run().iter().enumerate() {
+        if let Some(admission) = outcome.admission.as_ref().filter(|a| !a.added) {
             println!(
-                "        Processed {}/{}",
-                frames_processed,
-                images.len() - 1
+                "  sub {} not stacked: {:?} ({} stars matched, residual {:.2} px)",
+                n + 1,
+                admission.rejected_because,
+                admission.matched_stars,
+                admission.mean_residual
+            );
+        }
+    }
+    let integrated = replay.depth();
+    let retention = integrated as f64 / offered as f64;
+    println!("  {integrated}/{offered} subs integrated ({:.0}%)", retention * 100.0);
+
+    let mut stacked = replay.snapshot();
+    let render_config = night_amplifier::render::pipeline::RenderPipelineConfig::deep_sky();
+    let rendered = night_amplifier::render::pipeline::RenderPipeline::new(render_config)
+        .process(&mut stacked)
+        .unwrap_or_else(|e| panic!("{name}: the render pipeline failed: {e}"));
+    if let Some(stretch) = rendered.stretch_result {
+        println!(
+            "  stretch factor {:.2}, black point {:.6}, converged {}",
+            stretch.stretch_factor, stretch.black_point, stretch.converged
+        );
+        assert!(stretch.converged, "{name}: auto-stretch did not converge");
+        assert!(
+            (MIN_STRETCH_FACTOR..=MAX_STRETCH_FACTOR).contains(&stretch.stretch_factor),
+            "{name}: stretch factor {:.2} outside [{MIN_STRETCH_FACTOR}, {MAX_STRETCH_FACTOR}]",
+            stretch.stretch_factor
+        );
+    }
+
+    if stacked.channels() == 3 {
+        let stats = compute_image_stats(&stacked).expect("stats of a rendered stack");
+        let medians: Vec<f32> = stats.channels.iter().map(|c| c.median * 255.0).collect();
+        println!("  channel medians R={:.2} G={:.2} B={:.2}", medians[0], medians[1], medians[2]);
+        for (a, b) in [(0, 1), (1, 2), (0, 2)] {
+            assert!(
+                (medians[a] - medians[b]).abs() < 3.0,
+                "{name}: background not neutral, channel medians {medians:?}"
             );
         }
     }
 
-    // Get statistics from pipeline
-    let stats = pipeline.stats();
-    println!(
-        "        Successfully stacked {} of {} frames",
-        stats.frames_stacked, total_frames
-    );
-
-    // VALIDATION: Check stacking success rate
-    let stacking_rate = stats.success_rate() as f64 / 100.0;
-    println!(
-        "        Stacking success rate: {:.1}%",
-        stats.success_rate()
-    );
-    if stacking_rate < MIN_STACKING_SUCCESS_RATE {
-        println!(
-            "        VALIDATION WARNING: Stacking rate ({:.1}%) below minimum ({:.1}%)",
-            stats.success_rate(),
-            MIN_STACKING_SUCCESS_RATE * 100.0
-        );
-    }
-
-    // Compute stacked result
-    println!(
-        "  [{}/{}] Computing stacked result...",
-        3 + step_offset,
-        total_steps
-    );
-    let mut stacked = match pipeline.compute() {
-        Ok(f) => f,
-        Err(e) => {
-            println!("        Failed: {}. Skipping set.\n", e);
-            return false;
-        }
-    };
-    println!("        Stack computed");
-
-    // Use RenderPipeline to properly apply background neutralization, subtraction, and stretch
-    println!(
-        "  [{}/{}] Running render pipeline...",
-        4 + step_offset,
-        total_steps
-    );
-    let render_config = night_amplifier::render::pipeline::RenderPipelineConfig::deep_sky();
-    let render_pipeline = night_amplifier::render::pipeline::RenderPipeline::new(render_config);
-    match render_pipeline.process(&mut stacked) {
-        Ok(r) => {
-            if r.background_neutralized {
-                println!("        Background neutralized (grid-based)");
-            }
-            if r.background_subtracted {
-                println!("        Background subtracted");
-            }
-            if r.scnr_applied {
-                println!("        SCNR applied");
-            }
-            if let Some(stretch) = r.stretch_result {
-                println!(
-                    "        Stretch factor: {:.2}, Black point: {:.6}, Converged: {}",
-                    stretch.stretch_factor, stretch.black_point, stretch.converged
-                );
-
-                // VALIDATION: Check stretch factor bounds
-                if stretch.stretch_factor < MIN_STRETCH_FACTOR {
-                    println!(
-                        "        VALIDATION WARNING: Stretch factor ({:.2}) below minimum ({:.2})",
-                        stretch.stretch_factor, MIN_STRETCH_FACTOR
-                    );
-                }
-                if stretch.stretch_factor > MAX_STRETCH_FACTOR {
-                    println!(
-                        "        VALIDATION WARNING: Stretch factor ({:.2}) exceeds maximum ({:.2})",
-                        stretch.stretch_factor, MAX_STRETCH_FACTOR
-                    );
-                }
-                if !stretch.converged {
-                    println!("        VALIDATION WARNING: Auto-stretch did not converge");
-                }
-            }
-
-            // VALIDATION: Assert that background is neutral
-            if stacked.channels() == 3 {
-                let stats = compute_image_stats(&stacked).expect("Failed to compute stats");
-                println!(
-                    "        Channel Medians: R={:.2}, G={:.2}, B={:.2}",
-                    stats.channels[0].median * 255.0,
-                    stats.channels[1].median * 255.0,
-                    stats.channels[2].median * 255.0
-                );
-                let diff_rg = (stats.channels[0].median - stats.channels[1].median).abs() * 255.0;
-                let diff_gb = (stats.channels[1].median - stats.channels[2].median).abs() * 255.0;
-                let diff_rb = (stats.channels[0].median - stats.channels[2].median).abs() * 255.0;
-
-                assert!(diff_rg < 3.0, "VALIDATION FAILED: Red and Green medians differ significantly: R={:.2}, G={:.2}", stats.channels[0].median * 255.0, stats.channels[1].median * 255.0);
-                assert!(diff_gb < 3.0, "VALIDATION FAILED: Green and Blue medians differ significantly: G={:.2}, B={:.2}", stats.channels[1].median * 255.0, stats.channels[2].median * 255.0);
-                assert!(diff_rb < 3.0, "VALIDATION FAILED: Red and Blue medians differ significantly: R={:.2}, B={:.2}", stats.channels[0].median * 255.0, stats.channels[2].median * 255.0);
-            }
-        }
-        Err(e) => {
-            println!("        VALIDATION FAILED: Render pipeline failed: {}", e);
-        }
-    }
-
-    // Save result
-    println!(
-        "  [{}/{}] Saving processed result...",
-        6 + step_offset,
-        total_steps
-    );
-    match save_processed_frame_to_dir(&stacked, output_dir, &fixture_set.name) {
-        Ok(output_path) => {
-            let abs_path =
-                std::fs::canonicalize(&output_path).unwrap_or_else(|_| output_path.clone());
-            println!("\n  ✓ Processed file saved to: {}\n", abs_path.display());
-            let _ = io::stdout().flush();
-            true
-        }
-        Err(e) => {
-            println!("        Failed to save: {}\n", e);
-            let _ = io::stdout().flush();
-            false
-        }
-    }
+    let path = save_processed_frame_to_dir(&stacked, output_dir, name)
+        .unwrap_or_else(|e| panic!("{name}: cannot save the result: {e}"));
+    println!("  saved {}", std::fs::canonicalize(&path).unwrap_or(path).display());
+    let _ = io::stdout().flush();
 }
 
 /// Diagnostic test to understand why star detection fails on real images

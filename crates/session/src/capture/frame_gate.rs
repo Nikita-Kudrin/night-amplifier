@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 
-use night_amplifier_core::registration::AdaptiveRegistrationResult;
+use night_amplifier_core::registration::{AdaptiveRegistrationResult, AffineTransform};
 
 /// Absolute floor for the residual gate, in pixels.
 ///
@@ -55,6 +55,25 @@ const WARMUP_FRAMES: usize = 5;
 /// that no longer resembles the current sky.
 const HISTORY_LEN: usize = 50;
 
+/// Share of the headroom above the session's usual doubled-star share (see
+/// `detection::doubled_star_share`) a sub that would not register has to climb before
+/// it is read as bumped or trailed rather than as the sky having moved. Headroom, not
+/// a fixed step, because the share tops out at 1: clean subs sit at 0–20 % on sparse
+/// fields and ~55 % on every sub of a dense one, where a fixed +50 % could never fire.
+/// Every visibly doubled sub in the fixtures cleared it.
+///
+/// Only failed registrations are judged on it. Dropping *registered* doubled subs too
+/// was measured and does not pay: 2.5 % smaller stars on the worst-tracked set for 6.6 %
+/// more sky noise, and no sharper on the galaxies.
+const DOUBLED_MARGIN: f32 = 0.5;
+
+/// Consecutive unregistered, bloated subs after which they are read as the sky having
+/// moved after all. Nothing that fails to register updates the session's star size, so
+/// without a limit a new field with larger stars (a Barlow added, a low target in poor
+/// seeing) would hold Wanderer's old stack all night. A gust or a cloud bloats a sub or
+/// two; this many in a row means the stack has not grown for as long either way.
+const BLOATED_RUN_LIMIT: usize = WARMUP_FRAMES;
+
 /// Frames during which a sharper arrival can still take over as the reference.
 const REBASE_WINDOW: usize = 10;
 
@@ -89,6 +108,9 @@ pub enum RejectionReason {
     /// The stars are far larger than the rest of the session's — defocus,
     /// cloud, or shake.
     StarsTooLarge,
+    /// Every star appears twice, or smeared into a line: the mount moved during the
+    /// exposure. Judged only on subs that would not register.
+    StarsDoubled,
     /// The accumulator refused the frame.
     StackerError,
 }
@@ -102,6 +124,7 @@ impl RejectionReason {
             Self::TooFewCorrespondences => "too few correspondences for the fitted transform",
             Self::ResidualTooHigh => "registration residual far above the session median",
             Self::StarsTooLarge => "stars far larger than the session median",
+            Self::StarsDoubled => "stars doubled or trailed — the mount moved during the exposure",
             Self::StackerError => "stacker rejected the frame",
         }
     }
@@ -138,12 +161,16 @@ impl RejectionReason {
             | Self::TooFewStars
             | Self::RegistrationFailed
             | Self::TooFewCorrespondences => true,
-            Self::ResidualTooHigh | Self::StarsTooLarge | Self::StackerError => false,
+            Self::ResidualTooHigh
+            | Self::StarsTooLarge
+            | Self::StarsDoubled
+            | Self::StackerError => false,
         }
     }
 }
 
 /// What became of one frame offered to the stack.
+#[derive(Debug, Clone, Copy)]
 pub struct FrameAdmission {
     /// Whether the frame joined the stack.
     pub added: bool,
@@ -155,6 +182,9 @@ pub struct FrameAdmission {
     pub matched_stars: usize,
     /// Mean residual of those correspondences, in pixels; NaN if there were none.
     pub mean_residual: f32,
+    /// Where the frame landed: target -> reference coordinates. `Some` only for a frame
+    /// that joined the stack.
+    pub transform: Option<AffineTransform>,
 }
 
 impl FrameAdmission {
@@ -169,6 +199,7 @@ impl FrameAdmission {
             rebased: false,
             matched_stars,
             mean_residual,
+            transform: None,
         }
     }
 
@@ -179,6 +210,8 @@ impl FrameAdmission {
             rebased,
             matched_stars: result.matched_stars,
             mean_residual: result.mean_residual,
+            // A re-based frame *is* the new reference: it landed on itself.
+            transform: Some(if rebased { AffineTransform::identity() } else { result.transform }),
         }
     }
 
@@ -191,6 +224,7 @@ impl FrameAdmission {
             rebased: false,
             matched_stars: 0,
             mean_residual: f32::NAN,
+            transform: None,
         }
     }
 }
@@ -207,6 +241,9 @@ impl FrameAdmission {
 struct QualityHistory {
     residuals: VecDeque<f32>,
     fwhms: VecDeque<f32>,
+    /// Doubled-star shares of every sub that had stars, registered or not: what the
+    /// field looks like is measured whether or not the sub aligned.
+    doubling: VecDeque<f32>,
 }
 
 impl QualityHistory {
@@ -215,6 +252,10 @@ impl QualityHistory {
         if let Some(fwhm) = fwhm {
             push_bounded(&mut self.fwhms, fwhm);
         }
+    }
+
+    fn record_doubling(&mut self, share: f32) {
+        push_bounded(&mut self.doubling, share);
     }
 
     fn measured(&self) -> usize {
@@ -228,6 +269,14 @@ impl QualityHistory {
     fn median_fwhm(&self) -> Option<f32> {
         median(&self.fwhms)
     }
+
+    /// The lower quartile, not the median: on a rough night most subs may be doubled,
+    /// and a median would make their share the session's normal — the next bump of a
+    /// field already proven to be this one would then read as movement. The quartile
+    /// holds until three quarters of the window are doubled.
+    fn baseline_doubling(&self) -> Option<f32> {
+        (self.doubling.len() >= WARMUP_FRAMES).then(|| quantile(&self.doubling, 4)).flatten()
+    }
 }
 
 fn push_bounded(values: &mut VecDeque<f32>, value: f32) {
@@ -238,12 +287,36 @@ fn push_bounded(values: &mut VecDeque<f32>, value: f32) {
 }
 
 fn median(values: &VecDeque<f32>) -> Option<f32> {
+    quantile(values, 2)
+}
+
+/// The value `1 / divisor` of the way up the sorted values.
+fn quantile(values: &VecDeque<f32>, divisor: usize) -> Option<f32> {
     if values.is_empty() {
         return None;
     }
     let mut sorted: Vec<f32> = values.iter().copied().collect();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Some(sorted[sorted.len() / 2])
+    Some(sorted[sorted.len() / divisor])
+}
+
+/// What a sub's own star list says about it, measured before registration.
+#[derive(Debug, Clone, Copy)]
+pub struct StarField {
+    pub count: usize,
+    pub fwhm: Option<f32>,
+    /// See `detection::doubled_star_share`.
+    pub doubling: f32,
+}
+
+impl StarField {
+    pub fn of(stars: &[night_amplifier_core::detection::Star]) -> Self {
+        Self {
+            count: stars.len(),
+            fwhm: night_amplifier_core::detection::compute_median_fwhm(stars),
+            doubling: night_amplifier_core::detection::doubled_star_share(stars),
+        }
+    }
 }
 
 /// Judges arriving frames against what this session has looked like so far.
@@ -252,15 +325,22 @@ pub struct FrameGate {
     history: QualityHistory,
     /// Sharpness of the frame the stack is currently registered against.
     reference_fwhm: Option<f32>,
+    /// The reference's doubled-star share: the baseline until the session has its own.
+    reference_doubling: Option<f32>,
     /// Frames offered since the stack began, counted whether or not they were
     /// accepted — this is what closes the re-basing window.
     frames_seen: usize,
+    /// Consecutive subs that would not register and read as bloated. See
+    /// [`BLOATED_RUN_LIMIT`].
+    bloated_run: usize,
 }
 
 impl FrameGate {
-    /// Notes the sharpness of the frame the stack is now registered against.
-    pub fn set_reference(&mut self, fwhm: Option<f32>) {
+    /// Notes the sharpness and doubled-star share of the frame the stack is now
+    /// registered against.
+    pub fn set_reference(&mut self, fwhm: Option<f32>, doubling: f32) {
         self.reference_fwhm = fwhm;
+        self.reference_doubling = Some(doubling);
     }
 
     /// Counts a frame arriving, accepted or not.
@@ -288,17 +368,66 @@ impl FrameGate {
     pub fn admit(
         &mut self,
         result: &AdaptiveRegistrationResult,
-        fwhm: Option<f32>,
+        stars: StarField,
         reference_stars: usize,
-        target_stars: usize,
     ) -> Option<RejectionReason> {
-        let verdict = self.judge(result, fwhm, reference_stars, target_stars);
+        let verdict = self.judge(result, stars.fwhm, reference_stars, stars.count);
 
         if verdict.is_none_or(|reason| reason.measures_the_sky()) {
-            self.history.record(result.mean_residual, fwhm);
+            self.history.record(result.mean_residual, stars.fwhm);
         }
+        self.history.record_doubling(stars.doubling);
+        // It registered: the field is still there.
+        self.bloated_run = 0;
 
         verdict
+    }
+
+    /// Why a sub with stars would not register: a soft verdict when its own stars
+    /// explain it, else that it could not be placed against the reference at all.
+    ///
+    /// Wanderer restarts the stack on the latter, so a bump or a gust that left every
+    /// star doubled or bloated must not read as the telescope having been swung away —
+    /// a session's bumped subs used to throw away its whole integration one by one.
+    /// Doubled stars also need `is_this_field`: a dense *new* field scores as high as a
+    /// bumped one against a sparse session's baseline (Orion at ~55 % after a ring
+    /// session at 0 %), and only the field itself can tell the two apart. Bloated stars
+    /// have no such proof, so a long enough run of them is movement after all
+    /// ([`BLOATED_RUN_LIMIT`]).
+    pub fn explain_unregistered(
+        &mut self,
+        stars: StarField,
+        is_this_field: impl FnOnce() -> bool,
+    ) -> RejectionReason {
+        let verdict = if self.is_doubled(stars.doubling) && is_this_field() {
+            RejectionReason::StarsDoubled
+        } else if self.is_bloated(stars.fwhm) && self.bloated_run < BLOATED_RUN_LIMIT {
+            RejectionReason::StarsTooLarge
+        } else {
+            RejectionReason::RegistrationFailed
+        };
+        self.bloated_run = match verdict {
+            RejectionReason::StarsTooLarge => self.bloated_run + 1,
+            _ => 0,
+        };
+        self.history.record_doubling(stars.doubling);
+        verdict
+    }
+
+    fn is_doubled(&self, doubling: f32) -> bool {
+        self.history
+            .baseline_doubling()
+            .or(self.reference_doubling)
+            .is_some_and(|baseline| doubling >= baseline + DOUBLED_MARGIN * (1.0 - baseline))
+    }
+
+    /// Stars far larger than the session's. Needs a warmed-up history: one sub's
+    /// size is no yardstick.
+    fn is_bloated(&self, fwhm: Option<f32>) -> bool {
+        if self.history.measured() < WARMUP_FRAMES {
+            return false;
+        }
+        matches!((fwhm, self.history.median_fwhm()), (Some(fwhm), Some(median)) if fwhm > FWHM_K * median)
     }
 
     /// Returns why this frame should not be averaged into the stack, or `None`
@@ -327,10 +456,8 @@ impl FrameGate {
             }
         }
 
-        if let (Some(fwhm), Some(median)) = (fwhm, self.history.median_fwhm()) {
-            if fwhm > FWHM_K * median {
-                return Some(RejectionReason::StarsTooLarge);
-            }
+        if self.is_bloated(fwhm) {
+            return Some(RejectionReason::StarsTooLarge);
         }
 
         None
@@ -396,278 +523,5 @@ impl FrameGate {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use night_amplifier_core::registration::AffineTransform;
-
-    /// Fills the gate's history so it is past warm-up, with residuals centred on
-    /// `residual` and star sizes on `fwhm`.
-    fn seeded(residual: f32, fwhm: f32) -> FrameGate {
-        let mut gate = FrameGate::default();
-        for _ in 0..WARMUP_FRAMES + 3 {
-            gate.history.record(residual, Some(fwhm));
-        }
-        gate
-    }
-
-    fn fit(matched_stars: usize, mean_residual: f32) -> AdaptiveRegistrationResult {
-        AdaptiveRegistrationResult {
-            transform: AffineTransform::identity(),
-            matched_stars,
-            mean_residual,
-            config_used: "test".to_string(),
-            attempts: 1,
-        }
-    }
-
-    #[test]
-    fn admits_a_clean_fit() {
-        let gate = seeded(0.5, 5.0);
-        assert_eq!(gate.judge(&fit(180, 0.6), Some(5.0), 200, 200), None);
-    }
-
-    #[test]
-    fn rejects_a_fit_built_from_a_handful_of_stars() {
-        let gate = seeded(0.5, 5.0);
-        // A transform agreeing with 7 of 200 stars is a coincidence, however
-        // small its residual over those seven.
-        assert_eq!(
-            gate.judge(&fit(7, 0.4), Some(5.0), 200, 200),
-            Some(RejectionReason::TooFewCorrespondences)
-        );
-    }
-
-    #[test]
-    fn rejects_a_residual_far_above_the_session_median() {
-        let gate = seeded(0.5, 5.0);
-        assert_eq!(
-            gate.judge(&fit(180, 20.0), Some(5.0), 200, 200),
-            Some(RejectionReason::ResidualTooHigh)
-        );
-    }
-
-    #[test]
-    fn follows_a_loose_session_rather_than_a_fixed_idea_of_good() {
-        // The 250mm Orion fixture registers with a ~5.5 px median residual
-        // throughout. A fixed threshold would reject every frame in it; the
-        // point of scoring against the session's own median is that a frame is
-        // only an outlier relative to its neighbours.
-        let gate = seeded(5.5, 5.0);
-        assert_eq!(gate.judge(&fit(180, 6.5), Some(5.0), 200, 200), None);
-        assert_eq!(
-            gate.judge(&fit(180, 20.0), Some(5.0), 200, 200),
-            Some(RejectionReason::ResidualTooHigh)
-        );
-    }
-
-    /// The other half of the same idea, and the one a median-only rule gets
-    /// backwards: a rig that tracks *well* must not end up with the strictest
-    /// gate. The 250 mm dumbbell fixture holds a 0.6 px median residual on 5.4 px
-    /// stars, where `RESIDUAL_K * median` alone allows only 1.8 px and threw away
-    /// 9 of its 34 frames for residuals of 1.9–3.3 px — a fraction of one star's
-    /// width.
-    #[test]
-    fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
-        let gate = seeded(0.6, 5.4);
-
-        for residual in [1.9, 2.4, 2.7] {
-            assert_eq!(
-                gate.judge(&fit(150, residual), Some(5.4), 200, 200),
-                None,
-                "{residual} px is a fraction of a 5.4 px star and must still stack"
-            );
-        }
-
-        // Past half a star width it is smearing, whatever the session median.
-        assert_eq!(
-            gate.judge(&fit(150, 8.2), Some(5.4), 200, 200),
-            Some(RejectionReason::ResidualTooHigh)
-        );
-    }
-
-    /// The star-size floor tracks the session rather than sitting at a constant:
-    /// the same residual is fine on fat stars and smearing on tight ones.
-    #[test]
-    fn the_star_size_floor_follows_the_session_not_a_constant() {
-        assert_eq!(
-            seeded(0.6, 8.0).judge(&fit(150, 3.5), Some(8.0), 200, 200),
-            None,
-            "3.5 px is well inside an 8 px star"
-        );
-        assert_eq!(
-            seeded(0.6, 2.5).judge(&fit(150, 3.5), Some(2.5), 200, 200),
-            Some(RejectionReason::ResidualTooHigh),
-            "3.5 px is wider than a 2.5 px star"
-        );
-    }
-
-    #[test]
-    fn rejects_bloated_stars() {
-        let gate = seeded(0.5, 4.0);
-        assert_eq!(
-            gate.judge(&fit(180, 0.5), Some(9.0), 200, 200),
-            Some(RejectionReason::StarsTooLarge)
-        );
-    }
-
-    /// `compute_fwhm` counts whole pixels above half maximum, so star size is
-    /// quantised and its median wanders frame to frame even on a stable night:
-    /// the 250 mm dumbbell fixture spans 1.60–7.57 px around a 5.4 px median
-    /// while its residuals hold at 0.6 px. A threshold inside that spread rejects
-    /// the estimator, not the sky — at 1.35 that set lost its frame 17 (7.57 px)
-    /// while keeping neighbours at 6.82 and 6.48 px.
-    #[test]
-    fn ordinary_scatter_in_measured_star_size_is_not_defocus() {
-        let gate = seeded(0.6, 5.4);
-
-        for fwhm in [6.5, 7.6, 9.0] {
-            assert_eq!(
-                gate.judge(&fit(150, 0.6), Some(fwhm), 200, 200),
-                None,
-                "{fwhm} px is inside the spread a 5.4 px session measures"
-            );
-        }
-
-        // Twice the session's star size is defocus, cloud, or shake.
-        assert_eq!(
-            gate.judge(&fit(150, 0.6), Some(11.0), 200, 200),
-            Some(RejectionReason::StarsTooLarge)
-        );
-    }
-
-    #[test]
-    fn admits_a_registered_frame_during_warmup() {
-        let mut gate = FrameGate::default();
-        gate.history.record(0.5, Some(4.0));
-        // Nothing to compare against yet, so a wide residual still counts.
-        assert_eq!(gate.judge(&fit(180, 9.0), Some(12.0), 200, 200), None);
-    }
-
-    /// A gate keyed only on accepted frames would latch shut the moment
-    /// conditions moved past its threshold: nothing accepted means nothing
-    /// recorded, means the median never catches up. Recording every measured
-    /// frame lets a sustained change become the new normal.
-    #[test]
-    fn a_sustained_change_in_conditions_reopens_the_gate() {
-        let mut gate = seeded(0.4, 4.0);
-        assert!(gate
-            .admit(&fit(180, 9.0), Some(4.0), 200, 200)
-            .is_some());
-
-        for _ in 0..HISTORY_LEN {
-            if gate.admit(&fit(180, 9.0), Some(4.0), 200, 200).is_none() {
-                return;
-            }
-        }
-        panic!("gate never reopened after conditions settled at a new level");
-    }
-
-    /// A frame rejected for having too few correspondences must not move the
-    /// baseline. Its residual is a mean over the handful of pairs the fit chose
-    /// for itself — the dumbbell fixture produced one at 8.46 px over 6 of 200
-    /// stars, in a set whose other frames sit at 1.3–2.0 px. With the median at
-    /// `sorted[HISTORY_LEN / 2]`, a run of them redefines what the gate calls
-    /// normal.
-    #[test]
-    fn a_coincidental_fit_does_not_move_the_baseline() {
-        let mut gate = seeded(0.6, 5.4);
-        let before = gate.history.median_residual();
-
-        for _ in 0..HISTORY_LEN {
-            assert_eq!(
-                gate.admit(&fit(4, 0.05), Some(5.4), 200, 200),
-                Some(RejectionReason::TooFewCorrespondences)
-            );
-        }
-
-        assert_eq!(
-            gate.history.median_residual(),
-            before,
-            "a fit the gate called a coincidence redefined the session"
-        );
-        assert_eq!(
-            gate.judge(&fit(150, 2.4), Some(5.4), 200, 200),
-            None,
-            "the gate latched shut against a frame it admitted before the burst"
-        );
-    }
-
-    /// The verdicts that *are* measurements still have to land, or the gate
-    /// cannot follow a night that genuinely changes.
-    #[test]
-    fn a_frame_rejected_on_its_own_measurements_still_updates_the_baseline() {
-        let mut gate = seeded(0.6, 5.4);
-        let before = gate.history.median_residual();
-
-        for _ in 0..HISTORY_LEN {
-            gate.admit(&fit(150, 12.0), Some(5.4), 200, 200);
-        }
-
-        assert!(
-            gate.history.median_residual() > before,
-            "a sustained rise in residual never reached the baseline"
-        );
-    }
-
-    #[test]
-    fn a_sharper_frame_takes_over_as_reference_early_on() {
-        let mut gate = FrameGate::default();
-        gate.set_reference(Some(6.0));
-        gate.frames_seen = 3;
-        assert!(gate.should_rebase(Some(4.0)));
-    }
-
-    #[test]
-    fn a_marginally_sharper_frame_is_not_worth_the_integration() {
-        let mut gate = FrameGate::default();
-        gate.set_reference(Some(6.0));
-        gate.frames_seen = 3;
-        assert!(!gate.should_rebase(Some(5.5)));
-    }
-
-    #[test]
-    fn the_reference_settles_once_the_window_closes() {
-        let mut gate = FrameGate::default();
-        gate.set_reference(Some(6.0));
-        gate.frames_seen = REBASE_WINDOW + 1;
-        assert!(!gate.should_rebase(Some(2.0)));
-    }
-
-    #[test]
-    fn an_implausibly_sharp_frame_is_detection_noise_not_a_new_reference() {
-        let mut gate = seeded(0.5, 5.0);
-        gate.set_reference(Some(6.0));
-        gate.frames_seen = 3;
-        // 1.6 px against a 5.0 px session median is star detection latching onto
-        // noise; the dumbbell fixture's frame 11 reports exactly this.
-        assert!(!gate.should_rebase(Some(1.6)));
-        assert!(gate.should_rebase(Some(3.5)));
-    }
-
-    /// Beating the incumbent is not enough: the reference's own FWHM is a single
-    /// noisy sample, so a candidate one quantisation step below it is evidence of
-    /// nothing. This is the difference between the two re-bases the bundled
-    /// fixtures produce — the Orion set's 2.52 px against a 2.99 px reference in a
-    /// session that measures 2.26–2.99 px throughout, and the dumbbell set's
-    /// 4.37 px against a 6.28 px session.
-    #[test]
-    fn beating_only_a_noisy_reference_is_not_worth_a_rebase() {
-        let mut gate = seeded(0.6, 2.7);
-        gate.set_reference(Some(2.99));
-        gate.frames_seen = 1;
-        assert!(
-            !gate.should_rebase(Some(2.52)),
-            "one step of the area-based estimator is not a sharper frame"
-        );
-
-        // 6.2 rather than the fixture's exact 6.283 — that is tau, and clippy
-        // reads the literal as a mis-typed constant.
-        let mut gate = seeded(0.6, 6.2);
-        gate.set_reference(Some(6.2));
-        gate.frames_seen = 2;
-        assert!(
-            gate.should_rebase(Some(4.37)),
-            "30% sharper than the whole session is a real change"
-        );
-    }
-}
+#[path = "frame_gate_tests.rs"]
+mod tests;

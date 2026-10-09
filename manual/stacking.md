@@ -3,7 +3,7 @@
 Night Amplifier supports different stacking methodologies based on your celestial target.
 
 ## Deep Sky Stacking
-Traditional star-based alignment. The software detects stars, matches triangles across frames using RANSAC, and calculates an affine transformation to align the frames.
+Traditional star-based alignment. The software detects stars, matches triangles across frames using RANSAC, and calculates an affine transformation to align the frames. That first fit uses only the brightest stars, so it is then refined against every star detected in both frames, which keeps the corners of a wide field as sharp as its centre.
 
 ## Planetary Stacking
 (Also known as Lucky Imaging). This mode uses correlation-based alignment for high-framerate planetary or lunar targets where stars are absent. It uses percentile stacking (e.g., top 10% of frames) based on sharpness metrics.
@@ -23,6 +23,9 @@ reason. A frame is dropped when:
 
 - too few stars are detected to attempt an alignment;
 - no alignment can be found against the reference;
+- every star in it is doubled or smeared into a line — the mount moved during the exposure.
+  This is only judged on frames that would not align anyway, so it changes the reason
+  reported, not how many frames are kept;
 - the alignment rests on too small a fraction of the detected stars to be trusted;
 - its alignment error is far worse than the rest of the session's;
 - its stars are far larger than the rest of the session's — defocus, cloud, or shake.
@@ -52,8 +55,10 @@ the preview holds steady instead of dropping back to a single noisy sub-exposure
 
 Wanderer mode restarts the stack when you swing the telescope to a new object, which it detects by
 the incoming field no longer matching the reference. Frames that the checks above drop for
-*quality* — soft stars, a loose fit — do not count: the field is still the same field, so the stack
-keeps building and rides out the cloud rather than starting over.
+*quality* — soft stars, doubled stars, a loose fit — do not count: the field is still the same
+field, so the stack keeps building and rides out the cloud, or the bump, rather than starting over.
+Five frames in a row whose stars are swollen *and* will not align are the exception: that is no
+passing gust but a new field (or a new eyepiece train), and the stack restarts.
 
 ## Outlier Rejection (Pro)
 

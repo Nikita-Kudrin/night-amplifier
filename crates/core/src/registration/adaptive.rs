@@ -10,16 +10,21 @@ use crate::error::{Result, StackError};
 
 use super::config::RegistrationConfig;
 use super::engine::ImageRegistration;
+use super::refine::refine_transform;
 use super::transform::AffineTransform;
 
 /// Result of adaptive registration including diagnostics.
+///
+/// Two fits: `transform` is the all-star refit the frame is warped with, while
+/// `matched_stars` and `mean_residual` judge the ladder rung's own fit, which is what
+/// exposes a multi-image sub (see `register`).
 #[derive(Debug, Clone)]
 pub struct AdaptiveRegistrationResult {
-    /// The computed transform.
+    /// Target -> reference, refined over every star both lists hold.
     pub transform: AffineTransform,
-    /// Number of matched stars.
+    /// Stars the ladder rung's fit pairs up.
     pub matched_stars: usize,
-    /// Mean residual error.
+    /// Mean residual of those pairs under the ladder rung's fit, in pixels.
     pub mean_residual: f32,
     /// Configuration preset that succeeded.
     pub config_used: String,
@@ -89,7 +94,8 @@ impl AdaptiveRegistration {
         self
     }
 
-    /// Registers using adaptive strategy - tries multiple configurations until one works.
+    /// Registers using adaptive strategy - tries multiple configurations until one works,
+    /// then refits the winner over every star in both lists.
     #[instrument(skip(self, ref_stars, tgt_stars), fields(
         ref_count = ref_stars.len(),
         target_count = tgt_stars.len(),
@@ -109,13 +115,20 @@ impl AdaptiveRegistration {
             let registration = ImageRegistration::new(config.clone());
 
             match registration.register(ref_stars, tgt_stars) {
-                Ok(transform) => {
+                Ok(ladder) => {
+                    // The diagnostics judge the rung's own fit, not the refit: the refit
+                    // locks onto one image of each star, so a multi-image sub that the
+                    // ladder fits loosely would read as clean and slip past `FrameGate`
+                    // (one did, and lit the sky around every star in the stack).
                     let (matched_stars, mean_residual) = self.compute_diagnostics(
                         ref_stars,
                         tgt_stars,
-                        &transform,
+                        &ladder,
                         config.max_residual * 2.0,
                     );
+                    // The rung fitted from at most `max_stars`; every star detected
+                    // pins it down further.
+                    let transform = refine_transform(ref_stars, tgt_stars, &ladder);
 
                     let span = Span::current();
                     span.record("config_used", name.as_str());

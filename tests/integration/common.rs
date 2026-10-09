@@ -20,14 +20,9 @@ pub const MIN_FRAMES_FOR_STACKING: usize = 2;
 /// Triangle matching requires at least 3 stars, but we need more for robustness.
 pub const MIN_STARS_FOR_REGISTRATION: usize = 10;
 
-/// Minimum percentage of frames that must successfully stack (0.0 - 1.0).
-/// If fewer frames stack, the registration algorithm may have issues.
-pub const MIN_STACKING_SUCCESS_RATE: f64 = 0.5;
-
 /// Minimum fraction of frames the live-stacking path must get into the stack.
 ///
-/// Higher than `MIN_STACKING_SUCCESS_RATE`, which covers the batch path with no quality gate
-/// to lose frames to. The live path deliberately drops badly fitted frames, but losing a third
+/// The live path deliberately drops badly fitted frames, but losing a third
 /// of a clean fixture set means detection, registration, or the gate's thresholds regressed,
 /// not that the fixtures went bad. Measured against the stack, not admissions, so an early
 /// re-base (which discards everything before it) shows up here as the lost integration it is.
@@ -59,15 +54,6 @@ pub const MAX_RESIDUAL_REJECTION_SHARE: f64 = 0.1;
 /// the frame gate's quality verdicts — soft stars, a loose fit — being read the
 /// same way, which would restart the integration every time a cloud crossed.
 pub const MAX_WANDERER_RESET_SHARE: f64 = 0.25;
-
-/// Minimum mean pixel value for output (ensures image is not all black)
-pub const MIN_OUTPUT_MEAN_VALUE: f64 = 1.0;
-
-/// Maximum mean pixel value for output (ensures image is not all white/saturated)
-pub const MAX_OUTPUT_MEAN_VALUE: f64 = 254.0;
-
-/// Minimum acceptable SNR for detected stars
-pub const MIN_ACCEPTABLE_SNR: f32 = 5.0;
 
 /// Minimum stretch factor that indicates successful auto-stretch
 pub const MIN_STRETCH_FACTOR: f32 = 1.0;
@@ -399,6 +385,18 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
     (
         "globular-cluster-eyepiece",
         "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
+    ),
+    (
+        "ic-59-ghost-of-cassiopeia-nebula",
+        "https://drive.usercontent.google.com/download?id=1LsFIKXtybn-bWGMmEtMMs6VR0qFaJ8Vi&export=download&confirm=t",
+    ),
+    (
+        "m33-triangulum-galaxy-imx533",
+        "https://drive.usercontent.google.com/download?id=19Zi6f8ItzVpqdqQgFMp-k5ocxvEd5gBx&export=download&confirm=t",
+    ),
+    (
+        "m101-pinwheel-galaxy-imx533",
+        "https://drive.usercontent.google.com/download?id=13QC7HvBGJGzSB3oDzmGeBWY-ModyV5Tn&export=download&confirm=t",
     ),
 ];
 

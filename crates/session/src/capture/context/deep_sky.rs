@@ -3,12 +3,15 @@
 use tracing::{debug, field, info, info_span, instrument, warn, Span};
 
 use super::{LiveStackError, LiveStacker, StackSettings, MIN_REFERENCE_STARS};
-use night_amplifier_core::detection::{compute_median_fwhm, compute_median_snr, Star};
+use night_amplifier_core::detection::{
+    collapse_doubles, compute_median_fwhm, compute_median_snr, doubled_star_share,
+    dominant_companion_offset, Star,
+};
 use night_amplifier_core::frame::{Frame, NoiseField};
 use night_amplifier_core::registration::AdaptiveRegistration;
 use night_amplifier_core::stacking::{FrameQuality, Stacker, StackingType};
 
-use crate::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason};
+use crate::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason, StarField};
 
 pub struct StackingContext {
     pub stacker: Stacker,
@@ -70,7 +73,8 @@ impl StackingContext {
 
         self.stacker.add_reference_with_quality(frame, quality)?;
 
-        self.gate.set_reference(quality.fwhm);
+        self.gate
+            .set_reference(quality.fwhm, doubled_star_share(&self.reference_stars));
         self.is_initialized = true;
         Span::current().record("star_count", self.reference_stars.len());
         Ok(self.reference_stars.len())
@@ -121,6 +125,8 @@ impl StackingContext {
             ));
         }
 
+        let field = StarField::of(&target_stars);
+
         // Use adaptive registration which tries multiple strategies for robustness
         let register_result = {
             let _span = info_span!("register").entered();
@@ -144,8 +150,16 @@ impl StackingContext {
             }
             Err(_) => {
                 Span::current().record("registered", false);
+                // A bumped sub of this field registers once each star is one image
+                // again; a different field does not.
+                let (registration, reference) = (&self.adaptive_registration, &self.reference_stars);
+                let is_this_field = || {
+                    dominant_companion_offset(&target_stars)
+                        .map(|offset| collapse_doubles(&target_stars, offset))
+                        .is_some_and(|single| registration.register(reference, &single).is_ok())
+                };
                 return Ok(FrameAdmission::rejected(
-                    RejectionReason::RegistrationFailed,
+                    self.gate.explain_unregistered(field, is_this_field),
                     0,
                     f32::NAN,
                 ));
@@ -161,16 +175,11 @@ impl StackingContext {
 
         // Compute quality metrics from detected stars for weighted stacking
         let quality = FrameQuality {
-            fwhm: compute_median_fwhm(&target_stars),
+            fwhm: field.fwhm,
             snr: compute_median_snr(&target_stars),
         };
 
-        let verdict = self.gate.admit(
-            &result,
-            quality.fwhm,
-            self.reference_stars.len(),
-            target_stars.len(),
-        );
+        let verdict = self.gate.admit(&result, field, self.reference_stars.len());
 
         if let Some(reason) = verdict {
             span.record("registered", false);
@@ -186,7 +195,7 @@ impl StackingContext {
         // everything that follows, and frame one is picked blind.
         if self.gate.should_rebase(quality.fwhm) {
             let previous = self.gate.reference_fwhm();
-            self.rebase_on(frame, target_stars, quality)?;
+            self.rebase_on(frame, target_stars, quality, field.doubling)?;
             span.record("registered", true);
             info!(
                 previous_fwhm = ?previous,
@@ -220,11 +229,12 @@ impl StackingContext {
         frame: &Frame,
         target_stars: Vec<Star>,
         quality: FrameQuality,
+        doubling: f32,
     ) -> Result<(), LiveStackError> {
         self.stacker.clear();
         self.stacker.add_reference_with_quality(frame, quality)?;
         self.reference_stars = target_stars;
-        self.gate.set_reference(quality.fwhm);
+        self.gate.set_reference(quality.fwhm, doubling);
         Ok(())
     }
 

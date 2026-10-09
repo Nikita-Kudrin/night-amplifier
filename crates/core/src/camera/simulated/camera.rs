@@ -162,6 +162,11 @@ impl SimulatedCamera {
         })
     }
 
+    /// Image files the camera replays, in order, before it wraps to the first again.
+    pub fn frame_count(&self) -> usize {
+        self.files.len()
+    }
+
     /// Decode a single file and apply debayering if needed.
     fn decode_frame(&self, file_index: usize) -> CameraResult<Frame> {
         let path = &self.files[file_index];
