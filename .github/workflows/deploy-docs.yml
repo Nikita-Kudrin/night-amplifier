@@ -31,22 +31,13 @@ jobs:
         with:
           fetch-depth: 0 # Not needed if lastUpdated is not configured
 
-      - name: Setup Node.js
-        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: manual/package-lock.json
-
-      - name: Install dependencies
-        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        run: npm ci
-        working-directory: manual
-
       - name: Build with VitePress
-        run: npm run docs:build
-        working-directory: manual
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: ./.github/actions/setup-npm
+        with:
+          working-directory: manual
+          node-version: '20'
+          script: docs:build
 
       - name: Setup Pages
         timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}

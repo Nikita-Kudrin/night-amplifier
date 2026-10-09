@@ -1,0 +1,23 @@
+name: Run benchmarks
+description: Download the binaries pack-benchmarks uploaded and run each one.
+inputs:
+  artifact:
+    description: Artifact name given to pack-benchmarks.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Download benchmark binaries
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+    - name: Run benchmarks
+      shell: bash
+      run: |
+        tar xzf bench-binaries.tar.gz
+        for bin in bench-binaries/*; do
+          if [ -x "$bin" ]; then
+            echo "=== Running $(basename "$bin") ==="
+            "$bin" --bench
+          fi
+        done
