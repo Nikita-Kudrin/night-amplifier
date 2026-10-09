@@ -1,0 +1,17 @@
+name: Free disk space
+description: Remove the runner's preinstalled SDKs and Docker images (~20 GB) before a full build.
+# rust-cache's post step tars `target/` onto the same disk, needing its size free again; Pro's
+# build once died with 22 MB left after every build step had passed. None of these SDKs is
+# used by either repo. Local rather than a third-party action: Pro's jobs hold a token.
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell \
+          /usr/local/share/chromium /usr/local/share/boost
+        sudo docker image prune --all --force > /dev/null
+        df -h /

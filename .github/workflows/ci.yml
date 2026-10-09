@@ -9,11 +9,14 @@ on:
     branches: [ "main" ]
 
 jobs:
-  rust-build-all:
+  # Tests (dev profile) and benchmarks (release, fat LTO) share almost no artifacts, so they
+  # build in parallel jobs, each with its own rust-cache entry (keyed by job id).
+  rust-build-tests:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
       - name: Install dependencies
         timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
         run: |
@@ -27,6 +30,28 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Archive tests
         run: cargo nextest archive --archive-file tests.tar.zst --no-default-features
+      - name: Upload Test Archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-archive
+          path: tests.tar.zst
+          retention-days: 1
+
+  # Also hosts the feature checks: nothing waits on this job's artifacts but the benchmarks.
+  rust-build-benches:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Free disk space
+        uses: ./.github/actions/free-disk-space
+      - name: Install dependencies
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        run: |
+          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20"
+          sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20" nasm libusb-1.0-0-dev libclang-dev libcfitsio-dev
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
       - name: Build benchmarks
         run: cargo bench --no-run --no-default-features
       # Nothing else compiles the telemetry feature; 1a243da broke it unnoticed for three days
@@ -44,12 +69,6 @@ jobs:
             fi
           done
           tar czf bench-binaries.tar.gz bench-binaries/
-      - name: Upload Test Archive
-        uses: actions/upload-artifact@v7
-        with:
-          name: tests-archive
-          path: tests.tar.zst
-          retention-days: 1
       - name: Upload Benchmark Binaries
         uses: actions/upload-artifact@v7
         with:
@@ -58,7 +77,7 @@ jobs:
           retention-days: 1
   
   rust-unit-tests:
-    needs: rust-build-all
+    needs: rust-build-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -96,7 +115,7 @@ jobs:
         run: cargo nextest run --archive-file tests.tar.zst -E 'not (binary(integration_pipeline) or binary(pro_gating_test))'
   
   rust-integration-tests:
-    needs: rust-build-all
+    needs: rust-build-tests
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -122,7 +141,7 @@ jobs:
         run: cargo nextest run --archive-file tests.tar.zst -E 'binary(integration_pipeline)' --run-ignored all --test-threads 1 --partition hash:${{ matrix.partition }}/4
   
   rust-benchmarks:
-    needs: rust-build-all
+    needs: rust-build-benches
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -147,8 +166,8 @@ jobs:
             fi
           done
   
+  # Builds its own instrumented binaries, so it starts at once rather than behind a build job
   rust-coverage:
-    needs: rust-build-all
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
