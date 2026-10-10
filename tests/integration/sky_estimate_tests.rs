@@ -1,18 +1,11 @@
 //! What a target filling the frame may do to the sky estimate: nothing.
 //!
-//! `black_point::estimate_background_mode` picks a histogram bin and then refines it
-//! against the samples in it. Sizing that refinement window from a MAD over *every*
-//! sample only works while what contaminates it is a minority — and a frame-filling
-//! halo, which `background::target_disc` exists because of, is not. The window then
-//! sizes itself around the target's spread, swallows it, and the median lands inside
-//! it: measured +7.3 ADU on a synthetic halo over 69 % of the frame and +349 on a 75 %
-//! ramp, against a raw histogram peak 1.4 ADU off the sky.
-//!
-//! Real sky, synthetic contaminant. A crop of a real globular tight enough to be
-//! frame-filling has no ground truth — its sky *is* brighter in the middle, by 8 ADU
-//! on this fixture — so the target is added to a stack whose sky is already measured.
-//! Everything that makes the estimate hard (real grain, real stars, the session's own
-//! gradient) is the fixture's; only the answer is known.
+//! `estimate_background_mode` picks a histogram bin and refines it against a MAD over every
+//! sample, which works only while contamination is a minority. A frame-filling halo (why
+//! `background::target_disc` exists) is not: the window sizes around the target and the
+//! median lands inside it — +7.3 ADU on a synthetic halo over 69% of the frame, +349 on a
+//! 75% ramp, vs. a raw peak 1.4 ADU off sky. A real globular crop has no ground truth (its
+//! sky is 8 ADU brighter mid-frame), so it joins a stack whose sky is already measured.
 
 use serial_test::serial;
 

@@ -1,7 +1,8 @@
 <script setup>
 import {ref, provide, onMounted, watch} from 'vue'
-import {useEventStream} from './composables/useWebSocket.js'
+import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
+import {useAiCompute} from './composables/useAiCompute.js'
 import {getAstapStatus, getCatalogStatus} from './composables/api.js'
 
 import CameraPanel from './components/CameraPanel.vue'
@@ -14,6 +15,7 @@ import PushToSetupOverlay from './components/PushToSetupOverlay.vue'
 import EyepieceView from './components/EyepieceView.vue'
 import AboutDialog from './components/AboutDialog.vue'
 import EulaModal from './components/EulaModal.vue'
+import HardwareBenchmarkOverlay from './components/HardwareBenchmarkOverlay.vue'
 import { BaseSpinner } from './components/ui'
 
 // Routing
@@ -30,12 +32,14 @@ const {
   initializeState,
   updateCameraStatus,
   updateCameraPhase,
+  replaceCameraPhases,
   addDiscoveredCamera,
   _settingsRef,
   _camerasRef,
   _selectedCameraIdRef,
   _cameraStatusRef,
   _cameraPhaseRef,
+  _warmupEndsAtRef,
   capabilities,
   mainCamera,
   guideCamera,
@@ -52,6 +56,10 @@ const showAbout = ref(false)
 // Event stream for real-time updates
 const eventStream = useEventStream()
 
+// The one-time AI compute benchmark blocks the whole UI while it measures.
+const aiCompute = useAiCompute()
+const benchmarking = aiCompute.benchmarking
+
 // Provide state to children (for backwards compatibility during migration)
 provide('settings', _settingsRef)
 provide('cameras', _camerasRef)
@@ -63,6 +71,7 @@ provide('refreshCameras', refreshCameras)
 provide('capabilities', capabilities)
 provide('cameraStatus', _cameraStatusRef)
 provide('cameraPhase', _cameraPhaseRef)
+provide('warmupEndsAt', _warmupEndsAtRef)
 provide('mainCamera', mainCamera)
 provide('guideCamera', guideCamera)
 provide('hasGuideCamera', hasGuideCamera)
@@ -126,7 +135,14 @@ watch(
         })
       }
       if (event?.type === 'camera_phase_changed') {
-        updateCameraPhase(event.name, event.phase)
+        updateCameraPhase(event.name, event.phase, event.warmup_remaining_s)
+      }
+      if (event?.type === 'camera_phases') {
+        replaceCameraPhases(event.cameras)
+        // Sent on (re)connect: a camera connected or disconnected while this page was
+        // away has no other way to reach the list. Not during the first load, which is
+        // fetching the list already.
+        if (!loading.value && !sameCameraNames(event.cameras, _camerasRef.value)) refreshCameras()
       }
       if (event?.type === 'camera_disconnected') {
         updateCameraPhase(event.name, 'disconnected')
@@ -135,8 +151,16 @@ watch(
       if (event?.type === 'camera_discovered') {
         addDiscoveredCamera(event.camera)
       }
+      aiCompute.handleEvent(event)
     }
 )
+
+/** Whether the snapshot names exactly the cameras the list holds as connected. */
+function sameCameraNames(snapshot, list) {
+  const named = new Set((snapshot ?? []).map((camera) => camera.name))
+  const connected = list.filter((camera) => camera.connected)
+  return named.size === connected.length && connected.every((camera) => named.has(camera.name))
+}
 
 function handleEulaAccepted() {
   refreshSettings()
@@ -145,19 +169,21 @@ function handleEulaAccepted() {
 // Initialize on mount
 onMounted(() => {
   initializeState()
+  aiCompute.refresh()
 })
 </script>
 
 <template>
-  <EyepieceView v-if="isEyepieceRoute"/>
+  <EyepieceView v-if="isEyepieceRoute" :inert="benchmarking"/>
 
   <!-- EULA gate - blocks entire app until accepted -->
   <EulaModal
     v-else-if="!loading && !error && settings?.eula_accepted === false"
+    :inert="benchmarking"
     @accepted="handleEulaAccepted"
   />
 
-  <div v-else class="app">
+  <div v-else class="app" :inert="benchmarking">
     <!-- Header -->
     <header class="header">
       <h1 class="logo">NightAmplifier</h1>
@@ -264,6 +290,8 @@ onMounted(() => {
         @close="showAbout = false" 
     />
   </div>
+
+  <HardwareBenchmarkOverlay/>
 </template>
 
 <style scoped>

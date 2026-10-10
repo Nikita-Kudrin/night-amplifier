@@ -1,0 +1,48 @@
+use super::channel::ChannelStats;
+use super::ops::{compute_mad_in_place_simd, median_by_selection, min_max_simd};
+use crate::frame::Frame;
+use rayon::prelude::*;
+
+/// Compute statistics for a single channel with SIMD optimization
+pub(crate) fn compute_channel_stats(frame: &Frame, channel: usize, step: usize) -> ChannelStats {
+    let data = frame.data();
+    let total_pixels = frame.pixel_count();
+
+    // For step=1 (full sampling), use optimized contiguous access.
+    // Planar layout makes every channel contiguous, not just mono, so this shortcut
+    // now covers colour frames too instead of falling through to the strided gather.
+    if step == 1 {
+        let mut samples = frame.channel_data(channel).to_vec();
+        let (min_val, max_val) = min_max_simd(&samples);
+        let median = median_by_selection(&mut samples);
+        compute_mad_in_place_simd(&mut samples, median);
+        let mad = median_by_selection(&mut samples);
+        return ChannelStats::new(median, mad, min_val, max_val);
+    }
+
+    // Collect samples in parallel. Within a plane the stride is `step` samples (it was
+    // `step * channels` when frames were interleaved), so this is a sampling gather
+    // rather than a full traversal; splitting it across cores hides the miss latency.
+    let mut samples: Vec<f32> = (0..total_pixels)
+        .into_par_iter()
+        .step_by(step)
+        .map(|pixel_idx| data[channel * total_pixels + pixel_idx])
+        .collect();
+
+    if samples.is_empty() {
+        return ChannelStats::new(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Compute min/max using SIMD
+    let (min_val, max_val) = min_max_simd(&samples);
+
+    // By selection, not `fast_median`'s parallel sort: this runs for every rendered
+    // frame, and two full sorts per channel were most of its cost.
+    let median = median_by_selection(&mut samples);
+
+    // Compute MAD in-place using SIMD for absolute deviations
+    compute_mad_in_place_simd(&mut samples, median);
+    let mad = median_by_selection(&mut samples);
+
+    ChannelStats::new(median, mad, min_val, max_val)
+}

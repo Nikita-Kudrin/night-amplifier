@@ -44,18 +44,22 @@ What changes once a guide camera is attached:
   its loop instead — which is how you stop it saving raw frames without disconnecting
   it. The two are independent: stopping the capture leaves the guide camera running, and
   vice versa. Stopping the guide camera hands plate solving back to the imaging one.
+  Start on a guide camera that is already running changes nothing.
 - **It has no capture mode.** Nothing it produces is stacked, so Wanderer, Stacking and
   the stacking Type are offered only for the imaging camera; the guide camera always
   shows Live view.
 - **A "Guide camera" switch appears** next to the zoom controls over the live view. Turn
   it on to watch the guide camera instead of the imaging one. Push-To arrows are drawn
-  over whichever view you are on.
+  over whichever view you are on. The switch is the operator's: every
+  [eyepiece view](/eyepiece-display#whose-camera-it-shows) follows it, and every open live
+  view shows where it stands. Disconnecting the guide camera turns it off; a dropout the
+  camera recovers from does not.
 - **Its raw frames have their own switch**, under **Settings → Storage → Save Raw
   Frames**, and go to a folder of their own ending `-guide`. Turning the switch off stops
   the writing on the next frame; so does stopping the camera. A stop ends that folder —
   starting again opens a new one.
 
-The guide camera is only rendered while you are looking at it. With the switch off it
+The guide camera is only rendered while someone is looking at it. With the switch off it
 still exposes and still solves, but nothing is processed or encoded for the browser.
 
 ## Focus/Finder mode
@@ -68,8 +72,8 @@ focus mask.
 - Background Subtraction
 - Shadow Saturation Boost
 - Row/Column Pattern Removal
-- Colour Mottle
-- Background Grain
+- Colour Mottle *(Pro)*
+- Structure strength — the brightness denoiser *(Pro)*
 - Dithering
 
 On an IMX464-sized frame that halves the preview stage — 12.8 ms per frame down to
@@ -82,6 +86,9 @@ plate-solves the most, and a frame full of hot pixels does not solve at all — 
 Their switches under **Settings** grey out while the mode is on, because the mode
 remembers what each one was set to. Turn it off once you are focused and every one goes
 back to your value — including the ones you had already turned off yourself.
+
+**AI denoising** *(Pro)* is held off too, the costliest stage of all. The mode never
+changes its switch, so it is back in effect as soon as the mode ends.
 
 ## It is not available while you are stacking
 
@@ -101,6 +108,23 @@ blocked, whatever the camera is doing.
 Superpixel Debayer is deliberately left alone. It is the *cheap* debayer, so forcing it
 either way would work against the frame rate this mode exists to buy — set it to
 whatever suits your sensor and it stays there.
+
+## Disconnecting a camera
+
+**Disconnect** always works, whatever the camera is doing — including a camera you have
+unplugged, or one still being reconnected.
+
+- **During a capture**, Disconnect on the imaging camera asks first, then stops the capture
+  the way Stop does (the stack is saved) and disconnects. The sub being exposed is
+  discarded rather than waited for. The guide camera disconnects without asking; the
+  capture carries on.
+- **A cooled camera warms up first**, so its sensor is not shocked or fogged by a sudden
+  change. The camera shows *Warming up* with the longest it can still take, and disconnects
+  on its own once warm — after about 5½ minutes at most.
+- **Disconnect now** replaces the button during a warm-up. After you confirm, it switches
+  the cooler off and disconnects at once.
+- **No warm-up is attempted** for a camera that has stopped answering or has been
+  unplugged: there is nothing left to warm, so it disconnects straight away.
 
 ## If the camera drops out
 
@@ -153,12 +177,15 @@ Two switches under **Settings → If the camera drops out**:
   reconnect but leave the capture stopped.
 
 Recovery deliberately does nothing while the camera is warming up for a
-disconnect you asked for.
+disconnect you asked for: a camera that stops answering then simply disconnects.
 
 ## Logs
 
 Night Amplifier writes one log file a day to the `logs` folder beside `settings.json`, in
 the folder you start it from. When something goes wrong, that file is the thing to send.
+
+Every request the server refused or failed — a Start, a Disconnect — is logged with
+the reason it gave you.
 
 Every start opens with a short system report: the build, operating system, CPU, memory and
 free disk space, plus the board model, CPU temperature and power warnings on a Raspberry Pi

@@ -1,11 +1,9 @@
 //! Tests for API response types
 
-use axum::http::StatusCode;
-
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
-use crate::server::state::{
-    CaptureSession, CaptureSettings, CaptureState, RawFrameSaving, StackingType,
+use crate::session::state::{
+    CaptureSettings, CaptureState, RawFrameSaving, SessionStats, StackingType,
 };
 use crate::server::{CameraInfoResponse, CaptureStatusResponse, SettingsResponse};
 
@@ -85,25 +83,24 @@ fn test_camera_info_response_from_info() {
 
 #[test]
 fn test_capture_status_response_from_session() {
-    let session = CaptureSession {
-        state: CaptureState::Capturing,
-        frame_count: 100,
-        stacked_count: 95,
-        rejected_count: 5,
-        last_error: Some("Test error".to_string()),
-        started_at: Some(1234567890),
+    let stats = SessionStats::default();
+    stats.start(1234567890);
+    for stacked in (0..100).map(|i| i < 95) {
+        stats.frame_captured(stacked, true);
+    }
+    let settings = CaptureSettings {
         exposure_us: 2_000_000,
         gain: 150,
         ..Default::default()
     };
 
-    let response = CaptureStatusResponse::from(&session);
+    let response = CaptureStatusResponse::new(CaptureState::Capturing, &stats, &settings);
 
     assert_eq!(response.state, "Capturing");
     assert_eq!(response.frame_count, 100);
     assert_eq!(response.stacked_count, 95);
     assert_eq!(response.rejected_count, 5);
-    assert_eq!(response.last_error, Some("Test error".to_string()));
+    assert_eq!(response.last_error, None);
     assert_eq!(response.started_at, Some(1234567890));
     assert_eq!(response.exposure_us, 2_000_000);
     assert_eq!(response.gain, 150);
@@ -132,14 +129,14 @@ fn test_settings_response_from_settings() {
 
     let response = SettingsResponse::from(&settings);
 
-    assert_eq!(response.exposure_us, 5_000_000);
-    assert_eq!(response.gain, 200);
-    assert_eq!(response.offset, 30);
-    assert_eq!(response.bin, 2);
-    assert!(!response.auto_stretch);
-    assert!(!response.stacking);
-    assert_eq!(response.rejection_sigma, 3.0);
-    assert!(!response.background_subtraction);
-    assert_eq!(response.raw_frame_saving, RawFrameSaving::default());
-    assert!(response.save_stacked_image);
+    assert_eq!(response.settings.exposure_us, 5_000_000);
+    assert_eq!(response.settings.gain, 200);
+    assert_eq!(response.settings.offset, 30);
+    assert_eq!(response.settings.bin, 2);
+    assert!(!response.settings.auto_stretch);
+    assert!(!response.settings.stacking);
+    assert_eq!(response.settings.rejection_sigma, 3.0);
+    assert!(!response.settings.background_subtraction);
+    assert_eq!(response.settings.raw_frame_saving, RawFrameSaving::default());
+    assert!(response.settings.save_stacked_image);
 }

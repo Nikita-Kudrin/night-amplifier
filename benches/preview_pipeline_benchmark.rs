@@ -1,36 +1,21 @@
-//! Benchmark for `process_preview_frame` — the whole linear half of the render thread.
-//!
-//! Run with: cargo bench --bench preview_pipeline_benchmark
-//!
-//! Everything the render task does before the encoders happens here: background
-//! neutralisation, background subtraction, SCNR, and the auto-stretch preparation. In
-//! production traces it was 190 ms of a 300 ms `render_iteration`, and it had no
-//! benchmark — the pieces were covered individually by `render_benchmark`,
-//! `background_benchmark` and `statistics_benchmark`, but not the sum, so there was no
-//! number to measure a *structural* change against.
-//!
-//! # What the cases are for
-//!
-//! `analysis` is the part a cross-frame cache could skip: the white-balance grid, the
-//! background model estimate, and the image statistics. All three are statistical
-//! descriptions of a stack that moves by 1/N per frame, so recomputing them every frame
-//! is arguably waste — but only if they are a large enough share of the total to be
-//! worth the invalidation logic. This case measures that share directly, against
-//! `full`, so the decision is evidence rather than arithmetic.
-//!
-//! The pipeline mutates its input, so this uses `iter_batched_ref` over a `Vec` of
-//! clones — plain repetition would feed iteration N+1 iteration N's output, and a
-//! neutralised, background-subtracted frame is not the workload the first iteration ran.
-//! At ~50 MB a clone that is also why `REPS` is small and the measurement window short.
+//! Benchmark for `process_preview_frame` — the whole linear half of the render thread:
+//! background neutralisation, subtraction, SCNR, auto-stretch prep. Traced at 190 ms of a
+//! 300 ms `render_iteration`, with no benchmark of its own — `render_benchmark`,
+//! `background_benchmark` and `statistics_benchmark` covered the pieces but not the sum,
+//! so there was no number to catch a *structural* regression. `analysis` isolates what a
+//! cross-frame cache could skip (white-balance grid, background estimate, image stats —
+//! all 1/N-per-frame) against `full`, so the invalidation-logic call is evidence, not
+//! arithmetic. Mutates in place, so `iter_batched_ref` clones (~50 MB) keep `REPS` small.
 
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion, SamplingMode};
 use night_amplifier::background::BackgroundConfig;
 use night_amplifier::frame::Frame;
-use night_amplifier::server::capture::pipeline::{
+use night_amplifier::plugins::Plugins;
+use night_amplifier::session::capture::pipeline::{
     process_preview_frame, process_preview_frame_with_analysis,
 };
-use night_amplifier::server::capture::{AnalysisContext, PreviewAnalysis};
-use night_amplifier::server::state::CaptureSettings;
+use night_amplifier::session::capture::{AnalysisContext, PreviewAnalysis};
+use night_amplifier::session::state::CaptureSettings;
 use night_amplifier::{compute_image_stats, WhiteBalanceConfig};
 use std::hint::black_box;
 use std::time::Duration;
@@ -76,6 +61,7 @@ fn create_sky_frame() -> Frame {
 const REPS: usize = 6;
 
 fn bench_preview_pipeline(c: &mut Criterion) {
+    let plugins = Plugins::installed();
     let frame = create_sky_frame();
     let settings = CaptureSettings::default();
 
@@ -90,7 +76,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
             || vec![frame.clone(); REPS],
             |frames| {
                 for f in frames.iter_mut() {
-                    black_box(process_preview_frame(f, &settings).unwrap());
+                    black_box(process_preview_frame(f, &settings, &plugins).unwrap());
                 }
             },
             BatchSize::LargeInput,
@@ -106,7 +92,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
     // whole of it.
     let focus_settings = {
         let mut s = CaptureSettings::default();
-        night_amplifier::server::state::focus_mode::set(&mut s, true);
+        night_amplifier::session::state::focus_mode::set(&mut s, true, &plugins);
         s
     };
     group.bench_function(format!("focus_mode_x{}", REPS), |b| {
@@ -114,7 +100,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
             || vec![frame.clone(); REPS],
             |frames| {
                 for f in frames.iter_mut() {
-                    black_box(process_preview_frame(f, &focus_settings).unwrap());
+                    black_box(process_preview_frame(f, &focus_settings, &plugins).unwrap());
                 }
             },
             BatchSize::LargeInput,
@@ -161,7 +147,7 @@ fn bench_preview_pipeline(c: &mut Criterion) {
                         showing_stack: true,
                         stack_depth: 1000 + i as u32,
                     };
-                    black_box(process_preview_frame_with_analysis(f, &settings, ctx, analysis).unwrap());
+                    black_box(process_preview_frame_with_analysis(f, &settings, &plugins, ctx, analysis).unwrap());
                 }
             },
             BatchSize::LargeInput,

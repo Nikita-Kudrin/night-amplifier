@@ -1,24 +1,22 @@
 //! ASTAP and Catalog installation API handlers
 //!
-//! In the Community version, these endpoints delegate to the PushToSystemPlugin if present,
+//! These endpoints delegate to the Push-To installer plugin if present,
 //! otherwise they return an error indicating the feature requires the Pro version.
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::sync::Arc;
-use tracing::info;
 
-use super::super::dto::{
-    ApiResponse, AstapInstallRequest, AstapStatusResponse, CatalogInstallRequest,
-    CatalogStatusResponse, DatabaseTypeResponse, MessageResponse,
+use super::super::dto::{ApiResponse, AstapInstallRequest, CatalogInstallRequest, MessageResponse};
+use crate::session::state::AppState;
+use crate::push_to::{
+    AstapStatusResponse, CatalogStatusResponse, DatabaseTypeResponse,
 };
-use super::super::state::AppState;
-use crate::push_to::PUSH_TO_PLUGIN;
 
 /// GET /api/astap/status
 ///
 /// Get ASTAP installation status
-pub async fn get_astap_status() -> impl IntoResponse {
-    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+pub async fn get_astap_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(plugin) = state.plugins.push_to_installer() {
         let status = plugin.get_astap_status().await;
         (StatusCode::OK, ApiResponse::ok(status))
     } else {
@@ -40,8 +38,8 @@ pub async fn get_astap_status() -> impl IntoResponse {
 /// GET /api/astap/databases
 ///
 /// Get available database types for installation (in display order)
-pub async fn get_astap_databases() -> impl IntoResponse {
-    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+pub async fn get_astap_databases(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(plugin) = state.plugins.push_to_installer() {
         let databases = plugin.get_astap_databases().await;
         (StatusCode::OK, ApiResponse::ok(databases))
     } else {
@@ -56,13 +54,13 @@ pub async fn get_astap_databases() -> impl IntoResponse {
 ///
 /// Start ASTAP installation (binary and database)
 pub async fn install_astap(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<AstapInstallRequest>,
 ) -> impl IntoResponse {
     let database_types = request.into_database_types();
-    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    if let Some(plugin) = state.plugins.push_to_installer() {
         match plugin
-            .install_astap(&database_types, _state.events.clone())
+            .install_astap(&database_types, crate::session::events::push_to_events(&state.events))
             .await
         {
             Ok(_) => (
@@ -72,7 +70,7 @@ pub async fn install_astap(
                     camera_id: None,
                 }),
             ),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e.to_string())),
         }
     } else {
         (
@@ -85,8 +83,8 @@ pub async fn install_astap(
 /// GET /api/catalog/status
 ///
 /// Get OpenNGC catalog installation status
-pub async fn get_catalog_status() -> impl IntoResponse {
-    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+pub async fn get_catalog_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(plugin) = state.plugins.push_to_installer() {
         let status = plugin.get_catalog_status().await;
         (StatusCode::OK, ApiResponse::ok(status))
     } else {
@@ -108,12 +106,12 @@ pub async fn get_catalog_status() -> impl IntoResponse {
 ///
 /// Start OpenNGC catalog installation (downloads NGC.csv and addendum.csv)
 pub async fn install_catalog(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(request): Json<CatalogInstallRequest>,
 ) -> impl IntoResponse {
-    if let Some(plugin) = crate::license::pro_plugin(&PUSH_TO_PLUGIN) {
+    if let Some(plugin) = state.plugins.push_to_installer() {
         match plugin
-            .install_catalog(request.include_stars, _state.events.clone())
+            .install_catalog(request.include_stars, crate::session::events::push_to_events(&state.events))
             .await
         {
             Ok(_) => (
@@ -123,7 +121,7 @@ pub async fn install_catalog(
                     camera_id: None,
                 }),
             ),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e)),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, ApiResponse::err(e.to_string())),
         }
     } else {
         (

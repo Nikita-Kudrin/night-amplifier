@@ -1,0 +1,43 @@
+name: System dependencies
+description: Install the native build dependencies (nasm, cfitsio, libusb) for the runner's OS.
+# Linux: the Azure apt mirror stalls often enough to time a job out, so apt goes to the main
+# archive with retries (24.04's deb822 file only; 22.04 keeps its mirror). Windows: cfitsio is
+# linked statically from vcpkg for the runner's own architecture — every target builds natively.
+inputs:
+  apt-packages:
+    description: Debian packages to install on Linux.
+    default: nasm libusb-1.0-0-dev libclang-dev libcfitsio-dev
+  extra-apt-packages:
+    description: Debian packages installed alongside apt-packages, in the same apt run.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Install system deps (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.apt-packages }} ${{ inputs.extra-apt-packages }}
+      run: |
+        sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
+        apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+        sudo apt-get update "${apt_options[@]}"
+        # shellcheck disable=SC2086 # PACKAGES is a space-separated list
+        sudo apt-get install -y "${apt_options[@]}" $PACKAGES
+    - name: Install system deps (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install nasm libusb
+    - name: Install system deps (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco install pkgconfiglite nasm
+        $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x64' }
+        $triplet = "$arch-windows-static"
+        vcpkg install cfitsio:$triplet
+        $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet"
+        echo "PKG_CONFIG_PATH=$vcpkg_path/lib/pkgconfig" >> $env:GITHUB_ENV
+        echo "CFITSIO_STATIC=1" >> $env:GITHUB_ENV
+        echo "PKG_CONFIG_ALLOW_CROSS=1" >> $env:GITHUB_ENV
+        echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV

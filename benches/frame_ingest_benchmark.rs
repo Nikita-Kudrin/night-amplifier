@@ -1,24 +1,11 @@
-//! Benchmark for `Frame::from_raw` — the camera ingest path.
-//!
-//! Run with: cargo bench --bench frame_ingest_benchmark
-//!
-//! Every frame a camera hands over goes through `from_raw` before anything else in the
-//! pipeline touches it, so its cost is paid once per frame, unconditionally. It has no
-//! other benchmark today.
-//!
-//! `from_raw` dispatches on `PixelFormat` to one of two decode arms inside
-//! `scatter_to_planes` (see `src/frame/factory.rs`): a single-channel arm for raw Bayer
-//! captures, and a multi-channel arm for already-interleaved sources. Each case below
-//! exercises one arm; the `*Be` and `Bayer8` formats were left out because they run the
-//! same arm as `Bayer16`/`Rgb8` and differ only in the per-sample decode closure — a case
-//! that would only re-measure a sibling's kernel, per the community `AGENTS.md`.
-//!
-//! `from_raw` is pure (`&[u8]` in, fresh `Frame` out), so each case repeats it `REPS`
-//! times inside `b.iter` and declares `Throughput::Elements(REPS * pixels)`.
-//! **The reported `time:` is for `REPS` invocations, not one.**
-//!
-//! Both cases are IMX464 resolution (2712x1538) — the sensor the rest of the suite is
-//! sized against.
+//! Benchmark for `Frame::from_raw` — the camera ingest path. Every frame goes through it
+//! before anything else touches it, so its cost is paid once per frame, unconditionally;
+//! it has no other benchmark today. Dispatches on `PixelFormat` to one of two decode arms
+//! in `scatter_to_planes` (`src/frame/factory.rs`): single-channel for raw Bayer,
+//! multi-channel for interleaved. `*Be`/`Bayer8` are left out — same arm as
+//! `Bayer16`/`Rgb8`, differing only in the per-sample decode closure, so they'd just
+//! re-measure a sibling's kernel. Pure, so each case repeats `REPS` times; **reported
+//! `time:` is for `REPS`, not one.** Both cases are IMX464 (2712x1538).
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
 use night_amplifier::{Frame, PixelFormat};

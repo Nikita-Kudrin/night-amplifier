@@ -15,7 +15,7 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useImageStream as originalUseImageStream} from '../useWebSocket.js'
+import {NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream.js'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;
@@ -114,6 +114,45 @@ describe('useImageStream', () => {
             getWebSocket().simulateMessage(createTestFrame(2, 2))
             await waitForAsyncProcessing()
             expect(dimensions.value).toEqual({width: 2, height: 2})
+        })
+
+        // The eyepiece sockets switch camera in place; with nothing from the new one yet,
+        // the server says so rather than leave the old camera's picture up as its own.
+        it('drops the picture on no_frame', async () => {
+            const {frameData, dimensions} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+
+            await openWebSocket()
+            getWebSocket().simulateMessage(createTestFrame(2, 2))
+            await waitForAsyncProcessing()
+            expect(frameData.value).not.toBe(null)
+
+            getWebSocket().simulateMessage(NO_FRAME)
+            await waitForAsyncProcessing()
+
+            expect(frameData.value).toBe(null)
+            expect(dimensions.value).toEqual({width: 0, height: 0})
+        })
+
+        it('does not let a frame still being read land after no_frame', async () => {
+            const {frameData} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+
+            await openWebSocket()
+            getWebSocket().simulateMessage(new Blob([createTestFrame(2, 2)]))
+            getWebSocket().simulateMessage(NO_FRAME)
+            await waitForAsyncProcessing()
+
+            expect(frameData.value).toBe(null)
+        })
+
+        it('shows the next camera\'s frame after no_frame', async () => {
+            const {dimensions} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+
+            await openWebSocket()
+            getWebSocket().simulateMessage(NO_FRAME)
+            getWebSocket().simulateMessage(new Blob([createTestFrame(4, 2)]))
+            await waitForAsyncProcessing()
+
+            expect(dimensions.value).toEqual({width: 4, height: 2})
         })
 
         it('ignores non-binary messages', async () => {

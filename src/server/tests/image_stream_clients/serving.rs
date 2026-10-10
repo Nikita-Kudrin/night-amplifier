@@ -7,7 +7,7 @@ use serial_test::parallel;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::*;
-use crate::server::state::{EyepieceStreamResolution, Resolution, StreamKind};
+use crate::session::state::{EyepieceStreamResolution, Resolution, StreamKind};
 
 /// Clients of `/` and `/eyepiece` all receive the very same bytes at Streaming Resolution,
 /// whatever viewport an old frontend still reports.
@@ -46,11 +46,10 @@ async fn every_jpeg_client_receives_identical_bytes_at_streaming_resolution() {
 #[parallel(image_stream_log)]
 async fn lossless_clients_share_their_own_payload_independent_of_jpeg() {
     let server = start_server().await;
-    {
-        let mut settings = server.state.settings.write().await;
+    server.state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Hd1080;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
-    }
+    });
     let mut eyepieces = vec![
         server.connect_registered(LOSSLESS).await,
         server.connect_registered(LOSSLESS).await,
@@ -171,11 +170,10 @@ async fn odd_widths_are_complete_and_small_frames_are_not_upscaled() {
     assert_lossless(&next_frame(&mut eyepiece).await, (2539, 1440), "IMX464 at 1440p");
     assert_jpeg(&next_frame(&mut live).await, (2539, 1440), "IMX464 at 1440p");
 
-    {
-        let mut settings = server.state.settings.write().await;
+    server.state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Uhd2160;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Native;
-    }
+    });
     server.render((1201, 901), 0.25).await;
     assert_lossless(&next_frame(&mut eyepiece).await, (1201, 901), "Native, smaller frame");
     assert_jpeg(&next_frame(&mut live).await, (1201, 901), "4K, smaller frame");

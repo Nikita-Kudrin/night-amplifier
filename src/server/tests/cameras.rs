@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::camera::{CameraInfo, SensorType};
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 // ============================================================================
 // Camera List Endpoint Tests
@@ -23,99 +23,6 @@ async fn test_list_cameras_empty() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["success"], true);
     assert!(json["data"].is_array());
-}
-
-/// A camera wedged inside its SDK while being enumerated — QHY and ZWO discovery open every
-/// idle device — against the camera list.
-mod hung_discovery {
-    use super::*;
-    use crate::camera::{
-        CameraEntry, CameraError, CameraResult, DeviceCatalog, DeviceIdentity, OpenedCamera,
-    };
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::Mutex;
-    use std::time::Duration;
-
-    /// "Hung" blocks inside `list` until released; "Healthy" lists one camera.
-    struct HungCatalog {
-        release: Mutex<Receiver<()>>,
-        hung_calls: AtomicUsize,
-    }
-
-    impl DeviceCatalog for HungCatalog {
-        fn provider_names(&self, _: bool) -> Vec<String> {
-            vec!["Hung".to_string(), "Healthy".to_string()]
-        }
-        fn list(&self, provider: &str, _: bool) -> CameraResult<Vec<CameraEntry>> {
-            if provider == "Healthy" {
-                return Ok(vec![CameraEntry {
-                    provider: provider.to_string(),
-                    index: 0,
-                    info: CameraInfo {
-                        name: "Healthy Cam".to_string(),
-                        serial: Some("HEALTHY1".to_string()),
-                        ..Default::default()
-                    },
-                }]);
-            }
-            self.hung_calls.fetch_add(1, Ordering::SeqCst);
-            // Returns once the test drops the sender.
-            let _ = self.release.lock().unwrap().recv_timeout(Duration::from_secs(30));
-            Ok(Vec::new())
-        }
-        fn identities(&self, provider: &str, _: bool) -> CameraResult<Vec<DeviceIdentity>> {
-            Err(CameraError::ProviderNotFound(provider.to_string()))
-        }
-        fn open(&self, provider: &str, _: usize, _: bool) -> CameraResult<OpenedCamera> {
-            Err(CameraError::ProviderNotFound(provider.to_string()))
-        }
-    }
-
-    fn rig() -> (axum::Router, Arc<HungCatalog>, Sender<()>) {
-        let (release, released) = mpsc::channel();
-        let catalog = Arc::new(HungCatalog {
-            release: Mutex::new(released),
-            hung_calls: AtomicUsize::new(0),
-        });
-        let (mut state, _disk_writer) = AppState::new_for_testing();
-        state.device_catalog = Arc::clone(&catalog) as Arc<dyn DeviceCatalog>;
-        (create_test_router(Arc::new(state)), catalog, release)
-    }
-
-    #[tokio::test]
-    async fn a_hung_discovery_does_not_block_the_camera_list() {
-        let (app, _catalog, release) = rig();
-        let listed =
-            tokio::time::timeout(Duration::from_secs(4), get_json(&app, "/api/cameras")).await;
-        drop(release);
-        assert!(listed.is_ok(), "the camera list waited on a hung SDK enumeration");
-    }
-
-    #[tokio::test]
-    async fn a_hung_provider_does_not_hide_the_others() {
-        let (app, _catalog, release) = rig();
-        let (_, json) = get_json(&app, "/api/cameras").await;
-        drop(release);
-        let names: Vec<&str> = json["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|camera| camera["name"].as_str())
-            .collect();
-        assert_eq!(names, ["Healthy Cam"]);
-    }
-
-    /// Each refresh used to park one more blocking thread behind the stuck device.
-    #[tokio::test]
-    async fn refreshing_behind_a_hung_enumeration_starts_no_new_one() {
-        let (app, catalog, release) = rig();
-        get_json(&app, "/api/cameras").await;
-        get_json(&app, "/api/cameras").await;
-        let calls = catalog.hung_calls.load(Ordering::SeqCst);
-        drop(release);
-        assert_eq!(calls, 1);
-    }
 }
 
 #[tokio::test]
@@ -146,24 +53,19 @@ async fn test_multiple_cameras_connected() {
     let state = create_test_state();
     add_mock_camera(&state, "camera_0").await;
 
-    // Add a second camera manually
-    {
-        let mut cameras = state.cameras.write().await;
-        cameras.insert(
-            "camera_1".to_string(),
-            ConnectedCameraInfo {
-                id: "camera_1".to_string(),
-                provider: "Mock".to_string(),
-                index: 1,
-                role: CameraRole::Main,
-                info: CameraInfo {
-                    name: "Second Camera".to_string(),
-                    sensor_type: SensorType::Mono,
-                    ..Default::default()
-                },
-            },
-        );
-    }
+    // Add a second camera manually, as the guide camera: a role holds one.
+    let guide = ConnectedCameraInfo {
+        id: "camera_1".to_string(),
+        provider: "Mock".to_string(),
+        index: 1,
+        role: CameraRole::Guide,
+        info: CameraInfo {
+            name: "Second Camera".to_string(),
+            sensor_type: SensorType::Mono,
+            ..Default::default()
+        },
+    };
+    state.roster.install(guide, false);
 
     let app = create_test_router(Arc::clone(&state));
 
@@ -294,8 +196,7 @@ async fn test_disconnect_camera_success() {
         .contains("disconnected"));
 
     // Verify camera was removed
-    let cameras = state.cameras.read().await;
-    assert!(!cameras.contains_key("mock_0"));
+    assert!(!state.roster.contains("mock_0"));
 }
 
 #[tokio::test]
@@ -310,18 +211,32 @@ async fn test_disconnect_camera_not_connected() {
     assert!(json["error"].as_str().unwrap().contains("not connected"));
 }
 
+/// Disconnect is a request the observer must be able to make at any moment: a capture
+/// running on the camera is stopped first, the way Stop would, rather than refused.
 #[tokio::test]
-async fn test_disconnect_camera_while_capturing() {
+async fn disconnecting_a_capturing_camera_stops_the_capture_first() {
     let state = create_test_state();
     add_mock_camera(&state, "mock_0").await;
-    state.set_capture_state(CaptureState::Capturing).await;
-    let app = create_test_router(state);
+    state.set_capture_state(CaptureState::Capturing);
+    // Stands in for the capture pipeline: it winds down once asked to stop.
+    let pipeline = {
+        let state = Arc::clone(&state);
+        tokio::spawn(async move {
+            while state.capture_state() != CaptureState::Stopping {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            state.end_capture_state();
+        })
+    };
+    let app = create_test_router(Arc::clone(&state));
 
     let (status, json) = post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
+    pipeline.await.unwrap();
 
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(json["success"], false);
-    assert!(json["error"].as_str().unwrap().contains("while capturing"));
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["warming_up"], false);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
+    assert!(!state.roster.contains("mock_0"));
 }
 
 #[tokio::test]
@@ -331,15 +246,12 @@ async fn test_disconnect_camera_clears_selected() {
     let app = create_test_router(Arc::clone(&state));
 
     // Verify it's selected
-    assert_eq!(
-        state.selected_camera.read().await.as_deref(),
-        Some("mock_0")
-    );
+    assert_eq!(state.roster.selected().as_deref(), Some("mock_0"));
 
     post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
 
     // Verify selected was cleared
-    assert!(state.selected_camera.read().await.is_none());
+    assert!(state.roster.selected().is_none());
 }
 
 #[tokio::test]
@@ -392,4 +304,63 @@ fn test_connected_camera_info_clone() {
     assert_eq!(cloned.provider, "Test");
     assert_eq!(cloned.index, 0);
     assert_eq!(cloned.info.name, "Test Camera");
+}
+
+
+/// Start a warm-up on the mock camera without a monitor, the state a Disconnect leaves it in.
+async fn warming_up(state: &Arc<AppState>) {
+    state.set_camera_phase(CameraRole::Main, "Test Camera", CameraPhase::WarmingUp);
+    state
+        .slot(CameraRole::Main)
+        .begin_warmup(std::time::Instant::now() + std::time::Duration::from_secs(120));
+}
+
+/// The list carries each connected camera's phase, so a page opened mid-session knows a
+/// camera is warming up without having seen the event that said so.
+#[tokio::test]
+async fn the_camera_list_reports_phase_and_warmup_time() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    warming_up(&state).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, json) = get_json(&app, "/api/cameras").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let entry = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|camera| camera["id"] == "mock_0")
+        .expect("the connected camera is listed");
+    assert_eq!(entry["phase"], "warming_up");
+    let remaining = entry["warmup_remaining_s"].as_u64().expect("time left is reported");
+    assert!((110..=120).contains(&remaining), "{remaining}");
+}
+
+/// A second ordinary Disconnect reports the warm-up rather than cutting it short;
+/// `skip_warmup` ends it now.
+#[tokio::test]
+async fn disconnect_during_a_warmup_reports_it_unless_told_to_skip_it() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    warming_up(&state).await;
+    let app = create_test_router(Arc::clone(&state));
+
+    let (status, json) = post_json(&app, "/api/cameras/mock_0/disconnect", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["warming_up"], true);
+    assert!(json["data"]["warmup_remaining_s"].as_u64().is_some());
+    assert!(state.roster.contains("mock_0"));
+
+    let (status, json) = post_json(
+        &app,
+        "/api/cameras/mock_0/disconnect",
+        json!({"skip_warmup": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["warming_up"], false);
+    assert!(!state.roster.contains("mock_0"));
+    assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
 }

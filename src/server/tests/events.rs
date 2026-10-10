@@ -1,7 +1,7 @@
 //! Tests for WebSocket events
 
-use crate::server::events::ServerEvent;
-use crate::server::state::{CameraRole, CaptureState};
+use crate::session::events::ServerEvent;
+use crate::session::state::{CameraRole, CaptureState};
 
 #[tokio::test]
 async fn test_event_to_json_all_variants() {
@@ -86,4 +86,51 @@ async fn test_event_to_json_all_variants() {
     let json: serde_json::Value =
         serde_json::from_str(&ServerEvent::FocusModeLeft.to_json()).unwrap();
     assert_eq!(json, serde_json::json!({ "type": "focus_mode_left" }));
+}
+
+
+/// A client that connects later — a reloaded page, a phone waking up — gets every camera's
+/// phase and the viewed camera straight away. Phases otherwise arrive only as changes, and on 2026-09-20 a page
+/// that had missed one offered "Start guide" for a loop that was running.
+#[tokio::test]
+async fn the_events_socket_opens_with_the_capture_state_phases_and_viewed_camera() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let server = super::image_stream_clients::start_server().await;
+    let camera = crate::session::state::ConnectedCameraInfo {
+        id: "mock_1".to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role: CameraRole::Guide,
+        info: crate::camera::CameraInfo {
+            name: "Guiding".to_string(),
+            ..Default::default()
+        },
+    };
+    server.state.roster.install(camera, false);
+    server
+        .state
+        .set_camera_phase(CameraRole::Guide, "Guiding", crate::session::state::CameraPhase::Guiding);
+
+    let mut client = server.connect("/ws/events").await;
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                events.push(serde_json::from_str::<serde_json::Value>(&text).unwrap())
+            }
+            other => panic!("expected a JSON event, got {other:?}"),
+        }
+    }
+
+    let (state, phases, viewed) = (&events[0], &events[1], &events[2]);
+    assert_eq!(state["type"], "state_changed");
+    assert_eq!(state["state"], "Idle");
+    assert_eq!(phases["type"], "camera_phases");
+    assert_eq!(
+        phases["cameras"],
+        serde_json::json!([{"name": "Guiding", "role": "guide", "phase": "guiding"}])
+    );
+    assert_eq!(*viewed, serde_json::json!({"type": "viewed_camera_changed", "camera": "main"}));
 }

@@ -1,22 +1,16 @@
-//! Benchmarks for the raw-CFA stage — the corrections that run per frame, on the
-//! mosaic, before demosaic.
+//! Benchmarks for the raw-CFA stage — the corrections that run per frame, on the mosaic,
+//! before demosaic. Run with: cargo bench --bench cfa_benchmark -- --noplot
 //!
-//! Run with: cargo bench --bench cfa_benchmark -- --noplot
-//!
-//! Both filters mutate the frame in place, so the "repeat the kernel `reps` times"
-//! trick the pure benches use (see `debayer_benchmark`) is unavailable: iteration two
-//! would read iteration one's output, and for the hot-pixel filter that is not even a
-//! stable workload — the defects it found the first time are gone. Each setup therefore
-//! builds a `Vec` of `reps` clones and the routine walks it, exactly as
-//! `render_benchmark` does. A mono 3008² CFA frame is 36 MB, a third of the RGB frames
-//! that file clones, so `reps` can be larger here for the same live footprint.
-//!
-//! `debayer_superpixel` is pure, so it takes the cheap repeat route with no per-sample
-//! clone.
+//! Both filters mutate the frame in place, so the pure-bench "repeat the kernel `reps` times"
+//! trick (`debayer_benchmark`) is unavailable — for the hot-pixel filter it isn't even a
+//! stable workload, since the defects it found the first time are gone. Each setup instead
+//! builds a `Vec` of `reps` clones, as `render_benchmark` does; a mono 3008² CFA frame is
+//! 36 MB, a third of the RGB frames that file clones, so `reps` can be larger here for the
+//! same live footprint. `debayer_superpixel` is pure, so it takes the cheap repeat route.
 //!
 //! **The reported `time:` covers `reps` invocations.** Divide, or read the throughput.
-//! `reject_hot_pixels` is the production path: `HotPixelFilter::apply` delegates to it and
-//! re-measures the sky every frame, so there is no cached variant to bench separately.
+//! `reject_hot_pixels` is the production path — `HotPixelFilter::apply` delegates to it and
+//! re-measures the sky every frame, so there's no cached variant to bench separately.
 //! Per-call figures the current `reps` were sized from (x86 dev box, not a Pi 5):
 //!
 //! | Stage | 3008² (IMX533) | 2712x1538 (IMX464) |

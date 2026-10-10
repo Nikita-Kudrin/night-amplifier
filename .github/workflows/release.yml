@@ -77,22 +77,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-
-
       # ── Frontend build ───────────────────────────────────────────
-      - name: Setup Node.js
-        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
-
       - name: Build frontend
-        working-directory: ./web
-        run: |
-          npm ci
-          npm run build
+        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
+        uses: ./.github/actions/setup-npm
+        with:
+          script: build
 
       # ── Rust toolchain ───────────────────────────────────────────
       - name: Install cross (ARM64 builds)
@@ -105,31 +95,12 @@ jobs:
         if: "!matrix.use_cross"
         run: rustup target add ${{ matrix.target }}
 
-      - name: Install system deps (Linux)
+      - name: Install system deps
         timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        if: "!matrix.use_cross && runner.os == 'Linux'"
-        run: |
-          sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources || true
-          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20"
-          sudo apt-get install -y -o Acquire::Retries=3 -o Acquire::http::Timeout="20" -o Acquire::https::Timeout="20" nasm libcfitsio-dev
-
-      - name: Install system deps (macOS)
-        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        if: runner.os == 'macOS'
-        run: brew install nasm libusb
-
-      - name: Install system deps (Windows)
-        timeout-minutes: ${{ fromJSON(env.INSTALL_TIMEOUT) }}
-        if: runner.os == 'Windows'
-        run: |
-          choco install pkgconfiglite nasm
-          $triplet = "${{ matrix.target == 'aarch64-pc-windows-msvc' && 'arm64' || 'x64' }}-windows-static"
-          vcpkg install cfitsio:$triplet
-          $vcpkg_path = "$env:VCPKG_INSTALLATION_ROOT/installed/$triplet"
-          echo "PKG_CONFIG_PATH=$vcpkg_path/lib/pkgconfig" >> $env:GITHUB_ENV
-          echo "CFITSIO_STATIC=1" >> $env:GITHUB_ENV
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $env:GITHUB_ENV
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+        if: "!matrix.use_cross"
+        uses: ./.github/actions/system-deps
+        with:
+          apt-packages: nasm libcfitsio-dev
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

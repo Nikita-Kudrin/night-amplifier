@@ -1,5 +1,5 @@
 <script setup>
-import {ref, inject, computed, onMounted} from 'vue'
+import {ref, inject, computed, watch, onMounted} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -7,8 +7,10 @@ import {
   getSimulatorConfig,
   removeSimulatedCamera,
 } from '../composables/api.js'
+import {useCameraBadges} from '../composables/useCameraBadges.js'
 import {useError} from '../composables/useError.js'
-import {BaseAlert, BaseInfoIcon, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
+import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
+import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
 import {isCaptureRunning} from '../constants'
 
 const cameras = inject('cameras')
@@ -18,9 +20,12 @@ const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const cameraStatus = inject('cameraStatus', {value: {}})
 const cameraPhase = inject('cameraPhase', {value: {}})
+const warmupEndsAt = inject('warmupEndsAt', ref({}))
 const settings = inject('settings', ref(null))
 
 const {error, clearError, withErrorHandling} = useError()
+const {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill} =
+    useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings})
 
 const isSimulatorEnabled = computed(() => simulatorEnabledRef?.value ?? false)
 
@@ -31,7 +36,6 @@ const camerasCollapsed = ref(false)
 const simulatorConfig = ref({configured: false, directory: null, file_count: null})
 const configuringSimulator = ref(false)
 const showDirectoryInput = ref(false)
-const directoryPath = ref('')
 
 onMounted(async () => {
   try {
@@ -61,12 +65,6 @@ const connectOptions = computed(() => [
   {value: 'guide', label: 'As guide', disabled: hasGuideCamera.value},
 ])
 
-function roleLabel(cam) {
-  if (cam.role === 'guide') return 'Guide'
-  if (cam.role === 'main') return 'Main'
-  return null
-}
-
 const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.connected))
 
 const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
@@ -85,10 +83,84 @@ async function handleConnect(cameraId, role = 'main') {
   connecting.value = null
 }
 
-async function handleDisconnect(cameraId) {
+/**
+ * A Disconnect the user has to confirm first: one that stops a running capture, or one
+ * that cuts a warm-up short. `null` when no confirmation is open.
+ */
+const pendingDisconnect = ref(null)
+
+/** Only the imaging camera captures; a guide camera disconnects whatever the capture does. */
+function capturesOn(cam) {
+  return cam?.role !== 'guide' && isCapturing.value
+}
+
+/**
+ * Disconnect is always available — the server ends any session in bounded time — but two
+ * cases cost something the user should agree to first.
+ */
+function requestDisconnect(cam) {
+  if (isWarmingUp(cam)) {
+    pendingDisconnect.value = {camera: cam, kind: 'skip_warmup'}
+    return
+  }
+  if (capturesOn(cam)) {
+    pendingDisconnect.value = {camera: cam, kind: 'capture'}
+    return
+  }
+  handleDisconnect(cam.id)
+}
+
+async function confirmDisconnect() {
+  const pending = pendingDisconnect.value
+  pendingDisconnect.value = null
+  if (!pending) return
+  await handleDisconnect(pending.camera.id, {skipWarmup: pending.kind === 'skip_warmup'})
+}
+
+/**
+ * Whether the confirmation still describes the camera: it may have finished warming up
+ * and gone, or its capture ended, while the dialog was open. Confirming then answered
+ * "not connected", or asked about a cost that no longer applied.
+ */
+function pendingStillApplies(pending) {
+  const cam = cameras.value.find((c) => c.id === pending.camera.id && c.connected)
+  if (!cam) return false
+  return pending.kind === 'skip_warmup' ? isWarmingUp(cam) : capturesOn(cam)
+}
+
+watch(
+    () => pendingDisconnect.value && pendingStillApplies(pendingDisconnect.value),
+    (applies) => {
+      if (pendingDisconnect.value && !applies) pendingDisconnect.value = null
+    }
+)
+
+const pendingDisconnectCopy = computed(() => {
+  const pending = pendingDisconnect.value
+  if (!pending) return null
+  const name = pending.camera.name
+  if (pending.kind === 'capture') {
+    return {
+      title: 'Stop the capture and disconnect?',
+      body: `The capture running on ${name} stops first and its stack is saved, as on Stop. The sub being exposed is discarded.`,
+      confirm: 'Stop and disconnect',
+    }
+  }
+  return {
+    title: 'Disconnect without warming up?',
+    body: `${name} is warming up slowly so its sensor is not shocked by a sudden temperature change. Disconnecting now switches the cooler off at once.`,
+    confirm: 'Disconnect now',
+  }
+})
+
+async function handleDisconnect(cameraId, {skipWarmup = false} = {}) {
   connecting.value = cameraId
   await withErrorHandling(async () => {
-    await disconnectCamera(cameraId)
+    if (skipWarmup) {
+      await disconnectCamera(cameraId, {skipWarmup: true})
+    } else {
+      await disconnectCamera(cameraId)
+    }
     await refreshCameras()
     if (selectedCamera.value === cameraId) {
       selectedCamera.value = connectedCameras.value[0]?.id || null
@@ -101,72 +173,16 @@ function selectCamera(cameraId) {
   selectedCamera.value = cameraId
 }
 
-function formatResolution(cam) {
-  const {max_width: width, max_height: height} = cam?.info ?? {}
-  // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.
-  return width && height ? `${width}x${height}` : '—'
-}
-
-function temperaturePill(cam) {
-  if (!cam?.info?.has_cooler) return null
-  const status = cameraStatus.value?.[cam.name]
-  if (!status) return null
-  return `${status.temperature_c.toFixed(1)}°C`
-}
-
-function phaseOf(cam) {
-  return cameraPhase.value?.[cam?.name] || null
-}
-
-function isWarmingUp(cam) {
-  return phaseOf(cam) === 'warming_up'
-}
-
-function phaseLabel(cam) {
-  const phase = phaseOf(cam)
-  if (phase === 'precooling') return 'Precooling'
-  if (phase === 'warming_up') return 'Warming up'
-  // 'guiding' deliberately gets no pill: a connected guide camera is always guiding,
-  // and the green role badge next to it already says so.
-  return null
-}
-
-function sensorModePill(cam) {
-  const modes = cam?.info?.sensor_modes
-  if (!modes || modes.length === 0) return null
-  const isGuide = cam?.role === 'guide'
-  const override = isGuide
-      ? settings.value?.guide_camera?.sensor_mode_override
-      : settings.value?.sensor_mode_override
-  // Mirrors the backend's `is_actively_stacking` gate in
-  // `to_capture_config_with()` (server/state/settings.rs): Low Noise is only
-  // worth its frame-rate cost while frames are actually being integrated.
-  // `stacking_type !== 'planetary'` stands in for "DeepSky or Comet" —
-  // `StackingType::supports_stacking()` is `true` for every variant today,
-  // so the Rust condition reduces to exactly this. `wanderer_mode` doesn't
-  // need to appear here either: the UI always sets `stacking: true`
-  // alongside `wanderer_mode: true` (see `applyStackingMode` in
-  // CaptureControls.vue), so `stacking` alone already covers "Stacking or
-  // Wanderer". Never true for the guide camera: nothing it produces is stacked.
-  const isActivelyStacking =
-      !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
-  const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
-  const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
-  const match = modes.find((m) => needle.test(m.name))
-  return (match ?? modes[0]).name
-}
-
-async function handleConfigureSimulator() {
-  if (!directoryPath.value.trim()) {
+async function handleConfigureSimulator(path) {
+  if (!path) {
     error.value = 'Please enter a directory path'
     return
   }
 
   configuringSimulator.value = true
   await withErrorHandling(async () => {
-    simulatorConfig.value = await configureSimulator(directoryPath.value.trim())
+    simulatorConfig.value = await configureSimulator(path)
     showDirectoryInput.value = false
-    directoryPath.value = ''
     await refreshCameras()
   })
   configuringSimulator.value = false
@@ -201,7 +217,6 @@ async function handleRemoveSimulatedCamera(cam) {
 const HELP = {
   cameras:
       'Choose the camera to configure. One imaging camera and one guide camera can be connected at once — use the arrow next to Connect to attach a guide camera.',
-  simulator_dir: 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).',
 }
 </script>
 
@@ -248,34 +263,12 @@ const HELP = {
       {{ error }}
     </BaseAlert>
 
-    <div v-if="showDirectoryInput" class="simulator-config">
-      <div class="config-header">
-        <span>
-          Configure Simulator Directory
-          <BaseInfoIcon :message="HELP.simulator_dir"/>
-        </span>
-        <button class="btn-close" @click="showDirectoryInput = false">&times;</button>
-      </div>
-      <div class="config-body">
-        <input
-            v-model="directoryPath"
-            type="text"
-            placeholder="Enter path to image directory..."
-            class="directory-input"
-            @keyup.enter="handleConfigureSimulator"
-        />
-        <button
-            class="btn btn-sm btn-primary"
-            :disabled="configuringSimulator"
-            @click="handleConfigureSimulator"
-        >
-          {{ configuringSimulator ? '...' : 'Set' }}
-        </button>
-      </div>
-      <div class="config-hint">
-        Enter the full path to a directory containing FITS, TIFF, or PNG files
-      </div>
-    </div>
+    <SimulatorDirectoryInput
+        v-if="showDirectoryInput"
+        :busy="configuringSimulator"
+        @submit="handleConfigureSimulator"
+        @close="showDirectoryInput = false"
+    />
 
     <!-- Collapsible camera sections -->
     <div v-show="!camerasCollapsed" class="cameras-container">
@@ -317,7 +310,10 @@ const HELP = {
                 <span v-if="roleLabel(cam)" class="role-pill" :class="`role-${cam.role}`">{{
                     roleLabel(cam)
                   }}</span>
-                <span v-if="phaseLabel(cam)" class="phase-pill">{{ phaseLabel(cam) }}</span>
+                <span v-if="phaseLabel(cam)" class="phase-pill">
+                  <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
+                  {{ phaseLabel(cam) }}
+                </span>
                 <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
                     sensorModePill(cam)
                   }}</span>
@@ -329,16 +325,15 @@ const HELP = {
             <div class="camera-actions">
               <button
                   class="btn btn-sm btn-danger"
-                  :disabled="connecting === cam.id || isCapturing || isWarmingUp(cam)"
-                  :title="isWarmingUp(cam) ? 'Warming up, please wait…' : 'Disconnect'"
-                  @click.stop="handleDisconnect(cam.id)"
+                  :disabled="connecting === cam.id"
+                  :title="isWarmingUp(cam) ? 'Disconnect without finishing the warm-up' : 'Disconnect'"
+                  @click.stop="requestDisconnect(cam)"
               >
-                <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
                 <span>{{
                     connecting === cam.id
                         ? '...'
                         : isWarmingUp(cam)
-                            ? 'Warming up…'
+                            ? 'Disconnect now'
                             : 'Disconnect'
                   }}</span>
               </button>
@@ -412,6 +407,23 @@ const HELP = {
         <button class="btn btn-sm" @click="refreshCameras">Scan</button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <BaseModal
+          v-if="pendingDisconnectCopy"
+          :title="pendingDisconnectCopy.title"
+          max-width="420px"
+          @close="pendingDisconnect = null"
+      >
+        <p class="confirm-text">{{ pendingDisconnectCopy.body }}</p>
+        <template #footer>
+          <button class="btn btn-sm btn-secondary confirm-cancel" @click="pendingDisconnect = null">Cancel</button>
+          <button class="btn btn-sm btn-danger confirm-disconnect" @click="confirmDisconnect">
+            {{ pendingDisconnectCopy.confirm }}
+          </button>
+        </template>
+      </BaseModal>
+    </Teleport>
 
     <div v-if="camerasCollapsed && currentCamera" class="collapsed-summary">
       <span class="camera-name">{{ currentCamera.name }}</span>
@@ -518,11 +530,18 @@ const HELP = {
 }
 
 .phase-pill {
+  display: inline-flex;
+  align-items: center;
   background: rgba(234, 179, 8, 0.18);
   color: #eab308;
   padding: 0.05rem 0.375rem;
   border-radius: 999px;
   font-weight: 500;
+}
+
+.confirm-text {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .sensor-mode-pill {
@@ -556,7 +575,7 @@ const HELP = {
 }
 
 .warmup-spinner {
-  margin-right: 0.35rem;
+  margin-right: 0.25rem;
 }
 
 .btn-icon {
@@ -601,55 +620,6 @@ const HELP = {
 }
 
 /* empty-state and btn-close now in main.css */
-
-.simulator-config {
-  background: var(--surface-elevated);
-  border-radius: 6px;
-  padding: 0.5rem;
-  margin-bottom: 0.375rem;
-}
-
-.config-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin-bottom: 0.375rem;
-}
-
-.config-body {
-  display: flex;
-  gap: 0.375rem;
-  align-items: center;
-}
-
-.directory-input {
-  flex: 1;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
-  min-width: 0;
-}
-
-.directory-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.directory-input::placeholder {
-  color: var(--text-muted);
-}
-
-.config-hint {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  margin-top: 0.25rem;
-}
 
 .simulator-add {
   display: flex;

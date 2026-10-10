@@ -1,0 +1,396 @@
+//! Robust Image Statistics for Astrophotography Autostretch
+//!
+//! This module provides high-performance computation of robust statistics
+//! (median and MAD) optimized for astronomical images on embedded platforms.
+
+use crate::error::{Result, StackError};
+use crate::frame::Frame;
+use rayon::prelude::*;
+
+mod channel;
+mod compute;
+mod config;
+mod image;
+mod ops;
+
+pub use channel::ChannelStats;
+pub use config::StatsConfig;
+pub use image::ImageStats;
+pub use ops::{fast_median, select_median, select_nth};
+
+use compute::compute_channel_stats;
+use ops::{compute_mad_in_place_simd, min_max_simd};
+
+use tracing::instrument;
+
+/// Compute robust image statistics (median and MAD) per channel
+pub fn compute_image_stats(frame: &Frame) -> Result<ImageStats> {
+    compute_image_stats_with_config(frame, StatsConfig::default())
+}
+
+/// Compute image statistics with custom configuration
+#[instrument(skip(frame), fields(
+    resolution = %format!("{}x{}", frame.width(), frame.height()),
+    sample_count = tracing::field::Empty,
+    channels = frame.channels()
+))]
+pub fn compute_image_stats_with_config(frame: &Frame, config: StatsConfig) -> Result<ImageStats> {
+    let width = frame.width();
+    let height = frame.height();
+    let channels = frame.channels();
+    let total_pixels = width * height;
+
+    if total_pixels < config.min_samples {
+        return Err(StackError::InvalidConfiguration(format!(
+            "Image too small for statistics: {} pixels, need at least {}",
+            total_pixels, config.min_samples
+        )));
+    }
+
+    // Determine sample count and step
+    let sample_count = total_pixels.min(config.max_samples);
+    let step = if sample_count >= total_pixels {
+        1
+    } else {
+        total_pixels / sample_count
+    };
+
+    tracing::Span::current().record("sample_count", sample_count);
+
+    // Parallel over channels as well as inside them: the gather splits the sample range,
+    // but the median and MAD are single-threaded selections, so three channels in a row
+    // left all but one core idle through most of the call.
+    let channel_stats: Vec<ChannelStats> = (0..channels)
+        .into_par_iter()
+        .map(|channel| compute_channel_stats(frame, channel, step))
+        .collect();
+
+    Ok(ImageStats {
+        channels: channel_stats,
+        sample_count,
+    })
+}
+
+/// Compute statistics for a luminance image (single-pass for monochrome)
+pub fn compute_luminance_stats(data: &[f32]) -> Result<ChannelStats> {
+    if data.len() < 1000 {
+        return Err(StackError::InvalidConfiguration(
+            "Data too small for statistics".into(),
+        ));
+    }
+
+    let config = StatsConfig::default();
+    let step = data.len() / config.max_samples.min(data.len());
+    let step = step.max(1);
+
+    // For step=1, use contiguous access
+    let mut samples = if step == 1 {
+        data.to_vec()
+    } else {
+        let samples: Vec<f32> = (0..data.len())
+            .into_par_iter()
+            .step_by(step)
+            .map(|i| data[i])
+            .collect();
+        samples
+    };
+
+    if samples.is_empty() {
+        return Ok(ChannelStats::new(0.0, 0.0, 0.0, 0.0));
+    }
+
+    // Use SIMD for min/max
+    let (min_val, max_val) = min_max_simd(&samples);
+
+    // Compute median
+    let median = fast_median(&mut samples);
+
+    // Compute MAD in-place using SIMD
+    compute_mad_in_place_simd(&mut samples, median);
+    let mad = fast_median(&mut samples);
+
+    Ok(ChannelStats::new(median, mad, min_val, max_val))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_uniform_image_stats() {
+        let frame = Frame::filled(256, 256, 3, 0.3).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        assert_eq!(stats.channels.len(), 3);
+        for ch in &stats.channels {
+            assert!(
+                (ch.median - 0.3).abs() < 0.01,
+                "Median should be ~0.3, got {}",
+                ch.median
+            );
+            assert!(ch.mad < 0.01, "MAD should be ~0, got {}", ch.mad);
+            assert!(ch.sigma < 0.02, "Sigma should be ~0, got {}", ch.sigma);
+        }
+    }
+
+    #[test]
+    fn test_noisy_image_stats() {
+        let mut data = vec![0.5f32; 256 * 256];
+        let mut seed: u32 = 12345;
+        for v in data.iter_mut() {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            let noise = ((seed >> 16) as f32 / 65536.0 - 0.5) * 0.1;
+            *v += noise;
+        }
+
+        let frame = Frame::from_f32_vec(data, 256, 256, 1).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        let ch = &stats.channels[0];
+        assert!((ch.median - 0.5).abs() < 0.02);
+        assert!(ch.mad > 0.01);
+        assert!(ch.mad < 0.1);
+    }
+
+    #[test]
+    fn test_outlier_robustness() {
+        let mut data = vec![0.1f32; 100 * 100];
+        for i in 0..100 {
+            data[i * 100] = 1.0;
+        }
+
+        let frame = Frame::from_f32_vec(data, 100, 100, 1).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        let ch = &stats.channels[0];
+        assert!((ch.median - 0.1).abs() < 0.02);
+        assert!(ch.mad < 0.05);
+    }
+
+    #[test]
+    fn test_multichannel_independence() {
+        let mut data = vec![0.0f32; 64 * 64 * 3];
+        let plane = 64 * 64;
+        for i in 0..plane {
+            data[i] = 0.2;
+            data[plane + i] = 0.4;
+            data[plane * 2 + i] = 0.6;
+        }
+
+        let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        assert!((stats.channels[0].median - 0.2).abs() < 0.01);
+        assert!((stats.channels[1].median - 0.4).abs() < 0.01);
+        assert!((stats.channels[2].median - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_min_max_tracking() {
+        let mut data = vec![0.5f32; 100 * 100];
+        data[0] = 0.1;
+        data[9999] = 0.9;
+
+        let frame = Frame::from_f32_vec(data, 100, 100, 1).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        let ch = &stats.channels[0];
+        assert!((ch.min - 0.1).abs() < 0.01);
+        assert!((ch.max - 0.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_mean_statistics() {
+        let mut data = vec![0.0f32; 64 * 64 * 3];
+        let plane = 64 * 64;
+        for i in 0..plane {
+            data[i] = 0.3;
+            data[plane + i] = 0.3;
+            data[plane * 2 + i] = 0.3;
+        }
+
+        let frame = Frame::from_f32_vec(data, 64, 64, 3).unwrap();
+        let stats = compute_image_stats(&frame).unwrap();
+
+        assert!((stats.mean_median() - 0.3).abs() < 0.01);
+        assert!(stats.mean_sigma() < 0.02);
+    }
+
+    #[test]
+    fn test_suggested_black_point() {
+        let ch = ChannelStats::new(0.2, 0.01, 0.0, 1.0);
+        let bp = ch.suggested_black_point(2.8);
+        let expected = 0.2 - 2.8 * (0.01 * 1.4826);
+        assert!((bp - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_black_point_clamp() {
+        let ch = ChannelStats::new(0.05, 0.1, 0.0, 1.0);
+        let bp = ch.suggested_black_point(5.0);
+        assert_eq!(bp, 0.0);
+    }
+
+    #[test]
+    fn test_fast_median_odd() {
+        let mut values = vec![1.0, 5.0, 3.0, 2.0, 4.0];
+        let med = fast_median(&mut values);
+        assert!((med - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fast_median_even() {
+        let mut values = vec![1.0, 5.0, 3.0, 2.0, 4.0, 6.0];
+        let med = fast_median(&mut values);
+        assert!((med - 3.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fast_median_single() {
+        let mut values = vec![42.0];
+        let med = fast_median(&mut values);
+        assert!((med - 42.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_fast_median_empty() {
+        let mut values: Vec<f32> = vec![];
+        let med = fast_median(&mut values);
+        assert_eq!(med, 0.0);
+    }
+
+    #[test]
+    fn test_luminance_stats() {
+        let data = vec![0.25f32; 10000];
+        let stats = compute_luminance_stats(&data).unwrap();
+        assert!((stats.median - 0.25).abs() < 0.01);
+        assert!(stats.mad < 0.01);
+    }
+
+    #[test]
+    fn test_is_low_signal() {
+        let mut high_signal_data = vec![0.1f32; 64 * 64];
+        high_signal_data[0] = 0.9;
+        let high_signal = Frame::from_f32_vec(high_signal_data, 64, 64, 1).unwrap();
+        let stats = compute_image_stats(&high_signal).unwrap();
+        assert!(!stats.is_low_signal());
+    }
+
+    #[test]
+    fn test_config_full_precision() {
+        let config = StatsConfig::default().full_precision();
+        assert_eq!(config.max_samples, usize::MAX);
+    }
+
+    #[test]
+    fn test_signal_range() {
+        let ch = ChannelStats::new(0.2, 0.01, 0.0, 0.8);
+        assert!((ch.signal_range() - 0.6).abs() < 1e-6);
+    }
+
+    /// Built with `set_pixel`, not `data[i * 3 + c]`. The old fixture wrote *interleaved*
+    /// offsets into a planar frame, so every plane held a mix of all three values. It
+    /// passed only because global min and max are layout-invariant — and it would have
+    /// validated any per-channel assertion added later against a scrambled buffer, which
+    /// is exactly the trap the layout rules exist to close.
+    #[test]
+    fn test_global_min_max() {
+        let (r_val, g_val, b_val) = (0.1f32, 0.5, 0.9);
+        let mut frame = Frame::zeros(64, 64, 3).unwrap();
+        for y in 0..64 {
+            for x in 0..64 {
+                frame.set_pixel(x, y, 0, r_val);
+                frame.set_pixel(x, y, 1, g_val);
+                frame.set_pixel(x, y, 2, b_val);
+            }
+        }
+
+        let stats = compute_image_stats(&frame).unwrap();
+        assert!((stats.global_min() - r_val).abs() < 0.01);
+        assert!((stats.global_max() - b_val).abs() < 0.01);
+
+        // The assertion the corrected fixture makes possible: each channel's statistics
+        // must come from its own plane. Against the old fixture every channel median
+        // landed on the same mixture and this could not have been written.
+        assert_eq!(stats.channels.len(), 3);
+        for (c, want) in [r_val, g_val, b_val].iter().enumerate() {
+            let median = stats.channels[c].median;
+            assert!(
+                (median - want).abs() < 1e-4,
+                "channel {c} median is {median}, expected {want} — planes are mixed"
+            );
+        }
+    }
+
+    /// The cheap order statistic the per-frame estimators use instead of
+    /// [`fast_median`], which parallel-sorts from 4096 elements up. It has to agree with
+    /// the sorted answer exactly, or every threshold derived from it moves.
+    #[test]
+    fn selection_agrees_with_a_full_sort() {
+        for len in [1usize, 2, 3, 64, 4095, 4096, 8193] {
+            let data: Vec<f32> = (0..len)
+                .map(|i| ((i * 2_654_435_761usize) % 1_000_003) as f32 / 1e6)
+                .collect();
+            let mut sorted = data.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            for n in [0, len / 4, len / 2, len - 1] {
+                let mut scratch = data.clone();
+                assert_eq!(
+                    select_nth(&mut scratch, n),
+                    sorted[n],
+                    "len {len}, n {n}: selection disagrees with the sorted order"
+                );
+                assert_eq!(scratch.len(), len, "selection must not drop samples");
+            }
+
+            let mut scratch = data.clone();
+            assert_eq!(select_median(&mut scratch), sorted[len / 2]);
+        }
+    }
+
+    /// Out-of-range indices and an empty slice reach these from sample counts derived
+    /// from a frame's dimensions, so neither may panic.
+    #[test]
+    fn selection_survives_an_empty_slice_and_a_high_index() {
+        assert_eq!(select_nth(&mut [], 0), 0.0);
+        assert_eq!(select_median(&mut []), 0.0);
+        assert_eq!(select_nth(&mut [3.0, 1.0, 2.0], 99), 3.0);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_select_nth_no_panic(
+            mut data in prop::collection::vec(proptest::num::f32::ANY, 0..1000),
+            n in 0usize..1500,
+        ) {
+            let _ = select_nth(&mut data, n);
+        }
+
+        #[test]
+        fn prop_fast_median_preserves_length(mut data in prop::collection::vec(proptest::num::f32::NORMAL, 0..100)) {
+            let len = data.len();
+            let _ = fast_median(&mut data);
+            prop_assert_eq!(data.len(), len);
+        }
+
+        #[test]
+        fn prop_fast_median_no_panic(mut data in prop::collection::vec(proptest::num::f32::ANY, 0..1000)) {
+            let _ = fast_median(&mut data);
+        }
+
+        #[test]
+        fn prop_channel_stats_no_panic(
+            median in proptest::num::f32::ANY,
+            mad in proptest::num::f32::ANY,
+            min in proptest::num::f32::ANY,
+            max in proptest::num::f32::ANY
+        ) {
+            let ch = ChannelStats::new(median, mad, min, max);
+            let _ = ch.suggested_black_point(2.8);
+            let _ = ch.signal_range();
+        }
+    }
+}

@@ -1,12 +1,14 @@
 <script setup>
 import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
-import {useImageStream} from '../composables/useWebSocket.js'
+import {useImageStream} from '../composables/useImageStream.js'
 import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
 import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
+import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
 import {getAppState} from '../composables/useAppState.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
+import {useDisplayedFov} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
@@ -16,7 +18,12 @@ const settings = inject('settings')
 const appState = getAppState()
 const capabilities = appState.capabilities
 
+const mainCamera = inject('mainCamera', computed(() => null))
+const guideCamera = inject('guideCamera', computed(() => null))
+
 const routePath = window.location.pathname
+// No source in the URL: the server streams whichever camera the operator views on `/`,
+// switching this socket in place.
 const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
@@ -44,6 +51,10 @@ const singleViewBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
 const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
+
+const showsGuideCamera = computed(() => eventStream?.viewedCamera?.value === 'guide')
+const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
+const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
@@ -88,7 +99,8 @@ const backendLabel = computed(() => {
     none: 'No renderer',
     unknown: '...',
   }
-  return labels[renderBackend.value] || renderBackend.value
+  const label = labels[renderBackend.value] || renderBackend.value
+  return showsGuideCamera.value ? `${label} · Guide camera` : label
 })
 
 function initRenderer() {
@@ -101,6 +113,19 @@ function initRenderer() {
   if (canvasSingleRef.value) {
     if (!webglSingle.init(canvasSingleRef.value)) canvas2dSingle.init(canvasSingleRef.value)
   }
+}
+
+/** The size last drawn, so a change of it — a camera switch — re-measures the arrows. */
+let drawnSize = null
+
+/**
+ * Off the circular view the canvas takes the frame's own aspect, so a new size moves it
+ * inside an eye that stays put, and the eye's ResizeObserver never fires.
+ */
+function noteDrawnSize(width, height) {
+  if (drawnSize?.width === width && drawnSize?.height === height) return
+  drawnSize = {width, height}
+  updateBounds()
 }
 
 function renderFrame() {
@@ -119,6 +144,7 @@ function renderFrame() {
         if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
         else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
       }
+      noteDrawnSize(bitmap.width, bitmap.height)
       bitmap.close()
     }).catch(() => { /* frame was replaced before decode finished */ })
     return
@@ -134,6 +160,7 @@ function renderFrame() {
     if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, frameData.value, width, height)
     else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, frameData.value, width, height)
   }
+  noteDrawnSize(width, height)
 }
 
 function cleanupRenderer() {
@@ -156,44 +183,11 @@ watch(isBinoview, () => {
   }, 10)
 })
 
-let initialDist = 0
-let initialScale = 1
-let initialCx = 0
-let initialCy = 0
-let initialPanX = 0
-let initialPanY = 0
-
 const isZoomAllowed = computed(() => routePath === '/eyepiece')
-const zoomScale = ref(1)
-const panX = ref(0)
-const panY = ref(0)
-const isPinching = ref(false)
-
-const zoomStyle = computed(() => {
-  if (zoomScale.value === 1) return {}
-  return {
-    transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoomScale.value})`,
-    transformOrigin: '0 0',
-  }
-})
-
-function clampPan(x, y, scale) {
-  if (scale <= 1) return { x: 0, y: 0 }
-  const W = window.innerWidth
-  const H = window.innerHeight
-  const minX = W * (1 - scale)
-  const minY = H * (1 - scale)
-  return {
-    x: Math.min(0, Math.max(minX, x)),
-    y: Math.min(0, Math.max(minY, y))
-  }
-}
-
-function resetZoom() {
-  zoomScale.value = 1
-  panX.value = 0
-  panY.value = 0
-}
+const zoom = useEyepieceZoom(() => isZoomAllowed.value && effectiveHasFrame.value)
+const zoomScale = zoom.scale
+const zoomStyle = zoom.style
+const resetZoom = zoom.reset
 
 const rootRef = ref(null)
 
@@ -247,11 +241,10 @@ function reportDownloadError(message) {
 /**
  * Save the frame the server last rendered, at its own resolution rather than the
  * tier this screen happens to be streaming. `circular` is the round eyepiece
- * image; without it, the same picture as the uncropped stretched result.
+ * image; without it, the uncropped stretched result.
  *
- * The server names the file — the timestamp in it is its to stamp — and the name
- * travels with the bytes, because the blob the fetch produced has none of the
- * headers it arrived with.
+ * The server names the file (it owns the timestamp); the name travels with the
+ * bytes since the fetch's blob carries none of the headers it arrived with.
  */
 async function downloadSnapshot(circular) {
   if (downloading.value) return
@@ -269,116 +262,27 @@ async function downloadSnapshot(circular) {
 
 function handleWheel(e) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  const zoomSensitivity = 0.001
-  const delta = -e.deltaY * zoomSensitivity
-  
-  const oldScale = zoomScale.value
-  let newScale = oldScale + delta
-  newScale = Math.min(2, Math.max(1, newScale))
-  
-  if (newScale === oldScale) return
-
-  const cx = e.clientX
-  const cy = e.clientY
-  
-  let newX = cx - (cx - panX.value) * (newScale / oldScale)
-  let newY = cy - (cy - panY.value) * (newScale / oldScale)
-  
-  const clamped = clampPan(newX, newY, newScale)
-  panX.value = clamped.x
-  panY.value = clamped.y
-  zoomScale.value = newScale
-}
-
-function getDist(touches) {
-  const dx = touches[0].clientX - touches[1].clientX
-  const dy = touches[0].clientY - touches[1].clientY
-  return Math.sqrt(dx * dx + dy * dy)
-}
-
-function getCenter(touches) {
-  if (touches.length === 1) {
-    return { x: touches[0].clientX, y: touches[0].clientY }
-  }
-  return {
-    x: (touches[0].clientX + touches[1].clientX) / 2,
-    y: (touches[0].clientY + touches[1].clientY) / 2
-  }
+  zoom.wheel(e)
 }
 
 function handleTouchStart(e) {
   handlePressStart(e)
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2) {
-    isPinching.value = true
-    initialDist = getDist(e.touches)
-    initialScale = zoomScale.value
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  } else if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
+  zoom.touchStart(e)
 }
 
 function handleTouchMove(e) {
   showOverlay()
-  if (!isZoomAllowed.value || !effectiveHasFrame.value) return
-
-  if (e.touches.length === 2 && isPinching.value) {
-    const currentDist = getDist(e.touches)
-    const scaleRatio = currentDist / initialDist
-    let newScale = initialScale * scaleRatio
-    newScale = Math.min(2, Math.max(1, newScale))
-    
-    const currentCenter = getCenter(e.touches)
-    let newX = currentCenter.x - (initialCx - initialPanX) * (newScale / initialScale)
-    let newY = currentCenter.y - (initialCy - initialPanY) * (newScale / initialScale)
-    
-    const clamped = clampPan(newX, newY, newScale)
-    panX.value = clamped.x
-    panY.value = clamped.y
-    zoomScale.value = newScale
-  } else if (e.touches.length === 1 && zoomScale.value > 1 && !isPinching.value) {
-    const currentCenter = getCenter(e.touches)
-    const dx = currentCenter.x - initialCx
-    const dy = currentCenter.y - initialCy
-    
-    let newX = initialPanX + dx
-    let newY = initialPanY + dy
-    
-    const clamped = clampPan(newX, newY, zoomScale.value)
-    panX.value = clamped.x
-    panY.value = clamped.y
-  }
+  zoom.touchMove(e)
 }
 
 function handleTouchCancel(e) {
   cancelPress(e)
-  isPinching.value = false
+  zoom.touchCancel()
 }
 
 function handleTouchEnd(e) {
   handlePressEnd(e)
-  if (e.touches.length < 2) {
-    isPinching.value = false
-  }
-  if (e.touches.length === 1 && zoomScale.value > 1) {
-    const center = getCenter(e.touches)
-    initialCx = center.x
-    initialCy = center.y
-    initialPanX = panX.value
-    initialPanY = panY.value
-  }
+  zoom.touchEnd(e)
 }
 
 let resizeObserver = null
@@ -490,7 +394,7 @@ onUnmounted(() => {
             :image-top="leftEyeBounds.top"
             :image-width="leftEyeBounds.width"
             :image-height="leftEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
+            :fov-deg="displayedFovDeg"
             :is-circular="isCircularView"
           />
         </div>
@@ -506,7 +410,7 @@ onUnmounted(() => {
             :image-top="rightEyeBounds.top"
             :image-width="rightEyeBounds.width"
             :image-height="rightEyeBounds.height"
-            :fov-deg="pushDirection.fovDeg || 0"
+            :fov-deg="displayedFovDeg"
             :is-circular="isCircularView"
           />
         </div>
@@ -524,7 +428,7 @@ onUnmounted(() => {
           :image-top="singleViewBounds.top"
           :image-width="singleViewBounds.width"
           :image-height="singleViewBounds.height"
-          :fov-deg="pushDirection.fovDeg || 0"
+          :fov-deg="displayedFovDeg"
           :is-circular="isCircularView"
         />
       </div>

@@ -8,7 +8,7 @@ use crate::server::{Server, ServerConfig};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -203,14 +203,14 @@ async fn check_otlp_reachable(endpoint: &str) {
     let connect = tokio::net::TcpStream::connect((host.as_str(), port));
     match tokio::time::timeout(std::time::Duration::from_millis(500), connect).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => warn!(
+        Ok(Err(e)) => tracing::warn!(
             endpoint,
             error = %e,
             "OTLP collector unreachable — traces/metrics will not export until it is. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
              than this app (the default only works when both are on the same machine)."
         ),
-        Err(_) => warn!(
+        Err(_) => tracing::warn!(
             endpoint,
             "OTLP collector did not respond within 500ms — traces/metrics may not export. \
              Set --otlp-endpoint or OTEL_EXPORTER_OTLP_ENDPOINT if it runs on a different host \
@@ -235,54 +235,34 @@ fn parse_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// Run the Night Amplifier server. Call `register_plugins` before logging is
-/// initialized, to register Pro plugin implementations into the global OnceLock
-/// registries — pass a no-op closure (or nothing) for the Community edition.
-///
-/// ```ignore
-/// night_amplifier::app::run(|| { BACKGROUND_PLUGIN.set(Box::new(RbfPlugin)).ok(); }).await;
-/// ```
 /// What the startup system report needs from the application (`system_info::AppContext`).
 fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_info::AppContext {
-    let plugins = [
-        ("push_to", crate::PUSH_TO_PLUGIN.get().is_some()),
-        (
-            "rejection",
-            crate::stacking::REJECTION_PLUGIN.get().is_some(),
-        ),
-        ("comet", crate::stacking::COMET_PLUGIN.get().is_some()),
-        (
-            "background",
-            crate::background::BACKGROUND_PLUGIN.get().is_some(),
-        ),
-        (
-            "planetary",
-            crate::planetary::PLANETARY_PLUGIN.get().is_some(),
-        ),
-        (
-            "saturation",
-            crate::render::SATURATION_PLUGIN.get().is_some(),
-        ),
-    ];
     crate::system_info::AppContext {
         port: args.port,
         static_dir: args.static_dir.clone(),
         log_dir,
-        settings_file: crate::server::DEFAULT_SETTINGS_FILE.into(),
+        settings_file: crate::session::settings_persistence::DEFAULT_SETTINGS_FILE.into(),
         pro_active: crate::license::is_pro_active(),
-        plugins: plugins
-            .into_iter()
-            .filter_map(|(name, registered)| registered.then_some(name))
-            .collect(),
-        frame_queue_budget_bytes: crate::server::capture::channel::frame_queue_budget_bytes(),
+        plugins: crate::plugins::Plugins::installed().registered(),
+        frame_queue_budget_bytes: crate::session::capture::channel::frame_queue_budget_bytes(),
+        build: crate::system_info::BuildFacts {
+            version: env!("CARGO_PKG_VERSION"),
+            git: option_env!("NIGHT_AMPLIFIER_GIT_DESCRIBE").unwrap_or("unknown"),
+            target: option_env!("NIGHT_AMPLIFIER_TARGET").unwrap_or("unknown"),
+            target_cpu: option_env!("NIGHT_AMPLIFIER_TARGET_CPU").unwrap_or("unknown"),
+            rustc: option_env!("NIGHT_AMPLIFIER_RUSTC_VERSION").unwrap_or("unknown"),
+        },
     }
 }
 
-pub async fn run(register_plugins: impl FnOnce()) {
+/// Run the Night Amplifier server with `plugins` — [`Plugins::none`] for Community, Pro's
+/// set for Pro. Installed before anything else, so every later reader sees them.
+///
+/// [`Plugins::none`]: crate::plugins::Plugins::none
+pub async fn run(plugins: crate::plugins::Plugins) {
     let args = Args::parse();
 
-    // Register plugins before anything else
-    register_plugins();
+    crate::plugins::install(plugins);
 
     // Build logging configuration
     #[cfg(feature = "telemetry")]
@@ -363,14 +343,14 @@ pub async fn run(register_plugins: impl FnOnce()) {
 
     // Apply CLI overrides for INDI if present
     if args.indi_host.is_some() || args.indi_port.is_some() {
-        let state = server.state();
-        let mut settings = state.settings.write().await;
-        if let Some(host) = args.indi_host {
-            settings.indi_server_host = host;
-        }
-        if let Some(port) = args.indi_port {
-            settings.indi_server_port = port;
-        }
+        server.state().settings.update(|settings| {
+            if let Some(host) = args.indi_host {
+                settings.indi_server_host = host;
+            }
+            if let Some(port) = args.indi_port {
+                settings.indi_server_port = port;
+            }
+        });
     }
 
     if let Err(e) = server.run().await {

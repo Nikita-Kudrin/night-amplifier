@@ -20,21 +20,13 @@ pub const MIN_FRAMES_FOR_STACKING: usize = 2;
 /// Triangle matching requires at least 3 stars, but we need more for robustness.
 pub const MIN_STARS_FOR_REGISTRATION: usize = 10;
 
-/// Minimum percentage of frames that must successfully stack (0.0 - 1.0).
-/// If fewer frames stack, the registration algorithm may have issues.
-pub const MIN_STACKING_SUCCESS_RATE: f64 = 0.5;
-
 /// Minimum fraction of frames the live-stacking path must get into the stack.
 ///
-/// Higher than `MIN_STACKING_SUCCESS_RATE` because that constant covers the
-/// batch path, which has no quality gate to lose frames to. The live path
-/// deliberately drops badly fitted frames — but dropping a third of a clean
-/// fixture set means detection, registration, or the gate's thresholds have
-/// regressed, not that the fixtures went bad.
-///
-/// Measured against the stack rather than against admissions, so an early
-/// re-base — which discards everything before it — shows up here as the lost
-/// integration it is. The managed sets currently sit at 83–100 %.
+/// The live path deliberately drops badly fitted frames, but losing a third
+/// of a clean fixture set means detection, registration, or the gate's thresholds regressed,
+/// not that the fixtures went bad. Measured against the stack, not admissions, so an early
+/// re-base (which discards everything before it) shows up here as the lost integration it is.
+/// Managed sets sit at 83–100 %.
 pub const MIN_LIVE_STACKING_RETENTION: f64 = 0.7;
 
 /// Re-bases a clean fixture set may make before the gate is chasing noise.
@@ -63,15 +55,6 @@ pub const MAX_RESIDUAL_REJECTION_SHARE: f64 = 0.1;
 /// same way, which would restart the integration every time a cloud crossed.
 pub const MAX_WANDERER_RESET_SHARE: f64 = 0.25;
 
-/// Minimum mean pixel value for output (ensures image is not all black)
-pub const MIN_OUTPUT_MEAN_VALUE: f64 = 1.0;
-
-/// Maximum mean pixel value for output (ensures image is not all white/saturated)
-pub const MAX_OUTPUT_MEAN_VALUE: f64 = 254.0;
-
-/// Minimum acceptable SNR for detected stars
-pub const MIN_ACCEPTABLE_SNR: f32 = 5.0;
-
 /// Minimum stretch factor that indicates successful auto-stretch
 pub const MIN_STRETCH_FACTOR: f32 = 1.0;
 
@@ -88,6 +71,7 @@ pub const MANAGED_FIXTURE_SETS: &[&str] = &[
     "250mm-dob-imx464-orion-png",
     "130mm-imx464-dumbell-nebulae-png",
     "130mm-imx464-ring-nebulae-png",
+    "cats-eye-nebula-imx533",
 ];
 
 /// Supported image file extensions
@@ -103,32 +87,19 @@ pub const DEBAYER_OUTPUT_DIR: &str = "debayer";
 // ============================================================================
 // Planar Layout Detectors
 // ============================================================================
-//
-// `Frame` stores pixels planar (`channel * width * height + y * width + x`) while
-// every 8-bit output format is interleaved. Reading a planar buffer as interleaved
-// makes each output pixel three *adjacent samples of one channel*, so chroma
-// collapses toward zero. That is cheap to assert on and needs no golden image,
-// which makes it the detector for the whole class of layout bugs.
-//
-// Measured on the bundled fixtures: a correct *stretched* colour render scores ~32, a
-// planar-read-as-interleaved one ~0.5.
-//
-// Calibration matters. This threshold only applies **after** background
-// neutralisation and stretch. Raw linear data is legitimately near-neutral — a freshly
-// debayered sub from the bundled FITS fixture scores 0.72 with nothing wrong with it —
-// so asserting this on a linear frame produces a false failure. For raw data, assert a
-// scene-independent structural property instead (see the CFA-site check in
-// `debayer_tests`).
+// `Frame` stores pixels planar (`channel*width*height + y*width + x`); every 8-bit format is
+// interleaved, so reading planar as interleaved makes each pixel three adjacent samples of one
+// channel, collapsing chroma toward zero — cheap to assert, no golden image needed (stretched
+// fixture ~32, planar-as-interleaved ~0.5). Valid only after stretch: raw data is near-neutral
+// (fresh sub scores 0.72 clean) — for raw data assert a structural property instead (`debayer_tests`).
 
-/// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures
-/// must exceed. Do not apply to raw linear frames; see the note above.
+/// Minimum chroma spread a correct **stretched** colour render of the bundled fixtures must
+/// exceed. Do not apply to raw linear frames; see the note above.
 ///
-/// A floor against channels collapsing, which is an all-or-nothing defect: reading the
-/// planar buffer as interleaved scores ~0, not a few percent low. It was 5.0, close enough
-/// to the real numbers that raising `ContrastConfig`'s strength to 1.0 tripped it at 4.97
-/// — the eyepiece view at full intensity puts more of the frame in the curve's toe, which
-/// costs a little chroma. 4.0 keeps an order of magnitude over the defect while leaving
-/// the threshold off the measurement it is meant to bracket.
+/// A floor against channels collapsing (all-or-nothing: planar-as-interleaved scores ~0, not
+/// a few percent low). Was 5.0, until raising `ContrastConfig`'s strength to 1.0 tripped it
+/// at 4.97 — full intensity puts more of the frame in the curve's toe, costing a little
+/// chroma. 4.0 keeps an order of magnitude over the defect while staying off that measurement.
 pub const MIN_CHROMA_SPREAD: f64 = 4.0;
 
 /// Mean per-pixel `|R-G| + |G-B|` over an interleaved RGB8 buffer, in 0-255 units.
@@ -415,6 +386,25 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
     (
         "globular-cluster-eyepiece",
         "https://drive.usercontent.google.com/download?id=13TacCPmug7mM1F32WHGX3EYLGEm0RvVE&export=download&confirm=t",
+    ),
+    (
+        "ic-59-ghost-of-cassiopeia-nebula",
+        "https://drive.usercontent.google.com/download?id=1LsFIKXtybn-bWGMmEtMMs6VR0qFaJ8Vi&export=download&confirm=t",
+    ),
+    (
+        "m33-triangulum-galaxy-imx533",
+        "https://drive.usercontent.google.com/download?id=19Zi6f8ItzVpqdqQgFMp-k5ocxvEd5gBx&export=download&confirm=t",
+    ),
+    (
+        "m101-pinwheel-galaxy-imx533",
+        "https://drive.usercontent.google.com/download?id=13QC7HvBGJGzSB3oDzmGeBWY-ModyV5Tn&export=download&confirm=t",
+    ),
+    // 27 subs of NGC 6543 (IMX533, 0.7 s at gain 0, 250 mm Dob) from 2026-09-20: ~15 real
+    // stars a sub against a nebula that shatters into ~45 brighter detections. Every sub
+    // after the reference was refused (`thin_subs_of_a_bright_nebula_still_stack`).
+    (
+        "cats-eye-nebula-imx533",
+        "https://drive.usercontent.google.com/download?id=1udM7sCdeknz_lhZihoDDLwqaGA4en8ZD&export=download&confirm=t",
     ),
 ];
 

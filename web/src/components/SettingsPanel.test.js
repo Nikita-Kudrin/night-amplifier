@@ -7,9 +7,12 @@ import {DEFAULT_SETTINGS} from '../constants/index.js'
 // Mock the API module
 vi.mock('../composables/api.js', () => ({
     updateSettings: vi.fn(),
+    getAiCompute: vi.fn(),
+    remeasureAiCompute: vi.fn(),
 }))
 
-import {updateSettings} from '../composables/api.js'
+import {getAiCompute, remeasureAiCompute, updateSettings} from '../composables/api.js'
+import {resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
 
 /**
  * A toggle's checkbox, found by the label text next to it.
@@ -57,7 +60,7 @@ describe('SettingsPanel', () => {
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
             capabilities: ref({
                 has_pro: false,
-                deep_sky: {advanced_rejection: false, rbf_background: false},
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: false},
                 planetary: {advanced_stacking: false},
                 push_to: {astap_solver: false},
                 ...overrides.capabilities,
@@ -411,8 +414,73 @@ describe('SettingsPanel', () => {
     })
 
     describe('Noise Reduction Section', () => {
-        it('sends the whole denoise object when a filter is toggled', async () => {
+        const WITH_DENOISE = {
+            capabilities: {deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true}},
+        }
+
+        const denoiseControls = (wrapper) => [
+            findToggleByLabel(wrapper, 'Colour Mottle').attributes('disabled'),
+            ...wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .filter((s) =>
+                    ['Colour strength', 'Background Grain', 'Structure strength', 'Detail'].includes(
+                        s.props('label')
+                    )
+                )
+                .map((s) => (s.props('disabled') ? '' : undefined)),
+        ]
+
+        // Denoising is a Pro feature: the filters live in the Pro plugin, and so does
+        // every control over them. The section stays visible, locked, so the build says
+        // what it does not do rather than silently missing a section.
+        it('locks every noise-reduction control without the denoise capability', () => {
             const wrapper = mountSettingsPanel()
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeDefined()
+            expect(denoiseControls(wrapper).every((d) => d !== undefined)).toBe(true)
+        })
+
+        it('turning Denoise off holds the filter controls but not the switch itself', async () => {
+            const wrapper = mountSettingsPanel({
+                ...WITH_DENOISE,
+                settings: {
+                    denoise: {
+                        enabled: false,
+                        chroma: true,
+                        chroma_strength: 1.0,
+                        background_grain: 0.5,
+                        luma_strength: 1.0,
+                    },
+                },
+            })
+            await flushPromises()
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeUndefined()
+            expect(denoiseControls(wrapper).every((d) => d !== undefined)).toBe(true)
+        })
+
+        it('sends the switch with the rest of the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
+
+            await findToggleByLabel(wrapper, 'Denoise').setValue(false)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({enabled: false, background_grain: 0.5}),
+            })
+        })
+
+        // The mode reaches "off" through the strengths it snapshots. A denoise switch the
+        // mode forced false is how a saved file once lost the Background Grain dial for
+        // good, so the observer's master switch is deliberately theirs.
+        it('Focus/Finder mode never holds the Denoise switch', () => {
+            const wrapper = mountSettingsPanel({...WITH_DENOISE, settings: {focus_mode: true}})
+
+            expect(findToggleByLabel(wrapper, 'Denoise').attributes('disabled')).toBeUndefined()
+        })
+
+        it('sends the whole denoise object when a filter is toggled', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
 
             await findToggleByLabel(wrapper, 'Colour Mottle').setValue(false)
             await flushPromises()
@@ -504,6 +572,44 @@ describe('SettingsPanel', () => {
             expect(slider.props('max')).toBe(1.0)
         })
 
+        // Local contrast ships on, at the setting the plugin's measurements passed on
+        // every target, and zero is the picture from before the control existed.
+        it('offers Detail from off to its top and sends it with the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_DENOISE)
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('min')).toBe(0.0)
+            expect(slider.props('max')).toBe(1.0)
+            expect(slider.props('modelValue')).toBe(0.5)
+            expect(slider.props('disabled')).toBeFalsy()
+
+            slider.vm.$emit('update:modelValue', 0.8)
+            slider.vm.$emit('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({detail: 0.8, background_grain: 0.5}),
+            })
+        })
+
+        // Detail is a gain on the brightness denoiser's planes: with that at zero there is
+        // nothing for it to raise, and a live slider that moves nothing is a broken control.
+        it('holds Detail while the brightness denoiser is off', async () => {
+            const wrapper = mountSettingsPanel({
+                ...WITH_DENOISE,
+                settings: {denoise: {enabled: true, chroma: true, luma_strength: 0.0, detail: 0.5}},
+            })
+            await flushPromises()
+
+            const slider = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(slider.props('disabled')).toBe(true)
+        })
+
         it('falls back to defaults when the server sends no denoise settings', async () => {
             const wrapper = mountSettingsPanel()
             await flushPromises()
@@ -513,6 +619,220 @@ describe('SettingsPanel', () => {
                 .findAllComponents({name: 'BaseSlider'})
                 .find((s) => s.props('label') === 'Background Grain')
             expect(grain.props('modelValue')).toBe(0.5)
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('modelValue')).toBe(0.5)
+        })
+    })
+
+    describe('AI Denoising', () => {
+        const WITH_AI = {
+            capabilities: {
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true, ai_denoise: true},
+            },
+        }
+
+        const slider = (wrapper, label) =>
+            wrapper.findAllComponents({name: 'BaseSlider'}).find((s) => s.props('label') === label)
+
+        it('lives in the Advanced section, locked without the capability', () => {
+            const wrapper = mountSettingsPanel()
+
+            const advanced = wrapper
+                .findAll('.settings-section')
+                .find((section) => section.find('.section-title').text() === 'Advanced')
+            expect(advanced.text()).toContain('AI denoising')
+            expect(findToggleByLabel(wrapper, 'AI denoising').attributes('disabled')).toBeDefined()
+        })
+
+        it('sends the switch with the rest of the denoise object', async () => {
+            const wrapper = mountSettingsPanel(WITH_AI)
+
+            await findToggleByLabel(wrapper, 'AI denoising').setValue(true)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({ai: true, enabled: true, background_grain: 0.5}),
+            })
+        })
+
+        // Focus/Finder mode holds the network off without touching the switch, so the
+        // observer's choice is there again when the mode ends.
+        it('is held, keeping its value, while Denoise is off and in Focus/Finder mode', async () => {
+            for (const settings of [
+                {denoise: {enabled: false, ai: true}},
+                {focus_mode: true, denoise: {ai: true}},
+            ]) {
+                const wrapper = mountSettingsPanel({...WITH_AI, settings})
+                await flushPromises()
+
+                const toggle = findToggleByLabel(wrapper, 'AI denoising')
+                expect(toggle.attributes('disabled')).toBeDefined()
+                expect(toggle.element.checked).toBe(true)
+                expect(wrapper.text()).toContain('Held off')
+            }
+        })
+
+        it('replaces Structure strength and Detail while it runs, and nothing else', async () => {
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai: true}}})
+            await flushPromises()
+
+            expect(slider(wrapper, 'Structure strength').props('disabled')).toBe(true)
+            expect(slider(wrapper, 'Detail').props('disabled')).toBe(true)
+            expect(slider(wrapper, 'Background Grain').props('disabled')).toBe(false)
+            expect(findToggleByLabel(wrapper, 'Colour Mottle').attributes('disabled')).toBeUndefined()
+            expect(wrapper.text()).toContain('replaces Structure strength and Detail')
+        })
+
+        it('replaces nothing on a build without the network', async () => {
+            const wrapper = mountSettingsPanel({
+                capabilities: {deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true}},
+                settings: {denoise: {ai: true}},
+            })
+            await flushPromises()
+
+            expect(slider(wrapper, 'Structure strength').props('disabled')).toBe(false)
+            expect(slider(wrapper, 'Detail').props('disabled')).toBe(false)
+        })
+    })
+
+    describe('AI Compute', () => {
+        const WITH_AI = {
+            capabilities: {
+                deep_sky: {advanced_rejection: false, rbf_background: false, denoise: true, ai_denoise: true},
+            },
+        }
+
+        /** This laptop: Iris Xe measured, the NVIDIA card without a driver, no NPU. */
+        const LAPTOP = {
+            generation: 3,
+            state: 'ready',
+            auto: 'integrated_gpu',
+            effective: 'integrated_gpu',
+            notice: null,
+            rungs: [
+                {rung: 'npu', usable: false, device: null, reason: 'No supported NPU found'},
+                {
+                    rung: 'discrete_gpu',
+                    usable: false,
+                    device: 'NVIDIA [10de:25ba]',
+                    reason: 'present, but no Vulkan driver (kernel driver: nouveau)',
+                },
+                {rung: 'integrated_gpu', usable: true, device: 'Intel Iris Xe', api: 'Vulkan', precision: 'f32', ms_per_frame: 64.7},
+                {rung: 'cpu', usable: true, device: 'i9-12900H', api: 'engine', precision: 'f32', ms_per_frame: 219.3},
+            ],
+        }
+
+        const select = (wrapper) => wrapper.find('[data-test="ai-compute-select"]')
+
+        beforeEach(() => {
+            resetAiCompute()
+            getAiCompute.mockResolvedValue(LAPTOP)
+        })
+
+        it('offers every rung and greys out what this computer cannot use, with the reason', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel(WITH_AI)
+            await flushPromises()
+
+            const options = select(wrapper).findAll('option')
+            expect(options.map((o) => o.attributes('value'))).toEqual(['auto', 'npu', 'discrete_gpu', 'integrated_gpu', 'cpu'])
+            expect(options[0].text()).toBe('Auto — Integrated GPU · 65 ms')
+            expect(options[1].attributes('disabled')).toBeDefined()
+            expect(options[2].attributes('disabled')).toBeDefined()
+            expect(options[3].attributes('disabled')).toBeUndefined()
+            expect(select(wrapper).attributes('disabled')).toBeUndefined()
+
+            const reasons = wrapper.find('[data-test="ai-compute-reasons"]')
+            expect(reasons.text()).toContain('NVIDIA [10de:25ba] — present, but no Vulkan driver')
+            expect(reasons.find('a').attributes('href')).toBe('/night-amplifier/system-dependencies')
+            expect(wrapper.find('[data-test="ai-compute-hint"]').text()).toContain('Runs on the Integrated GPU: Intel Iris Xe')
+        })
+
+        it('saves the choice with the rest of the denoise object and refetches the report', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel(WITH_AI)
+            await flushPromises()
+
+            await select(wrapper).setValue('cpu')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({
+                denoise: expect.objectContaining({ai_compute: 'cpu', enabled: true, ai: false}),
+            })
+            expect(getAiCompute).toHaveBeenCalled()
+        })
+
+        it('shows the server’s notice when a forced rung is not available here', async () => {
+            const notice = 'NPU is not available on this computer; using Auto (Integrated GPU).'
+            useAiCompute().report.value = {...LAPTOP, notice}
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai_compute: 'npu'}}})
+            await flushPromises()
+            expect(wrapper.find('[data-test="ai-compute-hint"]').text()).toBe(notice)
+            expect(select(wrapper).element.value).toBe('npu')
+        })
+
+        it('waits for the benchmark, and stays usable while the AI switch is off', async () => {
+            useAiCompute().report.value = {state: 'benchmarking', rungs: []}
+            const wrapper = mountSettingsPanel({...WITH_AI, settings: {denoise: {ai: false}}})
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeDefined()
+            expect(select(wrapper).find('option').text()).toBe('Auto (checking hardware…)')
+
+            useAiCompute().report.value = LAPTOP
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeUndefined()
+        })
+
+        it('is locked without the capability', async () => {
+            useAiCompute().report.value = LAPTOP
+            const wrapper = mountSettingsPanel()
+            await flushPromises()
+            expect(select(wrapper).attributes('disabled')).toBeDefined()
+            expect(wrapper.find('[data-test="ai-compute-reasons"]').exists()).toBe(false)
+        })
+
+        describe('Measure again', () => {
+            const button = (wrapper) => wrapper.find('[data-test="ai-compute-remeasure"]')
+
+            it('asks the server to measure again and reads the new report', async () => {
+                useAiCompute().report.value = LAPTOP
+                remeasureAiCompute.mockResolvedValue({...LAPTOP, state: 'checking'})
+                getAiCompute.mockResolvedValue({...LAPTOP, state: 'checking'})
+                const wrapper = mountSettingsPanel(WITH_AI)
+                await flushPromises()
+
+                await button(wrapper).trigger('click')
+                await flushPromises()
+                expect(remeasureAiCompute).toHaveBeenCalledTimes(1)
+                expect(getAiCompute).toHaveBeenCalled()
+                expect(useAiCompute().report.value.state).toBe('checking')
+            })
+
+            it('shows why the server refused', async () => {
+                useAiCompute().report.value = LAPTOP
+                remeasureAiCompute.mockRejectedValue(new Error('Stop the capture to measure the hardware again'))
+                const wrapper = mountSettingsPanel(WITH_AI)
+                await flushPromises()
+
+                await button(wrapper).trigger('click')
+                await flushPromises()
+                expect(wrapper.text()).toContain('Stop the capture to measure the hardware again')
+                expect(button(wrapper).attributes('disabled')).toBeUndefined()
+            })
+
+            it('is offered only once there is a result, and only with the network', async () => {
+                useAiCompute().report.value = {state: 'benchmarking', rungs: []}
+                const measuring = mountSettingsPanel(WITH_AI)
+                await flushPromises()
+                expect(button(measuring).exists()).toBe(false)
+
+                useAiCompute().report.value = LAPTOP
+                const locked = mountSettingsPanel()
+                await flushPromises()
+                expect(button(locked).exists()).toBe(false)
+            })
         })
     })
 
@@ -690,10 +1010,27 @@ describe('SettingsPanel', () => {
             expect(grainSlider(wrapper).props('disabled')).toBe(true)
         })
 
+        // Held because the mode holds the denoiser it works through — not managed: the
+        // mode never snapshots or rewrites the observer's Detail value.
+        it('greys Detail out with the brightness denoiser while the mode is on', () => {
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: true},
+                capabilities: {deep_sky: {denoise: true}},
+            })
+
+            const detail = wrapper
+                .findAllComponents({name: 'BaseSlider'})
+                .find((s) => s.props('label') === 'Detail')
+            expect(detail.props('disabled')).toBe(true)
+        })
+
         // The dial is deliberately *not* managed: it moves the tone curve's split as well
         // as the wavelet, and this mode has no business moving the tone curve.
         it('leaves the Background Grain dial editable while the mode is on', () => {
-            const wrapper = mountSettingsPanel({settings: {focus_mode: true}})
+            const wrapper = mountSettingsPanel({
+                settings: {focus_mode: true},
+                capabilities: {deep_sky: {denoise: true}},
+            })
 
             const dial = wrapper
                 .findAllComponents({name: 'BaseSlider'})
@@ -715,6 +1052,7 @@ describe('SettingsPanel', () => {
                         advanced_rejection: false,
                         rbf_background: false,
                         saturation_boost: true,
+                        denoise: true,
                     },
                 },
             })

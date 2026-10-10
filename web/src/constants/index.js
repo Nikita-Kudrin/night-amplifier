@@ -77,7 +77,7 @@ export const BLACK_LEVEL_LIMITS = {
 // The darkening half is anchored to the sky, so its reach is only meaningful against
 // where the sky actually renders. -6% is where the spatial darkening saturates (a tenth
 // of the sky left); further travel would do nothing. Mirrors `MIN_BLACK_FLOOR` in
-// `server/capture/stage_config.rs`, which clamps it server-side.
+// `crates/session/src/capture/stage_config.rs`, which clamps it server-side.
 export const BLACK_FLOOR_LIMITS = {
     min: -0.045,
     max: 0.15,
@@ -112,9 +112,19 @@ export const BACKGROUND_GRAIN_LIMITS = {
     default: 0.5,
 }
 
+// Local contrast on the target's own structure. 50% is the default the Pro plugin's
+// measurements passed on every test target; 100% is where the first faint ring shows.
+// Mirrors `DEFAULT_DETAIL` in crates/core/src/render/denoise/settings.rs.
+export const DETAIL_LIMITS = {
+    min: 0.0,
+    max: 1.0,
+    step: 0.05,
+    default: 0.5,
+}
+
 // How far above its brightest same-colour neighbour a sample must sit to be
 // treated as a hot pixel
-// Mirrors `HOT_PIXEL_SIGMA_RANGE` in src/server/state/settings.rs, which enforces it.
+// Mirrors `HOT_PIXEL_SIGMA_RANGE` in crates/core/src/cfa/mod.rs, which enforces it.
 export const HOT_PIXEL_SIGMA_LIMITS = {
     min: 3.0,
     max: 12.0,
@@ -296,10 +306,14 @@ export const DEFAULT_SETTINGS = {
         superpixel_debayer: false,
     },
     denoise: {
+        enabled: true,
         chroma: true,
         chroma_strength: 1.0,
         background_grain: 0.5,
         luma_strength: 1.0,
+        detail: 0.5,
+        ai: false,
+        ai_compute: 'auto',
     },
     preview_resolution: 'native',
     streaming_resolution: 'qhd1440',
@@ -407,6 +421,8 @@ export const HELP_TEXTS = {
         'Resolution the whole preview pipeline runs at. Native uses every sensor pixel. The lower settings box-average the frame down first, which is much faster on a small board and removes noise on the way, but you lose detail and the picture will re-grade when you change it. Fixed for the session — it deliberately does not follow whoever is connected.',
     streaming_resolution:
         'Image size sent to every screen viewing the live view and the eyepiece view. All of them get the same picture, so larger sizes cost bandwidth and server time for every viewer. It never goes above the Processing Resolution. On a screen smaller than the image the browser shrinks it, which looks grainier than choosing the smaller size here. Changes apply from the next frame.',
+    denoise_enabled:
+        'Turns every noise filter on or off at once. Off shows the stacked image exactly as it comes out of the pipeline — useful for judging what the filters are doing to a target, and the quickest way back if something looks plastic. Background Grain switches off with the filters, including the brightness it trades: off, the picture is rendered as at the dial\'s default. Focus/Finder mode never touches this switch.',
     denoise_chroma:
         'Removes the blotchy colour patches in the background without touching brightness detail. The eye resolves far less colour detail than brightness, so this can smooth hard with almost nothing to lose. Cheap and safe — leave it on.',
     denoise_chroma_strength:
@@ -415,8 +431,16 @@ export const HELP_TEXTS = {
         'How hard to fight grain in the background. The two halves do different things, because the mechanisms available cost very different amounts.\n• Above 50% the picture gets smoother almost for free. This is the half that works on the coarse, blotchy grain you actually notice — measured across six sessions it takes it down 9-27% while the target dims by at most 1%. Start here.\n• 50% is the tuned default: the cheap mechanism fully spent, the expensive one no further than its own default.\n• Below 50% you are buying brightness back with grain. It returns the finest speckle first, which is nearly invisible at normal viewing size, and then starts weakening the tone curve, which is what actually brightens faint nebulosity and galaxy arms — on a deep session the target reads about 17% brighter at 0% than at 50%.\nIf you are chasing smooth background, go up. If you are chasing faint detail, go down. Judge it at the eyepiece on the target you are actually looking at.',
     denoise_luma_strength:
         'Scales the thresholds for the mid scales — the soft mottle across the target, not the fine speckle and not the broad background blotches the Background Grain dial handles. 100% is the tuned value and the maximum: past it the mottle does not go away, it moves out to a coarser scale, and stars start to show a ring. Lower it if the target looks soft or plastic; 0% turns the brightness denoiser off altogether, which is the setting to reach for if nebulae start looking like plastic.',
+    denoise_ai:
+        'Runs a small neural network over the stretched image to clean up the fine, pixel-scale grain. While it runs it replaces Structure strength and Detail; Colour Mottle and Background Grain keep working, and Background Grain above 50% also smooths the larger mottle the network cannot reach. It keeps a nebula\'s texture where the standard filters smooth it, but it removes less grain than they do and softens stars a little more: a different look, not a stronger filter. Needs Denoise on, and is held off in Focus/Finder mode and on the guide camera. It is the most expensive stage of a render, so expect a slower refresh on a small board. Model: astro_denoiser_N2N_N2S "train_13" by Andriy Melnykov (MIT licence).',
+    ai_compute:
+        'Which processor runs AI denoising. On first start Night Amplifier measures every NPU and GPU it can use on four IMX533 frames, once per computer, and Auto takes the fastest one that is not the CPU - during a session the CPU is busy capturing and stacking. Pick a rung to force it, for example the integrated GPU to spare a laptop battery. The chosen processor is only woken while AI denoising is on, and released a few minutes after it goes off. Options this computer lacks or cannot use are greyed out with the reason; missing drivers and runtimes are listed under System dependencies in the manual.',
+    ai_compute_remeasure:
+        'Runs the hardware benchmark again. Use it after installing a driver or runtime, or to give a processor recorded as crashing Night Amplifier another try - if it crashes again, it is skipped again at the next start. Not available while a capture is running.',
+    denoise_detail:
+        'Brings out the structure inside the target - the lanes, knots and edges of a nebula or a galaxy\'s arms - without touching the background or the stars. It raises contrast at the scales between fine speckle and broad glow, and only where the target stands above the sky, so the background grain does not grow with it. Stars are left alone, including stars sitting on the nebula, which is where ordinary sharpening leaves dark rings. The grain on the target sits at the same scales, so it rises too: if a short stack or a faint galaxy looks grainier, lower this. 0% shows the target as it was before this control existed. Towards 100% a bright star on a bright galaxy disk can pick up a faint dark ring. It works through the brightness denoiser, so it does nothing while Structure strength is at 0%.',
     eyepiece_dither:
-        'Adds a sub-pixel-level pattern before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth.',
+        'Adds a fine random-looking pattern, below one brightness step, before the image is reduced to 8 bits, so smooth gradients do not band. With a noisy sky the noise already does this and you will see no difference; it matters once the background is smooth. It arrives whole only on /eyepiece_quality; the compressed views keep about half of it.',
     auto_stretch_intensity:
         'Intensifies the colors of the image while perfectly preserving the luminance/black level.',
     rejection_method:

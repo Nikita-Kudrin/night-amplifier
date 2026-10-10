@@ -1,22 +1,11 @@
-//! Whether a plate-solve dispatch survives a rig switch that happens after
-//! `plate_solve_available` already approved the frame.
+//! Whether a plate-solve dispatch survives a rig switch after `plate_solve_available` approved the frame.
 //!
-//! Found in code review of `656e367`/`1c8fa0e` (2026-09-05): `PushToSolverPlugin::
-//! observe_frame`/`process_new_frame` are told nothing about which camera captured
-//! their frame, so `ProPushToPlugin::look()` scales and mutates the one shared
-//! `MovementDetector` for whichever frame reaches it. A frame from the outgoing camera
-//! that is still in flight when a guide camera connects or disconnects — offered
-//! before the switch, dispatched after it — used to reach the plugin anyway, reading
-//! as the *new* rig's telescope having moved and aborting a solve that had just
-//! started. `solve_frame` and `watch_frame` now re-check `SolveSource::is_active`
-//! immediately before every dispatch, not only once at the `plate_solve_available`
-//! gate the caller checks first.
-//!
-//! One test function, deliberately: it registers a fake plugin into the
-//! process-global `PUSH_TO_PLUGIN` and flips the process-global `PRO_LICENSE_ACTIVE`
-//! — both one-shot/global state that every other test in the crate assumes untouched.
-//! A dedicated top-level binary keeps that off the shared `cargo test --lib` process;
-//! one test keeps it off this binary's own parallel test scheduling.
+//! Review of `656e367`/`1c8fa0e` (2026-09-05): the shared `MovementDetector` doesn't
+//! know which camera's frame it's scoring, so a frame in flight during a guide
+//! connect/disconnect read as the new rig having moved, aborting a fresh solve.
+//! `solve_frame`/`watch_frame` now re-check `SolveSource::is_active` before dispatch,
+//! not just once at the gate. The plugin is handed to each test state
+//! (`AppState::plugins`), so nothing process-wide changes.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,18 +14,14 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use night_amplifier::detection::StarDetector;
 use night_amplifier::frame::Frame;
+use night_amplifier::plugins::Plugins;
 use night_amplifier::push_to::{
-    FrameOutcome, PushToCatalogPlugin, PushToInstallerPlugin, PushToResult, PushToSolverPlugin,
-    PUSH_TO_PLUGIN,
+    CatalogEntryResponse, FrameOutcome, PushToDirectionResponse, PushToResult, PushToSolverPlugin,
+    PushToStatusResponse, TelescopeSettings,
 };
-use night_amplifier::server::capture::solving::{solve_frame, watch_frame, SolveSource};
-use night_amplifier::server::services::PushToState;
-use night_amplifier::server::state::AppState;
-use night_amplifier::server::{
-    AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, PushToDirectionResponse, PushToStatusResponse, ServerEvent,
-    TelescopeSettings,
-};
+use night_amplifier::session::capture::solving::{solve_frame, watch_frame, SolveSource};
+use night_amplifier::session::services::PushToState;
+use night_amplifier::session::state::AppState;
 
 /// Counts dispatches into the plugin. Every gating decision under test lives in
 /// `solving.rs`, not here — this only records whether it was reached.
@@ -113,70 +98,15 @@ impl PushToSolverPlugin for CountingPlugin {
         None
     }
 
-    async fn set_fov(&self, _fov: f32) -> Result<(), String> {
+    async fn set_fov(&self, _fov: f32) -> PushToResult<()> {
         Ok(())
     }
 
-    async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> Result<(), String> {
+    async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> PushToResult<()> {
         Ok(())
     }
 
     async fn set_active_camera(&self, _camera: Option<String>) {}
-}
-
-/// None of these are exercised by this test — `solve_frame`/`watch_frame` only ever reach
-/// `PushToSolverPlugin` methods — but `PushToSystemPlugin` requires all three traits.
-#[async_trait]
-impl PushToCatalogPlugin for CountingPlugin {
-    async fn search_catalog(&self, _query: &str, _limit: usize) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_by_type(&self, _catalog_type: &str) -> Vec<CatalogEntryResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_name(&self, _name: &str) -> Result<CatalogEntryResponse, String> {
-        unreachable!("not exercised by this test")
-    }
-    async fn set_target_by_coords(
-        &self,
-        _ra: f64,
-        _dec: f64,
-    ) -> Result<CoordinateResponse, String> {
-        unreachable!("not exercised by this test")
-    }
-    async fn clear_target(&self) -> Result<(), String> {
-        unreachable!("not exercised by this test")
-    }
-    async fn load_database(&self, _path: &str) -> Result<(), String> {
-        unreachable!("not exercised by this test")
-    }
-}
-
-#[async_trait]
-impl PushToInstallerPlugin for CountingPlugin {
-    async fn get_astap_status(&self) -> AstapStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse> {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_astap(
-        &self,
-        _database_types: &[String],
-        _events: tokio::sync::broadcast::Sender<ServerEvent>,
-    ) -> Result<(), String> {
-        unreachable!("not exercised by this test")
-    }
-    async fn get_catalog_status(&self) -> CatalogStatusResponse {
-        unreachable!("not exercised by this test")
-    }
-    async fn install_catalog(
-        &self,
-        _include_stars: bool,
-        _events: tokio::sync::broadcast::Sender<ServerEvent>,
-    ) -> Result<(), String> {
-        unreachable!("not exercised by this test")
-    }
 }
 
 fn tiny_frame() -> Arc<Frame> {
@@ -200,11 +130,11 @@ fn isolate_cwd() {
 
 /// A fresh app state with a `PushToState` claiming the solve slot, so `watch_frame`
 /// finds a solve to watch.
-async fn state_mid_solve() -> Arc<AppState> {
+async fn state_mid_solve(plugins: &Plugins) -> Arc<AppState> {
     // No raw frames are queued in this test, so the writer half can simply drop —
     // nothing needs it running.
-    let (state, _disk_writer) = AppState::new();
-    let state = Arc::new(state);
+    let (mut state, _disk_writer) = AppState::new();
+    state.plugins = plugins.clone();
 
     let push_to = PushToState::default();
     let latch = push_to
@@ -214,16 +144,16 @@ async fn state_mid_solve() -> Arc<AppState> {
     // releases the slot, and this state must read as "solving" for as long as the
     // test holds onto it, which outlives this function's own scope.
     std::mem::forget(latch);
-    *state.push_to.write().await = Some(push_to);
-    state
+    state.push_to = Some(push_to);
+    Arc::new(state)
 }
 
 /// A fresh app state with nothing running yet, so `solve_frame` starts a solve.
-async fn state_ready_to_solve() -> Arc<AppState> {
-    let (state, _disk_writer) = AppState::new();
-    let state = Arc::new(state);
-    *state.push_to.write().await = Some(PushToState::default());
-    state
+async fn state_ready_to_solve(plugins: &Plugins) -> Arc<AppState> {
+    let (mut state, _disk_writer) = AppState::new();
+    state.plugins = plugins.clone();
+    state.push_to = Some(PushToState::default());
+    Arc::new(state)
 }
 
 /// Poll for up to a second for a dispatch count to be reached.
@@ -243,25 +173,23 @@ async fn wait_for_count(counter: &AtomicUsize, expected: usize) {
 #[tokio::test]
 async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() {
     isolate_cwd();
-    night_amplifier::license::PRO_LICENSE_ACTIVE.store(true, Ordering::SeqCst);
 
     let observe_calls = Arc::new(AtomicUsize::new(0));
     let process_calls = Arc::new(AtomicUsize::new(0));
     let on_get_status: Arc<Mutex<Option<Box<dyn Fn() + Send>>>> = Arc::new(Mutex::new(None));
 
-    PUSH_TO_PLUGIN
-        .set(Box::new(CountingPlugin {
+    let plugins = Plugins::none()
+        .with_push_to_solver(Arc::new(CountingPlugin {
             observe_frame_calls: Arc::clone(&observe_calls),
             process_new_frame_calls: Arc::clone(&process_calls),
             on_get_status: Arc::clone(&on_get_status),
         }))
-        .ok()
-        .expect("this binary registers the plugin exactly once, in this one test");
+        .always_licensed();
 
     let frame = tiny_frame();
 
     // ---- watch arm: the source is still active — dispatch reaches the plugin ------
-    let state = state_mid_solve().await;
+    let state = state_mid_solve(&plugins).await;
     state.set_guide_loop_running(false); // Main is the active source
 
     watch_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
@@ -272,7 +200,7 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
     );
 
     // ---- watch arm: the source went stale before watch_frame even started ---------
-    let state = state_mid_solve().await;
+    let state = state_mid_solve(&plugins).await;
     // The guide camera connects in the gap between the caller's `plate_solve_available`
     // check and this call — exactly the race the fix closes.
     state.set_guide_loop_running(true);
@@ -286,7 +214,7 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
     );
 
     // ---- solve arm: the source is active throughout — dispatch reaches the plugin -
-    let state = state_ready_to_solve().await;
+    let state = state_ready_to_solve(&plugins).await;
     state.set_guide_loop_running(false);
 
     solve_frame(&state, Arc::clone(&frame), SolveSource::Main).await;
@@ -296,7 +224,7 @@ async fn a_rig_switch_between_the_gate_and_the_dispatch_drops_the_stale_frame() 
     // The gap unique to this arm: claiming the slot and dispatching into
     // `process_new_frame` cross `get_status().await`, which can outlast a rig switch that
     // lands in between.
-    let state = state_ready_to_solve().await;
+    let state = state_ready_to_solve(&plugins).await;
     state.set_guide_loop_running(false);
     let flip_state = Arc::clone(&state);
     *on_get_status.lock().unwrap() = Some(Box::new(move || {

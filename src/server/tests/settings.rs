@@ -5,8 +5,8 @@ use serde_json::json;
 use std::sync::Arc;
 
 use super::helpers::*;
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 #[tokio::test]
 async fn test_get_settings_default() {
@@ -57,7 +57,7 @@ async fn test_update_streaming_resolution_leaves_the_other_resolutions_alone() {
     let (status, _) =
         post_json(&app, "/api/settings", json!({"streaming_resolution": "8k"})).await;
     assert!(status.is_client_error(), "an unknown resolution was accepted");
-    assert_eq!(state.settings.read().await.streaming_resolution, Resolution::Qhd1440);
+    assert_eq!(state.settings.snapshot().streaming_resolution, Resolution::Qhd1440);
 }
 
 #[tokio::test]
@@ -380,16 +380,16 @@ fn test_settings_response_from_settings() {
 
     let response = SettingsResponse::from(&settings);
 
-    assert_eq!(response.exposure_us, 5_000_000);
-    assert_eq!(response.gain, 200);
-    assert_eq!(response.offset, 30);
-    assert_eq!(response.bin, 2);
-    assert!(!response.auto_stretch);
-    assert!(!response.stacking);
-    assert_eq!(response.rejection_sigma, 3.0);
-    assert!(!response.background_subtraction);
-    assert_eq!(response.raw_frame_saving, RawFrameSaving::default());
-    assert!(response.save_stacked_image);
+    assert_eq!(response.settings.exposure_us, 5_000_000);
+    assert_eq!(response.settings.gain, 200);
+    assert_eq!(response.settings.offset, 30);
+    assert_eq!(response.settings.bin, 2);
+    assert!(!response.settings.auto_stretch);
+    assert!(!response.settings.stacking);
+    assert_eq!(response.settings.rejection_sigma, 3.0);
+    assert!(!response.settings.background_subtraction);
+    assert_eq!(response.settings.raw_frame_saving, RawFrameSaving::default());
+    assert!(response.settings.save_stacked_image);
 }
 
 #[test]
@@ -409,8 +409,8 @@ fn test_settings_response_includes_save_options() {
     };
 
     let response = SettingsResponse::from(&settings);
-    assert_eq!(response.raw_frame_saving, raw_frame_saving);
-    assert!(!response.save_stacked_image);
+    assert_eq!(response.settings.raw_frame_saving, raw_frame_saving);
+    assert!(!response.settings.save_stacked_image);
 }
 
 /// Live view saves raw frames when Live view is one of the modes selected — the whole
@@ -569,7 +569,7 @@ async fn test_no_session_directory_is_opened_while_idle() {
 async fn test_session_directory_rolls_when_the_capture_mode_changes() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -609,7 +609,7 @@ async fn test_session_directory_rolls_when_the_capture_mode_changes() {
 async fn rolling_back_within_a_second_opens_a_separate_directory() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -644,7 +644,7 @@ async fn rolling_back_within_a_second_opens_a_separate_directory() {
 async fn test_unrelated_settings_updates_keep_the_same_session_directory() {
     let state = create_test_state();
     let app = create_test_router(state.clone());
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     post_json(
         &app,
@@ -678,7 +678,7 @@ async fn test_settings_update_mirrors_to_active_profile() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     let profile = settings
         .camera_profiles
         .get("Mock/Test Camera")
@@ -697,11 +697,80 @@ async fn test_settings_update_with_no_camera_does_not_create_profile() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "gain": 250 })).await;
     assert_eq!(status, StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(
         settings.camera_profiles.is_empty(),
         "no camera connected → no profile should be created"
     );
+}
+
+/// The denoise block arrives over JSON like `sensor_correction` and is sanitised on the way
+/// in like it. The plugin re-sanitises what it reads, but the settings file and every
+/// client of `/api/settings` would otherwise carry the raw values.
+#[tokio::test]
+async fn test_denoise_settings_are_sanitised_on_the_way_in() {
+    let app = create_test_router(create_test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "denoise": {
+            "enabled": true,
+            "chroma": true,
+            "chroma_strength": 3.0,
+            "background_grain": 7.0,
+            "luma_strength": -3.0,
+            "detail": 5.0,
+        }}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["denoise"]["chroma_strength"], 1.0);
+    assert_eq!(json["data"]["denoise"]["background_grain"], 1.0);
+    assert_eq!(json["data"]["denoise"]["luma_strength"], 0.0);
+    assert_eq!(json["data"]["denoise"]["detail"], 1.0);
+}
+
+/// JSON has no NaN, but it does have numbers past `f32::MAX`: serde narrows `1e39` from
+/// f64 and lands on infinity, which is how a non-finite value reaches a settings struct.
+#[tokio::test]
+async fn test_an_overflowing_denoise_value_does_not_arrive_as_infinity() {
+    let app = create_test_router(create_test_state());
+    let (status, json) = post_json(
+        &app,
+        "/api/settings",
+        json!({ "denoise": {
+            "enabled": true,
+            "chroma": true,
+            "chroma_strength": 1.0,
+            "background_grain": 1e39,
+            "luma_strength": 1.0,
+        }}),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"]["denoise"]["background_grain"], 0.5, "{json}");
+}
+
+/// The eyepiece block is assigned whole like the denoise block, so it takes the same
+/// guard: a screen size typed as `1e39` must not become an infinity the file cannot hold.
+/// Only non-finite values are replaced — ranges stay the renderer's business.
+#[tokio::test]
+async fn test_an_overflowing_eyepiece_value_does_not_arrive_as_infinity() {
+    let app = create_test_router(create_test_state());
+    let mut eyepiece = serde_json::to_value(EyepieceSettings::default()).unwrap();
+    eyepiece["screen_width"] = json!(1e39);
+    eyepiece["black_floor"] = json!(-1e39);
+    eyepiece["screen_height"] = json!(80.0);
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "eyepiece": eyepiece })).await;
+
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let read = |key: &str| json["data"]["eyepiece"][key].as_f64().unwrap_or(f64::NAN);
+    assert_eq!(read("screen_width"), 140.0, "{json}");
+    assert!((read("black_floor") - 0.04).abs() < 1e-6, "{json}");
+    assert_eq!(read("screen_height"), 80.0, "a finite value is the observer's: {json}");
 }
 
 // --- Focus/Finder mode ---------------------------------------------------------
@@ -875,7 +944,7 @@ async fn test_focus_mode_is_off_by_default() {
     let (_, json) = get_json(&app, "/api/settings").await;
 
     assert_eq!(json["data"]["focus_mode"], false);
-    assert!(state.settings.read().await.focus_mode_snapshot.is_none());
+    assert!(state.settings.snapshot().focus_mode_snapshot.is_none());
 }
 
 /// Focus/Finder mode drops `fpn_removal`, which runs on the raw mosaic before demosaic —
@@ -885,14 +954,14 @@ async fn test_focus_mode_is_off_by_default() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_while_stacking() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
 
     let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(json["success"], false);
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(!settings.focus_mode);
     assert!(
         settings.sensor_correction.fpn_removal,
@@ -905,7 +974,7 @@ async fn test_focus_mode_is_refused_while_stacking() {
 #[tokio::test]
 async fn test_focus_mode_is_allowed_during_live_view() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
     let (status, _) = post_json(&app, "/api/settings", json!({ "stacking": false })).await;
     assert_eq!(status, StatusCode::OK);
@@ -921,7 +990,7 @@ async fn test_focus_mode_is_allowed_during_live_view() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_in_wanderer_mode() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state.clone());
     let (status, _) = post_json(
         &app,
@@ -945,7 +1014,7 @@ async fn test_leaving_focus_mode_is_allowed_while_stacking() {
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
     assert_eq!(status, StatusCode::OK);
 
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let (status, json) = post_json(&app, "/api/settings", json!({ "focus_mode": false })).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -958,7 +1027,7 @@ async fn test_leaving_focus_mode_is_allowed_while_stacking() {
 #[tokio::test]
 async fn test_an_ordinary_settings_write_is_unaffected_while_stacking() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(state);
 
     let (status, json) = post_json(&app, "/api/settings", json!({ "gain": 123 })).await;
@@ -973,13 +1042,13 @@ async fn test_an_ordinary_settings_write_is_unaffected_while_stacking() {
 #[tokio::test]
 async fn test_focus_mode_is_refused_while_a_capture_is_starting() {
     let state = create_test_state();
-    state.set_capture_state(CaptureState::Starting).await;
+    state.set_capture_state(CaptureState::Starting);
     let app = create_test_router(state.clone());
 
     let (status, _) = post_json(&app, "/api/settings", json!({ "focus_mode": true })).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(!state.settings.read().await.focus_mode);
+    assert!(!state.settings.snapshot().focus_mode);
 }
 
 /// Hot-pixel rejection lost its switch. A client built before that still posts

@@ -1,26 +1,11 @@
-//! Benchmarks for debayering algorithms
+//! Benchmarks for debayering algorithms. Run with: cargo bench --bench debayer_benchmark
 //!
-//! Run with: cargo bench --bench debayer_benchmark
-//!
-//! # Why each case runs the kernel `REPS` times
-//!
-//! A single 2712x1538 bilinear pass is ~4.4 ms. At that scale criterion's own timing
-//! noise and the machine's thermal management move the number by more than a real
-//! regression would, so the reported figures were not comparable between runs. Every
-//! case here therefore repeats the kernel until the measured region clears ~100 ms, and
-//! declares `Throughput::Elements(REPS * pixels)` so the per-pixel rate stays readable.
-//!
-//! **The reported `time:` is for `REPS` invocations, not one.** Divide by `REPS` for a
-//! per-call figure, or read the throughput line instead.
-//!
-//! Repeating is sound here because debayering is pure: it reads a `&Frame` and returns a
-//! fresh buffer, so iteration N sees exactly what iteration 1 saw. Anything that mutates
-//! its input in place must use `iter_batched_ref` with a clone instead — see
-//! `render_benchmark`.
-//!
-//! The small square sizes that used to sit alongside these were dropped rather than
-//! padded out: they exercised the same kernel as their larger siblings, and the ~30 s
-//! budget per bench binary is better spent on the shapes production actually sees.
+//! A single 2712x1538 bilinear pass is ~4.4 ms — at that scale criterion's timing noise and
+//! thermal throttling move the number more than a real regression would, so every case repeats
+//! the kernel until the measured region clears ~100 ms, declaring `Throughput::Elements(REPS *
+//! pixels)` for a readable per-pixel rate. **The reported `time:` is for `REPS` invocations, not
+//! one** — divide by `REPS`. Sound because debayering is pure (reads `&Frame`, returns a fresh
+//! buffer); in-place kernels need `iter_batched_ref` instead (see `render_benchmark`).
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput};
 use night_amplifier::{CfaPattern, DebayerAlgorithm, DebayerConfig, Frame};

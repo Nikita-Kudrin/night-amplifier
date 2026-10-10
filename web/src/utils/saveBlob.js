@@ -5,24 +5,18 @@
 /**
  * How long the object URL stays alive after the click.
  *
- * Revoking it in the same tick can cancel the download it was created for: the
- * browser has only queued the save at that point, not read the blob. Chrome
- * commits on the click, but Safari — iOS included — reads it later, so this is
- * seconds rather than one turn of the event loop. The delay only decides when the
- * URL is freed, not whether.
+ * Revoking it in the same tick can cancel the download: the browser has only
+ * queued the save, not read the blob yet. Chrome commits on click, but Safari
+ * (iOS included) reads it later, so this is seconds, not one event-loop turn —
+ * the delay decides only when the URL is freed, not whether.
  */
 export const URL_RELEASE_MS = 10000
 
 /**
- * Save `blob` to the user's device under `filename`.
- *
- * The `download` attribute is what makes this a save instead of a navigation, and
- * it is not optional on a `blob:` URL: such a URL carries no HTTP headers, because
- * `fetch` has already consumed the response, so `Content-Disposition` can neither
- * name the file nor force the save the way it does on a network URL. Without the
- * attribute the browser just navigates to the blob and renders it in the tab —
- * taking the page, and any stream it was holding open, with it.
- *
+ * Save `blob` to the user's device under `filename`. `download` makes this a save
+ * instead of a navigation: a `blob:` URL has no HTTP headers (`fetch` already
+ * consumed the response), so `Content-Disposition` can't force it. Without it the
+ * browser just navigates to and renders the blob, taking the page with it.
  * @param {Blob} blob - The bytes to save.
  * @param {string} filename - Name to save them under.
  */

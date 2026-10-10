@@ -3,7 +3,9 @@
 Night Amplifier supports different stacking methodologies based on your celestial target.
 
 ## Deep Sky Stacking
-Traditional star-based alignment. The software detects stars, matches triangles across frames using RANSAC, and calculates an affine transformation to align the frames.
+Traditional star-based alignment. The software detects stars, matches triangles across frames using RANSAC, and calculates an affine transformation to align the frames. That first fit uses only the brightest stars, so it is then refined against every star detected in both frames, which keeps the corners of a wide field as sharp as its centre.
+
+Short sub-exposures of a bright object work too. Noise on a bright nebula breaks it into dozens of false "stars", brighter than the real ones, so the matcher keeps only the brightest detection in each patch of sky. If that still finds no alignment, the software looks for the one shift that most star pairs agree on, trying a few small turns as well, since the field of an alt-az mount slowly rotates. That is enough for a handful of real stars among hundreds of detections: 0.7 s subs of the Cat's Eye Nebula hold about 15. A shift found this way has to stand out from all the shifts it was picked from, so a different patch of sky is not mistaken for this one. Longer exposures or more gain still give more stars to align on.
 
 ## Planetary Stacking
 (Also known as Lucky Imaging). This mode uses correlation-based alignment for high-framerate planetary or lunar targets where stars are absent. It uses percentile stacking (e.g., top 10% of frames) based on sharpness metrics.
@@ -23,7 +25,12 @@ reason. A frame is dropped when:
 
 - too few stars are detected to attempt an alignment;
 - no alignment can be found against the reference;
-- the alignment rests on too small a fraction of the detected stars to be trusted;
+- every star in it is doubled or smeared into a line — the mount moved during the exposure.
+  This is only judged on frames that would not align anyway, so it changes the reason
+  reported, not how many frames are kept;
+- the alignment is no better than chance: too few stars line up for where they are (a dense
+  patch lines some up by luck), or it would rescale the field, which a sub of the same session
+  never does;
 - its alignment error is far worse than the rest of the session's;
 - its stars are far larger than the rest of the session's — defocus, cloud, or shake.
 
@@ -52,8 +59,21 @@ the preview holds steady instead of dropping back to a single noisy sub-exposure
 
 Wanderer mode restarts the stack when you swing the telescope to a new object, which it detects by
 the incoming field no longer matching the reference. Frames that the checks above drop for
-*quality* — soft stars, a loose fit — do not count: the field is still the same field, so the stack
-keeps building and rides out the cloud rather than starting over.
+*quality* — soft stars, doubled stars, a loose fit — do not count: the field is still the same
+field, so the stack keeps building and rides out the cloud, or the bump, rather than starting over.
+Five frames in a row whose stars are swollen *and* will not align are the exception: that is no
+passing gust but a new field (or a new eyepiece train), and the stack restarts.
+
+One frame that will not align is not enough to restart: it takes two in a row. A faint field's
+frames align on only a few stars, and a single weak one should not throw away the stack. A real
+slew costs one extra frame before the new stack begins.
+
+## Outlier Rejection (Pro)
+
+Satellite trails, aircraft and cosmic-ray hits are removed pixel by pixel: each new sample is
+compared with the spread that pixel has shown so far and clipped when it lies too far out. Pro
+starts on **Sigma Clipping**, with **Winsorized** as the gentler alternative; Community averages
+every sample. Deep-sky and planetary stacking both run the method you pick.
 
 ## Saving raw frames
 
@@ -70,7 +90,11 @@ Each session writes to its own folder under `captures/raw/`, named for the time 
 mode that filled it — `21-14-08-live`, `21-31-52-wanderer`, `22-03-17-stacking`. Switching mode
 without stopping the capture opens a new folder, so a folder only ever holds frames captured in the
 mode it names. Two sessions starting inside the same second get a counter before the suffix
-(`21-14-08_2-stacking`) rather than sharing a folder.
+(`21-14-08_2-stacking`) rather than sharing a folder. A folder only appears once its first frame is
+saved, so a run that saves nothing — a mode whose switch is off, or one stopped before its first
+sub — leaves no empty folder behind. A disk that will not take writes (read-only or full) refuses
+the capture's start; one that stops taking them mid-session raises a single notice rather than
+losing the rest of the night quietly.
 
 Frame numbers run for the whole capture, not per folder, so a folder opened by a mode switch starts
 partway through the sequence — `frame_000517.fits` rather than `frame_000001.fits`.

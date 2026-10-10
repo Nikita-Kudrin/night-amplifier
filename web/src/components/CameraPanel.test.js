@@ -1,5 +1,5 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {mount, flushPromises} from '@vue/test-utils'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import {mount, flushPromises, enableAutoUnmount} from '@vue/test-utils'
 import {ref} from 'vue'
 import CameraPanel from './CameraPanel.vue'
 
@@ -12,6 +12,10 @@ vi.mock('../composables/api.js', () => ({
 }))
 
 import {connectCamera, disconnectCamera, getSimulatorConfig} from '../composables/api.js'
+
+// A wrapper left mounted keeps its teleported nodes; the next test's `<body>` reset pulls
+// them out from under it, and its next render fails.
+enableAutoUnmount(afterEach)
 
 describe('CameraPanel', () => {
     beforeEach(() => {
@@ -42,6 +46,7 @@ describe('CameraPanel', () => {
             simulatorEnabled: ref(overrides.simulatorEnabled ?? false),
             cameraStatus: ref(overrides.cameraStatus ?? {}),
             cameraPhase: ref(overrides.cameraPhase ?? {}),
+            warmupEndsAt: ref(overrides.warmupEndsAt ?? {}),
             settings: ref(overrides.settings ?? null),
         }
     }
@@ -353,12 +358,97 @@ describe('CameraPanel', () => {
             expect(disconnectCamera).toHaveBeenCalledWith('cam1')
         })
 
-        it('disables Disconnect button during capture', () => {
+        // Disconnect is a must (2026-09-20): during a capture it stops the capture first,
+        // which is worth one confirmation, not a greyed-out button.
+        it('asks before stopping a capture to disconnect the imaging camera', async () => {
             const wrapper = mountCameraPanel({
                 cameras: [
                     {
                         id: 'cam1',
+                        name: 'Ares-C PRO',
+                        role: 'main',
+                        connected: true,
+                        info: {max_width: 3008, max_height: 3008},
+                    },
+                ],
+                captureState: 'Capturing',
+            })
+
+            const button = wrapper.find('.btn-danger')
+            expect(button.attributes('disabled')).toBeUndefined()
+            await button.trigger('click')
+            await flushPromises()
+            expect(disconnectCamera).not.toHaveBeenCalled()
+            expect(document.body.textContent).toContain('Stop the capture and disconnect?')
+
+            document.querySelector('.confirm-disconnect').click()
+            await flushPromises()
+            expect(disconnectCamera).toHaveBeenCalledWith('cam1')
+        })
+
+        it('leaves the camera connected when the confirmation is cancelled', async () => {
+            const wrapper = mountCameraPanel({
+                cameras: [{id: 'cam1', name: 'Ares-C PRO', role: 'main', connected: true, info: {}}],
+                captureState: 'Recovering',
+            })
+
+            await wrapper.find('.btn-danger').trigger('click')
+            await flushPromises()
+            document.querySelector('.confirm-cancel').click()
+            await flushPromises()
+
+            expect(disconnectCamera).not.toHaveBeenCalled()
+            expect(document.querySelector('.confirm-disconnect')).toBeNull()
+        })
+
+        // The warm-up can finish while the dialog is open; confirming then answered
+        // "not connected" for a camera that had already gone the way it was asked to.
+        it('closes the warm-up confirmation once the camera has finished warming up', async () => {
+            const provides = createMockProvides({
+                cameras: [{id: 'cam1', name: 'Ares-C PRO', role: 'main', connected: true, info: {}}],
+                cameraPhase: {'Ares-C PRO': 'warming_up'},
+            })
+            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+
+            await wrapper.find('.btn-danger').trigger('click')
+            await flushPromises()
+            expect(document.body.textContent).toContain('Disconnect without warming up?')
+
+            provides.cameraPhase.value = {}
+            provides.cameras.value = [{id: 'cam1', name: 'Ares-C PRO', connected: false, info: {}}]
+            await flushPromises()
+
+            expect(document.querySelector('.confirm-disconnect')).toBeNull()
+            expect(disconnectCamera).not.toHaveBeenCalled()
+        })
+
+        it('closes the capture confirmation once the capture has ended', async () => {
+            const provides = createMockProvides({
+                cameras: [{id: 'cam1', name: 'Ares-C PRO', role: 'main', connected: true, info: {}}],
+                captureState: 'Capturing',
+            })
+            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+
+            await wrapper.find('.btn-danger').trigger('click')
+            await flushPromises()
+            expect(document.body.textContent).toContain('The sub being exposed is discarded')
+
+            provides.eventStream.captureState.value = 'Idle'
+            await flushPromises()
+
+            expect(document.querySelector('.confirm-disconnect')).toBeNull()
+            expect(disconnectCamera).not.toHaveBeenCalled()
+        })
+
+        // The guide camera has no tie to the capture; the 14:59 guide unplugged mid-capture
+        // could not be disconnected for minutes because this button was greyed out.
+        it('disconnects the guide camera during a main capture without asking', async () => {
+            const wrapper = mountCameraPanel({
+                cameras: [
+                    {
+                        id: 'guide1',
                         name: 'Neptune-C II',
+                        role: 'guide',
                         connected: true,
                         info: {max_width: 2712, max_height: 1538},
                     },
@@ -366,7 +456,10 @@ describe('CameraPanel', () => {
                 captureState: 'Capturing',
             })
 
-            expect(wrapper.find('.btn-danger').attributes('disabled')).toBeDefined()
+            await wrapper.find('.btn-danger').trigger('click')
+            await flushPromises()
+
+            expect(disconnectCamera).toHaveBeenCalledWith('guide1')
         })
 
         it('shows ... while connecting', async () => {
@@ -512,17 +605,36 @@ describe('CameraPanel', () => {
             })
 
             expect(wrapper.find('.phase-pill').text()).toBe('Warming up')
-            expect(wrapper.find('.base-spinner').exists()).toBe(true)
-            expect(wrapper.find('.btn-danger').text()).toContain('Warming up')
+            expect(wrapper.find('.phase-pill .base-spinner').exists()).toBe(true)
+            expect(wrapper.find('.btn-danger').text()).toBe('Disconnect now')
         })
 
-        it('disables Disconnect while warming up', () => {
+        it('says how long the warm-up may still take', () => {
+            const wrapper = mountCameraPanel({
+                cameras: [cooledCamera],
+                cameraPhase: {'Cooled Camera': 'warming_up'},
+                warmupEndsAt: {'Cooled Camera': Date.now() + 4.5 * 60_000},
+            })
+
+            expect(wrapper.find('.phase-pill').text()).toBe('Warming up, up to 5 min')
+        })
+
+        it('skips the warm-up only after the user confirms it', async () => {
             const wrapper = mountCameraPanel({
                 cameras: [cooledCamera],
                 cameraPhase: {'Cooled Camera': 'warming_up'},
             })
 
-            expect(wrapper.find('.btn-danger').attributes('disabled')).toBeDefined()
+            const button = wrapper.find('.btn-danger')
+            expect(button.attributes('disabled')).toBeUndefined()
+            await button.trigger('click')
+            await flushPromises()
+            expect(disconnectCamera).not.toHaveBeenCalled()
+            expect(document.body.textContent).toContain('Disconnect without warming up?')
+
+            document.querySelector('.confirm-disconnect').click()
+            await flushPromises()
+            expect(disconnectCamera).toHaveBeenCalledWith('cam1', {skipWarmup: true})
         })
 
         // The server reopens a dropped camera without disconnecting it; the panel must

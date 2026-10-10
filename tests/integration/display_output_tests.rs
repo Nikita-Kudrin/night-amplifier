@@ -1,18 +1,11 @@
-//! Tests for the display output path: the black floor and ordered dither that
-//! the fused encoders apply where a frame becomes 8-bit, and the resolution the
-//! lossless stream encodes into.
+//! Tests for the display output path: the black floor and dither the fused encoders apply
+//! at the 8-bit boundary, and the resolution the lossless stream encodes into.
 //!
-//! These measure the quantity that actually predicts what an observer sees at
-//! the eyepiece — sky sigma expressed in **output 8-bit levels**, taken from the
-//! bytes that reach the browser rather than from the linear frame. Every other
-//! measurement in this repo is taken before the stretch, where it says nothing
-//! about visible grain.
-//!
-//! Both fixtures are measured, not just the square one. They are the two ends of
-//! the case: an IMX533 at 3008² arrives at a 1440 screen with a 2.1x downsample
-//! of free averaging available, an IMX464 at 2712x1538 with essentially none —
-//! so a change that only helps because of the resample shows up as helping one
-//! and not the other.
+//! Measures sky sigma in **output 8-bit levels** from the bytes reaching the browser, not
+//! the linear frame (every other measurement here is pre-stretch and says nothing about
+//! visible grain). Both fixtures run: IMX533 at 3008² gets a 2.1x downsample to a 1440
+//! screen (free averaging), IMX464 at 2712x1538 gets essentially none — so a resample-only
+//! win shows on one and not the other.
 
 use std::path::Path;
 
@@ -58,45 +51,7 @@ const FIXTURES: [Fixture; 2] = [
     },
 ];
 
-/// Sky sigma of one channel of an interleaved RGB8 buffer, in 8-bit levels.
-///
-/// A MAD sets the clip and a clipped standard deviation is what gets reported.
-/// The MAD alone is what this used to return, and on byte samples it can only
-/// take integer values — so the figure snapped to multiples of 1.4826 levels and
-/// could not resolve any change smaller than one output level, which is most of
-/// them. The clip is what keeps stars and the target out of the variance; the
-/// standard deviation of what survives it is continuous.
-pub(crate) fn sky_sigma_levels(rgb8: &[u8], channel: usize) -> f64 {
-    let mut samples: Vec<f64> = rgb8
-        .iter()
-        .skip(channel)
-        .step_by(3)
-        .map(|&v| v as f64)
-        .collect();
-    if samples.len() < 2 {
-        return 0.0;
-    }
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = samples[samples.len() / 2];
-
-    let mut deviations: Vec<f64> = samples.iter().map(|v| (v - median).abs()).collect();
-    deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mad_sigma = deviations[deviations.len() / 2] * 1.4826;
-
-    // A floor of one level, or a sky already smooth enough to have a zero MAD
-    // would clip away everything including its own noise.
-    let clip = (mad_sigma * 3.0).max(1.0);
-    let kept: Vec<f64> = samples
-        .iter()
-        .copied()
-        .filter(|v| (v - median).abs() <= clip)
-        .collect();
-    if kept.len() < 2 {
-        return mad_sigma;
-    }
-    let mean = kept.iter().sum::<f64>() / kept.len() as f64;
-    (kept.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / kept.len() as f64).sqrt()
-}
+pub(crate) use crate::integration::instruments::sky_sigma_levels;
 
 /// First frame of a fixture directory, as a linear `Frame`.
 ///
@@ -145,7 +100,7 @@ fn load_first_frame(dir: &Path) -> Option<night_amplifier::Frame> {
 fn prepare_fixture(
     fixture: &Fixture,
     intensity: f32,
-) -> Option<night_amplifier::server::state::RenderReadyFrame> {
+) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     prepare_fixture_with(fixture, |settings| settings.eyepiece.intensity = intensity)
 }
 
@@ -157,8 +112,8 @@ fn prepare_fixture(
 /// testing a curve the product cannot produce.
 fn prepare_fixture_with(
     fixture: &Fixture,
-    configure: impl FnOnce(&mut night_amplifier::server::state::CaptureSettings),
-) -> Option<night_amplifier::server::state::RenderReadyFrame> {
+    configure: impl FnOnce(&mut night_amplifier::session::state::CaptureSettings),
+) -> Option<night_amplifier::render::display::RenderReadyFrame> {
     // Ensure fixtures are downloaded from Google Drive. Under nextest
     // partitioning this file may run in a shard with no other test that
     // downloads fixtures first, so it has to do it itself.
@@ -170,15 +125,23 @@ fn prepare_fixture_with(
         frame = night_amplifier::debayer_auto(&frame).ok()?.0;
     }
 
-    let mut settings = night_amplifier::server::state::CaptureSettings::default();
+    let mut settings = night_amplifier::session::state::CaptureSettings::default();
     settings.auto_stretch = true;
     configure(&mut settings);
 
-    let (pipeline_config, stretch_result) =
-        night_amplifier::server::capture::pipeline::process_preview_frame(&mut frame, &settings)
-            .ok()?;
+    let night_amplifier::session::capture::pipeline::PreviewRender {
+        pipeline_config,
+        stretch_result,
+        ..
+    } = night_amplifier::session::capture::pipeline::process_preview_frame(
+        &mut frame,
+        &settings,
+        &night_amplifier::plugins::Plugins::installed(),
+    )
+    .ok()?;
 
-    Some(night_amplifier::server::state::RenderReadyFrame {
+    Some(night_amplifier::render::display::RenderReadyFrame {
+        noise: None,
         linear_frame: std::sync::Arc::new(frame),
         pipeline_config,
         stretch_result,
@@ -189,26 +152,23 @@ fn prepare_fixture_with(
 const TIER_1440: (u32, u32) = (2560, 1440);
 
 fn encode(
-    ready: &night_amplifier::server::state::RenderReadyFrame,
+    ready: &night_amplifier::render::display::RenderReadyFrame,
     max_w: u32,
     max_h: u32,
 ) -> (Vec<u8>, usize, usize) {
     let (bytes, w, h) =
-        night_amplifier::server::encoding::frame_to_rgb8_downsampled(ready, max_w, max_h).unwrap();
+        night_amplifier::render::display::frame_to_rgb8_downsampled(ready, max_w, max_h).unwrap();
     (bytes, w as usize, h as usize)
 }
 
-/// The headline number for Tier 0, reported rather than only bounded so a
-/// regression is legible instead of just red.
+/// The headline number for Tier 0, reported rather than only bounded so a regression is
+/// legible instead of just red.
 ///
-/// Encoding into the viewport the eyepiece actually displays is an area average;
-/// leaving the browser to minify a near-native frame is a four-tap bilinear
-/// filter that discards most of that averaging as aliasing.
-///
-/// Denoising is switched off here on purpose: this measures what the *resample*
-/// is worth, and leaving the filters on made the printed figures a mixture of
-/// the two — which is how the numbers quoted in `AGENTS.md` came to describe a
-/// configuration the test no longer ran.
+/// Encoding into the viewport is an area average; leaving the browser to minify a
+/// near-native frame is a four-tap bilinear filter that discards most of that averaging as
+/// aliasing. Denoising is off on purpose: this measures what the *resample* alone is worth
+/// — filters on mixed the two, which is how `AGENTS.md`'s numbers came to describe a config
+/// this test no longer runs.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -325,7 +285,7 @@ fn eyepiece_intensity_reduces_visible_sky_grain() {
         };
         measured += 1;
 
-        let sigma = |ready: &night_amplifier::server::state::RenderReadyFrame| {
+        let sigma = |ready: &night_amplifier::render::display::RenderReadyFrame| {
             let (bytes, _, _) = encode(ready, TIER_1440.0, TIER_1440.1);
             sky_sigma_levels(&bytes, 1)
         };
@@ -353,141 +313,13 @@ fn eyepiece_intensity_reduces_visible_sky_grain() {
 // Tier 2: the denoisers, measured on the fixture
 // ---------------------------------------------------------------------------
 
-/// The two things a denoiser must be judged on together. Grain reduction alone
-/// is not a passing result — anything can smooth a sky.
-struct DenoiseMeasurement {
-    sky_sigma: f64,
-    nebula_flux: f64,
-    star_peak: u8,
-}
-
-fn measure(rgb8: &[u8], width: usize, target_box: (usize, usize, usize, usize)) -> DenoiseMeasurement {
-    let (x0, y0, x1, y1) = target_box;
-    let mut flux = 0.0;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            flux += rgb8[(y * width + x) * 3 + 1] as f64;
-        }
-    }
-
-    DenoiseMeasurement {
-        sky_sigma: sky_sigma_levels(rgb8, 1),
-        nebula_flux: flux,
-        star_peak: *rgb8.iter().skip(1).step_by(3).max().unwrap(),
-    }
-}
-
-fn encode_with(
-    fixture: &Fixture,
-    denoise: night_amplifier::render::DenoiseConfig,
-) -> Option<(Vec<u8>, usize)> {
-    let mut ready = prepare_fixture(fixture, 0.0)?;
-    ready.pipeline_config.denoise = denoise;
-    let (bytes, w, _) = encode(&ready, TIER_1440.0, TIER_1440.1);
-    Some((bytes, w))
-}
-
-/// The headline for Tier 2, reported rather than only bounded.
+/// Every spelling of "off" must reproduce the stream byte for byte, on the real
+/// fixture and through the real tone curve.
 ///
-/// Runs the shipped default, the chroma filter alone, and the two ends of the
-/// star-protection control — so the trade the level-1 threshold makes is visible
-/// as numbers on real data rather than as an argument.
-#[test]
-#[serial]
-#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
-fn denoisers_reduce_grain_without_eating_the_nebula() {
-    use night_amplifier::render::{ChromaDenoiseConfig, DenoiseConfig, LumaDenoiseConfig};
-
-    let cases: [(&str, DenoiseConfig); 3] = [
-        (
-            "chroma only",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig::OFF,
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-        (
-            "default (star protection 100 %)",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig {
-                    k: LumaDenoiseConfig::thresholds_for_star_protection(1.0),
-                    ..Default::default()
-                },
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-        (
-            "star protection 0 %",
-            DenoiseConfig {
-                luma: LumaDenoiseConfig {
-                    k: LumaDenoiseConfig::thresholds_for_star_protection(0.0),
-                    ..Default::default()
-                },
-                chroma: ChromaDenoiseConfig::default(),
-            },
-        ),
-    ];
-
-    println!("\n=== Tier 2 denoisers, 1440 tier ===");
-    let mut measured = 0;
-
-    for fixture in &FIXTURES {
-        let Some((plain, width)) = encode_with(fixture, DenoiseConfig::OFF) else {
-            println!("  {} not present. Skipping.", fixture.dir);
-            continue;
-        };
-        measured += 1;
-        let base = measure(&plain, width, fixture.target_box);
-
-        println!("  {}", fixture.label);
-        println!(
-            "    {:<32} sky sigma {:.2}, target flux {:.3e}, peak {}",
-            "off", base.sky_sigma, base.nebula_flux, base.star_peak
-        );
-
-        for (name, config) in cases {
-            let (bytes, w) = encode_with(fixture, config).unwrap();
-            let m = measure(&bytes, w, fixture.target_box);
-            println!(
-                "    {name:<32} sky sigma {:.2} ({:.2}x), target flux {:.3e} ({:+.2} %), peak {}",
-                m.sky_sigma,
-                base.sky_sigma / m.sky_sigma,
-                m.nebula_flux,
-                (m.nebula_flux / base.nebula_flux - 1.0) * 100.0,
-                m.star_peak
-            );
-
-            assert!(
-                m.sky_sigma <= base.sky_sigma + 0.01,
-                "{}/{name} made the sky noisier: {:.2} from {:.2}",
-                fixture.label,
-                m.sky_sigma,
-                base.sky_sigma
-            );
-            assert!(
-                (m.nebula_flux / base.nebula_flux - 1.0).abs() < 0.05,
-                "{}/{name} moved integrated target flux by {:.1} % — the filter is \
-                 eating signal",
-                fixture.label,
-                (m.nebula_flux / base.nebula_flux - 1.0) * 100.0
-            );
-            assert!(
-                m.star_peak >= base.star_peak.saturating_sub(2),
-                "{}/{name} clipped the brightest star from {} to {}",
-                fixture.label,
-                base.star_peak,
-                m.star_peak
-            );
-        }
-    }
-
-    assert!(measured > 0, "no fixture was available to measure");
-}
-
-/// Every spelling of "off" must reach the fused traversal, not a staged one that
-/// happens to agree. Byte equality against `DenoiseConfig::OFF` is what makes
-/// adding a stage to a path every client crosses a safe change — and it is
-/// asserted on the real tone curve rather than on a synthetic frame.
+/// This is Community's whole picture now that the filters are a Pro plugin, so it is
+/// also the guard on the claim that a Community build renders what it always did: the
+/// fused traversal is byte-identical to the pre-denoise output rather than merely
+/// equivalent, and `is_enabled` is what routes between the two.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -514,6 +346,7 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
                 enabled: false,
                 ..Default::default()
             },
+            ..DenoiseConfig::OFF
         },
         DenoiseConfig {
             luma: LumaDenoiseConfig {
@@ -524,6 +357,7 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
                 strength: 0.0,
                 ..Default::default()
             },
+            ..DenoiseConfig::OFF
         },
     ];
 
@@ -531,6 +365,40 @@ fn every_disabled_denoise_config_reproduces_the_stream_byte_for_byte() {
         ready.pipeline_config.denoise = denoise;
         let (bytes, _, _) = encode(&ready, TIER_1440.0, TIER_1440.1);
         assert_eq!(baseline, bytes, "variant {i} did not reproduce the stream");
+    }
+}
+
+/// Without the plugin the Background Grain dial must not move the picture at all.
+///
+/// The dial spends three levers, and one of them — the tone curve's grain split — is
+/// Community code. With the filters in the Pro repo, Community pins that split at
+/// `DEFAULT_GRAIN_SPLIT` whatever the dial says, so its render is exactly the pre-split
+/// "denoise off" picture at the default tone curve: verified byte for byte against the
+/// build before the move. A change that wired the split back to the dial here would give
+/// Community users a control they cannot see moving their target brightness.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn without_the_plugin_the_dial_does_not_move_the_picture() {
+    assert!(
+        night_amplifier::plugins::Plugins::installed().denoise().is_none(),
+        "this is Community's guard and must run without the denoise plugin"
+    );
+    let render_at = |dial: f32| {
+        let ready = prepare_fixture_with(&FIXTURES[0], |settings| {
+            settings.denoise.background_grain = dial;
+        })
+        .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(FIXTURES[0].dir)));
+        encode(&ready, TIER_1440.0, TIER_1440.1).0
+    };
+
+    let middle = render_at(0.5);
+    for dial in [0.0f32, 0.25, 0.75, 1.0] {
+        assert_eq!(
+            render_at(dial),
+            middle,
+            "dial {dial} changed Community's render; without the filters it must not"
+        );
     }
 }
 
@@ -616,14 +484,11 @@ fn measure_setting(fixture: &Fixture, black_floor: f32, darker_sky: bool) -> Opt
 
 /// The darkening half of the black floor, measured end to end on real frames.
 ///
-/// Headline figures are printed as well as bounded, because "the sky got 70 %
-/// darker and the target kept its contrast" is the whole claim and a red test
-/// that does not say which half moved is not much use at three in the morning.
-///
-/// The bounds are deliberately loose against the measured values — the point is
-/// to catch the curve being wired up wrongly or drifting out from under the
-/// settings, not to pin numbers that legitimately move when the stretch is
-/// retuned.
+/// Headline figures are printed as well as bounded: "the sky got 70% darker and the target
+/// kept its contrast" is the whole claim, and a red test that doesn't say which half moved
+/// isn't much use at three in the morning. Bounds are deliberately loose against measured
+/// values, to catch the curve wired up wrongly or drifting from the settings — not to pin
+/// numbers that legitimately move when the stretch is retuned.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -926,25 +791,14 @@ fn a_negative_floor_without_auto_stretch_leaves_the_stream_alone() {
     );
 }
 
-/// The floor rides the scale LUT when contrast does, and follows contrast out
-/// into the encoder's row tail when saturation boost pushes it out. Two code
-/// paths, one setting — so they have to agree, or the slider means one thing in
-/// Community and another in Pro.
+/// The floor follows contrast's path: fused into the LUT or the encoder's deferred row tail.
+/// One setting, two code paths that must agree, or the slider means different things in
+/// Community and Pro — reachable here since the split follows the saturation *flag*, not the
+/// plugin, so the floor still takes the deferred path even when the boost itself is a no-op.
 ///
-/// Reachable from here because the split is decided by the saturation *flag*,
-/// not by the plugin: with the flag set and no Pro plugin registered, the boost
-/// itself is a no-op while the floor still takes the deferred path.
-///
-/// # Why this is measured against a control rather than against zero
-///
-/// Fusing contrast into the scale LUT already disagrees with running it as its
-/// own pass, on highlights where a channel clips: one path clamps once at the
-/// end, the other clamps between the two stages, and a star whose red channel
-/// saturates comes out with a different green. `probe_fused_render_clamp_
-/// difference` calls that accepted divergence, and it is worth 34 output levels
-/// on the brightest handful of pixels here *with no floor configured at all*.
-/// So the question this test can answer is not "do the two paths agree" — they
-/// already did not — but "does adding the floor make them agree any less".
+/// Measured against a control, not zero: `probe_fused_render_clamp_difference` already shows
+/// fused and deferred contrast disagreeing by 34 levels on clipping highlights with the floor
+/// off — so this only asks whether adding the floor makes that disagreement worse.
 #[test]
 #[serial]
 #[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
@@ -953,17 +807,14 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
     /// rather than a rounding step.
     const FLOOR_PATH_TOLERANCE: i32 = 4;
 
-    /// Share of samples allowed past that, and the mean disagreement allowed over the
-    /// whole frame.
+    /// Share of samples allowed past that, and the mean disagreement allowed over the whole
+    /// frame.
     ///
-    /// Bounds on the body of the distribution rather than on its worst sample. The two
-    /// orders differ by tens of levels on a few dozen of 6.2 M samples — bright star
-    /// cores, where one path clips a step before the other — and that is true with the
-    /// floor off, with it on, and on the code this test was written against (33 levels
-    /// there, 39 here once the chroma denoiser stopped flattening star colour). It is
-    /// worth its own look, but it is not what this test is for: a floor applied in the
-    /// wrong place or order moves the *sky*, which is most of the frame, and that shows
-    /// up in these two numbers.
+    /// Bounds the body of the distribution, not the worst sample: the two orders differ by
+    /// tens of levels on a few dozen of 6.2 M samples (bright star cores where one path clips
+    /// a step before the other) — true with the floor off, on, and at 33 levels when written
+    /// (39 now that the chroma denoiser stopped flattening star colour). A floor in the wrong
+    /// place/order moves the *sky* instead, which is what these two numbers catch.
     const FLOOR_PATH_MAX_SHARE: f64 = 0.001;
     const FLOOR_PATH_MAX_MEAN: f64 = 0.1;
 
@@ -986,7 +837,7 @@ fn the_deferred_floor_adds_no_disagreement_to_the_fused_one() {
         let (fused, deferred) = (prepare(false)?, prepare(true)?);
 
         // The split really did happen, or this measures nothing.
-        let floor_of = |r: &night_amplifier::server::state::RenderReadyFrame| {
+        let floor_of = |r: &night_amplifier::render::display::RenderReadyFrame| {
             r.stretch_result
                 .as_ref()
                 .unwrap()

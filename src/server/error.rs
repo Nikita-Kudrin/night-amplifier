@@ -1,19 +1,10 @@
-//! Server error types
-//!
-//! Centralized error handling for the server module using thiserror.
+//! Server error types, and how a session's [`ApiError`] answers over HTTP.
 
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde::Serialize;
 use thiserror::Error;
 
-/// API error response body
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    success: bool,
-    error: String,
-}
+pub use crate::session::error::{ApiError, ApiResult};
+use crate::push_to::PushToError;
 
 /// Server-level errors (startup, binding, etc.)
 #[derive(Debug, Clone, Error)]
@@ -25,133 +16,70 @@ pub enum ServerError {
     ServeFailed(String),
 }
 
-/// API-level errors returned from endpoint handlers
-#[derive(Debug, Error)]
-pub enum ApiError {
-    #[error("No imaging camera is connected. Connect one before starting a capture.")]
-    NoCameraSelected,
-
-    #[error("Camera '{0}' not found")]
-    CameraNotFound(String),
-
-    #[error("Camera '{0}' not connected")]
-    CameraNotConnected(String),
-
-    #[error("Capture already in progress")]
-    CaptureInProgress,
-
-    /// A resume found no capture paused for recovery — it was stopped or disconnected.
-    #[error("There is no paused capture to resume")]
-    CaptureNotPaused,
-
-    #[error("Cannot disconnect camera while capturing")]
-    CameraInUse,
-
-    #[error("The {role} camera slot is taken by '{camera}', which is busy. Stop it first.")]
-    CameraRoleBusy {
-        role: &'static str,
-        camera: String,
-    },
-
-    #[error("'{camera}' is already connected as the {held} camera; disconnect it before connecting it as the {requested} camera")]
-    CameraRoleMismatch {
-        camera: String,
-        held: &'static str,
-        requested: &'static str,
-    },
-
-    /// Asked to capture with a camera that holds some other role.
-    ///
-    /// Separate from [`ApiError::CameraRoleMismatch`] because the remedy is different
-    /// and so is the request: that one answers a *connect*, and telling someone who
-    /// pressed Start to "disconnect it before connecting it" describes an action they
-    /// did not take and does not want.
-    #[error("'{camera}' is the {held} camera; captures run on the imaging camera")]
-    CaptureCameraIsNotMain {
-        camera: String,
-        held: &'static str,
-    },
-
-    #[error("No guide camera is connected. Connect one before starting it.")]
-    NoGuideCameraConnected,
-
-    #[error("The guide camera is already running")]
-    GuideAlreadyRunning,
-
-    #[error("Cannot change stacking type while capturing")]
-    StackingTypeChangeNotAllowed,
-
-    #[error("Invalid camera ID format. Expected: provider_index")]
-    InvalidCameraIdFormat,
-
-    #[error("Invalid camera index")]
-    InvalidCameraIndex,
-
-    #[error("Failed to open camera: {0}")]
-    CameraOpenFailed(String),
-
-    /// The device that opened is not the camera the id or the recovery named — the USB
-    /// list reordered between enumerating it and opening it.
-    #[error("Opened '{found}' where '{expected}' was expected; the camera list changed")]
-    CameraIdentityMismatch { expected: String, found: String },
-
-    /// The camera's handle was lost and recovery is reopening it; there is nothing to
-    /// hand out until it has.
-    #[error("'{camera}' is being reconnected")]
-    CameraRecovering { camera: String },
-
-    #[error("Failed to configure simulator: {0}")]
-    SimulatorConfigFailed(String),
-
-    #[error("Internal error: {0}")]
-    Internal(String),
+/// How a session's [`ApiError`] answers over HTTP. A trait only because `ApiError` lives in
+/// the session crate.
+///
+/// Handlers that build their own response body delegate the status here. They used to keep
+/// parallel `match` arms instead, and those drifted: `start_capture` had no arm for a role
+/// mismatch, so a conflict the client could act on went out as a 500.
+pub(crate) trait HttpStatus {
+    fn status_code(&self) -> StatusCode;
 }
 
-impl ApiError {
-    /// The HTTP status this error maps to.
-    ///
-    /// `pub(crate)` so handlers that build their own response body can still delegate
-    /// the status here. They used to keep parallel `match` arms instead, and those
-    /// drifted: `start_capture` had no arm for a role mismatch, so a conflict the
-    /// client could act on went out as a 500.
-    pub(crate) fn status_code(&self) -> StatusCode {
+impl HttpStatus for ApiError {
+    fn status_code(&self) -> StatusCode {
         match self {
             ApiError::NoCameraSelected => StatusCode::BAD_REQUEST,
             ApiError::CameraNotFound(_) => StatusCode::NOT_FOUND,
             ApiError::CameraNotConnected(_) => StatusCode::NOT_FOUND,
             ApiError::CaptureInProgress => StatusCode::CONFLICT,
+            ApiError::CaptureStillStopping => StatusCode::CONFLICT,
             ApiError::CaptureNotPaused => StatusCode::CONFLICT,
-            ApiError::CameraInUse => StatusCode::CONFLICT,
             ApiError::CameraRoleBusy { .. } => StatusCode::CONFLICT,
             ApiError::CameraRoleMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CaptureCameraIsNotMain { .. } => StatusCode::CONFLICT,
             ApiError::NoGuideCameraConnected => StatusCode::BAD_REQUEST,
-            ApiError::GuideAlreadyRunning => StatusCode::CONFLICT,
+            ApiError::NoGuideCameraToView => StatusCode::CONFLICT,
             ApiError::StackingTypeChangeNotAllowed => StatusCode::CONFLICT,
+            ApiError::FocusModeWhileStacking => StatusCode::CONFLICT,
+            ApiError::ProFeatureRequired(_) => StatusCode::FORBIDDEN,
             ApiError::InvalidCameraIdFormat => StatusCode::BAD_REQUEST,
             ApiError::InvalidCameraIndex => StatusCode::BAD_REQUEST,
             ApiError::CameraOpenFailed(_) => StatusCode::INTERNAL_SERVER_ERROR,
             ApiError::CameraIdentityMismatch { .. } => StatusCode::CONFLICT,
             ApiError::CameraRecovering { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::CameraHandleLost { .. } => StatusCode::SERVICE_UNAVAILABLE,
             ApiError::SimulatorConfigFailed(_) => StatusCode::BAD_REQUEST,
+            ApiError::HardwareBenchmarkRunning => StatusCode::SERVICE_UNAVAILABLE,
+            ApiError::BenchmarkDuringCapture => StatusCode::CONFLICT,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
 
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let status = self.status_code();
-        let body = ErrorResponse {
-            success: false,
-            error: self.to_string(),
-        };
-        (status, Json(body)).into_response()
+/// The Push-To routes answer through here. Each used to pick its own status, so the same
+/// missing plugin was a 404 on one route, a 400 on another and a 500 on the rest.
+impl HttpStatus for PushToError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            PushToError::PluginRequired => StatusCode::FORBIDDEN,
+            PushToError::TargetNotFound(_) => StatusCode::NOT_FOUND,
+            PushToError::ConfigError(_)
+            | PushToError::InvalidRequest(_)
+            | PushToError::DatabaseLoadFailed(_) => StatusCode::BAD_REQUEST,
+            PushToError::Cancelled => StatusCode::CONFLICT,
+            PushToError::DetectionFailed(_)
+            | PushToError::SolveFailed(_)
+            | PushToError::NotEnoughStars { .. }
+            | PushToError::PoorFrameQuality(_)
+            | PushToError::NotSettled(_)
+            | PushToError::InstallFailed(_)
+            | PushToError::ExtractionFailed(_)
+            | PushToError::ChecksumMismatch { .. }
+            | PushToError::IoError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
     }
 }
-
-/// Result type for API handlers
-pub type ApiResult<T> = Result<T, ApiError>;
 
 #[cfg(test)]
 mod tests {
@@ -198,23 +126,20 @@ mod tests {
     }
 
     #[test]
-    fn test_api_error_messages() {
+    fn push_to_error_status_codes() {
+        assert_eq!(PushToError::PluginRequired.status_code(), StatusCode::FORBIDDEN);
         assert_eq!(
-            ApiError::NoCameraSelected.to_string(),
-            "No imaging camera is connected. Connect one before starting a capture."
+            PushToError::TargetNotFound("M200".into()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        // A path the client sent that holds no database is the client's to fix.
+        assert_eq!(
+            PushToError::DatabaseLoadFailed("no d80 files".into()).status_code(),
+            StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            ApiError::CaptureCameraIsNotMain {
-                camera: "Simulator: 35mm-imx464-orion-tiff (17 files)".into(),
-                held: "guide",
-            }
-            .to_string(),
-            "'Simulator: 35mm-imx464-orion-tiff (17 files)' is the guide camera; \
-             captures run on the imaging camera"
-        );
-        assert_eq!(
-            ApiError::CameraNotFound("cam1".into()).to_string(),
-            "Camera 'cam1' not found"
+            PushToError::SolveFailed("x".into()).status_code(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 }

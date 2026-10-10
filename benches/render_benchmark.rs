@@ -6,36 +6,14 @@ use night_amplifier::{auto_stretch_frame, AutoStretchConfig};
 use std::hint::black_box;
 use std::time::Duration;
 
-// Every group below hands its input to `iter_batched_ref` rather than cloning inside
-// `b.iter`. That is not a style preference: a 2712x1538x3 `Frame::clone` measures ~14 ms
-// on its own, so an in-loop clone was 77 % of the reported `fused_stretch_frame` figure
-// (18.7 ms for ~4.3 ms of kernel) and roughly three quarters of the others. The suite
-// could not resolve a sub-30 % regression in the very kernels the planar migration
-// exists to speed up. `BatchSize::LargeInput` keeps one input live at a time, which
-// matters at ~50 MB per frame.
-//
-// These kernels all mutate the frame in place, so the "run it `REPS` times" trick the
-// pure benches use (see `debayer_benchmark`) is not available: iteration two would see
-// iteration one's output. Instead each setup produces a `Vec` of `REPS` clones and the
-// routine walks it, which raises the measured region above ~100 ms — below that, thermal
-// management moves the figure by more than a real regression would — while every clone
-// still starts from the same input. `REPS` clones are live at once, so it is chosen per
-// group from what the kernel costs, not set globally.
-//
-// At a 100 ms floor, `REPS` there is large enough that the *setup* clone (~14-16 ms per
-// 2712x1538x3 frame, ~50 MB) costs more wall clock per sample than the measured region
-// itself — setup isn't in the reported figure, but it still runs once per sample, and
-// with three such groups in one binary the ~30 s budget is the binding constraint. This
-// is also why `scale_lut_benchmark` is a separate binary: the four extra clone-heavy
-// cases it would add did not fit alongside these. `REPS` is sized to the minimum that
-// clears 100 ms, not padded with the margin other files use, and `warm_up_time` is
-// shortened: warm-up pays the same setup cost without needing the statistical rigor the
-// measured samples do.
-//
-// `bench_white_balance_grid` is the exception and the reason a fourth group fits at all:
-// it reads the frame instead of mutating it, so it takes the cheap `REPS`-repeat route
-// with no per-sample clone. Measured warm, the binary is 28 s with all four groups, of
-// which that one is ~6 s.
+// Every group hands its input to `iter_batched_ref` instead of cloning inside `b.iter`: a
+// 2712x1538x3 `Frame::clone` costs ~14 ms alone — 77 % of the reported `fused_stretch_frame`
+// figure (18.7 ms for ~4.3 ms of kernel) — so `BatchSize::LargeInput` keeps one input live at
+// a time (~50 MB/frame). These kernels mutate in place, so the cheap `REPS`-repeat trick
+// (`debayer_benchmark`) can't apply; each setup builds a `Vec` of `REPS` clones instead, sized
+// to clear the ~100 ms floor (below that, thermal noise swamps a real regression). The
+// ~14-16 ms setup cost per clone is why `scale_lut_benchmark` got its own binary — those
+// cases didn't fit this file's ~30 s budget.
 fn create_test_frame(width: usize, height: usize, channels: usize) -> Frame {
     let mut frame = Frame::zeros(width, height, channels).unwrap();
     // Fill with some gradient data
@@ -159,15 +137,12 @@ fn bench_fused_stretch(c: &mut Criterion) {
 
 /// The stage that dominated the preview pipeline before it was made planar and parallel.
 ///
-/// Unlike the three groups above this one reads the frame rather than mutating it, so it
-/// can use the cheap `REPS` repeat the pure benches use (see `debayer_benchmark`) instead
-/// of `iter_batched_ref` over clones — no 50 MB of setup per sample, which is why a fourth
-/// group fits in this binary's ~30 s budget at all.
+/// Unlike the groups above, this reads the frame rather than mutating it, using the cheap
+/// `REPS`-repeat route (`debayer_benchmark`) instead of `iter_batched_ref` over clones — no
+/// 50 MB of setup per sample, which is why a fourth group fits this binary's ~30 s budget.
 ///
-/// Both configurations are here because they are a real choice, not a before/after: the
-/// exact path is what the preview pipeline calls today, and the sampled path is what it
-/// would call if the coefficient drift is judged acceptable. Keeping the gap visible in CI
-/// is the point.
+/// Both configurations are kept because they're a real choice, not a before/after: exact is
+/// what the pipeline calls today, sampled is what it would call if the drift is acceptable.
 fn bench_white_balance_grid(c: &mut Criterion) {
     use night_amplifier::render::{compute_white_balance_grid_with_config, WhiteBalanceConfig};
 

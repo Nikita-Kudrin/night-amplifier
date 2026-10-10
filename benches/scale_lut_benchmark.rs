@@ -65,18 +65,13 @@ fn bench_scale_lut(c: &mut Criterion) {
         )
     });
 
-    // The whole-buffer cases above are not the shape production uses: the streaming
-    // encoder calls these per interleaved row from inside a rayon task, so the working
-    // set is one row, not the frame. Measured at both sizes because that is what decides
-    // whether the interleaved SIMD variant earns its keep next to the scalar one.
-    //
-    // One 2712-pixel row takes ~14 us, which is far too short to compare two kernels
-    // that measured within each other's confidence intervals to begin with. A frame's
-    // worth of rows is applied per iteration instead — the same call shape and the same
-    // one-row working set, just enough of them to measure. That is also what the encoder
-    // does: `expand_to_rgb8_fused` runs this kernel once per row of the frame. 1024 rows
-    // landed at ~14 ms; 8192 clears the ~100 ms floor.
-    //
+    // The whole-buffer cases above aren't the shape production uses: the streaming encoder
+    // calls these per interleaved row inside a rayon task, so the working set is one row, not
+    // the frame — measured at both sizes to see whether the interleaved SIMD variant earns its
+    // keep next to the scalar one. One row takes ~14 us, too short to compare kernels already
+    // within each other's confidence intervals, so a frame's worth of rows runs per iteration
+    // instead — same call shape, same one-row working set, just enough to measure (1024 rows
+    // ~14 ms, 8192 clears the ~100 ms floor).
     // **The reported `time:` is for `ROWS` rows, not one.**
     const ROWS: usize = 8192;
     const ROW_LEN: usize = 2712 * 3;

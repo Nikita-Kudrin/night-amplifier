@@ -1,17 +1,11 @@
-//! Planetary stacking: resample plus accumulate.
-//!
-//! `PlanetaryStacker::stack` is the per-stack cost: every selected frame is resampled by
-//! its sub-pixel offset (`apply_offset`) and then folded into the accumulator. It had no
-//! coverage here, which is how `apply_offset` kept a `Vec` allocation per output pixel —
-//! 4.17 million per stacked frame at IMX464 resolution, single-threaded — through the
-//! planar migration.
-//!
-//! `stack` takes `&self`, so the stacker is built once and shared. It used to be
-//! rebuilt inside `iter_batched`'s setup, and `add_frame` runs quality scoring plus a
-//! search-radius-50 cross-correlation: criterion excludes setup from the *measurement*
-//! but still has to run it, so the binary took 78 s wall clock to report two numbers and
-//! criterion asked for a 37.8 s target time. Both AGENTS.md files cap a bench binary at
-//! ~30 s.
+//! Planetary stacking: resample plus accumulate. `PlanetaryStacker::stack` is the
+//! per-stack cost — each frame is resampled by its sub-pixel offset (`apply_offset`)
+//! and folded into the accumulator. No coverage here let `apply_offset` keep a `Vec`
+//! allocation per output pixel — 4.17M per frame at IMX464, single-threaded — through
+//! the planar migration. `stack` takes `&self` so the stacker is built once and shared,
+//! not rebuilt per-iteration: `add_frame`'s quality scoring plus search-radius-50
+//! cross-correlation pushed the binary to 78 s wall clock for two numbers (criterion
+//! wanted 37.8 s) — both AGENTS.md files cap a binary at ~30 s.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
 use night_amplifier::frame::Frame;

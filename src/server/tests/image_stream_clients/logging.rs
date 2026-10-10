@@ -3,7 +3,6 @@
 use std::sync::Mutex;
 
 use serde_json::json;
-use serial_test::serial;
 
 use super::*;
 
@@ -36,12 +35,15 @@ impl CapturedLog {
 /// nothing for client messages; one line per actual resolution change.
 ///
 /// Current-thread runtime: the capturing subscriber is a thread-local default, so the
-/// server's tasks must run on this thread to be heard. Serial with the other stream
-/// tests: a callsite first hit on another thread while this subscriber registers can
-/// cache "never" interest and drop the line.
+/// server's tasks must run on this thread to be heard.
+///
+/// While it is the only live dispatcher, tracing-core takes a new callsite's interest
+/// from the default of whichever thread hits it *first* — a parallel settings test then
+/// caches "never" for the resolution-change line and this test hears nothing (failed
+/// under coverage). A second live dispatcher makes every registration ask all of them.
 #[tokio::test(flavor = "current_thread")]
-#[serial(image_stream_log)]
 async fn connections_and_resolution_changes_are_logged_once_each() {
+    let _ask_every_dispatcher = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let log = CapturedLog::default();
     let writer = log.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -55,7 +57,8 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
     server
         .state
         .main_stream
-        .set_latest_raw_frame(Arc::new(crate::server::state::RenderReadyFrame {
+        .set_latest_raw_frame(Arc::new(crate::render::display::RenderReadyFrame {
+            noise: None,
             linear_frame: Arc::new(crate::frame::Frame::filled(IMX533.0, IMX533.1, 3, 0.25).unwrap()),
             pipeline_config: crate::render::RenderPipelineConfig {
                 contrast: false,
@@ -64,8 +67,7 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
                 ..Default::default()
             },
             stretch_result: None,
-        }))
-        .await;
+        }));
     server.state.main_stream.begin_frame();
     server.state.main_stream.publish_frame();
 
@@ -96,7 +98,7 @@ async fn connections_and_resolution_changes_are_logged_once_each() {
     assert_eq!(changed.len(), 1, "{changed:#?}");
     assert!(changed[0].contains("from=\"1440p\"") && changed[0].contains("to=\"4K\""), "{}", changed[0]);
 
-    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.read().await.eyepiece).unwrap();
+    let mut eyepiece_settings = serde_json::to_value(&server.state.settings.snapshot().eyepiece).unwrap();
     eyepiece_settings["intensity"] = json!(0.5);
     server.post_settings(json!({"eyepiece": eyepiece_settings.clone()})).await;
     assert!(log.lines_containing("Eyepiece streaming resolution changed").is_empty());

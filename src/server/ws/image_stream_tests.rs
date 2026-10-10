@@ -1,6 +1,7 @@
 use super::*;
 use crate::frame::Frame;
-use crate::server::state::{EyepieceStreamResolution, RenderReadyFrame};
+use crate::render::display::RenderReadyFrame;
+use crate::session::state::EyepieceStreamResolution;
 
 /// A frame the encoder can run on without a stretch solve behind it.
 fn ready_frame(width: usize, height: usize) -> Arc<RenderReadyFrame> {
@@ -11,6 +12,7 @@ fn ready_frame(width: usize, height: usize) -> Arc<RenderReadyFrame> {
         ..Default::default()
     };
     Arc::new(RenderReadyFrame {
+        noise: None,
         linear_frame: Arc::new(Frame::filled(width, height, 3, 0.25).unwrap()),
         pipeline_config: config,
         stretch_result: None,
@@ -34,7 +36,7 @@ fn test_state() -> Arc<AppState> {
 }
 
 async fn with_frame(state: &AppState, width: usize, height: usize) -> u64 {
-    state.main_stream.set_latest_raw_frame(ready_frame(width, height)).await;
+    state.main_stream.set_latest_raw_frame(ready_frame(width, height));
     let counter = state.main_stream.begin_frame();
     state.main_stream.publish_frame();
     counter
@@ -50,8 +52,8 @@ async fn a_first_client_is_served_from_the_raw_frame_at_the_configured_size() {
     let stream = Arc::clone(&state.main_stream);
 
     for (kind, expected_magic) in [
-        (StreamKind::Jpeg, crate::server::encoding::JPEG_MAGIC),
-        (StreamKind::Lossless, crate::server::encoding::RGB8_CHUNKED_MAGIC),
+        (StreamKind::Jpeg, crate::session::encoding::JPEG_MAGIC),
+        (StreamKind::Lossless, crate::session::encoding::RGB8_CHUNKED_MAGIC),
     ] {
         assert!(stream.payload(kind, counter).is_none());
         let (tag, payload) = payload_for_client(&state, &stream, kind)
@@ -73,11 +75,10 @@ async fn a_first_client_is_served_from_the_raw_frame_at_the_configured_size() {
 #[tokio::test]
 async fn on_demand_encodes_follow_each_familys_setting() {
     let state = test_state();
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Hd1080;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Native;
-    }
+    });
     with_frame(&state, 3008, 3008).await;
     let stream = Arc::clone(&state.main_stream);
 
@@ -123,7 +124,7 @@ async fn a_current_payload_is_reused_until_the_next_frame() {
     let state = test_state();
     let counter = with_frame(&state, 400, 300).await;
     state.main_stream.set_payload(StreamKind::Jpeg, counter, vec![0xab; 64]);
-    state.settings.write().await.streaming_resolution = Resolution::Hd1080;
+    state.settings.update(|s| s.streaming_resolution = Resolution::Hd1080);
 
     let (tag, payload) = payload_for_client(&state, &state.main_stream, StreamKind::Jpeg)
         .await
@@ -188,11 +189,10 @@ async fn configured_resolution_reads_each_familys_setting() {
     assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Qhd1440);
     assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Qhd1440);
 
-    {
-        let mut settings = state.settings.write().await;
+    state.settings.update(|settings| {
         settings.streaming_resolution = Resolution::Native;
         settings.eyepiece.stream_resolution = EyepieceStreamResolution::Uhd2160;
-    }
+    });
     assert_eq!(configured_resolution(&state, StreamKind::Jpeg).await, Resolution::Native);
     assert_eq!(configured_resolution(&state, StreamKind::Lossless).await, Resolution::Uhd2160);
 }

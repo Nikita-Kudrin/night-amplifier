@@ -1,5 +1,6 @@
 //! Camera operations API handlers
 
+use crate::server::error::HttpStatus;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -8,12 +9,14 @@ use axum::{
 };
 use std::sync::Arc;
 
+use crate::session::camera::lifecycle::{DisconnectOutcome, WarmupPolicy};
 use super::super::dto::{
-    ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, MessageResponse,
+    ApiResponse, CameraInfoResponse, CameraListEntry, ConnectCameraRequest, DisconnectCameraRequest,
+    DisconnectResponse, MessageResponse, ViewedCameraBody,
 };
-use super::super::error::ApiError;
-use super::super::services::CameraService;
-use super::super::state::{AppState, CameraRole};
+use crate::session::services::CameraService;
+use crate::session::state::{AppState, CameraRole};
+use super::optional_body::OptionalBody;
 
 /// GET /api/cameras
 ///
@@ -30,6 +33,8 @@ pub async fn list_cameras(State(state): State<Arc<AppState>>) -> impl IntoRespon
             provider: cam.provider,
             index: cam.index,
             role: cam.role,
+            phase: cam.phase.map(Into::into),
+            warmup_remaining_s: cam.warmup_remaining.map(|left| left.as_secs()),
             info: CameraInfoResponse::from_info(&cam.info, &cam.id),
         })
         .collect();
@@ -68,7 +73,7 @@ pub async fn connect_camera(
 
     // Read before connecting: `connect` is idempotent and returns the existing info, so
     // asking afterwards cannot tell the two apart.
-    let was_already_connected = state.cameras.read().await.contains_key(&camera_id);
+    let was_already_connected = state.roster.contains(&camera_id);
 
     match CameraService::connect_camera(&state, &camera_id, role).await {
         Ok(cam_info) => {
@@ -96,17 +101,57 @@ pub async fn connect_camera(
 
 /// POST /api/cameras/:camera_id/disconnect
 ///
-/// Disconnect from a camera
+/// Disconnect a camera: stops a capture running on it, and warms a cooled camera up first.
+/// The optional body `{"skip_warmup": true}` closes it at once instead, including one
+/// already warming up.
 pub async fn disconnect_camera(
     State(state): State<Arc<AppState>>,
     Path(camera_id): Path<String>,
+    OptionalBody(request): OptionalBody<DisconnectCameraRequest>,
 ) -> impl IntoResponse {
-    match CameraService::disconnect_camera(&state, &camera_id).await {
-        Ok(_camera_name) => (
+    let warmup = if request.skip_warmup {
+        WarmupPolicy::Skip
+    } else {
+        WarmupPolicy::WhenPossible
+    };
+    match CameraService::disconnect_camera(&state, &camera_id, warmup).await {
+        Ok(outcome) => {
+            let (message, warming_up, remaining) = match outcome {
+                DisconnectOutcome::Disconnected => ("Camera disconnected", false, None),
+                DisconnectOutcome::WarmingUp { remaining } => (
+                    "Camera warming up; it disconnects once warm",
+                    true,
+                    remaining,
+                ),
+            };
+            (
+                StatusCode::OK,
+                ApiResponse::ok(DisconnectResponse {
+                    message: message.to_string(),
+                    camera_id,
+                    warming_up,
+                    warmup_remaining_s: remaining.map(|left| left.as_secs()),
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (e.status_code(), ApiResponse::err::<()>(e.to_string())).into_response(),
+    }
+}
+
+/// PUT /api/view/camera
+///
+/// The operator's Guide toggle on `/`: which camera `/eyepiece` and `/eyepiece_quality`
+/// show. Every client hears the change as `viewed_camera_changed`.
+pub async fn select_viewed_camera(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ViewedCameraBody>,
+) -> impl IntoResponse {
+    match CameraService::select_viewed_camera(&state, request.camera) {
+        Ok(()) => (
             StatusCode::OK,
-            ApiResponse::ok(MessageResponse {
-                message: "Camera disconnected".to_string(),
-                camera_id: Some(camera_id),
+            ApiResponse::ok(ViewedCameraBody {
+                camera: state.viewed_camera.get(),
             }),
         ),
         Err(e) => (e.status_code(), ApiResponse::err(e.to_string())),

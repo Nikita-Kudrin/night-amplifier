@@ -16,109 +16,141 @@ path = "src/lib.rs"
 name = "night_amplifier"
 path = "src/main.rs"
 
-[dependencies]
-thiserror = "2.0.20"
-rayon = "1.12.0"
-wide = "1.6.1"  # SIMD abstractions for performance-critical code
+[workspace]
+members = ["crates/core", "crates/session"]
+# A bare `cargo build`/`cargo test` at the root covers every crate, as before the split.
+default-members = [".", "crates/core", "crates/session"]
 
-# Embedded web frontend assets for single-binary distribution
-rust-embed = "8.12"
-mime_guess = "2.0.5"
-nalgebra = "0.35.0"  # Linear algebra for RBF background extraction
+[workspace.dependencies]
+night_amplifier_core = { path = "crates/core" }
+night_amplifier_session = { path = "crates/session" }
 async-trait = "0.1.92"
-process-wrap = { version = "9.1.0", features = ["std", "tokio1"] }
-# Optional: ZWO ASI camera support
-# Now loaded at runtime via dlopen - no compile-time linking needed
-
-# Web server dependencies
 axum = { version = "0.8.9", features = ["ws"] }
-tokio = { version = "1.53.1", features = ["full"] }
-tower-http = { version = "0.7.0", features = ["fs", "cors"] }
+base64 = "0.23.1"
+bytes = "1.12.1"
+chrono = "0.4.45"
+dlopen2 = "0.8.2"
+fitsio = "0.21.10"
+fs4 = { version = "1.1.0", default-features = false }
+futures-util = "0.3.33"
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+libc = "0.2"
+lz4_flex = "0.14.0"
+mime_guess = "2.0.5"
+nalgebra = "0.35.0"
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
+opentelemetry-semantic-conventions = "0.32.1"
+png = "0.18.1"
+process-wrap = { version = "9.1.0", features = ["std", "tokio1"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
+rayon = "1.12.0"
+rust-embed = "8.12"
+schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-
-# INDI protocol dependencies
-quick-xml = { version = "0.41.0", features = ["serialize"], optional = true }
-base64 = { version = "0.23.1", optional = true }
-
-
-# FITS file support for astronomical image storage
-fitsio = "0.21.10"
-
-# Date/time formatting for session directories
-chrono = "0.4.45"
-
-# Logging
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
-tracing-appender = "0.2.5"
-
-# Startup system report (`system_info`): OS, CPU and memory facts on every release target, and
-# free space for one path without touching other mounts
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
-fs4 = { version = "1.1.0", default-features = false }
-
-# OpenTelemetry (optional, enabled by default in debug builds)
-opentelemetry = { version = "0.32.0", optional = true }
-opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"], optional = true }
-opentelemetry-semantic-conventions = { version = "0.32.1", optional = true }
-tracing-opentelemetry = { version = "0.33.0", optional = true }
-
-# Image encoding for streaming
-image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
-
-# LZ4 compression for high-quality RGB16 streaming
-lz4_flex = "0.14.0"
-
-# JPEG compression for high-speed dynamic resolution streaming
-turbojpeg = "1.5.1"
-
-# Image file format support for simulated camera
+thiserror = "2.0.20"
 tiff = "0.11.3"
-png = "0.18.1"
+tokio = { version = "1.53.1", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["fs", "cors"] }
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-opentelemetry = "0.33.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+turbojpeg = "1.5.1"
+wide = "1.6.1"
 zune-png = "0.5.2"
-
-# ASTAP installer dependencies
-reqwest = { version = "0.13.4", default-features = false, features = ["stream", "cookies", "rustls"] }
-futures-util = "0.3.33"
-zip = "8.2.0"
+# Test-only
+criterion = "0.8.2"
+insta = "1.48.0"
+proptest = "1.11.0"
 regex = "1.13.1"
-urlencoding = "2.1.3"
-dlopen2 = "0.8.2"
-bytes = "1.12.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["stream", "cookies", "rustls"] }
+serial_test = "4.0.1"
+sha2 = "0.11.0"
+tempfile = "3.27.0"
+tokio-tungstenite = "0.29.0"
+tower = "0.5.3"
+zip = "8.2.0"
 
-# Eager and global dlopen flags for vendor SDKs (`camera::sdk_library`)
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
+# The server and the binary. Domain code lives in `crates/core`, the application layer in
+# `crates/session`; see AGENTS.md, Architecture, "Layers are crates".
+[dependencies]
+night_amplifier_core = { workspace = true }
+night_amplifier_session = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+mime_guess = { workspace = true }
+rayon = { workspace = true }
+# Embedded web frontend assets for single-binary distribution
+rust-embed = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# JSON Schema of the wire types, for `api-schema` only
+schemars = { workspace = true, optional = true }
 
 [features]
 default = ["playerone", "zwo", "indi", "qhy", "touptek", "svbony"]
-playerone = []
-zwo = []
-qhy = []
-touptek = []
-svbony = []
-indi = ["dep:quick-xml", "dep:base64"]
+playerone = ["night_amplifier_core/playerone"]
+zwo = ["night_amplifier_core/zwo"]
+qhy = ["night_amplifier_core/qhy"]
+touptek = ["night_amplifier_core/touptek"]
+svbony = ["night_amplifier_core/svbony"]
+indi = ["night_amplifier_core/indi"]
 # Bundle cfitsio from source (static link) for portable distribution.
 # Without this, the system libcfitsio-dev is required.
-bundled-cfitsio = ["fitsio/fitsio-src"]
+bundled-cfitsio = ["night_amplifier_core/bundled-cfitsio"]
+# Test doubles for other crates' tests (Pro's): `camera::testing` and
+# `AppState::new_for_testing`. Never enabled by a build that ships.
+test-support = ["night_amplifier_core/test-support", "night_amplifier_session/test-support"]
 # OpenTelemetry support - enabled by default in debug builds via cfg
-telemetry = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing-opentelemetry"]
+telemetry = ["night_amplifier_core/telemetry", "night_amplifier_session/telemetry"]
+# JSON Schema for the wire types, from which `tests/api_types.rs` writes the frontend's
+# `api.types.js`. Never enabled by a build that ships.
+api-schema = [
+    "dep:schemars",
+    "schemars/preserve_order",
+    "night_amplifier_core/api-schema",
+    "night_amplifier_session/api-schema",
+]
 
 [dev-dependencies]
-criterion = "0.8.2"
-tiff = "0.11.3"        # TIFF file reading
-fitsio = "0.21.10"     # FITS file reading (astronomy format)
-tempfile = "3.27.0"   # For creating temporary test outputs
-image = "0.25.10"      # General image handling for test output
-tower = "0.5.3"       # For server endpoint testing (ServiceExt::oneshot)
-tokio-tungstenite = "0.29.0" # WebSocket client for end-to-end stream tests; axum's version, so no second copy
-sha2 = "0.11.0"         # Content hashes for the in-source frontend-bundle test fixture
-serial_test = "4.0.1" # Run integration tests sequentially
-proptest = "1.11.0"
-insta = "1.48.0"
+night_amplifier_core = { workspace = true, features = ["test-support"] }
+night_amplifier_session = { workspace = true, features = ["test-support"] }
+async-trait = { workspace = true }
+criterion = { workspace = true }
+tiff = { workspace = true }        # TIFF file reading
+fitsio = { workspace = true }      # FITS file reading (astronomy format)
+tempfile = { workspace = true }    # For creating temporary test outputs
+image = { version = "0.25.10" }    # General image handling for test output (all formats)
+lz4_flex = { workspace = true }
+png = { workspace = true }
+turbojpeg = { workspace = true }
+tower = { workspace = true }       # For server endpoint testing (ServiceExt::oneshot)
+tokio-tungstenite = { workspace = true } # WebSocket client for end-to-end stream tests; axum's version, so no second copy
+sha2 = { workspace = true }        # Content hashes for the in-source frontend-bundle test fixture
+serial_test = { workspace = true } # Run integration tests sequentially
+proptest = { workspace = true }
+insta = { workspace = true }
+# Real-data fixtures download on demand (`tests/integration/common.rs`)
+reqwest = { workspace = true }
+zip = { workspace = true }
+regex = { workspace = true }
+
+# Tests render real 3008² frames. On Pro's 12 heaviest: 496 s at opt-level 0, 70 s here and 54 s
+# at 2 — for 2.1x / 3.5x the compile. Debug assertions and overflow checks stay on. Pro builds
+# use Pro's own profile, which matches.
+[profile.dev]
+opt-level = 1
 
 [profile.release]
 opt-level = 3
@@ -136,10 +168,6 @@ debug = 1
 
 [[bench]]
 name = "cfa_benchmark"
-harness = false
-
-[[bench]]
-name = "denoise_benchmark"
 harness = false
 
 [[bench]]

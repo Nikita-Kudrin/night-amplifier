@@ -5,27 +5,26 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::camera::CameraInfo;
-use crate::server::capture::solving::{plate_solve_available, SolveSource};
-use crate::server::state::*;
+use crate::push_to::TelescopeSettings;
+use crate::session::capture::solving::{plate_solve_available, SolveSource};
+use crate::session::state::*;
 
 /// Install a connected camera in `role` without opening a device.
 async fn register_camera(state: &Arc<AppState>, role: CameraRole, id: &str, name: &str) {
-    state.cameras.write().await.insert(
-        id.to_string(),
-        ConnectedCameraInfo {
-            id: id.to_string(),
-            provider: "Mock".to_string(),
-            index: 0,
-            role,
-            info: CameraInfo {
-                name: name.to_string(),
-                has_cooler: true,
-                min_temp_c: Some(-40.0),
-                max_temp_c: Some(20.0),
-                ..Default::default()
-            },
+    let camera = ConnectedCameraInfo {
+        id: id.to_string(),
+        provider: "Mock".to_string(),
+        index: 0,
+        role,
+        info: CameraInfo {
+            name: name.to_string(),
+            has_cooler: true,
+            min_temp_c: Some(-40.0),
+            max_temp_c: Some(20.0),
+            ..Default::default()
         },
-    );
+    };
+    state.roster.install(camera, false);
     if role == CameraRole::Guide {
         state.set_guide_loop_running(true);
     }
@@ -59,7 +58,7 @@ async fn guide_settings_do_not_disturb_the_main_camera() {
     assert_eq!(body["data"]["guide_camera"]["exposure_us"], 2_000_000);
     assert_eq!(body["data"]["guide_camera"]["gain"], 300);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert_eq!(settings.exposure_us, 60_000_000);
     assert_eq!(settings.guide_camera.exposure_us, 2_000_000);
 }
@@ -74,7 +73,7 @@ async fn a_settings_request_without_a_role_edits_the_main_camera() {
     let (status, _) = post_json(&app, "/api/settings", serde_json::json!({"gain": 42})).await;
     assert_eq!(status, axum::http::StatusCode::OK);
 
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert_eq!(settings.gain, 42);
     assert_eq!(
         settings.guide_camera.gain, 0,
@@ -185,7 +184,7 @@ async fn the_camera_list_reports_each_cameras_role() {
 /// would report a framing change that never happened (and restart a healthy solve).
 #[tokio::test]
 async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
-    use crate::server::api::settings::optics_change;
+    use crate::session::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let mut settings = CaptureSettings {
@@ -213,7 +212,7 @@ async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
 /// when the shared telescope block is untouched.
 #[tokio::test]
 async fn rewriting_the_optics_profiles_counts_as_a_telescope_change() {
-    use crate::server::api::settings::optics_change;
+    use crate::session::services::optics_change;
     use crate::server::dto::UpdateSettingsRequest;
 
     let settings = CaptureSettings::default();
@@ -290,7 +289,7 @@ fn both_roles_start_from_the_same_hardware_defaults() {
 #[tokio::test]
 async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
     use crate::camera::{CameraInfo, ImageFormat, SensorType};
-    use crate::server::camera_session::lifecycle::apply_camera_profile_on_connect;
+    use crate::session::camera::lifecycle::apply_camera_profile_on_connect;
 
     let info = CameraInfo {
         name: "Dual Duty".to_string(),
@@ -301,7 +300,7 @@ async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
         ..Default::default()
     };
     let key = |role| {
-        crate::server::camera_session::lifecycle::camera_profile_key("Mock", "Dual Duty", role)
+        crate::session::camera::lifecycle::camera_profile_key("Mock", "Dual Duty", role)
     };
 
     let mut settings = CaptureSettings::default();
@@ -323,7 +322,7 @@ async fn a_guide_connect_leaves_a_profile_the_imaging_camera_can_use() {
 #[tokio::test]
 async fn a_zeroed_stored_profile_is_repaired_on_connect() {
     use crate::camera::{CameraInfo, ImageFormat, SensorType};
-    use crate::server::camera_session::lifecycle::{
+    use crate::session::camera::lifecycle::{
         apply_camera_profile_on_connect, camera_profile_key,
     };
 
@@ -553,14 +552,14 @@ async fn the_name_lookup_answers_only_for_connected_cameras() {
     register_camera(&state, CameraRole::Main, "mock_0", "Imaging").await;
 
     assert_eq!(
-        state.connected_camera_name("mock_1").await.as_deref(),
+        state.connected_camera_name("mock_1").as_deref(),
         Some("Guiding")
     );
     assert_eq!(
-        state.connected_camera_name("mock_0").await.as_deref(),
+        state.connected_camera_name("mock_0").as_deref(),
         Some("Imaging")
     );
-    assert_eq!(state.connected_camera_name("mock_missing").await, None);
+    assert_eq!(state.connected_camera_name("mock_missing"), None);
 }
 
 // ============================================================================
@@ -573,9 +572,11 @@ async fn the_name_lookup_answers_only_for_connected_cameras() {
 // disconnecting it.
 
 /// `register_camera` leaves the guide loop marked running, which is what a connected
-/// guide camera looks like: it starts on connect.
+/// guide camera looks like: it starts on connect. Start is then the state already reached,
+/// not a conflict — the client asking was showing a stopped loop because it had missed the
+/// event saying otherwise (2026-09-20), and a 409 gave it nothing to act on.
 #[tokio::test]
-async fn starting_a_guide_camera_that_is_already_running_is_refused() {
+async fn starting_a_guide_camera_that_is_already_running_succeeds() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
     let app = create_test_router(Arc::clone(&state));
@@ -587,11 +588,12 @@ async fn starting_a_guide_camera_that_is_already_running_is_refused() {
     )
     .await;
 
-    assert_eq!(status, axum::http::StatusCode::CONFLICT);
-    assert!(body["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("already running"));
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["camera_id"], "mock_1");
+    assert!(
+        !state.guide_loops.is_registered(),
+        "a second loop was started beside the running one"
+    );
 }
 
 /// Distinct from "no imaging camera is connected": the two answer different requests,
@@ -686,7 +688,7 @@ async fn stopping_a_guide_camera_that_is_not_running_says_so() {
 async fn stopping_the_guide_camera_leaves_the_capture_running() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(Arc::clone(&state));
 
     post_json(
@@ -696,7 +698,7 @@ async fn stopping_the_guide_camera_leaves_the_capture_running() {
     )
     .await;
 
-    assert_eq!(state.capture_state().await, CaptureState::Capturing);
+    assert_eq!(state.capture_state(), CaptureState::Capturing);
     assert!(!state.is_cancelled());
 }
 
@@ -706,7 +708,7 @@ async fn stopping_the_guide_camera_leaves_the_capture_running() {
 async fn a_stop_with_no_role_stops_the_capture_and_not_the_guide_camera() {
     let state = create_test_state();
     register_camera(&state, CameraRole::Guide, "mock_1", "Guiding").await;
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
     let app = create_test_router(Arc::clone(&state));
 
     let (status, body) = post_json(&app, "/api/capture/stop", serde_json::json!({})).await;
@@ -716,7 +718,7 @@ async fn a_stop_with_no_role_stops_the_capture_and_not_the_guide_camera() {
         .as_str()
         .unwrap_or_default()
         .contains("Capture stopping"));
-    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+    assert_eq!(state.capture_state(), CaptureState::Stopping);
     assert!(
         state.guide_loop_running(),
         "stopping the capture stopped the guide camera with it"

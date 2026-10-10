@@ -1,20 +1,19 @@
 <script setup>
 /**
- * Sensor corrections and noise reduction: raw-mosaic corrections (pre-demosaic)
- * and the spatial filters the encoders run at view resolution — the two groups
- * that decide image cleanliness before anything cosmetic. Extracted from
- * `SettingsPanel.vue`, which had grown past the point its sections were findable.
+ * Sensor corrections and noise reduction: raw-mosaic corrections (pre-demosaic) and the
+ * spatial filters run at view resolution — the two groups deciding image cleanliness
+ * before anything cosmetic. Extracted from `SettingsPanel.vue` once its sections grew hard to find.
  *
- * Edits a local mirror, not the props, and emits `apply(key, value)` when a
- * control commits (a toggle immediately, a slider at drag end) — the parent
- * stays the single owner of the settings object and persistence.
+ * Edits a local mirror, emitting `apply(key, value)` on commit (toggle immediately,
+ * slider at drag end) — the parent stays sole owner of the settings.
  */
-import {reactive, watch} from 'vue'
-import {BaseToggle, BaseSlider, BaseInfoIcon} from './ui'
+import {computed, reactive, watch} from 'vue'
+import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
   BACKGROUND_GRAIN_LIMITS,
   DENOISE_LUMA_STRENGTH_LIMITS,
+  DETAIL_LIMITS,
   HOT_PIXEL_SIGMA_LIMITS,
   PREVIEW_RESOLUTION_OPTIONS,
   STREAMING_RESOLUTION_OPTIONS,
@@ -32,6 +31,14 @@ const props = defineProps({
    * took and then reverted on the next toggle is worse than one the UI refuses.
    */
   focusMode: {type: Boolean, default: false},
+  /**
+   * Whether the denoise plugin is present. The filters and every control over them are
+   * a Pro feature; without it the section stays visible, locked, so it is clear what
+   * the build does not do rather than silently missing.
+   */
+  denoiseAvailable: {type: Boolean, default: false},
+  /** Whether the AI denoiser is present; its switch lives in Settings → Advanced. */
+  aiDenoiseAvailable: {type: Boolean, default: false},
   formatPercent: {type: Function, required: true},
   formatSigma: {type: Function, required: true},
 })
@@ -46,6 +53,38 @@ const local = reactive({
   preview_resolution: props.previewResolution,
   streaming_resolution: props.streamingResolution,
 })
+
+/**
+ * The four filter controls are inert without the plugin and while the master switch is
+ * off. The switch itself is deliberately not held by Focus/Finder mode: the mode reaches
+ * "off" through the strengths it snapshots, and a switch it forced false is how a saved
+ * file once lost the Background Grain dial for good.
+ */
+const filtersLocked = computed(() => !props.denoiseAvailable || !local.denoise.enabled)
+
+/**
+ * While the network runs it has the fine and mid scales, so Structure strength and Detail
+ * grey out; Colour Mottle and Background Grain keep working. A switch saved on a build
+ * without the network, or held off by Focus/Finder mode, replaces nothing.
+ */
+const aiReplacing = computed(
+    () =>
+        props.aiDenoiseAvailable && !filtersLocked.value && !props.focusMode && Boolean(local.denoise.ai)
+)
+
+/**
+ * Detail is a gain on the brightness denoiser's own planes, so it has nothing to work on
+ * while that is held off — by Focus/Finder mode, a zero Structure strength, or the network
+ * taking those scales. The mode does not manage it: the value is the observer's and is
+ * not snapshotted.
+ */
+const detailLocked = computed(
+    () =>
+        filtersLocked.value ||
+        props.focusMode ||
+        !(local.denoise.luma_strength > 0) ||
+        aiReplacing.value
+)
 
 watch(
     () => [props.sensorCorrection, props.denoise, props.previewResolution, props.streamingResolution],
@@ -157,16 +196,32 @@ function applyValue(key, value) {
 
   <!-- Noise reduction: runs on the streamed image, at its streaming resolution -->
   <div class="settings-section">
-    <h3 class="section-title">Noise Reduction</h3>
+    <h3 class="section-title">
+      Noise Reduction
+      <BaseProLock v-if="!denoiseAvailable" feature="Noise Reduction"/>
+    </h3>
 
     <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+    <span v-if="aiReplacing" class="hint">
+      AI denoising (Settings → Advanced) replaces Structure strength and Detail while it runs.
+    </span>
 
     <div class="control-group" style="margin-top: 0.5rem">
+      <BaseToggle
+          v-model="local.denoise.enabled"
+          label="Denoise"
+          :help="HELP.denoise_enabled"
+          :disabled="!denoiseAvailable"
+          @update:model-value="apply('denoise')"
+      />
+    </div>
+
+    <div class="control-group">
       <BaseToggle
           v-model="local.denoise.chroma"
           label="Colour Mottle"
           :help="HELP.denoise_chroma"
-          :disabled="focusMode"
+          :disabled="filtersLocked || focusMode"
           @update:model-value="apply('denoise')"
       />
     </div>
@@ -181,6 +236,7 @@ function applyValue(key, value) {
           :step="DENOISE_CHROMA_STRENGTH_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.denoise_chroma_strength"
+          :disabled="filtersLocked"
           @change="apply('denoise')"
       />
     </div>
@@ -195,8 +251,12 @@ function applyValue(key, value) {
           :step="BACKGROUND_GRAIN_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.denoise_background_grain"
+          :disabled="filtersLocked"
           @change="apply('denoise')"
       />
+      <span v-if="aiReplacing" class="hint">
+        Above 50% it also smooths the larger mottle the network cannot reach.
+      </span>
     </div>
 
     <div class="control-group" style="margin-bottom: 1.5rem">
@@ -209,7 +269,22 @@ function applyValue(key, value) {
           :step="DENOISE_LUMA_STRENGTH_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.denoise_luma_strength"
-          :disabled="focusMode"
+          :disabled="filtersLocked || focusMode || aiReplacing"
+          @change="apply('denoise')"
+      />
+    </div>
+
+    <div class="control-group" style="margin-bottom: 1.5rem">
+      <BaseSlider
+          v-model="local.denoise.detail"
+          label="Detail"
+          large-gap
+          :min="DETAIL_LIMITS.min"
+          :max="DETAIL_LIMITS.max"
+          :step="DETAIL_LIMITS.step"
+          :format-value="formatPercent"
+          :help="HELP.denoise_detail"
+          :disabled="detailLocked"
           @change="apply('denoise')"
       />
     </div>

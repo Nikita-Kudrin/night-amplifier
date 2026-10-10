@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use super::helpers::*;
 use crate::disk_writer::DiskWriterConfig;
-use crate::server::events::ServerEvent;
-use crate::server::state::*;
+use crate::session::events::ServerEvent;
+use crate::session::state::*;
 
 // ============================================================================
 // State Management Tests
@@ -18,7 +18,7 @@ async fn test_app_state_event_subscription() {
     let mut rx1 = state.subscribe_events();
     let mut rx2 = state.subscribe_events();
 
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     // Both receivers should get the event
     let event1 = rx1.recv().await.unwrap();
@@ -49,18 +49,18 @@ async fn test_app_state_reset_session() {
     let state = create_test_state();
 
     // Add some data
-    state.frame_captured(true, None).await;
-    state.frame_captured(true, None).await;
-    state.frame_rejected("test".to_string()).await;
+    state.frame_captured(true, true, None);
+    state.frame_captured(true, true, None);
+    state.frame_rejected(true, "test".to_string());
 
     // Reset
-    state.reset_session().await;
+    state.reset_session();
 
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, 0);
-    assert_eq!(session.stacked_count, 0);
-    assert_eq!(session.rejected_count, 0);
-    assert!(session.started_at.is_some());
+    let session = state.stats.counts();
+    assert_eq!(session.frames, 0);
+    assert_eq!(session.stacked, 0);
+    assert_eq!(session.rejected, 0);
+    assert!(state.stats.started_at().is_some());
 }
 
 // ============================================================================
@@ -90,7 +90,7 @@ async fn test_concurrent_settings_updates() {
     }
 
     // Verify state is consistent (one of the values should have won)
-    let settings = state.settings.read().await;
+    let settings = state.settings.snapshot();
     assert!(settings.gain >= 0 && settings.gain < 10);
 }
 
@@ -126,27 +126,27 @@ async fn test_capture_state_transitions() {
     let state = create_test_state();
 
     // Initial state
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
 
     // Transition to Starting
-    state.set_capture_state(CaptureState::Starting).await;
-    assert_eq!(state.capture_state().await, CaptureState::Starting);
+    state.set_capture_state(CaptureState::Starting);
+    assert_eq!(state.capture_state(), CaptureState::Starting);
 
     // Transition to Capturing
-    state.set_capture_state(CaptureState::Capturing).await;
-    assert_eq!(state.capture_state().await, CaptureState::Capturing);
+    state.set_capture_state(CaptureState::Capturing);
+    assert_eq!(state.capture_state(), CaptureState::Capturing);
 
     // Transition to Stopping
-    state.set_capture_state(CaptureState::Stopping).await;
-    assert_eq!(state.capture_state().await, CaptureState::Stopping);
+    state.set_capture_state(CaptureState::Stopping);
+    assert_eq!(state.capture_state(), CaptureState::Stopping);
 
     // Transition to Idle
-    state.set_capture_state(CaptureState::Idle).await;
-    assert_eq!(state.capture_state().await, CaptureState::Idle);
+    state.set_capture_state(CaptureState::Idle);
+    assert_eq!(state.capture_state(), CaptureState::Idle);
 
     // Transition to Error
-    state.set_capture_state(CaptureState::Error).await;
-    assert_eq!(state.capture_state().await, CaptureState::Error);
+    state.set_capture_state(CaptureState::Error);
+    assert_eq!(state.capture_state(), CaptureState::Error);
 }
 
 #[tokio::test]
@@ -155,7 +155,7 @@ async fn test_capture_state_broadcasts_events() {
     let mut events_rx = state.subscribe_events();
 
     // Set state
-    state.set_capture_state(CaptureState::Capturing).await;
+    state.set_capture_state(CaptureState::Capturing);
 
     // Should receive event
     let event = events_rx.recv().await.unwrap();
@@ -169,42 +169,41 @@ async fn test_capture_state_broadcasts_events() {
 #[tokio::test]
 async fn test_frame_captured_increments_counts() {
     let state = create_test_state();
-    state.reset_session().await;
+    state.reset_session();
 
     // Capture stacked frame
-    state.frame_captured(true, None).await;
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, 1);
-    assert_eq!(session.stacked_count, 1);
-    drop(session);
+    state.frame_captured(true, true, None);
+    let session = state.stats.counts();
+    assert_eq!(session.frames, 1);
+    assert_eq!(session.stacked, 1);
 
     // Capture non-stacked frame
-    state.frame_captured(false, None).await;
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, 2);
-    assert_eq!(session.stacked_count, 1);
+    state.frame_captured(false, true, None);
+    let session = state.stats.counts();
+    assert_eq!(session.frames, 2);
+    assert_eq!(session.stacked, 1);
 }
 
 #[tokio::test]
 async fn test_frame_rejected_increments_counts() {
     let state = create_test_state();
-    state.reset_session().await;
+    state.reset_session();
 
-    state.frame_rejected("Test reason".to_string()).await;
+    state.frame_rejected(true, "Test reason".to_string());
 
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, 1);
-    assert_eq!(session.rejected_count, 1);
-    assert_eq!(session.stacked_count, 0);
+    let session = state.stats.counts();
+    assert_eq!(session.frames, 1);
+    assert_eq!(session.rejected, 1);
+    assert_eq!(session.stacked, 0);
 }
 
 #[tokio::test]
 async fn test_frame_captured_broadcasts_event() {
     let state = create_test_state();
     let mut events_rx = state.subscribe_events();
-    state.reset_session().await;
+    state.reset_session();
 
-    state.frame_captured(true, None).await;
+    state.frame_captured(true, true, None);
 
     let event = events_rx.recv().await.unwrap();
     match event {
@@ -231,11 +230,10 @@ async fn test_frame_captured_broadcasts_event() {
 async fn a_gate_rejection_carries_its_reason_without_arming_the_abort_detector() {
     let state = create_test_state();
     let mut events_rx = state.subscribe_events();
-    state.reset_session().await;
+    state.reset_session();
 
     state
-        .frame_captured(false, Some("stars far larger than the session median"))
-        .await;
+        .frame_captured(false, true, Some("stars far larger than the session median"));
 
     match events_rx.recv().await.unwrap() {
         ServerEvent::FrameCaptured {
@@ -247,9 +245,11 @@ async fn a_gate_rejection_carries_its_reason_without_arming_the_abort_detector()
         other => panic!("Expected FrameCaptured event, got {other:?}"),
     }
 
-    let session = state.session.read().await;
+    for _ in 1..crate::session::state::REJECTION_RATE_THRESHOLD {
+        state.frame_captured(false, true, Some("stars far larger than the session median"));
+    }
     assert!(
-        session.rejection_timestamps.is_empty(),
+        !state.stats.failing(),
         "a badly aligned frame must not count towards the capture-abort burst"
     );
 }
@@ -258,9 +258,9 @@ async fn a_gate_rejection_carries_its_reason_without_arming_the_abort_detector()
 async fn test_frame_rejected_broadcasts_event() {
     let state = create_test_state();
     let mut events_rx = state.subscribe_events();
-    state.reset_session().await;
+    state.reset_session();
 
-    state.frame_rejected("Test reason".to_string()).await;
+    state.frame_rejected(true, "Test reason".to_string());
 
     let event = events_rx.recv().await.unwrap();
     match event {
@@ -368,25 +368,24 @@ async fn test_session_reset_clears_all_counts() {
     let state = create_test_state();
 
     // Add some data
-    state.frame_captured(true, None).await;
-    state.frame_captured(true, None).await;
-    state.frame_rejected("test".to_string()).await;
+    state.frame_captured(true, true, None);
+    state.frame_captured(true, true, None);
+    state.frame_rejected(true, "test".to_string());
 
     // Verify data exists
     {
-        let session = state.session.read().await;
-        assert!(session.frame_count > 0);
+        let session = state.stats.counts();
+        assert!(session.frames > 0);
     }
 
     // Reset session
-    state.reset_session().await;
+    state.reset_session();
 
     // Verify all cleared
-    let session = state.session.read().await;
-    assert_eq!(session.frame_count, 0);
-    assert_eq!(session.stacked_count, 0);
-    assert_eq!(session.rejected_count, 0);
-    assert!(session.last_error.is_none());
+    let session = state.stats.counts();
+    assert_eq!(session.frames, 0);
+    assert_eq!(session.stacked, 0);
+    assert_eq!(session.rejected, 0);
 }
 
 #[tokio::test]
@@ -394,23 +393,20 @@ async fn test_session_reset_sets_started_at() {
     let state = create_test_state();
 
     // Initially no started_at
-    {
-        let session = state.session.read().await;
-        assert!(session.started_at.is_none());
-    }
+    assert!(state.stats.started_at().is_none());
 
     // Reset sets timestamp
-    state.reset_session().await;
+    state.reset_session();
 
-    let session = state.session.read().await;
-    assert!(session.started_at.is_some());
+    let started_at = state.stats.started_at();
+    assert!(started_at.is_some());
 
     // Should be a reasonable timestamp (within last minute)
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
-    let started = session.started_at.unwrap();
+    let started = started_at.unwrap();
     assert!(started <= now);
     assert!(started > now - 60_000); // Within last minute
 }

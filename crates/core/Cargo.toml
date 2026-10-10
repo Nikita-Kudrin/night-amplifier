@@ -1,0 +1,71 @@
+[package]
+name = "night_amplifier_core"
+version = "0.0.0-dev"
+edition = "2021"
+authors = ["Night Amplifier Contributors"]
+description = "Night Amplifier's domain: image pipeline, cameras and plugin traits"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+dlopen2 = { workspace = true }
+# FITS file support for astronomical image storage
+fitsio = { workspace = true }
+fs4 = { workspace = true }
+image = { workspace = true }
+nalgebra = { workspace = true }  # Linear algebra for RBF background extraction
+png = { workspace = true }
+process-wrap = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Startup system report (`system_info`): OS, CPU and memory facts on every release target, and
+# free space for one path without touching other mounts
+sysinfo = { workspace = true }
+thiserror = { workspace = true }
+tiff = { workspace = true }      # Image file format support for simulated camera
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-appender = { workspace = true }
+tracing-subscriber = { workspace = true }
+wide = { workspace = true }      # SIMD abstractions for performance-critical code
+zune-png = { workspace = true }
+
+# INDI protocol
+quick-xml = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+
+# OpenTelemetry (optional)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+# JSON Schema of the wire types (`api-schema`)
+schemars = { workspace = true, optional = true }
+
+# Eager and global dlopen flags for vendor SDKs (`camera::sdk_library`)
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+# No defaults: the `night_amplifier` crate's features choose, and forward here.
+[features]
+playerone = []
+zwo = []
+qhy = []
+touptek = []
+svbony = []
+indi = ["dep:quick-xml", "dep:base64"]
+bundled-cfitsio = ["fitsio/fitsio-src"]
+test-support = []
+api-schema = ["dep:schemars"]
+telemetry = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-semantic-conventions", "tracing-opentelemetry"]
+
+[dev-dependencies]
+image = { version = "0.25.10" }
+lz4_flex = { workspace = true }
+proptest = { workspace = true }
+tempfile = { workspace = true }
