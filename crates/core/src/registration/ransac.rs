@@ -165,6 +165,25 @@ pub fn estimate_transform_from_pairs(
     tgt_stars: &[Star],
     correspondences: &[(usize, usize)],
 ) -> Option<AffineTransform> {
+    fit_pairs(ref_stars, tgt_stars, correspondences, true)
+}
+
+/// As [`estimate_transform_from_pairs`], with the scale held at 1: subs of one session
+/// share their optics, so a few pairs pin rotation and shift but only add noise to scale.
+pub fn estimate_rigid_transform_from_pairs(
+    ref_stars: &[Star],
+    tgt_stars: &[Star],
+    correspondences: &[(usize, usize)],
+) -> Option<AffineTransform> {
+    fit_pairs(ref_stars, tgt_stars, correspondences, false)
+}
+
+fn fit_pairs(
+    ref_stars: &[Star],
+    tgt_stars: &[Star],
+    correspondences: &[(usize, usize)],
+    free_scale: bool,
+) -> Option<AffineTransform> {
     if correspondences.len() < 2 {
         return None;
     }
@@ -188,8 +207,12 @@ pub fn estimate_transform_from_pairs(
 
     let rotation = (sum_cross_2.atan2(sum_cross_1)) as f32;
     let denom = sum_tgt_sq.max(1e-10);
-    let scale = ((sum_cross_1 * sum_cross_1 + sum_cross_2 * sum_cross_2).sqrt() / denom) as f32;
-    let scale = scale.clamp(0.90, 1.10);
+    let scale = if free_scale {
+        let scale = ((sum_cross_1 * sum_cross_1 + sum_cross_2 * sum_cross_2).sqrt() / denom) as f32;
+        scale.clamp(0.90, 1.10)
+    } else {
+        1.0
+    };
 
     let cos_r = rotation.cos();
     let sin_r = rotation.sin();
@@ -268,6 +291,35 @@ mod tests {
         assert!((transform.scale - 1.0).abs() < 0.01);
         assert!(transform.tx.abs() < 1.0);
         assert!(transform.ty.abs() < 1.0);
+    }
+
+    /// Four pairs of a turned, shifted field whose centroids carry a 0.4 % scale error:
+    /// the free fit takes the error up as scale, the rigid one keeps 1 and still finds
+    /// the turn and the shift.
+    #[test]
+    fn a_rigid_fit_keeps_the_scale_and_finds_the_turn() {
+        let reference = create_test_stars();
+        let noisy = AffineTransform::new(0.01, 1.004, 30.0, -12.0);
+        let target: Vec<Star> = reference
+            .iter()
+            .map(|s| {
+                let (x, y) = noisy.inverse_transform_point(s.x, s.y);
+                Star::new(x, y, s.flux, s.peak, s.snr)
+            })
+            .collect();
+        let pairs: Vec<(usize, usize)> = (0..reference.len()).map(|i| (i, i)).collect();
+
+        let free = estimate_transform_from_pairs(&reference, &target, &pairs).unwrap();
+        let rigid = estimate_rigid_transform_from_pairs(&reference, &target, &pairs).unwrap();
+
+        assert!((free.scale - 1.004).abs() < 1e-4, "{free:?}");
+        assert_eq!(rigid.scale, 1.0);
+        assert!((rigid.rotation - 0.01).abs() < 1e-4, "{rigid:?}");
+        let n = target.len() as f32;
+        let (cx, cy) = (target.iter().map(|s| s.x).sum::<f32>() / n, target.iter().map(|s| s.y).sum::<f32>() / n);
+        let (x, y) = rigid.transform_point(cx, cy);
+        let (ex, ey) = noisy.transform_point(cx, cy);
+        assert!((x - ex).hypot(y - ey) < 0.5, "the pairs' centre lands at ({x}, {y}), not ({ex}, {ey})");
     }
 
     #[test]

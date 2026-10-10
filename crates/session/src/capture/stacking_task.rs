@@ -11,7 +11,7 @@ use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 use super::channel::{CapturedFrame, QueueDepth, StackedFrame};
 use super::context::{LiveStacker, StackingCarryover};
-use super::frame_gate::RejectionReason;
+use super::wanderer::Wanderer;
 use super::{pipeline, solving, storage};
 
 /// The channel ends the stacking task owns, with the depth counters that shadow them.
@@ -62,6 +62,7 @@ pub fn run_stacking_task(
     let (mut was_stacking_enabled, mut last_stacking_type) =
         reset_detector_start(stacker.as_deref());
     let mut stacking_failed = false;
+    let mut wanderer = Wanderer::default();
 
     // The raw-CFA stage, rebuilt only when what it is derived from moves: a stage
     // may own precomputed state, so it must not be reconstructed per frame. The
@@ -132,6 +133,7 @@ pub fn run_stacking_task(
         if must_reset_stack(stacking_enabled, was_stacking_enabled, stacking_type_changed) {
             stacker = None;
             stacking_failed = false;
+            wanderer.forget();
             state.reset_counters();
             info!(
                 stacking_type = ?settings.stacking_type,
@@ -145,6 +147,7 @@ pub fn run_stacking_task(
         if check_dimension_mismatch(&frame, stacker.as_deref()) {
             info!("Frame dimensions changed (likely due to binning change), resetting stack");
             stacker = None;
+            wanderer.forget();
             state.reset_counters();
         }
 
@@ -208,8 +211,8 @@ pub fn run_stacking_task(
         // Note there is deliberately no raw-frame fallback for a frame that
         // merely failed to register — see `StackingOutcome`.
 
-        // Wanderer mode: reset stack if movement detected
-        if wanderer_detected_movement(
+        // Wanderer mode: reset stack if movement is confirmed
+        if wanderer.confirms_movement(
             settings.wanderer_mode,
             stacking_enabled,
             registration_succeeded,
@@ -217,7 +220,7 @@ pub fn run_stacking_task(
         ) {
             info!(
                 reason = rejected_because.map(|r| r.describe()).unwrap_or("registration failed"),
-                "Wanderer mode: movement detected, resetting stack"
+                "Wanderer mode: movement confirmed, resetting stack"
             );
             stacker = None;
             state.reset_counters();
@@ -357,25 +360,6 @@ fn must_reset_stack(stacking_enabled: bool, was_stacking_enabled: bool, type_cha
     stacking_enabled && (!was_stacking_enabled || type_changed)
 }
 
-/// Whether Wanderer mode should treat this frame as the user having moved the
-/// telescope and restart the stack. Only a frame that couldn't be placed against
-/// the reference counts — before the frame gate existed, every rejection meant
-/// that, but the gate also rejects frames that aligned fine yet were soft or loose,
-/// and resetting on those would restart the stack every time a cloud crosses. A mode
-/// reporting no reason (comet, planetary) keeps the original behaviour: not
-/// stacking is the only signal available.
-fn wanderer_detected_movement(
-    wanderer_mode: bool,
-    stacking_enabled: bool,
-    registration_succeeded: bool,
-    rejected_because: Option<RejectionReason>,
-) -> bool {
-    if !wanderer_mode || !stacking_enabled || registration_succeeded {
-        return false;
-    }
-    rejected_because.is_none_or(|reason| reason.means_the_sky_moved())
-}
-
 /// Whether a running stack was built for a different frame geometry than `frame`.
 fn check_dimension_mismatch(frame: &Frame, stacker: Option<&dyn LiveStacker>) -> bool {
     stacker.is_some_and(|stacker| {
@@ -433,8 +417,6 @@ fn save_stacked_result(
 
 #[cfg(test)]
 mod tests {
-    use super::wanderer_detected_movement as moved;
-    use super::RejectionReason;
     use super::{check_dimension_mismatch, must_reset_stack, reset_detector_start};
     use crate::capture::context::{
         CometStacker, LiveStacker, PlanetaryStackingContext, StackSettings, StackingContext,
@@ -542,56 +524,5 @@ mod tests {
         assert!(!check_dimension_mismatch(&fits, Some(stack.as_ref())));
         assert!(check_dimension_mismatch(&binned, Some(stack.as_ref())));
         assert!(check_dimension_mismatch(&mono, Some(stack.as_ref())));
-    }
-
-    #[test]
-    fn wanderer_resets_when_the_frame_cannot_be_placed_at_all() {
-        for reason in [
-            RejectionReason::NoStars,
-            RejectionReason::TooFewStars,
-            RejectionReason::RegistrationFailed,
-            RejectionReason::TooFewCorrespondences,
-        ] {
-            assert!(
-                moved(true, true, false, Some(reason)),
-                "{reason:?} means the field no longer matches the reference"
-            );
-        }
-    }
-
-    /// The regression the frame gate introduced: it rejects frames that aligned
-    /// perfectly well but were soft or loose, and Wanderer read every rejection
-    /// as the user having swung the scope. A cloud crossing would restart the
-    /// stack, which is the opposite of what the mode is for.
-    #[test]
-    fn wanderer_holds_the_stack_through_a_cloud() {
-        for reason in [
-            RejectionReason::ResidualTooHigh,
-            RejectionReason::StarsTooLarge,
-            RejectionReason::StackerError,
-        ] {
-            assert!(
-                !moved(true, true, false, Some(reason)),
-                "{reason:?} is a bad frame, not a new target"
-            );
-        }
-    }
-
-    #[test]
-    fn wanderer_leaves_a_stacked_frame_alone() {
-        assert!(!moved(true, true, true, None));
-    }
-
-    /// Comet and planetary report no reason, so "did not stack" stays the only
-    /// signal available to them.
-    #[test]
-    fn a_mode_without_reasons_keeps_the_original_wanderer_behaviour() {
-        assert!(moved(true, true, false, None));
-    }
-
-    #[test]
-    fn wanderer_does_nothing_when_it_is_off_or_stacking_is_not_running() {
-        assert!(!moved(false, true, false, None), "wanderer mode is off");
-        assert!(!moved(true, false, false, None), "stacking is not running");
     }
 }

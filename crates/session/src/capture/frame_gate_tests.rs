@@ -1,7 +1,7 @@
 //! The frame gate's verdicts, one behaviour at a time.
 
 use super::*;
-use night_amplifier_core::registration::AffineTransform;
+use night_amplifier_core::registration::{AffineTransform, Support};
 
 /// Fills the gate's history so it is past warm-up, with residuals centred on
 /// `residual` and star sizes on `fwhm`.
@@ -21,32 +21,63 @@ const THIS_FIELD: fn() -> bool = || true;
 
 /// 200 stars of `fwhm`, as clean as the session's usual sub.
 fn stars(fwhm: f32) -> StarField {
-    StarField { count: 200, fwhm: Some(fwhm), doubling: CLEAN }
+    StarField { fwhm: Some(fwhm), doubling: CLEAN }
 }
 
+/// A fit whose pairs chance cannot explain.
 fn fit(matched_stars: usize, mean_residual: f32) -> AdaptiveRegistrationResult {
     AdaptiveRegistrationResult {
         transform: AffineTransform::identity(),
         matched_stars,
         mean_residual,
+        support: Support { pairs: matched_stars, expected: 1.0, log10_chance: -100.0, log10_trials: 0.0 },
         config_used: "test".to_string(),
         attempts: 1,
+    }
+}
+
+/// A fit whose pairs are what chance produces at that star density.
+fn coincidence(matched_stars: usize, mean_residual: f32) -> AdaptiveRegistrationResult {
+    AdaptiveRegistrationResult {
+        support: Support { pairs: 4, expected: 3.0, log10_chance: -0.5, log10_trials: 0.0 },
+        ..fit(matched_stars, mean_residual)
     }
 }
 
 #[test]
 fn admits_a_clean_fit() {
     let gate = seeded(0.5, 5.0);
-    assert_eq!(gate.judge(&fit(180, 0.6), Some(5.0), 200, 200), None);
+    assert_eq!(gate.judge(&fit(180, 0.6), Some(5.0)), None);
 }
 
 #[test]
-fn rejects_a_fit_built_from_a_handful_of_stars() {
+fn rejects_a_fit_chance_explains() {
     let gate = seeded(0.5, 5.0);
-    // A transform agreeing with 7 of 200 stars is a coincidence, however
-    // small its residual over those seven.
+    // However many stars the rung claims and however small its residual: the
+    // Cat's Eye fixture's coincidences claimed 53 of 200.
     assert_eq!(
-        gate.judge(&fit(7, 0.4), Some(5.0), 200, 200),
+        gate.judge(&coincidence(53, 0.4), Some(5.0)),
+        Some(RejectionReason::TooFewCorrespondences)
+    );
+}
+
+/// A thin sub's true fit pairs a dozen of its 200 detections, the rest being noise;
+/// a share of the list could never admit it.
+#[test]
+fn admits_a_credible_fit_on_a_dozen_stars() {
+    let gate = seeded(0.5, 5.0);
+    assert_eq!(gate.judge(&fit(12, 0.6), Some(5.0)), None);
+}
+
+/// A fit that rescales the field is not a sub of this session, however well it pairs.
+#[test]
+fn rejects_a_fit_that_changes_the_scale() {
+    let gate = seeded(0.5, 5.0);
+    let mut zoomed = fit(180, 0.6);
+    zoomed.transform.scale = 0.9;
+
+    assert_eq!(
+        gate.judge(&zoomed, Some(5.0)),
         Some(RejectionReason::TooFewCorrespondences)
     );
 }
@@ -55,7 +86,7 @@ fn rejects_a_fit_built_from_a_handful_of_stars() {
 fn rejects_a_residual_far_above_the_session_median() {
     let gate = seeded(0.5, 5.0);
     assert_eq!(
-        gate.judge(&fit(180, 20.0), Some(5.0), 200, 200),
+        gate.judge(&fit(180, 20.0), Some(5.0)),
         Some(RejectionReason::ResidualTooHigh)
     );
 }
@@ -67,9 +98,9 @@ fn follows_a_loose_session_rather_than_a_fixed_idea_of_good() {
     // point of scoring against the session's own median is that a frame is
     // only an outlier relative to its neighbours.
     let gate = seeded(5.5, 5.0);
-    assert_eq!(gate.judge(&fit(180, 6.5), Some(5.0), 200, 200), None);
+    assert_eq!(gate.judge(&fit(180, 6.5), Some(5.0)), None);
     assert_eq!(
-        gate.judge(&fit(180, 20.0), Some(5.0), 200, 200),
+        gate.judge(&fit(180, 20.0), Some(5.0)),
         Some(RejectionReason::ResidualTooHigh)
     );
 }
@@ -86,7 +117,7 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
 
     for residual in [1.9, 2.4, 2.7] {
         assert_eq!(
-            gate.judge(&fit(150, residual), Some(5.4), 200, 200),
+            gate.judge(&fit(150, residual), Some(5.4)),
             None,
             "{residual} px is a fraction of a 5.4 px star and must still stack"
         );
@@ -94,7 +125,7 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
 
     // Past half a star width it is smearing, whatever the session median.
     assert_eq!(
-        gate.judge(&fit(150, 8.2), Some(5.4), 200, 200),
+        gate.judge(&fit(150, 8.2), Some(5.4)),
         Some(RejectionReason::ResidualTooHigh)
     );
 }
@@ -104,12 +135,12 @@ fn a_well_tracked_session_is_not_punished_for_its_own_precision() {
 #[test]
 fn the_star_size_floor_follows_the_session_not_a_constant() {
     assert_eq!(
-        seeded(0.6, 8.0).judge(&fit(150, 3.5), Some(8.0), 200, 200),
+        seeded(0.6, 8.0).judge(&fit(150, 3.5), Some(8.0)),
         None,
         "3.5 px is well inside an 8 px star"
     );
     assert_eq!(
-        seeded(0.6, 2.5).judge(&fit(150, 3.5), Some(2.5), 200, 200),
+        seeded(0.6, 2.5).judge(&fit(150, 3.5), Some(2.5)),
         Some(RejectionReason::ResidualTooHigh),
         "3.5 px is wider than a 2.5 px star"
     );
@@ -119,7 +150,7 @@ fn the_star_size_floor_follows_the_session_not_a_constant() {
 fn rejects_bloated_stars() {
     let gate = seeded(0.5, 4.0);
     assert_eq!(
-        gate.judge(&fit(180, 0.5), Some(9.0), 200, 200),
+        gate.judge(&fit(180, 0.5), Some(9.0)),
         Some(RejectionReason::StarsTooLarge)
     );
 }
@@ -136,7 +167,7 @@ fn ordinary_scatter_in_measured_star_size_is_not_defocus() {
 
     for fwhm in [6.5, 7.6, 9.0] {
         assert_eq!(
-            gate.judge(&fit(150, 0.6), Some(fwhm), 200, 200),
+            gate.judge(&fit(150, 0.6), Some(fwhm)),
             None,
             "{fwhm} px is inside the spread a 5.4 px session measures"
         );
@@ -144,7 +175,7 @@ fn ordinary_scatter_in_measured_star_size_is_not_defocus() {
 
     // Twice the session's star size is defocus, cloud, or shake.
     assert_eq!(
-        gate.judge(&fit(150, 0.6), Some(11.0), 200, 200),
+        gate.judge(&fit(150, 0.6), Some(11.0)),
         Some(RejectionReason::StarsTooLarge)
     );
 }
@@ -154,7 +185,7 @@ fn admits_a_registered_frame_during_warmup() {
     let mut gate = FrameGate::default();
     gate.history.record(0.5, Some(4.0));
     // Nothing to compare against yet, so a wide residual still counts.
-    assert_eq!(gate.judge(&fit(180, 9.0), Some(12.0), 200, 200), None);
+    assert_eq!(gate.judge(&fit(180, 9.0), Some(12.0)), None);
 }
 
 /// A gate keyed only on accepted frames would latch shut the moment
@@ -165,20 +196,19 @@ fn admits_a_registered_frame_during_warmup() {
 fn a_sustained_change_in_conditions_reopens_the_gate() {
     let mut gate = seeded(0.4, 4.0);
     assert!(gate
-        .admit(&fit(180, 9.0), stars(4.0), 200)
+        .admit(&fit(180, 9.0), stars(4.0))
         .is_some());
 
     for _ in 0..HISTORY_LEN {
-        if gate.admit(&fit(180, 9.0), stars(4.0), 200).is_none() {
+        if gate.admit(&fit(180, 9.0), stars(4.0)).is_none() {
             return;
         }
     }
     panic!("gate never reopened after conditions settled at a new level");
 }
 
-/// A frame rejected for having too few correspondences must not move the
-/// baseline. Its residual is a mean over the handful of pairs the fit chose
-/// for itself — the dumbbell fixture produced one at 8.46 px over 6 of 200
+/// A frame rejected as a coincidental fit must not move the baseline. Its
+/// residual is a mean over whatever pairs the coincidence made — the dumbbell fixture produced one at 8.46 px over 6 of 200
 /// stars, in a set whose other frames sit at 1.3–2.0 px. With the median at
 /// `sorted[HISTORY_LEN / 2]`, a run of them redefines what the gate calls
 /// normal.
@@ -189,7 +219,7 @@ fn a_coincidental_fit_does_not_move_the_baseline() {
 
     for _ in 0..HISTORY_LEN {
         assert_eq!(
-            gate.admit(&fit(4, 0.05), stars(5.4), 200),
+            gate.admit(&coincidence(4, 0.05), stars(5.4)),
             Some(RejectionReason::TooFewCorrespondences)
         );
     }
@@ -200,7 +230,7 @@ fn a_coincidental_fit_does_not_move_the_baseline() {
         "a fit the gate called a coincidence redefined the session"
     );
     assert_eq!(
-        gate.judge(&fit(150, 2.4), Some(5.4), 200, 200),
+        gate.judge(&fit(150, 2.4), Some(5.4)),
         None,
         "the gate latched shut against a frame it admitted before the burst"
     );
@@ -214,7 +244,7 @@ fn a_frame_rejected_on_its_own_measurements_still_updates_the_baseline() {
     let before = gate.history.median_residual();
 
     for _ in 0..HISTORY_LEN {
-        gate.admit(&fit(150, 12.0), stars(5.4), 200);
+        gate.admit(&fit(150, 12.0), stars(5.4));
     }
 
     assert!(
@@ -354,7 +384,7 @@ fn a_registered_doubled_sub_still_stacks() {
     gate.set_reference(Some(5.0), CLEAN);
     let bumped = StarField { doubling: 0.9, ..stars(5.0) };
 
-    assert_eq!(gate.admit(&fit(150, 0.6), bumped, 200), None);
+    assert_eq!(gate.admit(&fit(150, 0.6), bumped), None);
 }
 
 /// A re-based frame became the reference, so it landed on itself — not where its fit
@@ -412,7 +442,7 @@ fn bloated_subs_between_registered_ones_never_add_up_to_movement() {
         for _ in 0..BLOATED_RUN_LIMIT {
             assert_eq!(gate.explain_unregistered(stars(7.0), THIS_FIELD), RejectionReason::StarsTooLarge);
         }
-        gate.admit(&fit(150, 0.6), stars(3.0), 200);
+        gate.admit(&fit(150, 0.6), stars(3.0));
     }
 }
 
@@ -426,7 +456,7 @@ fn a_run_of_doubled_subs_does_not_become_the_baseline() {
     let doubled = StarField { doubling: 0.9, ..stars(5.0) };
     for i in 0..HISTORY_LEN {
         let sub = if i % 5 < 3 { doubled } else { stars(5.0) };
-        gate.admit(&fit(150, 0.6), sub, 200);
+        gate.admit(&fit(150, 0.6), sub);
     }
 
     assert_eq!(gate.explain_unregistered(doubled, THIS_FIELD), RejectionReason::StarsDoubled);
@@ -444,7 +474,7 @@ fn unregistered_bumps_do_not_raise_their_own_bar() {
         if i % 5 < 3 {
             gate.explain_unregistered(doubled, THIS_FIELD);
         } else {
-            gate.admit(&fit(150, 0.6), stars(5.0), 200);
+            gate.admit(&fit(150, 0.6), stars(5.0));
         }
     }
 

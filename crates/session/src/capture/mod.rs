@@ -27,6 +27,7 @@ mod stage_config;
 pub(crate) mod stall;
 pub mod storage;
 mod stream_encoding;
+mod wanderer;
 
 pub mod config_overrides;
 pub mod task;

@@ -312,8 +312,20 @@ locates sub-pixel coordinates via Center of Mass, and computes FWHM/SNR.
 detected star** (`registration::refine`): the ladder fits from ≤30 stars with 6–8 px inlier slack, which left
 corners 1–4 px off and a stack's corner stars up to 19 % fatter. `FrameGate` still judges the **ladder's** fit: the
 refit locks onto one image of a multi-image sub, which then slipped past the residual gate and lit the sky around
-every star. **Planetary**: surface feature cross-correlation in
-an ROI (no stars needed). **Comet** [Pro]: centroids the nucleus so stars trail while the comet stacks sharp.
+every star.
+
+The ladder sees **clutter-suppressed** lists (`registration::clutter`, one detection per 25 px): noise on a bright
+nebula makes maxima brighter than a thin sub's stars (Cat's Eye 0.7 s: 27 of the top 30), and every fit was a
+coincidence. No credible rung → **voting** (`registration::translation`): shifts at turns within ±0.6° of the
+session's last rotation (`register_near`'s prior), since on shifts alone an alt-az field that had turned 0.3° lost
+every sub only voting registers. **Credible** (`Support`) = pairs within 1.5 px against chance at the *local*
+density (Poisson ≤ 1e-6) and scale within 1 %, the stronger of the full and suppressed lists (each fails a real
+set: nebula maxima, M42's fat stars). It replaced a 25 % match share that a thin sub's true fit (10–19 of 200
+detections) never reaches. A vote also pays for the ~10^4 offsets it searched (`Support::searched`): unpriced, 1
+in ~100 unrelated sparse fields passed. A refit with < 8 pairs holds scale at 1 (a thin fit carried 1.0034).
+
+**Planetary**: surface feature cross-correlation in an ROI (no stars needed). **Comet** [Pro]: centroids the
+nucleus so stars trail while the comet stacks sharp.
 
 A sub that **will not register** is explained before it is called movement (`FrameGate::explain_unregistered`):
 doubled stars (a bump: companion offsets that *agree*, `detection::doubled_star_share`, judged against the
@@ -321,7 +333,9 @@ session's own baseline — a dense field scores ~55 % on every sub) or bloated o
 through. The baseline is the share's **lower quartile**, so a rough night's doubled subs can't become its normal.
 Doubled needs same-field proof (collapsed, the sub registers); bloated has none, so `BLOATED_RUN_LIMIT` (5) in a row
 is movement — nothing unregistered updates the star size, and a new field of fatter stars held the stack forever.
-Registered doubled subs still stack: dropping them cost 6.6 % sky noise for 2.5 % smaller stars.
+Registered doubled subs still stack: dropping them cost 6.6 % sky noise for 2.5 % smaller stars. Wanderer restarts
+on **two** movement verdicts in a row (`capture::wanderer`): a thin session's fits sit near the bar, and one
+marginal sub used to wipe its stack.
 
 ### Phase 5: Live Stacking & Rejection
 

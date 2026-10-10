@@ -71,6 +71,7 @@ pub const MANAGED_FIXTURE_SETS: &[&str] = &[
     "250mm-dob-imx464-orion-png",
     "130mm-imx464-dumbell-nebulae-png",
     "130mm-imx464-ring-nebulae-png",
+    "cats-eye-nebula-imx533",
 ];
 
 /// Supported image file extensions
@@ -397,6 +398,13 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
     (
         "m101-pinwheel-galaxy-imx533",
         "https://drive.usercontent.google.com/download?id=13QC7HvBGJGzSB3oDzmGeBWY-ModyV5Tn&export=download&confirm=t",
+    ),
+    // 27 subs of NGC 6543 (IMX533, 0.7 s at gain 0, 250 mm Dob) from 2026-09-20: ~15 real
+    // stars a sub against a nebula that shatters into ~45 brighter detections. Every sub
+    // after the reference was refused (`thin_subs_of_a_bright_nebula_still_stack`).
+    (
+        "cats-eye-nebula-imx533",
+        "https://drive.usercontent.google.com/download?id=1udM7sCdeknz_lhZihoDDLwqaGA4en8ZD&export=download&confirm=t",
     ),
 ];
 

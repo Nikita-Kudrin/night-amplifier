@@ -8,7 +8,7 @@ use night_amplifier_core::detection::{
     dominant_companion_offset, Star,
 };
 use night_amplifier_core::frame::{Frame, NoiseField};
-use night_amplifier_core::registration::AdaptiveRegistration;
+use night_amplifier_core::registration::{AdaptiveRegistration, AffineTransform};
 use night_amplifier_core::stacking::{FrameQuality, Stacker, StackingType};
 
 use crate::capture::frame_gate::{FrameAdmission, FrameGate, RejectionReason, StarField};
@@ -20,6 +20,9 @@ pub struct StackingContext {
     pub is_initialized: bool,
     /// Judges arriving frames against what this session has looked like so far.
     gate: FrameGate,
+    /// The last stacked sub's transform against `reference_stars`: an alt-az field keeps
+    /// turning against the fixed reference, and registration searches near it.
+    last_transform: Option<AffineTransform>,
 }
 
 impl StackingContext {
@@ -46,6 +49,7 @@ impl StackingContext {
             reference_stars: Vec::new(),
             is_initialized: false,
             gate: FrameGate::default(),
+            last_transform: None,
         })
     }
 
@@ -75,6 +79,7 @@ impl StackingContext {
 
         self.gate
             .set_reference(quality.fwhm, doubled_star_share(&self.reference_stars));
+        self.last_transform = None;
         self.is_initialized = true;
         Span::current().record("star_count", self.reference_stars.len());
         Ok(self.reference_stars.len())
@@ -83,11 +88,10 @@ impl StackingContext {
     /// Offers one frame to the stack.
     ///
     /// A frame is admitted only if it registers *and* the fit is good enough to
-    /// be worth averaging in. `AdaptiveRegistration` returns the first transform
-    /// any of its presets can produce, with `robust`'s `max_residual` at 10 px —
-    /// so "registration succeeded" on its own admits transforms fitted from a
-    /// handful of coincidental correspondences, and averaging those is what
-    /// smears the stack.
+    /// be worth averaging in. `AdaptiveRegistration` hands back a fit chance can
+    /// explain when it finds no better, so "registration succeeded" on its own
+    /// admits coincidental correspondences, and averaging those is what smears the
+    /// stack.
     #[instrument(skip(self, frame), fields(
         registered = field::Empty,
         matched_stars = field::Empty,
@@ -127,17 +131,19 @@ impl StackingContext {
 
         let field = StarField::of(&target_stars);
 
-        // Use adaptive registration which tries multiple strategies for robustness
         let register_result = {
             let _span = info_span!("register").entered();
-            self.adaptive_registration
-                .register(&self.reference_stars, &target_stars)
+            self.adaptive_registration.register_near(
+                &self.reference_stars,
+                &target_stars,
+                self.last_transform.as_ref(),
+            )
         };
         let result = match register_result {
             Ok(result) => {
                 debug!(
                     config = %result.config_used,
-                    matched_stars = result.matched_stars,
+                    matched_stars = result.support.pairs,
                     // Debug, not the bare f32: mean_residual is f32::INFINITY when
                     // registration matched but no correspondences survived the
                     // diagnostic pass (see AdaptiveRegistration::compute_diagnostics).
@@ -153,10 +159,15 @@ impl StackingContext {
                 // A bumped sub of this field registers once each star is one image
                 // again; a different field does not.
                 let (registration, reference) = (&self.adaptive_registration, &self.reference_stars);
+                let prior = self.last_transform.as_ref();
                 let is_this_field = || {
                     dominant_companion_offset(&target_stars)
                         .map(|offset| collapse_doubles(&target_stars, offset))
-                        .is_some_and(|single| registration.register(reference, &single).is_ok())
+                        .is_some_and(|single| {
+                            registration
+                                .register_near(reference, &single, prior)
+                                .is_ok_and(|result| result.is_credible())
+                        })
                 };
                 return Ok(FrameAdmission::rejected(
                     self.gate.explain_unregistered(field, is_this_field),
@@ -167,7 +178,7 @@ impl StackingContext {
         };
 
         let span = Span::current();
-        span.record("matched_stars", result.matched_stars);
+        span.record("matched_stars", result.support.pairs);
         // field::debug, not the bare f32: see the "Registration succeeded" debug!
         // above — mean_residual can be non-finite and Jaeger's query API 500s on a
         // non-finite double attribute.
@@ -179,13 +190,13 @@ impl StackingContext {
             snr: compute_median_snr(&target_stars),
         };
 
-        let verdict = self.gate.admit(&result, field, self.reference_stars.len());
+        let verdict = self.gate.admit(&result, field);
 
         if let Some(reason) = verdict {
             span.record("registered", false);
             return Ok(FrameAdmission::rejected(
                 reason,
-                result.matched_stars,
+                result.support.pairs,
                 result.mean_residual,
             ));
         }
@@ -214,11 +225,12 @@ impl StackingContext {
             span.record("registered", false);
             return Ok(FrameAdmission::rejected(
                 RejectionReason::StackerError,
-                result.matched_stars,
+                result.support.pairs,
                 result.mean_residual,
             ));
         }
 
+        self.last_transform = Some(result.transform);
         span.record("registered", true);
         Ok(FrameAdmission::accepted(&result, false))
     }
@@ -234,6 +246,7 @@ impl StackingContext {
         self.stacker.clear();
         self.stacker.add_reference_with_quality(frame, quality)?;
         self.reference_stars = target_stars;
+        self.last_transform = None;
         self.gate.set_reference(quality.fwhm, doubling);
         Ok(())
     }

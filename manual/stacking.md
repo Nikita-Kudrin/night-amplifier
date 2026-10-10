@@ -5,6 +5,8 @@ Night Amplifier supports different stacking methodologies based on your celestia
 ## Deep Sky Stacking
 Traditional star-based alignment. The software detects stars, matches triangles across frames using RANSAC, and calculates an affine transformation to align the frames. That first fit uses only the brightest stars, so it is then refined against every star detected in both frames, which keeps the corners of a wide field as sharp as its centre.
 
+Short sub-exposures of a bright object work too. Noise on a bright nebula breaks it into dozens of false "stars", brighter than the real ones, so the matcher keeps only the brightest detection in each patch of sky. If that still finds no alignment, the software looks for the one shift that most star pairs agree on, trying a few small turns as well, since the field of an alt-az mount slowly rotates. That is enough for a handful of real stars among hundreds of detections: 0.7 s subs of the Cat's Eye Nebula hold about 15. A shift found this way has to stand out from all the shifts it was picked from, so a different patch of sky is not mistaken for this one. Longer exposures or more gain still give more stars to align on.
+
 ## Planetary Stacking
 (Also known as Lucky Imaging). This mode uses correlation-based alignment for high-framerate planetary or lunar targets where stars are absent. It uses percentile stacking (e.g., top 10% of frames) based on sharpness metrics.
 
@@ -26,7 +28,9 @@ reason. A frame is dropped when:
 - every star in it is doubled or smeared into a line — the mount moved during the exposure.
   This is only judged on frames that would not align anyway, so it changes the reason
   reported, not how many frames are kept;
-- the alignment rests on too small a fraction of the detected stars to be trusted;
+- the alignment is no better than chance: too few stars line up for where they are (a dense
+  patch lines some up by luck), or it would rescale the field, which a sub of the same session
+  never does;
 - its alignment error is far worse than the rest of the session's;
 - its stars are far larger than the rest of the session's — defocus, cloud, or shake.
 
@@ -59,6 +63,10 @@ the incoming field no longer matching the reference. Frames that the checks abov
 field, so the stack keeps building and rides out the cloud, or the bump, rather than starting over.
 Five frames in a row whose stars are swollen *and* will not align are the exception: that is no
 passing gust but a new field (or a new eyepiece train), and the stack restarts.
+
+One frame that will not align is not enough to restart: it takes two in a row. A faint field's
+frames align on only a few stars, and a single weak one should not throw away the stack. A real
+slew costs one extra frame before the new stack begins.
 
 ## Outlier Rejection (Pro)
 

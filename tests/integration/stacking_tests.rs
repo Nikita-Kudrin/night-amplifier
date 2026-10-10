@@ -268,6 +268,14 @@ fn wanderer_reads_a_new_target_as_movement() {
             "130mm-imx464-ring-nebulae-png",
             "250mm-dob-imx464-orion-png",
         ),
+        // A thin sub swung in, which the ladder may hand to translation voting: a
+        // voting rung that found a "shift" between any two fields would stack it. (The
+        // other way round the dumbbell's stars read as bloated against the Cat's Eye's
+        // noise-sized ones, a soft verdict until `BLOATED_RUN_LIMIT`.)
+        (
+            "250mm-dob-imx533-dumbbell-fits",
+            "cats-eye-nebula-imx533",
+        ),
     ];
 
     for (home, elsewhere) in pairings {
@@ -306,4 +314,91 @@ fn wanderer_reads_a_new_target_as_movement() {
     }
 
     assert!(pairs_checked > 0, "no fixture pairing was available to check");
+}
+
+/// Thin subs of a bright planetary nebula still stack, and stack where they belong.
+///
+/// The Cat's Eye set (0.7 s at gain 0, IMX533 behind a 250 mm Dob) holds ~15 real stars
+/// a sub, while noise on the nebula shatters it into ~45 local maxima that outshine
+/// them: 27 of the 30 stars the ladder's first rung fits from were nebula, every fit was
+/// a coincidence (rotations up to 2.9 rad), and the gate refused every sub after the
+/// reference. The session drifts ~4 px a sub (~120 px over the set) and never turns, so a
+/// sub that stacks must have landed on a near-translation — a loosened gate admitting
+/// the coincidences fails here too.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn thin_subs_of_a_bright_nebula_still_stack() {
+    const SET: &str = "cats-eye-nebula-imx533";
+    crate::integration::common::ensure_fixtures_sync_named(&[SET]);
+    let mut replay = managed_replay(SET)
+        .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(SET)));
+
+    let outcomes = replay.run();
+    for (sub, admission) in outcomes.iter().enumerate().filter_map(|(i, o)| Some((i + 1, o.admission?))) {
+        let Some(transform) = admission.transform else {
+            continue;
+        };
+        assert!(
+            transform.rotation.abs() < 0.01 && (transform.scale - 1.0).abs() < 0.01,
+            "sub {sub} stacked on rotation {:.4} rad, scale {:.4}: a session that only drifts \
+             was aligned by a coincidental fit",
+            transform.rotation,
+            transform.scale
+        );
+    }
+
+    let rate = replay.depth() as f64 / replay.subs() as f64;
+    println!("  {SET}: {}/{} subs integrated ({:.0}%)", replay.depth(), replay.subs(), rate * 100.0);
+    assert!(
+        rate >= MIN_LIVE_STACKING_RETENTION,
+        "{SET}: only {:.0}% of subs reached the stack, expected at least {:.0}%",
+        rate * 100.0,
+        MIN_LIVE_STACKING_RETENTION * 100.0
+    );
+}
+
+/// The Cat's Eye's thin subs keep stacking while the field rotates, as it does on the
+/// alt-az Dob that took them: near transit at 55°N the Cat's Eye turns ~0.7° a minute
+/// against the session's fixed reference. Each sub is turned 0.03° further than the last
+/// (0.78° by the end, a minute or more of a real session), plus a half-pixel shift so
+/// the unrotated control interpolates too: unrotated, every sub stacks.
+///
+/// Translation voting cannot follow a turn, and the subs only it registers (4 of 26)
+/// then read as the telescope having moved — each one a stack restart in Wanderer mode.
+#[test]
+#[serial]
+#[ignore = "integration test - run with: cargo test --test integration_pipeline -- --ignored --test-threads=1"]
+fn thin_subs_hold_the_stack_while_the_field_rotates() {
+    use night_amplifier::registration::AffineTransform;
+    const SET: &str = "cats-eye-nebula-imx533";
+    const TURN_PER_SUB_DEG: f32 = 0.03;
+    crate::integration::common::ensure_fixtures_sync_named(&[SET]);
+    let mut replay = managed_replay(SET)
+        .unwrap_or_else(|| panic!("{}", crate::integration::common::missing_fixture_message(SET)));
+
+    let mut moved = Vec::new();
+    let mut sub = 0;
+    while let Some(frame) = replay.capture() {
+        let (sin, cos) = (TURN_PER_SUB_DEG * sub as f32).to_radians().sin_cos();
+        let (cx, cy) = (frame.width() as f32 / 2.0, frame.height() as f32 / 2.0);
+        let turn = AffineTransform::new(
+            (TURN_PER_SUB_DEG * sub as f32).to_radians(),
+            1.0,
+            cx - (cos * cx - sin * cy) + 0.5,
+            cy - (sin * cx + cos * cy) + 0.5,
+        );
+        let turned = night_amplifier::stacking::warp_frame(&frame, &turn, 0.0).expect("the sub warps");
+        let outcome = replay.stack(&turned, false);
+        if outcome.rejected_because().is_some_and(|reason| reason.means_the_sky_moved()) {
+            moved.push(sub);
+        }
+        sub += 1;
+    }
+
+    println!("  {SET} turning {TURN_PER_SUB_DEG}°/sub: {}/{} subs stacked", replay.depth(), replay.subs());
+    assert!(
+        moved.is_empty(),
+        "subs {moved:?} read as movement once the field had turned — Wanderer would restart the stack on each"
+    );
 }

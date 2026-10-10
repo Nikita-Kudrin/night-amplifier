@@ -9,7 +9,8 @@
 
 use crate::detection::Star;
 
-use super::ransac::estimate_transform_from_pairs;
+use super::neighbours::ReferenceByX;
+use super::ransac::{estimate_rigid_transform_from_pairs, estimate_transform_from_pairs};
 use super::transform::AffineTransform;
 
 /// Pairing radii (px), each pass refitting from the last. Starting at 3 px admits every
@@ -17,8 +18,14 @@ use super::transform::AffineTransform;
 /// centroid noise of a faint star — keeps a mismatched neighbour from steering the fit.
 const RADII: [f32; 3] = [3.0, 2.0, 1.5];
 
-/// Pairs below which a refit is noise rather than an improvement.
+/// Pairs below which a refit with a free scale is noise rather than an improvement.
 const MIN_PAIRS: usize = 8;
+
+/// Pairs below which even a rigid refit (scale held at 1) is. Between the two, the scale
+/// is held: a thin sub's ladder fit, kept whole, carried its free scale from a handful of
+/// loose pairs (Cat's Eye: 1.0034 against its neighbours' 1.0004–1.001, ~6 px at the far
+/// corner).
+const MIN_RIGID_PAIRS: usize = 3;
 
 /// `initial` refined against every star both lists hold, or `initial` itself when the
 /// refit is not clearly better supported: it has to pair at least as many stars within
@@ -33,10 +40,12 @@ pub fn refine_transform(
     let mut refined = *initial;
     for radius in RADII {
         let pairs = by_x.nearest_pairs(target, &refined, radius);
-        if pairs.len() < MIN_PAIRS {
-            return *initial;
-        }
-        match estimate_transform_from_pairs(reference, target, &pairs) {
+        let fit = match pairs.len() {
+            n if n >= MIN_PAIRS => estimate_transform_from_pairs(reference, target, &pairs),
+            n if n >= MIN_RIGID_PAIRS => estimate_rigid_transform_from_pairs(reference, target, &pairs),
+            _ => None,
+        };
+        match fit {
             Some(fit) => refined = fit,
             None => return *initial,
         }
@@ -48,65 +57,6 @@ pub fn refine_transform(
         refined
     } else {
         *initial
-    }
-}
-
-/// The reference stars indexed by x, so pairing a target star scans only the reference
-/// stars within `radius` of it on that axis: a brute-force scan of 200x200 stars over
-/// five passes cost 0.62 ms per sub (x86), six times the whole ladder; indexed, 26 us.
-struct ReferenceByX<'a> {
-    stars: &'a [Star],
-    /// Indices into `stars`, ascending by x.
-    order: Vec<usize>,
-}
-
-impl<'a> ReferenceByX<'a> {
-    fn new(stars: &'a [Star]) -> Self {
-        let mut order: Vec<usize> = (0..stars.len()).collect();
-        order.sort_by(|&a, &b| stars[a].x.total_cmp(&stars[b].x));
-        Self { stars, order }
-    }
-
-    /// `(reference, target)` index pairs whose positions `transform` brings within
-    /// `radius`, one-to-one: a reference star claimed twice keeps its closer partner.
-    fn nearest_pairs(
-        &self,
-        target: &[Star],
-        transform: &AffineTransform,
-        radius: f32,
-    ) -> Vec<(usize, usize)> {
-        let mut best: Vec<Option<(usize, f32)>> = vec![None; self.stars.len()];
-        for (ti, star) in target.iter().enumerate() {
-            let (x, y) = transform.transform_point(star.x, star.y);
-            let Some((ri, distance)) = self.nearest(x, y, radius) else {
-                continue;
-            };
-            if best[ri].is_none_or(|(_, held)| distance < held) {
-                best[ri] = Some((ti, distance));
-            }
-        }
-        best.iter()
-            .enumerate()
-            .filter_map(|(ri, pair)| pair.map(|(ti, _)| (ri, ti)))
-            .collect()
-    }
-
-    /// The reference star nearest `(x, y)` and its squared distance, if it lies within
-    /// `radius`. Ties go to the lower index, as a scan in index order would give them.
-    fn nearest(&self, x: f32, y: f32, radius: f32) -> Option<(usize, f32)> {
-        let start = self.order.partition_point(|&ri| self.stars[ri].x <= x - radius);
-        let mut nearest: Option<(usize, f32)> = None;
-        for &ri in &self.order[start..] {
-            let star = &self.stars[ri];
-            if star.x >= x + radius {
-                break;
-            }
-            let squared = (star.x - x).powi(2) + (star.y - y).powi(2);
-            if nearest.is_none_or(|(held, d)| squared < d || (squared == d && ri < held)) {
-                nearest = Some((ri, squared));
-            }
-        }
-        nearest.filter(|&(_, squared)| squared < radius * radius)
     }
 }
 
@@ -156,70 +106,30 @@ mod tests {
         assert!(corner_error(&refined, &truth) < 0.05, "{refined:?}");
     }
 
-    /// The pairing as first written: every target star against every reference star.
-    fn brute_force_pairs(
-        reference: &[Star],
-        target: &[Star],
-        transform: &AffineTransform,
-        radius: f32,
-    ) -> Vec<(usize, usize)> {
-        let mut best: Vec<Option<(usize, f32)>> = vec![None; reference.len()];
-        for (ti, star) in target.iter().enumerate() {
-            let (x, y) = transform.transform_point(star.x, star.y);
-            let nearest = reference
-                .iter()
-                .enumerate()
-                .map(|(ri, r)| (ri, (r.x - x).hypot(r.y - y)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            let Some((ri, distance)) = nearest.filter(|&(_, d)| d < radius) else {
-                continue;
-            };
-            if best[ri].is_none_or(|(_, held)| distance < held) {
-                best[ri] = Some((ti, distance));
-            }
-        }
-        best.iter()
-            .enumerate()
-            .filter_map(|(ri, pair)| pair.map(|(ti, _)| (ri, ti)))
-            .collect()
-    }
-
-    /// The x index only skips stars that cannot pair: on a crowded field, where most stars
-    /// have a neighbour inside every radius, it must pair exactly as a full scan does.
-    #[test]
-    fn indexed_pairing_matches_a_full_scan() {
-        let mut state = 17u64;
-        let mut next = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            (state >> 33) as f32 / (1u64 << 31) as f32
-        };
-        let reference: Vec<Star> =
-            (0..200).map(|_| Star::new(next() * 120.0, next() * 120.0, 100.0, 0.5, 30.0)).collect();
-        let target: Vec<Star> =
-            (0..200).map(|_| Star::new(next() * 120.0, next() * 120.0, 100.0, 0.5, 30.0)).collect();
-        let by_x = ReferenceByX::new(&reference);
-
-        for transform in [
-            AffineTransform::identity(),
-            AffineTransform::new(0.01, 1.0, 3.5, -2.0),
-            AffineTransform::new(-0.02, 1.01, -1.0, 4.0),
-        ] {
-            for radius in [1.5, 2.0, 3.0, 8.0] {
-                let indexed = by_x.nearest_pairs(&target, &transform, radius);
-                assert!(!indexed.is_empty());
-                assert_eq!(indexed, brute_force_pairs(&reference, &target, &transform, radius));
-            }
-        }
-    }
-
     #[test]
     fn too_few_stars_leave_the_transform_alone() {
-        let reference: Vec<Star> = field().into_iter().take(MIN_PAIRS - 1).collect();
+        let reference: Vec<Star> = field().into_iter().take(MIN_RIGID_PAIRS - 1).collect();
         let truth = AffineTransform::from_translation(5.0, -3.0);
         let target = observed(&reference, &truth);
         let rough = AffineTransform::from_translation(5.5, -3.0);
 
         assert_eq!(refine_transform(&reference, &target, &rough), rough);
+    }
+
+    /// Too few stars for a free scale, enough for rotation and shift: the rung's loose
+    /// scale goes, and the fit lands on the stars.
+    #[test]
+    fn a_thin_fit_is_refitted_at_unit_scale() {
+        let reference: Vec<Star> = field().into_iter().take(MIN_PAIRS - 2).collect();
+        let truth = AffineTransform::new(0.0008, 1.0, -142.0, 110.0);
+        let target = observed(&reference, &truth);
+        let loose = AffineTransform::new(0.0008, 1.0015, -142.5, 109.5);
+
+        let refined = refine_transform(&reference, &target, &loose);
+
+        assert_eq!(refined.scale, 1.0);
+        assert!(corner_error(&loose, &truth) > 3.0);
+        assert!(corner_error(&refined, &truth) < 0.05, "{refined:?}");
     }
 
     /// A refit that agrees with fewer stars than the guess it started from is a

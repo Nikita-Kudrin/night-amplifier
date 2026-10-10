@@ -6,11 +6,13 @@
 //! also what Pro runs with rejection set to None. Pro's `rejection_benchmark` covers the
 //! clipping kernel; nothing measured this one, so its non-finite skip was priced by hand.
 //!
-//! `registration` prices the all-star refit every registered sub pays after the ladder.
+//! `registration` prices the all-star refit every registered sub pays after the ladder, and
+//! the whole of `AdaptiveRegistration::register`: on a rich field (the ladder's first
+//! rung) and on a thin sub whose stars only translation voting finds.
 
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode, Throughput};
 use night_amplifier::detection::Star;
-use night_amplifier::registration::{refine_transform, AffineTransform};
+use night_amplifier::registration::{refine_transform, AdaptiveRegistration, AffineTransform};
 use night_amplifier::stacking::{MasterStack, RejectionMethod, StackingConfig};
 use night_amplifier::Frame;
 use std::hint::black_box;
@@ -101,15 +103,38 @@ const STARS: usize = 200;
 /// Refits per measured iteration: one is ~26 us on x86, so 4000 clear the ~100 ms floor.
 const REFINE_REPS: usize = 4000;
 
+/// Whole registrations per measured iteration: the rich field's is the faster, at
+/// ~0.24 ms on x86 (the thin sub's ~1.5 ms, voting at nine turns), so 500 clear the
+/// ~100 ms floor.
+const REGISTER_REPS: usize = 500;
+
 /// `STARS` stars scattered over the sensor from a fixed seed, as detection hands them over.
 fn star_field() -> Vec<Star> {
-    let mut state = 0x2545_F491_u64;
+    scattered(STARS, 0x2545_F491, 100.0)
+}
+
+/// `count` stars of about `flux` scattered over the sensor from `seed`, brightest first.
+fn scattered(count: usize, seed: u64, flux: f32) -> Vec<Star> {
+    let mut state = seed;
     let mut next = move || {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         (state >> 33) as f32 / (1u64 << 31) as f32
     };
-    (0..STARS)
-        .map(|_| Star::new(next() * WIDTH as f32, next() * HEIGHT as f32, 100.0, 0.5, 30.0))
+    let mut stars: Vec<Star> = (0..count)
+        .map(|_| Star::new(next() * WIDTH as f32, next() * HEIGHT as f32, flux * (0.5 + next()), 0.5, 30.0))
+        .collect();
+    stars.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+    stars
+}
+
+/// `stars` as a sub displaced by `truth` would see them (target -> reference is `truth`).
+fn observed(stars: &[Star], truth: &AffineTransform) -> Vec<Star> {
+    stars
+        .iter()
+        .map(|s| {
+            let (x, y) = truth.inverse_transform_point(s.x, s.y);
+            Star::new(x, y, s.flux, s.peak, s.snr)
+        })
         .collect()
 }
 
@@ -118,13 +143,7 @@ fn star_field() -> Vec<Star> {
 fn refine_benchmark(c: &mut Criterion) {
     let reference = star_field();
     let truth = AffineTransform::new(0.0008, 1.0, -142.0, 110.0);
-    let target: Vec<Star> = reference
-        .iter()
-        .map(|s| {
-            let (x, y) = truth.inverse_transform_point(s.x, s.y);
-            Star::new(x, y, s.flux, s.peak, s.snr)
-        })
-        .collect();
+    let target = observed(&reference, &truth);
     let rough = AffineTransform::new(0.0013, 1.0, -141.0, 110.6);
 
     let mut group = c.benchmark_group("registration");
@@ -138,6 +157,30 @@ fn refine_benchmark(c: &mut Criterion) {
             }
         })
     });
+
+    // A thin sub: 15 faint stars under 185 brighter detections that do not repeat.
+    let stars = scattered(15, 0x51ED_270B, 1.0);
+    let thin = |seed, shift: &AffineTransform| {
+        let mut list = observed(&stars, shift);
+        list.extend(scattered(STARS - stars.len(), seed, 100.0));
+        list.sort_by(|a, b| b.flux.total_cmp(&a.flux));
+        list
+    };
+    let drift = AffineTransform::from_translation(-30.0, 7.0);
+    let cases = [
+        ("rich_field", reference.clone(), target.clone()),
+        ("thin_sub", thin(1, &AffineTransform::identity()), thin(2, &drift)),
+    ];
+    let registration = AdaptiveRegistration::new();
+    for (name, reference, target) in &cases {
+        group.bench_function(format!("register_{name}_x{REGISTER_REPS}"), |b| {
+            b.iter(|| {
+                for _ in 0..REGISTER_REPS {
+                    black_box(registration.register(black_box(reference), black_box(target)).ok());
+                }
+            })
+        });
+    }
     group.finish();
 }
 
