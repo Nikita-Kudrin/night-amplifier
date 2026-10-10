@@ -340,6 +340,54 @@ async fn a_resumed_guide_session_appends_to_the_folder_it_rejoined() {
     }
 }
 
+/// A guide reconnect whose folder cannot be opened yet — the disk is refusing writes —
+/// must keep rejoining that folder once it can, not take the resume on the first
+/// attempt and send every retry to a fresh one. The observer hears about it once, not
+/// every guide frame.
+#[tokio::test]
+async fn a_guide_resume_survives_a_failed_open_and_is_reported_once() {
+    let (state, disk_writer) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    std::thread::spawn(move || disk_writer.run());
+    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let mut events = state.events.subscribe();
+
+    // Under a plain file nothing can be created, by root either.
+    let parked = state.disk_writer.raw_dir().join("parked");
+    std::fs::write(&parked, b"").unwrap();
+    let rejoin = parked.join("earlier-guide");
+    let mut disk = GuideDiskSession::new(Some(crate::state::RawSessionResume {
+        dir: rejoin.clone(),
+        next_frame: 10,
+    }));
+    let settings = state.settings.snapshot();
+    let info = guide_camera_info();
+    let raw = Arc::new(night_amplifier_core::camera::RawFrame {
+        data: night_amplifier_core::camera::BufferPool::new().get(32 * 24 * 2),
+        width: 32,
+        height: 24,
+        format: ImageFormat::Raw16,
+    });
+
+    for n in 10..13 {
+        disk.write(&state, &settings, &raw, n, &info);
+    }
+    let errors: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|e| matches!(e, crate::events::ServerEvent::Error { .. }))
+        .collect();
+    assert_eq!(errors.len(), 1, "three failed opens told the observer {errors:?}");
+    assert!(guide_session_dir(&state).await.is_none());
+
+    std::fs::remove_file(&parked).unwrap();
+    std::fs::create_dir(&parked).unwrap();
+    disk.write(&state, &settings, &raw, 13, &info);
+
+    assert_eq!(guide_session_dir(&state).await, Some(rejoin.clone()), "the retry did not rejoin");
+    wait_for_files(&rejoin, 1).await;
+    assert!(rejoin.join("frame_000013.fits").exists());
+    let _ = std::fs::remove_dir_all(state.disk_writer.raw_dir());
+}
+
 /// Drive `frames` exposures and hand back everything the loop asked of the camera.
 async fn drive_and_log(state: &Arc<AppState>, frames: usize) -> Arc<CameraControls> {
     let stop = Arc::new(AtomicBool::new(false));

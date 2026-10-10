@@ -226,7 +226,12 @@ a drifting stack's border saved grainier than it streamed.
 SER (planetary) is uncompressed with per-frame timestamps; color id 0 is Mono, 8-11 are BayerRGGB/GRBG/GBRG/BGGR,
 100/101 are RGB/BGR. Layout: `captures/raw/DD-MM-YYYY_HH-MM-SS-<mode>/frame_NNNNNN.fits` (or `capture.ser`) and
 `captures/stacked/...-stacking.fits`. **A resumed capture rejoins its folder and must not overwrite it**: the
-resume plan carries `next_frame`, and video writes `capture_2.ser`, etc.
+resume plan carries `next_frame`, and video writes `capture_2.ser`, etc. **A session is a name, not a folder**:
+the worker creates the folder with the first frame (eager creation once left 23 empty `-live` folders in a night),
+so `DiskWriterHandle` remembers issued names to keep same-second sessions apart, and a session start **probes**
+`raw/` with a throwaway mkdir — the folder was the only check a read-only/full disk refused Start on. Failed writes
+go to the UI once per episode (`FailureSink`), never just a log line per frame. The main capture opens one only
+when *it* saves (`main_capture_saves`); guide saving keeps the writer on but files into the guide's own session.
 
 ## Streaming Protocols
 

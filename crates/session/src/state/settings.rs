@@ -281,6 +281,15 @@ impl CaptureSettings {
         self.raw_frame_saving.saves(CaptureMode::Guide)
     }
 
+    /// Whether the main capture writes anything into a session of its own: its raw
+    /// frames, or the finished stack, whose file is named after that session.
+    ///
+    /// Not [`Self::disk_writing_enabled`]: the guide camera keeps its own session, and
+    /// counting its switch opened a `-live` session for every Live view run.
+    pub fn main_capture_saves(&self) -> bool {
+        self.saves_raw_frames() || self.saves_stacked_image()
+    }
+
     /// Whether the disk writer has anything at all to do.
     ///
     /// The guide switch counts even though `initialize_capture_session` — the only place
@@ -288,7 +297,7 @@ impl CaptureSettings {
     /// camera saving subs with no main capture running is an ordinary case, and without
     /// this the writer would silently refuse every one of its frames.
     pub fn disk_writing_enabled(&self) -> bool {
-        self.saves_raw_frames() || self.saves_stacked_image() || self.saves_guide_raw_frames()
+        self.main_capture_saves() || self.saves_guide_raw_frames()
     }
 
     /// Get the saturation boost config based on current settings

@@ -6,11 +6,12 @@
 //! performance.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use tracing::error;
 
 mod config;
 mod error;
+mod failures;
 mod handle;
 mod utils;
 mod worker;
@@ -20,6 +21,7 @@ pub use config::{
     QUEUE_WARNING_THRESHOLD,
 };
 pub use error::DiskWriterError;
+pub use failures::FailureSink;
 pub use handle::{DiskWriterHandle, OpenSession};
 pub use worker::DiskWriter;
 
@@ -58,6 +60,7 @@ impl DiskWriter {
             session: Arc::new(RwLock::new(None)),
             enabled,
             stacked_dir,
+            issued: Arc::new(Mutex::new(Default::default())),
         };
 
         // Record initial metrics
@@ -118,7 +121,7 @@ mod tests {
         let session_path = handle
             .start_session(WritingSessionType::IndividualFrames, "")
             .unwrap();
-        assert!(session_path.exists());
+        assert!(!session_path.exists(), "the directory waits for the first frame");
 
         let dir = handle.session_dir();
         assert!(dir.is_some());
@@ -152,7 +155,6 @@ mod tests {
             name.ends_with("-live"),
             "session directory {name} carries no mode suffix"
         );
-        assert!(path.exists());
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
@@ -161,6 +163,7 @@ mod tests {
     /// timestamp has one-second resolution but a session can be rolled far faster, and
     /// `create_dir_all` succeeds silently on an existing directory — so the second
     /// session used to merge into the first, truncating its `capture.ser` on the way.
+    /// Neither directory exists yet, so the handle has to remember the names it gave.
     #[test]
     fn two_sessions_in_the_same_second_get_separate_directories() {
         let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_same_second");
@@ -177,7 +180,11 @@ mod tests {
             .unwrap();
 
         assert_ne!(first, second);
-        assert!(first.exists() && second.exists());
+        assert!(!first.exists() && !second.exists());
+        let guide = handle
+            .create_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+        assert!(guide.dir != first && guide.dir != second, "an unpublished session reused a name");
         // The mode is still readable off the name: the counter goes before the suffix.
         for path in [&first, &second] {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -210,6 +217,220 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    fn tiny_raw_frame() -> std::sync::Arc<crate::camera::RawFrame> {
+        std::sync::Arc::new(crate::camera::RawFrame {
+            data: crate::camera::BufferPool::new().get(32 * 32 * 2),
+            width: 32,
+            height: 32,
+            format: crate::camera::ImageFormat::Raw16,
+        })
+    }
+
+    /// A session that never saves a frame leaves nothing behind. Opening the directory
+    /// at session start filled `raw/` with empty `-live` folders: guide saving alone
+    /// opened a main session on every Live view start (2026-09-20 log, 23 of them).
+    #[test]
+    fn a_session_without_frames_leaves_no_directory() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_no_frames");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        handle
+            .start_session(WritingSessionType::IndividualFrames, "-live")
+            .unwrap();
+        handle.end_session();
+        handle
+            .start_session(WritingSessionType::VideoContainer, "-stacking")
+            .unwrap();
+        handle.abandon_session();
+        handle
+            .resume_session(temp_dir.join("raw/gone-stacking"), WritingSessionType::IndividualFrames)
+            .unwrap();
+        handle.end_session();
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let left: Vec<_> = std::fs::read_dir(temp_dir.join("raw")).unwrap().collect();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert!(left.is_empty(), "sessions without frames left {left:?}");
+    }
+
+    /// The directory a session named appears with its first frame, for both containers.
+    #[test]
+    fn the_first_frame_creates_the_session_directory() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_first_frame");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let writer_task = std::thread::spawn(move || writer.run());
+        let frame = tiny_raw_frame();
+        let queue = |n| {
+            handle
+                .queue_raw_frame(
+                    std::sync::Arc::clone(&frame),
+                    n,
+                    FitsMetadata::new(),
+                    crate::camera::SensorType::Mono,
+                    None,
+                )
+                .unwrap()
+        };
+
+        let fits_dir = handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+        assert!(queue(1));
+        handle.end_session();
+        let ser_dir = handle
+            .start_session(WritingSessionType::VideoContainer, "-stacking")
+            .unwrap();
+        assert!(queue(1));
+        handle.end_session();
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let fits = fits_dir.join("frame_000001.fits").exists();
+        let ser = ser_dir.join("capture.ser").exists();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert!(fits, "no FITS in {fits_dir:?}");
+        assert!(ser, "no SER in {ser_dir:?}");
+    }
+
+    /// The session start is the only point where an unusable disk can refuse the
+    /// capture. A read-only `raw/` (an SD card the kernel remounted read-only) used to
+    /// refuse it because the session folder could not be created; with folders deferred
+    /// to the first frame, `create_dir_all` on the existing `raw/` passed and every frame
+    /// after it failed. Covers `raw/` being a file too, which root cannot bypass.
+    #[cfg(unix)]
+    #[test]
+    fn an_unusable_captures_location_fails_the_session_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_unusable");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (_writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let raw = temp_dir.join("raw");
+
+        std::fs::remove_dir_all(&raw).unwrap();
+        std::fs::write(&raw, b"").unwrap();
+        let into_a_file = handle.start_session(WritingSessionType::IndividualFrames, "-live");
+        std::fs::remove_file(&raw).unwrap();
+        std::fs::create_dir(&raw).unwrap();
+
+        let earlier = raw.join("earlier-stacking");
+        std::fs::set_permissions(&raw, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores the mode bits, so there the read-only half cannot be staged.
+        let staged = std::fs::create_dir(raw.join("probe")).is_err();
+        let started = handle.start_session(WritingSessionType::IndividualFrames, "-stacking");
+        let resumed = handle.resume_session(earlier, WritingSessionType::IndividualFrames);
+        std::fs::set_permissions(&raw, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let left: Vec<_> = std::fs::read_dir(&raw).unwrap().collect();
+        std::fs::remove_dir_all(&temp_dir).ok();
+
+        assert!(into_a_file.is_err(), "a capture started with raw/ a plain file");
+        assert!(left.is_empty(), "the probe left {left:?} behind");
+        if !staged {
+            eprintln!("running as root: a read-only directory cannot be staged");
+            return;
+        }
+        assert!(started.is_err(), "a capture started into a folder it cannot create");
+        assert!(resumed.is_err(), "a resume rejoined a folder it cannot create");
+        assert!(handle.session_dir().is_none());
+    }
+
+    /// A write that fails mid-session — a disk filling up, a remount — is told to the
+    /// observer once, not logged per frame and nowhere else.
+    #[test]
+    fn failed_writes_are_reported_once_per_episode() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_failure_sink");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (mut writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&told);
+        writer.report_failures_to(Box::new(move |error| sink.lock().unwrap().push(error.to_string())));
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        // A folder under a plain file cannot be created, by root either.
+        std::fs::write(temp_dir.join("blocker"), b"").unwrap();
+        let doomed = OpenSession {
+            dir: temp_dir.join("blocker").join("doomed-stacking"),
+            session_type: WritingSessionType::IndividualFrames,
+        };
+        let queue = |session: Option<OpenSession>, n| {
+            handle
+                .queue_raw_frame_in(session, tiny_raw_frame(), n, FitsMetadata::new(), crate::camera::SensorType::Mono, None)
+                .unwrap()
+        };
+        for n in 1..=5 {
+            assert!(queue(Some(doomed.clone()), n));
+        }
+        let good = handle.create_session(WritingSessionType::IndividualFrames, "-stacking").unwrap();
+        assert!(queue(Some(good.clone()), 6));
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let told = told.lock().unwrap().clone();
+        let recovered = good.dir.join("frame_000006.fits").exists();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert_eq!(told.len(), 1, "five failed writes told the observer {told:?}");
+        assert!(recovered, "the write after the failures did not land");
+    }
+
+    /// A session resumed before it ever saved — a reconnect during a stack-only run, or
+    /// before the first sub — names a folder that does not exist. Its first frame
+    /// creates it rather than failing on it.
+    #[test]
+    fn a_resumed_session_that_never_saved_creates_its_folder_on_the_first_frame() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_resume_unsaved");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        let named = handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+        handle.abandon_session();
+        handle
+            .resume_session(named.clone(), WritingSessionType::IndividualFrames)
+            .unwrap();
+        handle
+            .queue_raw_frame(tiny_raw_frame(), 7, FitsMetadata::new(), crate::camera::SensorType::Mono, None)
+            .unwrap();
+        handle.end_session();
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let written = named.join("frame_000007.fits").exists();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert!(written, "the resumed session's first frame was not written to {named:?}");
+    }
+
+    /// Saving only the stack still needs the session — its FITS is named after it, to
+    /// pair with the raw folder — but no raw folder is created for it.
+    #[test]
+    fn a_stack_only_session_names_the_stack_without_a_raw_folder() {
+        let temp_dir = std::env::temp_dir().join("night_amplifier_test_dw_stack_only");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let (writer, handle) = DiskWriter::new(DiskWriterConfig::new(&temp_dir));
+        let writer_task = std::thread::spawn(move || writer.run());
+
+        handle
+            .start_session(WritingSessionType::IndividualFrames, "-stacking")
+            .unwrap();
+        let name = handle.session_name().unwrap();
+        handle
+            .queue_stacked_frame(std::sync::Arc::new(Frame::filled(4, 4, 3, 0.5).unwrap()), FitsMetadata::new())
+            .unwrap();
+        handle.end_session();
+        drop(handle);
+        writer_task.join().unwrap();
+
+        let stacked = temp_dir.join("stacked").join(format!("{name}.fits")).exists();
+        let raw: Vec<_> = std::fs::read_dir(temp_dir.join("raw")).unwrap().collect();
+        std::fs::remove_dir_all(&temp_dir).ok();
+        assert!(stacked, "no stacked FITS named {name}.fits");
+        assert!(raw.is_empty(), "a stack-only session left {raw:?} in raw/");
     }
 
     #[test]
