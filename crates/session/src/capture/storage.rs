@@ -774,12 +774,15 @@ pub fn render_stacked_png(
 
 /// Save stacked result if stacking was enabled and we have frames.
 ///
-/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`].
+/// `coverage` travels with the frame for the PNG — see [`render_stacked_png`]. `crop` is
+/// where `auto_crop` already cut the frame from the stack (see `capture::stack_crop`), which
+/// the FITS records as its subframe origin.
 pub fn save_stacked_result(
     state: &AppState,
     last_processed_frame: Option<Frame>,
     stack_depth: u32,
     coverage: Option<night_amplifier_core::frame::NoiseField>,
+    crop: Option<night_amplifier_core::stacking::CropRect>,
     camera_info: &ConnectedCameraInfo,
 ) {
     use night_amplifier_core::fits::FitsMetadata;
@@ -817,6 +820,9 @@ pub fn save_stacked_result(
             .with_camera(&camera_info.info.name)
             .with_stacked_frames(stacked_count)
             .with_date_obs(Utc::now().format("%Y-%m-%dT%H:%M:%S%.3f").to_string());
+        if let Some(rect) = crop {
+            metadata = metadata.with_subframe_origin(rect.x, rect.y);
+        }
 
         if camera_info.info.has_cooler {
             if let Some(set_temp) = settings.target_temp_c {

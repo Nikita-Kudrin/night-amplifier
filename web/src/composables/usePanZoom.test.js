@@ -3,6 +3,7 @@ import {usePanZoom} from './usePanZoom.js'
 
 // Mock ZOOM_LIMITS
 vi.mock('../constants', () => ({
+    FIT_MARGIN: 0.95,
     ZOOM_LIMITS: {
         min: 0.1,
         max: 10,

@@ -49,8 +49,11 @@
 //! - `render_brightness_tests` - Octave-band sky noise, the star radial profile and
 //!   object brightness at three radii: the instruments any change to the
 //!   brightness-against-grain trade has to be judged on
+//! - `auto_crop_tests` - `auto_crop` on real sessions: the area kept, how often the live
+//!   crop moves, the cut preceding the stretch's statistics, nothing cut with it off
 //! - `fixture_processing` - Long-running tests that process complete fixture sets
 
+pub mod auto_crop_tests;
 pub mod background_tests;
 pub mod cfa_tests;
 pub mod common;

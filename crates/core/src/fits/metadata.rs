@@ -27,6 +27,10 @@ pub struct FitsMetadata {
     pub temperature: Option<f64>,
     /// Target sensor temperature in Celsius (cooled cameras only)
     pub set_temp_c: Option<f64>,
+    /// Where this image's (0, 0) sits in the full frame, when it is a crop of it: written as
+    /// `XORGSUBF`/`YORGSUBF`, the subframe-origin keywords MaxIm DL and ASCOM drivers use.
+    /// Only the 32-bit (stacked) writer carries it.
+    pub subframe_origin: Option<(usize, usize)>,
 }
 
 impl FitsMetadata {
@@ -95,6 +99,12 @@ impl FitsMetadata {
     /// Set target sensor temperature in Celsius (cooled cameras only)
     pub fn with_set_temp(mut self, set_temp_c: f64) -> Self {
         self.set_temp_c = Some(set_temp_c);
+        self
+    }
+
+    /// Record that the image is a crop whose origin is `(x, y)` in the full frame
+    pub fn with_subframe_origin(mut self, x: usize, y: usize) -> Self {
+        self.subframe_origin = Some((x, y));
         self
     }
 }

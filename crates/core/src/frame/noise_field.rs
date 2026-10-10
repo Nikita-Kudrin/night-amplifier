@@ -251,6 +251,35 @@ impl NoiseField {
         (pixel as f32 + 0.5) * scale - 0.5
     }
 
+    /// This field, after the image it describes was cropped to `rect`.
+    ///
+    /// Exact, with no resampling, for a rectangle on the cell grid — what
+    /// [`crate::stacking::largest_covered`] hands out: its origin must be on the grid, and a
+    /// partial cell at its far edge keeps its value.
+    pub fn cropped(&self, rect: &crate::stacking::CropRect) -> Result<Self> {
+        rect.check(self.source_width, self.source_height)?;
+        if rect.x % NOISE_REDUCTION != 0 || rect.y % NOISE_REDUCTION != 0 {
+            return Err(StackError::InvalidConfiguration(format!(
+                "crop origin ({}, {}) is not on the {NOISE_REDUCTION} px cell grid",
+                rect.x, rect.y
+            )));
+        }
+        let (x0, y0) = (rect.x / NOISE_REDUCTION, rect.y / NOISE_REDUCTION);
+        let width = rect.width.div_ceil(NOISE_REDUCTION);
+        let height = rect.height.div_ceil(NOISE_REDUCTION);
+        let cut = |plane: &[f32]| -> Vec<f32> {
+            (y0..y0 + height)
+                .flat_map(|y| plane[y * self.width + x0..y * self.width + x0 + width].iter().copied())
+                .collect()
+        };
+        let plane = self.width * self.height;
+        let variance = self
+            .variance
+            .as_deref()
+            .map(|v| v.chunks_exact(plane).flat_map(|p| cut(p)).collect());
+        Self::validated(variance, cut(&self.coverage), width, height, self.channels, rect.width, rect.height)
+    }
+
     /// This field, after the image it describes was binned by `factor`.
     ///
     /// A box mean of `factor^2` independent samples, which is a resample whose taps are
@@ -510,5 +539,31 @@ mod tests {
     fn a_mismatched_cell_count_is_refused() {
         assert!(NoiseField::new(vec![0.0; 5], 2, 2, 1, 16, 16).is_err());
         assert!(NoiseField::new(vec![], 0, 2, 1, 16, 16).is_err());
+    }
+
+    /// A crop on the cell grid moves cells, it does not resample them: each keeps its value,
+    /// the partial cell at a frame edge included, and the field describes the cropped image.
+    #[test]
+    fn a_crop_keeps_its_cells_as_they_were() {
+        use crate::stacking::CropRect;
+        // 30x20 px → 4x3 cells, the last column and row partial.
+        let coverage: Vec<f32> = (0..12).map(|i| i as f32 / 12.0).collect();
+        let variance: Vec<f32> = (0..24).map(|i| i as f32).collect();
+        let field = NoiseField::new(variance, 4, 3, 2, 30, 20).unwrap().with_coverage(coverage.clone()).unwrap();
+
+        let cropped = field.cropped(&CropRect { x: 8, y: 8, width: 22, height: 12 }).unwrap();
+
+        assert_eq!((cropped.width(), cropped.height()), (3, 2));
+        assert_eq!((cropped.source_width(), cropped.source_height()), (22, 12));
+        assert_eq!(cropped.coverage(), &[coverage[5], coverage[6], coverage[7], coverage[9], coverage[10], coverage[11]]);
+        assert_eq!(cropped.variance().unwrap(), &[5.0, 6.0, 7.0, 9.0, 10.0, 11.0, 17.0, 18.0, 19.0, 21.0, 22.0, 23.0]);
+    }
+
+    #[test]
+    fn a_crop_off_the_cell_grid_or_outside_the_image_is_refused() {
+        use crate::stacking::CropRect;
+        let field = NoiseField::coverage_only(vec![1.0; 12], 4, 3, 3, 30, 20).unwrap();
+        assert!(field.cropped(&CropRect { x: 4, y: 0, width: 8, height: 8 }).is_err());
+        assert!(field.cropped(&CropRect { x: 8, y: 8, width: 24, height: 8 }).is_err());
     }
 }

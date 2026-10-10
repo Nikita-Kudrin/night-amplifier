@@ -184,6 +184,17 @@ impl Frame {
     /// arbitrary target size and emits `u8` — this takes an integer factor and stays f32 for
     /// solver precision. Trailing pixels are dropped: output is `width/factor` by `height/factor`.
     pub fn downsample(&self, factor: usize) -> crate::error::Result<Self> {
+        if factor == 1 {
+            return Ok(self.clone());
+        }
+        let full = crate::stacking::CropRect { x: 0, y: 0, width: self.width, height: self.height };
+        self.downsample_region(&full, factor)
+    }
+
+    /// [`Self::downsample`] of `rect` alone, read in place: a crop and a bin in one pass, so a
+    /// frame another holder shares is never copied whole first (that copy took a 3008² bin-2
+    /// display frame from 4.1 to 42.7 ms). Factor 1 is [`Self::cropped`].
+    pub fn downsample_region(&self, rect: &crate::stacking::CropRect, factor: usize) -> crate::error::Result<Self> {
         use rayon::prelude::*;
 
         if factor == 0 {
@@ -191,17 +202,17 @@ impl Frame {
                 "Downsample factor must be > 0".into(),
             ));
         }
-
+        rect.check(self.width, self.height)?;
         if factor == 1 {
-            return Ok(self.clone());
+            return self.cropped(rect);
         }
 
         let src_width = self.width;
         let src_height = self.height;
         let channels = self.channels;
 
-        let dst_width = src_width / factor;
-        let dst_height = src_height / factor;
+        let dst_width = rect.width / factor;
+        let dst_height = rect.height / factor;
 
         if dst_width == 0 || dst_height == 0 {
             return Err(crate::error::StackError::InvalidConfiguration(
@@ -225,10 +236,10 @@ impl Frame {
                 let c = row_idx / dst_height;
                 let dst_y = row_idx % dst_height;
                 let src_plane = &src_data[c * src_area..(c + 1) * src_area];
-                let src_y_start = dst_y * factor;
+                let src_y_start = rect.y + dst_y * factor;
 
                 for dst_x in 0..dst_width {
-                    let src_x_start = dst_x * factor;
+                    let src_x_start = rect.x + dst_x * factor;
                     let mut sum = 0.0f32;
                     for sy in 0..factor {
                         let row_start = (src_y_start + sy) * src_width;

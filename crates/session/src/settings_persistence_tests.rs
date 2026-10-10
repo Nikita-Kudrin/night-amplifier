@@ -73,6 +73,7 @@ mod tests {
             dew_heater_enabled: true,
             dew_heater_power: 30,
             wanderer_mode: true,
+            auto_crop: true,
             sensor_correction: SensorCorrectionSettings {
                 hot_pixel_sigma: 7.5,
                 fpn_removal: false,
@@ -421,6 +422,7 @@ mod tests {
             force_focus_image_now: false,
             comet_roi: None,
             wanderer_mode: true,
+            auto_crop: true,
             planetary_roi: None,
             planetary_auto_tracking: true,
             planetary_multi_point_alignment: false,
@@ -713,6 +715,22 @@ mod tests {
         assert_eq!(loaded.eyepiece.stream_resolution, EyepieceStreamResolution::Qhd1440);
         assert_eq!(loaded.preview_resolution, Resolution::Hd1080);
         assert!((loaded.eyepiece.intensity - 0.7).abs() < f32::EPSILON);
+    }
+
+    /// Auto crop is opt-in: a file from before it existed, and a fresh install, load with it
+    /// off, and the observer's choice survives a save.
+    #[test]
+    fn auto_crop_is_off_unless_the_file_says_otherwise() {
+        assert!(!CaptureSettings::default().auto_crop);
+
+        let mut older = written(&CaptureSettings { wanderer_mode: true, ..CaptureSettings::default() });
+        older.as_object_mut().unwrap().remove("auto_crop");
+        let loaded = read(older);
+        assert!(!loaded.auto_crop);
+        assert!(loaded.wanderer_mode, "the rest of the file was lost");
+
+        let on = CaptureSettings { auto_crop: true, ..CaptureSettings::default() };
+        assert!(read(written(&on)).auto_crop);
     }
 
     /// The defaults the UI promises: processing native, both streams at 1440p.

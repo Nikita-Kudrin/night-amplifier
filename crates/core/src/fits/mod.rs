@@ -265,6 +265,32 @@ mod tests {
         assert_eq!(meta.software, Some("Night Amplifier".to_string()));
     }
 
+    /// A cropped stack says where it came from; an uncropped one carries no origin at all,
+    /// rather than a (0, 0) that would claim it was cropped.
+    #[test]
+    fn a_subframe_origin_is_written_only_for_a_crop() {
+        let dir = std::env::temp_dir().join(format!("na_fits_origin_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let frame = Frame::filled(16, 8, 3, 0.5).unwrap();
+        let read = |path: &std::path::Path| {
+            let mut file = FitsFile::open(path).unwrap();
+            // The image, and its keywords, sit in the extension `write_fits` creates.
+            let hdu = file.hdu(1).unwrap();
+            let x = hdu.read_key::<i64>(&mut file, "XORGSUBF").ok();
+            let y = hdu.read_key::<i64>(&mut file, "YORGSUBF").ok();
+            (x, y)
+        };
+
+        let cropped = dir.join("cropped.fits");
+        write_fits(&frame, &cropped, Some(&FitsMetadata::new().with_subframe_origin(24, 8))).unwrap();
+        assert_eq!(read(&cropped), (Some(24), Some(8)));
+
+        let whole = dir.join("whole.fits");
+        write_fits(&frame, &whole, Some(&FitsMetadata::new())).unwrap();
+        assert_eq!(read(&whole), (None, None));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn test_fits_metadata_default() {
         let meta = FitsMetadata::default();

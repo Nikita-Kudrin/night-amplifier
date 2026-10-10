@@ -12,6 +12,43 @@ pub fn sample_to_u8(value: f32) -> u8 {
 }
 
 impl Frame {
+    /// Keeps only `rect`, in place: each plane's rows move forward and the buffer is truncated,
+    /// so nothing is allocated. A destination never lies past its source, which is what makes
+    /// the forward walk safe.
+    pub fn crop_in_place(&mut self, rect: &crate::stacking::CropRect) -> crate::error::Result<()> {
+        rect.check(self.width, self.height)?;
+        if rect.is_full(self.width, self.height) {
+            return Ok(());
+        }
+        let (w, area) = (self.width, self.width * self.height);
+        let (cw, ch) = (rect.width, rect.height);
+        for plane in 0..self.channels {
+            for row in 0..ch {
+                let src = plane * area + (rect.y + row) * w + rect.x;
+                self.data.copy_within(src..src + cw, plane * cw * ch + row * cw);
+            }
+        }
+        self.data.truncate(cw * ch * self.channels);
+        self.width = cw;
+        self.height = ch;
+        Ok(())
+    }
+
+    /// A copy of `rect` alone, allocating only its size: the cut for a frame shared with
+    /// another holder, which [`Self::crop_in_place`] would have to copy whole first.
+    pub fn cropped(&self, rect: &crate::stacking::CropRect) -> crate::error::Result<Self> {
+        rect.check(self.width, self.height)?;
+        let area = self.width * self.height;
+        let mut data = Vec::with_capacity(rect.area() * self.channels);
+        for plane in self.data.chunks_exact(area) {
+            for row in rect.y..rect.y + rect.height {
+                let start = row * self.width + rect.x;
+                data.extend_from_slice(&plane[start..start + rect.width]);
+            }
+        }
+        Self::from_f32_vec(data, rect.width, rect.height, self.channels)
+    }
+
     /// Clamps all pixel values to the range [0.0, 1.0]
     pub fn clamp(&mut self) {
         for v in &mut self.data {
@@ -106,5 +143,102 @@ impl Frame {
                     *slot = convert(self.data[c * area + i]);
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::frame::Frame;
+    use crate::stacking::CropRect;
+
+    /// Every sample names its own position, so a crop that crossed planes or rows shows it.
+    fn labelled(width: usize, height: usize, channels: usize) -> Frame {
+        let mut frame = Frame::zeros(width, height, channels).unwrap();
+        for c in 0..channels {
+            for y in 0..height {
+                for x in 0..width {
+                    frame.set_pixel(x, y, c, (c * 1_000_000 + y * 1000 + x) as f32);
+                }
+            }
+        }
+        frame
+    }
+
+    #[test]
+    fn a_crop_keeps_each_planes_own_samples() {
+        for channels in [1, 3] {
+            let mut frame = labelled(37, 29, channels);
+            let capacity = frame.data.capacity();
+            let rect = CropRect { x: 8, y: 5, width: 21, height: 17 };
+            frame.crop_in_place(&rect).unwrap();
+
+            assert_eq!((frame.width(), frame.height(), frame.channels()), (21, 17, channels));
+            assert_eq!(frame.sample_count(), 21 * 17 * channels);
+            assert_eq!(frame.data.capacity(), capacity, "the crop reallocated");
+            for c in 0..channels {
+                for y in 0..17 {
+                    for x in 0..21 {
+                        let want = (c * 1_000_000 + (y + 5) * 1000 + x + 8) as f32;
+                        assert_eq!(frame.get_pixel(x, y, c), want, "channel {c} at ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The copying cut and the binning cut both equal the in-place crop they stand in for,
+    /// bin and all, at every edge of the frame and for factors the cell grid does not divide.
+    #[test]
+    fn a_cut_from_a_shared_frame_equals_the_in_place_crop() {
+        for channels in [1, 3] {
+            let whole = labelled(37, 29, channels);
+            for rect in [
+                CropRect { x: 8, y: 5, width: 21, height: 17 },
+                CropRect { x: 0, y: 0, width: 37, height: 29 },
+                CropRect { x: 16, y: 8, width: 21, height: 21 },
+            ] {
+                let mut in_place = whole.clone();
+                in_place.crop_in_place(&rect).unwrap();
+                let cut = whole.cropped(&rect).unwrap();
+                assert_eq!((cut.width(), cut.height()), (rect.width, rect.height));
+                assert!(cut.data() == in_place.data(), "{channels} channels, {rect:?}: cropped");
+                for factor in [1, 2, 3] {
+                    let fused = whole.downsample_region(&rect, factor).unwrap();
+                    let reference = in_place.downsample(factor).unwrap();
+                    assert_eq!((fused.width(), fused.height()), (reference.width(), reference.height()));
+                    assert!(fused.data() == reference.data(), "{channels} channels, {rect:?}, factor {factor}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cut_outside_the_frame_or_by_zero_is_refused() {
+        let frame = labelled(16, 12, 3);
+        let outside = CropRect { x: 8, y: 0, width: 9, height: 4 };
+        assert!(frame.cropped(&outside).is_err());
+        assert!(frame.downsample_region(&outside, 2).is_err());
+        assert!(frame.downsample_region(&CropRect { x: 0, y: 0, width: 16, height: 12 }, 0).is_err());
+        assert!(frame.downsample_region(&CropRect { x: 0, y: 0, width: 4, height: 4 }, 5).is_err());
+    }
+
+    #[test]
+    fn a_full_frame_crop_changes_nothing() {
+        let mut frame = labelled(16, 12, 3);
+        let before = frame.data().to_vec();
+        frame.crop_in_place(&CropRect { x: 0, y: 0, width: 16, height: 12 }).unwrap();
+        assert_eq!(frame.data(), &before[..]);
+    }
+
+    #[test]
+    fn a_crop_outside_the_frame_is_refused_and_leaves_it_whole() {
+        let mut frame = labelled(16, 12, 1);
+        for rect in [
+            CropRect { x: 8, y: 0, width: 9, height: 4 },
+            CropRect { x: 0, y: 0, width: 0, height: 4 },
+        ] {
+            assert!(frame.crop_in_place(&rect).is_err(), "{rect:?} accepted");
+        }
+        assert_eq!((frame.width(), frame.height()), (16, 12));
     }
 }

@@ -3,6 +3,7 @@
 //! client of a family receives the same payload at the family's configured resolution,
 //! however many clients connect, leave, stall or misbehave around it.
 
+mod auto_crop;
 mod lifecycle;
 mod logging;
 mod serving;
@@ -52,6 +53,7 @@ pub(super) async fn start_server() -> TestServer {
             "/api/view/camera",
             axum::routing::put(crate::server::api::cameras::select_viewed_camera),
         )
+
         .with_state(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -136,7 +138,24 @@ impl TestServer {
         self.render_frame_with(frame, settings).await;
     }
 
-    async fn render_frame_with(&self, frame: Frame, mut settings: crate::session::state::CaptureSettings) {
+    async fn render_frame_with(&self, frame: Frame, settings: crate::session::state::CaptureSettings) {
+        self.render_message(frame, settings, false, None).await;
+    }
+
+    /// As [`Self::render`], for a frame showing a stack the stacking task cut to `crop`
+    /// (`None`: shown whole), under the live settings.
+    pub async fn render_stack(&self, size: (usize, usize), fill: f32, crop: Option<crate::stacking::CropRect>) {
+        let settings = (*self.state.settings.snapshot()).clone();
+        self.render_message(Frame::filled(size.0, size.1, 3, fill).unwrap(), settings, true, crop).await;
+    }
+
+    async fn render_message(
+        &self,
+        frame: Frame,
+        mut settings: crate::session::state::CaptureSettings,
+        showing_stack: bool,
+        crop: Option<crate::stacking::CropRect>,
+    ) {
         settings.auto_stretch = false;
         settings.background_subtraction = false;
         settings.saturation_boost = false;
@@ -145,11 +164,12 @@ impl TestServer {
         tx.send(StackedFrame {
             noise: None,
             display_frame: Arc::new(frame),
-            showing_stack: false,
-            was_stacked: false,
+            showing_stack,
+            was_stacked: showing_stack,
             frame_number: 1,
             settings: Arc::new(settings),
-            stack_depth: 0,
+            stack_depth: if showing_stack { 10 } else { 0 },
+            crop,
         })
         .unwrap();
         drop(tx);

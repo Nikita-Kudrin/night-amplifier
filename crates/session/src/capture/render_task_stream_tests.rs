@@ -23,6 +23,7 @@ fn passthrough_settings() -> CaptureSettings {
 fn stacked_frame(frame: Arc<night_amplifier_core::frame::Frame>, settings: CaptureSettings) -> super::StackedFrame {
     super::StackedFrame {
         noise: None,
+        crop: None,
         display_frame: frame,
         showing_stack: false,
         was_stacked: false,

@@ -40,6 +40,7 @@
  * @property {boolean} dew_heater_enabled - Whether anti-dew heater is enabled
  * @property {number} dew_heater_power - Anti-dew heater power level (0-100)
  * @property {boolean} wanderer_mode - Enable "Wanderer" mode for automatic stack reset on movement
+ * @property {boolean} auto_crop - Crop a deep-sky stack to the area most of its subs cover, live and in the saved FITS/PNG. Off crops nothing.
  * @property {boolean} auto_reconnect - Reopen the camera automatically after it drops out mid-session (a USB stall or an unplug), instead of leaving the session dead until someone clicks Connect.
  * @property {boolean} auto_resume_capture - After an automatic reconnect, resume the capture that was interrupted — same mode, same settings, same stack. Without this the camera comes back but the session does not.
  * @property {SensorCorrectionSettings} sensor_correction - Corrections applied to the raw sensor mosaic, before demosaic

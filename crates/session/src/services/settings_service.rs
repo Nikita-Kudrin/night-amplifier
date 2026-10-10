@@ -227,6 +227,7 @@ pub(crate) fn apply(
         saturation_boost_strength, use_simulated_camera, simulated_preload_images,
         show_focus_image, force_focus_image_now, planetary_auto_tracking,
         planetary_multi_point_alignment, auto_reconnect, auto_resume_capture, wanderer_mode,
+        auto_crop,
         denoise, preview_resolution, streaming_resolution, sensor_correction, eyepiece,
         telescope, camera_telescope_profiles, camera_profiles, eula_accepted,
         indi_server_host, indi_server_port,

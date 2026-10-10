@@ -117,12 +117,13 @@ pub async fn events_handler(
 }
 
 /// Send the state a client cannot rebuild from changes alone: the capture state, every
-/// camera's phase and the viewed camera. Returns `false` once the socket is gone.
+/// camera's phase, the viewed camera and the main stream's crop. Returns `false` once the socket is gone.
 async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
     let snapshot = [
         ServerEvent::state_changed(state.capture_state()),
         state.camera_phases_event(),
         state.viewed_camera.event(),
+        state.stream_crop.event(),
     ];
     for event in snapshot {
         if socket.send(Message::Text(event.to_json().into())).await.is_err() {

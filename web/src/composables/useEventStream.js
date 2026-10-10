@@ -47,6 +47,9 @@ export function useEventStream() {
     const viewedCamera = ref('main')
     // Counts `viewed_camera_changed`, so a PUT's answer can tell an event overtook it.
     const viewedCameraRevision = ref(0)
+    // Where the main stream's frames were cut from the stack (`auto_crop`, `crop` null when
+    // whole) and the live-stream frame size that cut arrives at (`frame`, null until known).
+    const stackCrop = ref({crop: null, frame: null})
 
     // Push-To state
     const pushDirection = ref(null)
@@ -138,6 +141,9 @@ export function useEventStream() {
         viewed_camera_changed(data) {
             viewedCamera.value = data.camera
             viewedCameraRevision.value++
+        },
+        stack_crop_changed(data) {
+            stackCrop.value = {crop: data.crop ?? null, frame: data.frame ?? null}
         },
         frame_captured: handleFrameEvent,
         frame_rejected: handleFrameEvent,
@@ -391,6 +397,7 @@ export function useEventStream() {
         resumeNotice,
         focusModeNotice,
         viewedCamera,
+        stackCrop,
         viewedCameraRevision,
         pushDirection,
         currentTarget,

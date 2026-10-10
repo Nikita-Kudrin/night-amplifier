@@ -26,6 +26,7 @@ mod session;
 mod settings;
 mod settings_store;
 mod types;
+mod stream_crop;
 mod viewed_camera;
 
 pub use night_amplifier_core::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
@@ -52,6 +53,7 @@ pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
 pub use types::{CameraPhase, CameraRole, CaptureState};
+pub use stream_crop::StreamCropView;
 pub use viewed_camera::{ViewSelection, ViewedCamera};
 
 /// The application state shared across all handlers.
@@ -79,6 +81,8 @@ pub struct AppState {
     pub guide_stream: Arc<FrameStream>,
     /// The camera the eyepiece pages show, chosen on `/`. See [`ViewedCamera`].
     pub viewed_camera: ViewedCamera,
+    /// The `auto_crop` cut the main stream's frames carry. See [`StreamCropView`].
+    pub stream_crop: StreamCropView,
     /// Event broadcast channel
     pub events: broadcast::Sender<ServerEvent>,
     /// Disk writer handle for saving frames
@@ -193,6 +197,7 @@ impl AppState {
             main_stream: Arc::new(FrameStream::default()),
             guide_stream: Arc::new(FrameStream::default()),
             viewed_camera: ViewedCamera::new(events_tx.clone()),
+            stream_crop: StreamCropView::new(events_tx.clone()),
             events: events_tx,
             disk_writer: disk_writer_handle,
             push_to,

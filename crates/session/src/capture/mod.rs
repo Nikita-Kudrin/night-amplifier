@@ -22,6 +22,7 @@ mod render_task;
 #[cfg(any(test, feature = "test-support"))]
 pub use render_task::run_render_task;
 pub mod solving;
+pub mod stack_crop;
 mod stacking_task;
 mod stage_config;
 pub(crate) mod stall;

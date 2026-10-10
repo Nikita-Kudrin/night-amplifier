@@ -7,6 +7,7 @@ import {usePanZoom} from '../composables/usePanZoom.js'
 import {useAutoFit} from '../composables/useAutoFit.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
+import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming.js'
 import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
@@ -89,6 +90,7 @@ const {
 // Pan/zoom controls. Both fullscreen edges fit the image to the new viewport.
 const {
   scale,
+  position,
   isDragging,
   isFullscreen,
   canvasStyle,
@@ -269,11 +271,31 @@ watch(hasFrame, (newHasFrame, oldHasFrame) => {
   }
 })
 
-// Watch for dimension changes to fit the view
-watch(dimensions, (newDims, oldDims) => {
-  if (newDims.width !== oldDims?.width || newDims.height !== oldDims?.height) {
-    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
+// The server's auto crop moved: held until the frame cut the new way arrives. Only the
+// imaging stream is ever cropped, so a change pending across a switch of camera is dropped.
+const cropFraming = useCropFraming()
+watch(() => eventStream.stackCrop?.value, (to, from) => {
+  if (!showGuide.value) cropFraming.note(to?.crop ?? null, from?.crop ?? null, to?.frame ?? null)
+})
+watch(showGuide, () => cropFraming.clear())
+
+// Fit the view when a frame changes the image's size — unless the frame is a new crop of
+// a view the observer zoomed or panned, which keeps its framing (see `useCropFraming`).
+watch([dimensions, frameData], ([newDims], [oldDims]) => {
+  const resized = newDims.width !== oldDims?.width || newDims.height !== oldDims?.height
+  const crop = frameData.value ? cropFraming.take(newDims) : null
+  if (crop && oldDims?.width) {
+    const view = {scale: scale.value, position: position.value}
+    const container = containerRef.value?.getBoundingClientRect()
+    const reframed = !isFitted(view, container, oldDims) &&
+        reframeForCrop({...crop, oldDims, newDims, view})
+    if (reframed) {
+      scale.value = reframed.scale
+      position.value = reframed.position
+      return
+    }
   }
+  if (resized) setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
 })
 
 // Clear frame data when a new capture session starts. A capture resuming after a camera

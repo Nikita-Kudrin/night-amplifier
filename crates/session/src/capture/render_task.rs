@@ -9,6 +9,7 @@ use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 use super::analysis::{AnalysisContext, PreviewAnalysis};
 use super::channel::{QueueDepth, StackedFrame};
 use super::pipeline;
+use super::stack_crop;
 use super::stream_encoding::{encode_watched, ConversionCache, FailureReports, StreamResolutions, StreamTarget};
 
 /// Preview rendering and encoding, on a dedicated OS thread. Drains the channel to
@@ -65,6 +66,7 @@ pub fn run_render_task(
             settings,
             stack_depth,
             mut noise,
+            crop,
         } = latest;
 
         let _iter_span =
@@ -86,26 +88,48 @@ pub fn run_render_task(
         // Bin before the pipeline touches the frame, rather than after. See
         // `preview_bin_factor` for why this is an integer and what it costs when it
         // comes out 1, and `SessionBinFactor` for why it is not re-derived per frame.
+        //
+        // Resolved on the stack's uncropped size, before `auto_crop` cuts it: resolved on the
+        // crop, the factor flipped 2 -> 1 once a crop took the frame under the target box,
+        // doubling the pipeline's cost and changing the grain the tone curve was solved for.
         let bin = session_bin.resolve(
             display_frame.width(),
             display_frame.height(),
             settings.preview_resolution,
         );
-        if bin > 1 {
-            let _span = tracing::info_span!("preview_bin", factor = bin).entered();
-            match display_frame.downsample(bin) {
-                Ok(binned) => {
-                    display_frame = Arc::new(binned);
-                    // The map describes the frame, so it follows every geometry change
-                    // the frame makes. Only applied where the frame really was binned,
-                    // so a failed downsample cannot leave the two describing different
-                    // grids.
-                    noise = noise.and_then(|field| field.binned(bin).ok());
+        let (source_width, source_height) = (display_frame.width(), display_frame.height());
+        // Cut before the pipeline measures anything: the thin border is what skewed the
+        // whole frame's statistics. See `capture::stack_crop`. The frame's own settings decide
+        // too, so a crop can never outlive the setting. A rect the frame cannot hold is shown
+        // whole rather than costing the frame.
+        let requested = crop.filter(|_| settings.auto_crop);
+        let (crop, binned) = {
+            let _span = tracing::info_span!("crop_and_bin", factor = bin, cropped = requested.is_some()).entered();
+            let cut = requested.and_then(|rect| {
+                let attempt = stack_crop::crop_coverage(noise.as_ref(), &rect).and_then(|map| {
+                    Ok((map, stack_crop::cut_display_frame(&mut display_frame, Some(&rect), bin)?))
+                });
+                match attempt {
+                    Ok((map, binned)) => {
+                        noise = map;
+                        Some((rect, binned))
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Auto crop failed, showing the stack whole");
+                        None
+                    }
                 }
-                // Not fatal: the pipeline is perfectly capable of running at sensor
-                // resolution, it is just slower. A failure here must not cost the frame.
-                Err(e) => warn!(error = %e, factor = bin, "Preview binning failed, rendering at full resolution"),
+            });
+            match cut {
+                Some((rect, binned)) => (Some(rect), binned),
+                None => (None, stack_crop::cut_display_frame(&mut display_frame, None, bin).unwrap_or(false)),
             }
+        };
+        analysis.note_crop(crop);
+        // The map describes the frame, so it follows every geometry change the frame makes,
+        // and only where the frame really was binned.
+        if binned {
+            noise = noise.and_then(|field| field.binned(bin).ok());
         }
 
         // Process frame through unified render pipeline
@@ -155,9 +179,20 @@ pub fn run_render_task(
         // both without also covering the work between them.
         let (counter, resolutions) = {
             let _span = tracing::info_span!("publish_state").entered();
-            state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame));
             // The live resolutions, not the frame's snapshot: a size change lands next frame.
             let resolutions = StreamResolutions::of(&state.settings.snapshot());
+            state.stream_crop.publish(
+                crop.map(|rect| crate::events::StreamCrop {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    source_width,
+                    source_height,
+                }),
+                live_stream_size(&raw_frame, resolutions),
+            );
+            state.main_stream.set_latest_raw_frame(Arc::clone(&raw_frame));
             // Claim the counter before encoding so every payload below is filed
             // under the same frame, then wake clients once they are all in place.
             (state.main_stream.begin_frame(), resolutions)
@@ -177,6 +212,19 @@ pub fn run_render_task(
     }
 
     debug!("Render task ended");
+}
+
+/// The size of the `/ws/stream` payload `frame` is encoded at: what a crop change tells the
+/// live view to wait for.
+fn live_stream_size(frame: &RenderReadyFrame, resolutions: StreamResolutions) -> crate::events::StreamFrameSize {
+    let (max_w, max_h) = resolutions.jpeg.bounding_box();
+    let (width, height) = night_amplifier_core::render::display::output_dimensions(
+        frame.linear_frame.width(),
+        frame.linear_frame.height(),
+        max_w,
+        max_h,
+    );
+    crate::events::StreamFrameSize { width, height }
 }
 
 /// A failure is a display problem, not a camera one: it is logged and reported to the UI,
@@ -508,6 +556,7 @@ mod tests {
             frame_number: 1,
             settings: settings.into(),
             stack_depth: 0,
+            crop: None,
         };
 
         // No extra messages — should return initial
@@ -530,6 +579,7 @@ mod tests {
             frame_number: 0,
             settings: settings.clone().into(),
             stack_depth: 0,
+            crop: None,
         };
 
         // Queue additional frames
@@ -542,6 +592,7 @@ mod tests {
                 frame_number: n + 1,
                 settings: settings.clone().into(),
                 stack_depth: 0,
+                crop: None,
             };
             tx.send(msg).unwrap();
         }
@@ -554,6 +605,7 @@ mod tests {
             frame_number: 4,
             settings: settings.clone().into(),
             stack_depth: 0,
+            crop: None,
         };
         tx.send(last).unwrap();
 
@@ -570,3 +622,7 @@ mod tests {
 #[cfg(test)]
 #[path = "render_task_stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "render_task_crop_tests.rs"]
+mod crop_tests;
