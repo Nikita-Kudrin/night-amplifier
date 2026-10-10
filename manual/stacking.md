@@ -68,6 +68,21 @@ One frame that will not align is not enough to restart: it takes two in a row. A
 frames align on only a few stars, and a single weak one should not throw away the stack. A real
 slew costs one extra frame before the new stack begins.
 
+### Auto crop
+
+The stack keeps the first frame's framing, so drift, field rotation on an alt-az mount or a bumped
+tripod leave a border that fewer frames reached: noisier than the rest, with seams where each
+frame's edge falls. **Settings → Stacking → Auto Crop** (Deep Sky, off by default) cuts the stack
+to the largest rectangle that nearly every frame covers. It starts at 20 frames, the first depth
+at which one bumped frame is outvoted by the rest; until then the stack is shown whole. The cut
+applies to the live view, both eyepiece views and the saved FITS and PNG. The FITS records where
+its corner sat in the full frame as `XORGSUBF`/`YORGSUBF`. Plate solving still sees the whole frame.
+
+The crop is applied before the image is stretched. Left in, the thin border made the whole sky
+measure noisier than it is, and the stretch came out flatter. As the field keeps drifting the crop
+shrinks, in occasional steps rather than on every frame. If you have zoomed in, the live view keeps
+the same patch of sky in view across a step. With the setting off nothing is ever cut.
+
 ## Outlier Rejection (Pro)
 
 Satellite trails, aircraft and cosmic-ray hits are removed pixel by pixel: each new sample is

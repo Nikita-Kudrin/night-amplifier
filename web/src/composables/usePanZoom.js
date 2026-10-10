@@ -1,5 +1,5 @@
 import {ref, computed} from 'vue'
-import {ZOOM_LIMITS} from '../constants'
+import {FIT_MARGIN, ZOOM_LIMITS} from '../constants'
 import {useFullscreen} from './useFullscreen.js'
 
 /**
@@ -106,7 +106,7 @@ export function usePanZoom(options = {}) {
 
         const scaleX = containerRect.width / canvasWidth
         const scaleY = containerRect.height / canvasHeight
-        scale.value = Math.min(scaleX, scaleY, 1) * 0.95
+        scale.value = Math.min(scaleX, scaleY, 1) * FIT_MARGIN
         position.value = {x: 0, y: 0}
     }
 

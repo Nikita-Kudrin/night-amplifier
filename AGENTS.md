@@ -146,8 +146,8 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
 ### Server & Web Frontend (src/server/, web/)
 
 Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless LZ4), `/ws/events`
-(JSON). `/ws/events` opens with `state_changed` + `camera_phases` + `viewed_camera_changed` and resends them after
-a `Lagged` client; `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+(JSON). `/ws/events` opens with `state_changed` + `camera_phases` + `viewed_camera_changed` + `stack_crop_changed` and
+resends them after a `Lagged` client; `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
 **Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
 show `AppState::viewed_camera` (set by `/`'s Guide toggle via `PUT /api/view/camera`, snapshot route too) and switch
 in place; their viewers have no control. A guide *disconnect* falls back to Main only after the roster says so
@@ -351,6 +351,18 @@ ones winsorised to the threshold — cosmic rays can't widen the window, but a c
 geometrically. `RejectionMethod` has four variants but the live path implements only two (`MinMax` would need
 per-pixel min/max, +650 MB); the plain-mean path maintains `m2` too, so a settings toggle lands mid-stack without
 opening a gap.
+
+**Auto crop** (`stacking::crop`, setting `auto_crop`, off = nothing cut anywhere) is the largest rectangle
+whose coverage cells all hold ≥ 0.95 of the stack, kept while they hold ≥ 0.85, and none before depth 20
+(`MIN_CROP_DEPTH`: shallower, 0.95 is every sub, and one early bump cut the view for 14 subs). The subs'
+common footprint lost 44 % of a frame to one bumped sub, and the raw rectangle moved on 51 of 64 drifting subs. It is
+decided once per snapshot in the stacking task and travels as `StackedFrame::crop`, so live view, eyepiece
+and saved FITS/PNG agree. It is cut **before the render pipeline**: the thin border inflated the sky MAD
+the stretch is solved from by 13-20 %. The bin is resolved on the uncropped size, a crop change keeps
+`NoiseTrend` (rebased), and solving keeps the uncropped frame. The render task cuts and bins in one pass
+(`cut_display_frame`): `make_mut` on a stack a solve shared copied all of it (4.1 -> 42.7 ms). Its
+`stack_crop_changed` names the live frame size the cut arrives at, and the live view waits for that frame:
+the two travel on different sockets, and reframing an old frame still in flight lost the zoom.
 
 ### Phase 6: Background Extraction (Light Pollution Removal)
 

@@ -224,12 +224,17 @@ impl Replay {
 
     /// The stack as the render task would receive it.
     pub fn snapshot(&self) -> Frame {
+        self.snapshot_with_coverage().0
+    }
+
+    /// [`Self::snapshot`] with the coverage map the stacking task sends beside it (`None`:
+    /// every sub covered all of it).
+    pub fn snapshot_with_coverage(&self) -> (Frame, Option<night_amplifier::NoiseField>) {
         self.stacker
             .as_ref()
             .expect("a stack exists once a reference has been taken")
             .snapshot()
             .expect("the stack reads")
-            .0
     }
 }
 

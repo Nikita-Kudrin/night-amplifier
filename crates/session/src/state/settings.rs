@@ -98,6 +98,9 @@ pub struct CaptureSettings {
     pub dew_heater_power: i32,
     /// Enable "Wanderer" mode for automatic stack reset on movement
     pub wanderer_mode: bool,
+    /// Crop a deep-sky stack to the area most of its subs cover, live and in the saved
+    /// FITS/PNG. Off crops nothing.
+    pub auto_crop: bool,
     /// Reopen the camera automatically after it drops out mid-session (a USB
     /// stall or an unplug), instead of leaving the session dead until someone
     /// clicks Connect.
@@ -200,6 +203,7 @@ impl Default for CaptureSettings {
             dew_heater_enabled: hw.dew_heater_enabled,
             dew_heater_power: hw.dew_heater_power,
             wanderer_mode: false,
+            auto_crop: false,
             auto_reconnect: true,
             auto_resume_capture: true,
             sensor_correction: SensorCorrectionSettings::default(),

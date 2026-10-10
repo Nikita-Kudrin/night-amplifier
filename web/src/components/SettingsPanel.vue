@@ -87,6 +87,7 @@ watch(
               : {...DEFAULT_SETTINGS.raw_frame_saving},
           save_stacked_image: newSettings.save_stacked_image ?? DEFAULT_SETTINGS.save_stacked_image,
           wanderer_mode: newSettings.wanderer_mode ?? DEFAULT_SETTINGS.wanderer_mode,
+          auto_crop: newSettings.auto_crop ?? DEFAULT_SETTINGS.auto_crop,
           auto_reconnect: newSettings.auto_reconnect ?? DEFAULT_SETTINGS.auto_reconnect,
           auto_resume_capture:
               newSettings.auto_resume_capture ?? DEFAULT_SETTINGS.auto_resume_capture,
@@ -395,6 +396,8 @@ const HELP = HELP_TEXTS
         :planetary-auto-tracking="localSettings.planetary_auto_tracking"
         :planetary-multi-point-alignment="localSettings.planetary_multi_point_alignment"
         :planetary="settings?.stacking_type === 'planetary'"
+        :auto-crop="localSettings.auto_crop"
+        :deep-sky="(settings?.stacking_type ?? 'deep_sky') === 'deep_sky'"
         :advanced-rejection-available="capabilities.deep_sky.advanced_rejection"
         :advanced-planetary-available="capabilities.planetary.advanced_stacking"
         @apply="applyGroup"

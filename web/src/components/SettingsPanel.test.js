@@ -196,6 +196,45 @@ describe('SettingsPanel', () => {
         })
     })
 
+    describe('Auto Crop', () => {
+        const hasAutoCrop = (wrapper) =>
+            wrapper.findAll('.toggle-label').some((el) => el.text().includes('Auto Crop'))
+
+        it('is off when the server omits it, as it is by default', () => {
+            expect(DEFAULT_SETTINGS.auto_crop).toBe(false)
+            const wrapper = mountSettingsPanel({settings: {stacking: true}})
+            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(false)
+        })
+
+        it('shows what the server reports', () => {
+            const wrapper = mountSettingsPanel({settings: {stacking: true, auto_crop: true}})
+            expect(findToggleByLabel(wrapper, 'Auto Crop').element.checked).toBe(true)
+        })
+
+        it('sends auto_crop when toggled', async () => {
+            const wrapper = mountSettingsPanel({settings: {stacking: true, auto_crop: false}})
+            const toggle = findToggleByLabel(wrapper, 'Auto Crop')
+
+            await toggle.setValue(true)
+            await toggle.trigger('change')
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledWith({auto_crop: true})
+        })
+
+        it('is offered for Deep Sky only', () => {
+            for (const [stacking_type, offered] of [['deep_sky', true], ['planetary', false], ['comet', false]]) {
+                const wrapper = mountSettingsPanel({settings: {stacking: true, stacking_type}})
+                expect(hasAutoCrop(wrapper), stacking_type).toBe(offered)
+            }
+        })
+
+        it('is hidden with stacking off', () => {
+            const wrapper = mountSettingsPanel({settings: {stacking: false, auto_crop: true}})
+            expect(hasAutoCrop(wrapper)).toBe(false)
+        })
+    })
+
     describe('Error Handling', () => {
         it('shows error when updateSettings fails', async () => {
             updateSettings.mockRejectedValue(new Error('Update failed'))

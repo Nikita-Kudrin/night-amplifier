@@ -406,6 +406,13 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "cats-eye-nebula-imx533",
         "https://drive.usercontent.google.com/download?id=1udM7sCdeknz_lhZihoDDLwqaGA4en8ZD&export=download&confirm=t",
     ),
+    // 64 subs of M33 (IMX533, 7 s), cropped to 1024x1024 on an even origin: the field drifts
+    // across the crop, so only ~56 % of it holds every sub by the end — the hard case for
+    // `auto_crop_tests` (crop area, change rate, the border skewing the stretch's statistics).
+    (
+        "m33-drifting-imx533-1024",
+        "https://drive.usercontent.google.com/download?id=1EHrsxIVrU7A5-Qsj2K-IoakXdeq5Gb2A&export=download&confirm=t",
+    ),
 ];
 
 /// Marks a `DEFAULT_FIXTURES` entry whose archive has been cut but not yet published.

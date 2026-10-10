@@ -288,6 +288,29 @@ async fn test_update_settings_raw_frame_saving() {
     assert!(!per_mode(&json, "stacking"));
 }
 
+/// `auto_crop` is off until asked for, takes a request on its own, and a request that does
+/// not name it leaves it where it was.
+#[tokio::test]
+async fn test_update_settings_auto_crop() {
+    let state = create_test_state();
+    let app = create_test_router(state.clone());
+
+    let (_, json) = get_json(&app, "/api/settings").await;
+    assert_eq!(json["data"]["auto_crop"], json!(false));
+
+    let (status, json) = post_json(&app, "/api/settings", json!({ "auto_crop": true })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["auto_crop"], json!(true));
+    assert!(state.settings.snapshot().auto_crop);
+
+    post_json(&app, "/api/settings", json!({ "wanderer_mode": true })).await;
+    let (_, json) = get_json(&app, "/api/settings").await;
+    assert_eq!(json["data"]["auto_crop"], json!(true), "an unrelated request switched it off");
+
+    let (_, json) = post_json(&app, "/api/settings", json!({ "auto_crop": false })).await;
+    assert_eq!(json["data"]["auto_crop"], json!(false));
+}
+
 #[tokio::test]
 async fn test_update_settings_save_stacked_image() {
     let state = create_test_state();

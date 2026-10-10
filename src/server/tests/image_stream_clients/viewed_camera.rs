@@ -15,7 +15,7 @@ use crate::session::state::{CameraRole, ConnectedCameraInfo, StreamKind};
 
 /// Small and distinct, so a payload's header says which camera it came from.
 const MAIN: (usize, usize) = (400, 300);
-const GUIDE: (usize, usize) = (320, 200);
+pub(super) const GUIDE: (usize, usize) = (320, 200);
 const GUIDE_NAME: &str = "Guide Mock";
 const QUIET: Duration = Duration::from_millis(300);
 
@@ -23,7 +23,7 @@ fn size(dims: (usize, usize)) -> (u32, u32) {
     (dims.0 as u32, dims.1 as u32)
 }
 
-fn install_guide(state: &AppState) {
+pub(super) fn install_guide(state: &AppState) {
     state.roster.install(
         ConnectedCameraInfo {
             id: "mock_guide".to_string(),
@@ -41,7 +41,7 @@ fn install_guide(state: &AppState) {
 
 /// Publish a guide frame the way the guide loop does: the latest frame, then one payload
 /// per watched family under one counter.
-fn publish_guide(state: &AppState, fill: f32) {
+pub(super) fn publish_guide(state: &AppState, fill: f32) {
     let ready = Arc::new(RenderReadyFrame {
         noise: None,
         linear_frame: Arc::new(Frame::filled(GUIDE.0, GUIDE.1, 3, fill).unwrap()),
@@ -74,7 +74,7 @@ fn counts(state: &AppState, kind: StreamKind) -> (usize, usize) {
     (state.main_stream.viewer_count(kind), state.guide_stream.viewer_count(kind))
 }
 
-async fn view(server: &TestServer, camera: &str) {
+pub(super) async fn view(server: &TestServer, camera: &str) {
     let response = server.view(camera).await;
     assert_eq!(response.status, 200, "viewing {camera}: {}", response.body);
 }

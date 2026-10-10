@@ -286,6 +286,10 @@ pub struct StackedFrame {
     /// beside a 108 MB display frame, within the slack `pipeline_capacities` already
     /// carries.
     pub noise: Option<night_amplifier_core::frame::NoiseField>,
+    /// The part of `display_frame` and `noise` the render task keeps, in their pixels:
+    /// `auto_crop`'s verdict on this snapshot (see `capture::stack_crop`). `None` shows the
+    /// frame whole, as it always is with the setting off.
+    pub crop: Option<night_amplifier_core::stacking::CropRect>,
 }
 
 #[cfg(test)]

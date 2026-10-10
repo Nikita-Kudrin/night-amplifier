@@ -15,6 +15,25 @@ use serde::Serialize;
 
 use super::state::{CameraPhase, CameraRole, CaptureState};
 
+/// Where the main stream's frames were cut from the stack, in the stack's pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct StreamCrop {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+    /// The uncropped stack's size.
+    pub source_width: usize,
+    pub source_height: usize,
+}
+
+/// The size of the `/ws/stream` frame a [`ServerEvent::StackCropChanged`] arrives with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct StreamFrameSize {
+    pub width: usize,
+    pub height: usize,
+}
+
 /// Event types sent to WebSocket clients
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -90,6 +109,20 @@ pub enum ServerEvent {
     /// The camera the eyepiece pages show. Also sent when a client connects and after it
     /// fell behind, since `/` derives its Guide toggle from it.
     ViewedCameraChanged { camera: CameraRole },
+
+    /// The main stream's frames became, or stopped being, an `auto_crop` cut of the stack.
+    /// Announced just before the first frame cut the new way is published, and sent when a
+    /// client connects and after it fell behind: the live view shifts its pan by the
+    /// origin's move rather than refitting, which would undo the observer's zoom every few subs.
+    /// `frame` is the live stream's payload size cut the new way: the event and the frame
+    /// travel on different sockets, so a frame cut the old way can land after the event, and
+    /// the view waits for this size rather than reframing the old picture.
+    StackCropChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crop: Option<StreamCrop>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frame: Option<StreamFrameSize>,
+    },
 
     /// The camera hit a run of consecutive status-poll watchdog timeouts across
     /// reconnects — likely a persistent hardware/USB fault rather than an

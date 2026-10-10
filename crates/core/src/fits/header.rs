@@ -79,6 +79,11 @@ pub(crate) fn write_fits_headers(
         if let Some(set_temp) = meta.set_temp_c {
             hdu.write_key(fptr, "SET-TEMP", set_temp).ok();
         }
+
+        if let Some((x, y)) = meta.subframe_origin {
+            hdu.write_key(fptr, "XORGSUBF", x as i64).ok();
+            hdu.write_key(fptr, "YORGSUBF", y as i64).ok();
+        }
     }
 
     Ok(())

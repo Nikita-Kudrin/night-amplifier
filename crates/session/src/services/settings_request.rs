@@ -97,6 +97,9 @@ pub struct UpdateSettingsRequest {
     /// Enable "Wanderer" mode
     #[serde(default)]
     pub wanderer_mode: Option<bool>,
+    /// Crop a deep-sky stack to its well-covered area
+    #[serde(default)]
+    pub auto_crop: Option<bool>,
     pub auto_reconnect: Option<bool>,
     pub auto_resume_capture: Option<bool>,
 

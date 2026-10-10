@@ -10,6 +10,7 @@
 use night_amplifier_core::background::{BackgroundConfig, BackgroundExtractionAlgorithm, BackgroundModel};
 use night_amplifier_core::error::Result;
 use night_amplifier_core::statistics::ImageStats;
+use night_amplifier_core::stacking::CropRect;
 
 /// Frames one analysis is reused for before it is recomputed regardless of stack growth.
 ///
@@ -143,6 +144,13 @@ impl NoiseTrend {
         self.latest = Some((depth, sigma));
     }
 
+    /// Forgets the latest measurement but keeps the exponent: the next one was taken over a
+    /// different crop of the stack, and an exponent derived across the two would read the
+    /// border's removal (~15 % less MAD) as noise falling with depth.
+    fn rebase(&mut self) {
+        self.latest = None;
+    }
+
     /// Factor carrying the latest measurement's noise to `depth`.
     fn scale_to(&self, depth: u32) -> f32 {
         match self.latest {
@@ -169,11 +177,27 @@ pub struct PreviewAnalysis {
     depth: u32,
     /// Kept across refreshes of one stack, dropped with it.
     trend: NoiseTrend,
+    /// The stack crop of the frame being analysed — see [`Self::note_crop`].
+    crop: Option<CropRect>,
+    /// `crop` moved since the last frame.
+    crop_changed: bool,
 }
 
 impl PreviewAnalysis {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The crop the render task cut the next frame to (`StackedFrame::crop`), before
+    /// [`Self::begin_frame`].
+    ///
+    /// A crop change is the same stack seen through a new window: its estimates describe the
+    /// old one and are measured again, but the `NoiseTrend` carries on, rebased. Treated as a
+    /// new stack, every change (one per 3-4 subs under drift) dropped the trend the stacked
+    /// view holds still with. A size change under an unchanged crop still resets everything.
+    pub fn note_crop(&mut self, crop: Option<CropRect>) {
+        self.crop_changed = self.crop != crop;
+        self.crop = crop;
     }
 
     /// Decide once, for this frame, whether the stored estimates still describe it.
@@ -203,11 +227,14 @@ impl PreviewAnalysis {
             auto_stretch,
         );
 
-        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx);
+        let crop_changed = std::mem::take(&mut self.crop_changed);
+        let same_stack = ctx.showing_stack && self.continues_stack(&key, ctx, crop_changed);
         if !same_stack {
             self.trend = NoiseTrend::default();
+        } else if crop_changed {
+            self.trend.rebase();
         }
-        self.reuse = same_stack && self.is_current(ctx);
+        self.reuse = same_stack && !crop_changed && self.is_current(ctx);
         self.depth = ctx.stack_depth;
 
         if self.reuse {
@@ -229,11 +256,17 @@ impl PreviewAnalysis {
     }
 
     /// The stored estimates were taken from an earlier frame of this same stack.
-    fn continues_stack(&self, key: &AnalysisKey, ctx: AnalysisContext) -> bool {
+    /// `crop_changed` lets the dimensions differ, since a new crop is what changed them.
+    fn continues_stack(&self, key: &AnalysisKey, ctx: AnalysisContext, crop_changed: bool) -> bool {
         // A stack that has not been measured yet, or that restarted, has nothing to
         // compare against — `stack_depth` going *down* is a reset.
         self.cached.as_ref().is_some_and(|cached| {
-            cached.key == *key && cached.depth != 0 && ctx.stack_depth >= cached.depth
+            let same_key = if crop_changed {
+                AnalysisKey { dimensions: key.dimensions, ..cached.key } == *key
+            } else {
+                cached.key == *key
+            };
+            same_key && cached.depth != 0 && ctx.stack_depth >= cached.depth
         })
     }
 
@@ -571,6 +604,64 @@ mod tests {
         b.stats(|| Ok(sky_stats(0.05, 0.01))).unwrap();
         measure(&mut b, 20, 0.003);
         assert_eq!(reuse(&mut b, 22).mean_sigma(), measured(0.003));
+    }
+
+    const CROP: CropRect = CropRect { x: 8, y: 0, width: 90, height: 100 };
+
+    /// One frame of the stack at `depth` and size `dims`, cut to `crop`; whether it reused.
+    fn frame_cut(a: &mut PreviewAnalysis, depth: u32, dims: (usize, usize), crop: Option<CropRect>) -> bool {
+        a.note_crop(crop);
+        a.begin_frame(stacked(depth), (dims.0, dims.1, 3), true, &config(), true, 1.0, true)
+    }
+
+    /// A new crop is the same stack through a new window: measured again, since every
+    /// estimate described the old window, but the trend carries on — and its exponent is
+    /// not re-derived from a pair either side of the cut, which saw the border's removal
+    /// (here 15 % less noise) as the stack deepening.
+    #[test]
+    fn a_crop_change_measures_again_but_keeps_the_trend() {
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        let sigma_25 = 0.004 * (16.0f32 / 25.0).powf(0.3);
+        measure(&mut a, 25, sigma_25);
+
+        assert!(!frame_cut(&mut a, 26, (90, 100), Some(CROP)), "a new crop reused the old window's estimates");
+        a.stats(|| Ok(sky_stats(0.05, sigma_25 * 0.85))).unwrap();
+
+        for depth in [27u32, 28, 30] {
+            assert!(frame_cut(&mut a, depth, (90, 100), Some(CROP)), "depth {depth} must reuse");
+            let served = a.stats(|| panic!("a reusing frame must not measure")).unwrap().mean_sigma();
+            let expected = measured(sigma_25 * 0.85) * (26.0 / depth as f32).powf(0.3);
+            assert!((served / expected - 1.0).abs() < 1e-4, "depth {depth}: served {served}, the trend says {expected}");
+        }
+    }
+
+    /// Only a crop excuses a size change: a resolution change under the same crop is a new
+    /// image, as before.
+    #[test]
+    fn a_size_change_under_an_unchanged_crop_still_resets() {
+        let mut a = PreviewAnalysis::new();
+        assert!(!frame_cut(&mut a, 100, (90, 100), Some(CROP)));
+        let _ = a.white_balance(|| Ok([1.0, 1.0, 1.0]));
+        assert!(frame_cut(&mut a, 101, (90, 100), Some(CROP)));
+        assert!(!frame_cut(&mut a, 102, (45, 50), Some(CROP)), "binning changed the frame under the model");
+    }
+
+    /// A crop change never excuses anything else: a settings change at the same moment
+    /// still drops the trend.
+    #[test]
+    fn a_crop_change_with_a_settings_change_is_a_new_stack() {
+        let mut a = PreviewAnalysis::new();
+        measure(&mut a, 16, 0.004);
+        measure(&mut a, 25, 0.002);
+        a.note_crop(Some(CROP));
+        let mut changed = config();
+        changed.aggressiveness += 0.1;
+        assert!(!a.begin_frame(stacked(26), (90, 100, 3), true, &changed, true, 1.0, true));
+        a.stats(|| Ok(sky_stats(0.05, 0.003))).unwrap();
+        a.note_crop(Some(CROP));
+        assert!(a.begin_frame(stacked(27), (90, 100, 3), true, &changed, true, 1.0, true));
+        assert_eq!(a.stats(|| panic!("must reuse")).unwrap().mean_sigma(), measured(0.003), "the old trend survived");
     }
 }
 

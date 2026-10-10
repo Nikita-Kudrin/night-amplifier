@@ -157,5 +157,44 @@ fn bench_preview_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_preview_pipeline);
+/// `auto_crop`'s cut of a 3008² IMX533 stack while a solve shares it, against the bin alone.
+/// Shared, `make_mut` used to copy the whole stack before cutting: 4.1 -> 42.7 ms at bin 2 on
+/// x86. Each case is pure (the source is never mutated), so no per-rep clone is needed.
+fn bench_display_cut(c: &mut Criterion) {
+    use night_amplifier::session::capture::stack_crop::cut_display_frame;
+    use night_amplifier::stacking::CropRect;
+    use std::sync::Arc;
+
+    let stack = Arc::new(Frame::filled(3008, 3008, 3, 0.2).unwrap());
+    let rect = CropRect { x: 152, y: 96, width: 2800, height: 2816 };
+    let cut = |crop: Option<&CropRect>, bin: usize| {
+        let mut frame = Arc::clone(&stack);
+        black_box(cut_display_frame(&mut frame, crop, bin).unwrap());
+        frame
+    };
+
+    let mut group = c.benchmark_group("display_cut");
+    group.sampling_mode(SamplingMode::Flat);
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_millis(200));
+    group.measurement_time(Duration::from_millis(2000));
+
+    // ~4 ms per call on x86 20-core.
+    const BIN_REPS: usize = 24;
+    group.bench_function(format!("bin2_uncut_x{BIN_REPS}"), |b| {
+        b.iter(|| (0..BIN_REPS).for_each(|_| drop(cut(None, 2))))
+    });
+    group.bench_function(format!("bin2_cut_shared_x{BIN_REPS}"), |b| {
+        b.iter(|| (0..BIN_REPS).for_each(|_| drop(cut(Some(&rect), 2))))
+    });
+    // A copy of the crop alone, ~95 MB.
+    const COPY_REPS: usize = 8;
+    group.bench_function(format!("bin1_cut_shared_x{COPY_REPS}"), |b| {
+        b.iter(|| (0..COPY_REPS).for_each(|_| drop(cut(Some(&rect), 1))))
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_preview_pipeline, bench_display_cut);
 criterion_main!(benches);

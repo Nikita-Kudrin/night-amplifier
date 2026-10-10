@@ -1,5 +1,6 @@
 mod comet_plugin;
 mod config;
+mod crop;
 mod incremental_pixel;
 mod quality_baseline;
 mod rejection;
@@ -19,6 +20,10 @@ pub use incremental_pixel::{
     mean_error_table, scale_alpha_table, IncrementalPixel, CLIPPED_SCALE_WINDOW,
     COLLAPSED_SCALE_MARGIN, MEAN_ERROR_TABLE_LEN, SCALE_FLOOR, SCALE_GUARD_MIN_OBSERVATIONS,
     SCALE_WINDOW, WARMUP_SIGMA_GUARD,
+};
+pub use crop::{
+    largest_covered, min_coverage, CropDecision, CropRect, CropTracker, GROW_SHARE, KEEP_COVERAGE,
+    MIN_CROP_DEPTH, MIN_CROP_SHARE, MIN_CROP_SIDE, PICK_COVERAGE,
 };
 pub use rejection::RejectionMethod;
 pub use stack::MasterStack;

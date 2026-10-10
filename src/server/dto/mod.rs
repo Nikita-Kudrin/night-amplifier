@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn the_settings_answer_keeps_its_wire_shape() {
         const ALWAYS: &[&str] = &[
-            "auto_reconnect", "auto_resume_capture", "auto_stretch", "auto_stretch_intensity",
+            "auto_crop", "auto_reconnect", "auto_resume_capture", "auto_stretch", "auto_stretch_intensity",
             "background_extraction_algorithm", "background_subtraction", "bin",
             "cooler_enabled", "cooler_fast_mode", "denoise", "dew_heater_enabled",
             "dew_heater_power", "eula_accepted", "exposure_us", "eyepiece", "focus_mode",

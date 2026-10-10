@@ -248,6 +248,9 @@ export const WS_RECONNECT = {
 }
 
 // Zoom limits for LiveView
+/** The share of the container a fitted image fills. */
+export const FIT_MARGIN = 0.95
+
 export const ZOOM_LIMITS = {
     min: 0.5,
     max: 5,
@@ -295,6 +298,7 @@ export const DEFAULT_SETTINGS = {
     show_focus_image: true,
     force_focus_image_now: false,
     wanderer_mode: false,
+    auto_crop: false,
     auto_reconnect: true,
     auto_resume_capture: true,
     cooler_enabled: false,
@@ -393,6 +397,8 @@ export const HELP_TEXTS = {
     gain: 'Electronic amplification of the signal. Higher gain increases sensitivity but also introduces more read noise.',
     wanderer_mode:
         'Automatically resets the stack when you move to a new target. Once stationary, stacking restarts and the live stack is displayed.',
+    auto_crop:
+        "Crops the stack to the area nearly every frame covers, cutting away the thin, noisy border that drift, field rotation or a bumped mount leave. Applies to the live view, both eyepiece views and the saved FITS and PNG (the FITS records where the crop starts as XORGSUBF/YORGSUBF). It starts once 20 frames are stacked, so one bumped frame is outvoted, and shrinks as the field drifts, in occasional steps rather than every frame. Deep Sky only.",
     auto_reconnect:
         'Reopens the camera by itself after it drops out mid-session — a USB stall or a knocked cable. Retries a few times with a growing gap, then stops and tells you.',
     auto_resume_capture:

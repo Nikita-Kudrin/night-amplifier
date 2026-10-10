@@ -296,6 +296,7 @@ export function createMockProvides(overrides = {}) {
             plateSolving: ref(overrides.plateSolving ?? {inProgress: false, targetName: null, lastResult: null}),
             viewedCamera: ref(overrides.viewedCamera ?? 'main'),
             viewedCameraRevision: ref(0),
+            stackCrop: ref(overrides.stackCrop ?? {crop: null, frame: null}),
             ...overrides.eventStream,
         },
         settings: ref({
