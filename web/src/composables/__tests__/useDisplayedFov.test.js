@@ -1,6 +1,6 @@
 import {describe, it, expect} from 'vitest'
 import {ref} from 'vue'
-import {useDisplayedFov} from '../useDisplayedFov.js'
+import {useDisplayedFov, useOtherSolvedCamera} from '../useDisplayedFov.js'
 
 /** 2 * atan(h * py / 2000 / fl) in degrees, the field the composable must report. */
 function fieldOf({focal_length_mm: fl, pixel_size_y_um: py, sensor_height_px: h, barlow_coeff: b = 1}) {
@@ -35,5 +35,33 @@ describe('useDisplayedFov', () => {
 
     it('is zero with nothing to go on', () => {
         expect(useDisplayedFov(ref(null), ref(null), ref(null)).value).toBe(0)
+    })
+})
+
+describe('useOtherSolvedCamera', () => {
+    it('names the solving camera while another camera is on screen', () => {
+        const camera = ref({name: 'Ares-C PRO'})
+        const direction = ref({solvedCamera: 'Neptune-C II'})
+
+        const other = useOtherSolvedCamera(camera, direction)
+
+        expect(other.value).toBe('Neptune-C II')
+        camera.value = {name: 'Neptune-C II'}
+        expect(other.value).toBe('')
+    })
+
+    it('follows a new solve from the camera on screen', () => {
+        const direction = ref({solvedCamera: 'Neptune-C II'})
+        const other = useOtherSolvedCamera(ref({name: 'Ares-C PRO'}), direction)
+
+        direction.value = {solvedCamera: 'Ares-C PRO'}
+
+        expect(other.value).toBe('')
+    })
+
+    it('keeps the chevron when either camera is unknown', () => {
+        expect(useOtherSolvedCamera(ref({name: 'Ares-C PRO'}), ref({solvedCamera: null})).value).toBe('')
+        expect(useOtherSolvedCamera(ref(null), ref({solvedCamera: 'Neptune-C II'})).value).toBe('')
+        expect(useOtherSolvedCamera(ref({name: 'Ares-C PRO'}), ref(null)).value).toBe('')
     })
 })

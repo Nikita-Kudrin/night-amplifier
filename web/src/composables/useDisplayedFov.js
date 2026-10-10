@@ -27,3 +27,22 @@ export function useDisplayedFov(camera, settings, pushDirection) {
         return (2 * Math.atan(sensorHeightMm / (2 * effectiveFl)) * 180) / Math.PI
     })
 }
+
+/**
+ * The camera a Push-To chevron was oriented for, when that is not the camera on screen.
+ *
+ * `angle_deg` carries the solving camera's rotation and parity, and with a guide camera
+ * connected that is the guide's even while the imaging camera is shown. Over another
+ * camera's picture the chevron could point anywhere, so the view drops it and says
+ * whose it is. Empty when it matches, or when either camera is unknown.
+ *
+ * @param {import('vue').MaybeRefOrGetter<{name?: string}|null>} camera - The displayed camera
+ * @param {import('vue').MaybeRefOrGetter<{solvedCamera?: string|null}|null>} pushDirection - Latest push direction
+ */
+export function useOtherSolvedCamera(camera, pushDirection) {
+    return computed(() => {
+        const solved = toValue(pushDirection)?.solvedCamera
+        const shown = toValue(camera)?.name
+        return solved && shown && solved !== shown ? solved : ''
+    })
+}

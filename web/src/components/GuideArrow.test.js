@@ -61,6 +61,39 @@ function expectSvgWithinImage(wrapper, {imageLeft = 0, imageTop = 0, imageWidth,
 }
 
 describe('GuideArrow', () => {
+    describe('over another camera than the one it was solved on', () => {
+        const OTHER = {...IMAGE_PROPS, angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', fovDeg: 1.45, otherCamera: 'Neptune-C II'}
+
+        it('drops the chevron, whose rotation belongs to the other camera', () => {
+            const wrapper = mountArrow(OTHER)
+
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.other-camera').text()).toBe('Arrow on Neptune-C II')
+        })
+
+        it('still gives the distance and compass point, at the centre of the view', () => {
+            const wrapper = mountArrow(OTHER)
+
+            expect(wrapper.find('.distance').text()).toBe('26.1°')
+            expect(wrapper.find('.hint').text()).toBe('NE')
+            expect(getPosition(wrapper)).toEqual({left: 400, top: 300})
+            expect(wrapper.find('.distance-info').classes()).toContain('centered')
+        })
+
+        it('still says on target, which needs no orientation', () => {
+            const wrapper = mountArrow({...OTHER, distanceDeg: 0.05, isClose: true, directionHint: 'OnTarget'})
+
+            expect(wrapper.find('.on-target').exists()).toBe(true)
+        })
+
+        it('draws the chevron as before when it belongs to this view', () => {
+            const wrapper = mountArrow({...OTHER, otherCamera: ''})
+
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
+            expect(wrapper.find('.other-camera').exists()).toBe(false)
+        })
+    })
+
     describe('rendering', () => {
         it('renders arrow wrapper when not on target', () => {
             const wrapper = mountArrow({angleDeg: 45, directionHint: 'NorthEast'})

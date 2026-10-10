@@ -220,4 +220,30 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
         })
     })
+
+    describe('camera the direction was solved on', () => {
+        const TARGET = {designation: 'NGC 40', raDegrees: 3.25, decDegrees: 72.52}
+        const SOLVED_ON_GUIDE = {
+            angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', isClose: false, solvedCamera: 'Neptune-C II',
+        }
+        const CAMERAS = {
+            hasGuideCamera: true,
+            mainCamera: {name: 'Ares-C PRO'},
+            guideCamera: {name: 'Neptune-C II'},
+        }
+
+        it('withholds the guide camera\'s chevron from the imaging camera\'s picture', () => {
+            const wrapper = mountLiveView({...CAMERAS, pushDirection: SOLVED_ON_GUIDE, currentTarget: TARGET})
+
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera')).toBe('Neptune-C II')
+        })
+
+        it('draws it over the guide camera\'s own picture', () => {
+            const wrapper = mountLiveView({
+                ...CAMERAS, viewedCamera: 'guide', pushDirection: SOLVED_ON_GUIDE, currentTarget: TARGET,
+            })
+
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera')).toBe('')
+        })
+    })
 })

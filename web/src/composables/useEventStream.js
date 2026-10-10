@@ -3,6 +3,23 @@ import {getPushToStatus} from './api.js'
 import {useWebSocket} from './useWebSocket.js'
 
 /**
+ * The client's push direction from a `push_direction_updated` event or the REST
+ * status' `direction`; only the event carries `fov_deg`.
+ * @param {object} direction - Snake-case direction from the server
+ * @returns {{angleDeg: number, distanceDeg: number, directionHint: string, isClose: boolean, fovDeg: number, solvedCamera: string|null}}
+ */
+export function pushDirectionFrom(direction) {
+    return {
+        angleDeg: direction.angle_deg,
+        distanceDeg: direction.distance_deg,
+        directionHint: direction.direction_hint,
+        isClose: direction.is_close,
+        fovDeg: direction.fov_deg || 0,
+        solvedCamera: direction.solved_camera ?? null,
+    }
+}
+
+/**
  * WebSocket composable for server events
  * @returns {object} Event stream state and methods
  */
@@ -225,13 +242,7 @@ export function useEventStream() {
             pushToBlocked.value = data.reason ?? null
         },
         push_direction_updated(data) {
-            pushDirection.value = {
-                angleDeg: data.angle_deg,
-                distanceDeg: data.distance_deg,
-                directionHint: data.direction_hint,
-                isClose: data.is_close,
-                fovDeg: data.fov_deg || 0,
-            }
+            pushDirection.value = pushDirectionFrom(data)
         },
         target_changed(data) {
             currentTarget.value = {
@@ -310,17 +321,7 @@ export function useEventStream() {
                 // Fetch the initial state upon connection
                 const status = await getPushToStatus()
                 currentTarget.value = status.current_target || null
-                if (status.direction) {
-                    pushDirection.value = {
-                        angleDeg: status.direction.angle_deg,
-                        distanceDeg: status.direction.distance_deg,
-                        directionHint: status.direction.direction_hint,
-                        isClose: status.direction.is_close,
-                        fovDeg: status.direction.fov_deg || 0,
-                    }
-                } else {
-                    pushDirection.value = null
-                }
+                pushDirection.value = status.direction ? pushDirectionFrom(status.direction) : null
             } catch {
                 // Ignore
             }
