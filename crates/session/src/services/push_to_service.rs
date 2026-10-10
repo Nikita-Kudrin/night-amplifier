@@ -265,8 +265,9 @@ struct Announced {
 /// Rounded rather than compared exactly because the direction is recomputed from
 /// floating-point spherical geometry every frame: bit-identical values are not
 /// guaranteed even when nothing has changed, and a de-duplication that compares
-/// exactly would let the spam straight back through.
-type DirectionKey = (i64, i64, bool);
+/// exactly would let the spam straight back through. The solving camera is part of it:
+/// the same numbers from the other camera's solve point a different way on screen.
+type DirectionKey = (i64, i64, bool, Option<String>);
 
 impl PushToState {
     /// Whether a solve is running right now.
@@ -361,13 +362,19 @@ impl PushToState {
     /// Push direction only really changes when the position or the target changes,
     /// but it was recomputed and broadcast on every captured frame regardless — one
     /// WebSocket message per frame per client, saying the same thing.
-    pub fn direction_is_news(&self, angle_deg: f64, distance_deg: f64, is_close: bool) -> bool {
+    pub fn direction_is_news(&self, direction: &PushToDirectionResponse) -> bool {
         let key = (
-            (angle_deg * 10.0).round() as i64,
-            (distance_deg * 1000.0).round() as i64,
-            is_close,
+            (direction.angle_deg * 10.0).round() as i64,
+            (direction.distance_deg * 1000.0).round() as i64,
+            direction.is_close,
+            direction.solved_camera.clone(),
         );
-        self.announced().direction.replace(key) != Some(key)
+        let mut announced = self.announced();
+        if announced.direction.as_ref() == Some(&key) {
+            return false;
+        }
+        announced.direction = Some(key);
+        true
     }
 
     /// Forget the last announced direction, so the next one is sent even if it is

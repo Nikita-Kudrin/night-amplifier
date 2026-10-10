@@ -286,24 +286,22 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
                 // The direction is recomputed every frame but only changes when
                 // the position or target does, so send it only when it is
                 // actually different.
-                let is_news = state.push_to.as_ref().is_none_or(|pt| {
-                    pt.direction_is_news(dir.angle_deg, dir.distance_deg, dir.is_close)
-                });
+                let is_news = state
+                    .push_to
+                    .as_ref()
+                    .is_none_or(|pt| pt.direction_is_news(&dir));
 
                 if is_news {
                     info!(
-                        celestial_angle = dir.angle_deg,
+                        screen_angle = dir.angle_deg,
                         hint = dir.direction_hint,
+                        solved_camera = dir.solved_camera.as_deref().unwrap_or("-"),
                         "Push direction calculated"
                     );
 
-                    let _ = state.events.send(ServerEvent::push_direction_updated(
-                        dir.angle_deg,
-                        dir.distance_deg,
-                        dir.direction_hint,
-                        dir.is_close,
-                        fov_deg,
-                    ));
+                    let _ = state
+                        .events
+                        .send(ServerEvent::push_direction_updated(dir, fov_deg));
                 }
             }
         }

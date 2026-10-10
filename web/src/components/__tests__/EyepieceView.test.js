@@ -880,6 +880,29 @@ describe('EyepieceView.vue follows the operator', () => {
     expect(arrowFov()).toBeCloseTo(field(imagingOptics), 6)
   })
 
+  it('keeps the chevron only on the camera whose solve oriented it', async () => {
+    window.location = { ...originalLocation, pathname: '/eyepiece' }
+    await loadEyepieceView()
+    const viewedCamera = ref('guide')
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: {
+        viewedCamera,
+        pushDirection: ref({ angleDeg: 37, distanceDeg: 26.1, isClose: false, directionHint: 'NE', solvedCamera: 'Guide Cam' }),
+        currentTarget: ref({ id: 'NGC 40', name: 'Bow-Tie nebula' }),
+      },
+      provide: {
+        guideCamera: ref({ name: 'Guide Cam' }),
+        mainCamera: ref({ name: 'Imaging Cam' }),
+      },
+    })
+    const others = () => wrapper.findAllComponents({ name: 'GuideArrow' }).map((a) => a.props('otherCamera'))
+
+    expect(others()).toEqual(['', '', ''])
+    viewedCamera.value = 'main'
+    await nextTick()
+    expect(others()).toEqual(['Guide Cam', 'Guide Cam', 'Guide Cam'])
+  })
+
   /**
    * Off the circular view the canvas takes the frame's own aspect, so the guide camera's
    * 16:9 picture after a square imaging frame moves the canvas inside an eye that stays the

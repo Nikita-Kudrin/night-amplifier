@@ -291,6 +291,7 @@
  * @property {string} direction_full - Full direction description
  * @property {Coordinate|null} current_position - Current position (if solved)
  * @property {Coordinate|null} target - Target position
+ * @property {string|null} solved_camera - The camera whose plate solve oriented `angle_deg`, `None` if unknown. A guide camera solves for both views, and its rotation and parity are not the imaging camera's, so a client draws the chevron only over this camera's picture.
  */
 
 /**

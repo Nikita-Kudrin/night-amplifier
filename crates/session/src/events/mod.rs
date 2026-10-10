@@ -10,6 +10,7 @@ pub use ai_compute::spawn_ai_compute_watcher;
 pub use camera_list::{CameraInfoResponse, CameraListEntry, SensorModeDto};
 pub use install::push_to_events;
 
+use night_amplifier_core::push_to::PushToDirectionResponse;
 use serde::Serialize;
 
 use super::state::{CameraPhase, CameraRole, CaptureState};
@@ -203,13 +204,15 @@ pub enum ServerEvent {
     /// is `None` once solving is possible again, which clears the notice.
     PushToBlocked { reason: Option<String> },
 
-    /// Push direction updated
+    /// Push direction updated. `solved_camera` names the camera whose solve oriented
+    /// `angle_deg` — see [`PushToDirectionResponse::solved_camera`].
     PushDirectionUpdated {
         angle_deg: f64,
         distance_deg: f64,
         direction_hint: String,
         is_close: bool,
         fov_deg: Option<f64>,
+        solved_camera: Option<String>,
     },
 
     /// Target changed
@@ -540,19 +543,14 @@ impl ServerEvent {
         ServerEvent::PushToBlocked { reason }
     }
 
-    pub fn push_direction_updated(
-        angle_deg: f64,
-        distance_deg: f64,
-        direction_hint: impl Into<String>,
-        is_close: bool,
-        fov_deg: Option<f64>,
-    ) -> Self {
+    pub fn push_direction_updated(direction: PushToDirectionResponse, fov_deg: Option<f64>) -> Self {
         ServerEvent::PushDirectionUpdated {
-            angle_deg,
-            distance_deg,
-            direction_hint: direction_hint.into(),
-            is_close,
+            angle_deg: direction.angle_deg,
+            distance_deg: direction.distance_deg,
+            direction_hint: direction.direction_hint,
+            is_close: direction.is_close,
             fov_deg,
+            solved_camera: direction.solved_camera,
         }
     }
 
@@ -584,6 +582,28 @@ impl ServerEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_push_direction_names_the_camera_that_oriented_it() {
+        let direction = PushToDirectionResponse {
+            angle_deg: 37.0,
+            distance_deg: 26.1,
+            is_close: false,
+            direction_hint: "NE".into(),
+            direction_full: "North-East".into(),
+            current_position: None,
+            target: None,
+            solved_camera: Some("Neptune-C II".into()),
+        };
+        let event = ServerEvent::push_direction_updated(direction, Some(1.45));
+        let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
+
+        assert_eq!(json["type"], "push_direction_updated");
+        assert_eq!(json["angle_deg"], 37.0);
+        assert_eq!(json["direction_hint"], "NE");
+        assert_eq!(json["fov_deg"], 1.45);
+        assert_eq!(json["solved_camera"], "Neptune-C II");
+    }
 
     #[test]
     fn test_state_changed_serialization() {

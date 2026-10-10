@@ -80,6 +80,10 @@ pub struct PushToDirectionResponse {
     pub current_position: Option<CoordinateResponse>,
     /// Target position
     pub target: Option<CoordinateResponse>,
+    /// The camera whose plate solve oriented `angle_deg`, `None` if unknown. A guide
+    /// camera solves for both views, and its rotation and parity are not the imaging
+    /// camera's, so a client draws the chevron only over this camera's picture.
+    pub solved_camera: Option<String>,
 }
 
 /// Coordinate response (simplified)
@@ -253,6 +257,7 @@ mod tests {
             direction_full: "North-East".into(),
             current_position: Some(coordinate()),
             target: Some(coordinate()),
+            solved_camera: Some("Guide Cam".into()),
         };
         let status = PushToStatusResponse {
             solver_ready: true,
@@ -263,7 +268,7 @@ mod tests {
         };
         assert_eq!(
             json(&status),
-            r#"{"solver_ready":true,"is_solving":false,"current_target":{"designation":"NGC 224","name":"Andromeda","catalog_type":"NGC","ra_degrees":10.68,"dec_degrees":41.27,"ra_string":"a","dec_string":"b","object_type":"Galaxy","magnitude":3.4,"constellation":"And","messier":"M31"},"last_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"direction":{"angle_deg":12.0,"distance_deg":3.5,"is_close":false,"direction_hint":"NE","direction_full":"North-East","current_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"target":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"}}}"#
+            r#"{"solver_ready":true,"is_solving":false,"current_target":{"designation":"NGC 224","name":"Andromeda","catalog_type":"NGC","ra_degrees":10.68,"dec_degrees":41.27,"ra_string":"a","dec_string":"b","object_type":"Galaxy","magnitude":3.4,"constellation":"And","messier":"M31"},"last_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"direction":{"angle_deg":12.0,"distance_deg":3.5,"is_close":false,"direction_hint":"NE","direction_full":"North-East","current_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"target":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"solved_camera":"Guide Cam"}}"#
         );
 
         let position = PushToPositionResponse {

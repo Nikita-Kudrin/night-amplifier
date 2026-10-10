@@ -8,7 +8,7 @@ import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
 import {getAppState} from '../composables/useAppState.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
-import {useDisplayedFov} from '../composables/useDisplayedFov.js'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
@@ -55,6 +55,7 @@ const showGuideArrow = computed(() => currentTarget.value !== null && pushDirect
 const showsGuideCamera = computed(() => eventStream?.viewedCamera?.value === 'guide')
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an
@@ -395,6 +396,7 @@ onUnmounted(() => {
             :image-width="leftEyeBounds.width"
             :image-height="leftEyeBounds.height"
             :fov-deg="displayedFovDeg"
+            :other-camera="arrowCamera"
             :is-circular="isCircularView"
           />
         </div>
@@ -411,6 +413,7 @@ onUnmounted(() => {
             :image-width="rightEyeBounds.width"
             :image-height="rightEyeBounds.height"
             :fov-deg="displayedFovDeg"
+            :other-camera="arrowCamera"
             :is-circular="isCircularView"
           />
         </div>
@@ -429,6 +432,7 @@ onUnmounted(() => {
           :image-width="singleViewBounds.width"
           :image-height="singleViewBounds.height"
           :fov-deg="displayedFovDeg"
+          :other-camera="arrowCamera"
           :is-circular="isCircularView"
         />
       </div>

@@ -43,7 +43,9 @@ up to disconnect — the eyepiece returns to the imaging camera; if it drops out
 recovers on its own, the eyepiece waits for it.
 
 Push-To arrows and **Download** follow too: the arrows are placed against the guide
-scope's field, and the download saves the guide camera's frame.
+scope's field, and the download saves the guide camera's frame. An arrow is drawn only
+over the camera that solved it — a guide camera's rotation is not the imaging camera's —
+so on the imaging camera the eyepiece shows the distance and compass point instead.
 
 ## Running it as a dedicated display
 

@@ -42,6 +42,12 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  // Name of the camera the angle was solved on, when it is not the one on screen: the
+  // chevron would carry that camera's rotation, so only distance and compass point show.
+  otherCamera: {
+    type: String,
+    default: '',
+  },
 })
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
@@ -106,7 +112,7 @@ const containerStyle = computed(() => {
   const imageCenterX = props.imageLeft + props.imageWidth / 2
   const imageCenterY = props.imageTop + props.imageHeight / 2
 
-  if (!isOffScreen.value || isOnTarget.value) {
+  if (!isOffScreen.value || isOnTarget.value || props.otherCamera) {
     return {
       position: 'absolute',
       top: `${imageCenterY}px`,
@@ -180,6 +186,7 @@ const rotationStyle = computed(() => {
 // the info box past that plus a small gap.
 const INFO_TAIL_GAP_PX = 20
 const distanceInfoStyle = computed(() => {
+  if (props.otherCamera) return {}
   const angleRad = (props.angleDeg * Math.PI) / 180
   const tailDirX = -Math.sin(angleRad)
   const tailDirY = Math.cos(angleRad)
@@ -257,7 +264,7 @@ function formatScreenSizes(screens) {
     </div>
 
     <template v-else>
-      <div class="arrow-wrapper" :style="rotationStyle">
+      <div v-if="!otherCamera" class="arrow-wrapper" :style="rotationStyle">
         <svg
             viewBox="0 0 100 160" :width="responsiveBaseSize * arrowScale"
             :height="responsiveBaseSize * 1.6 * arrowScale">
@@ -284,10 +291,11 @@ function formatScreenSizes(screens) {
         </svg>
       </div>
 
-      <div class="distance-info" :style="distanceInfoStyle">
+      <div class="distance-info" :class="{centered: otherCamera}" :style="distanceInfoStyle">
         <span class="distance">{{ formatDistance(distanceDeg) }}</span>
         <span v-if="formatScreenSizes(screenSizes)" class="screen-size">{{ formatScreenSizes(screenSizes) }}</span>
         <span class="hint">{{ directionHint }}</span>
+        <span v-if="otherCamera" class="other-camera">Arrow on {{ otherCamera }}</span>
       </div>
     </template>
   </div>
@@ -383,9 +391,24 @@ function formatScreenSizes(screens) {
   color: var(--text-secondary);
 }
 
+/* No chevron to sit behind: the box itself marks the centre of the view. */
+.distance-info.centered {
+  position: static;
+  transform: none;
+}
+
+.other-camera {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
 @media (max-width: 768px) {
   .distance-info {
     transform: translate(-50%, -50%) scale(0.5);
+  }
+
+  .distance-info.centered {
+    transform: scale(0.5);
   }
 }
 </style>

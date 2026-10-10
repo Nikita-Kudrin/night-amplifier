@@ -12,7 +12,7 @@ import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {getAppState} from '../composables/useAppState.js'
-import {useDisplayedFov} from '../composables/useDisplayedFov.js'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {setViewedCamera} from '../composables/api.js'
 
 /**
@@ -66,6 +66,7 @@ const displayedCamera = computed(() =>
 
 const pushDirection = computed(() => eventStream.pushDirection.value)
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
 const currentTarget = computed(() => eventStream.currentTarget.value)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
@@ -429,6 +430,7 @@ const backendLabel = computed(() => {
         :image-width="canvasBounds.width"
         :image-height="canvasBounds.height"
         :fov-deg="displayedFovDeg"
+        :other-camera="arrowCamera"
     />
 
     <!-- Comet ROI Overlay -->

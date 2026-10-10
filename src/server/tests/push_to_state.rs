@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::helpers::create_test_state;
-use crate::push_to::TelescopeSettings;
+use crate::push_to::{PushToDirectionResponse, TelescopeSettings};
 use crate::server::dto::UpdateSettingsRequest;
 use crate::session::services::PushToState;
 use crate::session::services::{optics_change, OpticsChange};
@@ -237,6 +237,19 @@ fn the_latch_is_released_even_if_the_solve_panics() {
 
 // ── Direction de-duplication ─────────────────────────────────────────────────
 
+fn direction(angle_deg: f64, distance_deg: f64, is_close: bool) -> PushToDirectionResponse {
+    PushToDirectionResponse {
+        angle_deg,
+        distance_deg,
+        is_close,
+        direction_hint: "NE".into(),
+        direction_full: "North-East".into(),
+        current_position: None,
+        target: None,
+        solved_camera: Some("Guide Cam".into()),
+    }
+}
+
 #[test]
 fn an_unchanged_direction_is_only_announced_once() {
     // The direction is recomputed on every captured frame but only changes when the
@@ -244,9 +257,9 @@ fn an_unchanged_direction_is_only_announced_once() {
     // per frame per client, all saying the same thing.
     let state = PushToState::default();
 
-    assert!(state.direction_is_news(122.68, 4.512, false));
-    assert!(!state.direction_is_news(122.68, 4.512, false));
-    assert!(!state.direction_is_news(122.68, 4.512, false));
+    assert!(state.direction_is_news(&direction(122.68, 4.512, false)));
+    assert!(!state.direction_is_news(&direction(122.68, 4.512, false)));
+    assert!(!state.direction_is_news(&direction(122.68, 4.512, false)));
 }
 
 #[test]
@@ -255,25 +268,25 @@ fn floating_point_jitter_does_not_count_as_a_change() {
     // exact comparison would let the per-frame spam straight back through.
     let state = PushToState::default();
 
-    assert!(state.direction_is_news(122.680_000, 4.512_000, false));
-    assert!(!state.direction_is_news(122.680_004, 4.512_000_2, false));
+    assert!(state.direction_is_news(&direction(122.680_000, 4.512_000, false)));
+    assert!(!state.direction_is_news(&direction(122.680_004, 4.512_000_2, false)));
 }
 
 #[test]
 fn a_direction_the_user_could_act_on_is_announced() {
     let state = PushToState::default();
-    assert!(state.direction_is_news(122.6, 4.5, false));
+    assert!(state.direction_is_news(&direction(122.6, 4.5, false)));
 
     assert!(
-        state.direction_is_news(124.0, 4.5, false),
+        state.direction_is_news(&direction(124.0, 4.5, false)),
         "a 1.4 degree heading change is real"
     );
     assert!(
-        state.direction_is_news(124.0, 3.9, false),
+        state.direction_is_news(&direction(124.0, 3.9, false)),
         "closing half a degree of distance is real"
     );
     assert!(
-        state.direction_is_news(124.0, 3.9, true),
+        state.direction_is_news(&direction(124.0, 3.9, true)),
         "crossing the 'close enough' threshold is real"
     );
 }
@@ -284,14 +297,30 @@ fn a_new_target_re_announces_even_an_identical_direction() {
     // the record were not cleared, the client would keep showing numbers computed for
     // the target the user just moved away from.
     let state = PushToState::default();
-    assert!(state.direction_is_news(90.0, 2.0, false));
+    assert!(state.direction_is_news(&direction(90.0, 2.0, false)));
 
     state.forget_direction();
 
     assert!(
-        state.direction_is_news(90.0, 2.0, false),
+        state.direction_is_news(&direction(90.0, 2.0, false)),
         "a target change must force the direction to be sent again"
     );
+}
+
+#[test]
+fn the_same_numbers_from_the_other_camera_are_announced() {
+    // A chevron is drawn only over the camera that oriented it, so a client still
+    // holding the guide camera's name would hide (or misdraw) the imaging camera's.
+    let state = PushToState::default();
+    assert!(state.direction_is_news(&direction(90.0, 2.0, false)));
+
+    let from_imaging = PushToDirectionResponse {
+        solved_camera: Some("Imaging Cam".into()),
+        ..direction(90.0, 2.0, false)
+    };
+
+    assert!(state.direction_is_news(&from_imaging));
+    assert!(!state.direction_is_news(&from_imaging));
 }
 
 // ── Blocker de-duplication ───────────────────────────────────────────────────

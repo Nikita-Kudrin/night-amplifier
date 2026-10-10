@@ -382,6 +382,34 @@ describe('useEventStream', () => {
     })
 
     describe('Push-To events', () => {
+        it('keeps the camera a push direction was solved on', async () => {
+            const {pushDirection} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({
+                type: 'push_direction_updated', angle_deg: 37, distance_deg: 26.1,
+                direction_hint: 'NE', is_close: false, fov_deg: 1.45, solved_camera: 'Neptune-C II',
+            })
+
+            expect(pushDirection.value).toEqual({
+                angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', isClose: false,
+                fovDeg: 1.45, solvedCamera: 'Neptune-C II',
+            })
+        })
+
+        it('treats a push direction without a camera as unattributed', async () => {
+            const {pushDirection} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({
+                type: 'push_direction_updated', angle_deg: 90, distance_deg: 2,
+                direction_hint: 'E', is_close: false, fov_deg: null,
+            })
+
+            expect(pushDirection.value.solvedCamera).toBeNull()
+            expect(pushDirection.value.fovDeg).toBe(0)
+        })
+
         it('updates plateSolving on plate_solving_started event', async () => {
             const {plateSolving} = useEventStream()
 
