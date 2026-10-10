@@ -1,7 +1,8 @@
 use chrono::Local;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc, Mutex, RwLock};
 use tracing::{info, warn};
 
 use super::config::{
@@ -40,6 +41,9 @@ pub struct DiskWriterHandle {
     pub(crate) enabled: Arc<AtomicBool>,
     /// Stacked output directory
     pub(crate) stacked_dir: PathBuf,
+    /// Every session path handed out so far. A session's directory only appears with
+    /// its first frame, so the disk alone no longer says which names are taken.
+    pub(crate) issued: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 impl DiskWriterHandle {
@@ -68,7 +72,11 @@ impl DiskWriterHandle {
         self.enabled.store(enabled, Ordering::SeqCst);
     }
 
-    /// Start a new capture session, creating the session directory
+    /// Start a new capture session.
+    ///
+    /// The directory itself is created by the worker with the session's first frame:
+    /// a capture that saves nothing — a Live view run, a mode switched and stopped
+    /// before a sub landed — used to leave an empty timestamped folder behind each time.
     ///
     /// `name_suffix` is appended to the timestamp so the folder records which capture
     /// mode filled it. The caller owns the vocabulary — `disk_writer` has no notion of
@@ -86,7 +94,15 @@ impl DiskWriterHandle {
         Ok(path)
     }
 
-    /// Create a session directory and hand back the session **without** publishing it
+    /// Where every session's folder goes, beside `stacked/`.
+    pub fn raw_dir(&self) -> PathBuf {
+        self.stacked_dir
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("raw")
+    }
+
+    /// Name a new session and hand it back **without** publishing it
     /// as the handle's current one.
     ///
     /// For a producer that owns its own session for its whole life rather than sharing
@@ -99,29 +115,37 @@ impl DiskWriterHandle {
         session_type: WritingSessionType,
         name_suffix: &str,
     ) -> std::io::Result<OpenSession> {
-        let raw_dir = self
-            .stacked_dir
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("raw");
+        let raw_dir = self.raw_dir();
+        probe_writable(&raw_dir)?;
         let timestamp = Local::now().format("%d-%m-%Y_%H-%M-%S").to_string();
-        let session_path = unused_session_path(&raw_dir, &timestamp, name_suffix);
+        let mut issued = self.issued.lock().unwrap_or_else(|e| e.into_inner());
+        let session_path = unused_session_path(&raw_dir, &timestamp, name_suffix, |path| {
+            issued.contains(path)
+        });
+        issued.insert(session_path.clone());
 
-        std::fs::create_dir_all(&session_path)?;
         Ok(OpenSession {
             dir: session_path,
             session_type,
         })
     }
 
-    /// Reopen an existing directory as an unpublished session, for a producer resuming
-    /// after a dropout. Counterpart to [`Self::create_session`].
+    /// Reopen an existing session as an unpublished one, for a producer resuming after a
+    /// dropout. Counterpart to [`Self::create_session`]; the directory may not exist yet
+    /// if the run before the dropout saved nothing.
     pub fn reopen_session(
         &self,
         dir: PathBuf,
         session_type: WritingSessionType,
     ) -> std::io::Result<OpenSession> {
-        std::fs::create_dir_all(&dir)?;
+        match dir.parent() {
+            Some(parent) if !dir.is_dir() => probe_writable(parent)?,
+            _ => probe_writable(&dir)?,
+        }
+        self.issued
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dir.clone());
         Ok(OpenSession { dir, session_type })
     }
 
@@ -141,10 +165,11 @@ impl DiskWriterHandle {
         session_path: PathBuf,
         session_type: WritingSessionType,
     ) -> std::io::Result<PathBuf> {
-        std::fs::create_dir_all(&session_path)?;
-        self.open(session_path.clone(), session_type);
-        info!(session_dir = ?session_path, ?session_type, "Resumed capture session");
-        Ok(session_path)
+        let session = self.reopen_session(session_path, session_type)?;
+        let path = session.dir.clone();
+        self.open(session.dir, session.session_type);
+        info!(session_dir = ?path, ?session_type, "Resumed capture session");
+        Ok(path)
     }
 
     /// Start a session only if saving is on and none is open.
@@ -371,22 +396,47 @@ impl DiskWriterHandle {
     }
 }
 
+/// Prove `dir` takes writes by creating and removing a throwaway directory in it.
+///
+/// With session folders deferred to the first frame, this is the only point an unusable
+/// disk reaches the observer before the capture runs: an SD card the kernel remounted
+/// read-only, or a full one, passes `create_dir_all` on a `raw/` that already exists and
+/// then fails every frame. One mkdir and rmdir per session, never per frame.
+fn probe_writable(dir: &Path) -> std::io::Result<()> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(format!(
+        ".write-probe-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&probe)?;
+    std::fs::remove_dir(&probe)
+}
+
 /// A session path under `raw_dir` that no earlier session is already using.
 ///
 /// The timestamp has one-second resolution and a session can roll faster than
 /// that — flipping capture mode twice inside a second used to land back on the
 /// first folder. `create_dir_all` succeeds silently on an existing directory, so
 /// the two sessions merged, and for planetary `SerWriter::create` truncated the first one's `capture.ser`.
+/// `issued` covers names handed out whose directory has no frame in it yet.
 ///
 /// The counter goes *before* the suffix so the name still ends with the mode it names — `CaptureMode::from_session_dir_name` reads it with `ends_with`.
-fn unused_session_path(raw_dir: &Path, timestamp: &str, name_suffix: &str) -> PathBuf {
+fn unused_session_path(
+    raw_dir: &Path,
+    timestamp: &str,
+    name_suffix: &str,
+    issued: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    let free = |path: &Path| !path.exists() && !issued(path);
     let first = raw_dir.join(format!("{}{}", timestamp, name_suffix));
-    if !first.exists() {
+    if free(&first) {
         return first;
     }
     for n in 2..=u32::MAX {
         let candidate = raw_dir.join(format!("{}_{}{}", timestamp, n, name_suffix));
-        if !candidate.exists() {
+        if free(&candidate) {
             return candidate;
         }
     }

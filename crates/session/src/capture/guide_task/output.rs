@@ -76,6 +76,8 @@ pub(super) struct GuideDiskSession {
     /// A directory a dropout left behind, rejoined by the first frame that needs one,
     /// together with the number that run had reached.
     resume: Option<RawSessionResume>,
+    /// Opening failed and the observer was told; every frame retries, quietly.
+    open_failing: bool,
 }
 
 impl GuideDiskSession {
@@ -83,6 +85,7 @@ impl GuideDiskSession {
         Self {
             session: None,
             resume,
+            open_failing: false,
         }
     }
 
@@ -115,10 +118,12 @@ impl GuideDiskSession {
         state.disk_writer.set_enabled(true);
 
         if self.session.is_none() {
-            let opened = match self.resume.take() {
+            // The resume stays parked until it opens: taken eagerly, one failed attempt
+            // sent every retry to a fresh folder instead of the one being rejoined.
+            let opened = match self.resume.as_ref() {
                 Some(resume) => state
                     .disk_writer
-                    .reopen_session(resume.dir, WritingSessionType::IndividualFrames),
+                    .reopen_session(resume.dir.clone(), WritingSessionType::IndividualFrames),
                 None => state.disk_writer.create_session(
                     WritingSessionType::IndividualFrames,
                     CaptureMode::Guide.session_dir_suffix(),
@@ -127,10 +132,15 @@ impl GuideDiskSession {
             match opened {
                 Ok(session) => {
                     info!(dir = ?session.dir, "Guide raw-frame session opened");
+                    self.resume = None;
+                    self.open_failing = false;
                     self.session = Some(session);
                 }
                 Err(e) => {
-                    warn!(error = %e, "Could not open a guide raw-frame directory");
+                    if !std::mem::replace(&mut self.open_failing, true) {
+                        warn!(error = %e, "Could not open a guide raw-frame directory");
+                        state.send_error(format!("Guide frames are not being saved: {e}"));
+                    }
                     return;
                 }
             }

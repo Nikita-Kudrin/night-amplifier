@@ -2,19 +2,21 @@ use chrono::{Local, Utc};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
+use std::time::Instant;
 use tracing::{debug, error, info, instrument, warn};
 
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
+use super::failures::{FailureSink, WriteFailures};
 use super::utils::write_rgb8_png;
 use crate::fits::{write_fits, write_fits_from_raw};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
 use crate::telemetry::metrics as telemetry_metrics;
 
-/// Recreate a captures directory if it has gone missing since the writer started.
+/// Create a captures directory on first write, or recreate one that has gone missing.
 ///
-/// `stacked_dir` is created once at server startup; a session's `raw` directory once
-/// at session start. Either can vanish under an observer's feet — an unmounted USB
+/// `stacked_dir` is created once at server startup; a session's `raw` directory only
+/// here, with its first frame. Either can vanish under an observer's feet — an unmounted USB
 /// drive, a dropped network share, a tidy-up script — and every following write
 /// would otherwise fail with ENOENT for the rest of the process's life. The call is
 /// idempotent and cheap (one syscall once the directory is back), so paying it
@@ -68,6 +70,7 @@ pub struct DiskWriter {
     pub(crate) stacked_dir: PathBuf,
     /// Active SER writer for planetary sessions, and the session directory it belongs to
     pub(crate) ser_writer: Option<ActiveSer>,
+    pub(crate) failures: WriteFailures,
 }
 
 /// The open SER container, tied to the session directory it was created for.
@@ -93,7 +96,13 @@ impl DiskWriter {
             queue_depth,
             stacked_dir,
             ser_writer: None,
+            failures: WriteFailures::default(),
         }
+    }
+
+    /// Where to report that frames have stopped reaching the disk.
+    pub fn report_failures_to(&mut self, sink: FailureSink) {
+        self.failures.report_to(sink);
     }
 
     /// Run the disk writer task (blocking — intended for a dedicated OS thread)
@@ -108,8 +117,9 @@ impl DiskWriter {
                     let depth = self.queue_depth.fetch_sub(1, Ordering::SeqCst) - 1;
                     telemetry_metrics::record_disk_writer_queue_depth(depth as u64);
 
-                    if let Err(e) = result {
-                        error!(error = %e, frame_number = request.frame_number, "Failed to write frame");
+                    match result {
+                        Ok(()) => self.failures.succeeded(),
+                        Err(e) => self.failures.failed(&e, request.frame_number, Instant::now()),
                     }
                 }
                 DiskWriterMessage::EndSession => self.finalize_ser(),

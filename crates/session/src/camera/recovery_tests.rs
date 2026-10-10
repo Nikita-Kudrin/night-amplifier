@@ -1250,6 +1250,58 @@ async fn a_resumed_capture_appends_to_the_raw_folder_it_rejoined() {
     assert!(!rewritten, "frame_000001.fits was overwritten by the resumed run; saved {saved:?}");
 }
 
+/// The 2026-09-20 field settings end to end: guide subs and the stack saved, raw main
+/// subs not. Each Live view run, and a switch to Stacking stopped before its first sub,
+/// left an empty folder under `raw/` — 25 that night.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capture_that_saves_no_raw_frame_leaves_raw_empty() {
+    use crate::state::RawFrameSaving;
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig_with_disk_writer(&catalog);
+    state.settings.update(|s| {
+        s.stacking = false;
+        s.save_stacked_image = true;
+        s.raw_frame_saving = RawFrameSaving { live_view: false, wanderer: false, stacking: true, guide: true }
+    });
+    let raw = state.disk_writer.raw_dir();
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+
+    for _ in 0..2 {
+        CaptureService::start_capture(&state, None).await.unwrap();
+        let before = state.stats.delivered();
+        assert!(eventually(|| state.stats.delivered() >= before + 3, Duration::from_secs(5)).await);
+        CaptureService::stop_capture(&state).await;
+        assert!(eventually(|| matches!(state.capture_state(), CaptureState::Idle), Duration::from_secs(10)).await);
+    }
+
+    // A switch to Stacking mid-capture, stopped before a sub could be saved.
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(eventually(|| matches!(state.capture_state(), CaptureState::Capturing), Duration::from_secs(5)).await);
+    let stacking = state.settings.update(|s| {
+        s.stacking = true;
+        s.clone()
+    });
+    crate::capture::storage::sync_disk_session(&state, &stacking, true).await;
+    let named = state.disk_writer.session_dir();
+    CaptureService::stop_capture(&state).await;
+    assert!(eventually(|| matches!(state.capture_state(), CaptureState::Idle), Duration::from_secs(10)).await);
+    teardown(&state).await;
+
+    // The roll can race a sub in before the Stop; that folder holds it and is fine.
+    let empty: Vec<_> = std::fs::read_dir(&raw)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|dir| std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_none()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&raw);
+    assert!(named.is_some(), "Stacking with raw saving on opened no session");
+    assert!(empty.is_empty(), "raw/ holds empty folders: {empty:?}");
+}
+
 /// The imaging camera is back but its paused capture has not resumed yet. Disconnect
 /// used to refuse only `Capturing`/`Starting`, so it went ahead and left the pause behind
 /// — for the resume to restart the capture on the camera being disconnected.

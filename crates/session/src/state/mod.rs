@@ -179,7 +179,11 @@ impl AppState {
         push_to: Option<PushToState>,
     ) -> (Self, DiskWriter) {
         let (events_tx, _) = broadcast::channel(256);
-        let (disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
+        let (mut disk_writer, disk_writer_handle) = DiskWriter::new(disk_config);
+        let failures = events_tx.clone();
+        disk_writer.report_failures_to(Box::new(move |error| {
+            let _ = failures.send(ServerEvent::error(format!("Frames are not being saved: {error}")));
+        }));
 
         let state = Self {
             roster: CameraRoster::default(),

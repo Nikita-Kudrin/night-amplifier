@@ -147,15 +147,14 @@ pub async fn initialize_capture_session(
     resume_dir: Option<std::path::PathBuf>,
 ) -> Result<(), String> {
     let settings = state.settings.snapshot();
-    let enabled = settings.disk_writing_enabled();
-    state.disk_writer.set_enabled(enabled);
+    state.disk_writer.set_enabled(settings.disk_writing_enabled());
 
     // A session can still be open here: a settings update lands between the capture
     // state flipping and this call, or a previous capture ended without one. Either way
     // this capture opens its own, so let go of the old one rather than letting
     // `ensure_session` adopt it later.
     state.disk_writer.abandon_session();
-    if !enabled {
+    if !settings.main_capture_saves() {
         return Ok(());
     }
 
@@ -196,11 +195,7 @@ pub async fn sync_disk_session(
     settings: &CaptureSettings,
     capture_active: bool,
 ) {
-    let enabled = settings.disk_writing_enabled();
-    state.disk_writer.set_enabled(enabled);
-    if !enabled {
-        return;
-    }
+    state.disk_writer.set_enabled(settings.disk_writing_enabled());
 
     // Nothing is being captured, so there is nothing to file yet: opening a directory
     // now would leave an empty one behind every time a switch is flipped between
@@ -229,13 +224,15 @@ pub async fn sync_disk_session(
         }
     }
 
-    if let Err(e) = state
-        .disk_writer
-        .ensure_session(session_type, mode.session_dir_suffix())
-    {
-        warn!(error = %e, "Could not open a capture directory for saving");
-        state.send_error(format!("Saving is on but no folder could be created: {}", e));
-        return;
+    // Guide saving alone keeps the writer enabled, but files into the guide's own session.
+    if settings.main_capture_saves() {
+        if let Err(e) = state
+            .disk_writer
+            .ensure_session(session_type, mode.session_dir_suffix())
+        {
+            warn!(error = %e, "Could not open a capture directory for saving");
+            state.send_error(format!("Saving is on but no folder could be created: {}", e));
+        }
     }
 
     // A reconnect rejoins the directory recorded in the resume plan. Left stale, it would
@@ -396,6 +393,134 @@ mod tests {
             CaptureMode::from_session_dir_name(&state.disk_writer.session_name().unwrap()),
             Some(CaptureMode::Stacking)
         );
+    }
+
+    /// The 2026-09-20 field settings: guide subs and the stack saved, raw main subs not.
+    /// Guide saving keeps the writer enabled, but the guide files into a session of its
+    /// own; counting it opened an empty `-live` folder on every Live view start (23 that
+    /// night). Stacking does name a session, for the stack's file, and still no folder.
+    #[tokio::test]
+    async fn guide_saving_opens_no_main_session_in_live_view() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|s| {
+            s.stacking = false;
+            s.save_stacked_image = true;
+            s.raw_frame_saving = crate::state::RawFrameSaving {
+                guide: true,
+                ..Default::default()
+            }
+        });
+
+        initialize_capture_session(&state, None).await.unwrap();
+        assert!(state.disk_writer.is_enabled(), "the guide's frames need the writer on");
+        assert_eq!(state.disk_writer.session_dir(), None);
+
+        state.settings.update(|s| s.stacking = true);
+        sync_disk_session(&state, &state.settings.snapshot(), true).await;
+        let dir = state.disk_writer.session_dir().expect("the stack is named after a session");
+        assert!(!dir.exists(), "{dir:?} was created with no raw frame to hold");
+    }
+
+    /// A mode roll the main capture does not save in must not leave the resume plan on
+    /// the folder it rolled away from, or a reconnect would rejoin it.
+    #[tokio::test]
+    async fn a_roll_into_a_mode_that_saves_nothing_clears_the_resume_folder() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|s| {
+            s.stacking = true;
+            s.raw_frame_saving = crate::state::RawFrameSaving {
+                stacking: true,
+                ..Default::default()
+            }
+        });
+        initialize_capture_session(&state, None).await.unwrap();
+        state.resume.record(crate::state::SessionResumePlan {
+            camera_id: "main".to_string(),
+            settings: (*state.settings.snapshot()).clone(),
+            disk_session_dir: state.disk_writer.session_dir(),
+            next_frame: 1,
+        });
+        assert!(state.resume.plan().unwrap().disk_session_dir.is_some());
+
+        state.settings.update(|s| s.stacking = false);
+        sync_disk_session(&state, &state.settings.snapshot(), true).await;
+
+        assert_eq!(state.disk_writer.session_dir(), None);
+        assert_eq!(state.resume.plan().unwrap().disk_session_dir, None);
+    }
+
+    /// Switching to Stacking mid-capture names a `-stacking` session at once; stopped
+    /// before a sub is saved, it must leave no folder (two of the 2026-09-20 empties).
+    #[tokio::test]
+    async fn a_stacking_roll_stopped_before_a_sub_leaves_no_folder() {
+        let (state, _disk_writer) = AppState::new_for_testing();
+        state.settings.update(|s| {
+            s.stacking = false;
+            s.raw_frame_saving = crate::state::RawFrameSaving {
+                stacking: true,
+                ..Default::default()
+            }
+        });
+        initialize_capture_session(&state, None).await.unwrap();
+        assert_eq!(state.disk_writer.session_dir(), None, "Live view saves nothing");
+
+        state.settings.update(|s| s.stacking = true);
+        sync_disk_session(&state, &state.settings.snapshot(), true).await;
+        let dir = state.disk_writer.session_dir().expect("a -stacking session");
+        assert_eq!(
+            CaptureMode::from_session_dir_name(&state.disk_writer.session_name().unwrap()),
+            Some(CaptureMode::Stacking)
+        );
+
+        state.disk_writer.end_session();
+        assert!(!dir.exists(), "{dir:?} was left behind with nothing in it");
+    }
+
+    /// The worker's failure port reaches the observer: a disk that stops taking frames
+    /// mid-session was only ever logged, a line per frame.
+    #[tokio::test]
+    async fn a_failed_write_reaches_the_observer() {
+        let (state, disk_writer) = AppState::new_for_testing();
+        let mut events = state.events.subscribe();
+        let writer_task = std::thread::spawn(move || disk_writer.run());
+        let raw = state.disk_writer.raw_dir();
+        // A folder under a plain file cannot be created, by root either.
+        std::fs::write(raw.join("blocker"), b"").unwrap();
+        let doomed = night_amplifier_core::disk_writer::OpenSession {
+            dir: raw.join("blocker").join("doomed-live"),
+            session_type: WritingSessionType::IndividualFrames,
+        };
+        for n in 1..=3 {
+            let frame = Arc::new(RawFrame {
+                data: night_amplifier_core::camera::BufferPool::new().get(8 * 8 * 2),
+                width: 8,
+                height: 8,
+                format: night_amplifier_core::camera::ImageFormat::Raw16,
+            });
+            state
+                .disk_writer
+                .queue_raw_frame_in(
+                    Some(doomed.clone()),
+                    frame,
+                    n,
+                    night_amplifier_core::fits::FitsMetadata::new(),
+                    night_amplifier_core::camera::SensorType::Mono,
+                    None,
+                )
+                .unwrap();
+        }
+        drop(state);
+        tokio::task::spawn_blocking(move || writer_task.join().unwrap()).await.unwrap();
+        let _ = std::fs::remove_dir_all(raw.parent().unwrap());
+
+        let mut errors = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let ServerEvent::Error { message } = event {
+                errors.push(message);
+            }
+        }
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("not being saved"), "{errors:?}");
     }
 
     /// The `stacked_count == 0` gate must survive the switch from a lifetime

@@ -90,7 +90,11 @@ Each session writes to its own folder under `captures/raw/`, named for the time 
 mode that filled it — `21-14-08-live`, `21-31-52-wanderer`, `22-03-17-stacking`. Switching mode
 without stopping the capture opens a new folder, so a folder only ever holds frames captured in the
 mode it names. Two sessions starting inside the same second get a counter before the suffix
-(`21-14-08_2-stacking`) rather than sharing a folder.
+(`21-14-08_2-stacking`) rather than sharing a folder. A folder only appears once its first frame is
+saved, so a run that saves nothing — a mode whose switch is off, or one stopped before its first
+sub — leaves no empty folder behind. A disk that will not take writes (read-only or full) refuses
+the capture's start; one that stops taking them mid-session raises a single notice rather than
+losing the rest of the night quietly.
 
 Frame numbers run for the whole capture, not per folder, so a folder opened by a mode switch starts
 partway through the sequence — `frame_000517.fits` rather than `frame_000001.fits`.
