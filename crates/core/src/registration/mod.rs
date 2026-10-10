@@ -5,17 +5,24 @@
 //! solves the affine transform (θ, tx/ty — no scaling). [`adaptive`] also handles field
 //! rotation, cloud cover, satellite trails, brightness/FOV differences.
 //!
-//! [`adaptive`] then refits the winning transform over every detected star ([`refine`]).
+//! [`adaptive`] runs the ladder on clutter-suppressed lists ([`clutter`]), falls back to
+//! translation voting ([`translation`]), refits the winner over every detected star
+//! ([`refine`]) and judges it against chance ([`support`]).
 //!
-//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`], [`adaptive`], [`engine`], [`refine`].
+//! Submodules: [`triangle`], [`transform`], [`config`], [`matcher`], [`ransac`], [`adaptive`], [`engine`],
+//! [`refine`], [`clutter`], [`translation`], [`support`], [`neighbours`].
 
 mod adaptive;
+mod clutter;
 mod config;
 mod engine;
 mod matcher;
+mod neighbours;
 mod ransac;
 mod refine;
+mod support;
 mod transform;
+mod translation;
 mod triangle;
 
 pub use adaptive::{
@@ -26,6 +33,7 @@ pub use config::RegistrationConfig;
 pub use engine::ImageRegistration;
 pub use matcher::TriangleMatcher;
 pub use refine::refine_transform;
+pub use support::Support;
 pub use transform::AffineTransform;
 pub use triangle::Triangle;
 

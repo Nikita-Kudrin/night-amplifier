@@ -1,11 +1,10 @@
-//! Deciding whether a frame is worth stacking. `AdaptiveRegistration` returns the
-//! first transform any preset can fit (`robust`'s `max_residual` is 10px), so
-//! "registration succeeded" alone admits coincidental correspondences that smear the
-//! stack — judged here against diagnostics registration already computes. Every
-//! limit derives from the session's own frames, not a fixed constant: mount, seeing,
-//! and focal length move the numbers too much (250mm dob ~0.5px vs Orion ~5.5px
-//! median residual, both normal), so a frame is an outlier only relative to its
-//! neighbours.
+//! Deciding whether a frame is worth stacking. `AdaptiveRegistration` may hand back a
+//! fit no better than chance (its credibility says so), so "registration succeeded"
+//! alone admits coincidental correspondences that smear the stack — judged here
+//! against diagnostics registration already computes. Every other limit derives from
+//! the session's own frames, not a fixed constant: mount, seeing, and focal length move
+//! the numbers too much (250mm dob ~0.5px vs Orion ~5.5px median residual, both
+//! normal), so a frame is an outlier only relative to its neighbours.
 
 use std::collections::VecDeque;
 
@@ -30,11 +29,6 @@ const RESIDUAL_K: f32 = 3.0;
 /// star width recovers 31/35 frames at 6.077px stacked FWHM (vs 26/5.863px with no
 /// floor, 34/6.180px ungated) — most of the sharpening and most of the integration.
 const RESIDUAL_FWHM_K: f32 = 0.5;
-
-/// Fraction of the smaller star list that must correspond for a fit to be
-/// trusted. A transform derived from a handful of stars out of two hundred is a
-/// coincidence, not an alignment.
-const MATCH_FRACTION: f32 = 0.25;
 
 /// How far above the session's median star size a frame may sit before it's treated
 /// as defocused, clouded, or shaken rather than merely soft. Bounded below by how
@@ -100,8 +94,8 @@ pub enum RejectionReason {
     TooFewStars,
     /// No preset could fit a transform at all.
     RegistrationFailed,
-    /// A transform was fitted, but from too small a share of the star field to
-    /// be more than a coincidence.
+    /// A transform was fitted, but its pairs are no more than chance produces at
+    /// that star density, or it changes the scale (see `Support::is_credible`).
     TooFewCorrespondences,
     /// The fit is far looser than the rest of the session's.
     ResidualTooHigh,
@@ -121,7 +115,7 @@ impl RejectionReason {
             Self::NoStars => "star detection failed",
             Self::TooFewStars => "too few stars",
             Self::RegistrationFailed => "registration failed",
-            Self::TooFewCorrespondences => "too few correspondences for the fitted transform",
+            Self::TooFewCorrespondences => "the fitted transform is no better than chance",
             Self::ResidualTooHigh => "registration residual far above the session median",
             Self::StarsTooLarge => "stars far larger than the session median",
             Self::StarsDoubled => "stars doubled or trailed — the mount moved during the exposure",
@@ -140,7 +134,7 @@ impl RejectionReason {
     /// [`RejectionReason::StarsTooLarge`] do — their fit covers most of the star
     /// field; dropping them would make the baseline self-referential (see
     /// [`QualityHistory`]). [`TooFewCorrespondences`] doesn't: its residual is a mean
-    /// over the handful of pairs the fit picked for itself, on an unrelated scale
+    /// over whatever pairs a coincidence happened to make, on an unrelated scale
     /// (6 of 200 stars at 8.46px vs. neighbours' 1.3-2.0px) — with a 50-frame window,
     /// 26 such frames would drag the median low enough to latch the gate shut.
     fn measures_the_sky(&self) -> bool {
@@ -152,9 +146,8 @@ impl RejectionReason {
     /// swinging a dobsonian to a new object makes the field stop matching, and the
     /// stack must restart — but a frame that *did* align, merely soft or loose from
     /// a passing cloud or gust, shouldn't throw away the integration.
-    /// [`TooFewCorrespondences`] counts as "could not align": agreement on a
-    /// handful of two hundred stars means the fields don't overlap, whatever the
-    /// fitter produced.
+    /// [`TooFewCorrespondences`] counts as "could not align": a fit chance explains
+    /// means the fields don't overlap, whatever the fitter produced.
     pub fn means_the_sky_moved(&self) -> bool {
         match self {
             Self::NoStars
@@ -178,9 +171,12 @@ pub struct FrameAdmission {
     pub rejected_because: Option<RejectionReason>,
     /// Whether this frame replaced the reference, discarding prior integration.
     pub rebased: bool,
-    /// Correspondences found for the fitted transform; 0 if registration failed.
+    /// Stars the fitted transform lines up within 1.5 px (`Support::pairs`); 0 if
+    /// registration failed. Not the rung's own correspondence count, which on a thin sub
+    /// counts nebula clutter (Cat's Eye: 47–63 against 5–13 real pairs).
     pub matched_stars: usize,
-    /// Mean residual of those correspondences, in pixels; NaN if there were none.
+    /// Mean residual of the rung fit's correspondences, in pixels, as the gate judged
+    /// it; NaN if there were none.
     pub mean_residual: f32,
     /// Where the frame landed: target -> reference coordinates. `Some` only for a frame
     /// that joined the stack.
@@ -208,7 +204,7 @@ impl FrameAdmission {
             added: true,
             rejected_because: None,
             rebased,
-            matched_stars: result.matched_stars,
+            matched_stars: result.support.pairs,
             mean_residual: result.mean_residual,
             // A re-based frame *is* the new reference: it landed on itself.
             transform: Some(if rebased { AffineTransform::identity() } else { result.transform }),
@@ -303,7 +299,6 @@ fn quantile(values: &VecDeque<f32>, divisor: usize) -> Option<f32> {
 /// What a sub's own star list says about it, measured before registration.
 #[derive(Debug, Clone, Copy)]
 pub struct StarField {
-    pub count: usize,
     pub fwhm: Option<f32>,
     /// See `detection::doubled_star_share`.
     pub doubling: f32,
@@ -312,7 +307,6 @@ pub struct StarField {
 impl StarField {
     pub fn of(stars: &[night_amplifier_core::detection::Star]) -> Self {
         Self {
-            count: stars.len(),
             fwhm: night_amplifier_core::detection::compute_median_fwhm(stars),
             doubling: night_amplifier_core::detection::doubled_star_share(stars),
         }
@@ -369,9 +363,8 @@ impl FrameGate {
         &mut self,
         result: &AdaptiveRegistrationResult,
         stars: StarField,
-        reference_stars: usize,
     ) -> Option<RejectionReason> {
-        let verdict = self.judge(result, stars.fwhm, reference_stars, stars.count);
+        let verdict = self.judge(result, stars.fwhm);
 
         if verdict.is_none_or(|reason| reason.measures_the_sky()) {
             self.history.record(result.mean_residual, stars.fwhm);
@@ -436,11 +429,11 @@ impl FrameGate {
         &self,
         result: &AdaptiveRegistrationResult,
         fwhm: Option<f32>,
-        reference_stars: usize,
-        target_stars: usize,
     ) -> Option<RejectionReason> {
-        let pool = reference_stars.min(target_stars) as f32;
-        if (result.matched_stars as f32) < MATCH_FRACTION * pool {
+        // Not a share of the star list: a thin sub's true fit pairs 10-19 of 200
+        // detections (the rest are noise), while a coincidence on a bright nebula's
+        // noise maxima paired 53 — see `Support`.
+        if !result.is_credible() {
             return Some(RejectionReason::TooFewCorrespondences);
         }
 
