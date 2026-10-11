@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use night_amplifier::cfa::{reject_hot_pixels, remove_fpn, CfaFrame, HotPixelConfig};
+use night_amplifier::statistics::MAD_TO_SIGMA;
 use night_amplifier::{CfaPattern, DetectionConfig, Frame, StarDetector};
 use serial_test::serial;
 
@@ -48,7 +49,7 @@ fn median_of(sorted_values: &[f64]) -> f64 {
 fn mad_sigma(values: &[f64]) -> f64 {
     let centre = median_of(&sorted(values.to_vec()));
     let deviations = sorted(values.iter().map(|v| (v - centre).abs()).collect());
-    median_of(&deviations) * 1.4826
+    median_of(&deviations) * f64::from(MAD_TO_SIGMA)
 }
 
 /// Mean of the central 80 % of a line.

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use lz4_flex::decompress_size_prepended;
-use night_amplifier::frame::Frame;
+use night_amplifier::frame::{luminance, Frame};
 use night_amplifier::render::{RenderPipeline, RenderPipelineConfig};
 use night_amplifier::session::encoding::{encode_rgb8_lz4, encode_rgb8_lz4_chunked};
 use night_amplifier::PixelFormat;
@@ -679,8 +679,6 @@ fn probe_fused_render_clamp_difference() {
         StretchAggressiveness,
     };
 
-    const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
-
     println!("\n=== Fused render kernel vs. the three passes it replaces ===\n");
 
     for dir in baseline_fixture_dirs() {
@@ -788,7 +786,7 @@ fn probe_fused_render_clamp_difference() {
             } else if px_changed {
                 clean_changed_px += 1;
                 clean_max_delta = clean_max_delta.max(px_max);
-                let lum = LUMA[0] * pa[0] + LUMA[1] * pa[1] + LUMA[2] * pa[2];
+                let lum = luminance(pa[0], pa[1], pa[2]);
                 clean_min_lum = clean_min_lum.min(lum);
             }
         }

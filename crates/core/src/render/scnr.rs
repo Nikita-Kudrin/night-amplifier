@@ -4,7 +4,7 @@
 //! while perfectly preserving the original luminance of the pixel.
 
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use rayon::prelude::*;
 use tracing::instrument;
 
@@ -46,13 +46,13 @@ pub fn apply_scnr(frame: &mut Frame, amount: f32) -> Result<()> {
 
                 if g > g_limit {
                     // 1. Calculate original luminance (Rec. 709)
-                    let l_old = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+                    let l_old = luminance(r, g, b);
 
                     // 2. Apply Maximum Neutral SCNR to Green
                     let g_new = g_limit * amount + g * (1.0 - amount);
 
                     // 3. Calculate new luminance
-                    let l_new = (r * 0.2126) + (g_new * 0.7152) + (b * 0.0722);
+                    let l_new = luminance(r, g_new, b);
 
                     // 4. Restore luminance with a division-by-zero safeguard
                     let ratio = if l_new > 1e-8 { l_old / l_new } else { 1.0 };
@@ -81,7 +81,7 @@ mod tests {
         frame.set_pixel(0, 0, 1, 0.5); // G (spike)
         frame.set_pixel(0, 0, 2, 0.1); // B
 
-        let l_old = (0.1 * 0.2126) + (0.5 * 0.7152) + (0.1 * 0.0722);
+        let l_old = luminance(0.1, 0.5, 0.1);
 
         apply_scnr(&mut frame, 1.0).unwrap();
 
@@ -89,7 +89,7 @@ mod tests {
         let g = frame.get_pixel(0, 0, 1);
         let b = frame.get_pixel(0, 0, 2);
 
-        let l_new = (r * 0.2126) + (g * 0.7152) + (b * 0.0722);
+        let l_new = luminance(r, g, b);
 
         // Luminance should be preserved exactly
         assert!((l_old - l_new).abs() < 1e-4);

@@ -72,6 +72,9 @@ When designing new features or refactoring, adhere to the following architectura
   has no plain setter outside tests (a Stop during startup was overwritten by `Capturing`), and Start refuses
   `Stopping`: it reset the cancel flag the stopping pipeline polls, which then captured on behind `Idle`.
 - f32 normalization: all pixel math uses [0.0, 1.0] to prevent overflow.
+- Pixel constants have one home, never a retyped literal (Pro too): `frame::{luminance, LUMA_REC709, sample_to_u8,
+  sample_to_u16}`, `render::simd::luminance_x4`, `statistics::MAD_TO_SIGMA`. `LUMA_REC601` only where a consumer was
+  built on it (simulator, AI denoise). The ~45 copies these replaced were bit-identical; keep the summation order.
 - Rayon for multi-core processing; no allocations in hot paths (pre-allocated buffers where possible).
 - ARM friendly (optimized for Raspberry Pi 5); FFI safety — all C/C++ calls wrapped with `catch_ffi_panic`.
 

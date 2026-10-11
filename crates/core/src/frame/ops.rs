@@ -11,6 +11,27 @@ pub fn sample_to_u8(value: f32) -> u8 {
     (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
 }
 
+/// Canonical normalised-f32 → 16-bit sample conversion. Truncates, unlike
+/// [`sample_to_u8`]: the FITS and SER 16-bit writers have always truncated, and they
+/// must agree with each other.
+#[inline(always)]
+pub fn sample_to_u16(value: f32) -> u16 {
+    (value.clamp(0.0, 1.0) * 65535.0) as u16
+}
+
+/// Rec.709 weights: every luminance-preserving kernel and luminance measurement uses them.
+pub const LUMA_REC709: [f32; 3] = [0.2126, 0.7152, 0.0722];
+
+/// Rec.601 weights, only for consumers built on them (the simulator's mono sensor, and
+/// Pro's AI denoiser, whose training mask was OpenCV's grey).
+pub const LUMA_REC601: [f32; 3] = [0.299, 0.587, 0.114];
+
+/// Rec.709 luminance. Summed left to right, as every kernel did before sharing this.
+#[inline(always)]
+pub fn luminance(r: f32, g: f32, b: f32) -> f32 {
+    LUMA_REC709[0] * r + LUMA_REC709[1] * g + LUMA_REC709[2] * b
+}
+
 impl Frame {
     /// Keeps only `rect`, in place: each plane's rows move forward and the buffer is truncated,
     /// so nothing is allocated. A destination never lies past its source, which is what makes
@@ -148,8 +169,37 @@ impl Frame {
 
 #[cfg(test)]
 mod tests {
+    use super::{luminance, sample_to_u16, LUMA_REC601, LUMA_REC709};
     use crate::frame::Frame;
     use crate::stacking::CropRect;
+
+    /// The one home of each weight set, so a typo or a swapped R/B (BGR order) no longer
+    /// meets ~45 independent copies that disagree with it. ITU-R BT.709 and BT.601 values.
+    #[test]
+    fn luma_weights_are_the_published_ones_in_rgb_order() {
+        assert_eq!(LUMA_REC709, [0.2126, 0.7152, 0.0722]);
+        assert_eq!(LUMA_REC601, [0.299, 0.587, 0.114]);
+    }
+
+    #[test]
+    fn both_luma_weight_sets_keep_grey_grey() {
+        for weights in [LUMA_REC709, LUMA_REC601] {
+            assert!((weights.iter().sum::<f32>() - 1.0).abs() < 1e-6, "{weights:?}");
+        }
+        assert!((luminance(0.4, 0.4, 0.4) - 0.4).abs() < 1e-6);
+        assert_eq!(luminance(1.0, 0.0, 0.0), LUMA_REC709[0]);
+        assert_eq!(luminance(0.0, 0.0, 1.0), LUMA_REC709[2]);
+    }
+
+    #[test]
+    fn sample_to_u16_clamps_and_truncates() {
+        assert_eq!(sample_to_u16(-0.5), 0);
+        assert_eq!(sample_to_u16(f32::NAN), 0);
+        assert_eq!(sample_to_u16(1.0), u16::MAX);
+        assert_eq!(sample_to_u16(7.0), u16::MAX);
+        // Just under the 2nd level truncates to the 1st, where rounding would reach the 2nd.
+        assert_eq!(sample_to_u16(1.9 / 65535.0), 1);
+    }
 
     /// Every sample names its own position, so a crop that crossed planes or rows shows it.
     fn labelled(width: usize, height: usize, channels: usize) -> Frame {

@@ -19,6 +19,7 @@ use night_amplifier::session::capture::{
     AnalysisContext, PreviewAnalysis, StackSettings, StackingContext,
 };
 use night_amplifier::session::state::CaptureSettings;
+use night_amplifier::statistics::MAD_TO_SIGMA;
 use night_amplifier::Frame;
 
 use crate::integration::instruments::{load_sub, requested_sessions, session_frames};
@@ -117,7 +118,7 @@ impl Regions {
         Seen {
             sky: [mean(&self.sky, 0), mean(&self.sky, 1), mean(&self.sky, 2)],
             target: mean(&self.target, 1),
-            grain: median(&mut deviation) * 1.4826,
+            grain: median(&mut deviation) * f64::from(MAD_TO_SIGMA),
         }
     }
 }

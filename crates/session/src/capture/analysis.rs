@@ -505,7 +505,8 @@ mod tests {
 
     /// Statistics with one sky level and one noise figure on every channel.
     fn sky_stats(level: f32, sigma: f32) -> ImageStats {
-        let channel = night_amplifier_core::statistics::ChannelStats::new(level, sigma / 1.4826, 0.0, 1.0);
+        use night_amplifier_core::statistics::{ChannelStats, MAD_TO_SIGMA};
+        let channel = ChannelStats::new(level, sigma / MAD_TO_SIGMA, 0.0, 1.0);
         ImageStats {
             channels: vec![channel; 3],
             sample_count: 100_000,

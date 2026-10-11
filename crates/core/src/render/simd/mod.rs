@@ -11,6 +11,14 @@ use wide::f32x4;
 
 const SIMD_MIN_LEN: usize = 8;
 
+/// Four Rec.709 luminances at once, in [`crate::frame::luminance`]'s summation order so
+/// SIMD bodies and their scalar tails agree bit for bit.
+#[inline(always)]
+pub fn luminance_x4(r: f32x4, g: f32x4, b: f32x4) -> f32x4 {
+    let [wr, wg, wb] = crate::frame::LUMA_REC709;
+    f32x4::splat(wr) * r + f32x4::splat(wg) * g + f32x4::splat(wb) * b
+}
+
 mod interleaved;
 mod planar;
 
@@ -129,6 +137,17 @@ mod tests {
                 (seed >> 8) as f32 / 16_777_216.0
             })
             .collect()
+    }
+
+    #[test]
+    fn luminance_x4_matches_the_scalar_luminance_bit_for_bit() {
+        let samples = noise(4 * 3 * 64, 7);
+        for [r, g, b] in samples.as_chunks::<4>().0.as_chunks::<3>().0 {
+            let lanes = luminance_x4(f32x4::new(*r), f32x4::new(*g), f32x4::new(*b)).to_array();
+            for j in 0..4 {
+                assert_eq!(lanes[j].to_bits(), crate::frame::luminance(r[j], g[j], b[j]).to_bits());
+            }
+        }
     }
 
     /// Splits interleaved RGB into three planes.

@@ -8,7 +8,7 @@ use tracing::{debug, error, instrument};
 
 use crate::error::{Result, StackError};
 use crate::ffi_safety::catch_ffi_panic;
-use crate::frame::Frame;
+use crate::frame::{sample_to_u16, Frame};
 use fitsio::FitsFile;
 
 mod header;
@@ -150,7 +150,7 @@ pub fn write_fits_u16(
     let data = frame.data();
     let u16_data: Vec<u16> = data
         .iter()
-        .map(|&v| (v.clamp(0.0, 1.0) * 65535.0) as u16)
+        .map(|&v| sample_to_u16(v))
         .collect();
 
     write_fits_u16_primary(&u16_data, width, height, channels, path, metadata)

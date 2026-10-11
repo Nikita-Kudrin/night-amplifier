@@ -16,7 +16,7 @@ mod ops;
 pub use channel::ChannelStats;
 pub use config::StatsConfig;
 pub use image::ImageStats;
-pub use ops::{fast_median, select_median, select_nth};
+pub use ops::{fast_median, select_median, select_nth, MAD_TO_SIGMA};
 
 use compute::compute_channel_stats;
 use ops::{compute_mad_in_place_simd, min_max_simd};
@@ -216,11 +216,21 @@ mod tests {
         assert!(stats.mean_sigma() < 0.02);
     }
 
+    /// Every MAD-to-sigma in both repos reads this one constant: a typo here (1.4286 passed
+    /// every other unit test) would move every black point, threshold and denoise level.
+    #[test]
+    fn mad_to_sigma_is_the_reciprocal_of_the_normal_quartile() {
+        // Phi^-1(3/4), the upper quartile of a standard normal, as published.
+        const NORMAL_QUARTILE: f64 = 0.674_489_750_196_081_7;
+        let relative = (f64::from(MAD_TO_SIGMA) * NORMAL_QUARTILE - 1.0).abs();
+        assert!(relative < 1e-5, "{MAD_TO_SIGMA} is {relative:e} off 1/Phi^-1(3/4)");
+    }
+
     #[test]
     fn test_suggested_black_point() {
         let ch = ChannelStats::new(0.2, 0.01, 0.0, 1.0);
         let bp = ch.suggested_black_point(2.8);
-        let expected = 0.2 - 2.8 * (0.01 * 1.4826);
+        let expected = 0.2 - 2.8 * (0.01 * MAD_TO_SIGMA);
         assert!((bp - expected).abs() < 0.001);
     }
 

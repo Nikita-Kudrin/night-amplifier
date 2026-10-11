@@ -4,7 +4,8 @@
 //! the streaming encoder assembles per row in `render::display`. For the planar
 //! `Frame` equivalents see [`super::planar`].
 
-use super::scale_lut_lookup;
+use super::{luminance_x4, scale_lut_lookup};
+use crate::frame::luminance;
 use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast.
@@ -28,9 +29,6 @@ pub fn apply_luminance_scale_lut_simd(
         return;
     }
 
-    let wr = f32x4::splat(0.2126);
-    let wg = f32x4::splat(0.7152);
-    let wb = f32x4::splat(0.0722);
     let zero = f32x4::ZERO;
     let bp = f32x4::splat(black_point);
     let one = f32x4::ONE;
@@ -61,7 +59,7 @@ pub fn apply_luminance_scale_lut_simd(
         let g_sub = (g - bp).max(zero);
         let b_sub = (b - bp).max(zero);
 
-        let lum = wr * r_sub + wg * g_sub + wb * b_sub;
+        let lum = luminance_x4(r_sub, g_sub, b_sub);
 
         let lut_max = f32x4::splat((scale_lut.len() - 1) as f32);
         let pos = (lum * lut_max).min(lut_max);
@@ -140,10 +138,10 @@ pub fn apply_luminance_scale_lut_scalar(
         let g = (pixel[1] - black_point).max(0.0);
         let b = (pixel[2] - black_point).max(0.0);
 
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let scale = scale_lut_lookup(scale_lut, luminance);
+        let lum = luminance(r, g, b);
+        let scale = scale_lut_lookup(scale_lut, lum);
 
-        let lum_stretched = luminance * scale;
+        let lum_stretched = lum * scale;
         let base_add = lum_stretched * (1.0 - color_intensity);
         let channel_mul = scale * color_intensity;
 
@@ -157,7 +155,7 @@ pub fn apply_luminance_scale_lut_scalar(
 /// scalar transform to each pixel's luminance, then scales all RGB channels by the
 /// same factor to preserve colour ratios. The surrounding math (dot product,
 /// division, multiplication, clamping) is vectorized even though the transform
-/// itself runs scalar. Equivalent to `L = 0.2126R + 0.7152G + 0.0722B; L' =
+/// itself runs scalar. Equivalent to `L = luminance(R, G, B); L' =
 /// transform_fn(L); scale = L'/L; R' = (R*scale).clamp(0,1)` (and same for G, B).
 #[inline]
 pub fn apply_luminance_preserving_simd(
@@ -171,9 +169,6 @@ pub fn apply_luminance_preserving_simd(
         return;
     }
 
-    let wr = f32x4::splat(0.2126);
-    let wg = f32x4::splat(0.7152);
-    let wb = f32x4::splat(0.0722);
     let zero = f32x4::ZERO;
     let one = f32x4::ONE;
 
@@ -200,7 +195,7 @@ pub fn apply_luminance_preserving_simd(
         ]);
 
         // Compute 4 luminances in SIMD
-        let lum = wr * r + wg * g + wb * b;
+        let lum = luminance_x4(r, g, b);
         let lum_arr = lum.to_array();
 
         // Apply transform (scalar) and compute scales
@@ -260,19 +255,19 @@ fn apply_luminance_preserving_scalar(
         let g = pixel[1];
         let b = pixel[2];
 
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let lum = luminance(r, g, b);
 
-        if luminance <= 1e-8 {
+        if lum <= 1e-8 {
             pixel[0] = 0.0;
             pixel[1] = 0.0;
             pixel[2] = 0.0;
             continue;
         }
 
-        let luminance_transformed = transform_fn(luminance);
-        let scale = luminance_transformed / luminance;
+        let luminance_transformed = transform_fn(lum);
+        let scale = luminance_transformed / lum;
 
-        let lum_stretched = luminance * scale;
+        let lum_stretched = lum * scale;
         let base_add = lum_stretched * (1.0 - color_intensity);
         let channel_mul = scale * color_intensity;
 
@@ -342,10 +337,10 @@ mod tests {
         // Intensity = 0.0 (monochrome)
         apply_luminance_preserving_simd(&mut data_0, 0.0, |l| l * 2.0);
 
-        let l_out_1 = 0.2126 * data_1[0] + 0.7152 * data_1[1] + 0.0722 * data_1[2];
+        let l_out_1 = luminance(data_1[0], data_1[1], data_1[2]);
         let dr_1 = data_1[0] - l_out_1;
 
-        let l_out_2 = 0.2126 * data_2[0] + 0.7152 * data_2[1] + 0.0722 * data_2[2];
+        let l_out_2 = luminance(data_2[0], data_2[1], data_2[2]);
         let dr_2 = data_2[0] - l_out_2;
 
         // Boosted intensity should have channels further from luminance

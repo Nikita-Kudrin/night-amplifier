@@ -8,6 +8,7 @@ use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::ColorType;
 
 use crate::camera::error::{CameraError, CameraResult};
+use crate::frame::sample_to_u16;
 use crate::{Frame, PixelFormat};
 
 pub fn load_tiff(path: &Path) -> CameraResult<Frame> {
@@ -82,7 +83,7 @@ fn convert_tiff_data(
         (ColorType::RGB(32), DecodingResult::F32(data)) => {
             let mut bytes = Vec::with_capacity(data.len() * 2);
             for &v in &data {
-                let scaled = (v.clamp(0.0, 1.0) * 65535.0) as u16;
+                let scaled = sample_to_u16(v);
                 bytes.extend_from_slice(&scaled.to_le_bytes());
             }
             Ok((bytes, PixelFormat::Rgb16, 3))
@@ -91,7 +92,7 @@ fn convert_tiff_data(
         (ColorType::Gray(32), DecodingResult::F32(data)) => {
             let mut bytes = Vec::with_capacity(data.len() * 2);
             for &v in &data {
-                let scaled = (v.clamp(0.0, 1.0) * 65535.0) as u16;
+                let scaled = sample_to_u16(v);
                 bytes.extend_from_slice(&scaled.to_le_bytes());
             }
             Ok((bytes, PixelFormat::Bayer16, 1))
@@ -102,7 +103,7 @@ fn convert_tiff_data(
             let mut bytes = Vec::with_capacity(pixel_count * 3 * 2);
             for chunk in data.as_chunks::<4>().0 {
                 for &v in &chunk[0..3] {
-                    let scaled = (v.clamp(0.0, 1.0) * 65535.0) as u16;
+                    let scaled = sample_to_u16(v);
                     bytes.extend_from_slice(&scaled.to_le_bytes());
                 }
             }

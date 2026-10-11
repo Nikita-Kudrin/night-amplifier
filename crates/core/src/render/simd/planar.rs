@@ -4,7 +4,8 @@
 //! samples: loads and stores stay contiguous within a plane instead of the stride-3
 //! gathers the [`super::interleaved`] variants need.
 
-use super::scale_lut_lookup;
+use super::{luminance_x4, scale_lut_lookup};
+use crate::frame::luminance;
 use wide::f32x4;
 
 /// SIMD-optimized fused scale lookup using a LUT for tone mapping + contrast (Planar version).
@@ -30,9 +31,6 @@ pub fn apply_luminance_scale_lut_simd_planar(
         return;
     }
 
-    let wr = f32x4::splat(0.2126);
-    let wg = f32x4::splat(0.7152);
-    let wb = f32x4::splat(0.0722);
     let zero = f32x4::ZERO;
     let bp = f32x4::splat(black_point);
     let one = f32x4::ONE;
@@ -64,7 +62,7 @@ pub fn apply_luminance_scale_lut_simd_planar(
         let g_sub = (g - bp).max(zero);
         let b_sub = (b - bp).max(zero);
 
-        let lum = wr * r_sub + wg * g_sub + wb * b_sub;
+        let lum = luminance_x4(r_sub, g_sub, b_sub);
         let pos = (lum * lut_max).min(lut_max);
 
         let pos_arr = pos.to_array();
@@ -138,10 +136,10 @@ pub fn apply_luminance_scale_lut_scalar_planar(
         let g = (g_plane[i] - black_point).max(0.0);
         let b = (b_plane[i] - black_point).max(0.0);
 
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let scale = scale_lut_lookup(scale_lut, luminance);
+        let lum = luminance(r, g, b);
+        let scale = scale_lut_lookup(scale_lut, lum);
 
-        let lum_stretched = luminance * scale;
+        let lum_stretched = lum * scale;
         let base_add = lum_stretched * (1.0 - color_intensity);
         let channel_mul = scale * color_intensity;
 
@@ -179,9 +177,6 @@ pub fn apply_luminance_preserving_simd_planar(
         .zip(g_plane.par_chunks_mut(chunk_size))
         .zip(b_plane.par_chunks_mut(chunk_size))
         .for_each(|((r_chunk, g_chunk), b_chunk)| {
-            let wr = f32x4::splat(0.2126);
-            let wg = f32x4::splat(0.7152);
-            let wb = f32x4::splat(0.0722);
             let zero = f32x4::ZERO;
             let one = f32x4::ONE;
             let color_int = f32x4::splat(color_intensity);
@@ -201,7 +196,7 @@ pub fn apply_luminance_preserving_simd_planar(
                 let g = f32x4::new(*gc);
                 let b = f32x4::new(*bc);
 
-                let lum = wr * r + wg * g + wb * b;
+                let lum = luminance_x4(r, g, b);
                 let lum_arr = lum.to_array();
 
                 let mut scale_arr = [0.0f32; 4];
@@ -243,19 +238,19 @@ fn apply_luminance_preserving_scalar_planar(
         let g = g_plane[i];
         let b = b_plane[i];
 
-        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let lum = luminance(r, g, b);
 
-        if luminance <= 1e-8 {
+        if lum <= 1e-8 {
             r_plane[i] = 0.0;
             g_plane[i] = 0.0;
             b_plane[i] = 0.0;
             continue;
         }
 
-        let luminance_transformed = transform_fn(luminance);
-        let scale = luminance_transformed / luminance;
+        let luminance_transformed = transform_fn(lum);
+        let scale = luminance_transformed / lum;
 
-        let lum_stretched = luminance * scale;
+        let lum_stretched = lum * scale;
         let base_add = lum_stretched * (1.0 - color_intensity);
         let channel_mul = scale * color_intensity;
 

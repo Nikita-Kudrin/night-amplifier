@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::frame::Frame;
+use crate::statistics::MAD_TO_SIGMA;
 use rayon::prelude::*;
 use tracing::instrument;
 
@@ -192,7 +193,7 @@ impl BackgroundModel {
                 deviations.push((v - median).abs());
             }
             let mad = crate::statistics::fast_median(&mut deviations);
-            let sigma = mad * 1.4826;
+            let sigma = mad * MAD_TO_SIGMA;
 
             (3.0 * sigma).max(0.001)
         };

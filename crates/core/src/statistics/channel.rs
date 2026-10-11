@@ -1,3 +1,5 @@
+use super::MAD_TO_SIGMA;
+
 /// Statistics for a single color channel
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChannelStats {
@@ -5,7 +7,7 @@ pub struct ChannelStats {
     pub median: f32,
     /// Median Absolute Deviation (raw, before scaling)
     pub mad: f32,
-    /// MAD scaled to Gaussian sigma equivalent (σ = 1.4826 × MAD)
+    /// MAD scaled to Gaussian sigma equivalent (σ = [`MAD_TO_SIGMA`] × MAD)
     pub sigma: f32,
     /// Minimum value in sampled data
     pub min: f32,
@@ -16,8 +18,7 @@ pub struct ChannelStats {
 impl ChannelStats {
     /// Create new channel statistics
     pub fn new(median: f32, mad: f32, min: f32, max: f32) -> Self {
-        // Scale MAD to sigma: for Gaussian distribution, σ = 1.4826 × MAD
-        let sigma = mad * 1.4826;
+        let sigma = mad * MAD_TO_SIGMA;
         Self {
             median,
             mad,

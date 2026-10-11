@@ -1,5 +1,6 @@
 use crate::error::Result;
 use crate::frame::Frame;
+use crate::statistics::MAD_TO_SIGMA;
 
 use super::config::DetectionConfig;
 use super::detector::StarDetector;
@@ -92,7 +93,7 @@ fn analyze_image(frame: &Frame) -> ImageAnalysis {
     let mut deviations: Vec<f32> = sample.iter().map(|&v| (v - median).abs()).collect();
     deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let mad = deviations[deviations.len() / 2];
-    let sigma = (mad * 1.4826).max(1e-6);
+    let sigma = (mad * MAD_TO_SIGMA).max(1e-6);
 
     let dynamic_range = max_value / median.max(1e-6);
 

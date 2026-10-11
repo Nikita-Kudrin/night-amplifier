@@ -8,7 +8,7 @@
 //! sky +1.16x (5x5 guide: +1.6x — a bright square around every star).
 
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use rayon::prelude::*;
 
 /// Sky darkening per unit of [`super::ShadowFloorRequest::fraction`]. -5 % measures 64 %
@@ -25,9 +25,6 @@ const SHOULDER_START: f32 = 1.05;
 
 /// Guide level, in sky levels, from which nothing is darkened.
 const SHOULDER_END: f32 = 2.0;
-
-/// Rec.709 weights, the luminance every luminance-preserving kernel here uses.
-const LUMA: [f32; 3] = [0.2126, 0.7152, 0.0722];
 
 /// Rows and columns per row the sky is measured on: <= 65k guide samples, and fixed
 /// positions, so a path that only renders those rows measures the same sky.
@@ -126,7 +123,7 @@ pub(crate) fn sky_sample_stride(width: usize) -> usize {
 /// Rec.709 luminance of an interleaved RGB row.
 pub(crate) fn luma_row(rgb: &[f32], out: &mut [f32]) {
     for (o, px) in out.iter_mut().zip(rgb.chunks_exact(3)) {
-        *o = LUMA[0] * px[0] + LUMA[1] * px[1] + LUMA[2] * px[2];
+        *o = luminance(px[0], px[1], px[2]);
     }
 }
 
@@ -302,7 +299,7 @@ pub fn apply_sky_shadow_frame(frame: &mut Frame, shadow: SkyShadow) -> Result<()
         let (r, g, b) = frame.planes();
         luma.par_iter_mut()
             .zip(r.par_iter().zip(g.par_iter().zip(b.par_iter())))
-            .for_each(|(o, (&r, (&g, &b)))| *o = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b);
+            .for_each(|(o, (&r, (&g, &b)))| *o = luminance(r, g, b));
     }
     let mut guide = vec![0.0f32; n];
     guides_from_luma(&luma, &mut guide, width, height);
