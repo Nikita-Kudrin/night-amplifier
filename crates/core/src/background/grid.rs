@@ -8,6 +8,7 @@
 //! delta-stepping; Pro centres nodes in each cell for its TPS solve's interior samples.
 
 use crate::frame::Frame;
+use crate::statistics::MAD_TO_SIGMA;
 
 /// Box side length as a fraction of image width.
 const BOX_SIZE_PERCENTAGE: f32 = 0.015;
@@ -150,7 +151,7 @@ pub fn extract_node_value(
             break;
         }
 
-        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * 1.4826;
+        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * MAD_TO_SIGMA;
         let before = pixels.len();
         pixels.retain(|&v| v <= threshold);
 
@@ -211,7 +212,7 @@ pub fn extract_node_sample(
         if dispersion < 1e-9 {
             break;
         }
-        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * 1.4826;
+        let threshold = med + SIGMA_CLIP_THRESHOLD * dispersion * MAD_TO_SIGMA;
         let before = pixels.len();
         pixels.retain(|p| p[2] <= threshold);
         if pixels.is_empty() {
@@ -235,7 +236,7 @@ pub fn extract_node_sample(
     let value = median(&mut values);
     let residuals = plane_residuals(&pixels);
     let centre = median(&mut residuals.clone());
-    let scatter = mad(&residuals, centre) * 1.4826;
+    let scatter = mad(&residuals, centre) * MAD_TO_SIGMA;
     Some(NodeSample {
         value,
         scatter,
@@ -285,7 +286,7 @@ pub struct PruneConfig {
 }
 
 /// Prune nodes that landed on nebulosity using a two-stage approach: (1) **global**
-/// rejection, nodes above `global_median + global_sigma * MAD * 1.4826`; (2) **neighbor**
+/// rejection, nodes above `global_median + global_sigma * MAD * MAD_TO_SIGMA`; (2) **neighbor**
 /// rejection, nodes exceeding the local 8-neighbor median by `neighbour_threshold`.
 ///
 /// Stage 2 reads a snapshot taken before it starts, so a node's fate does not depend on
@@ -304,7 +305,7 @@ pub fn prune_nebulosity(
 
     let global_median = median(&mut all_values);
     let global_mad = mad(&all_values, global_median);
-    let global_threshold = global_median + config.global_sigma * global_mad * 1.4826;
+    let global_threshold = global_median + config.global_sigma * global_mad * MAD_TO_SIGMA;
 
     for node in nodes.iter_mut() {
         if let Some(v) = node.value {

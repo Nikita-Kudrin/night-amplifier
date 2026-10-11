@@ -13,6 +13,7 @@ use crate::integration::stack_depth_grain_tests::managed_session;
 use night_amplifier::session::capture::stack_crop::{crop_stack, StackCrop};
 use night_amplifier::session::state::CaptureSettings;
 use night_amplifier::stacking::{min_coverage, CropRect, KEEP_COVERAGE};
+use night_amplifier::statistics::{select_median, MAD_TO_SIGMA};
 use night_amplifier::{Frame, NoiseField};
 
 /// 39 IMX533 subs of M101 that drift across the frame: a fifth of it thins out.
@@ -172,7 +173,7 @@ fn sky_and_sigma(frame: &Frame) -> (f32, f32) {
     let mut v = frame.channel_data(1).to_vec();
     let median = night_amplifier::statistics::select_median(&mut v);
     let mut deviations: Vec<f32> = frame.channel_data(1).iter().map(|x| (x - median).abs()).collect();
-    (median, night_amplifier::statistics::select_median(&mut deviations) * 1.4826)
+    (median, select_median(&mut deviations) * MAD_TO_SIGMA)
 }
 
 fn green_percentile(rgb8: &[u8], percentile: f64) -> u8 {

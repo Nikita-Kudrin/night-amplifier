@@ -1,5 +1,5 @@
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use rayon::prelude::*;
 
 /// Midtones Transfer Function (MTF)
@@ -31,15 +31,15 @@ pub fn mtf_stretch_color_preserving(
     midtone: f32,
     color_intensity: f32,
 ) -> (f32, f32, f32) {
-    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    if luminance <= 1e-8 {
+    let lum = luminance(r, g, b);
+    if lum <= 1e-8 {
         return (0.0, 0.0, 0.0);
     }
 
-    let luminance_stretched = mtf(luminance, midtone);
-    let scale = luminance_stretched / luminance;
+    let luminance_stretched = mtf(lum, midtone);
+    let scale = luminance_stretched / lum;
 
-    let lum_stretched = luminance * scale;
+    let lum_stretched = lum * scale;
     let base_add = lum_stretched * (1.0 - color_intensity);
     let channel_mul = scale * color_intensity;
 
@@ -173,10 +173,10 @@ mod tests {
         assert!((r_out_zero - b_out_zero).abs() < 1e-4);
 
         // High intensity means channels are further from luminance
-        let l_out = 0.2126 * r_out_1 + 0.7152 * g_out_1 + 0.0722 * b_out_1;
+        let l_out = luminance(r_out_1, g_out_1, b_out_1);
         let dr_1 = r_out_1 - l_out;
 
-        let l_out_high = 0.2126 * r_out_high + 0.7152 * g_out_high + 0.0722 * b_out_high;
+        let l_out_high = luminance(r_out_high, g_out_high, b_out_high);
         let dr_high = r_out_high - l_out_high;
 
         assert!(dr_high.abs() > dr_1.abs());

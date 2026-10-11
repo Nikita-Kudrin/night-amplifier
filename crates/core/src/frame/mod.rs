@@ -5,7 +5,7 @@
 //! (JPEG/LZ4/PNG/SER `Rgb`/`Bgr`; FITS NAXIS3=3 stays planar) — crossing that
 //! wrongly compiles and collapses colour toward grey, as happened once across
 //! eight output paths at once. Use [`Frame::planes`]/`channel_data`/`get_pixel`,
-//! never `frame.data()` with `* channels` math; fixtures via [`Frame::set_pixel`]; `layout_tests` sweeps every path; 8-bit rounds via [`sample_to_u8`], 16-bit truncates; reuse [`Frame::write_rgb8_into`].
+//! never `frame.data()` with `* channels` math; fixtures via [`Frame::set_pixel`]; `layout_tests` sweeps every path; 8-bit rounds via [`sample_to_u8`], 16-bit truncates via [`sample_to_u16`]; luma is [`luminance`]; reuse [`Frame::write_rgb8_into`].
 
 mod factory;
 mod format;
@@ -16,7 +16,7 @@ mod ops;
 
 pub use format::PixelFormat;
 pub use noise_field::{NoiseField, NOISE_REDUCTION};
-pub use ops::sample_to_u8;
+pub use ops::{luminance, sample_to_u16, sample_to_u8, LUMA_REC601, LUMA_REC709};
 
 /// A frame of image data stored as normalized f32 values in [0.0, 1.0]
 #[derive(Clone)]

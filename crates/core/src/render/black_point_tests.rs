@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::StackError;
+use crate::statistics::MAD_TO_SIGMA;
 
 #[test]
 fn test_black_point_config_defaults() {
@@ -20,7 +21,7 @@ fn test_calculate_black_point_formula() {
     let stats = ChannelStats::new(0.2, 0.01, 0.0, 1.0);
 
     let bp = calculate_black_point(&frame, 0, &stats, 2.0);
-    let expected = 0.2 - 2.0 * (0.01 * 1.4826);
+    let expected = 0.2 - 2.0 * (0.01 * MAD_TO_SIGMA);
     assert!(
         (bp - expected).abs() < 2e-4, // increased tolerance since mode calculation is binned
         "Black point mismatch: got {}, expected {}",
@@ -33,7 +34,7 @@ fn test_calculate_black_point_formula() {
 fn test_calculate_black_point_clamps_to_zero() {
     let data = vec![0.01f32; 64 * 64 * 1];
     let frame = Frame::from_f32_vec(data, 64, 64, 1).unwrap();
-    let stats = ChannelStats::new(0.01, 0.02 / 1.4826, 0.0, 1.0);
+    let stats = ChannelStats::new(0.01, 0.02 / MAD_TO_SIGMA, 0.0, 1.0);
 
     let bp = calculate_black_point(&frame, 0, &stats, 2.0);
     assert_eq!(bp, 0.0);

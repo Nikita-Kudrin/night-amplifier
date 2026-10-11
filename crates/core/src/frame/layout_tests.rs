@@ -10,7 +10,7 @@
 //! encoders' rows (JPEG/LZ4) live with them in the session crate (`encoding/layout_tests.rs`).
 
 use super::Frame;
-use crate::frame::PixelFormat;
+use crate::frame::{luminance, PixelFormat};
 
 const W: usize = 16;
 const H: usize = 8;
@@ -295,7 +295,7 @@ fn ser_mono_payload_is_per_pixel_luminance() {
         // Derived from the fixture rather than hardcoded, so the expectation stays
         // legible: one pixel's own three channels, not three neighbouring samples of one
         // plane.
-        let want = as_ser_sample(0.2126 * R_VAL + 0.7152 * G_VAL + 0.0722 * B_VAL, bit_depth);
+        let want = as_ser_sample(luminance(R_VAL, G_VAL, B_VAL), bit_depth);
         assert_eq!(samples.len(), W * H, "{bit_depth}-bit sample count");
         for (i, &got) in samples.iter().enumerate() {
             assert!(

@@ -7,6 +7,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 
+use night_amplifier::statistics::MAD_TO_SIGMA;
 use night_amplifier::{compute_image_stats, debayer_auto, DetectionConfig, StarDetector};
 use serial_test::serial;
 
@@ -153,7 +154,7 @@ fn diagnose_star_detection() {
         let mut deviations: Vec<f32> = sorted.iter().map(|&v| (v - median).abs()).collect();
         deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mad = deviations[deviations.len() / 2];
-        let sigma = mad * 1.4826;
+        let sigma = mad * MAD_TO_SIGMA;
 
         println!("  RAW Statistics:");
         println!(
@@ -208,7 +209,7 @@ fn diagnose_star_detection() {
                     db_sorted.iter().map(|&v| (v - db_median).abs()).collect();
                 db_deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 let db_mad = db_deviations[db_deviations.len() / 2];
-                let db_sigma = db_mad * 1.4826;
+                let db_sigma = db_mad * MAD_TO_SIGMA;
 
                 println!("    Debayered Statistics:");
                 println!("      Min: {:.6}, Max: {:.6}", db_min, db_max);

@@ -1,6 +1,10 @@
 use rayon::prelude::*;
 use wide::f32x4;
 
+/// Scales a median absolute deviation to the sigma of a Gaussian with that MAD
+/// (`1 / Φ⁻¹(3/4)`).
+pub const MAD_TO_SIGMA: f32 = 1.4826;
+
 /// SIMD-optimized min/max computation
 #[inline]
 pub(crate) fn min_max_simd(values: &[f32]) -> (f32, f32) {

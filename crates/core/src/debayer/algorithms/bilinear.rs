@@ -7,7 +7,7 @@ use rayon::prelude::*;
 
 use crate::debayer::CfaPattern;
 use crate::error::Result;
-use crate::frame::Frame;
+use crate::frame::{sample_to_u8 as to_u8, Frame};
 
 use super::{
     get_rb_orientation, interpolate_blue_at_green, interpolate_diagonal,
@@ -146,11 +146,6 @@ impl<'a> RowWriter for Rgb8RowWriter<'a> {
         self.dst[idx + 1] = to_u8(g);
         self.dst[idx + 2] = to_u8(b);
     }
-}
-
-#[inline(always)]
-fn to_u8(value: f32) -> u8 {
-    (value.max(0.0).min(1.0) * 255.0 + 0.5) as u8
 }
 
 /// Per-row CFA constants.

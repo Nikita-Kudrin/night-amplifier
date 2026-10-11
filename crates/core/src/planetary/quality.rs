@@ -1,6 +1,6 @@
 //! Quality metrics for frame selection in planetary stacking.
 
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 
 use super::QualityMetric;
 
@@ -36,7 +36,7 @@ pub fn frame_to_luminance(frame: &Frame) -> Vec<f32> {
     // write, instead of the strided gather the interleaved version needed.
     let (r, g, b) = frame.planes();
     (0..pixels)
-        .map(|i| 0.2126 * r[i] + 0.7152 * g[i] + 0.0722 * b[i])
+        .map(|i| luminance(r[i], g[i], b[i]))
         .collect()
 }
 

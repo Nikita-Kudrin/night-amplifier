@@ -38,6 +38,7 @@
 
 use std::path::{Path, PathBuf};
 
+use night_amplifier::statistics::MAD_TO_SIGMA;
 use night_amplifier::Frame;
 
 /// One sub as it comes off the disk, before the raw-CFA stage.
@@ -513,7 +514,7 @@ fn mad_sigma(values: &[f64]) -> f64 {
     let median = v[v.len() / 2];
     let mut dev: Vec<f64> = v.iter().map(|x| (x - median).abs()).collect();
     dev.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    dev[dev.len() / 2] * 1.4826
+    dev[dev.len() / 2] * f64::from(MAD_TO_SIGMA)
 }
 
 /// Sky noise split into octaves, as robust sigma in output levels per band.
@@ -899,7 +900,7 @@ fn clipped_sigma(samples: &[f64]) -> f64 {
 
     let mut deviations: Vec<f64> = sorted.iter().map(|v| (v - median).abs()).collect();
     deviations.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mad_sigma = deviations[deviations.len() / 2] * 1.4826;
+    let mad_sigma = deviations[deviations.len() / 2] * f64::from(MAD_TO_SIGMA);
 
     // A floor of one level, or a sky already smooth enough to have a zero MAD would clip
     // away everything including its own noise.
@@ -1458,7 +1459,9 @@ pub fn half_stacks(files: &[PathBuf], load: &dyn Fn(&Path) -> RawSub) -> [(usize
 /// Pixels within 5 px of a compact source: over 6 MADs of the 1-6 px [`band_pass`].
 pub fn compact_sources(plane: &[f64], w: usize, h: usize) -> Vec<bool> {
     let compact = band_pass(plane, w, h, (1, 6));
-    let limit = 6.0 * plane_median(&compact.iter().map(|v| v.abs()).collect::<Vec<_>>()) * 1.4826;
+    let limit = 6.0
+        * plane_median(&compact.iter().map(|v| v.abs()).collect::<Vec<_>>())
+        * f64::from(MAD_TO_SIGMA);
     let mut mask = vec![false; w * h];
     for (p, _) in compact.iter().enumerate().filter(|&(_, &v)| v > limit) {
         let (x, y) = ((p % w) as i64, (p / w) as i64);

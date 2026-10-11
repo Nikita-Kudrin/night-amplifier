@@ -12,6 +12,7 @@ use rayon::prelude::*;
 
 use super::grid::{extract_node_sample, median, GridNode, NodeSample};
 use crate::frame::Frame;
+use crate::statistics::MAD_TO_SIGMA;
 
 /// Relative scatter excess, in robust sigmas of that excess across nodes, marking a seed.
 const SEED_SIGMA: f32 = 3.0;
@@ -188,7 +189,7 @@ impl TargetDisc {
 /// 1.4826 x MAD.
 fn robust_sigma(values: &[f32]) -> f32 {
     let centre = median(&mut values.to_vec());
-    1.4826 * median(&mut values.iter().map(|v| (v - centre).abs()).collect::<Vec<_>>())
+    MAD_TO_SIGMA * median(&mut values.iter().map(|v| (v - centre).abs()).collect::<Vec<_>>())
 }
 
 fn has_crowded_neighbour(node: &GridNode, crowded: &[bool], cols: usize, rows: usize) -> bool {

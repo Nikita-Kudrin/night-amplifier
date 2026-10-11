@@ -4,7 +4,7 @@
 //! to astronomical images based on robust statistics.
 
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use crate::render::simd::subtract_scalar_clamp_simd;
 use crate::statistics::{compute_image_stats, select_median, select_nth, ChannelStats, ImageStats};
 use rayon::prelude::*;
@@ -136,7 +136,7 @@ pub fn estimate_background_mode(frame: &Frame) -> BackgroundEstimate {
     if channels == 3 {
         let (r, g, b) = frame.planes();
         for i in (0..num_pixels).step_by(step) {
-            let lum = 0.2126 * r[i] + 0.7152 * g[i] + 0.0722 * b[i];
+            let lum = luminance(r[i], g[i], b[i]);
             let bin = (lum * (NUM_BINS - 1) as f32) as usize;
             histogram[bin.clamp(0, NUM_BINS - 1)] += 1;
             luminance_samples.push(lum);

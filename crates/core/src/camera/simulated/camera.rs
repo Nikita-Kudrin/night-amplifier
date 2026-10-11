@@ -13,6 +13,7 @@ use crate::camera::traits::Camera;
 use crate::camera::types::{
     BufferPool, CameraInfo, CameraStatus, CaptureConfig, GainPresets, ImageFormat, RawFrame,
 };
+use crate::frame::{sample_to_u16, LUMA_REC601};
 use crate::Frame;
 
 use rayon::prelude::*;
@@ -293,8 +294,9 @@ impl SimulatedCamera {
 fn for_each_mono_sample(frame: &Frame, mut f: impl FnMut(usize, f32)) {
     if frame.channels() == 3 {
         let (r, g, b) = frame.planes();
+        let [kr, kg, kb] = LUMA_REC601;
         for i in 0..r.len() {
-            f(i, r[i] * 0.299 + g[i] * 0.587 + b[i] * 0.114);
+            f(i, r[i] * kr + g[i] * kg + b[i] * kb);
         }
         return;
     }
@@ -420,8 +422,7 @@ impl Camera for SimulatedCamera {
         // fixture is.
         match config.format {
             ImageFormat::Raw16 => for_each_mono_sample(&frame, |i, v| {
-                let val = (v * 65535.0).clamp(0.0, 65535.0) as u16;
-                buffer[i * 2..i * 2 + 2].copy_from_slice(&val.to_le_bytes());
+                buffer[i * 2..i * 2 + 2].copy_from_slice(&sample_to_u16(v).to_le_bytes());
             }),
             ImageFormat::Raw8 => for_each_mono_sample(&frame, |i, v| {
                 buffer[i] = (v * 255.0).clamp(0.0, 255.0) as u8;
@@ -569,7 +570,8 @@ mod tests {
         // legible: a per-pixel Rec. 601 combine, not a copy of one channel.
         let expect = {
             let f = |v: u8| v as f32 / 255.0;
-            let luma = f(rgb[0]) * 0.299 + f(rgb[1]) * 0.587 + f(rgb[2]) * 0.114;
+            let [kr, kg, kb] = LUMA_REC601;
+            let luma = f(rgb[0]) * kr + f(rgb[1]) * kg + f(rgb[2]) * kb;
             (luma * 65535.0) as u16
         };
         for (i, s) in captured.data.chunks_exact(2).enumerate() {

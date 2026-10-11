@@ -1,3 +1,5 @@
+use crate::statistics::MAD_TO_SIGMA;
+
 /// Background statistics for the image
 #[derive(Debug, Clone, Copy)]
 pub struct BackgroundStats {
@@ -47,7 +49,7 @@ fn compute_mad_sigma(sorted_sample: &[f32], median: f32) -> f32 {
     deviations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let mad = compute_median(&deviations);
-    (mad * 1.4826).max(1e-6)
+    (mad * MAD_TO_SIGMA).max(1e-6)
 }
 
 #[cfg(test)]

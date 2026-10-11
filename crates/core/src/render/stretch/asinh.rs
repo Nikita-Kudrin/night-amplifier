@@ -1,5 +1,5 @@
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use crate::render::simd::apply_luminance_preserving_simd_planar;
 use rayon::prelude::*;
 
@@ -51,17 +51,17 @@ pub fn asinh_stretch_color_preserving(
         return (r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0));
     }
 
-    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let lum = luminance(r, g, b);
 
-    if luminance <= 1e-8 {
+    if lum <= 1e-8 {
         return (0.0, 0.0, 0.0);
     }
 
     let asinh_norm = 1.0 / asinh(stretch_factor);
-    let luminance_stretched = asinh(stretch_factor * luminance) * asinh_norm;
-    let scale = luminance_stretched / luminance;
+    let luminance_stretched = asinh(stretch_factor * lum) * asinh_norm;
+    let scale = luminance_stretched / lum;
 
-    let lum_stretched = luminance * scale;
+    let lum_stretched = lum * scale;
     let base_add = lum_stretched * (1.0 - color_intensity);
     let channel_mul = scale * color_intensity;
 
@@ -74,7 +74,7 @@ pub fn asinh_stretch_color_preserving(
 
 /// Apply colour-preserving Asinh stretch to an entire frame in-place — the
 /// recommended way to stretch astronomical images, preserving RGB ratios per pixel
-/// for natural star colours. Per pixel: `L = 0.2126R + 0.7152G + 0.0722B`, `L' =
+/// for natural star colours. Per pixel: `L = luminance(R, G, B)` (Rec.709), `L' =
 /// asinh(L × stretch) / asinh(stretch)`, `s = L'/L`, then `R' = R×s` etc.
 /// `stretch_factor` typical range 1.0-20.0.
 ///
@@ -216,10 +216,10 @@ mod tests {
         let (b_r, b_g, b_b) =
             asinh_stretch_color_preserving(bright.0, bright.1, bright.2, 10.0, 1.0);
 
-        let dark_lum_in = 0.2126 * dark.0 + 0.7152 * dark.1 + 0.0722 * dark.2;
-        let dark_lum_out = 0.2126 * d_r + 0.7152 * d_g + 0.0722 * d_b;
-        let bright_lum_in = 0.2126 * bright.0 + 0.7152 * bright.1 + 0.0722 * bright.2;
-        let bright_lum_out = 0.2126 * b_r + 0.7152 * b_g + 0.0722 * b_b;
+        let dark_lum_in = luminance(dark.0, dark.1, dark.2);
+        let dark_lum_out = luminance(d_r, d_g, d_b);
+        let bright_lum_in = luminance(bright.0, bright.1, bright.2);
+        let bright_lum_out = luminance(b_r, b_g, b_b);
 
         let dark_boost = dark_lum_out / dark_lum_in;
         let bright_boost = bright_lum_out / bright_lum_in;
@@ -270,20 +270,20 @@ mod tests {
         assert!((r_out_zero - b_out_zero).abs() < 1e-4);
 
         // Calculate differences between channel and luminance for intensity=1
-        let l_out = 0.2126 * r_out_1 + 0.7152 * g_out_1 + 0.0722 * b_out_1;
+        let l_out = luminance(r_out_1, g_out_1, b_out_1);
         let dr_1 = r_out_1 - l_out;
         let dg_1 = g_out_1 - l_out;
         let db_1 = b_out_1 - l_out;
 
         // Calculate for intensity=2
-        let l_out_high = 0.2126 * r_out_high + 0.7152 * g_out_high + 0.0722 * b_out_high;
+        let l_out_high = luminance(r_out_high, g_out_high, b_out_high);
         let dr_high = r_out_high - l_out_high;
         let dg_high = g_out_high - l_out_high;
         let db_high = b_out_high - l_out_high;
 
         // Calculate for intensity=0.5. This case was computed but never asserted on,
         // so the monotonicity claim below only ever covered the 1.0 -> 2.0 half.
-        let l_out_low = 0.2126 * r_out_low + 0.7152 * g_out_low + 0.0722 * b_out_low;
+        let l_out_low = luminance(r_out_low, g_out_low, b_out_low);
         let dr_low = r_out_low - l_out_low;
         let dg_low = g_out_low - l_out_low;
         let db_low = b_out_low - l_out_low;

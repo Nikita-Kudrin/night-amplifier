@@ -250,7 +250,7 @@ fn test_output_length_always_matches_reported_dimensions() {
 #[test]
 fn test_expand_to_rgb8_fused_applies_stretch_scale_and_black_point() {
     // R=G=B per pixel, so luminance equals the shared channel value regardless of
-    // the 0.2126/0.7152/0.0722 weighting, keeping the expected values simple.
+    // the Rec.709 weighting, keeping the expected values simple.
     let data = vec![
         0.2, 0.05, 0.9, 0.0, //
         0.2, 0.05, 0.9, 0.0, //

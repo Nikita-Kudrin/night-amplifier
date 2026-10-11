@@ -4,7 +4,7 @@
 //! converting stretched f32 frames to display-ready 8-bit RGB.
 
 use crate::error::{Result, StackError};
-use crate::frame::Frame;
+use crate::frame::{luminance, Frame};
 use rayon::prelude::*;
 
 mod blue_noise;
@@ -129,10 +129,10 @@ pub fn frame_to_rgb8(frame: &Frame, config: OutputConfig) -> Result<Vec<u8>> {
                 let (mut r, mut g, mut b) = (r_block[i], g_block[i], b_block[i]);
 
                 if apply_contrast {
-                    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                    if luminance > 1e-8 {
-                        let luminance_adjusted = apply_s_curve(luminance, &contrast);
-                        let scale = luminance_adjusted / luminance;
+                    let lum = luminance(r, g, b);
+                    if lum > 1e-8 {
+                        let luminance_adjusted = apply_s_curve(lum, &contrast);
+                        let scale = luminance_adjusted / lum;
                         r = (r * scale).clamp(0.0, 1.0);
                         g = (g * scale).clamp(0.0, 1.0);
                         b = (b * scale).clamp(0.0, 1.0);
