@@ -11,6 +11,16 @@ This manual will guide you through setting up and using the software for your EA
 4. Adjust cooling settings if your camera supports it.
 5. Click "Start Capture" to begin live stacking.
 
+## The side panel
+
+The side panel shows one thing at a time. It opens on the camera list and capture controls.
+The **compass** button swaps them for **Push-To** and the **gear** for **Settings**; tap the
+lit button again to come back. A running capture carries on whichever is showing, and each
+panel keeps what you typed or scrolled to when you switch away. The cooler, dew heater and
+**Push-To → Equipment** sections edit the camera selected in the camera list; their heading
+names it (for example *Guide · ASI120MM Mini*). With no camera selected, Equipment edits
+the camera you last selected and names it *· not connected*.
+
 ## Live view
 
 Pinch or scroll to zoom and drag to pan; **Fit to view** brings the whole frame back. Going
@@ -32,9 +42,11 @@ What changes once a guide camera is attached:
   keeps going whether or not a capture is running, so you can frame and plate solve
   before pressing Start.
 - **It does the plate solving.** With a guide camera attached it is the only camera
-  offered to the solver. Set its focal length under **Settings → Equipment** while it is
+  offered to the solver. Set its focal length under **Push-To → Equipment** while it is
   the selected camera — a guide scope is usually much shorter than the imaging scope,
-  and the solver needs the right field to search.
+  and the solver needs the right field to search. A camera connected for the first
+  time takes its sensor from the camera, but its focal length only if it has the same
+  sensor as the last camera; otherwise the field stays empty until you enter it.
 - **Each camera has its own exposure, gain and cooling.** Click a camera in the list to
   select it; the capture controls then show and edit *that* camera's values, and its
   temperature and dew heater are reported and driven independently of the imaging

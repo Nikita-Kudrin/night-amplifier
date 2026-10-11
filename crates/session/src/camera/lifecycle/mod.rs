@@ -210,11 +210,7 @@ pub(crate) async fn vacate_role(state: &Arc<AppState>, role: CameraRole) -> ApiR
 /// One place decides both, because they have to agree: naming the guide camera while
 /// still handing over the main scope's focal length is worse than naming neither.
 pub(crate) async fn sync_solver_rig(state: &Arc<AppState>) {
-    let solve_camera = match state.camera_in_role(CameraRole::Guide) {
-        Some(guide) => Some(guide),
-        None => state.camera_in_role(CameraRole::Main),
-    };
-    let camera_name = solve_camera.map(|info| info.info.name);
+    let camera_name = state.solver_camera().map(|camera| camera.name);
 
     let telescope = {
         let settings = state.settings.snapshot();

@@ -16,6 +16,7 @@ import {isCaptureRunning} from '../constants'
 const cameras = inject('cameras')
 const selectedCamera = inject('selectedCamera')
 const refreshCameras = inject('refreshCameras')
+const refreshSettings = inject('refreshSettings', async () => {})
 const eventStream = inject('eventStream')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const cameraStatus = inject('cameraStatus', {value: {}})
@@ -75,6 +76,10 @@ async function handleConnect(cameraId, role = 'main') {
   connecting.value = cameraId
   await withErrorHandling(async () => {
     await connectCamera(cameraId, role)
+    // The settings first: the connect stored this camera's profiles, and Push-To resolved a
+    // camera it found no profile for from the previous camera's optics. Not in parallel:
+    // with nothing selected, the list refresh selects the new camera itself.
+    await refreshSettings()
     await refreshCameras()
     // Focus the newly connected camera for editing, whichever position it took: it is
     // the one the user is about to set an exposure on.

@@ -5,6 +5,7 @@ import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseToggle, BaseInfoIcon} from './ui'
+import SelectedCameraTag from './SelectedCameraTag.vue'
 
 const props = defineProps({
   connectedCameraInfo: {type: Object, default: null},
@@ -22,7 +23,7 @@ const manualSensorExpanded = ref(false)
 const {
   focalLength, pixelSizeX, pixelSizeY,
   sensorWidthPx, sensorHeightPx, barlowCoeff,
-  manualPixelSize, calculatedFov, autoFillFromCamera, selectCamera,
+  manualPixelSize, calculatedFov, autoFillFromCamera, selectCamera, profileName,
 } = useTelescopeSetup({withErrorHandling, connectedCameraInfo: computed(() => props.connectedCameraInfo)})
 
 // Emit FOV changes to parent (for FOV warning)
@@ -85,7 +86,7 @@ defineExpose({calculatedFov})
       >
         <path d="M6 9l6 6 6-6"/>
       </svg>
-      <h3 class="section-title">Equipment</h3>
+      <h3 class="section-title">Equipment <SelectedCameraTag :fallback-name="profileName"/></h3>
       <span v-if="calculatedFov && equipmentCollapsed" class="fov-badge">
         {{ formatFov(calculatedFov.x) }} &times; {{ formatFov(calculatedFov.y) }}
       </span>

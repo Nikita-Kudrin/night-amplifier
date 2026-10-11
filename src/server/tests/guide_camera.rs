@@ -199,17 +199,17 @@ async fn a_framing_change_is_judged_against_the_role_it_was_sent_for() {
     };
 
     assert!(
-        optics_change(&request, &settings, CameraRole::Main).framing,
+        optics_change(&request, &settings, CameraRole::Main, None).framing,
         "bin 1 -> 2 on the imaging camera is a framing change"
     );
     assert!(
-        !optics_change(&request, &settings, CameraRole::Guide).framing,
+        !optics_change(&request, &settings, CameraRole::Guide, None).framing,
         "the guide camera was already at bin 2 — nothing changed"
     );
 }
 
-/// The per-camera map is what the solver reads, so rewriting it moves the FOV hint even
-/// when the shared telescope block is untouched.
+/// The per-camera map is what the solver reads, so rewriting the solving camera's entry
+/// moves the FOV hint even when the shared telescope block is untouched.
 #[tokio::test]
 async fn rewriting_the_optics_profiles_counts_as_a_telescope_change() {
     use crate::session::services::optics_change;
@@ -230,7 +230,40 @@ async fn rewriting_the_optics_profiles_counts_as_a_telescope_change() {
         ..Default::default()
     };
 
-    assert!(optics_change(&request, &settings, CameraRole::Guide).telescope);
+    let guiding = solving(CameraRole::Guide, "Guiding");
+    let imaging = solving(CameraRole::Main, "Imaging");
+    assert!(optics_change(&request, &settings, CameraRole::Guide, Some(&guiding)).telescope);
+    assert!(
+        !optics_change(&request, &settings, CameraRole::Guide, Some(&imaging)).telescope,
+        "the solver reads the imaging camera's optics, which this request leaves alone"
+    );
+}
+
+fn solving(role: CameraRole, name: &str) -> SolverCamera {
+    SolverCamera { role, name: name.to_string() }
+}
+
+/// The solver only sees the guide camera's frames while one is connected, so rebinning
+/// the imaging camera leaves its field alone — restarting would abort a solve for nothing.
+#[tokio::test]
+async fn a_framing_change_counts_only_for_the_camera_that_feeds_the_solver() {
+    use crate::session::services::optics_change;
+    use crate::server::dto::UpdateSettingsRequest;
+
+    let settings = CaptureSettings {
+        bin: 1,
+        ..Default::default()
+    };
+    let request = UpdateSettingsRequest {
+        bin: Some(2),
+        ..Default::default()
+    };
+    let guiding = solving(CameraRole::Guide, "Guiding");
+    let imaging = solving(CameraRole::Main, "Imaging");
+
+    assert!(!optics_change(&request, &settings, CameraRole::Main, Some(&guiding)).framing);
+    assert!(optics_change(&request, &settings, CameraRole::Main, Some(&imaging)).framing);
+    assert!(optics_change(&request, &settings, CameraRole::Guide, Some(&guiding)).framing);
 }
 
 /// A guide camera that has never been configured must still produce a config a real SDK

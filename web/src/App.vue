@@ -3,7 +3,9 @@ import {ref, provide, onMounted, watch} from 'vue'
 import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
 import {useAiCompute} from './composables/useAiCompute.js'
+import {useSidebarTabs} from './composables/useSidebarTabs.js'
 import {getAstapStatus, getCatalogStatus} from './composables/api.js'
+import {SIDEBAR_TABS} from './constants'
 
 import CameraPanel from './components/CameraPanel.vue'
 import CaptureControls from './components/CaptureControls.vue'
@@ -47,11 +49,18 @@ const {
   selectedCameraRole,
 } = useAppState()
 
-const showSettings = ref(false)
-const showPushTo = ref(false)
-const showPushToSetup = ref(false)
-const checkingSetup = ref(false)
 const showAbout = ref(false)
+
+const sidebar = ref(null)
+const {
+  activeTab,
+  visited,
+  checkingSetup,
+  showPushToSetup,
+  toggle: toggleTab,
+  setupComplete,
+  closeSetup,
+} = useSidebarTabs({capabilities, getAstapStatus, getCatalogStatus, scroller: sidebar})
 
 // Event stream for real-time updates
 const eventStream = useEventStream()
@@ -76,47 +85,6 @@ provide('mainCamera', mainCamera)
 provide('guideCamera', guideCamera)
 provide('hasGuideCamera', hasGuideCamera)
 provide('selectedCameraRole', selectedCameraRole)
-
-// Handle Push-To button click - check ASTAP and catalog status first
-async function handlePushToClick() {
-  // If already showing Push-To panel, toggle off
-  if (showPushTo.value) {
-    showPushTo.value = false
-    return
-  }
-
-  // If user is not Pro, show the Push-To panel immediately (it handles the lock screen)
-  // This avoids triggering ASTAP/catalog downloads for Community users
-  if (!capabilities.value?.push_to?.astap_solver) {
-    showPushTo.value = true
-    return
-  }
-
-  // Check ASTAP and catalog status before showing Push-To panel
-  checkingSetup.value = true
-  try {
-    const [astapStatus, catalogStatus] = await Promise.all([getAstapStatus(), getCatalogStatus()])
-
-    if (astapStatus.ready && catalogStatus.installed) {
-      // Everything is installed, show Push-To panel
-      showPushTo.value = true
-    } else {
-      // Something is missing, show setup overlay
-      showPushToSetup.value = true
-    }
-  } catch {
-    // If status check fails, show setup overlay anyway
-    showPushToSetup.value = true
-  } finally {
-    checkingSetup.value = false
-  }
-}
-
-// Handle Push-To setup completion
-function handleSetupComplete() {
-  showPushToSetup.value = false
-  showPushTo.value = true
-}
 
 // Watch for external settings updates to sync our state across instances
 watch(
@@ -202,10 +170,12 @@ onMounted(() => {
       <div class="header-spacer"></div>
       <button
           class="btn btn-icon btn-header-icon"
-          :class="{ active: showPushTo, loading: checkingSetup }"
+          :class="{ active: activeTab === SIDEBAR_TABS.PUSH_TO, loading: checkingSetup }"
           title="Push-To Navigation"
+          data-test="tab-push-to"
+          :aria-pressed="activeTab === SIDEBAR_TABS.PUSH_TO"
           :disabled="checkingSetup"
-          @click="handlePushToClick"
+          @click="toggleTab(SIDEBAR_TABS.PUSH_TO)"
       >
         <svg
             v-if="!checkingSetup"
@@ -221,9 +191,11 @@ onMounted(() => {
       </button>
       <button
           class="btn btn-icon btn-header-icon"
-          :class="{ active: showSettings }"
+          :class="{ active: activeTab === SIDEBAR_TABS.SETTINGS }"
           title="Settings"
-          @click="showSettings = !showSettings"
+          data-test="tab-settings"
+          :aria-pressed="activeTab === SIDEBAR_TABS.SETTINGS"
+          @click="toggleTab(SIDEBAR_TABS.SETTINGS)"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
@@ -260,12 +232,28 @@ onMounted(() => {
 
     <!-- Main content -->
     <main v-else class="main">
-      <!-- Left panel (controls) -->
-      <aside class="sidebar" :class="{ 'settings-open': showSettings, 'pushto-open': showPushTo }">
-        <PushToPanel v-if="showPushTo"/>
-        <CameraPanel/>
-        <CaptureControls/>
-        <SettingsPanel v-if="showSettings"/>
+      <!-- Left panel: one tab at a time, each kept mounted once visited (useSidebarTabs) -->
+      <aside ref="sidebar" class="sidebar" :class="{ expanded: activeTab !== SIDEBAR_TABS.MAIN }">
+        <div v-show="activeTab === SIDEBAR_TABS.MAIN" class="sidebar-tab" data-test="sidebar-main">
+          <CameraPanel/>
+          <CaptureControls/>
+        </div>
+        <div
+            v-if="visited.has(SIDEBAR_TABS.PUSH_TO)"
+            v-show="activeTab === SIDEBAR_TABS.PUSH_TO"
+            class="sidebar-tab"
+            data-test="sidebar-push-to"
+        >
+          <PushToPanel/>
+        </div>
+        <div
+            v-if="visited.has(SIDEBAR_TABS.SETTINGS)"
+            v-show="activeTab === SIDEBAR_TABS.SETTINGS"
+            class="sidebar-tab"
+            data-test="sidebar-settings"
+        >
+          <SettingsPanel/>
+        </div>
       </aside>
 
       <!-- Live view (center) -->
@@ -280,8 +268,8 @@ onMounted(() => {
     <!-- Push-To Setup Overlay -->
     <PushToSetupOverlay
         v-if="showPushToSetup"
-        @close="showPushToSetup = false"
-        @installed="handleSetupComplete"
+        @close="closeSetup"
+        @installed="setupComplete"
     />
 
     <!-- About / License Dialog -->
@@ -399,6 +387,11 @@ onMounted(() => {
   gap: 1px;
 }
 
+/* Lays the tab's panels out as the sidebar's own children, keeping its gap between them. */
+.sidebar-tab {
+  display: contents;
+}
+
 .btn-header-icon {
   width: 24px;
   height: 24px;
@@ -428,8 +421,7 @@ onMounted(() => {
     border-bottom: 1px solid var(--border);
   }
 
-  .sidebar.settings-open,
-  .sidebar.pushto-open {
+  .sidebar.expanded {
     max-height: 60vh;
   }
 

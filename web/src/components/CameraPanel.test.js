@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises, enableAutoUnmount} from '@vue/test-utils'
-import {ref} from 'vue'
+import {ref, watch} from 'vue'
 import CameraPanel from './CameraPanel.vue'
 
 // Mock the API module
@@ -338,6 +338,59 @@ describe('CameraPanel', () => {
             await flushPromises()
 
             expect(connectCamera).toHaveBeenCalledWith('cam1', 'main')
+        })
+
+        // The connect stored the camera's profiles; Push-To resolves the selected camera
+        // from them, and without them derived its optics from the previous camera's.
+        it('loads the settings before it selects the connected camera', async () => {
+            let settingsLoaded = false
+            let loadedWhenSelected = null
+            const provide = {
+                ...createMockProvides({
+                    cameras: [{id: 'cam1', name: 'Mars-M', connected: false, info: {}}],
+                }),
+                refreshSettings: vi.fn(async () => {
+                    await Promise.resolve()
+                    settingsLoaded = true
+                }),
+            }
+            watch(provide.selectedCamera, () => { loadedWhenSelected = settingsLoaded }, {flush: 'sync'})
+            const wrapper = mount(CameraPanel, {global: {provide}})
+
+            await wrapper.find('.btn-primary').trigger('click')
+            await flushPromises()
+
+            expect(provide.selectedCamera.value).toBe('cam1')
+            expect(loadedWhenSelected).toBe(true)
+        })
+
+        // Review of 4fc5053, R4: with nothing selected, refreshing the list selects the
+        // camera itself (useAppState), so it must not run before the settings land.
+        it('loads the settings before the list refresh selects a first camera', async () => {
+            let settingsLoaded = false
+            let loadedWhenSelected = null
+            const base = createMockProvides({
+                cameras: [{id: 'cam1', name: 'Mars-M', connected: false, info: {}}],
+            })
+            const provide = {
+                ...base,
+                refreshCameras: vi.fn(async () => {
+                    if (!base.selectedCamera.value) base.selectedCamera.value = 'cam1'
+                }),
+                refreshSettings: vi.fn(async () => {
+                    await new Promise((resolve) => setTimeout(resolve, 0))
+                    settingsLoaded = true
+                }),
+            }
+            watch(provide.selectedCamera, () => { loadedWhenSelected = settingsLoaded }, {flush: 'sync'})
+            const wrapper = mount(CameraPanel, {global: {provide}})
+
+            await wrapper.find('.btn-primary').trigger('click')
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            await flushPromises()
+
+            expect(provide.selectedCamera.value).toBe('cam1')
+            expect(loadedWhenSelected).toBe(true)
         })
 
         it('calls disconnectCamera when Disconnect button clicked', async () => {

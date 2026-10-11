@@ -89,7 +89,7 @@ function databases(installedIds = []) {
 
 // ─── Component mounting ───────────────────────────────────────────────────────
 
-function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases()) {
+function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases(), {cameras = [], selected = null} = {}) {
     getAstapStatus.mockResolvedValue(mockedAstapStatus)
     getAstapDatabases.mockResolvedValue(mockedDatabases)
 
@@ -97,8 +97,8 @@ function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases()) 
         global: {
             provide: {
                 settings,
-                cameras: ref([]),
-                selectedCamera: ref(null),
+                cameras: ref(cameras),
+                selectedCamera: ref(selected),
                 capabilities: ref({
                     has_pro: true,
                     push_to: {astap_solver: true},
@@ -659,5 +659,49 @@ describe('PushToPanel – catalog search', () => {
 
         expect(wrapper.find('.search-result-item').exists()).toBe(true)
         expect(wrapper.find('.result-matched').exists()).toBe(false)
+    })
+})
+
+// Review of 4fc5053, R1: the Equipment fields edit `last_camera_name`'s profile, which
+// with no camera selected is whichever camera was clicked last — often the guide. A
+// heading naming nobody let the imaging scope's focal length land in the guide's profile.
+describe('PushToPanel – Equipment heading', () => {
+    const GUIDE_SCOPE = {
+        focal_length_mm: 200,
+        pixel_size_x_um: 2.9,
+        pixel_size_y_um: 2.9,
+        sensor_width_px: 1936,
+        sensor_height_px: 1096,
+        barlow_coeff: 1,
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+    })
+
+    it('names the camera whose profile it edits when no camera is selected', async () => {
+        const settings = ref({
+            telescope: GUIDE_SCOPE,
+            camera_telescope_profiles: {'ASI120MM Mini': GUIDE_SCOPE},
+            last_camera_name: 'ASI120MM Mini',
+        })
+        const wrapper = mountPanel(settings, astapStatus('D80'))
+        await flushPromises()
+
+        expect(wrapper.find('.equipment-header').text()).toContain('ASI120MM Mini')
+    })
+
+    it('names the selected camera once one is', async () => {
+        const settings = ref({
+            telescope: GUIDE_SCOPE,
+            camera_telescope_profiles: {'ASI120MM Mini': GUIDE_SCOPE},
+            last_camera_name: 'ASI120MM Mini',
+        })
+        const imaging = {id: 'cam-a', name: 'ASI533MC Pro', role: 'main', connected: true,
+            info: {name: 'ASI533MC Pro', pixel_size_x_um: 3.76, max_width: 3008, max_height: 3008}}
+        const wrapper = mountPanel(settings, astapStatus('D80'), databases(), {cameras: [imaging], selected: 'cam-a'})
+        await flushPromises()
+
+        expect(wrapper.find('.equipment-header').text()).toContain('Main · ASI533MC Pro')
     })
 })

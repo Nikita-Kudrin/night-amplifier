@@ -1,8 +1,10 @@
 <script setup>
 import {computed, inject, ref, watch} from 'vue'
 import {updateSettings} from '../composables/api.js'
+import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {useError} from '../composables/useError.js'
 import {BaseSlider, BaseToggle} from './ui'
+import SelectedCameraTag from './SelectedCameraTag.vue'
 import {HELP_TEXTS} from '../constants'
 
 const settings = inject('settings', ref(null))
@@ -47,19 +49,17 @@ const liveStatus = computed(() => {
   return name ? cameraStatus.value?.[name] : null
 })
 
-let debounceTimer = null
-
-async function applySetting(payload) {
+/** `role` is the camera selected when the edit was made, not when a debounce fires. */
+async function applySetting(payload, role = settingsRole.value) {
   await withErrorHandling(async () => {
-    await updateSettings({camera_role: settingsRole.value, ...payload})
+    await updateSettings({camera_role: role, ...payload})
     await refreshSettings()
   })
 }
 
-function debouncedApply(payload) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => applySetting(payload), 300)
-}
+const {schedule: debouncedApply, flush: flushPending} = useDebouncedCall(applySetting, 300)
+// A pending edit is the outgoing camera's: sent now, it is never coalesced with the next one's.
+watch(settingsRole, flushPending)
 
 function handleHeaterToggle(enabled) {
   localHeaterEnabled.value = enabled
@@ -68,7 +68,7 @@ function handleHeaterToggle(enabled) {
 
 function handlePowerChange(value) {
   localHeaterPower.value = value
-  debouncedApply({dew_heater_power: value})
+  debouncedApply({dew_heater_power: value}, settingsRole.value)
 }
 
 function formatPercent(v) {
@@ -78,7 +78,7 @@ function formatPercent(v) {
 
 <template>
   <div v-if="hasDewHeater" class="settings-section dew-heater-control">
-    <h3 class="section-title">Dew Heater</h3>
+    <h3 class="section-title">Dew Heater <SelectedCameraTag/></h3>
 
     <div v-if="error" class="heater-error">{{ error }}</div>
 

@@ -43,6 +43,14 @@ impl CameraRole {
     }
 }
 
+/// The camera whose frames the plate solver gets, and the position it holds: its
+/// telescope profile is the FOV hint, and its role's binning is the solve's framing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolverCamera {
+    pub role: CameraRole,
+    pub name: String,
+}
+
 /// Capture session state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CaptureState {

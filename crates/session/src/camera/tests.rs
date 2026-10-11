@@ -17,7 +17,7 @@ use crate::camera::lifecycle::DisconnectCause;
 use crate::camera::{lifecycle, monitor, PHASE_POLL_INTERVAL};
 use crate::events::ServerEvent;
 use crate::state::{
-    AppState, CameraOp, CameraPhase, CameraRole, CaptureState, ConnectedCameraInfo,
+    AppState, CameraOp, CameraPhase, CameraRole, CaptureState, ConnectedCameraInfo, SolverCamera,
 };
 
 /// Cooler model for the mock camera: step once per `status()` call with a
@@ -1653,6 +1653,22 @@ async fn a_main_and_a_guide_camera_hold_independent_handles() {
     );
 }
 
+/// The solver gets the guide camera's frames whenever one is connected, so its optics
+/// profile is the one a settings update is judged against.
+#[tokio::test]
+async fn the_solver_camera_is_the_guide_camera_when_there_is_one() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let solver = |role, name: &str| Some(SolverCamera { role, name: name.to_string() });
+    assert_eq!(state.solver_camera(), None);
+
+    install_camera(&state, CameraRole::Main, "mock_0", "Imaging", CameraPhase::Idle).await;
+    assert_eq!(state.solver_camera(), solver(CameraRole::Main, "Imaging"));
+
+    install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
+    assert_eq!(state.solver_camera(), solver(CameraRole::Guide, "Guiding"));
+}
+
 /// An idle incumbent is just occupying the position, so a new camera takes its place.
 #[tokio::test]
 async fn an_idle_role_is_vacated_for_a_new_camera() {
@@ -2459,4 +2475,28 @@ async fn a_handle_lost_while_its_warmup_waits_is_not_reopened() {
     assert!(!state.slot(CameraRole::Main).is_recovering());
     assert!(!state.slot(CameraRole::Main).reconnect_in_flight.load(Ordering::SeqCst));
     assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
+}
+
+/// A connect writes the settings (the camera's stored profile, a seeded telescope
+/// profile), and only `SettingsUpdated` makes clients fetch them: without it the Push-To
+/// tab derived the new camera's optics from stale settings and posted them over the seed.
+#[tokio::test(flavor = "multi_thread")]
+async fn connecting_a_camera_tells_clients_the_settings_changed() {
+    use super::recovery_tests::{connect, drain, rig, teardown, FakeCatalog, NEPTUNE};
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    let mut events = state.subscribe_events();
+
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+
+    assert!(
+        state.settings.snapshot().camera_profiles.keys().any(|key| key.contains(NEPTUNE.name)),
+        "the connect stored a profile for the camera"
+    );
+    assert!(
+        drain(&mut events).iter().any(|event| matches!(event, ServerEvent::SettingsUpdated)),
+        "no settings_updated after a connect changed the settings"
+    );
+    teardown(&state).await;
 }

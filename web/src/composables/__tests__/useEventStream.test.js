@@ -1,4 +1,4 @@
-import {describe, it, expect, beforeEach, afterEach} from 'vitest'
+import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
 import {nextTick} from 'vue'
 import {
     MockWebSocket,
@@ -13,6 +13,11 @@ import {
 
 setupGlobalWebSocketMock()
 
+// Opening the socket loads the Push-To status; unmocked, every test fetched it for real.
+const IDLE_STATUS = {solver_ready: true, is_solving: false, current_target: null, last_position: null, direction: null}
+vi.mock('../api.js', () => ({getPushToStatus: vi.fn(async () => IDLE_STATUS)}))
+
+import {getPushToStatus} from '../api.js'
 import {useEventStream as originalUseEventStream} from '../useEventStream.js'
 import { mount } from '@vue/test-utils'
 
@@ -378,6 +383,44 @@ describe('useEventStream', () => {
 
             clearAstapInstallProgress()
             expect(astapInstallProgress.value).toBe(null)
+        })
+    })
+
+    describe('Push-To status on connect', () => {
+        /** Lets `onOpen` finish with the status reply it awaited. */
+        async function statusSettled() {
+            await getPushToStatus.mock.results.at(-1).value.catch(() => {})
+            await nextTick()
+        }
+
+        it('shows the target and push direction the server already holds', async () => {
+            getPushToStatus.mockResolvedValueOnce({
+                ...IDLE_STATUS,
+                current_target: {designation: 'M31', name: 'Andromeda Galaxy', ra_degrees: 10.68, dec_degrees: 41.27},
+                direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false, solved_camera: 'Main'},
+            })
+            const {currentTarget, pushDirection} = useEventStream()
+
+            await openWebSocket()
+            await statusSettled()
+
+            expect(currentTarget.value).toMatchObject({designation: 'M31'})
+            // The REST status carries no FOV; only the event does.
+            expect(pushDirection.value).toEqual({
+                angleDeg: 120, distanceDeg: 4.5, directionHint: 'SE', isClose: false,
+                fovDeg: 0, solvedCamera: 'Main',
+            })
+        })
+
+        it('starts empty when the status request fails', async () => {
+            getPushToStatus.mockRejectedValueOnce(new TypeError('offline'))
+            const {currentTarget, pushDirection} = useEventStream()
+
+            await openWebSocket()
+            await statusSettled()
+
+            expect(currentTarget.value).toBeNull()
+            expect(pushDirection.value).toBeNull()
         })
     })
 

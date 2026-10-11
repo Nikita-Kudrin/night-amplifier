@@ -2,6 +2,7 @@
 import {ref, inject, watch, computed, unref} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
+import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {
   BasePanel,
   BaseToggle,
@@ -150,12 +151,7 @@ async function applySetting(key, value) {
   })
 }
 
-let debounceTimer = null
-
-function debouncedApply(key, value) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => applySetting(key, value), 300)
-}
+const {schedule: debouncedApply} = useDebouncedCall(applySetting, 300)
 
 function formatPercent(v) {
   return `${(v * 100).toFixed(0)}%`

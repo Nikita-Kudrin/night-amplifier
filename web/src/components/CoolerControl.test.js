@@ -1,6 +1,6 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
-import {ref, nextTick} from 'vue'
+import {h, ref, nextTick} from 'vue'
 import CoolerControl from './CoolerControl.vue'
 
 vi.mock('../composables/api.js', () => ({
@@ -15,6 +15,8 @@ describe('CoolerControl', () => {
         updateSettings.mockResolvedValue({})
     })
 
+    afterEach(() => vi.useRealTimers())
+
     function createMockProvides(overrides = {}) {
         return {
             settings: ref(
@@ -27,6 +29,7 @@ describe('CoolerControl', () => {
             cameras: ref(overrides.cameras ?? []),
             selectedCamera: ref(overrides.selectedCamera ?? null),
             cameraStatus: ref(overrides.cameraStatus ?? {}),
+            selectedCameraRole: ref(overrides.role ?? 'main'),
         }
     }
 
@@ -75,6 +78,8 @@ describe('CoolerControl', () => {
 
         expect(wrapper.find('.cooler-control').exists()).toBe(true)
         expect(wrapper.text()).toContain('Camera cooler')
+        // The camera list sits on another tab, so the heading names the camera.
+        expect(wrapper.find('.section-title').text()).toContain('Cool Cam')
         expect(wrapper.text()).toContain('Sensor')
     })
 
@@ -229,5 +234,66 @@ describe('CoolerControl', () => {
         await nextTick()
 
         expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', cooler_fast_mode: true})
+    })
+    describe('target temperature', () => {
+        const cooled = {
+            cameras: [{id: 'cam1', name: 'Cool Cam', info: {has_cooler: true, max_width: 1920, max_height: 1080}}],
+            selectedCamera: 'cam1',
+            settings: {cooler_enabled: true, target_temp_c: -10},
+        }
+
+        function dragTarget(wrapper, value) {
+            const slider = wrapper.findComponent({name: 'BaseSlider'})
+            slider.vm.$emit('update:modelValue', value)
+            slider.vm.$emit('change', value)
+        }
+
+        it('sends the last value once, 300 ms after the drag ends', async () => {
+            vi.useFakeTimers()
+            const wrapper = mountControl(cooled)
+            await flushPromises()
+
+            dragTarget(wrapper, -12)
+            dragTarget(wrapper, -15)
+            expect(updateSettings).not.toHaveBeenCalled()
+            await vi.advanceTimersByTimeAsync(300)
+
+            expect(updateSettings).toHaveBeenCalledTimes(1)
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -15})
+        })
+
+        it('sends a pending value when the Settings tab is torn down', async () => {
+            vi.useFakeTimers()
+            const wrapper = mount({render: () => h(CoolerControl)}, {global: {provide: createMockProvides(cooled)}})
+            await flushPromises()
+
+            dragTarget(wrapper, -18)
+            wrapper.unmount()
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledTimes(1)
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -18})
+        })
+
+        it('sends a pending value to its own camera when the selection changes', async () => {
+            vi.useFakeTimers()
+            const hardware = {cooler_enabled: true, target_temp_c: -10}
+            const provide = createMockProvides({
+                ...cooled,
+                settings: {...hardware, guide_camera: hardware},
+                role: 'guide',
+            })
+            const wrapper = mount(CoolerControl, {global: {provide}})
+            await flushPromises()
+
+            dragTarget(wrapper, -5)
+            provide.selectedCameraRole.value = 'main'
+            await flushPromises()
+            expect(updateSettings).toHaveBeenCalledTimes(1)
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'guide', target_temp_c: -5})
+
+            await vi.advanceTimersByTimeAsync(300)
+            expect(updateSettings).toHaveBeenCalledTimes(1)
+        })
     })
 })

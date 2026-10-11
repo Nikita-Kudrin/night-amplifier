@@ -22,6 +22,7 @@ fn main_camera(capture_state: CaptureState) -> UpdateTarget {
         role: CameraRole::Main,
         profile_key: Some("ZWO/ASI533MC Pro".to_string()),
         capture_state,
+        solver: None,
     }
 }
 
@@ -30,6 +31,7 @@ fn guide_camera() -> UpdateTarget {
         role: CameraRole::Guide,
         profile_key: Some("PlayerOne/Ares-C PRO".to_string()),
         capture_state: CaptureState::Idle,
+        solver: None,
     }
 }
 
@@ -311,4 +313,52 @@ fn switching_a_running_live_view_to_stacking_leaves_focus_mode() {
 
     assert!(delta.left_focus_mode);
     assert!(!settings.focus_mode && settings.focus_mode_snapshot.is_none());
+}
+
+fn scope(focal_length_mm: f32, pixel_size_um: f32, height_px: u32) -> night_amplifier_core::push_to::TelescopeSettings {
+    night_amplifier_core::push_to::TelescopeSettings {
+        focal_length_mm: Some(focal_length_mm),
+        pixel_size_x_um: Some(pixel_size_um),
+        pixel_size_y_um: Some(pixel_size_um),
+        sensor_width_px: Some(height_px),
+        sensor_height_px: Some(height_px),
+        barlow_coeff: Some(1.0),
+    }
+}
+
+fn solving_on(role: CameraRole, name: &str) -> UpdateTarget {
+    UpdateTarget {
+        solver: Some(SolverCamera { role, name: name.to_string() }),
+        ..main_camera(CaptureState::Idle)
+    }
+}
+
+/// Review of 4fc5053, R2: the UI posts its whole profile map, built from the settings it
+/// last fetched. One built before a connect's seed reached it replaced the map, the
+/// solving guide camera fell back to the flat block — the imaging scope — and the next
+/// solve ran on a 3x-wrong FOV hint. A profile the request does not name stays.
+#[test]
+fn a_profile_map_without_the_solving_camera_keeps_its_profile() {
+    let imaging = scope(650.0, 3.76, 3008);
+    let guiding = scope(200.0, 2.9, 1096);
+    let mut settings = CaptureSettings {
+        telescope: imaging.clone(),
+        camera_telescope_profiles: [
+            ("ASI533MC Pro".to_string(), imaging.clone()),
+            ("ASI120MM Mini".to_string(), guiding.clone()),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    // Fetched before the guide camera connected and was seeded.
+    let stale = UpdateSettingsRequest {
+        telescope: Some(imaging.clone()),
+        camera_telescope_profiles: Some([("ASI533MC Pro".to_string(), imaging)].into()),
+        last_camera_name: Some("ASI533MC Pro".into()),
+        ..Default::default()
+    };
+
+    apply(stale, &mut settings, &solving_on(CameraRole::Guide, "ASI120MM Mini"), &Plugins::none());
+
+    assert_eq!(settings.solver_telescope(Some("ASI120MM Mini")), guiding);
 }

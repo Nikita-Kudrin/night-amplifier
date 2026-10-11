@@ -21,6 +21,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::events::ServerEvent;
 use crate::state::{
     focus_mode, AppState, CameraRole, CaptureMode, CaptureSettings, CaptureState, Resolution,
+    SolverCamera,
 };
 
 /// Which Push-To-relevant inputs a settings update actually changes.
@@ -51,10 +52,17 @@ impl OpticsChange {
 /// `role` is the camera the request's hardware fields are for: binning and sensor mode
 /// live in that camera's own profile, so comparing them against the flat fields would
 /// report a guide-camera change as a change to the imaging camera's framing.
+///
+/// `solver` is the camera the solver gets frames from: only a change to *its* resolved
+/// telescope or *its* framing counts. Selecting the other camera in the UI re-posts that
+/// camera's profile as the flat block, and comparing the flat block restarted the solve
+/// on every click although the solver read the same profile before and after. With no
+/// camera connected, every change counts.
 pub fn optics_change(
     request: &UpdateSettingsRequest,
     current: &CaptureSettings,
     role: CameraRole,
+    solver: Option<&SolverCamera>,
 ) -> OpticsChange {
     let profile = current.profile_for(role);
     let bin_changed = request.bin.is_some_and(|b| b != profile.bin);
@@ -62,21 +70,24 @@ pub fn optics_change(
         .sensor_mode_override
         .as_ref()
         .is_some_and(|m| Some(m) != profile.sensor_mode_override.as_ref());
+    let frames_the_solve = solver.is_none_or(|solver| solver.role == role);
 
-    // A per-camera optics profile is what the solver actually reads, so a request that
-    // only rewrites the map still moves the FOV hint. The flat block alone would miss it.
-    let profiles_changed = request
-        .camera_telescope_profiles
-        .as_ref()
-        .is_some_and(|p| *p != current.camera_telescope_profiles);
+    // Resolved as `apply` leaves it: the request's profiles are upserted.
+    let solver_name = solver.map(|solver| solver.name.as_str());
+    let flat = request.telescope.as_ref().unwrap_or(&current.telescope);
+    let requested = solver_name
+        .and_then(|name| {
+            request
+                .camera_telescope_profiles
+                .as_ref()
+                .and_then(|profiles| profiles.get(name))
+                .or_else(|| current.camera_telescope_profiles.get(name))
+        })
+        .unwrap_or(flat);
 
     OpticsChange {
-        telescope: profiles_changed
-            || request
-                .telescope
-                .as_ref()
-                .is_some_and(|t| *t != current.telescope),
-        framing: bin_changed || sensor_mode_changed,
+        telescope: *requested != current.solver_telescope(solver_name),
+        framing: frames_the_solve && (bin_changed || sensor_mode_changed),
     }
 }
 
@@ -105,6 +116,8 @@ pub(crate) struct UpdateTarget {
     /// position is empty, so no phantom profile is created for it.
     pub profile_key: Option<String>,
     pub capture_state: CaptureState,
+    /// See [`optics_change`].
+    pub solver: Option<SolverCamera>,
 }
 
 /// What an applied update changed: the input to every reaction that follows it.
@@ -182,7 +195,7 @@ pub(crate) fn apply(
     plugins: &Plugins,
 ) -> SettingsDelta {
     let delta = SettingsDelta {
-        optics: optics_change(&request, settings, target.role),
+        optics: optics_change(&request, settings, target.role, target.solver.as_ref()),
         cooler: request.cooler_enabled.is_some()
             || request.target_temp_c.is_some()
             || request.cooler_fast_mode.is_some(),
@@ -229,9 +242,14 @@ pub(crate) fn apply(
         planetary_multi_point_alignment, auto_reconnect, auto_resume_capture, wanderer_mode,
         auto_crop,
         denoise, preview_resolution, streaming_resolution, sensor_correction, eyepiece,
-        telescope, camera_telescope_profiles, camera_profiles, eula_accepted,
-        indi_server_host, indi_server_port,
+        telescope, camera_profiles, eula_accepted, indi_server_host, indi_server_port,
     );
+    // Upserted, never replaced: a client posting the map it last fetched erased a profile
+    // seeded at connect since, and the solving guide camera fell back to the imaging
+    // scope's optics. No client removes a profile.
+    if let Some(profiles) = request.camera_telescope_profiles {
+        settings.camera_telescope_profiles.extend(profiles);
+    }
     set_present!(request => settings; comet_roi, planetary_roi, last_camera_name);
 
     let profile = profile.sanitized();
@@ -289,6 +307,7 @@ impl SettingsService {
                 .camera_in_role(role)
                 .map(|camera| camera_profile_key(&camera.provider, &camera.info.name, role)),
             capture_state: state.capture_state(),
+            solver: state.solver_camera(),
         };
 
         let (applied, delta) = state.settings.try_update(|settings| {

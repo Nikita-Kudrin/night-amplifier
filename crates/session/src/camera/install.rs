@@ -370,8 +370,11 @@ pub(super) async fn install_camera(
     // scale.
     sync_solver_rig(state).await;
 
-    // Persist the (possibly new / clamped) camera profile to disk.
+    // Persist the (possibly new / clamped) camera profile and seeded telescope profile,
+    // and announce them: a client left on the old settings derived the new camera's
+    // optics itself and posted them over the seed.
     state.save_settings();
+    let _ = state.events.send(ServerEvent::SettingsUpdated);
 
     // The guide camera free-runs from the moment it connects: solving and its preview
     // must work while the user is still framing, before any capture has started.
