@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
 import {mount} from '@vue/test-utils'
-import {nextTick, reactive} from 'vue'
+import {h, nextTick, reactive} from 'vue'
 import EyepieceSettings from './EyepieceSettings.vue'
 
 const EYEPIECE = {
@@ -47,5 +47,20 @@ describe('EyepieceSettings', () => {
             'eyepiece',
             expect.objectContaining({intensity: 0.8, stream_resolution: 'native'}),
         ])
+    })
+    // Vue drops an emit from an unmounted component, so a size typed just before the
+    // Settings tab closed never reached the server.
+    it('sends a pending screen size when it unmounts', async () => {
+        vi.useFakeTimers()
+        const onApply = vi.fn()
+        const wrapper = mount({render: () => h(EyepieceSettings, {eyepiece: {...EYEPIECE}, onApply})})
+
+        await wrapper.find('input[type="number"]').setValue(130)
+        wrapper.unmount()
+
+        expect(onApply).toHaveBeenCalledTimes(1)
+        expect(onApply).toHaveBeenCalledWith('eyepiece', expect.objectContaining({screen_width: 130}))
+        vi.advanceTimersByTime(300)
+        expect(onApply).toHaveBeenCalledTimes(1)
     })
 })

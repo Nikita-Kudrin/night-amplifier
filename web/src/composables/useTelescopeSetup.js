@@ -1,6 +1,48 @@
 import {ref, computed, watch, inject} from 'vue'
 import {updateSettings} from './api.js'
+import {useDebouncedCall} from './useDebouncedCall.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
+
+const TELESCOPE_FIELDS = [
+    'focal_length_mm',
+    'pixel_size_x_um',
+    'pixel_size_y_um',
+    'sensor_width_px',
+    'sensor_height_px',
+    'barlow_coeff',
+]
+
+/**
+ * Settings as a string that ignores key order, the server's 0-vs-null spelling and an
+ * unset Barlow, which the page shows (as a placeholder) and the solver reads as 1x.
+ */
+function payloadKey({telescope, camera_telescope_profiles: profiles, last_camera_name}) {
+    const cameras = Object.keys(profiles ?? {}).sort()
+    return JSON.stringify([
+        opticsFields(telescope),
+        cameras.map((name) => [name, opticsFields(profiles[name])]),
+        last_camera_name ?? null,
+    ])
+}
+
+function opticsFields(t) {
+    return TELESCOPE_FIELDS.map((field) => t?.[field] || (field === 'barlow_coeff' ? 1 : null))
+}
+
+function sameOptics(a, b) {
+    return JSON.stringify(opticsFields(a)) === JSON.stringify(opticsFields(b))
+}
+
+/**
+ * The profiles that differ from what the server holds. The server upserts the ones a
+ * request names; sending the whole map from the last fetch erased a profile seeded at
+ * connect since, and the guide camera then solved on the imaging scope's optics.
+ */
+function changedProfiles(profiles, persisted) {
+    return Object.fromEntries(
+        Object.entries(profiles).filter(([name, profile]) => !sameOptics(profile, persisted[name]))
+    )
+}
 
 /**
  * Telescope setup + FOV calculation: focal length, sensor (pixel size/resolution), and
@@ -12,6 +54,7 @@ import {CAMERA_DATABASE} from '../constants/cameras.js'
  */
 export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {}) {
     const settings = inject('settings')
+    const refreshSettings = inject('refreshSettings', async () => {})
 
     // ── Local reactive state ──────────────────────────────────────────
     const focalLength = ref(null)
@@ -19,33 +62,92 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     const pixelSizeY = ref(null)
     const sensorWidthPx = ref(null)
     const sensorHeightPx = ref(null)
-    const barlowCoeff = ref(1.0)
+    const barlowCoeff = ref(null)
     const manualPixelSize = ref(false)
 
     // ── Per-camera profile state ──────────────────────────────────────
     const cameraProfiles = ref({})   // camera_name -> TelescopeSettings
     const lastCameraName = ref(null)
+    // The server's profiles as of the last sync or landed save: a save sends only the
+    // entries that differ from them.
+    let persistedProfiles = {}
 
-    // ── Sync from persisted settings on load ──────────────────────────
+    // ── Sync from the server's settings ───────────────────────────────
+    // The Push-To tab stays mounted for the page's life, so this follows every settings
+    // change: the server seeds a profile for each camera it connects, and other clients
+    // edit them. Reading them once overwrote a guide scope's profile with the main
+    // scope's focal length on the next camera click.
     const initialSyncDone = ref(false)
+    // What the server holds, so re-deriving its values (a mount, a camera click, a sync)
+    // never writes them back.
+    let persistedKey = null
+    // An edit typed here and not yet sent survives a sync; values derived from the
+    // camera or the server do not. Set by a watcher that skips `assign`ed changes.
+    let userEdited = false
+    let assigning = 0
+    // Outgoing cameras whose typed values were parked in `cameraProfiles` by a camera
+    // switch inside the save delay.
+    const editedProfiles = new Set()
+    // A refresh fetched before a save landed carries the old values, so a sync arriving
+    // while one is in flight is held until it settles.
+    let savesInFlight = 0
+    let heldSync = null
 
-    watch(settings, (s) => {
-        if (!s?.telescope || initialSyncDone.value) return
+    function assign(update) {
+        assigning++
+        try {
+            update()
+        } finally {
+            assigning--
+        }
+    }
+
+    // Whole, never field by field: the server seeds a camera on another sensor without a
+    // focal length, and skipping the gap kept the previous scope's focal length on screen,
+    // from where the next save wrote it into the new camera's profile.
+    function applyFields(t) {
+        focalLength.value = t.focal_length_mm ?? null
+        pixelSizeX.value = t.pixel_size_x_um ?? null
+        pixelSizeY.value = t.pixel_size_y_um ?? null
+        sensorWidthPx.value = t.sensor_width_px ?? null
+        sensorHeightPx.value = t.sensor_height_px ?? null
+        // Unset stays unset (the input's placeholder shows 1x): posted back as 1x it read
+        // as new optics, restarting the solve and orphaning the FOV measured for the rig.
+        barlowCoeff.value = t.barlow_coeff ?? null
+    }
+
+    function syncFrom(s) {
+        if (!s?.telescope) return
+        if (savesInFlight) {
+            heldSync = s
+            return
+        }
+        const first = !initialSyncDone.value
+        const serverProfiles = s.camera_telescope_profiles ?? {}
+        const parked = Object.fromEntries(
+            [...editedProfiles].map((name) => [name, cameraProfiles.value[name]])
+        )
+        cameraProfiles.value = {...serverProfiles, ...parked}
+        persistedProfiles = serverProfiles
+        persistedKey = payloadKey(s)
+
+        if (!first && userEdited) return
+        assign(() => {
+            // The first sync loads the flat block; the camera watcher then resolves the
+            // connected camera from it. Later ones follow that camera's own profile.
+            const selected = connectedCameraInfo?.value?.name
+            if (first || !selected) {
+                applyFields(s.telescope)
+                if (s.last_camera_name) lastCameraName.value = s.last_camera_name
+            } else if (serverProfiles[selected]) {
+                restoreProfile(serverProfiles[selected])
+                lastCameraName.value = selected
+            }
+        })
         initialSyncDone.value = true
-        const t = s.telescope
-        if (t.focal_length_mm != null) focalLength.value = t.focal_length_mm
-        if (t.pixel_size_x_um != null) pixelSizeX.value = t.pixel_size_x_um
-        if (t.pixel_size_y_um != null) pixelSizeY.value = t.pixel_size_y_um
-        if (t.sensor_width_px != null) sensorWidthPx.value = t.sensor_width_px
-        if (t.sensor_height_px != null) sensorHeightPx.value = t.sensor_height_px
-        if (t.barlow_coeff != null) barlowCoeff.value = t.barlow_coeff
-        if (s.camera_telescope_profiles) {
-            cameraProfiles.value = {...s.camera_telescope_profiles}
-        }
-        if (s.last_camera_name) {
-            lastCameraName.value = s.last_camera_name
-        }
-    }, {immediate: true})
+    }
+
+    watch(settings, syncFrom, {immediate: true})
 
     // ── FOV calculation ───────────────────────────────────────────────
     const calculatedFov = computed(() => {
@@ -67,8 +169,6 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     })
 
     // ── Persist when params change ────────────────────────────────────
-    let saveTimer = null
-
     function buildTelescopePayload() {
         return {
             focal_length_mm: focalLength.value || null,
@@ -80,41 +180,82 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
         }
     }
 
-    function scheduleSettingsSave() {
-        clearTimeout(saveTimer)
-        saveTimer = setTimeout(async () => {
-            const telescope = buildTelescopePayload()
+    function buildSavePayload() {
+        return {
+            telescope: buildTelescopePayload(),
+            camera_telescope_profiles: changedProfiles(cameraProfiles.value, persistedProfiles),
+            last_camera_name: lastCameraName.value,
+        }
+    }
 
-            // Keep current camera's profile in sync
-            if (lastCameraName.value) {
-                cameraProfiles.value[lastCameraName.value] = {...telescope}
-            }
+    async function saveSettings() {
+        // Keep current camera's profile in sync
+        if (lastCameraName.value) {
+            cameraProfiles.value[lastCameraName.value] = buildTelescopePayload()
+        }
+        const payload = buildSavePayload()
+        const key = payloadKey({...payload, camera_telescope_profiles: cameraProfiles.value})
+        // Cleared before the request: anything typed while it is in flight is newer.
+        const edited = userEdited
+        const parked = [...editedProfiles]
+        userEdited = false
+        editedProfiles.clear()
+        if (key === persistedKey) return
+        savesInFlight++
 
-            // Posting `telescope` is all the solver needs: the backend derives the image-
-            // height FOV itself and prefers a previously measured FOV over any computed one.
-            //
-            // This used to also POST /push-to/config with `max(fovX, fovY)`, overwriting
-            // that decision ms later — discarding a solved FOV for a computed one, using
-            // the *width* field where ASTAP's `-fov` wants height. On a 2712x1538 sensor
-            // that's a 1.76x error: a wrong FOV doesn't slow a hinted attempt, it fails it.
-            const doSave = async () => {
-                await updateSettings({
-                    telescope,
-                    camera_telescope_profiles: cameraProfiles.value,
-                    last_camera_name: lastCameraName.value,
-                })
-            }
+        // Posting `telescope` is all the solver needs: the backend derives the image-
+        // height FOV itself and prefers a previously measured FOV over any computed one.
+        //
+        // This used to also POST /push-to/config with `max(fovX, fovY)`, overwriting
+        // that decision ms later — discarding a solved FOV for a computed one, using
+        // the *width* field where ASTAP's `-fov` wants height. On a 2712x1538 sensor
+        // that's a 1.76x error: a wrong FOV doesn't slow a hinted attempt, it fails it.
+        let saved = false
+        const doSave = async () => {
+            await updateSettings(payload)
+            persistedKey = key
+            persistedProfiles = {...persistedProfiles, ...payload.camera_telescope_profiles}
+            saved = true
+        }
 
+        try {
             if (withErrorHandling) {
                 await withErrorHandling(doSave)
             } else {
                 await doSave()
             }
-        }, 500)
+        } finally {
+            savesInFlight--
+            // A refused save keeps its edits safe from the next sync.
+            if (!saved) {
+                userEdited ||= edited
+                parked.forEach((name) => editedProfiles.add(name))
+            }
+            releaseHeldSync(saved)
+        }
     }
 
+    function releaseHeldSync(saved) {
+        if (savesInFlight || !heldSync) return
+        const held = heldSync
+        heldSync = null
+        // After a refused save the held settings are still the server's, and the edits
+        // are kept from them. After a landed one they may predate it: read them again.
+        if (!saved) return syncFrom(held)
+        refreshSettings().catch(() => {}) // logged where it failed
+    }
+
+    const {schedule: scheduleSettingsSave} = useDebouncedCall(saveSettings, 500)
+
+    const telescopeParams = [focalLength, pixelSizeX, pixelSizeY, sensorWidthPx, sensorHeightPx, barlowCoeff]
+
+    // Synchronous, so `assigning` still says who made the change.
+    watch(telescopeParams, () => {
+        if (!assigning) userEdited = true
+    }, {flush: 'sync'})
+
     // Watch all telescope params and debounce-save
-    watch([focalLength, pixelSizeX, pixelSizeY, sensorWidthPx, sensorHeightPx, barlowCoeff], () => {
+    watch(telescopeParams, () => {
         if (initialSyncDone.value) {
             scheduleSettingsSave()
         }
@@ -124,15 +265,11 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
 
     function saveCurrentAsProfile(cameraName) {
         cameraProfiles.value[cameraName] = buildTelescopePayload()
+        if (userEdited) editedProfiles.add(cameraName)
     }
 
     function restoreProfile(profile) {
-        if (profile.focal_length_mm != null) focalLength.value = profile.focal_length_mm
-        if (profile.pixel_size_x_um != null) pixelSizeX.value = profile.pixel_size_x_um
-        if (profile.pixel_size_y_um != null) pixelSizeY.value = profile.pixel_size_y_um
-        if (profile.sensor_width_px != null) sensorWidthPx.value = profile.sensor_width_px
-        if (profile.sensor_height_px != null) sensorHeightPx.value = profile.sensor_height_px
-        if (profile.barlow_coeff != null) barlowCoeff.value = profile.barlow_coeff
+        applyFields(profile)
         manualPixelSize.value = false
     }
 
@@ -165,7 +302,8 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
     if (connectedCameraInfo) {
         watch(
             [connectedCameraInfo, () => initialSyncDone.value],
-            ([newInfo, syncDone], oldValues) => {
+            // Everything this derives is the camera's, not an edit typed here.
+            ([newInfo, syncDone], oldValues) => assign(() => {
                 if (!syncDone) return
                 if (!newInfo) return
 
@@ -246,7 +384,7 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
                 manualPixelSize.value = false
                 lastCameraName.value = cameraName
                 scheduleSettingsSave()
-            },
+            }),
             {immediate: true}
         )
     }
@@ -281,5 +419,7 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
         calculatedFov,
         autoFillFromCamera,
         selectCamera,
+        // The camera whose profile the fields edit: the selected one, else the last one.
+        profileName: computed(() => lastCameraName.value),
     }
 }

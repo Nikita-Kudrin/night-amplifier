@@ -119,7 +119,9 @@ space); Pro runs them from its Community checkout (branch of the same name, else
 in Community first. Pro's own `checkout-siblings` does that checkout; step timeouts stay at the call site.
 
 Frontend commands (install/dev/build/lint/test) run from `web/` — see README. **Never `npm run format`** (rewrites
-the whole tree). Always run `cargo test` after changes, `npm run test:run` too.
+the whole tree). Always run `cargo test` after changes, `npm run test:run` too. A frontend test that reaches
+`fetch` unmocked fails (`src/testSetup.js`) even where the code swallows the error: happy-dom sends `/api/...` to
+`localhost:3000`, so one sent 40 real requests a run that anything on that port would have answered mid-test.
 
 ## Core Modules (crates/core/src/, crates/session/src/, src/)
 
@@ -166,6 +168,17 @@ Sockets: `useWebSocket` (reconnect, ping), `useEventStream` (a table from event 
 **`api.types.js` is generated** from the Rust wire types (`tests/api_types.rs`, feature `api-schema`, which derives
 `schemars::JsonSchema` only in that build); CI fails a stale one. A settings panel section is its own component that
 mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one that must await the save takes it as a prop.
+**Debounce through `useDebouncedCall`**, which flushes on unmount: Vue drops an `emit` from an unmounted component,
+so a hand-rolled timer lost an edit made just before its panel closed. The sidebar is **one tab at a time**
+(`useSidebarTabs`: Main, Push-To, Settings), each mounted on first visit and then only hidden (`v-show`) —
+remounting dropped typed coordinates and refetched. A hidden panel's watchers keep running, so mounting writes only
+to record the selected camera, never optics (`useTelescopeSetup` once rewrote the telescope block on every Push-To
+open), and a kept-mounted panel **follows** server state rather than snapshotting it — a profile map read once wrote
+the main scope's focal length over the guide's seeded profile on the next camera click. A stored profile is shown
+**whole** (a seed's missing focal length stays missing), a connect broadcasts `settings_updated`, and a sync
+arriving mid-save is held until the save settles: each gap once posted the previous scope's optics or a stale value.
+The camera list lives on Main, so a section editing the selected camera names it (`SelectedCameraTag`; Equipment,
+with none selected, names the profile it edits), and a debounced edit is bound to that camera.
 
 ## Camera Notes
 
@@ -179,6 +192,10 @@ mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one th
   a 300 s sub outlast it; a watchdog ends every warm-up by deadline regardless of the monitor.
 - **Per-camera profiles** are keyed `"{provider}/{model}"`; **telescope profiles** by camera *name*, seeding the
   solver's FOV — without a seed, two bodies of one model share one FOV and ASTAP fails to solve (once cost 19 min).
+  A settings write restarts a solve only if the **solver camera's** resolved optics or binning change
+  (`optics_change`, `AppState::solver_camera`): the UI re-posts the selected camera's profile as the flat block,
+  which restarted the solve on every camera click. Profile writes **upsert**, and the UI sends only the profiles it
+  changed: a whole map fetched before a connect's seed erased it, and the guide solved on the imaging scope's optics.
 - **Vendor SDKs are dlopen'd, never linked or shipped**: an unused `#[link]` breaks every build without that SDK,
   and QHY grants no redistribution. QHY/ToupTek/SVBony bind eagerly, since a lazy unresolved symbol kills the
   process at first call. C `long` is 32-bit on Windows, widen with `i64::from`.

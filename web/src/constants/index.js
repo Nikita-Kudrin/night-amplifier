@@ -216,6 +216,13 @@ export const TELESCOPE_LIMITS = {
     pixel_size_step: 0.01,
 }
 
+// Sidebar tabs: the header's compass and gear each show their panel alone
+export const SIDEBAR_TABS = {
+    MAIN: 'main',
+    PUSH_TO: 'push-to',
+    SETTINGS: 'settings',
+}
+
 // Capture states
 export const CAPTURE_STATES = {
     IDLE: 'Idle',

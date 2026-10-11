@@ -9,6 +9,7 @@
  */
 import {reactive, watch} from 'vue'
 import {BaseToggle, BaseInfoIcon} from './ui'
+import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS} from '../constants'
 
 const props = defineProps({
@@ -32,12 +33,7 @@ function apply() {
 }
 
 /** Screen sizes are typed digit by digit, so they are sent 300 ms after the last edit. */
-let debounceTimer = null
-
-function applyDebounced() {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(apply, 300)
-}
+const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </script>
 
 <template>

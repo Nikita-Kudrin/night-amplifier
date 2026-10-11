@@ -13,6 +13,7 @@ vi.mock('../api.js', () => ({
 describe('useTelescopeSetup', () => {
     let settingsRef
     let connectedCameraInfoRef
+    let refreshSettings
 
     beforeEach(() => {
         vi.clearAllMocks()
@@ -20,19 +21,20 @@ describe('useTelescopeSetup', () => {
         
         settingsRef = ref(null)
         connectedCameraInfoRef = ref(null)
+        refreshSettings = vi.fn().mockResolvedValue({})
     })
 
     afterEach(() => {
         vi.useRealTimers()
     })
 
-    function setupComposable() {
+    function setupComposable(withErrorHandling = async (fn) => { await fn() }) {
         let result
         const TestComponent = {
             setup() {
                 result = useTelescopeSetup({
                     connectedCameraInfo: connectedCameraInfoRef,
-                    withErrorHandling: async (fn) => { await fn() }
+                    withErrorHandling,
                 })
                 return () => {}
             }
@@ -40,7 +42,8 @@ describe('useTelescopeSetup', () => {
         mount(TestComponent, {
             global: {
                 provide: {
-                    'settings': settingsRef
+                    'settings': settingsRef,
+                    refreshSettings,
                 }
             }
         })
@@ -256,5 +259,398 @@ describe('useTelescopeSetup', () => {
 
         expect(api.updateSettings).toHaveBeenCalled()
         expect(api.updatePushToConfig).not.toHaveBeenCalled()
+    })
+    // Push-To mounts this after settings have loaded. Reading the stored values back in
+    // must not count as an edit, or every first visit rewrote the telescope block.
+    describe('mounting over loaded settings', () => {
+        const telescope = {
+            focal_length_mm: 500,
+            pixel_size_x_um: 3.76,
+            pixel_size_y_um: 3.76,
+            sensor_width_px: 3000,
+            sensor_height_px: 2000,
+            barlow_coeff: 1,
+        }
+        const cameraA = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3000, max_height: 2000}
+
+        async function mountLoaded(cameraInfo) {
+            settingsRef.value = {
+                telescope,
+                camera_telescope_profiles: {'Camera A': {...telescope}},
+                last_camera_name: 'Camera A',
+            }
+            connectedCameraInfoRef.value = cameraInfo
+            const result = setupComposable()
+            await nextTick()
+            await flushPromises()
+            vi.runAllTimers()
+            await flushPromises()
+            return result
+        }
+
+        it('writes nothing without a camera', async () => {
+            const {focalLength} = await mountLoaded(null)
+            expect(focalLength.value).toBe(500)
+            expect(api.updateSettings).not.toHaveBeenCalled()
+        })
+
+        it('writes nothing when the stored camera is the connected one', async () => {
+            const {focalLength} = await mountLoaded(cameraA)
+            expect(focalLength.value).toBe(500)
+            expect(api.updateSettings).not.toHaveBeenCalled()
+        })
+
+        it('still saves a camera other than the stored one', async () => {
+            await mountLoaded({name: 'Camera B', pixel_size_x_um: 2.4, max_width: 1000, max_height: 1000})
+            expect(api.updateSettings).toHaveBeenCalledTimes(1)
+            expect(api.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                last_camera_name: 'Camera B',
+                telescope: expect.objectContaining({focal_length_mm: 500, pixel_size_x_um: 2.4}),
+            }))
+        })
+
+        // A visited Push-To tab stays mounted while hidden, so a camera switched from the
+        // Main tab is resolved here too: the outgoing profile is kept, the new one stored.
+        it('saves both profiles when the camera changes after mounting', async () => {
+            const {focalLength} = await mountLoaded(cameraA)
+            focalLength.value = 900
+            await nextTick()
+            connectedCameraInfoRef.value = {name: 'Camera B', pixel_size_x_um: 2.4, max_width: 1000, max_height: 1000}
+            await nextTick()
+            vi.runAllTimers()
+            await flushPromises()
+
+            expect(api.updateSettings).toHaveBeenCalledTimes(1)
+            const payload = api.updateSettings.mock.calls[0][0]
+            expect(payload.last_camera_name).toBe('Camera B')
+            expect(payload.camera_telescope_profiles['Camera A']).toMatchObject({focal_length_mm: 900, pixel_size_x_um: 3.76})
+            expect(payload.camera_telescope_profiles['Camera B']).toMatchObject({focal_length_mm: 900, pixel_size_x_um: 2.4})
+        })
+
+        it('saves an edit made after mounting', async () => {
+            const {focalLength} = await mountLoaded(cameraA)
+            focalLength.value = 750
+            await nextTick()
+            vi.runAllTimers()
+            await flushPromises()
+            expect(api.updateSettings).toHaveBeenCalledTimes(1)
+            expect(api.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+                telescope: expect.objectContaining({focal_length_mm: 750}),
+            }))
+        })
+    })
+    // The Push-To tab stays mounted for the page's life, so the server's later changes
+    // (a profile seeded at connect, another client's edit) must reach it.
+    describe('following the server after mounting', () => {
+        const mainScope = {
+            focal_length_mm: 650,
+            pixel_size_x_um: 3.76,
+            pixel_size_y_um: 3.76,
+            sensor_width_px: 3008,
+            sensor_height_px: 3008,
+            barlow_coeff: 1,
+        }
+        const guideScope = {
+            focal_length_mm: 200,
+            pixel_size_x_um: 2.9,
+            pixel_size_y_um: 2.9,
+            sensor_width_px: 1936,
+            sensor_height_px: 1096,
+            barlow_coeff: 1,
+        }
+        const cameraA = {name: 'Camera A', pixel_size_x_um: 3.76, max_width: 3008, max_height: 3008}
+        const cameraB = {name: 'Camera B', pixel_size_x_um: 2.9, max_width: 1936, max_height: 1096}
+
+        function serverSettings({profiles = {'Camera A': mainScope}, telescope = mainScope, last = 'Camera A'} = {}) {
+            return {telescope, camera_telescope_profiles: profiles, last_camera_name: last}
+        }
+
+        async function settle() {
+            await nextTick()
+            await flushPromises()
+        }
+
+        async function mountWith(cameraInfo, settings = serverSettings(), withErrorHandling) {
+            settingsRef.value = settings
+            connectedCameraInfoRef.value = cameraInfo
+            const result = withErrorHandling ? setupComposable(withErrorHandling) : setupComposable()
+            await settle()
+            vi.runAllTimers()
+            await flushPromises()
+            api.updateSettings.mockClear()
+            return result
+        }
+
+        async function swallowErrors(fn) {
+            try {
+                await fn()
+            } catch {
+                // useError shows it; the edit must stay on screen
+            }
+        }
+
+        async function runSaves() {
+            vi.runAllTimers()
+            await flushPromises()
+            return api.updateSettings.mock.calls.map((call) => call[0])
+        }
+
+        /** The profiles the server holds after `payloads`: it upserts the ones each names. */
+        function stored(payloads) {
+            return payloads.reduce(
+                (profiles, payload) => ({...profiles, ...payload.camera_telescope_profiles}),
+                {...settingsRef.value.camera_telescope_profiles},
+            )
+        }
+
+        /** Every value `payloads` posted for `name`'s profile. */
+        function postedFor(payloads, name) {
+            return payloads.map((payload) => payload.camera_telescope_profiles?.[name]).filter(Boolean)
+        }
+
+        it('restores a profile the server seeded for a camera connected later', async () => {
+            const {focalLength} = await mountWith(cameraA)
+
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': guideScope}})
+            await settle()
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            expect(focalLength.value).toBe(200)
+            const profiles = stored(await runSaves())
+            expect(profiles['Camera B']).toMatchObject({focal_length_mm: 200})
+            expect(profiles['Camera A']).toMatchObject({focal_length_mm: 650})
+        })
+
+        // The camera list and the settings refresh after a connect race each other.
+        it('takes the seeded profile when it lands after the camera was selected', async () => {
+            const {focalLength} = await mountWith(cameraA)
+
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+            expect(focalLength.value).toBe(650) // inherited, nothing better known yet
+
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': guideScope}})
+            await settle()
+
+            expect(focalLength.value).toBe(200)
+            const payloads = await runSaves()
+            expect(payloads).toHaveLength(1)
+            expect(payloads[0].telescope).toMatchObject({focal_length_mm: 200})
+            expect(stored(payloads)['Camera B']).toMatchObject({focal_length_mm: 200})
+        })
+
+        it('shows a focal length another client stored, without writing it back', async () => {
+            const {focalLength} = await mountWith(cameraA)
+
+            const edited = {...mainScope, focal_length_mm: 1000}
+            settingsRef.value = serverSettings({telescope: edited, profiles: {'Camera A': edited}})
+            await settle()
+
+            expect(focalLength.value).toBe(1000)
+            expect(await runSaves()).toEqual([])
+        })
+
+        it('follows the flat block while no camera is connected', async () => {
+            const {focalLength} = await mountWith(null)
+
+            // As a client without a camera saves it: the flat block and its last camera.
+            const edited = {...mainScope, focal_length_mm: 1200}
+            settingsRef.value = serverSettings({telescope: edited, profiles: {'Camera A': edited}})
+            await settle()
+
+            expect(focalLength.value).toBe(1200)
+            expect(await runSaves()).toEqual([])
+        })
+
+        it('keeps a typed focal length through a sync inside the save delay', async () => {
+            const {focalLength} = await mountWith(cameraA)
+            focalLength.value = 750
+            await nextTick()
+
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': guideScope}})
+            await settle()
+
+            expect(focalLength.value).toBe(750)
+            const payloads = await runSaves()
+            expect(payloads).toHaveLength(1)
+            expect(stored(payloads)['Camera A']).toMatchObject({focal_length_mm: 750})
+            expect(stored(payloads)['Camera B']).toMatchObject({focal_length_mm: 200})
+        })
+
+        // Review of 4fc5053, R2: the server upserts what a save names, so a profile this
+        // page last fetched (or never saw, like a seed from a connect) is not resent.
+        it('names only the profile it changed', async () => {
+            const {focalLength} = await mountWith(cameraA, serverSettings({
+                profiles: {'Camera A': mainScope, 'Camera B': guideScope},
+            }))
+            focalLength.value = 750
+            await nextTick()
+
+            const payloads = await runSaves()
+            expect(payloads).toHaveLength(1)
+            expect(Object.keys(payloads[0].camera_telescope_profiles)).toEqual(['Camera A'])
+        })
+
+        it('sends a profile whose save was refused with the next save', async () => {
+            const {focalLength} = await mountWith(cameraA, serverSettings({
+                profiles: {'Camera A': mainScope, 'Camera B': guideScope},
+            }), swallowErrors)
+            api.updateSettings.mockRejectedValueOnce(new Error('offline'))
+            focalLength.value = 750
+            await nextTick()
+            await runSaves()
+
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            const payloads = await runSaves()
+            expect(payloads.at(-1).camera_telescope_profiles['Camera A']).toMatchObject({focal_length_mm: 750})
+        })
+
+        it('keeps an edit parked by a camera switch through a sync', async () => {
+            const {focalLength} = await mountWith(cameraA, serverSettings({
+                profiles: {'Camera A': mainScope, 'Camera B': guideScope},
+            }))
+            focalLength.value = 900
+            await nextTick()
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': guideScope}})
+            await settle()
+
+            const payloads = await runSaves()
+            expect(payloads).toHaveLength(1)
+            expect(stored(payloads)['Camera A']).toMatchObject({focal_length_mm: 900})
+            expect(stored(payloads)['Camera B']).toMatchObject({focal_length_mm: 200})
+        })
+
+        it('keeps an edit whose save was refused through the next sync', async () => {
+            const {focalLength} = await mountWith(cameraA, serverSettings(), swallowErrors)
+            api.updateSettings.mockRejectedValueOnce(new Error('offline'))
+            focalLength.value = 750
+            await nextTick()
+            await runSaves()
+
+            settingsRef.value = serverSettings()
+            await settle()
+
+            expect(focalLength.value).toBe(750)
+        })
+
+        // The solver's rig key tells an unset Barlow from 1x, so 1 must not be written
+        // over it just because the field shows 1.
+        it('writes nothing over an unset Barlow on mount', async () => {
+            const unset = {...mainScope, barlow_coeff: null}
+            settingsRef.value = serverSettings({telescope: unset, profiles: {'Camera A': unset}})
+            connectedCameraInfoRef.value = cameraA
+            setupComposable()
+            await settle()
+
+            expect(await runSaves()).toEqual([])
+        })
+
+        // A refresh fetched before the save landed (another panel's write, the cooler's
+        // own refresh) carries the old value; it must not undo the edit being saved.
+        async function typeWhileSaveIsInFlight(save, withErrorHandling) {
+            const composable = await mountWith(cameraA, serverSettings(), withErrorHandling)
+            api.updateSettings.mockImplementationOnce(() => new Promise((resolve, reject) => {
+                save.resolve = resolve
+                save.reject = reject
+            }))
+            composable.focalLength.value = 750
+            await nextTick()
+            vi.advanceTimersByTime(500)
+            await flushPromises()
+            expect(api.updateSettings).toHaveBeenCalledTimes(1)
+
+            settingsRef.value = serverSettings()
+            await settle()
+            return composable
+        }
+
+        it('keeps an edit through a stale sync while its save is in flight', async () => {
+            const save = {}
+            const {focalLength} = await typeWhileSaveIsInFlight(save)
+            expect(focalLength.value).toBe(750)
+
+            save.resolve({})
+            await flushPromises()
+            vi.runAllTimers()
+            await flushPromises()
+
+            expect(focalLength.value).toBe(750)
+            expect(api.updateSettings).toHaveBeenCalledTimes(1)
+            // The held settings may predate the save, so they are read again.
+            expect(refreshSettings).toHaveBeenCalledTimes(1)
+        })
+
+        it('keeps an edit through a stale sync when its save is then refused', async () => {
+            const save = {}
+            const {focalLength} = await typeWhileSaveIsInFlight(save, swallowErrors)
+
+            save.reject(new Error('offline'))
+            await flushPromises()
+
+            expect(focalLength.value).toBe(750)
+            expect(refreshSettings).not.toHaveBeenCalled()
+            focalLength.value = 760
+            await nextTick()
+            const payloads = await runSaves()
+            expect(payloads.at(-1).telescope).toMatchObject({focal_length_mm: 760})
+        })
+
+        // What `ensure_camera_telescope_profile` really seeds for a camera on another
+        // sensor: no focal length, since the flat block's belongs to a different scope.
+        const seededGuide = {...guideScope, focal_length_mm: null}
+
+        it('does not post the outgoing focal length over a seeded profile without one', async () => {
+            const {focalLength} = await mountWith(cameraA)
+
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': seededGuide}})
+            await settle()
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            const payloads = await runSaves()
+            expect(postedFor(payloads, 'Camera B').map((profile) => profile.focal_length_mm)).not.toContain(650)
+            expect(stored(payloads)['Camera B'].focal_length_mm).toBeNull()
+            expect(focalLength.value).toBeNull()
+        })
+
+        it('does not post the outgoing focal length when the focal-less seed lands late', async () => {
+            const {focalLength} = await mountWith(cameraA)
+
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+            settingsRef.value = serverSettings({profiles: {'Camera A': mainScope, 'Camera B': seededGuide}})
+            await settle()
+
+            const payloads = await runSaves()
+            expect(postedFor(payloads, 'Camera B').map((profile) => profile.focal_length_mm)).not.toContain(650)
+            expect(stored(payloads)['Camera B'].focal_length_mm).toBeNull()
+            expect(focalLength.value).toBeNull()
+        })
+
+        // Review of 4fc5053, R3: the field shows an unset Barlow as 1x, and the outgoing
+        // camera's profile is rebuilt from the fields on a switch. The server and Pro's
+        // rig key tell None from 1x, so the click restarts the solve and orphans the
+        // FOV measured under the old key.
+        it('keeps an unset Barlow unset when the camera switches away', async () => {
+            const unset = {...mainScope, barlow_coeff: null}
+            await mountWith(cameraA, serverSettings({
+                telescope: unset,
+                profiles: {'Camera A': unset, 'Camera B': guideScope},
+            }))
+
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            const payloads = await runSaves()
+            expect(payloads).toHaveLength(1)
+            expect(postedFor(payloads, 'Camera A').map((profile) => profile.barlow_coeff)).not.toContain(1)
+            expect(stored(payloads)['Camera A'].barlow_coeff).toBeNull()
+        })
     })
 })

@@ -1,5 +1,12 @@
 import {ref, watch, onUnmounted, unref} from 'vue'
 
+/** "Main" or "Guide" for a connected camera; null for one in neither role. */
+export function roleLabel(cam) {
+    if (cam?.role === 'guide') return 'Guide'
+    if (cam?.role === 'main') return 'Main'
+    return null
+}
+
 /**
  * The badges a camera row carries: its role, resolution, phase (with the warm-up
  * countdown), sensor mode and temperature. All read from the shared stores the panel is
@@ -12,12 +19,6 @@ import {ref, watch, onUnmounted, unref} from 'vue'
  * @param {import('vue').Ref<object|null>} sources.settings - The server settings.
  */
 export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings}) {
-    function roleLabel(cam) {
-        if (cam.role === 'guide') return 'Guide'
-        if (cam.role === 'main') return 'Main'
-        return null
-    }
-
     function formatResolution(cam) {
         const {max_width: width, max_height: height} = cam?.info ?? {}
         // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.

@@ -9,6 +9,7 @@
  */
 import {reactive, watch} from 'vue'
 import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'
+import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {WEIGHTING_PRESET_OPTIONS, REJECTION_METHOD_OPTIONS, HELP_TEXTS} from '../constants'
 
 const props = defineProps({
@@ -56,12 +57,7 @@ function apply(key, value) {
   emit('apply', key, value)
 }
 
-let debounceTimer = null
-
-function applyDebounced(key, value) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => apply(key, value), 300)
-}
+const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </script>
 
 <template>

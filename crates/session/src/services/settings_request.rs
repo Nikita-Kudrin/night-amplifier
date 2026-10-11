@@ -121,7 +121,7 @@ pub struct UpdateSettingsRequest {
     #[serde(default)]
     pub telescope: Option<TelescopeSettings>,
 
-    /// Per-camera telescope profiles keyed by camera name
+    /// Per-camera telescope profiles keyed by camera name, upserted: one left out is kept
     #[serde(default)]
     pub camera_telescope_profiles: Option<HashMap<String, TelescopeSettings>>,
     /// Per-camera capture profiles (mainly for tests to seed the map without

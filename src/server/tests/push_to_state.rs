@@ -11,11 +11,15 @@ use crate::push_to::{PushToDirectionResponse, TelescopeSettings};
 use crate::server::dto::UpdateSettingsRequest;
 use crate::session::services::PushToState;
 use crate::session::services::{optics_change, OpticsChange};
-use crate::session::state::{CameraRole, CaptureSettings};
+use crate::session::state::{CameraRole, CaptureSettings, SolverCamera};
 use std::time::{Duration, Instant};
 
 /// No cadence floor, so the latch tests exercise the latch alone.
 const NO_THROTTLE: Duration = Duration::ZERO;
+
+fn solving(role: CameraRole, name: &str) -> SolverCamera {
+    SolverCamera { role, name: name.to_string() }
+}
 
 fn telescope(focal_length_mm: f32) -> TelescopeSettings {
     TelescopeSettings {
@@ -372,7 +376,7 @@ fn a_telescope_block_that_changes_nothing_is_not_a_change() {
         ..Default::default()
     };
 
-    assert_eq!(optics_change(&request, &current, CameraRole::Main), OpticsChange::default());
+    assert_eq!(optics_change(&request, &current, CameraRole::Main, None), OpticsChange::default());
 }
 
 #[test]
@@ -386,7 +390,7 @@ fn a_different_focal_length_is_a_change() {
         ..Default::default()
     };
 
-    let change = optics_change(&request, &current, CameraRole::Main);
+    let change = optics_change(&request, &current, CameraRole::Main, None);
     assert!(change.telescope);
     assert!(change.any());
 }
@@ -398,9 +402,96 @@ fn a_request_without_a_telescope_block_changes_nothing() {
         ..Default::default()
     };
     assert_eq!(
-        optics_change(&UpdateSettingsRequest::default(), &current, CameraRole::Main),
+        optics_change(&UpdateSettingsRequest::default(), &current, CameraRole::Main, None),
         OpticsChange::default()
     );
+}
+
+/// The UI re-posts the selected camera's profile as the flat block on every camera
+/// click; the solver reads its own camera's profile, so nothing it uses moved.
+#[test]
+fn rewriting_only_the_flat_block_is_not_a_change_for_a_profiled_camera() {
+    let profiles: std::collections::HashMap<_, _> = [
+        ("Imaging".to_string(), telescope(650.0)),
+        ("Guiding".to_string(), telescope(200.0)),
+    ]
+    .into();
+    let current = CaptureSettings {
+        telescope: telescope(650.0),
+        camera_telescope_profiles: profiles.clone(),
+        ..Default::default()
+    };
+    let request = UpdateSettingsRequest {
+        telescope: Some(telescope(200.0)),
+        camera_telescope_profiles: Some(profiles),
+        last_camera_name: Some("Guiding".into()),
+        ..Default::default()
+    };
+
+    for solver in [solving(CameraRole::Main, "Imaging"), solving(CameraRole::Guide, "Guiding")] {
+        assert_eq!(
+            optics_change(&request, &current, CameraRole::Main, Some(&solver)),
+            OpticsChange::default(),
+            "solving on {}", solver.name
+        );
+    }
+}
+
+/// A camera without a profile of its own falls back to the flat block, so there the
+/// flat block is what the solver reads.
+#[test]
+fn the_flat_block_is_a_change_for_a_camera_without_a_profile() {
+    let current = CaptureSettings {
+        telescope: telescope(650.0),
+        camera_telescope_profiles: [("Imaging".to_string(), telescope(650.0))].into(),
+        ..Default::default()
+    };
+    let request = UpdateSettingsRequest {
+        telescope: Some(telescope(200.0)),
+        ..Default::default()
+    };
+
+    assert!(optics_change(&request, &current, CameraRole::Main, Some(&solving(CameraRole::Main, "Simulator"))).telescope);
+    assert!(!optics_change(&request, &current, CameraRole::Main, Some(&solving(CameraRole::Main, "Imaging"))).telescope);
+}
+
+/// Editing the solving camera's own profile is what moves the FOV hint.
+#[test]
+fn a_new_focal_length_in_the_solving_cameras_profile_is_a_change() {
+    let current = CaptureSettings {
+        telescope: telescope(650.0),
+        camera_telescope_profiles: [("Guiding".to_string(), telescope(200.0))].into(),
+        ..Default::default()
+    };
+    let request = UpdateSettingsRequest {
+        camera_telescope_profiles: Some([("Guiding".to_string(), telescope(240.0))].into()),
+        ..Default::default()
+    };
+
+    assert!(optics_change(&request, &current, CameraRole::Guide, Some(&solving(CameraRole::Guide, "Guiding"))).telescope);
+}
+
+/// Profiles are upserted, so a request naming only another camera's profile leaves the
+/// solving camera's in place: a map lacking it no longer drops it to the flat block.
+#[test]
+fn a_profile_map_without_the_solving_camera_is_not_a_change() {
+    let current = CaptureSettings {
+        telescope: telescope(650.0),
+        camera_telescope_profiles: [
+            ("Imaging".to_string(), telescope(650.0)),
+            ("Guiding".to_string(), telescope(200.0)),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let request = UpdateSettingsRequest {
+        telescope: Some(telescope(650.0)),
+        camera_telescope_profiles: Some([("Imaging".to_string(), telescope(700.0))].into()),
+        ..Default::default()
+    };
+    let guiding = solving(CameraRole::Guide, "Guiding");
+
+    assert!(!optics_change(&request, &current, CameraRole::Main, Some(&guiding)).telescope);
 }
 
 #[test]
@@ -413,7 +504,7 @@ fn resending_the_current_binning_is_not_a_change() {
         bin: Some(2),
         ..Default::default()
     };
-    assert!(!optics_change(&request, &current, CameraRole::Main).any());
+    assert!(!optics_change(&request, &current, CameraRole::Main, None).any());
 }
 
 #[test]
@@ -429,7 +520,7 @@ fn a_different_binning_is_a_framing_change() {
         ..Default::default()
     };
 
-    let change = optics_change(&request, &current, CameraRole::Main);
+    let change = optics_change(&request, &current, CameraRole::Main, None);
     assert!(!change.telescope);
     assert!(change.framing);
     assert!(change.any());
@@ -446,7 +537,7 @@ fn an_unrelated_setting_is_never_an_optics_change() {
         ..Default::default()
     };
 
-    assert_eq!(optics_change(&request, &current, CameraRole::Main), OpticsChange::default());
+    assert_eq!(optics_change(&request, &current, CameraRole::Main, None), OpticsChange::default());
 }
 
 // ── Without Pro ──────────────────────────────────────────────────────────────

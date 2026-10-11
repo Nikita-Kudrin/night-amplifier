@@ -52,7 +52,7 @@ pub use session::{
 pub use settings::CaptureSettings;
 pub use settings_store::SettingsStore;
 pub use stream_viewers::{StreamKind, ViewerGuard};
-pub use types::{CameraPhase, CameraRole, CaptureState};
+pub use types::{CameraPhase, CameraRole, CaptureState, SolverCamera};
 pub use stream_crop::StreamCropView;
 pub use viewed_camera::{ViewSelection, ViewedCamera};
 
@@ -236,6 +236,17 @@ impl AppState {
     /// The camera currently occupying `role`, if any.
     pub fn camera_in_role(&self, role: CameraRole) -> Option<ConnectedCameraInfo> {
         self.roster.in_role(role)
+    }
+
+    /// The camera whose frames the plate solver gets: the guide camera when one is
+    /// connected, else the main camera.
+    pub fn solver_camera(&self) -> Option<SolverCamera> {
+        self.camera_in_role(CameraRole::Guide)
+            .or_else(|| self.camera_in_role(CameraRole::Main))
+            .map(|camera| SolverCamera {
+                role: camera.role,
+                name: camera.info.name,
+            })
     }
 
     /// Which role a connected camera holds, by id.

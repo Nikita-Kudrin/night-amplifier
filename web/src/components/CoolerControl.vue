@@ -1,8 +1,10 @@
 <script setup>
 import {computed, inject, ref, watch} from 'vue'
 import {updateSettings} from '../composables/api.js'
+import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {useError} from '../composables/useError.js'
 import {BaseSlider, BaseToggle} from './ui'
+import SelectedCameraTag from './SelectedCameraTag.vue'
 import {COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants'
 
 const settings = inject('settings', ref(null))
@@ -67,19 +69,17 @@ const statusBadge = computed(() => {
   return {label: 'Warming', tone: 'busy'}
 })
 
-let debounceTimer = null
-
-async function applySetting(payload) {
+/** `role` is the camera selected when the edit was made, not when a debounce fires. */
+async function applySetting(payload, role = settingsRole.value) {
   await withErrorHandling(async () => {
-    await updateSettings({camera_role: settingsRole.value, ...payload})
+    await updateSettings({camera_role: role, ...payload})
     await refreshSettings()
   })
 }
 
-function debouncedApply(payload) {
-  clearTimeout(debounceTimer)
-  debounceTimer = setTimeout(() => applySetting(payload), 300)
-}
+const {schedule: debouncedApply, flush: flushPending} = useDebouncedCall(applySetting, 300)
+// A pending edit is the outgoing camera's: sent now, it is never coalesced with the next one's.
+watch(settingsRole, flushPending)
 
 function handleCoolerToggle(enabled) {
   localCoolerEnabled.value = enabled
@@ -88,7 +88,7 @@ function handleCoolerToggle(enabled) {
 
 function handleTargetChange(value) {
   localTargetTemp.value = value
-  debouncedApply({target_temp_c: value})
+  debouncedApply({target_temp_c: value}, settingsRole.value)
 }
 
 function handleFastModeToggle(enabled) {
@@ -107,7 +107,7 @@ function formatPower(v) {
 
 <template>
   <div v-if="hasCooler" class="settings-section cooler-control">
-    <h3 class="section-title">Camera cooler</h3>
+    <h3 class="section-title">Camera cooler <SelectedCameraTag/></h3>
 
     <div v-if="error" class="cooler-error">{{ error }}</div>
 
