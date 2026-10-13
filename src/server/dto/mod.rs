@@ -157,6 +157,7 @@ impl From<&CaptureSettings> for SettingsResponse {
 /// Absent (or an empty body) means the imaging camera, so a client that has never heard
 /// of roles keeps working.
 #[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct ConnectCameraRequest {
     #[serde(default)]
     pub role: Option<CameraRole>,
@@ -164,12 +165,14 @@ pub struct ConnectCameraRequest {
 
 /// Body and answer of `PUT /api/view/camera`: the camera the eyepiece pages show.
 #[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct ViewedCameraBody {
     pub camera: CameraRole,
 }
 
 /// Body of `POST /api/cameras/{id}/disconnect`. Absent means an ordinary Disconnect.
 #[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct DisconnectCameraRequest {
     /// Close at once instead of warming a cooled camera up first.
     #[serde(default)]
@@ -178,6 +181,7 @@ pub struct DisconnectCameraRequest {
 
 /// Answer to a Disconnect.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct DisconnectResponse {
     pub message: String,
     pub camera_id: String,
@@ -190,6 +194,7 @@ pub struct DisconnectResponse {
 
 /// Simple message response
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct MessageResponse {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,6 +229,7 @@ pub struct SimulatorConfigResponse {
 /// so Start has to address the same one. Absent means the imaging camera, so a client
 /// that has never heard of roles keeps working.
 #[derive(Debug, Deserialize, Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct StartCaptureRequest {
     #[serde(default)]
     pub camera_id: Option<String>,
@@ -233,6 +239,7 @@ pub struct StartCaptureRequest {
 
 /// Body of `POST /api/capture/stop`. See [`StartCaptureRequest`] for `role`.
 #[derive(Debug, Deserialize, Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct StopCaptureRequest {
     #[serde(default)]
     pub role: Option<CameraRole>,
@@ -240,9 +247,26 @@ pub struct StopCaptureRequest {
 
 /// Configure simulated camera request
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct ConfigureSimulatorRequest {
     /// Path to directory containing image files
     pub directory: String,
+}
+
+/// Body of `POST /api/about/license`.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct UpdateLicenseRequest {
+    pub token: String,
+}
+
+/// What `GET /api/about/software-licenses` answers.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct SoftwareLicensesResponse {
+    pub version: String,
+    pub core_license: String,
+    pub third_party_licenses: Option<String>,
 }
 
 #[cfg(test)]

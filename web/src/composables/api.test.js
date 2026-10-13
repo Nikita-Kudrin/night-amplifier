@@ -1,8 +1,6 @@
 import * as api from './api.js'
 import {ApiError, ignoreProOnly, isProOnly, LONG_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS} from './api.js'
-import source from './api.js?raw'
 import {envelope, refusal, stubFetch, textResponse} from '../test/http.js'
-import {wireTypeNames} from '../test/apiTypes.js'
 
 const JSON_HEADERS = {'Content-Type': 'application/json'}
 
@@ -81,14 +79,6 @@ describe('API Client', () => {
             .map(([name]) => name)
             .filter((name) => name !== 'fetchEyepieceSnapshot') // eyepieceSnapshot.test.js
         expect(new Set(CALLS.map(([name]) => name))).toEqual(new Set(endpoints))
-    })
-
-    // `TargetInfo` was named and defined nowhere; until api.js is TypeScript, nothing else checks it.
-    it('documents its answers with types the server generates', () => {
-        const known = new Set([...wireTypeNames(), 'Promise', 'Partial', 'Blob', 'Object'])
-        const named = [...source.matchAll(/@(?:returns|param) \{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g)]
-            .flatMap(([, type]) => type.match(/\b[A-Z]\w*/g) ?? [])
-        expect([...new Set(named)].filter((name) => !known.has(name))).toEqual([])
     })
 
     describe('Error Handling', () => {

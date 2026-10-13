@@ -2,8 +2,9 @@
 
 use serde::Deserialize;
 
-/// Set target request
+/// Body of `POST /api/push-to/target`: a name, which wins, or both coordinates.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SetTargetRequest {
     /// Target name (e.g., "M31", "NGC 7000", "Andromeda Galaxy")
     #[serde(default)]
@@ -15,8 +16,9 @@ pub struct SetTargetRequest {
     pub dec_degrees: Option<f64>,
 }
 
-/// Search catalog request
+/// Query of `GET /api/push-to/catalog/search`.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct SearchCatalogRequest {
     /// Search query
     pub query: String,
@@ -66,6 +68,7 @@ mod search_limit_tests {
 
 /// Push-To configuration request
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PushToConfigRequest {
     /// Field of view hint in degrees
     #[serde(default)]

@@ -3,23 +3,10 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use serde::{Deserialize, Serialize};
 
 use crate::license::{LicenseStatus, LICENSE_UPDATER, PRO_LICENSE_DATA};
-use crate::server::dto::ApiResponse;
+use crate::server::dto::{ApiResponse, SoftwareLicensesResponse, UpdateLicenseRequest};
 use crate::session::state::AppState;
-
-#[derive(Debug, Deserialize)]
-pub struct UpdateLicenseRequest {
-    pub token: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SoftwareLicensesResponse {
-    pub version: String,
-    pub core_license: String,
-    pub third_party_licenses: Option<String>,
-}
 
 /// GET /api/about/license
 pub async fn get_license() -> impl IntoResponse {

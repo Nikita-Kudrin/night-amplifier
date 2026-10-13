@@ -28,7 +28,7 @@ function readCounts() {
 
 /**
  * The real stream and stores, wired as `App.vue` wires them, held to the server's event
- * catalogue (`api.events.js`): a state event nobody follows, or a handler for an event
+ * catalogue (`api.events.ts`): a state event nobody follows, or a handler for an event
  * the server never sends, fails here. Notices may go unheard.
  */
 describe('the event handlers against the server catalogue', () => {

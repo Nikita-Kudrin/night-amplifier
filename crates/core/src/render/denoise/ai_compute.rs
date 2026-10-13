@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 /// A kind of unit the network can run on, in the order the benchmark tries them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ComputeRung {
     Npu,
@@ -72,6 +73,7 @@ impl<'de> Deserialize<'de> for AiComputePreference {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum BenchmarkState {
     /// No AI denoiser in this build, or no Pro licence.
@@ -84,6 +86,7 @@ pub enum BenchmarkState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct BenchmarkProgress {
     /// Units finished, and how many there are.
     pub done: u32,
@@ -94,6 +97,7 @@ pub struct BenchmarkProgress {
 
 /// The best unit found on one rung, or why there is none.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct RungReport {
     pub rung: ComputeRung,
     pub usable: bool,
@@ -121,7 +125,9 @@ impl RungReport {
     }
 }
 
+/// What `GET /api/ai-compute` and `POST /api/ai-compute/benchmark` answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct AiComputeReport {
     /// Advances on every change, so a watcher can tell without comparing reports.
     pub generation: u64,

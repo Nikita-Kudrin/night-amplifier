@@ -18,8 +18,9 @@ use crate::state::{
 };
 use night_amplifier_core::stacking::{RejectionMethod, StackingType, WeightingPreset};
 
-/// Update settings request
+/// Body of `POST /api/settings`: the settings to change, every other one left as it is.
 #[derive(Debug, Deserialize, Default)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct UpdateSettingsRequest {
     /// Which camera the hardware fields below (exposure, gain, offset, bin, cooler and
     /// dew heater) apply to. Absent means the imaging camera.

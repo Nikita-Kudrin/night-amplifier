@@ -1,8 +1,6 @@
 import {ref} from 'vue'
 import {rgb8ToRgba8} from '../utils/pixelConversion.js'
 
-/* global ImageBitmap */
-
 /**
  * Canvas 2D renderer composable for fallback rendering when WebGL is unavailable
  */

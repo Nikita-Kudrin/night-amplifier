@@ -1,14 +1,10 @@
 import {createDefaultSettings} from './settingsPanel.js'
-import {wireTypes} from './apiTypes.js'
-
-const types = wireTypes()
+import type {Settings} from '../composables/api.types.js'
 
 describe('createDefaultSettings', () => {
     // It once listed a few keys by hand and missed `raw_frame_saving.guide`.
     it('carries every Settings field the server sends', () => {
-        const built = createDefaultSettings()
-        expect(types.Settings.required.filter((key) => !(key in built))).toEqual([])
-        expect(Object.keys(built.raw_frame_saving).sort()).toEqual([...types.RawFrameSaving.all].sort())
+        expectTypeOf(createDefaultSettings()).toEqualTypeOf<Settings>()
     })
 
     it('hands out fresh objects', () => {

@@ -127,7 +127,7 @@ const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 
 /// The black floor slider's travel, enforced here, not trusted, since `POST /api/settings`
 /// takes any `f32` with nowhere else to clamp a wild value; the frontend reads it from the
-/// generated `api.settings.js`.
+/// generated `api.settings.ts`.
 ///
 /// The bottom stops at fraction 1.0 (= `NOMINAL_SKY_LEVEL`), where `ShadowFloor` clips at
 /// `fraction * sky`: past that, "Darker sky" eats into the target it exists to separate

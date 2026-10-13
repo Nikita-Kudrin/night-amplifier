@@ -1,4 +1,4 @@
-import {defineConfig} from 'vite'
+import {defineConfig} from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
@@ -31,15 +31,16 @@ export default defineConfig({
             provider: 'v8',
             reporter: ['text', 'html'],
             // Every source file counts, imported by a test or not; test code never does.
-            include: ['src/**/*.{js,vue}'],
+            include: ['src/**/*.{js,ts,vue}'],
             exclude: [
-                'src/**/*.test.js',
+                'src/**/*.test.{js,ts}',
+                'src/**/*.d.ts',
                 'src/**/__tests__/**',
                 'src/test/**',
-                'src/testSetup.js',
-                'src/main.js',
-                'src/composables/api.types.js',
-                'src/composables/api.events.js',
+                'src/testSetup.{js,ts}',
+                'src/main.ts',
+                'src/composables/api.types.{js,ts}',
+                'src/composables/api.events.{js,ts}',
             ],
             thresholds: {
                 lines: 80,
