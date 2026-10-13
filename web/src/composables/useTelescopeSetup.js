@@ -1,5 +1,5 @@
 import {ref, computed, watch, inject} from 'vue'
-import {updateSettings} from './api.js'
+import {useApplySettings} from './appContext.js'
 import {useDebouncedCall} from './useDebouncedCall.js'
 import {runDirectly} from './useError.js'
 import {fieldOfViewDeg} from '../utils/optics.js'
@@ -56,7 +56,7 @@ function changedProfiles(profiles, persisted) {
  */
 export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCameraInfo} = {}) {
     const settings = inject('settings')
-    const refreshSettings = inject('refreshSettings', async () => {})
+    const applySettings = useApplySettings()
 
     // ── Local reactive state ──────────────────────────────────────────
     const focalLength = ref(null)
@@ -90,8 +90,8 @@ export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCam
     // Outgoing cameras whose typed values were parked in `cameraProfiles` by a camera
     // switch inside the save delay.
     const editedProfiles = new Set()
-    // A refresh fetched before a save landed carries the old values, so a sync arriving
-    // while one is in flight is held until it settles.
+    // Settings read before a save landed carry the old values, so a sync arriving while
+    // one is in flight is held until it settles.
     let savesInFlight = 0
     let heldSync = null
 
@@ -202,7 +202,7 @@ export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCam
         // that's a 1.76x error: a wrong FOV doesn't slow a hinted attempt, it fails it.
         let saved = false
         const doSave = async () => {
-            await updateSettings(payload)
+            await applySettings(payload)
             persistedKey = key
             persistedProfiles = {...persistedProfiles, ...payload.camera_telescope_profiles}
             saved = true
@@ -226,9 +226,9 @@ export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCam
         const held = heldSync
         heldSync = null
         // After a refused save the held settings are still the server's, and the edits
-        // are kept from them. After a landed one they may predate it: read them again.
-        if (!saved) return syncFrom(held)
-        refreshSettings().catch(() => {}) // logged where it failed
+        // are kept from them. After a landed one they may predate it, but the settings
+        // store has adopted the save's answer: what it holds now is no older than the save.
+        syncFrom(saved ? settings.value : held)
     }
 
     const {schedule: scheduleSettingsSave} = useDebouncedCall(saveSettings, 500)

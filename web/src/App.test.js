@@ -10,12 +10,10 @@ vi.mock('./composables/useAppState.js', () => ({
     simulatorEnabled: ref(false),
     settings: ref({ eula_accepted: true }),
     refreshSettings: vi.fn(),
+    applySettings: vi.fn(),
     refreshCameras: vi.fn(),
     initializeState: vi.fn(),
-    updateCameraStatus: vi.fn(),
-    updateCameraPhase: vi.fn(),
-    replaceCameraPhases: vi.fn(),
-    addDiscoveredCamera: vi.fn(),
+    connectEvents: vi.fn(),
     cameras: ref([]),
     selection: ref(null),
     cameraStatus: ref(null),
@@ -25,11 +23,10 @@ vi.mock('./composables/useAppState.js', () => ({
   }))
 }))
 
-vi.mock('./composables/useEventStream.js', () => ({
-  useEventStream: vi.fn(() => ({
-    lastEvent: ref(null),
-  }))
-}))
+vi.mock('./composables/useEventStream.js', async () => {
+  const { createEventStreamStub } = await import('./test/eventStream.js')
+  return { useEventStream: vi.fn(() => createEventStreamStub()) }
+})
 
 vi.mock('./composables/api.js', async (importOriginal) =>
   (await import('./test/mockApi.js')).mockApi(await importOriginal(), {
@@ -150,9 +147,8 @@ describe('App.vue Routing', () => {
     wrapper.unmount()
   })
 
-  // Sent when the event socket (re)connects. A page that was away also missed cameras
-  // connecting and disconnecting, so a snapshot naming other cameras refetches the list.
-  it('takes phases from the server snapshot and refetches a camera list that disagrees', async () => {
+  // The stores subscribe themselves; App only hands them the one stream.
+  it('connects the app state and the AI compute report to the event stream', async () => {
     window.location = { ...originalLocation, pathname: '/' }
     const App = (await import('./App.vue')).default
     const { useAppState } = await import('./composables/useAppState.js')
@@ -161,17 +157,8 @@ describe('App.vue Routing', () => {
     const appState = useAppState.mock.results.at(-1).value
     const events = useEventStream.mock.results.at(-1).value
 
-    const cameras = [{ name: 'Neptune-C II', role: 'guide', phase: 'guiding' }]
-    events.lastEvent.value = { type: 'camera_phases', cameras }
-    await flushPromises()
-
-    expect(appState.replaceCameraPhases).toHaveBeenCalledWith(cameras)
-    expect(appState.refreshCameras).toHaveBeenCalledTimes(1)
-
-    appState.cameras.value = [{ name: 'Neptune-C II', connected: true }]
-    events.lastEvent.value = { type: 'camera_phases', cameras: [...cameras] }
-    await flushPromises()
-    expect(appState.refreshCameras).toHaveBeenCalledTimes(1)
+    expect(appState.connectEvents).toHaveBeenCalledExactlyOnceWith(events)
+    expect(events.on).toHaveBeenCalledWith('ai_compute_changed', expect.any(Function))
   })
 
   it('leaves the app interactive when there is no benchmark', async () => {

@@ -1,4 +1,5 @@
-import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {computed, ref, watch} from 'vue'
+import {tryOnBeforeUnmount, tryOnMounted} from './lifecycle.js'
 import {useWebGLRenderer} from './useWebGLRenderer.js'
 import {useCanvas2DRenderer} from './useCanvas2DRenderer.js'
 import {formatResolution} from '../utils/format.js'
@@ -127,9 +128,9 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
 
     watch(frameData, show)
 
-    onMounted(attach)
+    tryOnMounted(attach)
 
-    onBeforeUnmount(() => {
+    tryOnBeforeUnmount(() => {
         generation++
         hold(null)
         surfaces.forEach((surface) => surface.cleanup())

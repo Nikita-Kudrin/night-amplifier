@@ -15,6 +15,7 @@ describe('useTelescopeSetup', () => {
     let settingsRef
     let connectedCameraInfoRef
     let refreshSettings
+    let applySettings
 
     beforeEach(() => {
         vi.clearAllMocks()
@@ -23,6 +24,13 @@ describe('useTelescopeSetup', () => {
         settingsRef = ref(null)
         connectedCameraInfoRef = ref(null)
         refreshSettings = vi.fn().mockResolvedValue({})
+        // The settings store: posts, then adopts an answer that carries settings (the
+        // mocked `{}` does not).
+        applySettings = vi.fn(async (patch) => {
+            const answer = await api.updateSettings(patch)
+            if (answer?.telescope) settingsRef.value = answer
+            return answer
+        })
     })
 
     afterEach(() => {
@@ -45,6 +53,7 @@ describe('useTelescopeSetup', () => {
                 provide: {
                     'settings': settingsRef,
                     refreshSettings,
+                    applySettings,
                 }
             }
         })
@@ -576,15 +585,35 @@ describe('useTelescopeSetup', () => {
             const {focalLength} = await typeWhileSaveIsInFlight(save)
             expect(focalLength.value).toBe(750)
 
-            save.resolve({})
+            const saved = {...mainScope, focal_length_mm: 750}
+            save.resolve(serverSettings({telescope: saved, profiles: {'Camera A': saved}}))
             await flushPromises()
             vi.runAllTimers()
             await flushPromises()
 
             expect(focalLength.value).toBe(750)
             expect(api.updateSettings).toHaveBeenCalledTimes(1)
-            // The held settings may predate the save, so they are read again.
-            expect(refreshSettings).toHaveBeenCalledTimes(1)
+            // The held settings predate the save; the store adopted its answer instead of
+            // reading them again.
+            expect(refreshSettings).not.toHaveBeenCalled()
+        })
+
+        // Adopted while the save was in flight, and newer than it: the panel follows it.
+        it('follows what the store holds once a landed save releases a held sync', async () => {
+            const save = {}
+            const composable = await typeWhileSaveIsInFlight(save)
+
+            const saved = {...mainScope, focal_length_mm: 750}
+            save.resolve(serverSettings({
+                telescope: saved,
+                profiles: {'Camera A': saved, 'Camera B': guideScope},
+            }))
+            await flushPromises()
+            connectedCameraInfoRef.value = cameraB
+            await settle()
+
+            expect(composable.focalLength.value).toBe(200)
+            expect(refreshSettings).not.toHaveBeenCalled()
         })
 
         it('keeps an edit through a stale sync when its save is then refused', async () => {

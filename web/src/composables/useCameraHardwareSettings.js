@@ -1,8 +1,7 @@
 import {computed, inject, ref, watch} from 'vue'
-import {updateSettings} from './api.js'
 import {useDebouncedCall} from './useDebouncedCall.js'
 import {useError} from './useError.js'
-import {useSelectedCamera} from './appContext.js'
+import {useApplySettings, useSelectedCamera} from './appContext.js'
 import {SETTINGS_DEBOUNCE_MS} from '../constants'
 
 /**
@@ -26,7 +25,7 @@ export function hardwareBlock(settings, role) {
  */
 export function useCameraHardwareSettings() {
     const settings = inject('settings', ref(null))
-    const refreshSettings = inject('refreshSettings', async () => {})
+    const applySettings = useApplySettings()
     const cameraStatus = inject('cameraStatus', ref({}))
     const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 
@@ -42,8 +41,7 @@ export function useCameraHardwareSettings() {
 
     async function apply(payload, role = settingsRole.value) {
         await withErrorHandling(async () => {
-            await updateSettings({camera_role: role, ...payload})
-            await refreshSettings()
+            await applySettings({camera_role: role, ...payload})
         })
     }
 

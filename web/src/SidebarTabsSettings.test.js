@@ -14,20 +14,10 @@ vi.mock('./composables/api.js', async (importOriginal) =>
         getAstapStatus: vi.fn().mockResolvedValue({ready: true, installed_databases: []}),
     }))
 
-// Every field a panel reads is a ref, every `clear*` a no-op.
-vi.mock('./composables/useEventStream.js', () => ({
-    useEventStream: vi.fn(() => {
-        const fields = {captureState: ref('Idle'), lastEvent: ref(null)}
-        return new Proxy(fields, {
-            get(target, key) {
-                if (!(key in target)) {
-                    target[key] = typeof key === 'string' && key.startsWith('clear') ? vi.fn() : ref(null)
-                }
-                return target[key]
-            },
-        })
-    }),
-}))
+vi.mock('./composables/useEventStream.js', async () => {
+    const {createEventStreamStub} = await import('./test/eventStream.js')
+    return {useEventStream: vi.fn(() => createEventStreamStub())}
+})
 
 const settingsRef = ref(null)
 const selectedRef = ref('cam-a')
@@ -45,12 +35,11 @@ vi.mock('./composables/useAppState.js', () => ({
         simulatorEnabled: ref(false),
         settings: settingsRef,
         refreshSettings: vi.fn().mockResolvedValue(undefined),
+        // Posts only: the answer `mockApi` gives is a fixture, not these settings.
+        applySettings: vi.fn(async (patch) => (await import('./composables/api.js')).updateSettings(patch)),
         refreshCameras: vi.fn(),
         initializeState: vi.fn(),
-        updateCameraStatus: vi.fn(),
-        updateCameraPhase: vi.fn(),
-        replaceCameraPhases: vi.fn(),
-        addDiscoveredCamera: vi.fn(),
+        connectEvents: vi.fn(),
         cameras: camerasRef,
         selection: selectedRef,
         cameraStatus: ref({}),

@@ -1,4 +1,5 @@
-import {computed, inject, onMounted, onUnmounted, ref, watch} from 'vue'
+import {computed, inject, ref, watch} from 'vue'
+import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
 import {getCatalogStatus, installCatalog} from './api.js'
 import {useInstallSettle} from './useAstapInstall.js'
 import {formatBytes} from '../utils/format.js'
@@ -81,8 +82,8 @@ export function useCatalogInstall({onComplete} = {}) {
     const installComplete = computed(() => progress.value.stage === 'completed')
     useInstallSettle(installComplete, {loadStatus, installing, status, onComplete})
 
-    onMounted(loadStatus)
-    onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
+    tryOnMounted(loadStatus)
+    tryOnScopeDispose(() => eventStream?.clearCatalogInstallProgress?.())
 
     return {loading, installing, status, error, progress, canInstall, progressText, installComplete, loadStatus, startInstall}
 }

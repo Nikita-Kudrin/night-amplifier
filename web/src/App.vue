@@ -1,5 +1,5 @@
 <script setup>
-import {ref, onMounted, watch} from 'vue'
+import {ref, onMounted} from 'vue'
 import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
 import {provideAppContext} from './composables/appContext.js'
@@ -26,20 +26,7 @@ const isEyepieceRoute = ref(isEyepiecePage(window.location.pathname))
 
 // Centralized state management
 const appState = useAppState()
-const {
-  loading,
-  globalError: error,
-  settings,
-  cameras,
-  refreshSettings,
-  refreshCameras,
-  initializeState,
-  updateCameraStatus,
-  updateCameraPhase,
-  replaceCameraPhases,
-  addDiscoveredCamera,
-  capabilities,
-} = appState
+const {loading, globalError: error, settings, initializeState, capabilities} = appState
 
 const showAbout = ref(false)
 
@@ -63,53 +50,9 @@ const benchmarking = aiCompute.benchmarking
 
 provideAppContext(appState, eventStream)
 
-// Watch for external settings updates to sync our state across instances
-watch(
-    () => eventStream.lastEvent.value,
-    (event) => {
-      if (event?.type === 'settings_updated') {
-        refreshSettings()
-      }
-      if (event?.type === 'camera_status_updated') {
-        updateCameraStatus(event.name, {
-          temperature_c: event.temperature_c,
-          cooler_power: event.cooler_power ?? null,
-          cooler_on: event.cooler_on,
-          dew_heater_on: event.dew_heater_on,
-          target_temp_c: event.target_temp_c ?? null,
-        })
-      }
-      if (event?.type === 'camera_phase_changed') {
-        updateCameraPhase(event.name, event.phase, event.warmup_remaining_s)
-      }
-      if (event?.type === 'camera_phases') {
-        replaceCameraPhases(event.cameras)
-        // Sent on (re)connect: a camera connected or disconnected while this page was
-        // away has no other way to reach the list. Not during the first load, which is
-        // fetching the list already.
-        if (!loading.value && !sameCameraNames(event.cameras, cameras.value)) refreshCameras()
-      }
-      if (event?.type === 'camera_disconnected') {
-        updateCameraPhase(event.name, 'disconnected')
-        refreshCameras()
-      }
-      if (event?.type === 'camera_discovered') {
-        addDiscoveredCamera(event.camera)
-      }
-      aiCompute.handleEvent(event)
-    }
-)
-
-/** Whether the snapshot names exactly the cameras the list holds as connected. */
-function sameCameraNames(snapshot, list) {
-  const named = new Set((snapshot ?? []).map((camera) => camera.name))
-  const connected = list.filter((camera) => camera.connected)
-  return named.size === connected.length && connected.every((camera) => named.has(camera.name))
-}
-
-function handleEulaAccepted() {
-  refreshSettings()
-}
+// Every store follows the server through the one event stream.
+appState.connectEvents(eventStream)
+aiCompute.connectEvents({stream: eventStream, settings})
 
 // Initialize on mount
 onMounted(() => {
@@ -125,7 +68,6 @@ onMounted(() => {
   <EulaModal
     v-else-if="!loading && !error && settings?.eula_accepted === false"
     :inert="benchmarking"
-    @accepted="handleEulaAccepted"
   />
 
   <div v-else class="app" :inert="benchmarking">

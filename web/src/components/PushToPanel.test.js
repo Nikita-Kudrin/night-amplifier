@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref} from 'vue'
 import PushToPanel from './PushToPanel.vue'
+import {createEventStreamStub} from '../test/eventStream.js'
 
 // Mock the full API module used by PushToPanel and its composables
 vi.mock('../composables/api.js', async (importOriginal) =>
@@ -121,15 +122,7 @@ function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases(), 
                     deep_sky: {advanced_rejection: false, rbf_background: false},
                     planetary: {advanced_stacking: false},
                 }),
-                eventStream: {
-                    lastEvent: ref(null),
-                    currentTarget: ref(null),
-                    pushDirection: ref(null),
-                    isSolving: ref(false),
-                    astapInstallProgress: ref(null),
-                    clearAstapInstallProgress: vi.fn(),
-                    clearPlateSolving: vi.fn(),
-                },
+                eventStream: createEventStreamStub(),
             },
             stubs: {
                 AstapInstallOverlay: true,

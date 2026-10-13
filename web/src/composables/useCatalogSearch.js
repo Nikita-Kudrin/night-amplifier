@@ -1,4 +1,5 @@
-import {ref, watch, onUnmounted} from 'vue'
+import {ref, watch} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 import {searchCatalog} from './api.js'
 
 const DEBOUNCE_DELAY_MS = 300
@@ -115,7 +116,7 @@ export function useCatalogSearch() {
         }, DEBOUNCE_DELAY_MS)
     })
 
-    onUnmounted(() => {
+    tryOnScopeDispose(() => {
         if (searchTimer) {
             clearTimeout(searchTimer)
         }

@@ -4,9 +4,8 @@
  * and emitting `apply(key, value)`. The panel owns the one save path and error banner.
  */
 import {ref, inject, watch, computed} from 'vue'
-import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {useCapabilities} from '../composables/appContext.js'
+import {useApplySettings, useCapabilities} from '../composables/appContext.js'
 import {settingsMirror} from '../utils/settings.js'
 import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
@@ -21,7 +20,7 @@ import StackingSettings from './StackingSettings.vue'
 import StorageSettings from './StorageSettings.vue'
 
 const settings = inject('settings')
-const refreshSettings = inject('refreshSettings')
+const applySettings = useApplySettings()
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const {
   rbfBackground,
@@ -55,8 +54,7 @@ watch(
 
 async function applySetting(key, value) {
   await withErrorHandling(async () => {
-    await updateSettings({[key]: value})
-    await refreshSettings()
+    await applySettings({[key]: value})
   })
 }
 

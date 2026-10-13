@@ -94,8 +94,8 @@ defineExpose({calculatedFov})
           <input
               v-model.number="focalLength"
               type="number"
-              :min="TELESCOPE_LIMITS.focal_length_min"
-              :max="TELESCOPE_LIMITS.focal_length_max"
+              :min="TELESCOPE_LIMITS.focalLength.min"
+              :max="TELESCOPE_LIMITS.focalLength.max"
               placeholder="1000"
               class="input input-dense telescope-input"
           />
@@ -178,9 +178,9 @@ defineExpose({calculatedFov})
                 <input
                     v-model.number="pixelSizeX"
                     type="number"
-                    :min="TELESCOPE_LIMITS.pixel_size_min"
-                    :max="TELESCOPE_LIMITS.pixel_size_max"
-                    :step="TELESCOPE_LIMITS.pixel_size_step"
+                    :min="TELESCOPE_LIMITS.pixelSize.min"
+                    :max="TELESCOPE_LIMITS.pixelSize.max"
+                    :step="TELESCOPE_LIMITS.pixelSize.step"
                     placeholder="X"
                     class="input input-dense telescope-input pixel-input"
                     :disabled="!manualPixelSize"
@@ -192,9 +192,9 @@ defineExpose({calculatedFov})
                 <input
                     v-model.number="pixelSizeY"
                     type="number"
-                    :min="TELESCOPE_LIMITS.pixel_size_min"
-                    :max="TELESCOPE_LIMITS.pixel_size_max"
-                    :step="TELESCOPE_LIMITS.pixel_size_step"
+                    :min="TELESCOPE_LIMITS.pixelSize.min"
+                    :max="TELESCOPE_LIMITS.pixelSize.max"
+                    :step="TELESCOPE_LIMITS.pixelSize.step"
                     placeholder="Y"
                     class="input input-dense telescope-input pixel-input"
                     :disabled="!manualPixelSize"
@@ -238,9 +238,9 @@ defineExpose({calculatedFov})
           <input
               v-model.number="barlowCoeff"
               type="number"
-              :min="TELESCOPE_LIMITS.barlow_min"
-              :max="TELESCOPE_LIMITS.barlow_max"
-              :step="TELESCOPE_LIMITS.barlow_step"
+              :min="TELESCOPE_LIMITS.barlow.min"
+              :max="TELESCOPE_LIMITS.barlow.max"
+              :step="TELESCOPE_LIMITS.barlow.step"
               placeholder="1.0"
               class="input input-dense telescope-input"
           />

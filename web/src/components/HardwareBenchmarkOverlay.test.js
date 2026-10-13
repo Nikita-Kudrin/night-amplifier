@@ -8,7 +8,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import HardwareBenchmarkOverlay from './HardwareBenchmarkOverlay.vue'
-import {resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
+import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
 
 describe('HardwareBenchmarkOverlay', () => {
     beforeEach(() => resetAiCompute())

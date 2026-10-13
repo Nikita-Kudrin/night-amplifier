@@ -54,6 +54,19 @@ describe('useFullscreen', () => {
         expect(isFullscreen.value).toBe(true)
     })
 
+    // A refusal (no user gesture, a frame without the permission) was an unhandled rejection.
+    it('says so when the browser refuses, and stays out of fullscreen', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        Element.prototype.requestFullscreen = vi.fn().mockRejectedValue(new TypeError('Permissions check failed'))
+        const {isFullscreen, toggleFullscreen} = useFullscreen()
+
+        toggleFullscreen(document.createElement('div'))
+        await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('Fullscreen refused:', 'Permissions check failed'))
+
+        expect(isFullscreen.value).toBe(false)
+        warn.mockRestore()
+    })
+
     it('follows the browser back out of fullscreen', () => {
         const {isFullscreen, handleFullscreenChange} = useFullscreen()
         setFullscreenElement(document.body)

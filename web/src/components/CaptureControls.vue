@@ -1,8 +1,8 @@
 <script setup>
 import {ref, inject, computed, watch, onMounted} from 'vue'
-import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
+import {startCapture, stopCapture, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {findCamera, useCapabilities} from '../composables/appContext.js'
+import {findCamera, useApplySettings, useCapabilities} from '../composables/appContext.js'
 import {hardwareBlock} from '../composables/useCameraHardwareSettings.js'
 import {useCaptureTarget} from '../composables/useCaptureTarget.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
@@ -20,7 +20,7 @@ import {
 
 const settings = inject('settings')
 const selectedCamera = inject('selectedCamera')
-const refreshSettings = inject('refreshSettings')
+const applySettings = useApplySettings()
 const cameras = inject('cameras', {value: []})
 const cameraPhase = inject('cameraPhase', {value: {}})
 const {cometPro} = useCapabilities()
@@ -133,7 +133,7 @@ async function handleStart() {
     // Flush the exposure and gain shown above before starting, so an edit the user
     // typed but never blurred is not lost. It lands on the camera being started, which
     // is the one those controls are editing.
-    await updateSettings({
+    await applySettings({
       camera_role: settingsRole.value,
       exposure_us: exposureUs.value,
       gain: gain.value,
@@ -160,8 +160,7 @@ async function handleStop() {
 
 async function applySetting(settings, onError = null) {
   await withErrorHandling(async () => {
-    await updateSettings(settings)
-    await refreshSettings()
+    await applySettings(settings)
   }, onError ? {onError} : {})
 }
 

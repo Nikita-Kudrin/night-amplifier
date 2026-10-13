@@ -1,4 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
+import {__resetForTests, createScrollProtect, useScrollProtect} from './useScrollProtect.js'
+import {TOUCH_SLOP_PX} from '../constants'
 
 function touch(type, x, y) {
     const event = new Event(type)
@@ -11,16 +13,13 @@ const range = {target: {type: 'range', value: '5'}}
 describe('useScrollProtect', () => {
     let blockIfScrolling, isScrolling
 
-    beforeEach(async () => {
+    beforeEach(() => {
         vi.useFakeTimers()
-        // Its state and window listeners are module-wide: a fresh module per test.
-        vi.resetModules()
-        const {useScrollProtect} = await import('./useScrollProtect.js')
         ;({blockIfScrolling, isScrolling} = useScrollProtect())
     })
 
     afterEach(() => {
-        touch('touchcancel', 0, 0)
+        __resetForTests()
         vi.useRealTimers()
     })
 
@@ -53,9 +52,42 @@ describe('useScrollProtect', () => {
         touch('touchmove', 140, 102)
         vi.advanceTimersByTime(50)
 
-        // Still mid-slide: the old scroll's reset must not reopen the 5 px dead zone.
+        // Still mid-slide: the old scroll's reset must not reopen the dead zone.
         expect(blockIfScrolling(range)).toBe(false)
         touch('touchmove', 150, 160)
         expect(isScrolling.value).toBe(false)
+    })
+
+    it('decides nothing inside the touch slop', () => {
+        touch('touchstart', 100, 100)
+        touch('touchmove', 100, 100 + TOUCH_SLOP_PX)
+        expect(isScrolling.value).toBe(false)
+        touch('touchmove', 100, 101 + TOUCH_SLOP_PX)
+        expect(isScrolling.value).toBe(true)
+    })
+
+    it('is one guard for the page, and lets go of the window once reset', () => {
+        expect(useScrollProtect().blockIfScrolling).toBe(blockIfScrolling)
+        __resetForTests()
+
+        touch('touchstart', 100, 100)
+        touch('touchmove', 102, 140)
+        expect(isScrolling.value).toBe(false)
+        expect(useScrollProtect().isScrolling).not.toBe(isScrolling)
+    })
+
+    it('watches the target it is given', () => {
+        const target = document.createElement('div')
+        const guard = createScrollProtect(target)
+        const send = (type, y) => {
+            const event = new Event(type)
+            event.touches = [{clientX: 100, clientY: y}]
+            target.dispatchEvent(event)
+        }
+
+        send('touchstart', 100)
+        send('touchmove', 140)
+        expect(guard.isScrolling.value).toBe(true)
+        guard.dispose()
     })
 })

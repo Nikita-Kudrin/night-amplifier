@@ -1,4 +1,5 @@
-import {ref, watch, onUnmounted, unref} from 'vue'
+import {ref, watch, unref} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 import {formatResolution, formatTemperature} from '../utils/format.js'
 import {CAMERA_PHASES, STACKING_TYPES} from '../constants'
 
@@ -52,7 +53,7 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
         },
         {immediate: true}
     )
-    onUnmounted(() => clearInterval(clock))
+    tryOnScopeDispose(() => clearInterval(clock))
 
     /** "up to N min" until the server cuts the warm-up short, when it said when. */
     function warmupLeft(cam) {

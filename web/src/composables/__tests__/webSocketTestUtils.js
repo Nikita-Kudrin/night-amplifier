@@ -1,7 +1,12 @@
 import {nextTick} from 'vue'
 import lz4 from 'lz4js'
-import {RGB8_CHUNKED_MAGIC, RGB8_MAGIC} from '../../constants'
-import {SA09_CHUNK_DESCRIPTOR_SIZE, SA09_HEADER_SIZE} from '../../utils/frameDecoder.js'
+import {
+    FRAME_HEADER_SIZE as RGB8_HEADER_SIZE,
+    RGB8_CHUNKED_MAGIC,
+    RGB8_MAGIC,
+    SA09_CHUNK_DESCRIPTOR_SIZE,
+    SA09_HEADER_SIZE,
+} from '../../utils/frameDecoder.js'
 
 // --- Constants ---
 const WS_STATES = {
@@ -11,7 +16,6 @@ const WS_STATES = {
     CLOSED: 3,
 }
 
-const RGB8_HEADER_SIZE = 16
 export const RGB8_BYTES_PER_PIXEL = 3
 
 // --- MockWebSocket ---
