@@ -1,12 +1,13 @@
 <script setup>
 import {ref, computed} from 'vue'
-import {updateSettings} from '../composables/api.js'
+import {useApplySettings} from '../composables/appContext.js'
 import {useError} from '../composables/useError.js'
 import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
 import {BaseAlert, BaseModal, BaseSpinner} from './ui'
 import LicenseTexts from './LicenseTexts.vue'
 
 const emit = defineEmits(['accepted'])
+const applySettings = useApplySettings()
 
 const {
   coreLicense,
@@ -23,7 +24,7 @@ const canAccept = computed(() => agreed.value && !!coreLicense.value && !isAccep
 async function handleAccept() {
   if (!canAccept.value) return
   await withErrorHandling(async () => {
-    await updateSettings({eula_accepted: true})
+    await applySettings({eula_accepted: true})
     emit('accepted')
   })
 }

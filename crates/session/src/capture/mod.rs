@@ -44,4 +44,5 @@ pub use context::{
 };
 pub use drop_log::DropLog;
 pub use frame_gate::{FrameAdmission, FrameGate, RejectionReason};
+pub use stage_config::BLACK_FLOOR_RANGE;
 pub use task::run_capture_loop;

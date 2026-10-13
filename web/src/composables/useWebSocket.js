@@ -1,4 +1,5 @@
-import {ref, onUnmounted, toValue} from 'vue'
+import {ref, toValue} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 import {WS_RECONNECT} from '../constants'
 
 /**
@@ -176,10 +177,7 @@ export function useWebSocket(path, options = {}) {
         connect()
     }
 
-    // Cleanup on unmount
-    onUnmounted(() => {
-        disconnect()
-    })
+    tryOnScopeDispose(disconnect)
 
     return {
         connected,

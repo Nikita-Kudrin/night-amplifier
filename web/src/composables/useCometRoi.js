@@ -1,6 +1,6 @@
 import {ref, computed} from 'vue'
 import {updateSettings} from '../composables/api.js'
-import {STACKING_TYPES} from '../constants'
+import {COMET_ROI_MIN_PX, STACKING_TYPES} from '../constants'
 
 /**
  * Composable for managing Comet ROI selection and display
@@ -10,9 +10,11 @@ import {STACKING_TYPES} from '../constants'
  * @param {import('vue').Ref} canvasBounds - The canvas's box in container coordinates, kept
  *   current by the view; a `computed` reading `getBoundingClientRect` went stale on zoom or pan
  * @param {import('vue').Ref} containerRef - Container element ref
+ * @param {Object} [options]
+ * @param {(patch: object) => Promise<object>} [options.save] - Saves the ROI (`useApplySettings`)
  * @returns {Object} ROI selection state and handlers
  */
-export function useCometRoi(settings, dimensions, canvasBounds, containerRef) {
+export function useCometRoi(settings, dimensions, canvasBounds, containerRef, {save = updateSettings} = {}) {
     const isSelectingCometRoi = ref(false)
     const roiSelectionStart = ref(null)
     const roiSelectionEnd = ref(null)
@@ -123,14 +125,14 @@ export function useCometRoi(settings, dimensions, canvasBounds, containerRef) {
         }
 
         // Ensure minimum size in image coordinates
-        if (imageRoi.width < 20 || imageRoi.height < 20) {
+        if (imageRoi.width < COMET_ROI_MIN_PX || imageRoi.height < COMET_ROI_MIN_PX) {
             cancelCometRoiSelection()
             return
         }
 
         // Send to API
         try {
-            await updateSettings({comet_roi: imageRoi})
+            await save({comet_roi: imageRoi})
             console.log('[useCometRoi] Comet ROI set:', imageRoi)
         } catch (e) {
             console.error('[useCometRoi] Failed to set comet ROI:', e)

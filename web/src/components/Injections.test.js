@@ -4,6 +4,7 @@ import {ref} from 'vue'
 import SettingsPanel from './SettingsPanel.vue'
 import CaptureControls from './CaptureControls.vue'
 import PushToPanel from './PushToPanel.vue'
+import {createEventStreamStub} from '../test/eventStream.js'
 
 // Mock dependencies that aren't injections
 vi.mock('../composables/api.js', async (importOriginal) =>
@@ -66,15 +67,7 @@ describe('Injection Resilience', () => {
                 global: {
                     provide: {
                         settings: ref({ telescope: {} }),
-                        eventStream: {
-                            lastEvent: ref(null),
-                            currentTarget: ref(null),
-                            pushDirection: ref(null),
-                            isSolving: ref(false),
-                            astapInstallProgress: ref(null),
-                            clearAstapInstallProgress: vi.fn(),
-                            clearPlateSolving: vi.fn(),
-                        },
+                        eventStream: createEventStreamStub(),
                         // 'capabilities' is INTENTIONALLY MISSING
                     },
                     stubs: commonStubs,

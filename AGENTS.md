@@ -111,7 +111,7 @@ cargo bench --bench <name> -- --noplot                              # see Benchm
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 cargo run --release -- --span-timings                               # per-stage durations on span close
-UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.types.js
+UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.{types,settings}.js
 ```
 
 **CI steps both repos repeat are composite actions in `.github/actions/`** (system deps, npm, benchmarks, disk
@@ -164,9 +164,21 @@ in place; their viewers have no control. A guide *disconnect* falls back to Main
 Vue 3 SPA, mobile-first, dark theme, proxying `/api`/`/ws` to `localhost:9955` in dev. Pro-only controls stay
 visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` skips a programmatic query by
 *value*, never a one-shot flag — a flag-based version once left M1-M9 unfindable after clearing a 1-character query.
-Sockets: `useWebSocket` (reconnect, ping), `useEventStream` (a table from event type to state), `useImageStream`.
-**`api.types.js` is generated** from the Rust wire types (`tests/api_types.rs`, feature `api-schema`, which derives
-`schemars::JsonSchema` only in that build); CI fails a stale one. A settings panel section is its own component that
+Sockets: `useWebSocket` (reconnect, ping), `useEventStream`, `useImageStream`.
+**`/ws/events` has one dispatch path**: `useEventStream` is the socket plus `on(type, fn)`, every message handed to
+its type's subscribers in order — the domain tables in `composables/events/` first, then the stores, which subscribe
+through `connectEvents` from `App.vue` (a `lastEvent` watcher saw one of two events landing in a tick). **One writer
+per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`),
+settings only by `settingsStore`: `applySettings` (`useApplySettings`) adopts the POST's answer, and `refresh` never
+runs beside a write, coalesces, and drops an answer older than the one adopted — an edit is one POST and at most one
+GET (it was a POST and 2-3 GETs). Stores are `createX()` + a module default + `__resetForTests()`; a composable's
+lifecycle hooks go through `lifecycle.js` (`tryOn*`), which a bare call or a module store skips. Polling only while
+the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on open.
+**`api.types.js` and `api.settings.js` are generated** from the Rust wire types and the code that clamps settings
+(`tests/api_types.rs`, feature `api-schema`, which derives `schemars::JsonSchema` only in that build); CI fails a
+stale one. `DEFAULT_SETTINGS` *is* the server's default, and a control's range comes from `serverLimits(path, ui)`,
+which may narrow but never widen it (`constants/serverSettings.test.js`); constants live by domain behind
+`constants/index.js`, help copy per panel in `constants/help/`. A settings panel section is its own component that
 mirrors its keys of the panel's `settingsMirror` (`useSectionMirror`) and emits `apply(key, value)`; one that must
 await the save takes it as a prop. Only a typed number debounces (`SETTINGS_DEBOUNCE_MS`); a slider release or a
 select sends at once. Cooler and dew heater save through `useCameraHardwareSettings`, which names `camera_role`.

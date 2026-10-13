@@ -1,13 +1,14 @@
 import {computed, inject, provide, unref} from 'vue'
+import {updateSettings} from './api.js'
 import {DEFAULT_CAPABILITIES} from '../constants'
 
 /**
  * What `App.vue` provides to the components below it, and the accessors that read it.
  *
- * Server state goes out read-only: a component edits it through the API and the answer
- * comes back through `useAppState`. The camera selection and the simulator switch are UI
- * state the panels set themselves, so those two stay writable. The keys are plain strings
- * because tests provide them by name.
+ * Server state goes out read-only: a component edits settings through `applySettings`
+ * (`useApplySettings`), whose answer the settings store adopts. The camera selection and
+ * the simulator switch are UI state the panels set themselves, so those two stay writable.
+ * The keys are plain strings because tests provide them by name.
  */
 export function provideAppContext(appState, eventStream) {
     provide('settings', appState.settings)
@@ -16,6 +17,7 @@ export function provideAppContext(appState, eventStream) {
     provide('eventStream', eventStream)
     provide('simulatorEnabled', appState.simulatorEnabled)
     provide('refreshSettings', appState.refreshSettings)
+    provide('applySettings', appState.applySettings)
     provide('refreshCameras', appState.refreshCameras)
     provide('capabilities', appState.capabilities)
     provide('cameraStatus', appState.cameraStatus)
@@ -47,6 +49,15 @@ export function useCapabilities() {
         cometPro: flag((c) => c.comet?.pro_stacking),
         debugLogging: flag((c) => c.debug_logging),
     }
+}
+
+/**
+ * Saves a settings patch and resolves to the server's answer. Below `App.vue` the settings
+ * store adopts that answer; a component mounted alone only posts it.
+ * @returns {(patch: object) => Promise<object>}
+ */
+export function useApplySettings() {
+    return inject('applySettings', updateSettings)
 }
 
 /** The camera list's entry for the selected camera, or `null`. */

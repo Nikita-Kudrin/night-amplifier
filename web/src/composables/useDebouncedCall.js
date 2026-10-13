@@ -1,4 +1,4 @@
-import {getCurrentInstance, onBeforeUnmount} from 'vue'
+import {tryOnBeforeUnmount} from './lifecycle.js'
 
 /**
  * Calls `fn` `ms` after the last `schedule`, with that call's arguments.
@@ -29,7 +29,7 @@ export function useDebouncedCall(fn, ms) {
         timer = setTimeout(flush, ms)
     }
 
-    if (getCurrentInstance()) onBeforeUnmount(flush)
+    tryOnBeforeUnmount(flush)
 
     return {schedule, flush, cancel}
 }

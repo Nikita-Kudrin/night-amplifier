@@ -502,8 +502,8 @@ describe('SettingsPanel', () => {
             const slider = blackFloorSlider(wrapper)
             expect(slider).toBeDefined()
             // The negative end is one nominal sky level, where the hard floor clips
-            // exactly at the sky; it is mirrored from `MIN_BLACK_FLOOR`, which the
-            // backend enforces, and it moves whenever the stretch is retuned.
+            // exactly at the sky; it comes from the backend's `BLACK_FLOOR_RANGE`
+            // (`api.settings.js`) and moves whenever the stretch is retuned.
             expect(slider.props('min')).toBe(-0.045)
             expect(slider.props('max')).toBe(0.15)
         })

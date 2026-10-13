@@ -1,5 +1,14 @@
 import lz4 from 'lz4js'
-import {RGB8_MAGIC, RGB8_CHUNKED_MAGIC, SA10_MAGIC} from '../constants'
+
+// The stream formats' magic numbers: "SA08".."SA10" read as a little-endian u32.
+export const RGB8_MAGIC = 0x53413038 // "SA08" — legacy single-block
+export const RGB8_CHUNKED_MAGIC = 0x53413039 // "SA09" — parallel chunked
+export const SA10_MAGIC = 0x53413130 // "SA10" — dynamic resolution JPEG
+
+/** The SA08 and SA10 header: magic, width, height and payload size, each a u32. */
+export const FRAME_HEADER_SIZE = 16
+export const SA09_HEADER_SIZE = 20
+export const SA09_CHUNK_DESCRIPTOR_SIZE = 8
 
 /**
  * Logs and drops a frame whose header disagrees with its own bytes. Unchecked, a
@@ -17,7 +26,7 @@ function malformed(format, reason) {
  * @returns {object|null} Decoded frame { width, height, frameData } or null if invalid
  */
 export function decodeFrame(buffer) {
-    if (buffer.byteLength < 16) return null
+    if (buffer.byteLength < FRAME_HEADER_SIZE) return null
 
     const view = new DataView(buffer)
     const magic = view.getUint32(0, true)
@@ -60,15 +69,16 @@ export function decodeRgb8Lz4(buffer, view) {
     const height = view.getUint32(8, true)
     const compressedSize = view.getUint32(12, true)
 
-    if (compressedSize < 4 || 16 + compressedSize > buffer.byteLength) {
+    if (compressedSize < 4 || FRAME_HEADER_SIZE + compressedSize > buffer.byteLength) {
         return malformed('SA08', `payload of ${compressedSize} bytes in a ${buffer.byteLength}-byte frame`)
     }
-    const decompressedSize = view.getUint32(16, true)
+    // The payload opens with its decompressed size, a u32.
+    const decompressedSize = view.getUint32(FRAME_HEADER_SIZE, true)
     if (decompressedSize !== width * height * 3) {
         return malformed('SA08', `${decompressedSize} bytes of pixels for ${width}x${height}`)
     }
 
-    const lz4BlockData = new Uint8Array(buffer, 20, compressedSize - 4)
+    const lz4BlockData = new Uint8Array(buffer, FRAME_HEADER_SIZE + 4, compressedSize - 4)
 
     let decompressedBuffer
     try {
@@ -82,9 +92,6 @@ export function decodeRgb8Lz4(buffer, view) {
 
     return {width, height, frameData: decompressedBuffer}
 }
-
-export const SA09_HEADER_SIZE = 20
-export const SA09_CHUNK_DESCRIPTOR_SIZE = 8
 
 /**
  * Decode chunked RGB8+LZ4 binary stream format (SA09)
@@ -180,15 +187,15 @@ export function decodeRgb8Lz4Chunked(buffer, view) {
  */
 export function decodeRgb8Jpeg(buffer, view) {
     if (!view) view = new DataView(buffer)
-    if (buffer.byteLength < 16) return null
+    if (buffer.byteLength < FRAME_HEADER_SIZE) return null
 
     const width = view.getUint32(4, true)
     const height = view.getUint32(8, true)
     const payloadSize = view.getUint32(12, true)
 
-    if (buffer.byteLength < 16 + payloadSize) return null
+    if (buffer.byteLength < FRAME_HEADER_SIZE + payloadSize) return null
 
-    const jpegData = new Uint8Array(buffer, 16, payloadSize)
+    const jpegData = new Uint8Array(buffer, FRAME_HEADER_SIZE, payloadSize)
     const blob = new Blob([jpegData], {type: 'image/jpeg'})
 
     return {width, height, frameData: blob, isJpeg: true}

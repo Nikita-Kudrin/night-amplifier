@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, afterEach, vi} from 'vitest'
-import {nextTick} from 'vue'
+import {effectScope, nextTick} from 'vue'
 import {
     MockWebSocket,
     createTestContext,
@@ -248,7 +248,9 @@ describe('useEventStream', () => {
         })
 
         it('handles malformed JSON gracefully', async () => {
-            const {lastEvent} = useEventStream()
+            const stream = useEventStream()
+            const handler = vi.fn()
+            stream.on('error', handler)
             const consoleSpy = suppressConsoleErrors()
 
             await openWebSocket()
@@ -256,29 +258,111 @@ describe('useEventStream', () => {
             await nextTick()
 
             expect(consoleSpy).toHaveBeenCalled()
-            expect(lastEvent.value).toBe(null)
+            expect(handler).not.toHaveBeenCalled()
+            expect(stream.lastError.value).toBeNull()
 
             consoleSpy.mockRestore()
         })
     })
 
-    describe('general events', () => {
-        it('stores lastEvent for any event type', async () => {
-            const {lastEvent} = useEventStream()
-
+    describe('disk and drop counters', () => {
+        it('shows a backed-up disk writer until it catches up or is dismissed', async () => {
+            const {diskWriterWarning, clearDiskWriterWarning} = useEventStream()
             await openWebSocket()
-            await sendEvent({type: 'settings_updated'})
 
-            expect(lastEvent.value).toEqual({type: 'settings_updated'})
+            await sendEvent({type: 'disk_writer_warning', queue_depth: 42})
+            expect(diskWriterWarning.value).toBe(42)
+            await sendEvent({type: 'disk_writer_warning_cleared'})
+            expect(diskWriterWarning.value).toBeNull()
+
+            await sendEvent({type: 'disk_writer_warning', queue_depth: 7})
+            clearDiskWriterWarning()
+            expect(diskWriterWarning.value).toBeNull()
         })
 
-        it('handles camera_connected event', async () => {
-            const {lastEvent} = useEventStream()
+        // The drop count needs its denominator; an older server sends none.
+        it('counts dropped frames against the frames delivered', async () => {
+            const {droppedCount, deliveredCount} = useEventStream()
+            await openWebSocket()
+
+            await sendEvent({type: 'frame_dropped', dropped_count: 3, delivered_count: 120})
+            expect([droppedCount.value, deliveredCount.value]).toEqual([3, 120])
+            await sendEvent({type: 'frame_dropped', dropped_count: 4})
+            expect([droppedCount.value, deliveredCount.value]).toEqual([4, 0])
+        })
+
+        it('says a camera is back until the notice is dismissed', async () => {
+            const {resumeNotice, clearResumeNotice} = useEventStream()
+            await openWebSocket()
+
+            await sendEvent({type: 'capture_resumed', name: 'ASI533MC Pro', stacked_count: 12})
+            expect(resumeNotice.value).toBe('ASI533MC Pro is back. Capture resumed with 12 frames still stacked.')
+            clearResumeNotice()
+            expect(resumeNotice.value).toBeNull()
+        })
+    })
+
+    describe('subscriptions', () => {
+        it('hands every event of a type to what subscribed to it', async () => {
+            const {on} = useEventStream()
+            const settings = vi.fn()
+            const camera = vi.fn()
+            on('settings_updated', settings)
+            on('camera_connected', camera)
 
             await openWebSocket()
             await sendEvent({type: 'camera_connected', name: 'Neptune-C II'})
+            await sendEvent({type: 'settings_updated'})
 
-            expect(lastEvent.value).toEqual({type: 'camera_connected', name: 'Neptune-C II'})
+            expect(camera).toHaveBeenCalledExactlyOnceWith({type: 'camera_connected', name: 'Neptune-C II'})
+            expect(settings).toHaveBeenCalledExactlyOnceWith({type: 'settings_updated'})
+        })
+
+        // The `lastEvent` watcher this replaced ran once per tick, on the last event only.
+        it('sees both of two events arriving in one tick', async () => {
+            const {on} = useEventStream()
+            const phases = []
+            on('camera_phase_changed', (event) => phases.push(event.phase))
+
+            await openWebSocket()
+            getWebSocket().simulateMessage(JSON.stringify({type: 'camera_phase_changed', name: 'A', phase: 'idle'}))
+            getWebSocket().simulateMessage(JSON.stringify({type: 'camera_phase_changed', name: 'A', phase: 'capturing'}))
+
+            expect(phases).toEqual(['idle', 'capturing'])
+        })
+
+        it('runs the stream\'s own table before later subscribers, and survives one that throws', async () => {
+            const {on, captureState} = useEventStream()
+            const seen = []
+            const consoleSpy = suppressConsoleErrors()
+            on('state_changed', () => {
+                throw new Error('broken subscriber')
+            })
+            on('state_changed', () => seen.push(captureState.value))
+
+            await openWebSocket()
+            await sendEvent({type: 'state_changed', state: 'Capturing'})
+
+            expect(seen).toEqual(['Capturing'])
+            expect(consoleSpy).toHaveBeenCalled()
+            consoleSpy.mockRestore()
+        })
+
+        it('stops delivering once unsubscribed, or once the subscribing scope is gone', async () => {
+            const {on} = useEventStream()
+            const early = vi.fn()
+            const scoped = vi.fn()
+            const off = on('settings_updated', early)
+            const scope = effectScope()
+            scope.run(() => on('settings_updated', scoped))
+
+            await openWebSocket()
+            off()
+            scope.stop()
+            await sendEvent({type: 'settings_updated'})
+
+            expect(early).not.toHaveBeenCalled()
+            expect(scoped).not.toHaveBeenCalled()
         })
     })
 
@@ -476,6 +560,71 @@ describe('useEventStream', () => {
             expect(currentTarget.value).toBeNull()
             expect(warn).not.toHaveBeenCalled()
             warn.mockRestore()
+        })
+
+        it('shows a solve the server is already running', async () => {
+            getPushToStatus.mockResolvedValueOnce(pushToStatus({is_solving: true}))
+            const {plateSolving} = useEventStream()
+
+            await openWebSocket()
+            await statusSettled()
+
+            expect(plateSolving.value.inProgress).toBe(true)
+        })
+
+        // The status left the server before the event did, so it describes an older state.
+        it('drops a status answer that a Push-To event overtook', async () => {
+            let answer
+            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+            const {currentTarget} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'target_cleared'})
+            answer(pushToStatus({current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}}))
+            await statusSettled()
+
+            expect(currentTarget.value).toBeNull()
+        })
+
+        it('reads the status again whenever the socket reopens', async () => {
+            getPushToStatus.mockClear()
+            useEventStream()
+
+            await openWebSocket()
+            getWebSocket().simulateClose()
+            vi.advanceTimersByTime(1000)
+            MockWebSocket.instances.at(-1).simulateOpen()
+            await nextTick()
+
+            expect(getPushToStatus).toHaveBeenCalledTimes(2)
+        })
+    })
+
+    describe('Push-To answers', () => {
+        it('aims at a target the panel set, dropping the old direction', async () => {
+            const {aimAt, currentTarget, pushDirection} = useEventStream()
+            await openWebSocket()
+            await sendEvent({type: 'push_direction_updated', angle_deg: 1, distance_deg: 2, direction_hint: 'N', is_close: false})
+
+            const target = {designation: 'M42', ra_degrees: 83.8, dec_degrees: -5.4}
+            expect(aimAt(target)).toBe(target)
+
+            expect(currentTarget.value).toEqual(target)
+            expect(pushDirection.value).toBeNull()
+        })
+
+        it('forgets the target, its direction and the solve together', async () => {
+            const {forgetTarget, currentTarget, plateSolving, pushToBlocked} = useEventStream()
+            await openWebSocket()
+            await sendEvent({type: 'target_changed', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27})
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'push_to_blocked', reason: 'Waiting'})
+
+            forgetTarget()
+
+            expect(currentTarget.value).toBeNull()
+            expect(plateSolving.value).toEqual({inProgress: false, targetName: null, lastResult: null, stage: null})
+            expect(pushToBlocked.value).toBeNull()
         })
     })
 

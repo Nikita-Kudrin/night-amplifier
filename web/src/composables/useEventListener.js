@@ -1,4 +1,4 @@
-import {getCurrentScope, onScopeDispose} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 
 /**
  * `target.addEventListener(type, listener, options)`, removed when the calling component
@@ -10,6 +10,6 @@ export function useEventListener(target, type, listener, options) {
     if (!target) return () => {}
     target.addEventListener(type, listener, options)
     const stop = () => target.removeEventListener(type, listener, options)
-    if (getCurrentScope()) onScopeDispose(stop)
+    tryOnScopeDispose(stop)
     return stop
 }

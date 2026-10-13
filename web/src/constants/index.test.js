@@ -1,4 +1,6 @@
+import * as constants from './index.js'
 import {
+    BACKGROUND_ALGORITHM_OPTIONS,
     CAMERA_PHASES,
     CAPTURE_STATE_DISPLAY,
     CAPTURE_STATES,
@@ -6,9 +8,20 @@ import {
     DEFAULT_CAPABILITIES,
     DEFAULT_SETTINGS,
     defaultSettings,
+    EYEPIECE_STREAM_RESOLUTION_OPTIONS,
+    HELP_TEXTS,
+    PREVIEW_RESOLUTION_OPTIONS,
+    REJECTION_METHOD_OPTIONS,
     STACKING_TYPES,
+    STREAMING_RESOLUTION_OPTIONS,
+    STRETCH_AGGRESSIVENESS_OPTIONS,
+    WEIGHTING_PRESET_OPTIONS,
 } from './index.js'
+import {HELP_SECTIONS} from './help/index.js'
 import {wireEnum, wireTypes} from '../test/apiTypes.js'
+
+// Every domain module behind the barrel; `export *` silently drops a name two of them share.
+const modules = import.meta.glob(['./*.js', '!./*.test.js', '!./index.js', '!./serverSettings.js', '!./cameras.js'], {eager: true})
 
 const types = wireTypes()
 
@@ -66,5 +79,53 @@ describe('wire enums', () => {
         ['StackingType', STACKING_TYPES],
     ])('names every %s the server sends, and no other', (typedef, table) => {
         expect(Object.values(table).sort()).toEqual(wireEnum(typedef).sort())
+    })
+})
+
+describe('option tables', () => {
+    const values = (options) => options.map((option) => option.value).sort()
+
+    it.each([
+        ['StretchAggressiveness', STRETCH_AGGRESSIVENESS_OPTIONS],
+        ['BackgroundExtractionAlgorithm', BACKGROUND_ALGORITHM_OPTIONS],
+        ['WeightingPreset', WEIGHTING_PRESET_OPTIONS],
+        ['Resolution', PREVIEW_RESOLUTION_OPTIONS],
+        ['Resolution', STREAMING_RESOLUTION_OPTIONS],
+        ['EyepieceStreamResolution', EYEPIECE_STREAM_RESOLUTION_OPTIONS],
+    ])('offers every %s the server takes, and no other', (typedef, options) => {
+        expect(values(options)).toEqual(wireEnum(typedef).sort())
+    })
+
+    // Min-Max needs per-pixel extremes the live stack does not keep; the server substitutes.
+    it('offers every RejectionMethod but Min-Max', () => {
+        expect(values(REJECTION_METHOD_OPTIONS)).toEqual(wireEnum('RejectionMethod').filter((m) => m !== 'MinMax').sort())
+    })
+})
+
+describe('the constants barrel', () => {
+    it('re-exports every domain module, none shadowing another', () => {
+        const seen = new Map()
+        for (const [file, module] of Object.entries(modules)) {
+            for (const [name, value] of Object.entries(module)) {
+                expect(seen.get(name), `${name} in ${file} and ${seen.get(name)}`).toBeUndefined()
+                seen.set(name, file)
+                expect(constants[name], name).toBe(value)
+            }
+        }
+        expect(seen.size).toBeGreaterThan(40)
+    })
+})
+
+describe('HELP_TEXTS', () => {
+    it('has each key in one panel’s file only', () => {
+        const keys = Object.values(HELP_SECTIONS).flatMap((section) => Object.keys(section))
+        expect(keys.length).toBe(new Set(keys).size)
+        expect(Object.keys(HELP_TEXTS)).toHaveLength(keys.length)
+    })
+
+    it('has text for every key', () => {
+        for (const [key, text] of Object.entries(HELP_TEXTS)) {
+            expect(typeof text === 'string' && text.trim().length > 0, key).toBe(true)
+        }
     })
 })

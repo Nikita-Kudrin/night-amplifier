@@ -1,4 +1,5 @@
-import {ref, onUnmounted, shallowRef, toValue, watch} from 'vue'
+import {ref, shallowRef, toValue, watch} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 import {decodeFrame} from '../utils/frameDecoder.js'
 import {useWebSocket} from './useWebSocket.js'
 import {WS} from '../constants/endpoints.js'
@@ -124,9 +125,7 @@ export function useImageStream(options = {}) {
         }
     )
 
-    onUnmounted(() => {
-        stopFpsTimer()
-    })
+    tryOnScopeDispose(stopFpsTimer)
 
     return {
         connected,

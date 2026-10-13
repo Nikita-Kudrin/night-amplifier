@@ -1,9 +1,10 @@
 //! The frontend's `api.types.js`, written from the Rust wire types so the two cannot drift
 //! (the hand-kept file once described 8 of ~60 settings and push directions by field
-//! names the server never sent).
+//! names the server never sent), and `api.settings.js`: the default settings and the
+//! ranges the server clamps them to, read off the code that enforces them.
 //!
-//! `cargo test --features api-schema --test api_types` fails when the file is stale;
-//! `UPDATE_API_TYPES=1` on the same command rewrites it. Run this binary alone: the feature
+//! `cargo test --features api-schema --test api_types` fails when either file is stale;
+//! `UPDATE_API_TYPES=1` on the same command rewrites them. Run this binary alone: the feature
 //! turns on `serde_json/preserve_order` (declaration order in the output) for the build.
 #![cfg(feature = "api-schema")]
 
@@ -14,17 +15,30 @@ use night_amplifier::push_to::{
 use night_amplifier::server::{
     CapabilitiesResponse, CaptureStatusResponse, SettingsResponse, SimulatorConfigResponse,
 };
+use night_amplifier::session::capture::BLACK_FLOOR_RANGE;
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
+use night_amplifier::session::state::CaptureSettings;
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+use std::ops::RangeInclusive;
 
 const TYPES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.types.js");
+const SETTINGS_FILE: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.settings.js");
 
 const HEADER: &str = "\
 /**
  * JSDoc types of the server's JSON answers, generated from the Rust wire types by
  * `tests/api_types.rs`. Do not edit: change the Rust type, then run
+ *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
+ */
+";
+
+const SETTINGS_HEADER: &str = "\
+/**
+ * The server's default settings and the ranges it clamps settings to, generated from the
+ * Rust code that enforces them by `tests/api_types.rs`. Do not edit: change the Rust, then run
  *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
  */
 ";
@@ -159,17 +173,102 @@ fn generate() -> String {
     out
 }
 
-#[test]
-fn api_types_js_is_current() {
-    let generated = generate();
+/// A setting `CaptureSettings::sanitized` clamps: its dotted path in the `/api/settings`
+/// answer, and how to set it from an `f64`.
+type Probe = (&'static str, fn(&mut CaptureSettings, f64));
+
+const CLAMPED: &[Probe] = &[
+    ("rejection_sigma", |s, v| s.rejection_sigma = v as f32),
+    ("auto_stretch_intensity", |s, v| s.auto_stretch_intensity = v as f32),
+    ("saturation_boost_strength", |s, v| s.saturation_boost_strength = v as f32),
+    ("simulated_preload_images", |s, v| s.simulated_preload_images = v as usize),
+    ("target_temp_c", |s, v| s.target_temp_c = Some(v)),
+    ("dew_heater_power", |s, v| s.dew_heater_power = v as i32),
+    ("guide_camera.target_temp_c", |s, v| s.guide_camera.target_temp_c = Some(v)),
+    ("guide_camera.dew_heater_power", |s, v| s.guide_camera.dew_heater_power = v as i32),
+    ("sensor_correction.hot_pixel_sigma", |s, v| s.sensor_correction.hot_pixel_sigma = v as f32),
+    ("denoise.chroma_strength", |s, v| s.denoise.chroma_strength = v as f32),
+    ("denoise.background_grain", |s, v| s.denoise.background_grain = v as f32),
+    ("denoise.luma_strength", |s, v| s.denoise.luma_strength = v as f32),
+    ("denoise.detail", |s, v| s.denoise.detail = v as f32),
+];
+
+/// Settings as `/api/settings` sends them. Parsed back from the text, not `to_value`, which
+/// widens an f32 to its f64 digits (`-0.04500000178813934` for `-0.045`).
+fn wire(settings: &CaptureSettings) -> Value {
+    let text = serde_json::to_string(&SettingsResponse::from(settings)).unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+fn at(wire: &Value, path: &str) -> Value {
+    let value = path.split('.').fold(wire, |value, key| &value[key]);
+    assert!(!value.is_null(), "{path} is not in the /api/settings answer");
+    value.clone()
+}
+
+/// Where `sanitized` puts a value far past one end, or `null` when it lets it through.
+fn clamp_end((path, set): &Probe, far: f64) -> Value {
+    let mut settings = CaptureSettings::default();
+    set(&mut settings, far);
+    let kept = at(&wire(&settings.clone().sanitized()), path);
+    if kept == at(&wire(&settings), path) { Value::Null } else { kept }
+}
+
+/// An f32 as the literal a human would write, not its f64 widening.
+fn shortest(value: f32) -> f64 {
+    value.to_string().parse().unwrap()
+}
+
+fn range(range: RangeInclusive<f32>) -> Value {
+    json!({ "min": shortest(*range.start()), "max": shortest(*range.end()) })
+}
+
+fn generate_settings() -> String {
+    // Without a Pro plugin `rejection_method` is Community's `best_available`.
+    let defaults = serde_json::to_string_pretty(&SettingsResponse::from(&CaptureSettings::default()));
+    let mut ranges = Map::new();
+    for probe in CLAMPED {
+        let bounds = json!({ "min": clamp_end(probe, -1e9), "max": clamp_end(probe, 1e9) });
+        ranges.insert(probe.0.to_string(), bounds);
+    }
+    // Clamped where the renderer reads it, not in `sanitized`.
+    ranges.insert("eyepiece.black_floor".to_string(), range(BLACK_FLOOR_RANGE));
+    format!(
+        "{SETTINGS_HEADER}\n\
+         /** @type {{import('./api.types.js').Settings}} */\n\
+         export const SERVER_DEFAULT_SETTINGS = {}\n\n\
+         /**\n \
+         * The range the server clamps each ranged setting to, by its dotted path in `Settings`;\n \
+         * `null` is an open end.\n \
+         * @type {{Object<string, {{min: number|null, max: number|null}}>}}\n \
+         */\n\
+         export const SERVER_SETTING_RANGES = {}\n",
+        defaults.unwrap(),
+        serde_json::to_string_pretty(&ranges).unwrap(),
+    )
+}
+
+/// Rewrites `path` under `UPDATE_API_TYPES`, else fails when it differs from `generated`.
+fn assert_current(path: &str, generated: &str) {
+    let name = path.rsplit('/').next().unwrap();
     if std::env::var_os("UPDATE_API_TYPES").is_some() {
-        std::fs::write(TYPES_FILE, &generated).expect("write api.types.js");
+        std::fs::write(path, generated).unwrap_or_else(|e| panic!("write {name}: {e}"));
         return;
     }
-    let committed = std::fs::read_to_string(TYPES_FILE).expect("read api.types.js");
+    let committed = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {name}: {e}"));
     assert!(
         committed == generated,
-        "web/src/composables/api.types.js is stale; regenerate it with\n  \
+        "web/src/composables/{name} is stale; regenerate it with\n  \
          UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types"
     );
+}
+
+#[test]
+fn api_types_js_is_current() {
+    assert_current(TYPES_FILE, &generate());
+}
+
+#[test]
+fn api_settings_js_is_current() {
+    assert_current(SETTINGS_FILE, &generate_settings());
 }

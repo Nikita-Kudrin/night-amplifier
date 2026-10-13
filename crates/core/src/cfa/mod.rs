@@ -268,8 +268,8 @@ pub struct SensorCorrectionSettings {
     pub superpixel_debayer: bool,
 }
 
-/// The range `hot_pixel_sigma` is held to at every boundary it can arrive through. Keep in
-/// sync with `HOT_PIXEL_SIGMA_LIMITS` in `web/src/constants/index.js`.
+/// The range `hot_pixel_sigma` is held to at every boundary it can arrive through. The
+/// frontend reads it from the generated `api.settings.js` (`tests/api_types.rs`).
 ///
 /// Enforced rather than trusted because the stage has no off switch any more, so this is
 /// the only way to break it. Measured on a guide sub: sigma <= 0 or a huge value disables it

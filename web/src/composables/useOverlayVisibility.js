@@ -1,4 +1,6 @@
-import {getCurrentInstance, onUnmounted, ref} from 'vue'
+import {ref} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
+import {TOUCH_SLOP_PX} from '../constants'
 
 /**
  * How long the controls stay up after the last deliberate interaction.
@@ -9,12 +11,6 @@ import {getCurrentInstance, onUnmounted, ref} from 'vue'
  */
 export const IDLE_HIDE_MS = 10_000
 
-/**
- * How far a pointer may travel and still count as a tap. A pan that ends where it
- * started is a tap; one that travelled is not. Without this every drag-to-pan
- * would finish by toggling the controls the drag had nothing to do with.
- */
-const TAP_SLOP_PX = 6
 
 /** Anything a press lands on that is a control, not the image behind it. */
 const CONTROL_SELECTOR = 'button, a, input, select, [data-overlay-control]'
@@ -129,7 +125,7 @@ export function useOverlayVisibility({idleMs = IDLE_HIDE_MS} = {}) {
         const travelled = Math.hypot(x - press.x, y - press.y)
         press = null
 
-        if (onControl || multiTouch || travelled > TAP_SLOP_PX) {
+        if (onControl || multiTouch || travelled > TOUCH_SLOP_PX) {
             show()
             return
         }
@@ -154,7 +150,7 @@ export function useOverlayVisibility({idleMs = IDLE_HIDE_MS} = {}) {
 
     // Guarded so the composable stays callable from its own unit tests, which have
     // no component instance for a lifecycle hook to attach to.
-    if (getCurrentInstance()) onUnmounted(clearHideTimer)
+    tryOnScopeDispose(clearHideTimer)
 
     return {visible, show, hide, setHold, cancelPress, handlePressStart, handlePressEnd}
 }

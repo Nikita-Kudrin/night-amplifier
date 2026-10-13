@@ -2,7 +2,7 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {flushPromises} from '@vue/test-utils'
 import {mountSettingsPanel} from '../test/settingsPanel.js'
-import {resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
+import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
 
 vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal(), {

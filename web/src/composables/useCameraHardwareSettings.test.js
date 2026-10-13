@@ -71,14 +71,22 @@ describe('useCameraHardwareSettings', () => {
         expect(hardware.liveStatus.value).toBeUndefined()
     })
 
-    it('names the camera in every save and refreshes after it', async () => {
+    // The store adopts the POST's answer: one request per edit, no refresh behind it.
+    it('names the camera in every save, through the settings store', async () => {
         const refreshSettings = vi.fn(async () => {})
-        const {hardware} = mountHardware({role: 'guide', overrides: {refreshSettings}})
+        const applySettings = vi.fn(async () => settings())
+        const {hardware} = mountHardware({role: 'guide', overrides: {refreshSettings, applySettings}})
 
         await hardware.apply({cooler_enabled: true})
 
+        expect(applySettings).toHaveBeenCalledExactlyOnceWith({camera_role: 'guide', cooler_enabled: true})
+        expect(refreshSettings).not.toHaveBeenCalled()
+    })
+
+    it('posts the patch itself when mounted without the store', async () => {
+        const {hardware} = mountHardware({role: 'guide'})
+        await hardware.apply({cooler_enabled: true})
         expect(updateSettings).toHaveBeenCalledWith({camera_role: 'guide', cooler_enabled: true})
-        expect(refreshSettings).toHaveBeenCalled()
     })
 
     it('surfaces a refused save', async () => {

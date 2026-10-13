@@ -1,4 +1,5 @@
-import {onMounted, ref} from 'vue'
+import {ref} from 'vue'
+import {tryOnMounted} from './lifecycle.js'
 import {getSoftwareLicenses} from './api.js'
 import {useError} from './useError.js'
 
@@ -25,7 +26,7 @@ export function useSoftwareLicenses() {
         if (!error.value && !coreLicense.value) setError('The server sent no license text.')
     }
 
-    onMounted(load)
+    tryOnMounted(load)
 
     return {version, coreLicense, thirdPartyLicenses, loading, error, load}
 }

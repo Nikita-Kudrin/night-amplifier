@@ -14,6 +14,7 @@ use night_amplifier_core::debayer::DebayerAlgorithm;
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::plugins::Plugins;
 use crate::state::CaptureSettings;
+use std::ops::RangeInclusive;
 
 /// The raw-CFA stage for the current settings.
 ///
@@ -124,19 +125,18 @@ const DARKENED_FLOOR_PEDESTAL: f32 = 0.006;
 /// — for a floor of nothing.
 const BLACK_FLOOR_DEADBAND: f32 = 1e-4;
 
-/// How far down the slider reaches, matching `BLACK_FLOOR_LIMITS` in the frontend
-/// — enforced here, not trusted, since `POST /api/settings` takes any `f32` with
-/// nowhere else to clamp a wild value. Stops at fraction 1.0 (= `NOMINAL_SKY_LEVEL`),
-/// where `ShadowFloor` clips at `fraction * sky`: past that, "Darker sky" eats into
-/// the target it exists to separate (measured: 1.11 cost 6% target excess, 34% of
-/// samples at pure black). The soft form's own ceiling sits further out
-/// (`MAX_DARKENING`, fraction 1.125), left unused here on purpose. Calibrated, not
-/// fixed — see `NOMINAL_SKY_LEVEL`'s history; pinned by the black-floor tests below.
-const MIN_BLACK_FLOOR: f32 = -NOMINAL_SKY_LEVEL;
-
-/// The ceiling `DisplayOutput::with_pedestal` already imposes, restated so the
-/// lifting half is clamped in the same place as the darkening one.
-const MAX_BLACK_FLOOR: f32 = 0.5;
+/// The black floor slider's travel, enforced here, not trusted, since `POST /api/settings`
+/// takes any `f32` with nowhere else to clamp a wild value; the frontend reads it from the
+/// generated `api.settings.js`.
+///
+/// The bottom stops at fraction 1.0 (= `NOMINAL_SKY_LEVEL`), where `ShadowFloor` clips at
+/// `fraction * sky`: past that, "Darker sky" eats into the target it exists to separate
+/// (measured: 1.11 cost 6% target excess, 34% of samples at pure black). The soft form's
+/// own ceiling (`MAX_DARKENING`, fraction 1.125) is left unused on purpose. Calibrated, not
+/// fixed — see `NOMINAL_SKY_LEVEL`'s history; pinned by the black-floor tests below. The top
+/// is the ceiling `DisplayOutput::with_pedestal` already imposes, restated so the lifting
+/// half is clamped in the same place as the darkening one.
+pub const BLACK_FLOOR_RANGE: RangeInclusive<f32> = -NOMINAL_SKY_LEVEL..=0.5;
 
 /// How much of the eyepiece intensity slider's range actually reaches the
 /// stretch. The slider is a comfort control, not a full remap of the tone curve.
@@ -199,7 +199,7 @@ fn sanitized_black_floor(settings: &CaptureSettings) -> f32 {
     if !value.is_finite() || value.abs() < BLACK_FLOOR_DEADBAND {
         return 0.0;
     }
-    value.clamp(MIN_BLACK_FLOOR, MAX_BLACK_FLOOR)
+    value.clamp(*BLACK_FLOOR_RANGE.start(), *BLACK_FLOOR_RANGE.end())
 }
 
 /// The slider's darkening half, or `None` when it's off or can't be honoured. Two
@@ -678,7 +678,7 @@ mod tests {
 
         settings.eyepiece.black_floor = -5.0;
         let clamped = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
-        settings.eyepiece.black_floor = MIN_BLACK_FLOOR;
+        settings.eyepiece.black_floor = *BLACK_FLOOR_RANGE.start();
         let end_stop = get_render_pipeline_config(&settings, &Plugins::none(), false).shadow_floor;
         assert_eq!(clamped, end_stop);
 
@@ -693,7 +693,7 @@ mod tests {
         settings.eyepiece.black_floor = 10.0;
         let config = get_render_pipeline_config(&settings, &Plugins::none(), false);
         assert!(config.shadow_floor.is_none());
-        assert!((config.display.pedestal - MAX_BLACK_FLOOR).abs() < 1e-6);
+        assert!((config.display.pedestal - BLACK_FLOOR_RANGE.end()).abs() < 1e-6);
     }
 
     /// FITS is 32-bit linear data; the display transform is a property of the

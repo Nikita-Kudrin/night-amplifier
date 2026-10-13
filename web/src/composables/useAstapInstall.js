@@ -1,4 +1,5 @@
-import {ref, computed, watch, onMounted, onUnmounted, inject} from 'vue'
+import {ref, computed, watch, inject} from 'vue'
+import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
 import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
 import {useTimeouts} from './useTimeouts.js'
 import {formatBytes, formatPercent} from '../utils/format.js'
@@ -168,11 +169,9 @@ export function useAstapInstall({onComplete} = {}) {
     )
 
     // Lifecycle
-    onMounted(() => {
-        loadStatus()
-    })
+    tryOnMounted(loadStatus)
 
-    onUnmounted(() => {
+    tryOnScopeDispose(() => {
         eventStream?.clearAstapInstallProgress?.()
         stopWatch()
     })

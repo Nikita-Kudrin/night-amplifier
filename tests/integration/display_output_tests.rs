@@ -498,8 +498,8 @@ fn the_black_floor_darkens_the_sky_without_dimming_the_target() {
     /// The slider's end stop, which has to stay usable rather than merely legal — and
     /// where **both** forms are measured, since that is the position each one fails at
     /// first: the soft form by saturating (every deeper position reads the same) and the
-    /// hard form by clipping above the sky. `MIN_BLACK_FLOOR` is one nominal sky level, so
-    /// assertions 4 and 5 are what keep that calibration honest when the stretch moves.
+    /// hard form by clipping above the sky. `BLACK_FLOOR_RANGE` bottoms out at one nominal
+    /// sky level, so assertions 4 and 5 keep that calibration honest when the stretch moves.
     const DEEPEST: f32 = -0.045;
 
     println!("\n=== Black floor, darkening half ===");

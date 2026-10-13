@@ -1,4 +1,4 @@
-import {onScopeDispose} from 'vue'
+import {tryOnScopeDispose} from './lifecycle.js'
 
 /**
  * `setTimeout` owned by the calling component (or effect scope): whatever is still
@@ -21,7 +21,7 @@ export function useTimeouts() {
         pending.clear()
     }
 
-    onScopeDispose(clearAll)
+    tryOnScopeDispose(clearAll)
 
     return {later, clearAll}
 }

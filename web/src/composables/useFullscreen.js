@@ -12,11 +12,10 @@ export function useFullscreen({onChange} = {}) {
     const isFullscreen = ref(false)
 
     function toggleFullscreen(element) {
-        if (!document.fullscreenElement) {
-            element?.requestFullscreen()
-            return
-        }
-        document.exitFullscreen()
+        // Either can be refused (no user gesture, a frame without the permission); the
+        // state follows `fullscreenchange`, so a refusal only needs saying.
+        const request = document.fullscreenElement ? document.exitFullscreen() : element?.requestFullscreen()
+        request?.catch?.((e) => console.warn('Fullscreen refused:', e?.message ?? e))
     }
 
     function handleFullscreenChange() {

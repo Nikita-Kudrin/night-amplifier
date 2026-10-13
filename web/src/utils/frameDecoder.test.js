@@ -1,5 +1,4 @@
-import {decodeFrame, decodeRgb8Jpeg, SA09_HEADER_SIZE} from './frameDecoder.js'
-import {SA10_MAGIC} from '../constants'
+import {decodeFrame, decodeRgb8Jpeg, SA09_HEADER_SIZE, SA10_MAGIC} from './frameDecoder.js'
 import {
     createChunkedTestFrame,
     createInvalidMagicBuffer,

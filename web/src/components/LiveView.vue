@@ -14,7 +14,7 @@ import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {useAppState} from '../composables/useAppState.js'
-import {useCapabilities} from '../composables/appContext.js'
+import {useApplySettings, useCapabilities} from '../composables/appContext.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {setViewedCamera} from '../composables/api.js'
 
@@ -125,7 +125,7 @@ const {
   handleMouseDown: handleRoiMouseDown,
   handleMouseMove: handleRoiMouseMove,
   handleMouseUp: handleRoiMouseUp,
-} = useCometRoi(settings, dimensions, canvasBounds, containerRef)
+} = useCometRoi(settings, dimensions, canvasBounds, containerRef, {save: useApplySettings()})
 
 const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
