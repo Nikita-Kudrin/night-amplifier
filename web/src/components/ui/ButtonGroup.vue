@@ -1,26 +1,21 @@
-<script setup>
-defineProps({
-  modelValue: {
-    type: [String, Number],
-    default: null
-  },
-  options: {
-    type: Array,
-    required: true,
-  },
-  disabled: {
-    type: Boolean,
-    default: false
-  },
+<script setup lang="ts" generic="T extends string | number">
+import type {Option} from '../../constants/tables.js'
+import { useScrollProtect } from '../../composables/useScrollProtect.js'
+
+withDefaults(defineProps<{
+  modelValue?: NoInfer<T> | null
+  options: readonly Option<T>[]
+  disabled?: boolean
+}>(), {
+  modelValue: null,
+  disabled: false
 })
 
-const emit = defineEmits(['update:modelValue'])
-
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+const emit = defineEmits<{'update:modelValue': [value: T]}>()
 
 const { blockIfScrolling } = useScrollProtect()
 
-function handleClick(event, value) {
+function handleClick(event: Event, value: T) {
   if (blockIfScrolling(event)) return
   emit('update:modelValue', value)
 }

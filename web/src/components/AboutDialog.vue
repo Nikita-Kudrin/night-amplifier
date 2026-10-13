@@ -1,20 +1,24 @@
-<script setup>
+<script setup lang="ts">
 import {ref, onMounted} from 'vue'
 import {getLicenseStatus, updateLicense} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
 import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
 import {BaseAlert, BaseModal, BaseSpinner, ButtonGroup} from './ui'
 import LicenseTexts from './LicenseTexts.vue'
+import type {Option} from '../constants/tables.js'
+import type {LicenseStatus} from '../composables/api.types.js'
 
-defineEmits(['close'])
+defineEmits<{close: []}>()
 
-const TABS = [
+type Tab = 'license' | 'software'
+
+const TABS: readonly Option<Tab>[] = [
   {value: 'license', label: 'Pro License'},
   {value: 'software', label: 'Legal & Software'},
 ]
-const activeTab = ref('license')
+const activeTab = ref<Tab>('license')
 
-const licenseStatus = ref(null)
+const licenseStatus = ref<LicenseStatus | null>(null)
 const licenseToken = ref('')
 const isLoadingLicense = ref(true)
 const licenseSuccess = ref(false)
@@ -47,7 +51,7 @@ async function handleUpdateLicense() {
   })
 }
 
-function formatDate(dateString) {
+function formatDate(dateString: string) {
   if (!dateString) return ''
   const date = new Date(dateString)
   return new Intl.DateTimeFormat('en-US', {
@@ -59,7 +63,7 @@ function formatDate(dateString) {
   }).format(date)
 }
 
-function getDaysLeft(expiresAt) {
+function getDaysLeft(expiresAt: string) {
   if (!expiresAt) return 0
   const diff = new Date(expiresAt).getTime() - new Date().getTime()
   return Math.ceil(diff / (1000 * 60 * 60 * 24))

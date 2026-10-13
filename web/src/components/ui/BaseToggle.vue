@@ -1,39 +1,29 @@
-<script setup>
+<script setup lang="ts">
 import BaseInfoIcon from './BaseInfoIcon.vue'
 
-const props = defineProps({
-  modelValue: {
-    type: Boolean,
-    default: false
-  },
-  label: {
-    type: String,
-    default: ''
-  },
-  size: {
-    type: String,
-    default: 'normal',
-    validator: (v) => ['small', 'normal'].includes(v),
-  },
-  help: {
-    type: String,
-    default: ''
-  },
-  disabled: {
-    type: Boolean,
-    default: false
-  },
+const props = withDefaults(defineProps<{
+  modelValue?: boolean
+  label?: string
+  size?: 'small' | 'normal'
+  help?: string
+  disabled?: boolean
+}>(), {
+  modelValue: false,
+  label: '',
+  size: 'normal',
+  help: '',
+  disabled: false
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{'update:modelValue': [value: boolean]}>()
 
 import { useScrollProtect } from '../../composables/useScrollProtect.js'
 
 const { blockIfScrolling } = useScrollProtect()
 
-function handleChange(event) {
+function handleChange(event: Event) {
   if (blockIfScrolling(event, props.modelValue)) return
-  emit('update:modelValue', event.target.checked)
+  emit('update:modelValue', (event.target as HTMLInputElement).checked)
 }
 </script>
 

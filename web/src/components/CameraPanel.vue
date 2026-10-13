@@ -1,5 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import {ref, computed, onMounted} from 'vue'
+import type {DeepReadonly} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -27,7 +28,13 @@ import {
 import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton, CollapseToggle} from './ui'
 import CameraRow from './CameraRow.vue'
 import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
-import {HELP_TEXTS, isCaptureRunning} from '../constants'
+import {CAPTURE_STATES, HELP_TEXTS, isCaptureRunning} from '../constants'
+import {CAMERA_ROLE_VALUES} from '../composables/api.types.js'
+import type {Camera, CameraRole, SimulatorConfig} from '../composables/api.types.js'
+import type {SplitButtonOption} from './ui/BaseSplitButton.vue'
+
+/** A camera as the camera list hands it out. */
+type ListedCamera = DeepReadonly<Camera>
 
 const cameras = useCameras()
 const selectedCamera = useSelectedCameraId()
@@ -43,17 +50,17 @@ const settings = useSettings()
 const {error, clearError, setError, withErrorHandling} = useError()
 
 /** A role is a kind of camera, not a state: told apart by hue. */
-const ROLE_TONES = {main: 'category-blue', guide: 'category-green'}
+const ROLE_TONES: Record<CameraRole, string> = {main: 'category-blue', guide: 'category-green'}
 const {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill} =
     useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings})
 
-const isSimulatorEnabled = computed(() => simulatorEnabledRef?.value ?? false)
+const isSimulatorEnabled = computed(() => simulatorEnabledRef.value)
 
-const connecting = ref(null)
+const connecting = ref<string | null>(null)
 const camerasCollapsed = ref(false)
 
 // Simulator state
-const simulatorConfig = ref({configured: false, directory: null, file_count: null})
+const simulatorConfig = ref<SimulatorConfig>({configured: false, directory: null, file_count: null})
 const configuringSimulator = ref(false)
 const showDirectoryInput = ref(false)
 
@@ -81,7 +88,7 @@ const hasGuideCamera = computed(() => connectedCameras.value.some((c) => c.role 
  * it is free. The main action stays enabled even with an imaging camera connected: an
  * idle one is swapped, and the server refuses only while it is busy.
  */
-const connectOptions = computed(() => [
+const connectOptions = computed((): SplitButtonOption[] => [
   {value: 'guide', label: 'As guide', disabled: hasGuideCamera.value},
 ])
 
@@ -89,22 +96,23 @@ const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.c
 
 const currentCamera = useSelectedCamera()
 
-const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
+/** Without a provided event stream the imaging camera reads as idle, as `useCaptureTarget` has it. */
+const isCapturing = computed(() => isCaptureRunning(eventStream?.captureState.value ?? CAPTURE_STATES.IDLE))
 
 /** Runs `operation` for camera `id`, which reads as busy (its buttons disabled) meanwhile. */
-async function withBusy(id, operation) {
+async function withBusy(id: string, operation: () => Promise<unknown>) {
   connecting.value = id
   await withErrorHandling(operation)
   connecting.value = null
 }
 
-function selectFirstConnectedIf(cameraId) {
+function selectFirstConnectedIf(cameraId: string) {
   if (selectedCamera.value === cameraId) {
     selectedCamera.value = connectedCameras.value[0]?.id || null
   }
 }
 
-function handleConnect(cameraId, role = 'main') {
+function handleConnect(cameraId: string, role: CameraRole = 'main') {
   return withBusy(cameraId, async () => {
     await connectCamera(cameraId, role)
     // The settings first: the connect stored this camera's profiles, and Push-To resolved a
@@ -118,12 +126,18 @@ function handleConnect(cameraId, role = 'main') {
   })
 }
 
-/** Only the imaging camera captures; a guide camera disconnects whatever the capture does. */
-function capturesOn(cam) {
-  return cam?.role !== 'guide' && isCapturing.value
+/** A connect menu option's `value` is the role it connects as (`connectOptions`). */
+function handleConnectOption(cameraId: string, value: string) {
+  const role = CAMERA_ROLE_VALUES.find((r) => r === value)
+  return role ? handleConnect(cameraId, role) : undefined
 }
 
-function handleDisconnect(cam, {skipWarmup = false} = {}) {
+/** Only the imaging camera captures; a guide camera disconnects whatever the capture does. */
+function capturesOn(cam: ListedCamera) {
+  return cam.role !== 'guide' && isCapturing.value
+}
+
+function handleDisconnect(cam: ListedCamera, {skipWarmup = false} = {}) {
   return withBusy(cam.id, async () => {
     if (skipWarmup) {
       await disconnectCamera(cam.id, {skipWarmup: true})
@@ -142,11 +156,11 @@ const {
   cancel: cancelDisconnect,
 } = useDisconnectConfirm({cameras, isWarmingUp, capturesOn, disconnect: handleDisconnect})
 
-function selectCamera(cameraId) {
+function selectCamera(cameraId: string) {
   selectedCamera.value = cameraId
 }
 
-async function handleConfigureSimulator(path) {
+async function handleConfigureSimulator(path: string) {
   if (!path) {
     setError('Please enter a directory path')
     return
@@ -166,11 +180,11 @@ function promptSimulatorConfig() {
   clearError()
 }
 
-async function handleRemoveSimulatedCamera(cam) {
-  if (!isSimulator(cam)) return
-
+async function handleRemoveSimulatedCamera(cam: ListedCamera) {
   // The camera index within the Simulator provider
   const index = cam.index
+  if (!isSimulator(cam) || index == null) return
+
   await withBusy(cam.id, async () => {
     await removeSimulatedCamera(index)
     await refreshCameras()
@@ -188,7 +202,7 @@ async function handleRemoveSimulatedCamera(cam) {
         Camera
         <BaseInfoIcon :message="HELP_TEXTS.cameras"/>
       </h2>
-      <button class="btn btn-sm" title="Refresh" @click="refreshCameras">
+      <button class="btn btn-sm" title="Refresh" @click="refreshCameras()">
         <svg
             viewBox="0 0 24 24"
             width="14"
@@ -232,7 +246,7 @@ async function handleRemoveSimulatedCamera(cam) {
           >
             <template #details>
               {{ formatResolution(cam) }}
-              <span v-if="roleLabel(cam)" class="pill role-pill" :class="ROLE_TONES[cam.role]">{{
+              <span v-if="roleLabel(cam)" class="pill role-pill" :class="cam.role && ROLE_TONES[cam.role]">{{
                   roleLabel(cam)
                 }}</span>
               <span v-if="phaseLabel(cam)" class="pill pill-warning phase-pill">
@@ -287,7 +301,7 @@ async function handleRemoveSimulatedCamera(cam) {
                   :options="connectOptions"
                   :disabled="connecting === cam.id"
                   @click="handleConnect(cam.id, 'main')"
-                  @select="(role) => handleConnect(cam.id, role)"
+                  @select="(value) => handleConnectOption(cam.id, value)"
               />
             </template>
           </CameraRow>
@@ -313,7 +327,7 @@ async function handleRemoveSimulatedCamera(cam) {
           class="empty-state"
       >
         <p>No cameras found</p>
-        <button class="btn btn-sm" @click="refreshCameras">Scan</button>
+        <button class="btn btn-sm" @click="refreshCameras()">Scan</button>
       </div>
     </div>
 

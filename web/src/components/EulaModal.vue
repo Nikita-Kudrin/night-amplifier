@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import {ref, computed} from 'vue'
 import {useApplySettings} from '../composables/appContext.js'
 import {useError} from '../composables/useError.js'
@@ -6,7 +6,7 @@ import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
 import {BaseAlert, BaseModal, BaseSpinner} from './ui'
 import LicenseTexts from './LicenseTexts.vue'
 
-const emit = defineEmits(['accepted'])
+const emit = defineEmits<{accepted: []}>()
 const applySettings = useApplySettings()
 
 const {

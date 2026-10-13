@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Names the camera a section edits: the one selected on the Main tab, which the Push-To
  * and Settings tabs do not show. Without it a guide rig's cooler was set from Settings
@@ -12,8 +12,10 @@ import {computed} from 'vue'
 import {roleLabel} from '../composables/useCameraBadges.js'
 import {useSelectedCamera} from '../composables/appContext.js'
 
-const props = defineProps({
-  fallbackName: {type: String, default: null},
+const props = withDefaults(defineProps<{
+  fallbackName?: string | null
+}>(), {
+  fallbackName: null,
 })
 
 const camera = useSelectedCamera()

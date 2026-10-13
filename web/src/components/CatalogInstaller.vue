@@ -1,9 +1,10 @@
-<script setup>
+<script setup lang="ts">
 import {computed, ref, watch} from 'vue'
 import {useCatalogInstall} from '../composables/useCatalogInstall.js'
 import {BaseSpinner, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
+import type {CatalogStatus} from '../composables/api.types.js'
 
-const emit = defineEmits(['installed', 'state-change'])
+const emit = defineEmits<{installed: [status: CatalogStatus]; 'state-change': [installing: boolean]}>()
 
 const includeStars = ref(true)
 

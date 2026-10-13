@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Push-To's object search: the query field, its result list, and Cancel while a solve
  * runs. Emits `select(designation)` for a picked object and `cancel` for the solve.
@@ -6,32 +6,35 @@
  * A pick puts the object's name in the field without searching for it again; see
  * `useCatalogSearch` for why that is decided by value rather than by a flag.
  */
-import {ref} from 'vue'
+import {useTemplateRef} from 'vue'
 import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
 import {useClickOutside} from '../composables/useClickOutside.js'
 import {BaseSpinner} from './ui'
+import type {CatalogEntry} from '../composables/api.types.js'
 
-defineProps({
+withDefaults(defineProps<{
   /** A solve is running: the field is locked and Cancel is offered. */
-  solving: {type: Boolean, default: false},
+  solving?: boolean
+}>(), {
+  solving: false,
 })
 
-const emit = defineEmits(['select', 'cancel'])
+const emit = defineEmits<{select: [designation: string]; cancel: []}>()
 
 const {searchQuery, searchResults, searching, showResults, setQueryWithoutSearch, hideResults, revealResults} =
     useCatalogSearch()
 
-function select(entry) {
+function select(entry: CatalogEntry) {
   setQueryWithoutSearch(entry.name || entry.designation)
   emit('select', entry.designation)
 }
 
-const containerRef = ref(null)
+const containerRef = useTemplateRef<HTMLElement>('container')
 useClickOutside([containerRef], hideResults)
 </script>
 
 <template>
-  <div ref="containerRef" class="search-container">
+  <div ref="container" class="search-container">
     <input
         v-model="searchQuery"
         type="text"

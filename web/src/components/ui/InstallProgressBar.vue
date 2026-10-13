@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import BaseSpinner from './BaseSpinner.vue'
 
 /**
@@ -6,31 +6,20 @@ import BaseSpinner from './BaseSpinner.vue'
  * above, overall line and hint below); `compact` inside a setup section, the spinner
  * inline with the text. `spinner: false` leaves it to a host that shows its own.
  */
-defineProps({
-  progressText: {
-    type: String,
-    default: '',
-  },
-  progressPercent: {
-    type: Number,
-    default: null,
-  },
-  overallProgressText: {
-    type: String,
-    default: '',
-  },
-  hint: {
-    type: String,
-    default: '',
-  },
-  compact: {
-    type: Boolean,
-    default: false,
-  },
-  spinner: {
-    type: Boolean,
-    default: true,
-  },
+withDefaults(defineProps<{
+  progressText?: string
+  progressPercent?: number | null
+  overallProgressText?: string
+  hint?: string
+  compact?: boolean
+  spinner?: boolean
+}>(), {
+  progressText: '',
+  progressPercent: null,
+  overallProgressText: '',
+  hint: '',
+  compact: false,
+  spinner: true,
 })
 </script>
 

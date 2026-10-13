@@ -1,13 +1,15 @@
-<script setup>
+<script setup lang="ts">
 /**
  * One numbered step of the Push-To setup dialog: a header with the step's number (a check
  * once `done`) over whatever the step shows. The `:slotted` rules style the body classes
  * the installers put inside it.
  */
-defineProps({
-  number: {type: [Number, String], required: true},
-  title: {type: String, required: true},
-  done: {type: Boolean, default: false},
+withDefaults(defineProps<{
+  number: number | string
+  title: string
+  done?: boolean
+}>(), {
+  done: false,
 })
 </script>
 

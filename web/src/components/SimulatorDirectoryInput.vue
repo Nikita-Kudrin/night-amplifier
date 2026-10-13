@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * The box that adds a simulated camera: a directory of FITS, TIFF or PNG files. Emits
  * `submit(path)`; the panel configures the simulator and closes the box once it took.
@@ -7,12 +7,17 @@ import {ref} from 'vue'
 import {BaseInfoIcon} from './ui'
 import {HELP_TEXTS} from '../constants'
 
-defineProps({
+withDefaults(defineProps<{
   /** The panel is configuring the simulator. */
-  busy: {type: Boolean, default: false},
+  busy?: boolean
+}>(), {
+  busy: false,
 })
 
-const emit = defineEmits(['submit', 'close'])
+const emit = defineEmits<{
+  submit: [path: string]
+  close: []
+}>()
 
 const directoryPath = ref('')
 

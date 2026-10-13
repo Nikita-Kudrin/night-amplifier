@@ -1,23 +1,19 @@
-<script setup>
-const props = defineProps({
-  databases: {
-    type: Array,
-    required: true,
-    // Each database: { id, description, min_fov_deg, max_fov_deg, size, installed }
-  },
-  modelValue: {
-    type: Array,
-    default: () => [],
-  },
-  hint: {
-    type: String,
-    default: '',
-  },
+<script setup lang="ts">
+import type {DatabaseType} from '../../composables/api.types.js'
+
+const props = withDefaults(defineProps<{
+  databases: readonly DatabaseType[]
+  /** The ids of the databases chosen to install. */
+  modelValue?: readonly string[]
+  hint?: string
+}>(), {
+  modelValue: () => [],
+  hint: '',
 })
 
-const emit = defineEmits(['update:modelValue'])
+const emit = defineEmits<{'update:modelValue': [ids: string[]]}>()
 
-function toggleDatabase(dbId) {
+function toggleDatabase(dbId: string) {
   const current = [...props.modelValue]
   const index = current.indexOf(dbId)
   if (index >= 0) {
@@ -28,11 +24,11 @@ function toggleDatabase(dbId) {
   emit('update:modelValue', current)
 }
 
-function isSelected(dbId) {
+function isSelected(dbId: string) {
   return props.modelValue.includes(dbId)
 }
 
-function formatFovRange(db) {
+function formatFovRange(db: DatabaseType) {
   return `${db.min_fov_deg}°–${db.max_fov_deg}°`
 }
 </script>

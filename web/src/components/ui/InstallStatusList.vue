@@ -1,8 +1,15 @@
-<script setup>
+<script setup lang="ts">
 /** What an installer has on disk: one row per part, ticked when it is there. */
-defineProps({
-  items: {type: Array, required: true}, // [{label: string, ok: boolean}]
-  size: {type: String, default: 'sm', validator: (v) => ['sm', 'md'].includes(v)},
+export interface InstallStatusItem {
+  label: string
+  ok: boolean
+}
+
+withDefaults(defineProps<{
+  items: readonly InstallStatusItem[]
+  size?: 'sm' | 'md'
+}>(), {
+  size: 'sm',
 })
 </script>
 

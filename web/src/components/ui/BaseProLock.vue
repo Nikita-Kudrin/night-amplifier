@@ -1,15 +1,12 @@
-<script setup>
+<script setup lang="ts">
 import {computed} from 'vue'
 
-const props = defineProps({
-  feature: {
-    type: String,
-    default: 'This specialized'
-  },
-  size: {
-    type: String,
-    default: '12px'
-  }
+const props = withDefaults(defineProps<{
+  feature?: string
+  size?: string
+}>(), {
+  feature: 'This specialized',
+  size: '12px'
 })
 
 const tooltipText = computed(() => `${props.feature} feature requires Night Amplifier Pro`)

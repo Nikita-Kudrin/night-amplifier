@@ -1,11 +1,15 @@
-<script setup>
+<script setup lang="ts">
 /** The core licence and, when there is one, the third-party notices, each in its own scroll box. */
-defineProps({
-  core: {type: String, required: true},
-  thirdParty: {type: String, default: ''},
-  coreTitle: {type: String, default: 'NightAmplifier License'},
+withDefaults(defineProps<{
+  core: string
+  thirdParty?: string
+  coreTitle?: string
   /** Prefixes the two texts' ids (`<prefix>-core-license`, `<prefix>-third-party`). */
-  idPrefix: {type: String, default: 'license'},
+  idPrefix?: string
+}>(), {
+  thirdParty: '',
+  coreTitle: 'NightAmplifier License',
+  idPrefix: 'license',
 })
 </script>
 

@@ -1,5 +1,5 @@
-<script setup>
-import {ref, computed, onMounted, onUnmounted, watch} from 'vue'
+<script setup lang="ts">
+import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
 import {useFrameRenderer} from '../composables/useFrameRenderer.js'
 import {useEventListener} from '../composables/useEventListener.js'
@@ -25,6 +25,7 @@ import {
 } from '../composables/appContext.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {setViewedCamera} from '../composables/api.js'
+import type {ScreenRect} from '../composables/useCometRoi.js'
 
 /**
  * How long to wait before fitting after a frame changes the image's size. Viewport
@@ -46,20 +47,20 @@ const mainCamera = useMainCamera()
  * pages show the same camera, and a reloaded page finds it where it was left. The server
  * falls back to the imaging camera when the guide camera goes away.
  */
-const showGuide = computed(() => hasGuideCamera.value && eventStream.viewedCamera?.value === 'guide')
+const showGuide = computed(() => hasGuideCamera.value && eventStream?.viewedCamera.value === 'guide')
 
-async function setShowGuide(show) {
-  const revision = eventStream.viewedCameraRevision?.value
+async function setShowGuide(show: boolean) {
+  const revision = eventStream?.viewedCameraRevision.value
   try {
     const answer = await setViewedCamera(show ? 'guide' : 'main')
     // The event follows, but this tab need not wait for it to move its own view — unless
     // one already arrived: it may be another operator's later toggle, which this older
     // answer must not undo while every eyepiece shows the other camera.
-    if (eventStream.viewedCamera && eventStream.viewedCameraRevision?.value === revision) {
+    if (eventStream && eventStream.viewedCameraRevision.value === revision) {
       eventStream.viewedCamera.value = answer.camera
     }
   } catch (e) {
-    setGlobalError(e.message)
+    setGlobalError(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -74,17 +75,17 @@ const displayedCamera = computed(() =>
     showGuide.value ? guideCamera.value : mainCamera.value
 )
 
-const pushDirection = computed(() => eventStream.pushDirection.value)
+const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
-const currentTarget = computed(() => eventStream.currentTarget.value)
+const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
-const containerRef = ref(null)
-const canvasRef = ref(null)
+const containerRef = useTemplateRef<HTMLDivElement>('container')
+const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 
 const containerSize = ref({width: 400, height: 300})
-const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
+const canvasBounds = ref<ScreenRect>({left: 0, top: 0, width: 400, height: 300})
 
 const {
   requestFit,
@@ -135,7 +136,7 @@ const {
   handleMouseUp: handleRoiMouseUp,
 } = useCometRoi(settings, dimensions, canvasBounds, containerRef, {save: useApplySettings()})
 
-const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
+const isCapturing = computed(() => isCaptureRunning(eventStream?.captureState.value ?? CAPTURE_STATES.IDLE))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
 // A new frame size resizes the canvas, which the arrow and the comet ROI follow.
@@ -165,34 +166,34 @@ function toggleFullscreen() {
 
 // Gestures keep the overlay up for as long as they last: a pan or a pinch is the
 // user working with the image, and the controls must not vanish mid-drag.
-function handleWheel(e) {
+function handleWheel(e: WheelEvent) {
   showOverlay()
   handleWheelBase(e)
 }
 
-function handleTouchStart(e) {
+function handleTouchStart(e: TouchEvent) {
   handlePressStart(e)
   handleTouchStartBase(e)
 }
 
-function handleTouchMove(e) {
+function handleTouchMove(e: TouchEvent) {
   showOverlay()
   handleTouchMoveBase(e)
 }
 
-function handleTouchEnd(e) {
+function handleTouchEnd(e: TouchEvent) {
   handlePressEnd(e)
-  handleTouchEndBase(e)
+  handleTouchEndBase()
 }
 
 // The system taking the gesture away — a notification swipe, palm rejection — is
 // not the observer asking for anything, so it must not read as a tap.
-function handleTouchCancel(e) {
+function handleTouchCancel(e: TouchEvent) {
   cancelPress(e)
-  handleTouchEndBase(e)
+  handleTouchEndBase()
 }
 
-function handleMouseDown(e) {
+function handleMouseDown(e: MouseEvent) {
   handlePressStart(e)
   if (isSelectingCometRoi.value) {
     handleRoiMouseDown(e)
@@ -201,7 +202,7 @@ function handleMouseDown(e) {
   handlePanMouseDown(e)
 }
 
-function handleMouseMove(e) {
+function handleMouseMove(e: MouseEvent) {
   if (isSelectingCometRoi.value) {
     showOverlay()
     handleRoiMouseMove(e)
@@ -211,7 +212,7 @@ function handleMouseMove(e) {
   handlePanMouseMove(e)
 }
 
-function handleMouseUp(e) {
+function handleMouseUp(e: MouseEvent) {
   handlePressEnd(e)
   if (isSelectingCometRoi.value) {
     handleRoiMouseUp()
@@ -230,9 +231,11 @@ watch(hasFrame, (newHasFrame, oldHasFrame) => {
 // The server's auto crop moved: held until the frame cut the new way arrives. Only the
 // imaging stream is ever cropped, so a change pending across a switch of camera is dropped.
 const cropFraming = useCropFraming()
-watch(() => eventStream.stackCrop?.value, (to, from) => {
-  if (!showGuide.value) cropFraming.note(to?.crop ?? null, from?.crop ?? null, to?.frame ?? null)
-})
+if (eventStream) {
+  watch(() => eventStream.stackCrop.value, (to, from) => {
+    if (!showGuide.value) cropFraming.note(to.crop, from.crop, to.frame)
+  })
+}
 watch(showGuide, () => cropFraming.clear())
 
 // Fit the view when a frame changes the image's size — unless the frame is a new crop of
@@ -256,7 +259,7 @@ watch([dimensions, frameData], ([newDims], [oldDims]) => {
 
 // Clear frame data when a new capture session starts. A capture resuming after a camera
 // reconnect is the same session: blanking it would show the dropout the server hid.
-watch(() => eventStream.captureState.value, (newState, oldState) => {
+watch(() => eventStream?.captureState.value, (newState, oldState) => {
   if (newState === CAPTURE_STATES.STARTING && oldState !== CAPTURE_STATES.RECOVERING) {
     clearFrameData()
   }
@@ -267,7 +270,7 @@ watch(() => eventStream.captureState.value, (newState, oldState) => {
 // which forced two layouts per frame.
 watch([scale, position, hasFrame], () => updateContainerSize(), {flush: 'post'})
 
-let resizeObserver = null
+let resizeObserver: ResizeObserver | null = null
 
 function handleWindowResize() {
   // Only in fullscreen: windowed, the user's own pan and zoom survive a resize
@@ -333,7 +336,7 @@ onUnmounted(() => {
 
 <template>
   <div
-      ref="containerRef"
+      ref="container"
       class="live-view"
       :class="{ capturing: isCapturing, fullscreen: isFullscreen, 'selecting-roi': isSelectingCometRoi }"
       @wheel="handleWheel"
@@ -370,11 +373,11 @@ onUnmounted(() => {
     </div>
 
     <!-- Canvas for rendering (used for both LZ4 and JPEG paths) -->
-    <canvas v-show="hasFrame" ref="canvasRef" :style="canvasStyle" class="live-canvas"/>
+    <canvas v-show="hasFrame" ref="canvas" :style="canvasStyle" class="live-canvas"/>
 
     <!-- Guide arrow -->
     <GuideArrow
-        v-if="showGuideArrow"
+        v-if="showGuideArrow && pushDirection"
         :direction="pushDirection"
         :bounds="canvasBounds"
         :fov-deg="displayedFovDeg"

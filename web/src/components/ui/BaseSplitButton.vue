@@ -1,42 +1,43 @@
-<script setup>
-import {ref, computed, watch, nextTick, useSlots} from 'vue'
+<script setup lang="ts">
+import {ref, computed, watch, nextTick, useSlots, useTemplateRef} from 'vue'
+import type {CSSProperties} from 'vue'
 import {useClickOutside} from '../../composables/useClickOutside.js'
 import {useEventListener} from '../../composables/useEventListener.js'
 
-const props = defineProps({
+/** A secondary action of the menu. */
+export interface SplitButtonOption {
+  value: string
+  label: string
+  disabled?: boolean
+}
+
+const props = withDefaults(defineProps<{
   /**
    * Label of the primary action. Rendered as the button's text unless the default
    * slot replaces it, and used as the accessible name either way — an icon-only
    * button still has to say what it does.
    */
-  label: {
-    type: String,
-    required: true,
-  },
+  label: string
   /** Accessible name for the menu trigger. */
-  menuLabel: {
-    type: String,
-    default: 'More options',
-  },
-  /** Secondary actions, as `{value, label, disabled?}`. */
-  options: {
-    type: Array,
-    default: () => [],
-  },
+  menuLabel?: string
+  /** Secondary actions, in order. */
+  options?: readonly SplitButtonOption[]
   /** Disables the primary action only; the menu stays reachable. */
-  disabled: {
-    type: Boolean,
-    default: false,
-  },
-  variant: {
-    type: String,
-    default: 'primary',
-    validator: (v) => ['primary', 'secondary', 'danger'].includes(v),
-  },
+  disabled?: boolean
+  variant?: 'primary' | 'secondary' | 'danger'
+}>(), {
+  menuLabel: 'More options',
+  options: () => [],
+  disabled: false,
+  variant: 'primary',
 })
 
 /** `menuToggle` carries the menu's open state, for callers that must react to it. */
-const emit = defineEmits(['click', 'select', 'menuToggle'])
+const emit = defineEmits<{
+  click: []
+  select: [value: string]
+  menuToggle: [open: boolean]
+}>()
 
 const slots = useSlots()
 
@@ -48,15 +49,15 @@ const slots = useSlots()
 const mainTitle = computed(() => (slots.default ? props.label : undefined))
 
 const open = ref(false)
-const rootRef = ref(null)
-const menuRef = ref(null)
-const menuStyle = ref({})
+const rootRef = useTemplateRef<HTMLElement>('root')
+const menuRef = useTemplateRef<HTMLElement>('menu')
+const menuStyle = ref<CSSProperties>({})
 
 // A watcher rather than an emit at each site: three paths close the menu, and one
 // of them silently not reporting is how a listener ends up stuck open.
 watch(open, (isOpen) => emit('menuToggle', isOpen))
 
-async function toggleMenu(e) {
+async function toggleMenu(e: Event) {
   e.stopPropagation()
   open.value = !open.value
   if (open.value) {
@@ -88,7 +89,7 @@ function positionMenu() {
   menuStyle.value = {left: `${left}px`, top: `${top}px`}
 }
 
-function choose(option) {
+function choose(option: SplitButtonOption) {
   if (option.disabled) return
   open.value = false
   emit('select', option.value)
@@ -103,7 +104,7 @@ useEventListener(window, 'scroll', positionMenu, true)
 </script>
 
 <template>
-  <div ref="rootRef" class="split-button">
+  <div ref="root" class="split-button">
     <button
       class="btn btn-sm split-button-main"
       :class="`btn-${props.variant}`"
@@ -138,7 +139,7 @@ useEventListener(window, 'scroll', positionMenu, true)
     </button>
 
     <Teleport to="body">
-      <div v-if="open" ref="menuRef" class="split-button-menu" :style="menuStyle" role="menu">
+      <div v-if="open" ref="menu" class="split-button-menu" :style="menuStyle" role="menu">
         <button
           v-for="option in props.options"
           :key="option.value"

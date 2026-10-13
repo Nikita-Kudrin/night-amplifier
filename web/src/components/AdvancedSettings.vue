@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → Advanced: binning, the AI compute unit (`AiComputeSettings`), the simulated
  * camera and the focus image. Mirrors its keys and emits `apply(key, value)`.
@@ -10,7 +10,7 @@
  * `save` and `guard` are only handed on: the AI section must await its save, so it takes
  * the panel's save rather than an emit (see `AiComputeSettings`).
  */
-import {computed, ref, watch} from 'vue'
+import {ref, watch} from 'vue'
 import {useSimulatorEnabled} from '../composables/appContext.js'
 import {BaseAlert, BaseToggle, BaseSlider, BaseInfoIcon, ButtonGroup} from './ui'
 import AiComputeSettings from './AiComputeSettings.vue'
@@ -18,19 +18,25 @@ import SelectedCameraTag from './SelectedCameraTag.vue'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
 import {BINNING_OPTIONS, DEFAULT_SETTINGS, HELP_TEXTS, SIMULATED_PRELOAD_LIMITS} from '../constants'
+import type {SaveSetting, SettingApply} from '../utils/settings.js'
+import type {ErrorHandler} from '../composables/useError.js'
+import type {Settings} from '../composables/api.types.js'
 
-const props = defineProps({
+const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */
-  settings: {type: Object, required: true},
-  focusMode: {type: Boolean, default: false},
-  aiDenoiseAvailable: {type: Boolean, default: false},
-  /** `(key, value) => Promise`: persists a settings group. */
-  save: {type: Function, required: true},
-  /** `(operation) => Promise`: runs `operation`, reporting a failure to the panel. */
-  guard: {type: Function, required: true},
+  settings: Settings
+  focusMode?: boolean
+  aiDenoiseAvailable?: boolean
+  /** Persists a settings group. */
+  save: SaveSetting
+  /** Runs an operation, reporting a failure to the panel. */
+  guard: ErrorHandler
+}>(), {
+  focusMode: false,
+  aiDenoiseAvailable: false,
 })
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 
@@ -50,19 +56,13 @@ const {
 const bin = ref(DEFAULT_SETTINGS.bin)
 watch(() => cameraSettings.value?.bin, (value) => (bin.value = value ?? DEFAULT_SETTINGS.bin), {immediate: true})
 
-function applyBin(value) {
+function applyBin(value: number) {
   bin.value = value
   applyHardware({bin: value})
 }
 
 /** The app's own switch (it decides which cameras the list offers), mirrored to the server. */
-const simulatorEnabledRef = useSimulatorEnabled()
-const simulatorEnabled = computed({
-  get: () => simulatorEnabledRef?.value ?? false,
-  set: (val) => {
-    if (simulatorEnabledRef) simulatorEnabledRef.value = val
-  },
-})
+const simulatorEnabled = useSimulatorEnabled()
 </script>
 
 <template>

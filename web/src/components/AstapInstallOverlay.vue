@@ -1,20 +1,21 @@
-<script setup>
+<script setup lang="ts">
 import {computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
 import AstapStatusSection from './AstapStatusSection.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
+import type {InstallStage} from './ui/InstallStageIndicator.vue'
 import { BaseModal, BaseSpinner } from './ui'
+import type {AstapStatus} from '../composables/api.types.js'
 
-const props = defineProps({
-  allowManage: {
-    type: Boolean,
-    default: false,
-  },
+const props = withDefaults(defineProps<{
+  allowManage?: boolean
+}>(), {
+  allowManage: false,
 })
 
-const emit = defineEmits(['close', 'installed'])
+const emit = defineEmits<{close: []; installed: []}>()
 
 const {
   loading, installing, error, status, databases, selectedDatabases,
@@ -32,7 +33,7 @@ watch(loading, (isLoading, wasLoading) => {
   }
 }, {once: true})
 
-function handleInstalled(installed) {
+function handleInstalled(installed: AstapStatus | null) {
   if (!installed?.ready) return
   emit('installed')
   if (!props.allowManage) emit('close')
@@ -40,7 +41,7 @@ function handleInstalled(installed) {
 
 // Overlay-specific computed
 const stages = computed(() => {
-  const result = []
+  const result: InstallStage[] = []
 
   if (!status.value?.binary_installed) {
     result.push({
@@ -114,7 +115,7 @@ const installButtonText = computed(() => {
           Download additional star databases to support different fields of view.
         </p>
 
-        <AstapStatusSection v-if="!allowManage" :status="status"/>
+        <AstapStatusSection v-if="!allowManage && status" :status="status"/>
 
         <div v-if="hasUninstalledDatabases" class="database-section">
           <h3 class="eyebrow">Select Star Databases</h3>

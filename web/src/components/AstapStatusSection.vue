@@ -1,19 +1,16 @@
-<script setup>
+<script setup lang="ts">
 import {computed} from 'vue'
 import InstallStatusList from './ui/InstallStatusList.vue'
+import type {AstapStatus} from '../composables/api.types.js'
 
-const props = defineProps({
-  status: {
-    type: Object,
-    required: true,
-    // { binary_installed: boolean, database_installed: boolean, installed_databases: Array<{id, database_path}> }
-  },
-})
+const props = defineProps<{
+  status: AstapStatus
+}>()
 
 const items = computed(() => {
-  const databases = props.status?.installed_databases ?? []
+  const databases = props.status.installed_databases
   return [
-    {label: 'ASTAP CLI', ok: Boolean(props.status?.binary_installed)},
+    {label: 'ASTAP CLI', ok: props.status.binary_installed},
     ...(databases.length
         ? databases.map((db) => ({label: `${db.id} Database`, ok: true}))
         : [{label: 'No Star Database', ok: false}]),

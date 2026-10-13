@@ -1,5 +1,5 @@
-<script setup>
-import {computed, nextTick, ref, watch} from 'vue'
+<script setup lang="ts">
+import {computed, nextTick, useTemplateRef, watch} from 'vue'
 import {useAiCompute} from '../composables/useAiCompute.js'
 import {BaseSpinner, InstallProgressBar} from './ui'
 
@@ -9,7 +9,7 @@ import {BaseSpinner, InstallProgressBar} from './ui'
  * the server refuses to start a capture meanwhile.
  */
 const {benchmarking, progress} = useAiCompute()
-const dialog = ref(null)
+const dialogRef = useTemplateRef<HTMLDivElement>('dialog')
 
 const step = computed(() => {
   const p = progress.value
@@ -27,7 +27,7 @@ const percent = computed(() => {
 watch(benchmarking, async (on) => {
   if (!on) return
   await nextTick()
-  dialog.value?.focus()
+  dialogRef.value?.focus()
 }, {immediate: true})
 </script>
 

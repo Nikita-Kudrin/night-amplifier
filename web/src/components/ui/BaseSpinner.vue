@@ -1,14 +1,12 @@
-<script setup>
-defineProps({
-  size: {
-    type: String,
-    default: 'md', // 'xs' (12px), 'sm' (16px), 'md' (32px), 'lg' (48px)
-    validator: (value) => ['xs', 'sm', 'md', 'lg'].includes(value)
-  },
-  light: {
-    type: Boolean,
-    default: false // Use white border for dark buttons
-  }
+<script setup lang="ts">
+withDefaults(defineProps<{
+  /** 'xs' (12px), 'sm' (16px), 'md' (32px), 'lg' (48px) */
+  size?: 'xs' | 'sm' | 'md' | 'lg'
+  /** Use white border for dark buttons */
+  light?: boolean
+}>(), {
+  size: 'md',
+  light: false
 })
 </script>
 

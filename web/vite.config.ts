@@ -24,7 +24,7 @@ export default defineConfig({
         environment: 'happy-dom',
         globals: true,
         include: ['src/**/*.{test,spec}.{js,ts}'],
-        setupFiles: ['src/testSetup.js'],
+        setupFiles: ['src/testSetup.ts'],
         // Puts back what `vi.stubGlobal` replaced (`fetch`'s unmocked-call guard among them).
         unstubGlobals: true,
         coverage: {

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → "If the camera drops out": reconnect, then resume the capture that was
  * running. Mirrors both and emits `apply(key, value)`.
@@ -6,13 +6,15 @@
 import {BaseToggle} from './ui'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {HELP_TEXTS} from '../constants'
+import type {SettingApply} from '../utils/settings.js'
+import type {Settings} from '../composables/api.types.js'
 
-const props = defineProps({
+const props = defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */
-  settings: {type: Object, required: true},
-})
+  settings: Settings
+}>()
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 

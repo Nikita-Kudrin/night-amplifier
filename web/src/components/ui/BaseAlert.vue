@@ -1,22 +1,16 @@
-<script setup>
-defineProps({
-  type: {
-    type: String,
-    default: 'error',
-    validator: (v) => ['error', 'warning', 'info', 'success'].includes(v),
-  },
-  dismissible: {
-    type: Boolean,
-    default: true,
-  },
+<script setup lang="ts">
+withDefaults(defineProps<{
+  type?: 'error' | 'warning' | 'info' | 'success'
+  dismissible?: boolean
   /** Dialog size: roomier, with a rule in its own colour. */
-  bordered: {
-    type: Boolean,
-    default: false,
-  },
+  bordered?: boolean
+}>(), {
+  type: 'error',
+  dismissible: true,
+  bordered: false,
 })
 
-const emit = defineEmits(['dismiss'])
+const emit = defineEmits<{dismiss: []}>()
 </script>
 
 <template>

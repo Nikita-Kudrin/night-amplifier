@@ -1,20 +1,28 @@
-<script setup>
+<script setup lang="ts">
 /**
  * One camera in the camera list: its name, a details line (the resolution unless the
  * `details` slot says more), its actions, and a remove button for a simulated camera.
  */
-defineProps({
-  camera: {type: Object, required: true},
+import type {Camera} from '../composables/api.types.js'
+
+withDefaults(defineProps<{
+  camera: Pick<Camera, 'name'>
   /** The resolution line, shown when the `details` slot is not used. */
-  resolution: {type: String, default: ''},
-  selected: {type: Boolean, default: false},
+  resolution?: string
+  selected?: boolean
   /** Listed under Available: not connected, so not selectable. */
-  available: {type: Boolean, default: false},
-  removable: {type: Boolean, default: false},
-  removeDisabled: {type: Boolean, default: false},
+  available?: boolean
+  removable?: boolean
+  removeDisabled?: boolean
+}>(), {
+  resolution: '',
+  selected: false,
+  available: false,
+  removable: false,
+  removeDisabled: false,
 })
 
-const emit = defineEmits(['select', 'remove'])
+const emit = defineEmits<{select: []; remove: []}>()
 </script>
 
 <template>

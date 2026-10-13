@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → Processing: colour intensity, the eyepiece group's tone fields, background
  * subtraction and the shadow saturation boost.
@@ -10,7 +10,8 @@
 import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {formatPercent} from '../utils/format.js'
-import {copySetting} from '../utils/settings.js'
+import {applyArgs} from '../utils/settings.js'
+import type {SettingApply} from '../utils/settings.js'
 import {
   AUTO_STRETCH_INTENSITY,
   BACKGROUND_ALGORITHM_OPTIONS,
@@ -19,17 +20,22 @@ import {
   HELP_TEXTS,
   SATURATION_BOOST_LIMITS,
 } from '../constants'
+import type {EyepieceSettings, Settings} from '../composables/api.types.js'
 
-const props = defineProps({
+const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */
-  settings: {type: Object, required: true},
+  settings: Settings
   /** Focus/Finder mode holds dithering, background subtraction and the boost off. */
-  focusMode: {type: Boolean, default: false},
-  rbfBackgroundAvailable: {type: Boolean, default: false},
-  saturationBoostAvailable: {type: Boolean, default: false},
+  focusMode?: boolean
+  rbfBackgroundAvailable?: boolean
+  saturationBoostAvailable?: boolean
+}>(), {
+  focusMode: false,
+  rbfBackgroundAvailable: false,
+  saturationBoostAvailable: false,
 })
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 
@@ -42,11 +48,14 @@ const local = useSectionMirror(() => props.settings, [
   'saturation_boost_strength',
 ])
 
-function apply(key) {
-  emit('apply', key, copySetting(local[key]))
+function apply(key: keyof typeof local) {
+  emit('apply', ...applyArgs(local, key))
 }
 
-function applyTone(field) {
+/** The eyepiece group's fields this section edits. */
+type ToneField = keyof Pick<EyepieceSettings, 'intensity' | 'black_floor' | 'darker_sky' | 'dither'>
+
+function applyTone(field: ToneField) {
   emit('apply', 'eyepiece', {[field]: local.eyepiece[field]})
 }
 </script>
