@@ -60,6 +60,64 @@ describe('decodeFrame', () => {
         expect(error).toHaveBeenCalled()
     })
 
+    it('decodes the smallest frames, which LZ4 cannot shrink', () => {
+        expect(decodeFrame(createTestFrame(2, 2, 5)).frameData).toEqual(new Uint8Array(12).fill(5))
+        expect(decodeFrame(createChunkedTestFrame(2, 2, 2, 5)).frameData).toEqual(new Uint8Array(12).fill(5))
+    })
+
+    describe('drops a frame its own header contradicts, rather than throwing', () => {
+        beforeEach(() => vi.spyOn(console, 'error').mockImplementation(() => {}))
+
+        const truncated = (buffer, bytes) => buffer.slice(0, buffer.byteLength - bytes)
+
+        it.each([
+            ['SA08 cut short', () => truncated(createTestFrame(32, 32), 3)],
+            ['SA08 under 4 payload bytes', () => {
+                const buffer = createTestFrame(32, 32)
+                new DataView(buffer).setUint32(12, 2, true)
+                return buffer
+            }],
+            ['SA08 naming another size', () => {
+                const buffer = createTestFrame(32, 32)
+                new DataView(buffer).setUint32(4, 64, true)
+                return buffer
+            }],
+            ['SA09 cut short', () => truncated(createChunkedTestFrame(32, 32, 3), 3)],
+            ['SA09 cut inside its descriptors', () => createChunkedTestFrame(32, 32, 3).slice(0, SA09_HEADER_SIZE + 12)],
+            ['SA09 claiming a million chunks', () => {
+                const buffer = createChunkedTestFrame(32, 32, 2)
+                new DataView(buffer).setUint32(16, 1_000_000, true)
+                return buffer
+            }],
+            ['SA09 naming another size', () => {
+                const buffer = createChunkedTestFrame(32, 32, 2)
+                new DataView(buffer).setUint32(8, 64, true)
+                return buffer
+            }],
+            ['SA09 whose chunk spills into the next stripe', () => {
+                const buffer = createChunkedTestFrame(32, 32, 2)
+                const view = new DataView(buffer)
+                const first = view.getUint32(SA09_HEADER_SIZE + 4, true)
+                view.setUint32(SA09_HEADER_SIZE + 4, first - 3, true)
+                view.setUint32(SA09_HEADER_SIZE + 12, view.getUint32(SA09_HEADER_SIZE + 12, true) + 3, true)
+                return buffer
+            }],
+        ])('%s', (_, frame) => {
+            expect(decodeFrame(frame())).toBeNull()
+            expect(console.error).toHaveBeenCalled()
+        })
+
+        it('never allocates the pixels a contradicted header names', () => {
+            const buffer = createChunkedTestFrame(32, 32, 2)
+            const view = new DataView(buffer)
+            view.setUint32(4, 60_000, true)
+            view.setUint32(8, 60_000, true)
+
+            expect(() => decodeFrame(buffer)).not.toThrow()
+            expect(decodeFrame(buffer)).toBeNull()
+        })
+    })
+
     it('drops a chunked frame whose chunk runs past its end', () => {
         const error = vi.spyOn(console, 'error').mockImplementation(() => {})
         const buffer = createChunkedTestFrame(32, 32, 2, 9)

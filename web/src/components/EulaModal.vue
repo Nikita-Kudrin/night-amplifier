@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getSoftwareLicenses, updateSettings } from '../composables/api.js'
 import { BaseAlert, BaseModal, BaseSpinner } from './ui'
 
@@ -11,22 +11,28 @@ const isLoading = ref(true)
 const isAccepting = ref(false)
 const agreed = ref(false)
 const acceptError = ref(null)
+const loadError = ref(null)
+// Agreeing to a text never shown is no agreement.
+const canAccept = computed(() => agreed.value && !!coreLicense.value && !isAccepting.value)
 
 async function fetchLicenses() {
   try {
     isLoading.value = true
+    loadError.value = null
     const res = await getSoftwareLicenses()
     coreLicense.value = res.core_license
     thirdPartyLicenses.value = res.third_party_licenses
+    if (!coreLicense.value) loadError.value = 'The server sent no license text.'
   } catch (err) {
     console.error('Failed to load licenses:', err)
+    loadError.value = err.message || 'Could not load the license text.'
   } finally {
     isLoading.value = false
   }
 }
 
 async function handleAccept() {
-  if (!agreed.value || isAccepting.value) return
+  if (!canAccept.value) return
   try {
     isAccepting.value = true
     acceptError.value = null
@@ -71,6 +77,15 @@ onMounted(() => {
         <p>Loading license information...</p>
       </div>
 
+      <div v-else-if="loadError" class="eula-body">
+        <BaseAlert bordered :dismissible="false">
+          Could not load the license agreement: {{ loadError }}
+        </BaseAlert>
+        <button id="eula-retry-button" class="btn btn-primary eula-accept-btn" @click="fetchLicenses">
+          Retry
+        </button>
+      </div>
+
       <!-- License Content -->
       <div v-else class="eula-body">
         <p class="eula-intro">
@@ -112,7 +127,7 @@ onMounted(() => {
           <button
             id="eula-accept-button"
             class="btn btn-primary eula-accept-btn"
-            :disabled="!agreed || isAccepting"
+            :disabled="!canAccept"
             @click="handleAccept"
           >
             <BaseSpinner v-if="isAccepting" size="sm" light />

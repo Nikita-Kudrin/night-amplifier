@@ -2,6 +2,7 @@
 import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
 import {getCatalogStatus, installCatalog} from '../composables/api.js'
 import {formatBytes} from '../utils/format.js'
+import {useTimeouts} from '../composables/useTimeouts.js'
 import {BaseSpinner, InstallStatusList, SetupSection} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
@@ -25,6 +26,7 @@ const progress = ref({
 
 // Event stream for receiving WebSocket events
 const eventStream = inject('eventStream', null)
+const {later} = useTimeouts()
 
 // Computed
 const canInstall = computed(() => !installing.value)
@@ -98,7 +100,7 @@ function handleProgress(p) {
 
   if (p.stage === 'completed' || p.object_count !== undefined) {
     progress.value.stage = 'completed'
-    setTimeout(async () => {
+    later(async () => {
       await loadStatus()
       installing.value = false
       emit('state-change', false)

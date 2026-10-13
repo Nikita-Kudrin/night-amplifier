@@ -91,6 +91,21 @@ describe('CatalogInstaller', () => {
         expect(wrapper.text()).toContain('Installed (Target Catalogs)')
     })
 
+    it('drops the status reload when it goes away before the install settled', async () => {
+        vi.useFakeTimers()
+        const {wrapper, progress} = mountInstaller()
+        await flushPromises()
+        await wrapper.find('.btn-primary').trigger('click')
+        progress.value = {stage: 'completed', object_count: 13957}
+        await flushPromises()
+        getCatalogStatus.mockClear()
+
+        wrapper.unmount()
+        await vi.advanceTimersByTimeAsync(500)
+
+        expect(getCatalogStatus).not.toHaveBeenCalled()
+    })
+
     it('says why an install failed, from the event or the request', async () => {
         const {wrapper, progress} = mountInstaller()
         await flushPromises()

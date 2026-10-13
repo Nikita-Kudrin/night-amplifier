@@ -78,6 +78,21 @@ describe('AstapInstaller', () => {
         expect(wrapper.text()).toContain('Installed (D80)')
     })
 
+    it('drops the status reload when it goes away before the install settled', async () => {
+        vi.useFakeTimers()
+        const {wrapper, progress} = mountInstaller()
+        await flushPromises()
+        await wrapper.find('.install-btn').trigger('click')
+        progress.value = {component: 'D80 Database', stage: 'completed', stageName: 'Database Installed', overallPercent: 100}
+        await flushPromises()
+        getAstapStatus.mockClear()
+
+        wrapper.unmount()
+        await vi.advanceTimersByTimeAsync(500)
+
+        expect(getAstapStatus).not.toHaveBeenCalled()
+    })
+
     it('says why the status could not be read, and retries', async () => {
         getAstapStatus.mockRejectedValueOnce(new Error('Server unavailable'))
         getAstapDatabases.mockResolvedValue(DATABASES)
