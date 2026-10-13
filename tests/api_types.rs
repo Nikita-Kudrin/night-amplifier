@@ -1,22 +1,26 @@
 //! The frontend's `api.types.js`, written from the Rust wire types so the two cannot drift
 //! (the hand-kept file once described 8 of ~60 settings and push directions by field
-//! names the server never sent), and `api.settings.js`: the default settings and the
-//! ranges the server clamps them to, read off the code that enforces them.
+//! names the server never sent), `api.settings.js`: the default settings and the ranges
+//! the server clamps them to, read off the code that enforces them, and `api.events.js`
+//! (`events`): every `/ws/events` event and the topic it states.
 //!
-//! `cargo test --features api-schema --test api_types` fails when either file is stale;
+//! `cargo test --features api-schema --test api_types` fails when any file is stale;
 //! `UPDATE_API_TYPES=1` on the same command rewrites them. Run this binary alone: the feature
 //! turns on `serde_json/preserve_order` (declaration order in the output) for the build.
 #![cfg(feature = "api-schema")]
 
+#[path = "api_types/events.rs"]
+mod events;
+
 use night_amplifier::push_to::{
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, DatabaseTypeResponse,
-    PushToStatusResponse,
 };
 use night_amplifier::server::{
     CapabilitiesResponse, CaptureStatusResponse, SettingsResponse, SimulatorConfigResponse,
 };
 use night_amplifier::session::capture::BLACK_FLOOR_RANGE;
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
+use night_amplifier::session::services::PushToStatus;
 use night_amplifier::session::state::CaptureSettings;
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
@@ -26,6 +30,7 @@ use std::ops::RangeInclusive;
 const TYPES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.types.js");
 const SETTINGS_FILE: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.settings.js");
+const EVENTS_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.events.js");
 
 const HEADER: &str = "\
 /**
@@ -57,7 +62,7 @@ fn roots(generator: &mut SchemaGenerator) -> Vec<(&'static str, Value)> {
         root::<CameraListEntry>(generator, "Camera"),
         root::<CameraInfoResponse>(generator, "CameraInfo"),
         root::<SimulatorConfigResponse>(generator, "SimulatorConfig"),
-        root::<PushToStatusResponse>(generator, "PushToStatus"),
+        root::<PushToStatus>(generator, "PushToStatus"),
         root::<CatalogEntryResponse>(generator, "CatalogEntry"),
         root::<AstapStatusResponse>(generator, "AstapStatus"),
         root::<DatabaseTypeResponse>(generator, "DatabaseType"),
@@ -152,10 +157,15 @@ fn typedef(name: &str, schema: &Value, roots: &[(&str, Value)]) -> String {
     out
 }
 
-fn generate() -> String {
+/// `api.types.js`'s definitions by Rust name, and the roots that name some of them.
+fn type_definitions() -> (Vec<(&'static str, Value)>, Map<String, Value>) {
     let mut generator = SchemaSettings::draft2020_12().for_serialize().into_generator();
     let roots = roots(&mut generator);
-    let definitions: Map<String, Value> = generator.take_definitions(true);
+    (roots, generator.take_definitions(true))
+}
+
+fn generate() -> String {
+    let (roots, definitions) = type_definitions();
 
     let mut order: Vec<&String> = roots
         .iter()
@@ -277,4 +287,9 @@ fn api_types_js_is_current() {
 #[test]
 fn api_settings_js_is_current() {
     assert_current(SETTINGS_FILE, &generate_settings());
+}
+
+#[test]
+fn api_events_js_is_current() {
+    assert_current(EVENTS_FILE, &events::generate());
 }

@@ -1,7 +1,7 @@
 import {computed, inject, ref, watch} from 'vue'
 import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
 import {getCatalogStatus, installCatalog} from './api.js'
-import {useInstallSettle} from './useAstapInstall.js'
+import {ACTIVE_INSTALL_STAGES, ignoresProgress, useInstallSettle} from './useAstapInstall.js'
 import {formatBytes} from '../utils/format.js'
 
 function emptyProgress(stage = '') {
@@ -54,23 +54,34 @@ export function useCatalogInstall({onComplete} = {}) {
         }
     }
 
+    let requesting = false
+
     async function startInstall(includeStars) {
         if (!canInstall.value) return false
         installing.value = true
         error.value = null
         progress.value = emptyProgress('starting')
+        requesting = true
         try {
             await installCatalog(includeStars)
             return true
         } catch (e) {
+            // A 409 too: another page's install runs, which this one joins on its next event.
             error.value = e.message
             installing.value = false
             return false
+        } finally {
+            requesting = false
         }
     }
 
     function handleProgress(p) {
+        if (ignoresProgress(p, {installing: installing.value, requesting})) return
         progress.value = {...emptyProgress(), ...p}
+        if (ACTIVE_INSTALL_STAGES.has(p.stage) && !installing.value) {
+            installing.value = true
+            error.value = null
+        }
         if (p.stage === 'failed') {
             error.value = `Installation failed: ${p.error}`
             installing.value = false

@@ -7,19 +7,23 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, warn};
 
 use super::events::ServerEvent;
-use super::services::PushToState;
+use super::services::{DiscoveredCameras, PushToState};
 use super::settings_persistence::SettingsPersistence;
 use night_amplifier_core::camera::CameraStatus;
 use night_amplifier_core::disk_writer::{DiskWriter, DiskWriterConfig, DiskWriterHandle};
 use night_amplifier_core::telemetry::metrics as telemetry_metrics;
 
 mod camera_profile;
+mod camera_recovery;
 mod camera_slot;
 mod capture_mode;
+mod disk_warning;
 mod display_settings;
 pub mod focus_mode;
 mod frame_stream;
 mod guide_loop;
+mod installs;
+mod push_to_announcer;
 mod roster;
 mod stream_viewers;
 mod session;
@@ -27,15 +31,18 @@ mod settings;
 mod settings_store;
 mod types;
 mod stream_crop;
+mod sync;
 mod viewed_camera;
 
 pub use night_amplifier_core::stacking::{StackingType, StackingTypeInfo, WeightingPreset};
 pub use camera_profile::CameraCaptureProfile;
+pub use camera_recovery::{CameraRecoveryStatus, RecoveryStatus};
 pub use camera_slot::{
     BoundedCallError, CameraOp, CameraSlot, InstallOutcome, RawSessionResume, Recovery,
     SuspendVerdict,
 };
 pub use capture_mode::{CaptureMode, RawFrameSaving};
+pub use disk_warning::DiskWarning;
 pub use display_settings::{
     default_preview_resolution, default_streaming_resolution, EyepieceSettings,
     EyepieceStreamResolution, Resolution, DEFAULT_PREVIEW_RESOLUTION,
@@ -44,6 +51,8 @@ pub use display_settings::{
 pub use focus_mode::FocusModeSnapshot;
 pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
+pub use installs::{InstallEvents, InstallStatus, Installer, Installs};
+pub use push_to_announcer::PushToAnnouncer;
 pub use roster::{CameraRoster, ConnectedCameraInfo};
 pub use session::{
     CaptureControl, CaptureResume, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
@@ -81,15 +90,24 @@ pub struct AppState {
     pub guide_stream: Arc<FrameStream>,
     /// The camera the eyepiece pages show, chosen on `/`. See [`ViewedCamera`].
     pub viewed_camera: ViewedCamera,
+    /// What automatic recovery has told clients about each role. See [`RecoveryStatus`].
+    pub recovery_status: CameraRecoveryStatus,
     /// The `auto_crop` cut the main stream's frames carry. See [`StreamCropView`].
     pub stream_crop: StreamCropView,
     /// Event broadcast channel
     pub events: broadcast::Sender<ServerEvent>,
     /// Disk writer handle for saving frames
     pub disk_writer: DiskWriterHandle,
+    /// The slow-disk warning clients are shown. See [`DiskWarning`].
+    pub disk_warning: DiskWarning,
+    /// What the last camera enumeration found, for lists that do not enumerate again.
+    pub discovered_cameras: DiscoveredCameras,
     /// Push-To's solve bookkeeping; `None` for a server without it. Synchronized inside,
     /// so the capture threads read it without a lock.
     pub push_to: Option<PushToState>,
+    /// What clients were told about Push-To, and the plugin's event port. Present without
+    /// the plugin too, so a Community sync still says "no target".
+    pub push_to_announcer: Arc<PushToAnnouncer>,
     /// Push-To's solve and watch consumer threads, started by the first frame offered.
     pub(crate) push_to_tasks: std::sync::OnceLock<crate::capture::push_to_tasks::PushToTasks>,
     /// The guide camera's free-running loop: whether one is registered, whether it is
@@ -121,6 +139,8 @@ pub struct AppState {
     /// plan recorded when it started, and the stack it parked. Consumed by the reconnect
     /// supervisor, cleared on a clean stop or a fresh start.
     pub resume: CaptureResume,
+    /// Where the ASTAP and catalog installs stand, recorded from their events.
+    pub installs: Arc<Installs>,
 }
 
 /// Commands accepted by the camera monitor thread. Defined here (not in
@@ -189,6 +209,7 @@ impl AppState {
             let _ = failures.send(ServerEvent::error(format!("Frames are not being saved: {error}")));
         }));
 
+        let disk_warning = DiskWarning::new(events_tx.clone());
         let state = Self {
             roster: CameraRoster::default(),
             capture: CaptureControl::default(),
@@ -197,9 +218,14 @@ impl AppState {
             main_stream: Arc::new(FrameStream::default()),
             guide_stream: Arc::new(FrameStream::default()),
             viewed_camera: ViewedCamera::new(events_tx.clone()),
+            recovery_status: CameraRecoveryStatus::new(events_tx.clone()),
             stream_crop: StreamCropView::new(events_tx.clone()),
+            push_to_announcer: Arc::new(PushToAnnouncer::new(events_tx.clone())),
+            installs: Arc::new(Installs::new(events_tx.clone())),
             events: events_tx,
             disk_writer: disk_writer_handle,
+            disk_warning,
+            discovered_cameras: DiscoveredCameras::default(),
             push_to,
             push_to_tasks: std::sync::OnceLock::new(),
             guide_loops: guide_loop::GuideLoops::default(),
@@ -410,6 +436,9 @@ impl AppState {
             !(stacked && rejection_reason.is_some()),
             "a stacked frame has no rejection reason"
         );
+        if let Some(reason) = rejection_reason {
+            self.stats.record_rejection(reason);
+        }
         let counts = self.stats.frame_captured(stacked, stacking);
         let _ = self.events.send(ServerEvent::frame_captured(
             counts.frames,
@@ -595,19 +624,6 @@ impl AppState {
     /// so that the stacking thread can gate plate solving synchronously.
     pub fn set_push_to_has_target(&self, has_target: bool) {
         if let Some(pt) = &self.push_to {
-            pt.set_has_target(has_target);
-        }
-    }
-
-    /// Record that the target changed: update the cached flag and drop the
-    /// de-duplication record for the push direction.
-    ///
-    /// The direction is only re-broadcast when its numbers change, so without this a
-    /// new target whose arrow happens to point the same way would leave the client
-    /// showing a distance and heading computed for the *old* target.
-    pub fn push_to_target_changed(&self, has_target: bool) {
-        if let Some(pt) = &self.push_to {
-            pt.forget_direction();
             pt.set_has_target(has_target);
         }
     }

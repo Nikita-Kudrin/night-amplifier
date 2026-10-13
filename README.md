@@ -249,6 +249,12 @@ Push-To events on `/ws/events`:
 | `plate_solving_restarted` | Abandoned because something it depended on changed; a retry follows |
 | `push_to_blocked`         | Why solving is idle (`reason: null` clears the notice)              |
 | `push_direction_updated`  | Sent only when the direction actually changes                       |
+| `push_direction_cleared`  | No direction (the target changed or was cleared)                    |
+| `plate_solving_status`    | The whole solve state: running, stage, last verdict                 |
+
+Target, direction, solve and blocker are each restated in the sync snapshot a client gets on connect and after a lag
+(`target_*`, `push_direction_*`, `plate_solving_status`, `push_to_blocked`), and `GET /api/push-to/status` carries the
+same solve and blocker, so a lost event never leaves "Searching…" or a stale arrow up.
 
 #### Live Stream Scaling
 
@@ -312,10 +318,13 @@ npm run lint      # check for issues (npm run lint:fix: auto-fix)
 npm run format    # format with Prettier
 ```
 
-`src/composables/api.types.js` (JSDoc types of the server's answers) is generated from the Rust types, and
+`src/composables/api.types.js` (JSDoc types of the server's answers) is generated from the Rust types,
 `src/composables/api.settings.js` (default settings and the ranges the server clamps them to) from the code that
-enforces them; after changing either, run `UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types`
-from the repository root.
+enforces them, and `src/composables/api.events.js` (every `/ws/events` event, and `SERVER_EVENTS`: the topic each
+states) from `ServerEvent` and one sample per variant (`ServerEvent::examples()`); after changing any, run
+`UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types` from the repository root. A new event
+needs a sample, and the frontend's guard tests (`useEventStream.catalogue.test.js`) fail one that states a topic
+nobody follows.
 
 ## License
 

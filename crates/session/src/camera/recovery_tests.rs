@@ -19,7 +19,7 @@ use crate::camera::lifecycle::DisconnectCause;
 use crate::events::ServerEvent;
 use crate::services::{CameraService, CaptureService};
 use crate::state::{
-    AppState, CameraPhase, CameraRole, CaptureState, Recovery, SessionResumePlan,
+    AppState, CameraPhase, CameraRole, CaptureState, Recovery, RecoveryStatus, SessionResumePlan,
 };
 
 const PROVIDER: &str = "Fake";
@@ -222,6 +222,7 @@ fn is_loud(event: &ServerEvent) -> bool {
             | ServerEvent::CameraReconnecting { .. }
             | ServerEvent::CameraReconnectFailed { .. }
             | ServerEvent::CaptureResumed { .. }
+            | ServerEvent::CameraRecoveryCleared { .. }
     )
 }
 
@@ -422,6 +423,9 @@ async fn a_slow_recovery_tells_the_observer_once_it_is_worth_it() {
     let seen = drain(&mut events);
     assert!(seen.iter().any(|e| matches!(e, ServerEvent::CameraReconnecting { .. })));
     assert!(!seen.iter().any(|e| matches!(e, ServerEvent::CameraDisconnected { .. })));
+    // A client that missed the clear is told on its next sync.
+    assert!(seen.iter().any(|e| matches!(e, ServerEvent::CameraRecoveryCleared { role: CameraRole::Main })));
+    assert_eq!(state.recovery_status.get(CameraRole::Main), RecoveryStatus::None);
     teardown(&state).await;
 }
 
@@ -454,6 +458,15 @@ async fn giving_up_ends_the_session_and_says_why() {
     assert!(seen.iter().any(|e| matches!(e, ServerEvent::CameraDisconnected { .. })));
     assert!(seen.iter().any(|e| matches!(e, ServerEvent::CameraReconnectFailed { .. })));
     assert!(!state.slot(CameraRole::Main).is_recovering());
+    assert!(
+        matches!(state.recovery_status.get(CameraRole::Main), RecoveryStatus::Failed { attempts, .. } if attempts > 0),
+        "the give-up is restated to a client that missed it"
+    );
+
+    catalog.set(&[NEPTUNE]);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    assert_eq!(state.recovery_status.get(CameraRole::Main), RecoveryStatus::None, "a fresh connect ends it");
+    teardown(&state).await;
 }
 
 /// Twice on 2026-09-07 the observer clicked Connect while a reconnect was waiting, and
@@ -503,6 +516,32 @@ async fn disconnecting_during_recovery_stops_it_quietly() {
         !drain(&mut events).iter().any(|e| matches!(e, ServerEvent::CameraReconnectFailed { .. })),
         "the observer ended it; there is no failure to report"
     );
+    assert_eq!(state.recovery_status.get(CameraRole::Main), RecoveryStatus::None);
+}
+
+/// The disconnect clears the status while the attempt it waited for can still post
+/// "Reconnecting" after it; the supervisor that stops on the disconnect takes that down too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reconnect_notice_posted_past_a_disconnect_goes_with_the_supervisor() {
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig(&catalog);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+
+    catalog.set(&[]);
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, NEPTUNE.name, DisconnectCause::DeviceFault).await;
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::WhenPossible).await.unwrap();
+    let late = RecoveryStatus::Reconnecting { name: NEPTUNE.name.into(), attempt: 2, of: 9, next_attempt_in_s: 1 };
+    state.recovery_status.set(CameraRole::Main, late);
+
+    assert!(
+        eventually(
+            || !state.slot(CameraRole::Main).reconnect_in_flight.load(Ordering::SeqCst),
+            Duration::from_secs(3)
+        )
+        .await,
+        "the supervisor should stop"
+    );
+    assert_eq!(state.recovery_status.get(CameraRole::Main), RecoveryStatus::None);
 }
 
 async fn start_capture_plan(state: &Arc<AppState>, device: &FakeDevice) {

@@ -86,3 +86,93 @@ async fn refreshing_behind_a_hung_enumeration_starts_no_new_one() {
     drop(release);
     assert_eq!(calls, 1);
 }
+
+fn indi_camera(id: i32, name: &str) -> CameraListItem {
+    indi_list_item(&CameraInfo {
+        id,
+        name: name.to_string(),
+        ..Default::default()
+    })
+}
+
+/// Only a camera the last discovery did not find is announced again, and one the server no
+/// longer lists leaves the set.
+#[test]
+fn a_discovery_replaces_the_indi_cameras_and_names_the_new_ones() {
+    let cameras = DiscoveredCameras::default();
+    let ids = |items: Vec<CameraListItem>| items.into_iter().map(|camera| camera.id).collect::<Vec<_>>();
+
+    assert_eq!(ids(cameras.replace_indi(vec![indi_camera(0, "CCD A"), indi_camera(1, "CCD B")])), ["indi_0", "indi_1"]);
+    assert_eq!(ids(cameras.replace_indi(vec![indi_camera(1, "CCD B"), indi_camera(2, "CCD C")])), ["indi_2"]);
+    assert_eq!(ids(cameras.indi()), ["indi_1", "indi_2"]);
+}
+
+/// A list built while discovery still runs carries what the last one found.
+#[tokio::test]
+async fn the_camera_list_carries_the_indi_cameras_last_discovered() {
+    let (state, _catalog, release) = rig();
+    drop(release);
+    CameraService::list_cameras(&state).await;
+    state.discovered_cameras.replace_indi(vec![indi_camera(0, "CCD A")]);
+
+    let listed = CameraService::list_known_cameras(&state).await;
+    let indi = listed.iter().find(|camera| camera.provider.as_deref() == Some("indi"));
+    assert_eq!(indi.map(|camera| (camera.id.as_str(), camera.connected)), Some(("indi_0", false)));
+}
+
+/// An INDI server that no longer answers lists no cameras: its last ones stayed listed,
+/// and connecting one could only fail.
+#[tokio::test]
+async fn an_indi_server_that_does_not_answer_lists_no_cameras() {
+    let (state, _catalog, release) = rig();
+    drop(release);
+    let closed_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    state.settings.update(|settings| {
+        settings.indi_server_host = "127.0.0.1".to_string();
+        settings.indi_server_port = closed_port;
+    });
+    state.discovered_cameras.replace_indi(vec![indi_camera(0, "CCD A")]);
+
+    CameraService::list_cameras(&state).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !state.discovered_cameras.indi().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "the unreachable server's cameras stayed listed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// A sync on every reconnect and lag enumerated the USB bus each time, for every page.
+#[tokio::test]
+async fn a_known_camera_list_reuses_the_last_enumeration() {
+    let (state, catalog, release) = rig();
+    drop(release);
+
+    let first = CameraService::list_known_cameras(&state).await;
+    assert_eq!(catalog.hung_calls.load(Ordering::SeqCst), 1, "nothing was enumerated yet");
+    let again = CameraService::list_known_cameras(&state).await;
+
+    assert_eq!(catalog.hung_calls.load(Ordering::SeqCst), 1);
+    let ids = |items: &[CameraListItem]| items.iter().map(|camera| camera.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&again), ids(&first));
+    CameraService::list_cameras(&state).await;
+    assert_eq!(catalog.hung_calls.load(Ordering::SeqCst), 2, "a refresh still enumerates");
+}
+
+/// The simulator setting changes what there is to find, so a list made under the other one
+/// is not reused.
+#[tokio::test]
+async fn a_known_camera_list_enumerates_again_once_the_simulator_setting_changed() {
+    let (state, catalog, release) = rig();
+    drop(release);
+    CameraService::list_cameras(&state).await;
+
+    let simulated = !state.settings.snapshot().use_simulated_camera;
+    state.settings.update(|settings| settings.use_simulated_camera = simulated);
+    CameraService::list_known_cameras(&state).await;
+
+    assert_eq!(catalog.hung_calls.load(Ordering::SeqCst), 2);
+}

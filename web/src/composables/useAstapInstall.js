@@ -10,6 +10,18 @@ export const DEFAULT_ASTAP_DATABASE = 'D80'
 /** How long after an install's last event the status is read again. */
 export const INSTALL_SETTLE_MS = 500
 
+/** Stages of an install still under way, which a page that did not start it joins. */
+export const ACTIVE_INSTALL_STAGES = new Set(['starting', 'downloading', 'extracting', 'file_completed'])
+
+/**
+ * Whether an installer ignores `progress`: an `ended` status while it follows no install,
+ * or a sync's `idle` (`interrupted`) while its own request is still on the way — the
+ * server says that until the request reaches it.
+ */
+export function ignoresProgress(progress, {installing, requesting}) {
+    return Boolean(progress.ended && (!installing || (progress.interrupted && requesting)))
+}
+
 /** ASTAP's status and the databases it offers, fetched together as every caller wants them. */
 export async function fetchAstapState() {
     const [status, databases] = await Promise.all([getAstapStatus(), getAstapDatabases()])
@@ -98,6 +110,8 @@ export function useAstapInstall({onComplete} = {}) {
         }
     }
 
+    let requesting = false
+
     async function startInstall() {
         if (!canInstall.value) return false
 
@@ -106,20 +120,30 @@ export function useAstapInstall({onComplete} = {}) {
         installProgress.value = createEmptyProgress()
         stageCompletion.value = createEmptyStageCompletion()
 
+        requesting = true
         try {
             await installAstap(selectedDatabases.value)
             return true
         } catch (e) {
+            // A 409 too: another page's install runs, which this one joins on its next event.
             error.value = e.message
             installing.value = false
             return false
+        } finally {
+            requesting = false
         }
     }
 
     function handleProgressUpdate(progress) {
         if (!progress) return
+        if (ignoresProgress(progress, {installing: installing.value, requesting})) return
 
         const stage = progress.stage
+        if (ACTIVE_INSTALL_STAGES.has(stage) && !installing.value) {
+            // Joining an install: the refusal a click on this page met is moot now.
+            installing.value = true
+            error.value = null
+        }
 
         installProgress.value = {
             component: progress.component || '',
@@ -130,6 +154,7 @@ export function useAstapInstall({onComplete} = {}) {
             stageName: progress.stageName || '',
             overallPercent: progress.overallPercent,
             error: progress.error,
+            ended: Boolean(progress.ended),
         }
 
         updateStageCompletion(stageCompletion.value, stage, progress.stageName, progress.component)
@@ -140,10 +165,12 @@ export function useAstapInstall({onComplete} = {}) {
         }
     }
 
-    // Each database reports its own completion; the install is done with the last one's.
+    // Each database reports its own completion; the install is done with the last one's,
+    // or once the server says it ended (a page that joined it may not know its databases).
     const installComplete = computed(() => {
         const p = installProgress.value
         if (p.stage !== 'completed') return false
+        if (p.ended) return true
         const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
         return Boolean(p.component?.includes(lastDb))
     })

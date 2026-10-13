@@ -39,6 +39,7 @@ export default defineConfig({
                 'src/testSetup.js',
                 'src/main.js',
                 'src/composables/api.types.js',
+                'src/composables/api.events.js',
             ],
             thresholds: {
                 lines: 80,

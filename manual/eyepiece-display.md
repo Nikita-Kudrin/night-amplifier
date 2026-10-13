@@ -55,6 +55,10 @@ you once it is up:
 - The view **reconnects on its own, indefinitely**, backing off from one second to
   thirty. Restarting Night Amplifier mid-session no longer leaves a black screen
   that only a page reload can clear — which matters when the display has no keyboard.
+  A connection that goes silent is replaced after five minutes, long enough for a
+  large frame to arrive over weak Wi-Fi. If the server log shows *"Image stream frame
+  was slow to send"*, the link is too slow for that view's size: lower its Eyepiece
+  Streaming Resolution or move the display closer to the access point.
 - It shows the **last rendered frame the moment it connects**, rather than waiting
   for the next exposure. At 60-second subs that used to be a minute of black, and a
   display opened after capture had stopped stayed black indefinitely.

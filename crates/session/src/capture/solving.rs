@@ -5,7 +5,7 @@ use tracing::{debug, info, warn};
 use night_amplifier_core::detection::{DetectionConfig, StarDetector};
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::push_to::{PushToBlocker, PushToError, SolveOutcome};
-use crate::events::ServerEvent;
+use crate::events::{PushDirection, ServerEvent};
 use crate::state::AppState;
 
 use super::push_to_tasks::{self, Lane};
@@ -148,7 +148,9 @@ pub async fn watch_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
         .observe_frame(&frame, solve_detector(), wanderer_mode)
         .await
     {
-        Ok(outcome) => announce_blocker(state, outcome.blocker),
+        Ok(outcome) => {
+            state.push_to_announcer.announce_blocker(outcome.blocker);
+        }
         Err(e) => debug!(error = %e, "Movement watch failed on this frame"),
     }
 }
@@ -209,7 +211,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
     } else {
         None
     };
-    announce_blocker(state, blocker);
+    state.push_to_announcer.announce_blocker(blocker);
 
     if let Some(blocker) = blocker {
         debug!(reason = blocker.reason(), "Plate solving skipped");
@@ -259,7 +261,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
                         "Plate solve succeeded"
                     );
 
-                    let _ = state.events.send(ServerEvent::position_solved(
+                    state.push_to_announcer.announce(ServerEvent::position_solved(
                         pos.ra_degrees,
                         pos.dec_degrees,
                         pos.ra_string,
@@ -280,28 +282,19 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
             // the view to settle" — through the same de-duplication as every
             // other blocker, so a state that holds for a hundred frames costs one
             // event. A solve that ran clears it by reporting `None`.
-            announce_blocker(state, outcome.blocker);
+            state.push_to_announcer.announce_blocker(outcome.blocker);
 
             if let Some(dir) = outcome.direction {
-                // The direction is recomputed every frame but only changes when
-                // the position or target does, so send it only when it is
-                // actually different.
-                let is_news = state
-                    .push_to
-                    .as_ref()
-                    .is_none_or(|pt| pt.direction_is_news(&dir));
-
-                if is_news {
+                let direction = PushDirection::new(dir, fov_deg);
+                let (angle, hint) = (direction.angle_deg, direction.direction_hint.clone());
+                let camera = direction.solved_camera.clone();
+                if state.push_to_announcer.announce_direction(direction) {
                     info!(
-                        screen_angle = dir.angle_deg,
-                        hint = dir.direction_hint,
-                        solved_camera = dir.solved_camera.as_deref().unwrap_or("-"),
+                        screen_angle = angle,
+                        hint,
+                        solved_camera = camera.as_deref().unwrap_or("-"),
                         "Push direction calculated"
                     );
-
-                    let _ = state
-                        .events
-                        .send(ServerEvent::push_direction_updated(dir, fov_deg));
                 }
             }
         }
@@ -310,28 +303,16 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
             // the UI stops the spinner without claiming the sky could not be
             // matched and without discrediting the last known position.
             info!("Plate solve cancelled");
-            let _ = state
-                .events
-                .send(ServerEvent::plate_solving_cancelled());
+            state
+                .push_to_announcer
+                .announce(ServerEvent::plate_solving_cancelled());
         }
         Err(e) => {
             warn!(error = %e, "Plate solve failed");
-            let _ = state
-                .events
-                .send(ServerEvent::position_solve_failed(e.to_string()));
+            state
+                .push_to_announcer
+                .announce(ServerEvent::position_solve_failed(e.to_string()));
         }
-    }
-}
-
-/// Broadcast a change in why Push-To is idle, ignoring repeats.
-fn announce_blocker(state: &Arc<AppState>, blocker: Option<PushToBlocker>) {
-    let is_news = state.push_to.as_ref().is_some_and(|pt| pt.blocker_is_news(blocker));
-    if is_news {
-        let _ = state
-            .events
-            .send(ServerEvent::push_to_blocked(
-                blocker.map(|b| b.reason().to_string()),
-            ));
     }
 }
 
@@ -348,12 +329,9 @@ pub async fn abandon_solve_on_shutdown(state: &Arc<AppState>) {
     };
 
     // Clear the "why is nothing happening" notice so the next session starts from a
-    // blank slate rather than inheriting this one's last blocker. Through
-    // `announce_blocker`, not by poking the de-duplication record directly: that
-    // updated the server's idea of what clients had been told without telling them
-    // anything, so the last blocker stayed on screen until the next transition —
-    // and a blocker now outranks the last solve verdict in the UI.
-    announce_blocker(state, None);
+    // blank slate rather than inheriting this one's last blocker: it outranks the last
+    // solve verdict in the UI.
+    state.push_to_announcer.announce_blocker(None);
 
     match plugin.cancel_solve().await {
         Ok(true) => info!("Capture ended; abandoned the plate solve that was in flight"),
@@ -365,52 +343,6 @@ pub async fn abandon_solve_on_shutdown(state: &Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::PushToState;
-
-    async fn state_with_push_to() -> Arc<AppState> {
-        let (mut state, _disk_writer) = AppState::new_for_testing();
-        state.push_to = Some(PushToState::default());
-        Arc::new(state)
-    }
-
-    #[tokio::test]
-    async fn clearing_the_blocker_tells_the_clients_and_not_just_the_bookkeeping() {
-        // `abandon_solve_on_shutdown` used to poke `blocker_is_news` for its side
-        // effect and drop the result, so the server recorded that clients had been
-        // told "nothing is blocking" without ever sending it. The last blocker then
-        // stayed on screen indefinitely — and it now outranks the last solve verdict.
-        let state = state_with_push_to().await;
-        let mut events = state.events.subscribe();
-
-        announce_blocker(&state, Some(PushToBlocker::TelescopeMoving));
-        assert!(matches!(
-            events.try_recv(),
-            Ok(ServerEvent::PushToBlocked { .. })
-        ));
-
-        announce_blocker(&state, None);
-        match events.try_recv() {
-            Ok(ServerEvent::PushToBlocked { reason }) => assert_eq!(reason, None),
-            other => panic!("the clear must reach the bus, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn a_blocker_that_has_not_changed_is_not_re_sent() {
-        let state = state_with_push_to().await;
-        let mut events = state.events.subscribe();
-
-        announce_blocker(&state, Some(PushToBlocker::Settling));
-        let _ = events.try_recv().expect("the first one is news");
-
-        for _ in 0..5 {
-            announce_blocker(&state, Some(PushToBlocker::Settling));
-        }
-        assert!(
-            events.try_recv().is_err(),
-            "a state that holds for a hundred frames must cost one event"
-        );
-    }
 
     // ---- SolveSource::is_active: the predicate every staleness re-check rests on --
 

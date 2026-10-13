@@ -6,12 +6,39 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::super::events::ServerEvent;
+use serde::Serialize;
+
+use super::super::events::{PushToTarget, ServerEvent, SolveStatus};
 use super::super::state::AppState;
 use night_amplifier_core::push_to::{
-    CatalogEntryResponse, CoordinateResponse, PushToBlocker, PushToDirectionResponse, PushToError,
-    PushToResult, PushToStatusResponse, TelescopeSettings,
+    CatalogEntryResponse, CoordinateResponse, PushToDirectionResponse, PushToError, PushToResult,
+    PushToStatusResponse, TelescopeSettings,
 };
+
+/// `GET /api/push-to/status`: the plugin's answer, plus what the sync snapshot restates.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct PushToStatus {
+    /// Whether the solver database is loaded
+    pub solver_ready: bool,
+    /// Whether a plate solve is currently in progress
+    pub is_solving: bool,
+    pub current_target: Option<CatalogEntryResponse>,
+    pub last_position: Option<CoordinateResponse>,
+    pub direction: Option<PushToStatusDirection>,
+    pub solve: SolveStatus,
+    /// Why solving is idle, as `push_to_blocked` last said it.
+    pub blocker: Option<String>,
+}
+
+/// The plugin's direction with the field of view the last announced one carried.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub struct PushToStatusDirection {
+    #[serde(flatten)]
+    pub direction: PushToDirectionResponse,
+    pub fov_deg: Option<f64>,
+}
 
 /// Push-To navigation service
 pub struct PushToService;
@@ -25,17 +52,29 @@ impl PushToService {
     /// `solve_frame`, and clearing it here would let a second solve start under one
     /// already in flight. The mirror is kept in sync by the target mutations below
     /// and `solve_frame`'s own authoritative read of the plugin.
-    pub async fn get_status(state: &AppState) -> PushToStatusResponse {
-        if let Some(plugin) = state.plugins.push_to_solver() {
-            plugin.get_status().await
-        } else {
-            PushToStatusResponse {
+    pub async fn get_status(state: &AppState) -> PushToStatus {
+        let plugin = match state.plugins.push_to_solver() {
+            Some(plugin) => plugin.get_status().await,
+            None => PushToStatusResponse {
                 solver_ready: false,
                 is_solving: false,
                 current_target: None,
                 last_position: None,
                 direction: None,
-            }
+            },
+        };
+        let announced = &state.push_to_announcer;
+        PushToStatus {
+            solver_ready: plugin.solver_ready,
+            is_solving: plugin.is_solving,
+            current_target: plugin.current_target,
+            last_position: plugin.last_position,
+            direction: plugin.direction.map(|direction| PushToStatusDirection {
+                direction,
+                fov_deg: announced.direction().and_then(|d| d.fov_deg),
+            }),
+            solve: announced.solve(),
+            blocker: announced.blocker(),
         }
     }
 
@@ -53,7 +92,7 @@ impl PushToService {
 
         let was_solving = plugin.cancel_solve().await?;
         if was_solving {
-            let _ = state.events.send(ServerEvent::plate_solving_cancelled());
+            state.push_to_announcer.announce(ServerEvent::plate_solving_cancelled());
         }
         Ok(was_solving)
     }
@@ -70,9 +109,9 @@ impl PushToService {
         };
 
         plugin.restart_solve().await?;
-        let _ = state
-            .events
-            .send(ServerEvent::plate_solving_restarted(reason));
+        state
+            .push_to_announcer
+            .announce(ServerEvent::plate_solving_restarted(reason));
         Ok(())
     }
 
@@ -122,13 +161,13 @@ impl PushToService {
     ) -> PushToResult<CatalogEntryResponse> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.set_target_by_name(name).await?;
-            state.push_to_target_changed(true);
-            let _ = state.events.send(ServerEvent::target_changed(
-                result.name.clone(),
-                Some(result.designation.clone()),
-                result.ra_degrees,
-                result.dec_degrees,
-            ));
+            state.set_push_to_has_target(true);
+            state.push_to_announcer.target_changed(PushToTarget {
+                name: result.name.clone(),
+                designation: Some(result.designation.clone()),
+                ra_degrees: result.ra_degrees,
+                dec_degrees: result.dec_degrees,
+            });
             Ok(result)
         } else {
             Err(PushToError::PluginRequired)
@@ -143,14 +182,13 @@ impl PushToService {
     ) -> PushToResult<CoordinateResponse> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.set_target_by_coords(ra_degrees, dec_degrees).await?;
-            state.push_to_target_changed(true);
-            // For custom coordinates, name is usually the coordinate string
-            let _ = state.events.send(ServerEvent::target_changed(
-                Some(result.ra_string.clone() + " " + &result.dec_string),
-                None,
-                result.ra_degrees,
-                result.dec_degrees,
-            ));
+            state.set_push_to_has_target(true);
+            state.push_to_announcer.target_changed(PushToTarget {
+                name: Some(result.ra_string.clone() + " " + &result.dec_string),
+                designation: None,
+                ra_degrees: result.ra_degrees,
+                dec_degrees: result.dec_degrees,
+            });
             Ok(result)
         } else {
             Err(PushToError::PluginRequired)
@@ -161,13 +199,13 @@ impl PushToService {
     pub async fn clear_target(state: &AppState) -> PushToResult<()> {
         if let Some(plugin) = state.plugins.push_to_catalog() {
             let result = plugin.clear_target().await;
-            // Only mirror a clear that actually happened — a failed clear leaves
-            // the plugin holding the target, and claiming otherwise would stop
-            // plate solving for a target that is still set.
+            // Only a clear that actually happened — a failed clear leaves the plugin
+            // holding the target, and claiming otherwise would stop plate solving (and
+            // tell every client) for a target that is still set.
             if result.is_ok() {
-                state.push_to_target_changed(false);
+                state.set_push_to_has_target(false);
+                state.push_to_announcer.target_cleared();
             }
-            let _ = state.events.send(ServerEvent::target_cleared());
             result
         } else {
             Err(PushToError::PluginRequired)
@@ -218,9 +256,8 @@ impl PushToService {
 /// a plate solve is worth preparing a frame for without awaiting the plugin's own
 /// locks. `has_target` is a cache, not the source of truth (the plugin is) — it exists
 /// only to keep `capture::solving::plate_solve_available` synchronous and cheap; every
-/// consequential check repeats against the plugin inside `solve_frame`. `announced` is
-/// event de-duplication state, owned here since it is about what this server already
-/// told clients, which the plugin has no view of.
+/// consequential check repeats against the plugin inside `solve_frame`. What clients were
+/// told is `AppState::push_to_announcer`'s.
 ///
 /// Synchronized field by field, so `AppState` holds it without a lock: the capture
 /// threads read it per frame and never wait.
@@ -247,27 +284,7 @@ pub struct PushToState {
     /// Whether the plugin currently holds a target. Written by the target
     /// mutations in [`PushToService`] and re-synced from `solve_frame`.
     has_target: AtomicBool,
-    announced: std::sync::Mutex<Announced>,
 }
-
-/// What clients were last told, so a repeat is not sent again.
-#[derive(Default)]
-struct Announced {
-    /// Last push direction, rounded — see [`PushToState::direction_is_news`].
-    direction: Option<DirectionKey>,
-    /// Last blocker. The outer `Option` distinguishes "never reported" from "reported
-    /// that nothing is blocking".
-    blocker: Option<Option<PushToBlocker>>,
-}
-
-/// A push direction rounded to the precision a person can act on.
-///
-/// Rounded rather than compared exactly because the direction is recomputed from
-/// floating-point spherical geometry every frame: bit-identical values are not
-/// guaranteed even when nothing has changed, and a de-duplication that compares
-/// exactly would let the spam straight back through. The solving camera is part of it:
-/// the same numbers from the other camera's solve point a different way on screen.
-type DirectionKey = (i64, i64, bool, Option<String>);
 
 impl PushToState {
     /// Whether a solve is running right now.
@@ -281,10 +298,6 @@ impl PushToState {
 
     pub fn set_has_target(&self, has_target: bool) {
         self.has_target.store(has_target, Ordering::SeqCst);
-    }
-
-    fn announced(&self) -> std::sync::MutexGuard<'_, Announced> {
-        self.announced.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Claim the solve slot, or `None` if one is already running or the previous
@@ -354,41 +367,6 @@ impl PushToState {
 
         *self.last_watch.lock().unwrap() = Some(now);
         Some(latch)
-    }
-
-    /// Whether this direction differs from the last one announced, updating the
-    /// record if it does.
-    ///
-    /// Push direction only really changes when the position or the target changes,
-    /// but it was recomputed and broadcast on every captured frame regardless — one
-    /// WebSocket message per frame per client, saying the same thing.
-    pub fn direction_is_news(&self, direction: &PushToDirectionResponse) -> bool {
-        let key = (
-            (direction.angle_deg * 10.0).round() as i64,
-            (direction.distance_deg * 1000.0).round() as i64,
-            direction.is_close,
-            direction.solved_camera.clone(),
-        );
-        let mut announced = self.announced();
-        if announced.direction.as_ref() == Some(&key) {
-            return false;
-        }
-        announced.direction = Some(key);
-        true
-    }
-
-    /// Forget the last announced direction, so the next one is sent even if it is
-    /// numerically identical. Used when the target changes: the arrow means something
-    /// different now even when it points the same way.
-    pub fn forget_direction(&self) {
-        self.announced().direction = None;
-    }
-
-    /// Whether this blocker differs from the last one announced, updating the record
-    /// if it does. Keeps the "why is nothing happening" notice to one event per
-    /// transition instead of one per frame.
-    pub fn blocker_is_news(&self, blocker: Option<PushToBlocker>) -> bool {
-        self.announced().blocker.replace(blocker) != Some(blocker)
     }
 }
 

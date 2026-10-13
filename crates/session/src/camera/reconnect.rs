@@ -17,7 +17,8 @@ use super::recovery;
 use crate::error::ApiError;
 use crate::events::ServerEvent;
 use crate::state::{
-    AppState, CameraRole, CaptureState, ConnectedCameraInfo, Recovery, SessionResumePlan,
+    AppState, CameraRole, CaptureState, ConnectedCameraInfo, Recovery, RecoveryStatus,
+    SessionResumePlan,
 };
 
 #[cfg(not(test))]
@@ -127,7 +128,12 @@ pub(super) fn spawn(state: &Arc<AppState>, recorded: ConnectedCameraInfo) {
         match supervise(&state, &recorded).await {
             Ok(()) => info!(camera_id = %recorded.id, role = role.label(), "Camera recovered"),
             Err(Stop::Abandoned(why)) => {
-                info!(camera_id = %recorded.id, why, "Stopped reconnecting the camera")
+                info!(camera_id = %recorded.id, why, "Stopped reconnecting the camera");
+                // A Disconnect waiting on the connect lock clears the status, and the attempt
+                // that held the lock can still post "Reconnecting" after it: unclear, every
+                // sync restated that for good. Before the slot is released, so no newer
+                // supervisor's notice is cleared.
+                state.recovery_status.clear(role);
             }
             Err(Stop::GaveUp { attempts, reason }) => {
                 recovery::give_up(&state, &recorded, attempts, &reason).await
@@ -201,6 +207,7 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
         match recovery::reopen_for_recovery(state, &recorded).await {
             Ok(connected) => {
                 info!(camera = %name, role = role.label(), attempt, elapsed = ?started.elapsed(), "Reconnected");
+                state.recovery_status.clear(role);
                 // Only the imaging camera has a capture to resume. For the guide camera
                 // the reopen has already restarted its loop and reapplied its profile.
                 if role == CameraRole::Main {
@@ -215,13 +222,15 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
         let left = attempts_left(started.elapsed(), attempt);
         if started.elapsed() + wait >= NOTICE_AFTER && left > 0 {
             noticed = true;
-            let _ = state.events.send(ServerEvent::camera_reconnecting(
-                name.clone(),
+            state.recovery_status.set(
                 role,
-                attempt + 1,
-                attempt + left,
-                wait.as_secs(),
-            ));
+                RecoveryStatus::Reconnecting {
+                    name: name.clone(),
+                    attempt: attempt + 1,
+                    of: attempt + left,
+                    next_attempt_in_s: wait.as_secs(),
+                },
+            );
         }
         tokio::time::sleep(wait).await;
     }

@@ -359,6 +359,11 @@ pub(super) async fn install_camera(
         );
     }
 
+    // A fresh connect replaces whatever recovery reported for the role; a reopen leaves it
+    // to the supervisor, which may yet fail again.
+    if replaces.is_none() {
+        state.recovery_status.clear(role);
+    }
     let _ = state
         .events
         .send(ServerEvent::camera_connected(&camera_name));

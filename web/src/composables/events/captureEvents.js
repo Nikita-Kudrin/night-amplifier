@@ -1,4 +1,5 @@
 import {ref} from 'vue'
+import {dismissRecoveryFailure} from '../api.js'
 import {CAMERA_PHASES} from '../../constants'
 
 /**
@@ -18,8 +19,9 @@ export function createCaptureEvents() {
     const lastError = ref(null)
     const diskWriterWarning = ref(null)
     const unresponsiveWarning = ref(null)
-    // Which camera the warning is about — `{name, role}`, role null when the event had
-    // none — so its recovery can clear it.
+    // Which camera the warning is about — `{name, role, recovery, gaveUp}`, role null when the
+    // event had none, `recovery` when automatic recovery raised it (`gaveUp` its give-up) —
+    // so its end can clear it.
     const unresponsiveCamera = ref(null)
     const resumeNotice = ref(null)
     // Why the server switched Focus/Finder mode off on its own; stays until dismissed.
@@ -36,6 +38,35 @@ export function createCaptureEvents() {
     // frame, so the reason a rejection burst is happening stays readable while good
     // frames come and go between the bad ones.
     const lastRejectionReason = ref(null)
+
+    function clearUnresponsive() {
+        unresponsiveWarning.value = null
+        unresponsiveCamera.value = null
+    }
+
+    /**
+     * The observer dismissed the warning. A give-up is also dismissed on the server, which
+     * restates it on every sync until a camera connects into the role: dismissed only here,
+     * it came back after every reconnect, all night for one imaging on without its guide.
+     */
+    function dismissUnresponsive() {
+        const warned = unresponsiveCamera.value
+        clearUnresponsive()
+        if (!warned?.gaveUp || !warned.role) return
+        dismissRecoveryFailure(warned.role).catch((e) => console.warn('Could not dismiss the recovery warning:', e))
+    }
+
+    /**
+     * A camera that came back needs no warning, and a guide camera or an idle one gets no
+     * `capture_resumed` to clear it. Matched on role too where both sides carry one: two
+     * bodies of one model share a name.
+     */
+    function clearIfHealthy({name, role, phase}) {
+        const healthy = phase !== CAMERA_PHASES.RECOVERING && phase !== CAMERA_PHASES.DISCONNECTED
+        const warned = unresponsiveCamera.value
+        const sameCamera = warned?.name === name && (!warned.role || !role || warned.role === role)
+        if (healthy && sameCamera) clearUnresponsive()
+    }
 
     function handleFrameEvent(data) {
         frameCount.value = data.frame_number
@@ -82,27 +113,26 @@ export function createCaptureEvents() {
         camera_reconnecting(data) {
             unresponsiveWarning.value =
                 `Reconnecting to ${data.name} — attempt ${data.attempt} of ${data.of}.`
-            unresponsiveCamera.value = {name: data.name, role: data.role ?? null}
+            unresponsiveCamera.value = {name: data.name, role: data.role ?? null, recovery: true}
         },
-        camera_phase_changed(data) {
-            // A camera that came back needs no warning, and a guide camera or an idle
-            // one gets no `capture_resumed` to clear it. Matched on role too where both
-            // sides carry one: two bodies of one model share a name.
-            const healthy = data.phase !== CAMERA_PHASES.RECOVERING && data.phase !== CAMERA_PHASES.DISCONNECTED
-            const warned = unresponsiveCamera.value
-            const sameCamera = warned?.name === data.name
-                && (!warned.role || !data.role || warned.role === data.role)
-            if (healthy && sameCamera) {
-                unresponsiveWarning.value = null
-                unresponsiveCamera.value = null
-            }
+        camera_phase_changed: clearIfHealthy,
+        // The sync's restatement of every phase, which a page that missed the healthy
+        // `camera_phase_changed` would otherwise never see.
+        camera_phases(data) {
+            for (const camera of data.cameras ?? []) clearIfHealthy(camera)
         },
         camera_reconnect_failed(data) {
             unresponsiveWarning.value =
                 `Could not bring ${data.name} back after ${data.attempts} attempts: ${data.reason}.`
+            unresponsiveCamera.value = {name: data.name, role: data.role ?? null, recovery: true, gaveUp: true}
+        },
+        // Sent for every role on each sync: only a warning recovery raised for that role goes.
+        camera_recovery_cleared(data) {
+            const warned = unresponsiveCamera.value
+            if (warned?.recovery && warned.role === data.role) clearUnresponsive()
         },
         capture_resumed(data) {
-            unresponsiveWarning.value = null
+            clearUnresponsive()
             lastError.value = null
             resumeNotice.value =
                 `${data.name} is back. Capture resumed with ${data.stacked_count} frames still stacked.`
@@ -120,6 +150,16 @@ export function createCaptureEvents() {
         frame_dropped(data) {
             droppedCount.value = data.dropped_count
             deliveredCount.value = data.delivered_count ?? 0
+        },
+        // The sync's restatement of every counter: a page opened between captures shows the
+        // last session's, and one that missed a `frame_dropped` catches up.
+        capture_counts(data) {
+            frameCount.value = data.frame_count
+            stackedCount.value = data.stacked_count
+            rejectedCount.value = data.rejected_count
+            droppedCount.value = data.dropped_count
+            deliveredCount.value = data.delivered_count
+            lastRejectionReason.value = data.last_rejection_reason ?? null
         },
     }
 
@@ -143,7 +183,7 @@ export function createCaptureEvents() {
             viewedCameraRevision,
             clearError: () => (lastError.value = null),
             clearDiskWriterWarning: () => (diskWriterWarning.value = null),
-            clearUnresponsiveWarning: () => (unresponsiveWarning.value = null),
+            clearUnresponsiveWarning: dismissUnresponsive,
             clearResumeNotice: () => (resumeNotice.value = null),
             clearFocusModeNotice: () => (focusModeNotice.value = null),
         },

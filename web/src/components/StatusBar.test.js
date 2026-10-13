@@ -2,6 +2,7 @@ import {describe, it, expect, vi} from 'vitest'
 import {ref} from 'vue'
 import StatusBar from './StatusBar.vue'
 import {mountWithDefaults} from '../test/mount.js'
+import {createCaptureEvents} from '../composables/events/captureEvents.js'
 
 describe('StatusBar', () => {
     function mountStatusBar(provide = {}) {
@@ -425,5 +426,21 @@ describe('StatusBar', () => {
             expect(text).toContain('Dropped: 5')
             expect(text).not.toContain('%')
         })
+    })
+
+    // A page opened between captures gets the counts from the sync snapshot alone.
+    it('shows the last session\'s counts on a page opened while idle', () => {
+        const capture = createCaptureEvents()
+        capture.handlers.state_changed({state: 'Idle'})
+        capture.handlers.capture_counts({
+            frame_count: 120, stacked_count: 100, rejected_count: 20,
+            dropped_count: 6, delivered_count: 126, last_rejection_reason: 'trailed stars',
+        })
+
+        const wrapper = mountStatusBar({eventStream: {...capture.state}})
+
+        expect(wrapper.find('.frames').text()).toContain('Rejected 20 | Total 120')
+        expect(wrapper.find('.dropped').text()).toContain('Dropped: 6')
+        expect(wrapper.findComponent({name: 'BaseInfoIcon'}).props('message')).toContain('trailed stars')
     })
 })

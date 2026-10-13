@@ -77,7 +77,9 @@
  * @property {number} frame_count
  * @property {number} stacked_count
  * @property {number} rejected_count
- * @property {string|null} last_error
+ * @property {number} dropped_count - Frames the pipeline's back-pressure dropped, out of `delivered_count`.
+ * @property {number} delivered_count
+ * @property {string|null} last_rejection_reason - Why the most recently rejected frame was kept out of the stack.
  * @property {number|null} started_at
  * @property {number} exposure_us
  * @property {number} gain
@@ -131,13 +133,15 @@
  */
 
 /**
- * Push-To status response
+ * `GET /api/push-to/status`: the plugin's answer, plus what the sync snapshot restates.
  * @typedef {object} PushToStatus
  * @property {boolean} solver_ready - Whether the solver database is loaded
  * @property {boolean} is_solving - Whether a plate solve is currently in progress
- * @property {CatalogEntry|null} current_target - Current target (if set)
- * @property {Coordinate|null} last_position - Last solved position (if available)
- * @property {PushToDirection|null} direction - Push direction to target (if both position and target are set)
+ * @property {CatalogEntry|null} current_target
+ * @property {Coordinate|null} last_position
+ * @property {PushToStatusDirection|null} direction
+ * @property {SolveStatus} solve
+ * @property {string|null} blocker - Why solving is idle, as `push_to_blocked` last said it.
  */
 
 /**
@@ -318,8 +322,8 @@
  */
 
 /**
- * Push-To direction response
- * @typedef {object} PushToDirection
+ * The plugin's direction with the field of view the last announced one carried.
+ * @typedef {object} PushToStatusDirection
  * @property {number} angle_deg - Angle to push in degrees, in the image frame: 0 = screen up, 90 = screen right, rotation is clockwise. The plate-solved camera rotation and parity are already applied, so this can be used directly as an SVG/CSS rotation for a chevron that points "up" at 0°. For a celestial-frame label use `direction_hint`.
  * @property {number} distance_deg - Angular distance to target in degrees
  * @property {boolean} is_close - Whether within fine-adjustment range (<1 degree)
@@ -328,6 +332,7 @@
  * @property {Coordinate|null} current_position - Current position (if solved)
  * @property {Coordinate|null} target - Target position
  * @property {string|null} solved_camera - The camera whose plate solve oriented `angle_deg`, `None` if unknown. A guide camera solves for both views, and its rotation and parity are not the imaging camera's, so a client draws the chevron only over this camera's picture.
+ * @property {number|null} fov_deg
  */
 
 /**
@@ -363,6 +368,28 @@
  * @property {number} index
  * @property {string} name
  * @property {string} [description]
+ */
+
+/**
+ * Which attempt of a multi-strategy solve is running — see [`ServerEvent::PlateSolvingProgress`](super::ServerEvent::PlateSolvingProgress).
+ * @typedef {object} SolveStage
+ * @property {string} stage
+ * @property {number} attempt
+ * @property {number} total
+ */
+
+/**
+ * Whether a plate solve is running, and how the last one ended.
+ * @typedef {object} SolveStatus
+ * @property {boolean} in_progress
+ * @property {string|null} target_name
+ * @property {SolveStage|null} stage
+ * @property {SolveVerdict|null} last_result - `None` until a solve ends, and after a restart or a cleared target.
+ */
+
+/**
+ * How the last solve ended.
+ * @typedef {'success'|'failed'|'cancelled'} SolveVerdict
  */
 
 /**

@@ -52,6 +52,10 @@ pub enum PushToError {
     #[error("Database load failed: {0}")]
     DatabaseLoadFailed(String),
 
+    /// One install of a kind at a time: two would download into the same files.
+    #[error("An installation is already running")]
+    InstallInProgress,
+
     #[error("Installation failed: {0}")]
     InstallFailed(String),
 

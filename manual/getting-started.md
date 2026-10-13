@@ -165,7 +165,7 @@ You only see a message when recovery takes longer than about 20 seconds:
 |---|---|
 | *"Reconnecting to … — attempt 4 of 25."* | Recovery is taking a while. Attempts repeat every 2, 3, 5, then 10 seconds, for up to 5 minutes; the total counts only the attempts that still fit in that time. |
 | *"… is back. Capture resumed with N frames still stacked."* | It came back after that notice, and your capture picked up where it stopped. |
-| *"Could not bring … back …"* | Recovery gave up. Check the cable and the power supply, then reconnect by hand. |
+| *"Could not bring … back …"* | Recovery gave up. Check the cable and the power supply, then reconnect by hand. The message stays on every open page until a camera connects in that role; dismissing it on one page clears it on all of them. |
 | *"… has stopped responding."* | The camera failed several calls in a row; recovery is under way. |
 
 A resumed capture keeps what it had: the same mode (Live, Wanderer, Stacking or

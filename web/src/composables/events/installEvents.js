@@ -1,8 +1,19 @@
 import {ref} from 'vue'
 
 /**
+ * Why an install a page was following ended with the server saying `idle` — nothing
+ * installed since it started. Read as a success, it showed "installed" for a restart.
+ */
+export const INSTALL_INTERRUPTED = 'The server restarted before the install finished'
+
+/**
  * Download and unpack progress of the ASTAP and catalog installs, in the client's casing:
  * the installers read only these fields, never the event's own.
+ *
+ * A `*_install_status` (sent as an install begins and ends, and by every sync) replays a
+ * running install's last event, or reads as an `ended` 'completed'/'failed' — which an
+ * installer acts on only while it believes an install runs: every connect says `idle`, a
+ * failure marked `interrupted` (see `INSTALL_INTERRUPTED`).
  */
 export function createInstallEvents() {
     const astapInstallProgress = ref(null)
@@ -65,6 +76,35 @@ export function createInstallEvents() {
         catalog_install_failed(data) {
             catalogInstallProgress.value = {stage: 'failed', error: data.error}
         },
+        astap_install_status(data) {
+            if (data.state === 'running') {
+                replay(data.progress ?? {type: 'astap_install_starting', component: 'ASTAP'})
+                return
+            }
+            astapInstallProgress.value = data.state === 'completed'
+                ? {component: '', stage: 'completed', stageName: '', overallPercent: 100, error: null, ended: true}
+                : {component: '', ...endedFailure(data)}
+        },
+        catalog_install_status(data) {
+            if (data.state === 'running') {
+                replay(data.progress ?? {type: 'catalog_install_starting'})
+                return
+            }
+            catalogInstallProgress.value = data.state === 'completed'
+                ? {stage: 'completed', objectCount: null, error: null, ended: true}
+                : endedFailure(data)
+        },
+    }
+
+    function replay(event) {
+        handlers[event.type]?.(event)
+    }
+
+    /** A `failed` status, or an `idle` one, which can only mean the install was cut short. */
+    function endedFailure(data) {
+        return data.state === 'idle'
+            ? {stage: 'failed', error: INSTALL_INTERRUPTED, ended: true, interrupted: true}
+            : {stage: 'failed', error: data.error, ended: true}
     }
 
     return {

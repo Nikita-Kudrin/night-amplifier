@@ -18,10 +18,9 @@ use night_amplifier_core::camera::identity::{self, DeviceIdentity};
 use night_amplifier_core::camera::{DeviceCatalog, OpenedCamera};
 use crate::capture::watchdog::release_faulted_handle;
 use crate::error::{ApiError, ApiResult};
-use crate::events::ServerEvent;
 use crate::state::{
     AppState, CameraPhase, CameraRole, CaptureState, ConnectedCameraInfo, InstallOutcome,
-    MonitorCmd, Recovery, SuspendVerdict,
+    MonitorCmd, Recovery, RecoveryStatus, SuspendVerdict,
 };
 
 /// Suspend `role`'s camera after a device fault and make sure a supervisor is reopening
@@ -122,11 +121,14 @@ pub(super) async fn give_up(
         )
         .await;
     }
-    let _ = state.events.send(ServerEvent::camera_reconnect_failed(
-        recorded.info.name.clone(),
-        attempts,
-        reason.to_string(),
-    ));
+    state.recovery_status.set(
+        recorded.role,
+        RecoveryStatus::Failed {
+            name: recorded.info.name.clone(),
+            attempts,
+            reason: reason.to_string(),
+        },
+    );
     state.send_error(format!(
         "Could not bring camera '{}' back ({}). Check the cable and reconnect.",
         recorded.info.name, reason

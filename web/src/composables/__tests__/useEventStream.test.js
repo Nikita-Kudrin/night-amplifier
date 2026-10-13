@@ -7,18 +7,18 @@ import {
     getWebSocket,
     openWebSocket,
     sendEvent,
+    syncWebSocket,
     suppressConsoleErrors,
     setupGlobalWebSocketMock,
 } from './webSocketTestUtils.js'
 
 setupGlobalWebSocketMock()
 
-// Opening the socket loads the Push-To status; unmocked, every test fetched it for real.
+// A sync once read the Push-To status; mocked, a regression is a call rather than a real fetch.
 vi.mock('../api.js', async (importOriginal) =>
     (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
 
-import {ApiError, getPushToStatus} from '../api.js'
-import {pushToStatus} from '../../test/fixtures.js'
+import {getPushToStatus} from '../api.js'
 import {useEventStream as originalUseEventStream} from '../useEventStream.js'
 import { mount } from '@vue/test-utils'
 
@@ -366,6 +366,58 @@ describe('useEventStream', () => {
         })
     })
 
+    describe('syncs', () => {
+        it('hands each sync its cause and drop count, marking only the stream\'s first', async () => {
+            const {onSync} = useEventStream()
+            const syncs = []
+            onSync((sync) => syncs.push(sync))
+
+            await openWebSocket()
+            await syncWebSocket()
+            await syncWebSocket({cause: 'lagged', dropped: 144})
+            getWebSocket().simulateClose()
+            vi.advanceTimersByTime(1000)
+            MockWebSocket.latest.simulateOpen()
+            await syncWebSocket()
+
+            expect(syncs).toEqual([
+                {cause: 'connect', dropped: 0, first: true},
+                {cause: 'lagged', dropped: 144, first: false},
+                {cause: 'connect', dropped: 0, first: false},
+            ])
+        })
+
+        it('stops calling a subscriber once unsubscribed, or once its scope is gone', async () => {
+            const {onSync} = useEventStream()
+            const early = vi.fn()
+            const scoped = vi.fn()
+            const off = onSync(early)
+            const scope = effectScope()
+            scope.run(() => onSync(scoped))
+
+            await openWebSocket()
+            off()
+            scope.stop()
+            await syncWebSocket()
+
+            expect(early).not.toHaveBeenCalled()
+            expect(scoped).not.toHaveBeenCalled()
+        })
+
+        // A lag is the server's business and the sync its whole answer: no toast.
+        it('notes a lag in the debug log only', async () => {
+            const debug = vi.spyOn(console, 'debug').mockImplementation(() => {})
+            const {lastError} = useEventStream()
+
+            await openWebSocket()
+            await syncWebSocket({cause: 'lagged', dropped: 144})
+
+            expect(debug).toHaveBeenCalledWith(expect.stringContaining('144'))
+            expect(lastError.value).toBeNull()
+            debug.mockRestore()
+        })
+    })
+
     describe('ASTAP installation events', () => {
         const astapEventTestCases = [
             {
@@ -510,147 +562,90 @@ describe('useEventStream', () => {
         })
     })
 
-    describe('Push-To status on connect', () => {
-        /** Lets `onOpen` finish with the status reply it awaited. */
-        async function statusSettled() {
-            await getPushToStatus.mock.results.at(-1).value.catch(() => {})
-            await nextTick()
+    describe('Push-To snapshot', () => {
+        /** The Push-To part of a sync snapshot, in the server's topic order. */
+        async function sendSnapshot({target, direction, solve, blocker = null}) {
+            await sendEvent(target ? {type: 'target_changed', ...target} : {type: 'target_cleared'})
+            await sendEvent(direction ? {type: 'push_direction_updated', ...direction} : {type: 'push_direction_cleared'})
+            await sendEvent({type: 'plate_solving_status', in_progress: false, target_name: null, stage: null, last_result: null, ...solve})
+            await sendEvent({type: 'push_to_blocked', reason: blocker})
+            await syncWebSocket()
         }
 
-        it('shows the target and push direction the server already holds', async () => {
-            getPushToStatus.mockResolvedValueOnce(pushToStatus({
-                current_target: {designation: 'M31', name: 'Andromeda Galaxy', ra_degrees: 10.68, dec_degrees: 41.27},
-                direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false, solved_camera: 'Main'},
-            }))
-            const {currentTarget, pushDirection} = useEventStream()
+        it('restores the target, direction, solve and blocker the server holds', async () => {
+            const {currentTarget, pushDirection, plateSolving, pushToBlocked, solvingMessage} = useEventStream()
 
             await openWebSocket()
-            await statusSettled()
+            await sendSnapshot({
+                target: {name: 'Andromeda', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+                direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false, fov_deg: 1.45, solved_camera: 'Main'},
+                solve: {in_progress: true, target_name: 'M31', stage: {stage: 'blind', attempt: 3, total: 4}},
+                blocker: 'Telescope is moving',
+            })
 
-            expect(currentTarget.value).toMatchObject({designation: 'M31'})
-            // The REST status carries no FOV; only the event does.
+            expect(currentTarget.value).toEqual({name: 'Andromeda', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27})
             expect(pushDirection.value).toEqual({
                 angleDeg: 120, distanceDeg: 4.5, directionHint: 'SE', isClose: false,
-                fovDeg: 0, solvedCamera: 'Main',
+                fovDeg: 1.45, solvedCamera: 'Main',
             })
+            expect(plateSolving.value).toEqual({
+                inProgress: true, targetName: 'M31', lastResult: null,
+                stage: {label: 'blind', attempt: 3, total: 4},
+            })
+            expect(pushToBlocked.value).toBe('Telescope is moving')
+            expect(solvingMessage.value).toBe('Searching (step 3/4): M31')
         })
 
-        it('starts empty when the status request fails, and says so', async () => {
-            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-            getPushToStatus.mockRejectedValueOnce(new ApiError('Server unavailable'))
-            const {currentTarget, pushDirection} = useEventStream()
-
+        // What a lost event left behind -- "Searching...", an arrow, a blocker -- goes.
+        it('clears what the server no longer holds', async () => {
+            const {currentTarget, pushDirection, plateSolving, pushToBlocked, solvingMessage} = useEventStream()
             await openWebSocket()
-            await statusSettled()
+            await sendEvent({type: 'target_changed', designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27})
+            await sendEvent({type: 'push_direction_updated', angle_deg: 7, distance_deg: 1, direction_hint: 'N', is_close: false})
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'push_to_blocked', reason: 'Waiting'})
+
+            await sendSnapshot({})
 
             expect(currentTarget.value).toBeNull()
             expect(pushDirection.value).toBeNull()
-            expect(warn).toHaveBeenCalledWith('Push-To status failed:', 'Server unavailable')
-            warn.mockRestore()
+            expect(plateSolving.value).toEqual({inProgress: false, targetName: null, lastResult: null, stage: null})
+            expect(pushToBlocked.value).toBeNull()
+            expect(solvingMessage.value).toBeNull()
         })
 
-        it("starts empty without a word on a Community server's refusal", async () => {
-            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-            getPushToStatus.mockRejectedValueOnce(new ApiError('Push-To requires Pro', 403))
-            const {currentTarget} = useEventStream()
-
+        it('ends a solve whose verdict it missed', async () => {
+            const {plateSolving, solvingMessage} = useEventStream()
             await openWebSocket()
-            await statusSettled()
-
-            expect(currentTarget.value).toBeNull()
-            expect(warn).not.toHaveBeenCalled()
-            warn.mockRestore()
-        })
-
-        it('shows a solve the server is already running', async () => {
-            getPushToStatus.mockResolvedValueOnce(pushToStatus({is_solving: true}))
-            const {plateSolving} = useEventStream()
-
-            await openWebSocket()
-            await statusSettled()
-
-            expect(plateSolving.value.inProgress).toBe(true)
-        })
-
-        // The status left the server before the event did, so it describes an older state.
-        it('drops a status answer that a Push-To event overtook', async () => {
-            let answer
-            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
-            const {currentTarget} = useEventStream()
-
-            await openWebSocket()
-            await sendEvent({type: 'target_cleared'})
-            answer(pushToStatus({current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}}))
-            await statusSettled()
-
-            expect(currentTarget.value).toBeNull()
-        })
-
-        // Only the field an event wrote is stale: a page opened mid-solve gets progress
-        // events, none of which names the target the status alone carries.
-        it('keeps the target and direction of a status answer a solve event overtook', async () => {
-            let answer
-            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
-            const {currentTarget, pushDirection, plateSolving} = useEventStream()
-
-            await openWebSocket()
-            await sendEvent({type: 'plate_solving_progress', stage: 'hinted', attempt: 2, total: 4})
-            await sendEvent({type: 'push_to_blocked', reason: 'Waiting'})
-            answer(pushToStatus({
-                current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
-                direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false},
-                is_solving: false,
-            }))
-            await statusSettled()
-
-            expect(currentTarget.value).toMatchObject({designation: 'M31'})
-            expect(pushDirection.value).toMatchObject({angleDeg: 120})
-            expect(plateSolving.value).toMatchObject({inProgress: true, stage: {attempt: 2, total: 4}})
-        })
-
-        it('keeps a direction that arrived while the status was in flight', async () => {
-            let answer
-            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
-            const {currentTarget, pushDirection} = useEventStream()
-
-            await openWebSocket()
-            await sendEvent({type: 'push_direction_updated', angle_deg: 7, distance_deg: 1, direction_hint: 'N', is_close: false})
-            answer(pushToStatus({current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}}))
-            await statusSettled()
-
-            expect(currentTarget.value).toMatchObject({designation: 'M31'})
-            expect(pushDirection.value).toMatchObject({angleDeg: 7})
-        })
-
-        // `position_solved` was sent while the socket was down; the status read on reopen
-        // is all that says the solve is over, and it does not say how it ended.
-        it('ends a solve the status says is over, without inventing a verdict', async () => {
-            const {plateSolving} = useEventStream()
-            await openWebSocket()
-            await statusSettled()
             await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
             await sendEvent({type: 'plate_solving_progress', stage: 'blind', attempt: 3, total: 4})
 
-            getPushToStatus.mockResolvedValueOnce(pushToStatus({is_solving: false}))
-            getWebSocket().simulateClose()
-            vi.advanceTimersByTime(1000)
-            MockWebSocket.instances.at(-1).simulateOpen()
-            await statusSettled()
+            await sendEvent({type: 'plate_solving_status', in_progress: false, target_name: 'M31', stage: null, last_result: 'success'})
 
-            expect(plateSolving.value).toEqual({inProgress: false, targetName: 'M31', lastResult: null, stage: null})
+            expect(plateSolving.value).toEqual({inProgress: false, targetName: 'M31', lastResult: 'success', stage: null})
+            expect(solvingMessage.value).toBe('Found: M31')
         })
 
-        it('reads the status again whenever the socket reopens', async () => {
+        it('takes the arrow down on push_direction_cleared', async () => {
+            const {pushDirection} = useEventStream()
+            await openWebSocket()
+            await sendEvent({type: 'push_direction_updated', angle_deg: 7, distance_deg: 1, direction_hint: 'N', is_close: false})
+
+            await sendEvent({type: 'push_direction_cleared'})
+            await sendEvent({type: 'push_direction_cleared'})
+
+            expect(pushDirection.value).toBeNull()
+        })
+
+        it('reads no Push-To status on a sync: the snapshot carries it', async () => {
             getPushToStatus.mockClear()
             useEventStream()
 
             await openWebSocket()
-            getWebSocket().simulateClose()
-            vi.advanceTimersByTime(1000)
-            MockWebSocket.instances.at(-1).simulateOpen()
-            await nextTick()
+            await syncWebSocket()
+            await syncWebSocket({cause: 'lagged', dropped: 144})
 
-            expect(getPushToStatus).toHaveBeenCalledTimes(2)
+            expect(getPushToStatus).not.toHaveBeenCalled()
         })
     })
 

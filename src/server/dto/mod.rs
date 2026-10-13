@@ -101,15 +101,18 @@ pub struct CaptureStatusResponse {
     pub frame_count: u64,
     pub stacked_count: u64,
     pub rejected_count: u64,
-    pub last_error: Option<String>,
+    /// Frames the pipeline's back-pressure dropped, out of `delivered_count`.
+    pub dropped_count: u64,
+    pub delivered_count: u64,
+    /// Why the most recently rejected frame was kept out of the stack.
+    pub last_rejection_reason: Option<String>,
     pub started_at: Option<u64>,
     pub exposure_us: u64,
     pub gain: i32,
 }
 
 impl CaptureStatusResponse {
-    /// `exposure_us` and `gain` are the imaging camera's settings; nothing records a
-    /// `last_error`, so it is always `None`.
+    /// `exposure_us` and `gain` are the imaging camera's settings.
     pub fn new(state: CaptureState, stats: &SessionStats, settings: &CaptureSettings) -> Self {
         let counts = stats.counts();
         Self {
@@ -117,7 +120,9 @@ impl CaptureStatusResponse {
             frame_count: counts.frames,
             stacked_count: counts.stacked,
             rejected_count: counts.rejected,
-            last_error: None,
+            dropped_count: counts.dropped,
+            delivered_count: counts.delivered,
+            last_rejection_reason: stats.last_rejection_reason(),
             started_at: stats.started_at(),
             exposure_us: settings.exposure_us,
             gain: settings.gain,
@@ -317,7 +322,10 @@ mod tests {
         let stats = SessionStats::default();
         for stacked in [true, true, false] {
             stats.frame_captured(stacked, true);
+            stats.frame_delivered();
         }
+        stats.frame_dropped();
+        stats.record_rejection("trailed stars");
         let settings = CaptureSettings {
             exposure_us: 30_000_000,
             gain: 120,
@@ -328,6 +336,7 @@ mod tests {
         assert_eq!(response.state, "Capturing");
         assert_eq!((response.frame_count, response.stacked_count, response.rejected_count), (3, 2, 1));
         assert_eq!((response.exposure_us, response.gain), (30_000_000, 120));
-        assert_eq!(response.last_error, None);
+        assert_eq!((response.dropped_count, response.delivered_count), (1, 3));
+        assert_eq!(response.last_rejection_reason.as_deref(), Some("trailed stars"));
     }
 }

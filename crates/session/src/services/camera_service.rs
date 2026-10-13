@@ -5,20 +5,44 @@
 //! in `crate::camera::lifecycle`. This service is the thin
 //! HTTP-facing surface plus camera discovery.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use night_amplifier_core::camera::identity::{self, DeviceIdentity};
-use night_amplifier_core::camera::CameraEntry;
+use night_amplifier_core::camera::{CameraEntry, CameraInfo};
 use crate::camera::lifecycle;
 use crate::error::{ApiError, ApiResult};
+use crate::events::{CameraInfoResponse, CameraListEntry, ServerEvent};
 use crate::state::{AppState, CameraPhase, CameraRole, ConnectedCameraInfo, ViewSelection};
 
 /// Service for managing camera operations
 pub struct CameraService;
 
 impl CameraService {
-    /// List all available cameras (connected + discovered)
+    /// Every camera: the connected ones, and what a fresh enumeration of each provider and
+    /// the INDI server finds. Seconds of USB work (QHY and ZWO open every idle device), so
+    /// only for a first load or an explicit refresh — see [`Self::list_known_cameras`].
     pub async fn list_cameras(state: &Arc<AppState>) -> Vec<CameraListItem> {
+        let use_simulated = state.settings.snapshot().use_simulated_camera;
+        let devices = Self::discover_cameras(state, use_simulated).await;
+        state.discovered_cameras.record_devices(use_simulated, devices.clone());
+        Self::spawn_indi_discovery(state);
+        Self::assemble(state, devices)
+    }
+
+    /// As [`Self::list_cameras`], from what the last enumeration found: what a client
+    /// re-reads after a sync. A sync on every reconnect and lag enumerated the USB bus each
+    /// time, for every open page, often in the middle of a capture. Enumerates only when
+    /// nothing has yet, or the simulator setting changed what there is to find.
+    pub async fn list_known_cameras(state: &Arc<AppState>) -> Vec<CameraListItem> {
+        let use_simulated = state.settings.snapshot().use_simulated_camera;
+        match state.discovered_cameras.devices(use_simulated) {
+            Some(devices) => Self::assemble(state, devices),
+            None => Self::list_cameras(state).await,
+        }
+    }
+
+    /// The connected cameras, then every listed device and INDI camera not among them.
+    fn assemble(state: &AppState, devices: Vec<CameraEntry>) -> Vec<CameraListItem> {
         let mut cameras_list = Vec::new();
 
         for (cam_info, phase) in state.roster.connected_with_phases() {
@@ -35,18 +59,13 @@ impl CameraService {
             });
         }
 
-        // Get current setting for simulated camera
-        let use_simulated = state.settings.snapshot().use_simulated_camera;
-
-        for entry in Self::discover_cameras(state, use_simulated).await {
-            let id = identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref());
-
-            if state.roster.connected().iter().any(|camera| is_same_device(camera, &entry)) {
+        let connected = state.roster.connected();
+        for entry in devices {
+            if connected.iter().any(|camera| is_same_device(camera, &entry)) {
                 continue;
             }
-
             cameras_list.push(CameraListItem {
-                id,
+                id: identity::camera_id(&entry.provider, entry.index, entry.info.serial.as_deref()),
                 name: entry.info.name.clone(),
                 connected: false,
                 provider: Some(entry.provider),
@@ -58,47 +77,44 @@ impl CameraService {
             });
         }
 
-        // Get INDI settings
+        cameras_list.extend(
+            state
+                .discovered_cameras
+                .indi()
+                .into_iter()
+                .filter(|camera| !state.roster.contains(&camera.id)),
+        );
+        cameras_list
+    }
+
+    /// Ask the INDI server for its cameras in the background — it takes seconds to answer —
+    /// and announce the ones the last discovery did not find. A server that does not answer
+    /// lists none: its cameras stayed listed after it had gone.
+    fn spawn_indi_discovery(state: &Arc<AppState>) {
         let settings = state.settings.snapshot();
-        let indi_host = settings.indi_server_host.clone();
-        let indi_port = settings.indi_server_port;
+        let (host, port) = (settings.indi_server_host.clone(), settings.indi_server_port);
         drop(settings);
-
-        // Spawn INDI discovery in the background
-        if !indi_host.is_empty() {
-            let event_sender = state.events.clone();
-            let state_arc = state.clone();
-
-            tokio::spawn(async move {
-                let provider = night_amplifier_core::camera::IndiProvider::new(indi_host, indi_port);
-                if let Ok(cameras) = provider.list_cameras_async().await {
-                    for cam in cameras {
-                        let provider_name = "indi";
-                        let id = format!("{}_{}", provider_name, cam.id);
-
-                        if state_arc.roster.contains(&id) {
-                            continue;
-                        }
-
-                        let entry = crate::events::CameraListEntry {
-                            id: id.clone(),
-                            name: cam.name.clone(),
-                            connected: false,
-                            provider: Some(provider_name.to_string()),
-                            index: Some(cam.id as usize),
-                            role: None,
-                            phase: None,
-                            warmup_remaining_s: None,
-                            info: crate::events::CameraInfoResponse::from_info(&cam, &id),
-                        };
-                        let _ = event_sender
-                            .send(crate::events::ServerEvent::camera_discovered(entry));
-                    }
-                }
-            });
+        if host.is_empty() {
+            state.discovered_cameras.replace_indi(Vec::new());
+            return;
         }
 
-        cameras_list
+        let state = Arc::clone(state);
+        tokio::spawn(async move {
+            let provider = night_amplifier_core::camera::IndiProvider::new(host, port);
+            let found = match provider.list_cameras_async().await {
+                Ok(cameras) => cameras.into_iter().map(|camera| indi_list_item(&camera)).collect(),
+                Err(e) => {
+                    tracing::debug!(error = %e, "INDI discovery failed; listing no INDI cameras");
+                    Vec::new()
+                }
+            };
+            for camera in state.discovered_cameras.replace_indi(found) {
+                if !state.roster.contains(&camera.id) {
+                    let _ = state.events.send(ServerEvent::camera_discovered(camera.entry()));
+                }
+            }
+        });
     }
 
     /// Cap on one provider's enumeration: QHY and ZWO open every idle device to read its
@@ -191,6 +207,12 @@ impl CameraService {
         lifecycle::disconnect(state, camera_id, warmup).await
     }
 
+    /// The observer dismissed `role`'s "could not bring it back" warning. Returns whether
+    /// there was one; every client hears `camera_recovery_cleared` if so.
+    pub fn dismiss_recovery_failure(state: &AppState, role: CameraRole) -> bool {
+        state.recovery_status.dismiss_failure(role)
+    }
+
     /// Show `role`'s camera on the eyepiece pages; a change reaches every client as an event.
     pub fn select_viewed_camera(state: &AppState, role: CameraRole) -> ApiResult<()> {
         match state
@@ -222,6 +244,66 @@ fn is_same_device(connected: &ConnectedCameraInfo, entry: &CameraEntry) -> bool 
     }
 }
 
+/// What the last enumeration found: every provider's devices (connected ones included, so
+/// a camera disconnected since is listed again), keyed by the simulator setting it ran
+/// under, and the INDI server's cameras, which every list carries — a list without them
+/// dropped the INDI cameras its `camera_discovered` events had added.
+#[derive(Default)]
+pub struct DiscoveredCameras {
+    devices: Mutex<Option<(bool, Vec<CameraEntry>)>>,
+    indi: Mutex<Vec<CameraListItem>>,
+}
+
+impl DiscoveredCameras {
+    fn record_devices(&self, use_simulated: bool, devices: Vec<CameraEntry>) {
+        *self.devices.lock().unwrap_or_else(|e| e.into_inner()) = Some((use_simulated, devices));
+    }
+
+    /// The devices the last enumeration under `use_simulated` found; `None` before one.
+    fn devices(&self, use_simulated: bool) -> Option<Vec<CameraEntry>> {
+        let devices = self.devices.lock().unwrap_or_else(|e| e.into_inner());
+        devices
+            .as_ref()
+            .filter(|(simulated, _)| *simulated == use_simulated)
+            .map(|(_, devices)| devices.clone())
+    }
+
+    fn indi_lock(&self) -> std::sync::MutexGuard<'_, Vec<CameraListItem>> {
+        self.indi.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn indi(&self) -> Vec<CameraListItem> {
+        self.indi_lock().clone()
+    }
+
+    /// Replace the INDI cameras with `found`, returning the ones it did not hold before.
+    fn replace_indi(&self, found: Vec<CameraListItem>) -> Vec<CameraListItem> {
+        let mut known = self.indi_lock();
+        let new = found
+            .iter()
+            .filter(|camera| !known.iter().any(|old| old.id == camera.id))
+            .cloned()
+            .collect();
+        *known = found;
+        new
+    }
+}
+
+fn indi_list_item(camera: &CameraInfo) -> CameraListItem {
+    const PROVIDER: &str = "indi";
+    CameraListItem {
+        id: format!("{PROVIDER}_{}", camera.id),
+        name: camera.name.clone(),
+        connected: false,
+        provider: Some(PROVIDER.to_string()),
+        index: Some(camera.id as usize),
+        role: None,
+        phase: None,
+        warmup_remaining: None,
+        info: camera.clone(),
+    }
+}
+
 /// Camera list item returned by list_cameras
 #[derive(Debug, Clone)]
 pub struct CameraListItem {
@@ -236,7 +318,24 @@ pub struct CameraListItem {
     pub phase: Option<CameraPhase>,
     /// Time until a warm-up in progress is cut short, at the latest.
     pub warmup_remaining: Option<std::time::Duration>,
-    pub info: night_amplifier_core::camera::CameraInfo,
+    pub info: CameraInfo,
+}
+
+impl CameraListItem {
+    /// How a client sees it, in `GET /api/cameras` and `camera_discovered`.
+    pub fn entry(self) -> CameraListEntry {
+        CameraListEntry {
+            info: CameraInfoResponse::from_info(&self.info, &self.id),
+            id: self.id,
+            name: self.name,
+            connected: self.connected,
+            provider: self.provider,
+            index: self.index,
+            role: self.role,
+            phase: self.phase.map(Into::into),
+            warmup_remaining_s: self.warmup_remaining.map(|left| left.as_secs()),
+        }
+    }
 }
 
 #[cfg(test)]

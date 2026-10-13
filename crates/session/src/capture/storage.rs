@@ -8,7 +8,6 @@ use night_amplifier_core::camera::RawFrame;
 use night_amplifier_core::disk_writer::WritingSessionType;
 use night_amplifier_core::frame::Frame;
 use night_amplifier_core::plugins::Plugins;
-use crate::events::ServerEvent;
 use crate::state::{
     AppState, CaptureMode, CaptureSettings, ConnectedCameraInfo,
 };
@@ -56,12 +55,10 @@ pub fn run_storage_task(
 
 /// How far behind the disk is, as the storage task has reported it so far.
 ///
-/// One value threaded through the loop rather than three: the SSE warning latch, the
-/// throttle behind it, and the drop counter are all the same story about the same disk,
-/// and splitting them across parameters was what pushed this past a readable signature.
+/// One value threaded through the loop: the throttle behind the warning and the drop
+/// counter are the same story about the same disk. Whether the warning is raised lives in
+/// `AppState::disk_warning`, which a client syncing reads.
 struct StorageWarnings {
-    /// Whether the frontend currently believes the queue is backed up.
-    active: bool,
     /// When the last `DiskWriterWarning` event went out.
     last_sent: std::time::Instant,
     /// Frames the writer would not take, rate-limited for the log.
@@ -71,7 +68,6 @@ struct StorageWarnings {
 impl Default for StorageWarnings {
     fn default() -> Self {
         Self {
-            active: false,
             last_sent: std::time::Instant::now(),
             drops: DropLog::default(),
         }
@@ -98,22 +94,14 @@ impl StorageWarnings {
 
         if queue_depth > QUEUE_WARNING_THRESHOLD {
             let now = std::time::Instant::now();
-            if self.active && now.duration_since(self.last_sent) < Self::RESEND_INTERVAL {
+            if state.disk_warning.is_raised() && now.duration_since(self.last_sent) < Self::RESEND_INTERVAL {
                 return;
             }
-            self.active = true;
             self.last_sent = now;
-            let _ = state
-                .events
-                .send(ServerEvent::DiskWriterWarning { queue_depth });
+            state.disk_warning.raise(queue_depth);
             return;
         }
-
-        if self.active {
-            self.active = false;
-            state.disk_writer.clear_queue_warning();
-            let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
-        }
+        clear_warning(state);
     }
 
     /// Close the books at the end of the session: report the tail of a drop burst the
@@ -125,10 +113,14 @@ impl StorageWarnings {
                 "Frames dropped since the last report: could not be queued for saving"
             );
         }
-        if self.active {
-            state.disk_writer.clear_queue_warning();
-            let _ = state.events.send(ServerEvent::DiskWriterWarningCleared);
-        }
+        clear_warning(state);
+    }
+}
+
+fn clear_warning(state: &AppState) {
+    if state.disk_warning.is_raised() {
+        state.disk_writer.clear_queue_warning();
+        state.disk_warning.clear();
     }
 }
 
@@ -326,8 +318,27 @@ pub fn should_stop_on_errors(state: &AppState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::ServerEvent;
     use crate::state::REJECTION_RATE_THRESHOLD;
     use std::time::{Duration, Instant};
+
+    /// The warning a syncing client is sent follows the queue: raised while it is backed up,
+    /// cleared once it drains, and cleared when the session ends with it still raised.
+    #[tokio::test]
+    async fn the_disk_warning_a_client_syncs_follows_the_queue() {
+        use night_amplifier_core::disk_writer::QUEUE_WARNING_THRESHOLD;
+        let (state, _disk_writer) = AppState::new_for_testing();
+        let mut warnings = StorageWarnings::default();
+
+        warnings.observe_depth(&state, QUEUE_WARNING_THRESHOLD + 3);
+        assert_eq!(state.disk_warning.queue_depth(), Some(QUEUE_WARNING_THRESHOLD + 3));
+        warnings.observe_depth(&state, QUEUE_WARNING_THRESHOLD);
+        assert!(matches!(state.disk_warning.event(), ServerEvent::DiskWriterWarningCleared));
+
+        warnings.observe_depth(&state, QUEUE_WARNING_THRESHOLD + 1);
+        warnings.finish(&state);
+        assert!(!state.disk_warning.is_raised(), "a finished session leaves no warning up");
+    }
 
     #[tokio::test]
     async fn should_stop_on_errors_false_when_healthy() {

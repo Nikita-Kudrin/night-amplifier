@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use super::settings::CaptureSettings;
 use super::CaptureState;
 use crate::capture::StackingCarryover;
+use crate::events::ServerEvent;
 
 /// Sliding window used by [`SessionStats::record_failure`] to detect a
 /// *current* burst of camera-capture failures, rather than a lifetime-
@@ -39,6 +40,9 @@ pub struct SessionStats {
     /// Recent *camera-capture* failures, pruned to [`REJECTION_RATE_WINDOW`]: a current
     /// failure burst, independent of `rejected`, which mixes in stacking rejects.
     failures: Mutex<VecDeque<Instant>>,
+    /// Why the most recently rejected frame was kept out of the stack, for a client that
+    /// missed its `frame_captured`. Locked only on a rejection.
+    last_rejection: Mutex<Option<String>>,
 }
 
 /// One reading of the frame counters.
@@ -47,6 +51,8 @@ pub struct FrameCounts {
     pub frames: u64,
     pub stacked: u64,
     pub rejected: u64,
+    pub delivered: u64,
+    pub dropped: u64,
 }
 
 impl SessionStats {
@@ -55,7 +61,27 @@ impl SessionStats {
             frames: self.frames.load(Ordering::SeqCst),
             stacked: self.stacked.load(Ordering::SeqCst),
             rejected: self.rejected.load(Ordering::SeqCst),
+            delivered: self.delivered.load(Ordering::SeqCst),
+            dropped: self.dropped.load(Ordering::SeqCst),
         }
+    }
+
+    /// The counters and the last rejection reason, as the event that replaces a client's copy.
+    pub fn counts_event(&self) -> ServerEvent {
+        ServerEvent::capture_counts(self.counts(), self.last_rejection_reason())
+    }
+
+    /// Records why a frame stayed out of the stack. The buffer is reused, since on a night of
+    /// soft seeing every frame can be rejected.
+    pub fn record_rejection(&self, reason: &str) {
+        let mut last = self.last_rejection.lock().unwrap_or_else(|e| e.into_inner());
+        let last = last.get_or_insert_with(String::new);
+        last.clear();
+        last.push_str(reason);
+    }
+
+    pub fn last_rejection_reason(&self) -> Option<String> {
+        self.last_rejection.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// When the session started, Unix milliseconds.
@@ -113,6 +139,7 @@ impl SessionStats {
             counter.store(0, Ordering::SeqCst);
         }
         self.failures.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.last_rejection.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
     /// A new session starting at `now_ms` (Unix milliseconds).
@@ -205,7 +232,9 @@ mod tests {
             FrameCounts {
                 frames: 5,
                 stacked: 1,
-                rejected: 2
+                rejected: 2,
+                delivered: 0,
+                dropped: 0,
             }
         );
     }
@@ -218,11 +247,22 @@ mod tests {
         stats.frame_captured(true, true);
         stats.frame_delivered();
         stats.frame_dropped();
+        stats.record_rejection("trailed stars");
+        assert_eq!((stats.counts().delivered, stats.counts().dropped), (1, 1));
 
         stats.reset_counters();
         assert_eq!(stats.counts(), FrameCounts::default());
-        assert_eq!((stats.delivered(), stats.dropped()), (0, 0));
+        assert_eq!(stats.last_rejection_reason(), None);
         assert_eq!(stats.started_at(), Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn the_latest_rejection_reason_replaces_the_one_before() {
+        let stats = SessionStats::default();
+        assert_eq!(stats.last_rejection_reason(), None);
+        stats.record_rejection("stars far larger than the session median");
+        stats.record_rejection("trailed");
+        assert_eq!(stats.last_rejection_reason().as_deref(), Some("trailed"));
     }
 
     /// The count alone is not the number an observer needs: 40 drops is a ruined evening

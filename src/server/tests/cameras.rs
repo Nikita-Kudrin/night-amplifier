@@ -48,6 +48,24 @@ async fn test_list_cameras_with_connected() {
     assert_eq!(mock_camera["info"]["max_height"], 1080);
 }
 
+/// A sync re-reads the list without enumerating: the connected cameras are there all the
+/// same (whether it enumerates is `list_known_cameras`' own tests').
+#[tokio::test]
+async fn a_list_without_discovery_still_lists_the_connected_cameras() {
+    let state = create_test_state();
+    add_mock_camera(&state, "mock_0").await;
+    let app = create_test_router(state);
+
+    let (status, json) = get_json(&app, "/api/cameras?discover=false").await;
+
+    assert_eq!(status, StatusCode::OK);
+    let connected: Vec<_> = json["data"].as_array().unwrap().iter().filter(|c| c["connected"] == true).collect();
+    assert_eq!(connected.len(), 1);
+    assert_eq!(connected[0]["id"], "mock_0");
+    let (status, _) = get_json(&app, "/api/cameras?discover=maybe").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn test_multiple_cameras_connected() {
     let state = create_test_state();
@@ -363,4 +381,106 @@ async fn disconnect_during_a_warmup_reports_it_unless_told_to_skip_it() {
     assert_eq!(json["data"]["warming_up"], false);
     assert!(!state.roster.contains("mock_0"));
     assert_eq!(state.camera_phase(CameraRole::Main), CameraPhase::Disconnected);
+}
+
+/// An INDI server that answers every client's `getProperties` with one camera, `name`.
+#[cfg(feature = "indi")]
+async fn serve_indi(name: &'static str) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut received = String::new();
+                let mut chunk = [0u8; 1024];
+                while let Ok(n @ 1..) = socket.read(&mut chunk).await {
+                    received.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                    if received.contains("getProperties") {
+                        let definitions = format!(
+                            "<defNumberVector device='{name}' name='CCD_EXPOSURE' state='Idle'>\n\
+                             <defNumber name='CCD_EXPOSURE_VALUE' min='0' max='3600' step='1'>1</defNumber>\n\
+                             </defNumberVector>\n"
+                        );
+                        let _ = socket.write_all(definitions.as_bytes()).await;
+                        received.clear();
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+/// INDI cameras arrive by `camera_discovered`, after the list. Every client lists the
+/// cameras again after a sync and on every connect, so a list without them dropped them.
+#[cfg(feature = "indi")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relisted_camera_list_keeps_the_indi_cameras_it_announced() {
+    let state = create_test_state();
+    let port = serve_indi("Fake CCD").await;
+    state.settings.update(|settings| {
+        settings.indi_server_host = "127.0.0.1".to_string();
+        settings.indi_server_port = port;
+    });
+    let mut events = state.subscribe_events();
+    let app = create_test_router(Arc::clone(&state));
+
+    let (_, first) = get_json(&app, "/api/cameras").await;
+    assert!(!first["data"].as_array().unwrap().iter().any(|c| c["provider"] == "indi"), "INDI answers later");
+    let discovered = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Ok(ServerEvent::CameraDiscovered { camera }) = events.recv().await {
+                return camera;
+            }
+        }
+    })
+    .await
+    .expect("the INDI camera was never announced");
+    assert_eq!(discovered.name, "Fake CCD");
+
+    let (_, relisted) = get_json(&app, "/api/cameras").await;
+    let indi: Vec<_> = relisted["data"].as_array().unwrap().iter().filter(|c| c["provider"] == "indi").collect();
+    assert_eq!(indi.len(), 1, "{relisted}");
+    assert_eq!((&indi[0]["id"], &indi[0]["name"], &indi[0]["connected"]), (&json!(discovered.id), &json!("Fake CCD"), &json!(false)));
+}
+
+async fn delete_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    use tower::ServiceExt;
+    let request = axum::http::Request::builder().method("DELETE").uri(uri).body(axum::body::Body::empty()).unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(json!({})))
+}
+
+/// A give-up is restated on every sync until a camera connects into the role, so the
+/// observer's dismissal goes to the server and ends it for every client at once.
+#[tokio::test]
+async fn dismissing_a_recovery_give_up_clears_it_for_every_client() {
+    let state = create_test_state();
+    let failed = RecoveryStatus::Failed { name: "Ares".into(), attempts: 9, reason: "unplugged".into() };
+    state.recovery_status.set(CameraRole::Guide, failed);
+    let mut events = state.subscribe_events();
+    let app = crate::server::api::create_router().with_state(Arc::clone(&state));
+
+    let (status, body) = delete_json(&app, "/cameras/recovery/guide").await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["message"], "Recovery warning dismissed.");
+    assert_eq!(state.recovery_status.get(CameraRole::Guide), RecoveryStatus::None);
+    assert!(matches!(events.try_recv(), Ok(ServerEvent::CameraRecoveryCleared { role: CameraRole::Guide })));
+
+    let (status, body) = delete_json(&app, "/cameras/recovery/guide").await;
+    assert_eq!((status, &body["data"]["message"]), (StatusCode::OK, &json!("No recovery warning to dismiss.")));
+    assert!(events.try_recv().is_err(), "nothing more to announce");
+}
+
+#[tokio::test]
+async fn dismissing_names_a_role() {
+    let app = crate::server::api::create_router().with_state(create_test_state());
+
+    let (status, _) = delete_json(&app, "/cameras/recovery/finder").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

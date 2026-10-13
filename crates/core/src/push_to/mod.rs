@@ -326,7 +326,9 @@ pub trait PushToInstallerPlugin: Send + Sync {
     /// Get available database types for installation
     async fn get_astap_databases(&self) -> Vec<DatabaseTypeResponse>;
 
-    /// Start ASTAP installation (binary and selected databases)
+    /// Start ASTAP installation (binary and selected databases). The install is over when
+    /// the plugin drops `events`: the session reports it completed if its last event was a
+    /// completed component, else failed.
     async fn install_astap(
         &self,
         database_types: &[String],
@@ -336,7 +338,8 @@ pub trait PushToInstallerPlugin: Send + Sync {
     /// Get OpenNGC catalog installation status
     async fn get_catalog_status(&self) -> CatalogStatusResponse;
 
-    /// Start OpenNGC catalog installation
+    /// Start OpenNGC catalog installation. Dropping `events` before its completed or
+    /// failed event fails the install.
     async fn install_catalog(
         &self,
         include_stars: bool,

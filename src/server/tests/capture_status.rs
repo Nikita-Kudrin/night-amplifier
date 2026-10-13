@@ -44,8 +44,12 @@ async fn test_capture_status_with_frame_counts() {
     state.reset_session();
     state.frame_captured(true, true, None);
     state.frame_captured(true, true, None);
-    state.frame_captured(false, true, None);
+    state.frame_captured(false, true, Some("trailed stars"));
     state.frame_rejected(true, "Test rejection".to_string());
+    for _ in 0..5 {
+        state.frame_delivered();
+    }
+    state.frame_dropped();
 
     let (status, json) = get_json(&app, "/api/capture/status").await;
 
@@ -53,4 +57,6 @@ async fn test_capture_status_with_frame_counts() {
     assert_eq!(json["data"]["frame_count"], 4);
     assert_eq!(json["data"]["stacked_count"], 2);
     assert_eq!(json["data"]["rejected_count"], 2);
+    assert_eq!((&json["data"]["dropped_count"], &json["data"]["delivered_count"]), (&1.into(), &5.into()));
+    assert_eq!(json["data"]["last_rejection_reason"], "trailed stars");
 }

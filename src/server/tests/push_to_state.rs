@@ -1,5 +1,5 @@
-//! Server-side Push-To bookkeeping: the solve latch, and the de-duplication that
-//! keeps per-frame recomputation off the event bus.
+//! Server-side Push-To bookkeeping: the solve and watch latches, and which settings
+//! changes restart a solve. What clients are told is `PushToAnnouncer`'s, tested there.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -239,127 +239,6 @@ fn the_latch_is_released_even_if_the_solve_panics() {
     );
 }
 
-// ── Direction de-duplication ─────────────────────────────────────────────────
-
-fn direction(angle_deg: f64, distance_deg: f64, is_close: bool) -> PushToDirectionResponse {
-    PushToDirectionResponse {
-        angle_deg,
-        distance_deg,
-        is_close,
-        direction_hint: "NE".into(),
-        direction_full: "North-East".into(),
-        current_position: None,
-        target: None,
-        solved_camera: Some("Guide Cam".into()),
-    }
-}
-
-#[test]
-fn an_unchanged_direction_is_only_announced_once() {
-    // The direction is recomputed on every captured frame but only changes when the
-    // position or target does. Broadcasting it regardless was one WebSocket message
-    // per frame per client, all saying the same thing.
-    let state = PushToState::default();
-
-    assert!(state.direction_is_news(&direction(122.68, 4.512, false)));
-    assert!(!state.direction_is_news(&direction(122.68, 4.512, false)));
-    assert!(!state.direction_is_news(&direction(122.68, 4.512, false)));
-}
-
-#[test]
-fn floating_point_jitter_does_not_count_as_a_change() {
-    // Spherical geometry recomputed from scratch each frame is not bit-stable, so an
-    // exact comparison would let the per-frame spam straight back through.
-    let state = PushToState::default();
-
-    assert!(state.direction_is_news(&direction(122.680_000, 4.512_000, false)));
-    assert!(!state.direction_is_news(&direction(122.680_004, 4.512_000_2, false)));
-}
-
-#[test]
-fn a_direction_the_user_could_act_on_is_announced() {
-    let state = PushToState::default();
-    assert!(state.direction_is_news(&direction(122.6, 4.5, false)));
-
-    assert!(
-        state.direction_is_news(&direction(124.0, 4.5, false)),
-        "a 1.4 degree heading change is real"
-    );
-    assert!(
-        state.direction_is_news(&direction(124.0, 3.9, false)),
-        "closing half a degree of distance is real"
-    );
-    assert!(
-        state.direction_is_news(&direction(124.0, 3.9, true)),
-        "crossing the 'close enough' threshold is real"
-    );
-}
-
-#[test]
-fn a_new_target_re_announces_even_an_identical_direction() {
-    // Two targets can happen to lie in the same direction at the same distance. If
-    // the record were not cleared, the client would keep showing numbers computed for
-    // the target the user just moved away from.
-    let state = PushToState::default();
-    assert!(state.direction_is_news(&direction(90.0, 2.0, false)));
-
-    state.forget_direction();
-
-    assert!(
-        state.direction_is_news(&direction(90.0, 2.0, false)),
-        "a target change must force the direction to be sent again"
-    );
-}
-
-#[test]
-fn the_same_numbers_from_the_other_camera_are_announced() {
-    // A chevron is drawn only over the camera that oriented it, so a client still
-    // holding the guide camera's name would hide (or misdraw) the imaging camera's.
-    let state = PushToState::default();
-    assert!(state.direction_is_news(&direction(90.0, 2.0, false)));
-
-    let from_imaging = PushToDirectionResponse {
-        solved_camera: Some("Imaging Cam".into()),
-        ..direction(90.0, 2.0, false)
-    };
-
-    assert!(state.direction_is_news(&from_imaging));
-    assert!(!state.direction_is_news(&from_imaging));
-}
-
-// ── Blocker de-duplication ───────────────────────────────────────────────────
-
-#[test]
-fn a_blocker_is_announced_on_each_transition_and_not_between() {
-    use crate::push_to::PushToBlocker;
-
-    let state = PushToState::default();
-
-    assert!(
-        state.blocker_is_news(Some(PushToBlocker::SolverNotReady)),
-        "the first report is always news"
-    );
-    assert!(!state.blocker_is_news(Some(PushToBlocker::SolverNotReady)));
-
-    assert!(
-        state.blocker_is_news(Some(PushToBlocker::NoTarget)),
-        "a different reason is news"
-    );
-    assert!(
-        state.blocker_is_news(None),
-        "clearing the notice is news, so the UI can take it down"
-    );
-    assert!(!state.blocker_is_news(None));
-}
-
-#[test]
-fn the_absence_of_a_blocker_is_reported_the_first_time() {
-    // The outer Option exists to tell "never reported" from "reported that nothing is
-    // wrong"; without it the very first healthy poll would be swallowed.
-    let state = PushToState::default();
-    assert!(state.blocker_is_news(None));
-}
-
 // ── Settings comparison ──────────────────────────────────────────────────────
 
 #[test]
@@ -574,4 +453,125 @@ async fn without_the_plugin_every_push_to_route_is_forbidden() {
             "{method} {uri} {body}"
         );
     }
+}
+
+// ── Status ───────────────────────────────────────────────────────────────────
+
+/// A solver that reports one direction and does nothing else.
+struct PointingSolver;
+
+#[async_trait::async_trait]
+impl crate::push_to::PushToSolverPlugin for PointingSolver {
+    async fn process_new_frame(
+        &self,
+        _frame: &crate::frame::Frame,
+        _detector: &crate::detection::StarDetector,
+        _wanderer_mode: bool,
+    ) -> crate::push_to::PushToResult<crate::push_to::FrameOutcome> {
+        unreachable!("no frames in this test")
+    }
+
+    async fn observe_frame(
+        &self,
+        _frame: &crate::frame::Frame,
+        _detector: &crate::detection::StarDetector,
+        _wanderer_mode: bool,
+    ) -> crate::push_to::PushToResult<crate::push_to::FrameOutcome> {
+        unreachable!("no frames in this test")
+    }
+
+    async fn get_status(&self) -> crate::push_to::PushToStatusResponse {
+        crate::push_to::PushToStatusResponse {
+            solver_ready: true,
+            is_solving: false,
+            current_target: None,
+            last_position: None,
+            direction: Some(pointing()),
+        }
+    }
+
+    async fn cancel_solve(&self) -> crate::push_to::PushToResult<bool> {
+        Ok(false)
+    }
+
+    async fn restart_solve(&self) -> crate::push_to::PushToResult<()> {
+        Ok(())
+    }
+
+    async fn get_direction(&self) -> Option<PushToDirectionResponse> {
+        Some(pointing())
+    }
+
+    async fn set_fov(&self, _fov: f32) -> crate::push_to::PushToResult<()> {
+        Ok(())
+    }
+
+    async fn set_telescope_settings(&self, _settings: TelescopeSettings) -> crate::push_to::PushToResult<()> {
+        Ok(())
+    }
+
+    async fn set_active_camera(&self, _camera: Option<String>) {}
+}
+
+fn pointing() -> PushToDirectionResponse {
+    PushToDirectionResponse {
+        angle_deg: 37.0,
+        distance_deg: 2.5,
+        is_close: false,
+        direction_hint: "NE".into(),
+        direction_full: "North-East".into(),
+        current_position: None,
+        target: None,
+        solved_camera: Some("Guide Cam".into()),
+    }
+}
+
+async fn status(state: std::sync::Arc<crate::session::state::AppState>) -> Value {
+    let app = crate::server::api::create_router().with_state(state);
+    let request = Request::builder().uri("/push-to/status").body(Body::empty()).unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice::<Value>(&bytes).unwrap()["data"].clone()
+}
+
+/// The status says what the sync snapshot does: the solve, the blocker, and the direction's
+/// field of view, which only its event used to carry.
+#[tokio::test]
+async fn the_status_carries_the_solve_the_blocker_and_the_direction_fov() {
+    use crate::push_to::PushToBlocker;
+    use crate::session::events::ServerEvent;
+
+    let (mut state, _disk_writer) = crate::session::state::AppState::new_for_testing();
+    state.plugins = crate::plugins::Plugins::none()
+        .with_push_to_solver(std::sync::Arc::new(PointingSolver))
+        .always_licensed();
+    let announcer = &state.push_to_announcer;
+    announcer.announce_direction(crate::session::events::PushDirection::new(pointing(), Some(1.45)));
+    announcer.announce(ServerEvent::PlateSolvingStarted { target_name: Some("M31".into()) });
+    announcer.announce(ServerEvent::position_solve_failed("no match"));
+    announcer.announce_blocker(Some(PushToBlocker::BackingOff));
+
+    let status = status(std::sync::Arc::new(state)).await;
+
+    assert_eq!(status["solver_ready"], true);
+    assert_eq!(status["direction"]["angle_deg"], 37.0);
+    assert_eq!(status["direction"]["direction_full"], "North-East");
+    assert_eq!(status["direction"]["solved_camera"], "Guide Cam");
+    assert_eq!(status["direction"]["fov_deg"], 1.45);
+    assert_eq!(
+        status["solve"],
+        json!({"in_progress": false, "target_name": "M31", "stage": null, "last_result": "failed"})
+    );
+    assert_eq!(status["blocker"], "Waiting before the next solve attempt");
+}
+
+#[tokio::test]
+async fn without_the_plugin_the_status_says_nothing_is_happening() {
+    let status = status(create_test_state()).await;
+
+    assert_eq!(status["solver_ready"], false);
+    assert_eq!(status["direction"], Value::Null);
+    assert_eq!(status["solve"]["in_progress"], false);
+    assert_eq!(status["blocker"], Value::Null);
 }

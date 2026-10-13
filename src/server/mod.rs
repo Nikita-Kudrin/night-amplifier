@@ -108,7 +108,7 @@ impl Server {
 
         // Initialize Push-To plugin if available
         if let Some(plugin) = state_arc.plugins.push_to_solver() {
-            plugin.init(crate::session::events::push_to_events(&state_arc.events));
+            plugin.init(state_arc.push_to_announcer.clone());
         }
 
         Self {

@@ -64,6 +64,7 @@ pub fn create_router() -> Router<Arc<AppState>> {
             "/cameras/{camera_id}/disconnect",
             post(cameras::disconnect_camera),
         )
+        .route("/cameras/recovery/{role}", delete(cameras::dismiss_recovery_failure))
         .route("/view/camera", put(cameras::select_viewed_camera))
         // INDI
         .route("/indi/test", post(indi::test_connection))

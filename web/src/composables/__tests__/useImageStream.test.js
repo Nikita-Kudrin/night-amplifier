@@ -16,7 +16,8 @@ import {
 setupGlobalWebSocketMock()
 
 import {nextTick, ref} from 'vue'
-import {NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream.js'
+import {IMAGE_LIVENESS_MS, NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream.js'
+import {WS_RECONNECT} from '../../constants'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;
@@ -57,6 +58,25 @@ describe('useImageStream', () => {
                 await openWebSocket()
                 expect(MockWebSocket.lastSent).toBeNull()
             })
+        }
+    })
+
+    // One lossless frame on weak Wi-Fi outlasted the events socket's minute, which cut the
+    // socket mid-frame, over and over: an image socket waits far longer, but not forever.
+    it('keeps a silent socket through a slow frame, and drops it once that is all it does', async () => {
+        vi.useFakeTimers()
+        try {
+            const {connected} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+            await openWebSocket()
+            const ping = WS_RECONNECT.pingInterval
+
+            vi.advanceTimersByTime(ping + 2 * ping)
+            expect(connected.value).toBe(true)
+            vi.advanceTimersByTime(IMAGE_LIVENESS_MS)
+
+            expect(connected.value).toBe(false)
+        } finally {
+            vi.useRealTimers()
         }
     })
 

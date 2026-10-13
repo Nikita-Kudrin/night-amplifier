@@ -1,6 +1,6 @@
-import {readonly, ref, watch} from 'vue'
+import {readonly, ref} from 'vue'
 import {getCapabilities} from './api.js'
-import {onEvents} from './useEventStream.js'
+import {onEvents, resyncOn} from './useEventStream.js'
 import {createSettingsStore} from './settingsStore.js'
 import {createCameraStore} from './cameraStore.js'
 import {DEFAULT_CAPABILITIES} from '../constants'
@@ -21,7 +21,7 @@ export function createAppState() {
     const globalError = ref(null)
     const capabilities = ref(DEFAULT_CAPABILITIES)
     const settingsStore = createSettingsStore()
-    const {handlers: cameraHandlers, ...cameras} = createCameraStore({loading: () => loading.value})
+    const {connectEvents: connectCameraEvents, ...cameras} = createCameraStore({loading: () => loading.value})
 
     let events = null
     let loadFailed = false
@@ -42,9 +42,9 @@ export function createAppState() {
         retryTimeoutId = null
     }
 
-    // A server that is down has the event socket down too, and the socket's own reconnect
-    // retries the load when it opens (`connectEvents`). Only a server that keeps the socket
-    // up while refusing the load is polled.
+    // A server that is down has the event socket down too, and the sync its reconnect
+    // delivers retries the load (`connectEvents`). Only a server that keeps the socket up
+    // while refusing the load is polled.
     function scheduleRetry() {
         stopRetry()
         if (events && !events.connected.value) return
@@ -72,17 +72,13 @@ export function createAppState() {
     function connectEvents(stream) {
         events = stream
         onEvents(stream, settingsStore.handlers)
-        onEvents(stream, cameraHandlers)
-        // No snapshot carries the settings, so a `settings_updated` sent while the socket
-        // was down is read again on every reopen. The first open only retries a failed
-        // load: the first load is reading them already.
-        let opened = stream.connected.value
-        watch(stream.connected, (up) => {
-            if (!up) return
-            if (loadFailed) initializeState()
-            else if (opened) settingsStore.refresh().catch(() => {})
-            opened = true
+        // No snapshot carries the settings, so a sync reads them again. The first only
+        // retries a failed load: the first load is reading them already. Subscribed before
+        // the cameras, so a retried load is already `loading` when they ask.
+        resyncOn(stream, () => (loadFailed ? initializeState() : settingsStore.refresh().catch(() => {})), {
+            skipFirst: () => !loadFailed,
         })
+        connectCameraEvents(stream)
     }
 
     function setGlobalError(message) {

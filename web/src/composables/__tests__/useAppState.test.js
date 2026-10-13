@@ -11,7 +11,7 @@ vi.mock('../api.js', async (importOriginal) =>
 import {effectScope, nextTick} from 'vue'
 import {getCapabilities, getSettings, listCameras, updateSettings} from '../api.js'
 import {camera, proCapabilities, settings} from '../../test/fixtures.js'
-import {createEventStreamStub, emitEvent} from '../../test/eventStream.js'
+import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream.js'
 import {__resetForTests, RETRY_INTERVAL_MS, useAppState} from '../useAppState.js'
 
 // The state is a module default; each test gets a fresh one.
@@ -154,8 +154,8 @@ describe('useAppState loading', () => {
         vi.restoreAllMocks()
     })
 
-    // A server that is down has the event socket down too; its reconnect is the signal.
-    it('retries a load that failed with the socket down when the socket opens, not on a timer', async () => {
+    // A server that is down has the event socket down too; the sync its reconnect brings is the signal.
+    it('retries a load that failed with the socket down on the first sync, not on a timer', async () => {
         vi.spyOn(console, 'error').mockImplementation(() => {})
         getSettings.mockRejectedValueOnce(new Error('Server unavailable'))
         const app = await freshAppState()
@@ -169,59 +169,67 @@ describe('useAppState loading', () => {
 
         stream.connected.value = true
         await nextTick()
+        emitSync(stream)
         await vi.runOnlyPendingTimersAsync()
         expect(getSettings).toHaveBeenCalledTimes(2)
+        expect(listCameras).toHaveBeenCalledTimes(2)
         expect(app.globalError.value).toBeNull()
 
-        // Loaded: a later reconnect re-reads only the settings, which no snapshot carries.
-        stream.connected.value = false
-        await nextTick()
-        stream.connected.value = true
-        await nextTick()
+        // Loaded: a later sync re-reads what no snapshot carries, never the capabilities.
+        emitSync(stream)
         await vi.runOnlyPendingTimersAsync()
         expect(getSettings).toHaveBeenCalledTimes(3)
-        expect(listCameras).toHaveBeenCalledTimes(2)
+        expect(listCameras).toHaveBeenCalledTimes(3)
         expect(getCapabilities).toHaveBeenCalledTimes(2)
         scope.stop()
         vi.restoreAllMocks()
     })
 
     // A `settings_updated` sent while the socket was down (a phone asleep, another
-    // client's edit, a server restart) reached no one, and kept-mounted panels followed
-    // the old values.
-    it('reads the settings again whenever the socket reopens', async () => {
-        getSettings.mockResolvedValueOnce(settings({gain: 100})).mockResolvedValue(settings({gain: 300}))
+    // client's edit, a server restart), or lost to a lag, reached no one, and kept-mounted
+    // panels followed the old values.
+    it('reads the settings again on every later sync, a lag\'s included', async () => {
+        getSettings
+            .mockResolvedValueOnce(settings({gain: 100}))
+            .mockResolvedValueOnce(settings({gain: 300}))
+            .mockResolvedValue(settings({gain: 500}))
         const app = await freshAppState()
         const stream = createEventStreamStub({connected: true})
         const scope = effectScope()
         scope.run(() => app.connectEvents(stream))
         await app.initializeState()
+        emitSync(stream)
 
-        stream.connected.value = false
-        await nextTick()
-        stream.connected.value = true
-        await nextTick()
+        emitSync(stream, {cause: 'lagged', dropped: 144})
         await vi.runOnlyPendingTimersAsync()
-
-        expect(getSettings).toHaveBeenCalledTimes(2)
         expect(app.settings.value.gain).toBe(300)
+
+        emitSync(stream)
+        await vi.runOnlyPendingTimersAsync()
+        expect(getSettings).toHaveBeenCalledTimes(3)
+        expect(app.settings.value.gain).toBe(500)
         scope.stop()
     })
 
-    it('reads the settings once at startup when the socket first opens during the first load', async () => {
-        const app = await freshAppState()
-        const stream = createEventStreamStub({connected: false})
-        const scope = effectScope()
-        scope.run(() => app.connectEvents(stream))
+    it('reads nothing twice at startup for a first sync during or after the first load', async () => {
+        for (const syncDuringLoad of [true, false]) {
+            getSettings.mockClear()
+            listCameras.mockClear()
+            const app = await freshAppState()
+            const stream = createEventStreamStub()
+            const scope = effectScope()
+            scope.run(() => app.connectEvents(stream))
 
-        const loading = app.initializeState()
-        stream.connected.value = true
-        await nextTick()
-        await loading
-        await vi.runOnlyPendingTimersAsync()
+            const loading = app.initializeState()
+            if (syncDuringLoad) emitSync(stream)
+            await loading
+            if (!syncDuringLoad) emitSync(stream)
+            await vi.runOnlyPendingTimersAsync()
 
-        expect(getSettings).toHaveBeenCalledTimes(1)
-        scope.stop()
+            expect(getSettings, `sync during load: ${syncDuringLoad}`).toHaveBeenCalledTimes(1)
+            expect(listCameras, `sync during load: ${syncDuringLoad}`).toHaveBeenCalledTimes(1)
+            scope.stop()
+        }
     })
 
     it('polls a server that keeps the socket up while refusing the load', async () => {
@@ -356,29 +364,32 @@ describe('useAppState events', () => {
 
     afterEach(() => scope.stop())
 
-    // Sent when the event socket (re)connects. A page that was away also missed cameras
-    // connecting and disconnecting, so a snapshot naming other cameras refetches the list.
-    it('takes phases from the server snapshot and refetches a camera list that disagrees', async () => {
+    it('takes phases from the server snapshot without listing the cameras again', async () => {
         await loaded()
-        const cameras = [{name: 'Neptune-C II', role: 'guide', phase: 'guiding'}]
-        listCameras.mockResolvedValue([guide('guiding')])
 
-        emitEvent(stream, {type: 'camera_phases', cameras})
-        await vi.waitFor(() => expect(app.cameras.value).toHaveLength(1))
+        emitEvent(stream, {type: 'camera_phases', cameras: [{name: 'Neptune-C II', role: 'guide', phase: 'guiding'}]})
 
         expect(app.cameraPhase.value).toEqual({'Neptune-C II': 'guiding'})
-        expect(listCameras).toHaveBeenCalledTimes(1)
-
-        emitEvent(stream, {type: 'camera_phases', cameras: [...cameras]})
-        await nextTick()
-        expect(listCameras).toHaveBeenCalledTimes(1)
+        expect(listCameras).not.toHaveBeenCalled()
     })
 
-    it('does not refetch the list for a snapshot during the first load', async () => {
-        const loading = app.initializeState()
-        emitEvent(stream, {type: 'camera_phases', cameras: [{name: 'Neptune-C II', phase: 'guiding'}]})
-        await loading
+    // A page that was away, or lagged, also missed cameras connecting and disconnecting.
+    it('lists the cameras again on a later sync, once for a burst', async () => {
+        await loaded()
+        emitSync(stream)
+        expect(listCameras).not.toHaveBeenCalled()
+        let answer
+        listCameras
+            .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+            .mockResolvedValue([guide('guiding')])
+
+        emitSync(stream, {cause: 'lagged', dropped: 144})
+        emitSync(stream)
         expect(listCameras).toHaveBeenCalledTimes(1)
+        answer([])
+
+        await vi.waitFor(() => expect(app.hasGuideCamera.value).toBe(true))
+        expect(listCameras).toHaveBeenCalledTimes(2)
     })
 
     it('follows a camera’s live status, phase, disconnect and discovery', async () => {

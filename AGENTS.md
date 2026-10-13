@@ -111,7 +111,7 @@ cargo bench --bench <name> -- --noplot                              # see Benchm
 cargo run --release -- [port]
 cargo run --release --features telemetry -- --telemetry
 cargo run --release -- --span-timings                               # per-stage durations on span close
-UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.{types,settings}.js
+UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerate web/src/composables/api.{types,settings,events}.js
 ```
 
 **CI steps both repos repeat are composite actions in `.github/actions/`** (system deps, npm, benchmarks, disk
@@ -151,9 +151,23 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too. 
 ### Server & Web Frontend (src/server/, web/)
 
 Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless LZ4), `/ws/events`
-(JSON). `/ws/events` opens with `state_changed` + `camera_phases` + `viewed_camera_changed` + `stack_crop_changed` and
-resends them after a `Lagged` client, plus `ai_compute_changed` and `settings_updated` (no snapshot carries either,
-and a dropped one left the benchmark overlay up); `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+(JSON). `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+
+**Every `/ws/events` event is a topic or a notice** (`session::events::sync`). A topic is state the server can always
+restate, *including "none"* (`target_cleared`, `camera_recovery_cleared`), and is changed before its event is sent —
+one aggregate records and announces under one lock (`PushToAnnouncer`, `Installs`, `DiskWarning`, `RecoveryStatus`).
+A notice (`error`, `focus_mode_left`) may be lost. `ServerEvent::topic()` has no wildcard arm, so a new event does not
+compile until classified. On connect and after a `Lagged` client (whose backlog is dropped, debug log only, no toast)
+`send_sync` sends every **Value** topic's snapshot then `synced {cause, dropped}`, on which the client re-reads every
+**Refetch** topic (settings, AI compute, camera list) via `resyncOn` — the list as `?discover=false`, the last
+enumeration's devices: one per sync opened every idle QHY/ZWO camera on each reconnect and lag of every page. Before this, only 4 of 37 events were
+restatable: a lost install end froze the installer and a lost `push_to_blocked` was never recovered, by any client.
+Sticky topics need an end: `Installs` runs one install per kind (409 `InstallInProgress`; a refused second one once
+failed the first), and a page that is installing reads a sync's `idle` as interrupted, not done (a restart showed
+"installed"). A recovery give-up stays until a connect into the role or `DELETE /api/cameras/recovery/{role}` — the
+warning's dismiss — since a page-only dismissal came back on every sync, all night.
+`api.events.js` is generated with every event's topic and kind; `useEventStream.catalogue.test.js` fails a state
+event nobody handles, a handler for an event the server never sends, and a refetch topic not re-read on sync.
 **Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
 show `AppState::viewed_camera` (set by `/`'s Guide toggle via `PUT /api/view/camera`, snapshot route too) and switch
 in place; their viewers have no control. A guide *disconnect* falls back to Main only after the roster says so
@@ -165,21 +179,21 @@ in place; their viewers have no control. A guide *disconnect* falls back to Main
 Vue 3 SPA, mobile-first, dark theme, proxying `/api`/`/ws` to `localhost:9955` in dev. Pro-only controls stay
 visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` skips a programmatic query by
 *value*, never a one-shot flag — a flag-based version once left M1-M9 unfindable after clearing a 1-character query.
-Sockets: `useWebSocket` (reconnect, ping), `useEventStream`, `useImageStream`.
+Sockets: `useWebSocket` (reconnect, ping; no answer within `livenessTimeout` — two ping intervals, five minutes for
+image streams, since a lossless frame on weak Wi-Fi outlasted a minute and was cut mid-frame forever — drops a
+half-open socket with close code 4000, which the server logs beside each frame slower than 10 s to send),
+`useEventStream`, `useImageStream`.
 **`/ws/events` has one dispatch path**: `useEventStream` is the socket plus `on(type, fn)`, every message handed to
 its type's subscribers in order — the domain tables in `composables/events/` first, then the stores, which subscribe
 through `connectEvents` from `App.vue` (a `lastEvent` watcher saw one of two events landing in a tick). **One writer
-per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`);
-its status read on open drops a field only if *that* field was written meanwhile (one shared counter lost the target
-to any progress event),
+per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`),
 settings only by `settingsStore`: `applySettings` (`useApplySettings`) adopts the POST's answer, and `refresh` never
 runs beside a write, coalesces, and drops an answer older than the one adopted — an edit is one POST and at most one
-GET (it was a POST and 2-3 GETs). Settings, Push-To and AI compute are read again on every reopen; a refresh asked
-during a request reads once more after it. Every `api.js` call has a deadline (15 s; 120 s for connect, capture
+GET (it was a POST and 2-3 GETs). A refresh asked during a request reads once more after it. Every `api.js` call has a deadline (15 s; 120 s for connect, capture
 start/stop, installs, snapshot): one hung POST held every settings refresh behind it. Stores are `createX()` + a module default + `__resetForTests()`; a composable's
 lifecycle hooks go through `lifecycle.js` (`tryOn*`), which a bare call or a module store skips. Polling only while
-the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on open.
-**`api.types.js` and `api.settings.js` are generated** from the Rust wire types and the code that clamps settings
+the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on sync.
+**`api.types.js`, `api.settings.js` and `api.events.js` are generated** from the Rust wire types, the code that clamps settings and `ServerEvent::examples()`
 (`tests/api_types.rs`, feature `api-schema`, which derives `schemars::JsonSchema` only in that build); CI fails a
 stale one. `DEFAULT_SETTINGS` *is* the server's default, and a control's range comes from `serverLimits(path, ui)`,
 which may narrow but never widen it (`constants/serverSettings.test.js`); constants live by domain behind
@@ -216,7 +230,7 @@ splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`.
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.js` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
 components' error icons). Test helpers live in `src/test/`: `mockApi`, fixtures held to `api.types.js`,
-`createEventStreamStub` held to `useEventStream`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
+`createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` held to `api.events.js`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
 browser hands them out); tests sit beside their source (`X.test.js`, `X.<aspect>.test.js`). Wire enums the UI
 spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to `api.types.js`.
 
