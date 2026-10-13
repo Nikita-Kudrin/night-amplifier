@@ -27,6 +27,7 @@ import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
 import {usePanZoom} from '../../../composables/usePanZoom.js'
 import {useFullscreen} from '../../../composables/useFullscreen.js'
 import LiveView from '../../LiveView.vue'
+import {contextProvides} from '../../../composables/appContext.js'
 
 /**
  * Options LiveView handed `useImageStream` on its most recent mount.
@@ -301,7 +302,7 @@ export function createMockFrameData(width, height, fillValue = 100) {
 export function mountLiveView(provides = {}) {
     return mount(LiveView, {
         global: {
-            provide: createMockProvides(provides),
+            provide: contextProvides(createMockProvides(provides)),
         },
     })
 }

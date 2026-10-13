@@ -4,6 +4,7 @@ import {mount, flushPromises} from '@vue/test-utils'
 import {useTelescopeSetup} from '../useTelescopeSetup.js'
 import {SETTINGS_DEBOUNCE_MS} from '../../constants'
 import * as api from '../api.js'
+import {contextProvides} from '../appContext.js'
 
 // Mock API
 vi.mock('../api.js', async (importOriginal) =>
@@ -51,11 +52,11 @@ describe('useTelescopeSetup', () => {
         }
         mount(TestComponent, {
             global: {
-                provide: {
+                provide: contextProvides({
                     'settings': settingsRef,
                     refreshSettings,
                     applySettings,
-                }
+                })
             }
         })
         return result

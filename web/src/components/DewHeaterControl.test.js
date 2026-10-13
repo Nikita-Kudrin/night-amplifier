@@ -9,6 +9,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import {updateSettings} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 function provides(role = 'main') {
     const hardware = {dew_heater_enabled: true, dew_heater_power: 10}
@@ -35,7 +36,7 @@ describe('DewHeaterControl', () => {
 
     // A slider release sends at once, like every other settings slider.
     it('sends the released power at once, for the edited camera', async () => {
-        const wrapper = mount(DewHeaterControl, {global: {provide: provides('guide')}})
+        const wrapper = mount(DewHeaterControl, {global: {provide: contextProvides(provides('guide'))}})
         await flushPromises()
 
         dragPower(wrapper, 45)
@@ -47,7 +48,7 @@ describe('DewHeaterControl', () => {
     it('shows the selected camera\'s power', async () => {
         const provide = provides('main')
         provide.settings.value.guide_camera.dew_heater_power = 70
-        const wrapper = mount(DewHeaterControl, {global: {provide}})
+        const wrapper = mount(DewHeaterControl, {global: {provide: contextProvides(provide)}})
         await flushPromises()
 
         provide.selectedCameraRole.value = 'guide'

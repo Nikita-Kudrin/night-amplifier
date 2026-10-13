@@ -2,6 +2,7 @@ import {describe, it, expect} from 'vitest'
 import {mount} from '@vue/test-utils'
 import {nextTick, ref} from 'vue'
 import SelectedCameraTag from './SelectedCameraTag.vue'
+import {contextProvides} from '../composables/appContext.js'
 
 const MAIN = {id: 'cam-a', name: 'ASI533MC Pro', role: 'main'}
 const GUIDE = {id: 'cam-b', name: 'ASI120MM Mini', role: 'guide'}
@@ -10,7 +11,7 @@ function mountTag(selected, cameras = [MAIN, GUIDE], props = {}) {
     const selectedCamera = ref(selected)
     const wrapper = mount(SelectedCameraTag, {
         props,
-        global: {provide: {cameras: ref(cameras), selectedCamera}},
+        global: {provide: contextProvides({cameras: ref(cameras), selectedCamera})},
     })
     return {wrapper, selectedCamera}
 }

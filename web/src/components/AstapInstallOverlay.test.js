@@ -13,6 +13,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 describe('AstapInstallOverlay', () => {
     beforeEach(() => {
@@ -63,9 +64,9 @@ describe('AstapInstallOverlay', () => {
         return mount(AstapInstallOverlay, {
             props,
             global: {
-                provide: {
+                provide: contextProvides({
                     eventStream: createMockEventStream(astapInstallProgressRef),
-                },
+                }),
             },
         })
     }
@@ -293,12 +294,12 @@ describe('AstapInstallOverlay', () => {
             const astapInstallProgress = ref(null)
             const wrapper = mount(AstapInstallOverlay, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         eventStream: {
                             astapInstallProgress,
                             clearAstapInstallProgress: vi.fn(),
                         },
-                    },
+                    }),
                 },
             })
             await flushPromises()
@@ -329,12 +330,12 @@ describe('AstapInstallOverlay', () => {
             const astapInstallProgress = ref(null)
             const wrapper = mount(AstapInstallOverlay, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         eventStream: {
                             astapInstallProgress,
                             clearAstapInstallProgress: vi.fn(),
                         },
-                    },
+                    }),
                 },
             })
             await flushPromises()
@@ -365,12 +366,12 @@ describe('AstapInstallOverlay', () => {
             const astapInstallProgress = ref(null)
             const wrapper = mount(AstapInstallOverlay, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         eventStream: {
                             astapInstallProgress,
                             clearAstapInstallProgress: vi.fn(),
                         },
-                    },
+                    }),
                 },
             })
             await flushPromises()
@@ -431,12 +432,12 @@ describe('AstapInstallOverlay', () => {
             const clearAstapInstallProgress = vi.fn()
             const wrapper = mount(AstapInstallOverlay, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         eventStream: {
                             astapInstallProgress: ref(null),
                             clearAstapInstallProgress,
                         },
-                    },
+                    }),
                 },
             })
             await flushPromises()

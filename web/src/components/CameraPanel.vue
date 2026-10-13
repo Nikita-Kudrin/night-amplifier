@@ -1,5 +1,5 @@
 <script setup>
-import {ref, inject, computed, onMounted} from 'vue'
+import {ref, computed, onMounted} from 'vue'
 import {
   connectCamera,
   disconnectCamera,
@@ -10,22 +10,35 @@ import {
 import {useCameraBadges} from '../composables/useCameraBadges.js'
 import {useDisconnectConfirm} from '../composables/useDisconnectConfirm.js'
 import {useError} from '../composables/useError.js'
-import {isSimulator, useSelectedCamera} from '../composables/appContext.js'
+import {
+  isSimulator,
+  useCameraPhase,
+  useCameras,
+  useCameraStatus,
+  useEventStreamContext,
+  useRefreshCameras,
+  useRefreshSettings,
+  useSelectedCamera,
+  useSelectedCameraId,
+  useSettings,
+  useSimulatorEnabled,
+  useWarmupEndsAt,
+} from '../composables/appContext.js'
 import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton, CollapseToggle} from './ui'
 import CameraRow from './CameraRow.vue'
 import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
 import {HELP_TEXTS, isCaptureRunning} from '../constants'
 
-const cameras = inject('cameras')
-const selectedCamera = inject('selectedCamera')
-const refreshCameras = inject('refreshCameras')
-const refreshSettings = inject('refreshSettings', async () => {})
-const eventStream = inject('eventStream')
-const simulatorEnabledRef = inject('simulatorEnabled')
-const cameraStatus = inject('cameraStatus', {value: {}})
-const cameraPhase = inject('cameraPhase', {value: {}})
-const warmupEndsAt = inject('warmupEndsAt', ref({}))
-const settings = inject('settings', ref(null))
+const cameras = useCameras()
+const selectedCamera = useSelectedCameraId()
+const refreshCameras = useRefreshCameras()
+const refreshSettings = useRefreshSettings()
+const eventStream = useEventStreamContext()
+const simulatorEnabledRef = useSimulatorEnabled()
+const cameraStatus = useCameraStatus()
+const cameraPhase = useCameraPhase()
+const warmupEndsAt = useWarmupEndsAt()
+const settings = useSettings()
 
 const {error, clearError, setError, withErrorHandling} = useError()
 

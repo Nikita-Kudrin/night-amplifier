@@ -10,6 +10,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import {updateSettings} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 describe('CoolerControl', () => {
     beforeEach(() => {
@@ -38,7 +39,7 @@ describe('CoolerControl', () => {
     function mountControl(provides = {}) {
         return mount(CoolerControl, {
             global: {
-                provide: createMockProvides(provides),
+                provide: contextProvides(createMockProvides(provides)),
             },
         })
     }
@@ -293,7 +294,7 @@ describe('CoolerControl', () => {
                     guide_camera: {cooler_enabled: true, target_temp_c: null},
                 },
             })
-            const wrapper = mount(CoolerControl, {global: {provide}})
+            const wrapper = mount(CoolerControl, {global: {provide: contextProvides(provide)}})
             const target = () => wrapper.findComponent({name: 'BaseSlider'}).props('modelValue')
             await flushPromises()
             expect(target()).toBe(-25)

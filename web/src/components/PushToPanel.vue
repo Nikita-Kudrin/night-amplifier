@@ -1,8 +1,8 @@
 <script setup>
-import {ref, onMounted, inject, computed, watch} from 'vue'
+import {ref, onMounted, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
-import {useCapabilities, useSelectedCamera} from '../composables/appContext.js'
+import {useCapabilities, useEventStreamContext, useSelectedCamera} from '../composables/appContext.js'
 import {formatDec, formatRA} from '../utils/coordinates.js'
 import {fovWarning as warnOnFov} from '../utils/fovWarning.js'
 import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel, CollapseToggle} from './ui'
@@ -61,7 +61,7 @@ const fovWarning = computed(() => warnOnFov({
   available: availableDatabases.value,
 }))
 
-const eventStream = inject('eventStream')
+const eventStream = useEventStreamContext()
 const selectedCamera = useSelectedCamera()
 const {astapSolver: hasProSolver} = useCapabilities()
 const showProOverlay = computed(() => !hasProSolver.value)

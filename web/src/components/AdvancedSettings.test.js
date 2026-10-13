@@ -11,11 +11,12 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 import {updateSettings} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 function mountSection(server = {}, simulatorEnabled = ref(false)) {
     const wrapper = mount(AdvancedSettings, {
         props: {settings: settingsMirror(server), save: vi.fn(async () => {}), guard: vi.fn((op) => op())},
-        global: {provide: {simulatorEnabled}, stubs: {BaseProLock: true}},
+        global: {provide: contextProvides({simulatorEnabled}), stubs: {BaseProLock: true}},
     })
     return {wrapper, simulatorEnabled}
 }

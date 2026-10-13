@@ -1,4 +1,5 @@
-import {ref, computed, watch, inject} from 'vue'
+import {ref, computed, watch} from 'vue'
+import {useEventStreamContext} from './appContext.js'
 import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
 import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
 import {useTimeouts} from './useTimeouts.js'
@@ -68,7 +69,7 @@ export function useAstapInstall({onComplete} = {}) {
     const stageCompletion = ref(createEmptyStageCompletion())
 
     // Event stream for receiving WebSocket events
-    const eventStream = inject('eventStream', null)
+    const eventStream = useEventStreamContext()
 
     // Computed properties
     const canInstall = computed(() => !installing.value && selectedDatabases.value.length > 0)

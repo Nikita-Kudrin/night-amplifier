@@ -4,9 +4,9 @@
  * and emitting `apply(key, value)`. The panel owns the one save path and error banner, and
  * is the one writer of the `eyepiece` group (`applyEyepiece`).
  */
-import {ref, inject, watch, computed} from 'vue'
+import {ref, watch, computed} from 'vue'
 import {useError} from '../composables/useError.js'
-import {useApplySettings, useCapabilities} from '../composables/appContext.js'
+import {useApplySettings, useCapabilities, useHasGuideCamera, useSettings} from '../composables/appContext.js'
 import {settingsMirror} from '../utils/settings.js'
 import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
@@ -20,9 +20,9 @@ import ReconnectSettings from './ReconnectSettings.vue'
 import StackingSettings from './StackingSettings.vue'
 import StorageSettings from './StorageSettings.vue'
 
-const settings = inject('settings')
+const settings = useSettings()
 const applySettings = useApplySettings()
-const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
+const hasGuideCamera = useHasGuideCamera()
 const {
   rbfBackground,
   saturationBoost,

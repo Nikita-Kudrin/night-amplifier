@@ -55,11 +55,12 @@ const mockCapabilities = ref({ debug_logging: false })
 import { useImageStream } from '../../composables/useImageStream.js'
 import { fetchEyepieceSnapshot } from '../../composables/api.js'
 import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility.js'
+import {contextProvides} from '../../composables/appContext.js'
 
 function mountEyepiece(settings = { binoview: true, circular_view: true }, overrides = {}) {
   return mount(EyepieceViewModule, {
     global: {
-      provide: {
+      provide: contextProvides({
         settings: ref({ eyepiece: settings, ...overrides.settings }),
         capabilities: mockCapabilities,
         eventStream: {
@@ -68,7 +69,7 @@ function mountEyepiece(settings = { binoview: true, circular_view: true }, overr
           ...overrides.eventStream,
         },
         ...overrides.provide,
-      },
+      }),
     },
   })
 }
@@ -114,13 +115,13 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref(null),
           }
-        }
+        })
       }
     })
 
@@ -133,13 +134,13 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref(null),
           }
-        }
+        })
       }
     })
 
@@ -159,13 +160,13 @@ describe('EyepieceView.vue Endpoint Selection', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref(null),
           }
-        }
+        })
       }
     })
 
@@ -202,13 +203,13 @@ describe('EyepieceView.vue Layout', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: false, circular_view: true } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref(null),
           }
-        }
+        })
       }
     })
 
@@ -221,13 +222,13 @@ describe('EyepieceView.vue Layout', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: false, circular_view: false } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref(null),
           }
-        }
+        })
       }
     })
 
@@ -242,13 +243,13 @@ describe('EyepieceView.vue Layout', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: true, circular_view: true } }),
           eventStream: {
             pushDirection: ref({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE' }),
             currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
           }
-        }
+        })
       }
     })
 
@@ -263,13 +264,13 @@ describe('EyepieceView.vue Layout', () => {
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: false, circular_view: true } }),
           eventStream: {
             pushDirection: ref(null),
             currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
           }
-        }
+        })
       }
     })
 
@@ -776,13 +777,13 @@ describe('EyepieceView.vue Overlay auto-hide', () => {
   it('never hides the Push-To chevrons', async () => {
     const wrapper = mount(EyepieceViewModule, {
       global: {
-        provide: {
+        provide: contextProvides({
           settings: ref({ eyepiece: { binoview: false, circular_view: true } }),
           eventStream: {
             pushDirection: ref({ angleDeg: 45, distanceDeg: 10, isClose: false, directionHint: 'NE' }),
             currentTarget: ref({ id: 'M42', name: 'Orion Nebula' }),
           },
-        },
+        }),
       },
     })
 

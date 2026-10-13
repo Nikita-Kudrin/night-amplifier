@@ -1,8 +1,18 @@
 <script setup>
-import {ref, inject, computed, watch, onMounted} from 'vue'
+import {ref, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
-import {findCamera, useApplySettings, useCapabilities} from '../composables/appContext.js'
+import {
+  findCamera,
+  useApplySettings,
+  useCameraPhase,
+  useCameras,
+  useCapabilities,
+  useMainCamera,
+  useSelectedCameraId,
+  useSelectedCameraRole,
+  useSettings,
+} from '../composables/appContext.js'
 import {hardwareBlock} from '../composables/useCameraHardwareSettings.js'
 import {useCaptureTarget} from '../composables/useCaptureTarget.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
@@ -18,11 +28,11 @@ import {
   HELP_TEXTS
 } from '../constants'
 
-const settings = inject('settings')
-const selectedCamera = inject('selectedCamera')
+const settings = useSettings()
+const selectedCamera = useSelectedCameraId()
 const applySettings = useApplySettings()
-const cameras = inject('cameras', {value: []})
-const cameraPhase = inject('cameraPhase', {value: {}})
+const cameras = useCameras()
+const cameraPhase = useCameraPhase()
 const {cometPro} = useCapabilities()
 
 const {error, loading, clearError, setError, withErrorHandling} = useError()
@@ -34,8 +44,8 @@ const {error, loading, clearError, setError, withErrorHandling} = useError()
  * gain, so the same two controls address a different set of values depending on the
  * selection. Start/Stop follows the same selection — see `isCapturing` below.
  */
-const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
-const mainCamera = inject('mainCamera', computed(() => null))
+const settingsRole = useSelectedCameraRole()
+const mainCamera = useMainCamera()
 
 const {
   isGuide: isEditingGuide,

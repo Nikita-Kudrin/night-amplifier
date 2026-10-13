@@ -1,5 +1,5 @@
-import {ref, computed, watch, inject} from 'vue'
-import {useApplySettings} from './appContext.js'
+import {ref, computed, watch} from 'vue'
+import {useApplySettings, useSettings} from './appContext.js'
 import {useDebouncedCall} from './useDebouncedCall.js'
 import {runDirectly} from './useError.js'
 import {fieldOfViewDeg} from '../utils/optics.js'
@@ -56,7 +56,7 @@ function changedProfiles(profiles, persisted) {
  * @returns Reactive telescope state, computed FOV, and helper methods
  */
 export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCameraInfo} = {}) {
-    const settings = inject('settings')
+    const settings = useSettings()
     const applySettings = useApplySettings()
 
     // ── Local reactive state ──────────────────────────────────────────

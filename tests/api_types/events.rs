@@ -1,6 +1,6 @@
 //! `api.events.ts`: an interface per `/ws/events` event, their union `ServerEvent`, and
 //! `SERVER_EVENTS`, the topic each states and how a sync restates it, which the frontend's
-//! guard tests hold its handlers to (`useEventStream.catalogue.test.js`). The topic is read off
+//! guard tests hold its handlers to (`useEventStream.catalogue.test.ts`). The topic is read off
 //! `ServerEvent::examples()`, one per variant: the schema lists every variant on its own, so one
 //! without a sample fails here.
 

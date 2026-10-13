@@ -28,6 +28,7 @@ import {
 } from '../composables/api.js'
 import ManualCoordinates from './ManualCoordinates.vue'
 import {fieldOfViewDeg} from '../utils/optics.js'
+import {contextProvides} from '../composables/appContext.js'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
@@ -106,7 +107,7 @@ function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases(), 
 
     return mount(PushToPanel, {
         global: {
-            provide: {
+            provide: contextProvides({
                 settings,
                 cameras: ref(cameras),
                 selectedCamera: ref(selected),
@@ -117,7 +118,7 @@ function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases(), 
                     planetary: {advanced_stacking: false},
                 }),
                 eventStream: createEventStreamStub(),
-            },
+            }),
             stubs: {
                 AstapInstallOverlay: true,
                 BaseProLock: true,

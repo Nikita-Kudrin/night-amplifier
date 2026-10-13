@@ -1,5 +1,5 @@
 <script setup>
-import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
+import {ref, computed, onMounted, onUnmounted, watch} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
 import {useFrameRenderer} from '../composables/useFrameRenderer.js'
 import {useEventListener} from '../composables/useEventListener.js'
@@ -14,7 +14,15 @@ import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
 import {useAppState} from '../composables/useAppState.js'
-import {useApplySettings, useCapabilities} from '../composables/appContext.js'
+import {
+  useApplySettings,
+  useCapabilities,
+  useEventStreamContext,
+  useGuideCamera,
+  useHasGuideCamera,
+  useMainCamera,
+  useSettings,
+} from '../composables/appContext.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {setViewedCamera} from '../composables/api.js'
 
@@ -24,14 +32,14 @@ import {setViewedCamera} from '../composables/api.js'
  */
 const FIT_AFTER_LAYOUT_MS = 10
 
-const eventStream = inject('eventStream')
-const settings = inject('settings')
+const eventStream = useEventStreamContext()
+const settings = useSettings()
 const {setGlobalError} = useAppState()
 const {later} = useTimeouts()
 const {debugLogging} = useCapabilities()
-const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
-const guideCamera = inject('guideCamera', computed(() => null))
-const mainCamera = inject('mainCamera', computed(() => null))
+const hasGuideCamera = useHasGuideCamera()
+const guideCamera = useGuideCamera()
+const mainCamera = useMainCamera()
 
 /**
  * The operator's Guide toggle, held by the server rather than this tab: the eyepiece

@@ -28,7 +28,7 @@ struct Announced {
 
 impl Announced {
     /// What `event` does to a client's copy, handler for handler as
-    /// `web/src/composables/events/pushToEvents.js` does it, so a client that saw every
+    /// `web/src/composables/events/pushToEvents.ts` does it, so a client that saw every
     /// event and one handed the snapshot hold the same state.
     fn apply(&mut self, event: &ServerEvent) {
         use ServerEvent as E;

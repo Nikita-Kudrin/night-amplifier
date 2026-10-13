@@ -1,6 +1,12 @@
-import {computed, inject, ref} from 'vue'
+import {computed} from 'vue'
 import {useError} from './useError.js'
-import {useApplySettings, useSelectedCamera} from './appContext.js'
+import {
+    useApplySettings,
+    useCameraStatus,
+    useSelectedCamera,
+    useSelectedCameraRole,
+    useSettings,
+} from './appContext.js'
 
 /**
  * The settings block of the camera in `role`: the imaging camera's hardware settings sit at
@@ -21,10 +27,10 @@ export function hardwareBlock(settings, role) {
  * camera selected when it was made.
  */
 export function useCameraHardwareSettings() {
-    const settings = inject('settings', ref(null))
+    const settings = useSettings()
     const applySettings = useApplySettings()
-    const cameraStatus = inject('cameraStatus', ref({}))
-    const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
+    const cameraStatus = useCameraStatus()
+    const settingsRole = useSelectedCameraRole()
 
     const {error, clearError, withErrorHandling} = useError()
     const currentCamera = useSelectedCamera()

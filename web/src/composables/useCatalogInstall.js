@@ -1,4 +1,5 @@
-import {computed, inject, ref, watch} from 'vue'
+import {computed, ref, watch} from 'vue'
+import {useEventStreamContext} from './appContext.js'
 import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
 import {getCatalogStatus, installCatalog} from './api.js'
 import {ACTIVE_INSTALL_STAGES, ignoresProgress, useInstallSettle} from './useAstapInstall.js'
@@ -22,7 +23,7 @@ export function useCatalogInstall({onComplete} = {}) {
     const error = ref(null)
     const progress = ref(emptyProgress())
 
-    const eventStream = inject('eventStream', null)
+    const eventStream = useEventStreamContext()
 
     const canInstall = computed(() => !installing.value)
 

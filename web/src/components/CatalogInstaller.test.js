@@ -7,6 +7,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 import {getCatalogStatus, installCatalog} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 const MISSING = catalogStatus({installed: false, ngc_file_exists: true, addendum_file_exists: false, hyg_file_exists: false})
 
@@ -14,7 +15,7 @@ function mountInstaller(status = MISSING) {
     getCatalogStatus.mockResolvedValue(status)
     const progress = ref(null)
     const eventStream = {catalogInstallProgress: progress, clearCatalogInstallProgress: vi.fn()}
-    const wrapper = mount(CatalogInstaller, {global: {provide: {eventStream}}})
+    const wrapper = mount(CatalogInstaller, {global: {provide: contextProvides({eventStream})}})
     return {wrapper, progress, eventStream}
 }
 

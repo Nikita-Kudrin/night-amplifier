@@ -1,8 +1,6 @@
 import * as constants from './index.js'
 import {
-    BACKGROUND_ALGORITHM_OPTIONS,
     CAMERA_PHASES,
-    CAPTURE_STATE_DISPLAY,
     CAPTURE_STATES,
     captureStateDisplay,
     DEFAULT_CAPABILITIES,
@@ -10,7 +8,12 @@ import {
     defaultSettings,
     EYEPIECE_STREAM_RESOLUTION_OPTIONS,
     HELP_TEXTS,
+} from './index.js'
+import type {
+    BACKGROUND_ALGORITHM_OPTIONS,
+    CAPTURE_STATE_DISPLAY,
     PREVIEW_RESOLUTION_OPTIONS,
+    RAW_FRAME_SAVING_MODES,
     REJECTION_METHOD_OPTIONS,
     STACKING_TYPES,
     STREAMING_RESOLUTION_OPTIONS,
@@ -18,23 +21,36 @@ import {
     WEIGHTING_PRESET_OPTIONS,
 } from './index.js'
 import {HELP_SECTIONS} from './help/index.js'
-import {
-    BACKGROUND_EXTRACTION_ALGORITHM_VALUES,
-    CAMERA_PHASE_VALUES,
-    EYEPIECE_STREAM_RESOLUTION_VALUES,
-    REJECTION_METHOD_VALUES,
-    RESOLUTION_VALUES,
-    STACKING_TYPE_VALUES,
-    STRETCH_AGGRESSIVENESS_VALUES,
-    WEIGHTING_PRESET_VALUES,
+import type {CaptureState} from '../composables/api.events.js'
+import type {
+    BackgroundExtractionAlgorithm,
+    CameraPhase,
+    Capabilities,
+    EyepieceStreamResolution,
+    RawFrameSaving,
+    RejectionMethod,
+    Resolution,
+    StackingType,
+    StretchAggressiveness,
+    WeightingPreset,
 } from '../composables/api.types.js'
-import type {Capabilities} from '../composables/api.types.js'
 
 // Every domain module behind the barrel; `export *` silently drops a name two of them share.
+// `serverSettings` and `tables` are the modules' own helpers, not constants.
 const modules = import.meta.glob<Record<string, unknown>>(
-    ['./*.{js,ts}', '!./*.test.{js,ts}', '!./index.{js,ts}', '!./serverSettings.{js,ts}', '!./cameras.{js,ts}'],
+    [
+        './*.{js,ts}',
+        '!./*.test.{js,ts}',
+        '!./index.{js,ts}',
+        '!./serverSettings.{js,ts}',
+        '!./tables.{js,ts}',
+        '!./cameras.{js,ts}',
+    ],
     {eager: true},
 )
+
+/** The values an option table offers. */
+type Offered<T extends readonly {value: unknown}[]> = T[number]['value']
 
 // It names only wire keys by construction: `structuredClone(SERVER_DEFAULT_SETTINGS)`, which
 // `api.settings.ts` holds to `Settings`. (The fallback once mirrored `simulated_camera`, a key
@@ -63,37 +79,42 @@ describe('captureStateDisplay', () => {
     })
 
     it('has an entry for every capture state, and shows an unknown one as Idle', () => {
-        for (const state of Object.values(CAPTURE_STATES)) expect(CAPTURE_STATE_DISPLAY[state], state).toBeTruthy()
+        expectTypeOf<keyof typeof CAPTURE_STATE_DISPLAY>().toEqualTypeOf<CaptureState>()
         expect(captureStateDisplay('Teleporting')).toEqual({tone: 'idle', label: 'Idle'})
     })
 })
 
+// Type-level: `npm run typecheck` fails a value the server would refuse, or one it sends
+// that a table leaves out.
 describe('wire enums', () => {
-    it.each([
-        ['CameraPhase', CAMERA_PHASES, CAMERA_PHASE_VALUES],
-        ['StackingType', STACKING_TYPES, STACKING_TYPE_VALUES],
-    ])('names every %s the server sends, and no other', (_, table, wire) => {
-        expect(Object.values(table).sort()).toEqual([...wire].sort())
+    it('names every CameraPhase, CaptureState and StackingType the server sends, and no other', () => {
+        expectTypeOf<(typeof CAMERA_PHASES)[keyof typeof CAMERA_PHASES]>().toEqualTypeOf<CameraPhase>()
+        expectTypeOf<(typeof CAPTURE_STATES)[keyof typeof CAPTURE_STATES]>().toEqualTypeOf<CaptureState>()
+        expectTypeOf<(typeof STACKING_TYPES)[keyof typeof STACKING_TYPES]>().toEqualTypeOf<StackingType>()
+        expect(CAMERA_PHASES.WARMING_UP).toBe('warming_up')
+        expect(CAPTURE_STATES.RECOVERING).toBe('Recovering')
     })
 })
 
 describe('option tables', () => {
-    const values = (options: readonly {value: string}[]) => options.map((option) => option.value).sort()
-
-    it.each([
-        ['StretchAggressiveness', STRETCH_AGGRESSIVENESS_OPTIONS, STRETCH_AGGRESSIVENESS_VALUES],
-        ['BackgroundExtractionAlgorithm', BACKGROUND_ALGORITHM_OPTIONS, BACKGROUND_EXTRACTION_ALGORITHM_VALUES],
-        ['WeightingPreset', WEIGHTING_PRESET_OPTIONS, WEIGHTING_PRESET_VALUES],
-        ['Resolution', PREVIEW_RESOLUTION_OPTIONS, RESOLUTION_VALUES],
-        ['Resolution', STREAMING_RESOLUTION_OPTIONS, RESOLUTION_VALUES],
-        ['EyepieceStreamResolution', EYEPIECE_STREAM_RESOLUTION_OPTIONS, EYEPIECE_STREAM_RESOLUTION_VALUES],
-    ])('offers every %s the server takes, and no other', (_, options, wire) => {
-        expect(values(options)).toEqual([...wire].sort())
+    it('offers every value the server takes, and no other', () => {
+        expectTypeOf<Offered<typeof STRETCH_AGGRESSIVENESS_OPTIONS>>().toEqualTypeOf<StretchAggressiveness>()
+        expectTypeOf<Offered<typeof BACKGROUND_ALGORITHM_OPTIONS>>().toEqualTypeOf<BackgroundExtractionAlgorithm>()
+        expectTypeOf<Offered<typeof WEIGHTING_PRESET_OPTIONS>>().toEqualTypeOf<WeightingPreset>()
+        expectTypeOf<Offered<typeof PREVIEW_RESOLUTION_OPTIONS>>().toEqualTypeOf<Resolution>()
+        expectTypeOf<Offered<typeof STREAMING_RESOLUTION_OPTIONS>>().toEqualTypeOf<Resolution>()
+        expectTypeOf<Offered<typeof EYEPIECE_STREAM_RESOLUTION_OPTIONS>>().toEqualTypeOf<EyepieceStreamResolution>()
+        expectTypeOf<(typeof RAW_FRAME_SAVING_MODES)[number]['key']>().toEqualTypeOf<keyof RawFrameSaving>()
     })
 
     // Min-Max needs per-pixel extremes the live stack does not keep; the server substitutes.
     it('offers every RejectionMethod but Min-Max', () => {
-        expect(values(REJECTION_METHOD_OPTIONS)).toEqual(REJECTION_METHOD_VALUES.filter((m) => m !== 'MinMax').sort())
+        expectTypeOf<Offered<typeof REJECTION_METHOD_OPTIONS>>().toEqualTypeOf<Exclude<RejectionMethod, 'MinMax'>>()
+    })
+
+    // The type above sees only the declared values: hd1080 must be gone at runtime too.
+    it('leaves 1080p out of the lossless eyepiece stream', () => {
+        expect(EYEPIECE_STREAM_RESOLUTION_OPTIONS.map((option) => option.value)).toEqual(['native', 'uhd2160', 'qhd1440'])
     })
 })
 

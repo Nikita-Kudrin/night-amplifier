@@ -324,7 +324,7 @@ npm run format    # format with Prettier
 enforces them, and `src/composables/api.events.ts` (every `/ws/events` event, and `SERVER_EVENTS`: the topic each
 states) from `ServerEvent` and one sample per variant (`ServerEvent::examples()`); after changing any, run
 `UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types` from the repository root. A new event
-needs a sample, and the frontend's guard tests (`useEventStream.catalogue.test.js`) fail one that states a topic
+needs a sample, and the frontend's guard tests (`useEventStream.catalogue.test.ts`) fail one that states a topic
 nobody follows.
 
 ## License
