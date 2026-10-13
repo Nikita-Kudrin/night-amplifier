@@ -3,17 +3,18 @@ import {flushPromises, mount} from '@vue/test-utils'
 import {catalogStatus} from '../test/fixtures.js'
 import {INSTALL_SETTLE_MS} from './useAstapInstall.js'
 import {useCatalogInstall} from './useCatalogInstall.js'
+import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents.js'
 
 vi.mock('./api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
-import {getCatalogStatus, installCatalog} from './api.js'
+import {ApiError, getCatalogStatus, installCatalog} from './api.js'
 
 const MISSING = catalogStatus({installed: false})
 
-function mountInstall(options = {}) {
+function mountInstall(options = {}, eventStream = null) {
     const progress = ref(null)
-    const eventStream = {catalogInstallProgress: progress, clearCatalogInstallProgress: vi.fn()}
+    eventStream ??= {catalogInstallProgress: progress, clearCatalogInstallProgress: vi.fn()}
     let install
     const Host = defineComponent({
         setup() {
@@ -123,5 +124,137 @@ describe('useCatalogInstall', () => {
 
         expect(getCatalogStatus).not.toHaveBeenCalled()
         expect(eventStream.clearCatalogInstallProgress).toHaveBeenCalled()
+    })
+})
+
+/** The events as the stream dispatches them, through the real install event table. */
+describe('useCatalogInstall after a sync', () => {
+    function mountWithEvents(options = {}) {
+        const {handlers, state} = createInstallEvents()
+        return {...mountInstall(options, state), handlers}
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        getCatalogStatus.mockResolvedValue(MISSING)
+        vi.useFakeTimers()
+    })
+    afterEach(() => vi.useRealTimers())
+
+    it('finishes an install whose end it missed on a completed status', async () => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        await install.startInstall(false)
+        handlers.catalog_install_progress({file_name: 'NGC.csv', bytes_downloaded: 300, total_bytes: 1200, percent: 25})
+        await nextTick()
+
+        getCatalogStatus.mockResolvedValue(catalogStatus())
+        handlers.catalog_install_status({state: 'completed'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(onComplete).toHaveBeenCalledOnce()
+        expect(onComplete).toHaveBeenCalledWith(catalogStatus())
+        expect(install.installing.value).toBe(false)
+    })
+
+    // `idle` is what a restarted server says: read as completed, a restart showed
+    // "Catalog installed", then the form came back with no word of why.
+    it('says an install a server restart cut short did not finish', async () => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        await install.startInstall(false)
+        handlers.catalog_install_progress({file_name: 'NGC.csv', bytes_downloaded: 300, total_bytes: 1200, percent: 25})
+        await nextTick()
+
+        handlers.catalog_install_status({state: 'idle'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(install.error.value).toBe(`Installation failed: ${INSTALL_INTERRUPTED}`)
+        expect(install.installing.value).toBe(false)
+        expect(install.progressText.value).not.toBe('Catalog installed')
+        expect(onComplete).not.toHaveBeenCalled()
+    })
+
+    // The server says `idle` until the request reaches it.
+    it('keeps an install whose request is still on the way through a sync saying idle', async () => {
+        let accept
+        installCatalog.mockImplementationOnce(() => new Promise((resolve) => (accept = resolve)))
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+        const started = install.startInstall(false)
+
+        handlers.catalog_install_status({state: 'idle'})
+        await nextTick()
+        accept({message: 'Catalog installation started.'})
+
+        expect(await started).toBe(true)
+        expect(install.installing.value).toBe(true)
+        expect(install.error.value).toBeNull()
+    })
+
+    // A click on a second page meets the server's 409, then follows the install it names.
+    it('follows the install another page is running after its own click is refused', async () => {
+        installCatalog.mockRejectedValueOnce(new ApiError('An installation is already running', 409))
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+
+        expect(await install.startInstall(false)).toBe(false)
+        expect(install.error.value).toBe('An installation is already running')
+        handlers.catalog_install_progress({file_name: 'NGC.csv', bytes_downloaded: 600, total_bytes: 1200, percent: 50})
+        await nextTick()
+
+        expect(install.installing.value).toBe(true)
+        expect(install.error.value).toBeNull()
+    })
+
+    it('shows the error of a failure it missed', async () => {
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+        await install.startInstall(true)
+
+        handlers.catalog_install_status({state: 'failed', error: 'disk full'})
+        await nextTick()
+
+        expect(install.error.value).toBe('Installation failed: disk full')
+        expect(install.installing.value).toBe(false)
+    })
+
+    it('joins an install another page started', async () => {
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+
+        handlers.catalog_install_status({
+            state: 'running',
+            progress: {type: 'catalog_install_progress', file_name: 'NGC.csv', bytes_downloaded: 2048, total_bytes: null, percent: null},
+        })
+        await nextTick()
+
+        expect(install.installing.value).toBe(true)
+        expect(install.canInstall.value).toBe(false)
+        expect(install.progressText.value).toBe('Downloading NGC.csv: 2 KB')
+    })
+
+    it.each(['idle', 'completed', 'failed'])('does nothing on a connect that finds it %s', async (state) => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        getCatalogStatus.mockClear()
+
+        handlers.catalog_install_status({state, error: 'an old failure'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(onComplete).not.toHaveBeenCalled()
+        expect(getCatalogStatus).not.toHaveBeenCalled()
+        expect(install.installing.value).toBe(false)
+        expect(install.error.value).toBeNull()
+        expect(install.progressText.value).toBe('')
     })
 })

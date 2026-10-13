@@ -20,6 +20,8 @@ const CALLS = [
     ['updateSettings', [{gain: 200, bin: 2}], '/api/settings', 'POST', {gain: 200, bin: 2}],
     ['getStackingTypes', [], '/api/settings/stacking-types', 'GET'],
     ['listCameras', [], '/api/cameras', 'GET'],
+    ['listCameras', [{discover: false}], '/api/cameras?discover=false', 'GET'],
+    ['dismissRecoveryFailure', ['guide'], '/api/cameras/recovery/guide', 'DELETE'],
     ['connectCamera', ['zwo_0'], '/api/cameras/zwo_0/connect', 'POST', {role: 'main'}],
     ['connectCamera', ['zwo_0', 'guide'], '/api/cameras/zwo_0/connect', 'POST', {role: 'guide'}],
     ['connectCamera', ['camera/with/slashes'], '/api/cameras/camera%2Fwith%2Fslashes/connect', 'POST', {role: 'main'}],

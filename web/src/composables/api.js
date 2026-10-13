@@ -289,10 +289,21 @@ const cameraPath = (cameraId, action) => `/cameras/${encodeURIComponent(cameraId
 
 /**
  * List available cameras
+ * @param {{discover?: boolean}} [options] - `discover: false` lists what the server's last
+ *   enumeration found, without the seconds of USB work a fresh one costs.
  * @returns {Promise<Camera[]>}
  */
-export async function listCameras() {
-    return get('/cameras')
+export async function listCameras({discover = true} = {}) {
+    return get('/cameras', discover ? undefined : {discover: false})
+}
+
+/**
+ * Dismiss the warning automatic recovery left when it gave up on `role`'s camera, for every
+ * client: the server restates it on each sync until a camera connects into the role.
+ * @param {'main'|'guide'} role
+ */
+export async function dismissRecoveryFailure(role) {
+    return del(`/cameras/recovery/${encodeURIComponent(role)}`)
 }
 
 /**

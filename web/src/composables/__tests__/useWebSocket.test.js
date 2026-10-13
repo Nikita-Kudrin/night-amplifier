@@ -11,7 +11,8 @@ import {
 
 setupGlobalWebSocketMock()
 
-import {useWebSocket as originalUseWebSocket} from '../useWebSocket.js'
+import {useWebSocket as originalUseWebSocket, WS_CLOSE_UNRESPONSIVE} from '../useWebSocket.js'
+import {WS_RECONNECT} from '../../constants'
 import { mount } from '@vue/test-utils'
 
 let currentApp = null;
@@ -232,6 +233,84 @@ describe('useWebSocket', () => {
             MockWebSocket.instances[1].simulateOpen()
             await nextTick()
             expect(reconnectAttempts.value).toBe(0)
+        })
+    })
+
+    describe('liveness', () => {
+        const PING = WS_RECONNECT.pingInterval
+
+        it('pings on every interval', async () => {
+            useWebSocket('/ws/test')
+            await openWebSocket()
+
+            vi.advanceTimersByTime(PING)
+
+            expect(MockWebSocket.lastSent).toBe('ping')
+        })
+
+        // A vanished peer can leave the socket OPEN for minutes, the page on stale state.
+        it('drops a socket that answers no ping for two intervals, and reconnects', async () => {
+            const onClose = vi.fn()
+            const {connected} = useWebSocket('/ws/test', {onClose})
+            await openWebSocket()
+
+            vi.advanceTimersByTime(PING + 2 * PING - 1)
+            expect(connected.value).toBe(true)
+            vi.advanceTimersByTime(1)
+
+            expect(connected.value).toBe(false)
+            expect(getWebSocket().readyState).toBe(MockWebSocket.CLOSED)
+            // The server logs a close with this code, naming the frame that was in flight.
+            expect(getWebSocket().closedWith).toEqual({code: WS_CLOSE_UNRESPONSIVE, reason: 'No answer to ping'})
+            expect(onClose).toHaveBeenCalledOnce()
+            vi.advanceTimersByTime(WS_RECONNECT.interval)
+            expect(MockWebSocket.instances).toHaveLength(2)
+        })
+
+        it('keeps a socket that answers, with a pong or anything else', async () => {
+            const {connected} = useWebSocket('/ws/test', {onMessage: () => {}})
+            await openWebSocket()
+
+            for (const answer of ['pong', '{"type":"frame_captured"}', 'pong']) {
+                vi.advanceTimersByTime(2 * PING)
+                getWebSocket().simulateMessage(answer)
+            }
+            vi.advanceTimersByTime(2 * PING)
+
+            expect(connected.value).toBe(true)
+            expect(MockWebSocket.instances).toHaveLength(1)
+        })
+
+        it('waits out the liveness window it was given', async () => {
+            const {connected} = useWebSocket('/ws/test', {livenessTimeout: 5 * PING})
+            await openWebSocket()
+
+            vi.advanceTimersByTime(PING + 5 * PING - 1)
+            expect(connected.value).toBe(true)
+            vi.advanceTimersByTime(1)
+
+            expect(connected.value).toBe(false)
+        })
+
+        it('never drops a socket whose liveness window is null', async () => {
+            const {connected} = useWebSocket('/ws/test', {livenessTimeout: null})
+            await openWebSocket()
+
+            vi.advanceTimersByTime(100 * PING)
+
+            expect(connected.value).toBe(true)
+            expect(MockWebSocket.lastSent).toBe('ping')
+        })
+
+        it('stops watching a socket closed by disconnect()', async () => {
+            const {disconnect} = useWebSocket('/ws/test')
+            await openWebSocket()
+            vi.advanceTimersByTime(PING)
+
+            disconnect()
+            vi.advanceTimersByTime(10 * PING)
+
+            expect(MockWebSocket.instances).toHaveLength(1)
         })
     })
 

@@ -85,7 +85,7 @@ describe('usePushToTarget', () => {
         })
     })
 
-    it('reads no status of its own: the stream loads it when its socket opens', () => {
+    it('reads no status of its own: the sync snapshot carries Push-To', () => {
         usePushToTarget({eventStream})
         expect(api.getPushToStatus).not.toHaveBeenCalled()
     })

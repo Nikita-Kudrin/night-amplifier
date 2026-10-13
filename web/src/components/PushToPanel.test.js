@@ -12,12 +12,6 @@ vi.mock('../composables/api.js', async (importOriginal) =>
         updateSettings: vi.fn().mockResolvedValue({}),
         updatePushToConfig: vi.fn().mockResolvedValue({}),
         searchCatalog: vi.fn().mockResolvedValue([]),
-        getPushToStatus: vi.fn().mockResolvedValue({
-            current_target: null,
-            last_position: null,
-            direction: null,
-            is_solving: false,
-        }),
         setTargetByName: vi.fn(),
         setTargetByCoordinates: vi.fn(),
         clearTarget: vi.fn(),

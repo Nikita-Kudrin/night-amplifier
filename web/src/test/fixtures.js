@@ -124,6 +124,8 @@ export function pushToStatus(overrides = {}) {
         current_target: null,
         last_position: null,
         direction: null,
+        solve: {in_progress: false, target_name: null, stage: null, last_result: null},
+        blocker: null,
         ...overrides,
     }
 }

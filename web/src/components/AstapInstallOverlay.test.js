@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref, nextTick} from 'vue'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
+import {createInstallEvents} from '../composables/events/installEvents.js'
 
 // Mock the API module
 vi.mock('../composables/api.js', async (importOriginal) =>
@@ -495,6 +496,38 @@ describe('AstapInstallOverlay', () => {
 
             expect(wrapper.emitted('installed')).toHaveLength(1)
             expect(wrapper.emitted('close')).toBeUndefined()
+        })
+
+        it('closes once a sync says the install whose end it missed completed', async () => {
+            vi.useFakeTimers()
+            const {handlers, state} = createInstallEvents()
+            wrapper = mountOverlay(state.astapInstallProgress)
+            await flushPromises()
+            await wrapper.find('.btn-primary').trigger('click')
+            await flushPromises()
+            getAstapStatus.mockResolvedValue({binary_installed: true, database_installed: true, installed_databases: [{id: 'D80'}], ready: true})
+
+            handlers.astap_install_status({state: 'completed'})
+            await vi.advanceTimersByTimeAsync(500)
+            await flushPromises()
+
+            expect(wrapper.emitted('installed')).toHaveLength(1)
+            expect(wrapper.emitted('close')).toHaveLength(1)
+        })
+
+        it('stays put when a connect finds no install running', async () => {
+            vi.useFakeTimers()
+            const {handlers, state} = createInstallEvents()
+            wrapper = mountOverlay(state.astapInstallProgress)
+            await flushPromises()
+
+            handlers.astap_install_status({state: 'idle'})
+            await vi.advanceTimersByTimeAsync(500)
+            await flushPromises()
+
+            expect(getAstapStatus).toHaveBeenCalledTimes(1)
+            expect(wrapper.emitted('installed')).toBeUndefined()
+            expect(wrapper.find('.btn-primary').attributes('disabled')).toBeUndefined()
         })
 
         it('drops the status reload when it goes away first', async () => {

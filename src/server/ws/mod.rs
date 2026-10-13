@@ -19,10 +19,16 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::sync::broadcast::error::RecvError;
+use tracing::{debug, warn};
 
-use crate::session::events::ServerEvent;
+use crate::session::events::{ServerEvent, SyncCause};
 use crate::session::state::{AppState, CameraRole};
 pub use image_stream::{PeerAddr, StreamClient, StreamEndpoint, StreamSource, NO_FRAME};
+
+/// The close code a page sends as it drops a socket that answered nothing — no message,
+/// no `pong` — for its liveness window (`useWebSocket`'s `dropDead`).
+pub const CLOSE_UNRESPONSIVE: u16 = 4000;
 
 /// Every WebSocket route, relative to the `/ws` nest.
 pub fn routes() -> Router<Arc<AppState>> {
@@ -108,6 +114,7 @@ impl StreamSourceQuery {
 ///
 /// Protocol:
 /// - Server sends JSON text messages with event data
+/// - Server opens with a sync (see [`send_sync`]) and repeats it after the client lagged
 /// - Client can send "ping" text messages to keep connection alive
 pub async fn events_handler(
     ws: WebSocketUpgrade,
@@ -116,29 +123,14 @@ pub async fn events_handler(
     ws.on_upgrade(move |socket| handle_events(socket, state))
 }
 
-/// Send the state a client cannot rebuild from changes alone: the capture state, every
-/// camera's phase, the viewed camera and the main stream's crop. Returns `false` once the socket is gone.
-async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
-    let snapshot = [
-        ServerEvent::state_changed(state.capture_state()),
-        state.camera_phases_event(),
-        state.viewed_camera.event(),
-        state.stream_crop.event(),
-    ];
-    send_all(socket, snapshot).await
-}
-
-/// After a lag, also the announcements whose answer the client refetches, since it may have
-/// dropped one: a lost `ai_compute_changed` left the benchmark overlay up, a lost
-/// `settings_updated` left panels on stale values. Not on connect: a client reads both
-/// itself on every open, and the events there would only cost it a second read.
-async fn send_lag_resync(socket: &mut WebSocket, state: &AppState) -> bool {
-    let refetch = [ServerEvent::AiComputeChanged, ServerEvent::SettingsUpdated];
-    send_snapshot(socket, state).await && send_all(socket, refetch).await
-}
-
-async fn send_all(socket: &mut WebSocket, events: impl IntoIterator<Item = ServerEvent>) -> bool {
-    for event in events {
+/// Bring a client up to date: every value topic's current events, then `synced`, on which
+/// it re-reads every refetched topic (see `session::events::Topic`). Sent after subscribing,
+/// so a client always converges: a value is changed before its event is sent, and every
+/// event sent after the snapshot was read follows on this socket. Returns `false` once the
+/// socket is gone.
+async fn send_sync(socket: &mut WebSocket, state: &AppState, cause: SyncCause, dropped: u64) -> bool {
+    let synced = ServerEvent::synced(cause, dropped);
+    for event in state.sync_snapshot().into_iter().chain([synced]) {
         if socket.send(Message::Text(event.to_json().into())).await.is_err() {
             return false;
         }
@@ -150,13 +142,12 @@ async fn send_all(socket: &mut WebSocket, events: impl IntoIterator<Item = Serve
 async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
     let mut events_rx = state.subscribe_events();
 
-    if !send_snapshot(&mut socket, &state).await {
+    if !send_sync(&mut socket, &state, SyncCause::Connect, 0).await {
         return;
     }
 
     loop {
         tokio::select! {
-            // Check for incoming messages
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -164,17 +155,17 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => {
+                    Some(Ok(Message::Close(frame))) => {
+                        if frame.is_some_and(|frame| frame.code == CLOSE_UNRESPONSIVE) {
+                            warn!("An events client dropped its socket as unresponsive; it reconnects and syncs");
+                        }
                         break;
                     }
-                    Some(Err(_)) => {
-                        break;
-                    }
+                    None | Some(Err(_)) => break,
                     _ => {}
                 }
             }
 
-            // Forward events to client
             event = events_rx.recv() => {
                 match event {
                     Ok(event) => {
@@ -182,21 +173,18 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        // Client is too slow: what it dropped may have been a state or
-                        // phase change, so it gets the current picture again.
-                        let warning = ServerEvent::warning(format!("Dropped {} events (client too slow)", n));
-                        let _ = socket.send(Message::Text(warning.to_json().into())).await;
-                        if !send_lag_resync(&mut socket, &state).await {
+                    Err(RecvError::Lagged(dropped)) => {
+                        // The backlog (up to the channel's 256) is stale beside the snapshot
+                        // that replaces it, and feeding it to a slow client lags it again.
+                        events_rx = events_rx.resubscribe();
+                        debug!(dropped, "Events client lagged; resyncing it");
+                        if !send_sync(&mut socket, &state, SyncCause::Lagged, dropped).await {
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
+                    Err(RecvError::Closed) => break,
                 }
             }
         }
     }
 }
-

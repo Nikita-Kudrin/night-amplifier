@@ -9,8 +9,10 @@ mod push_to_service;
 mod settings_request;
 mod settings_service;
 
-pub use camera_service::CameraService;
+pub use camera_service::{CameraService, DiscoveredCameras};
 pub use capture_service::CaptureService;
-pub use push_to_service::{PushToService, PushToState, SolveLatch, WatchLatch};
+pub use push_to_service::{
+    PushToService, PushToState, PushToStatus, PushToStatusDirection, SolveLatch, WatchLatch,
+};
 pub use settings_request::UpdateSettingsRequest;
 pub use settings_service::{optics_change, OpticsChange, SettingsService};

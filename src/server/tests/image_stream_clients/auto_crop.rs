@@ -171,7 +171,7 @@ async fn a_crop_change_names_the_live_frame_it_arrives_with() {
 async fn a_lagged_events_client_is_told_the_crop_again() {
     let server = start_server().await;
     let mut client = server.connect("/ws/events").await;
-    next_crop_event(&mut client).await;
+    events_until_synced(&mut client).await;
 
     let crop = crate::session::events::StreamCrop {
         x: 40,
@@ -186,15 +186,9 @@ async fn a_lagged_events_client_is_told_the_crop_again() {
         server.state.send_error(format!("burst {i}"));
     }
 
-    let mut seen = Vec::new();
-    loop {
-        let event = next_event(&mut client).await;
-        let after_warning = seen.iter().any(|e: &serde_json::Value| e["type"] == "warning");
-        seen.push(event.clone());
-        if after_warning && event["type"] == "stack_crop_changed" {
-            assert_eq!(event["crop"]["x"], 40);
-            return;
-        }
-        assert!(seen.len() < 1000, "no crop after the lag warning: {:?}", &seen[..5]);
-    }
+    let resync = events_until_synced(&mut client).await;
+    assert_eq!(resync.last().unwrap()["cause"], "lagged");
+    let crops: Vec<_> = resync.iter().filter(|e| e["type"] == "stack_crop_changed").collect();
+    assert_eq!(crops.len(), 1, "{resync:?}");
+    assert_eq!(crops[0]["crop"]["x"], 40);
 }

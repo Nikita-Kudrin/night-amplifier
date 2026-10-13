@@ -1,4 +1,5 @@
 import source from '../composables/api.types.js?raw'
+import eventSource from '../composables/api.events.js?raw'
 
 /**
  * The `@property` names of each `@typedef {object}` in the generated `api.types.js`, so a
@@ -6,8 +7,17 @@ import source from '../composables/api.types.js?raw'
  * @returns {Record<string, {all: string[], required: string[]}>}
  */
 export function wireTypes() {
+    return typedefs(source)
+}
+
+/** As `wireTypes`, of the events in `api.events.js` (`StateChangedEvent`, …). */
+export function wireEventTypes() {
+    return typedefs(eventSource)
+}
+
+function typedefs(text) {
     const types = {}
-    for (const [, block] of source.matchAll(/\/\*\*([\s\S]*?)\*\//g)) {
+    for (const [, block] of text.matchAll(/\/\*\*([\s\S]*?)\*\//g)) {
         const name = /@typedef \{object\} (\w+)/.exec(block)?.[1]
         if (!name) continue
         const properties = [...block.matchAll(/@property \{[^}]*\} (\[?)(\w+)\]?/g)]

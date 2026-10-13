@@ -67,7 +67,7 @@ impl HttpStatus for PushToError {
             PushToError::ConfigError(_)
             | PushToError::InvalidRequest(_)
             | PushToError::DatabaseLoadFailed(_) => StatusCode::BAD_REQUEST,
-            PushToError::Cancelled => StatusCode::CONFLICT,
+            PushToError::Cancelled | PushToError::InstallInProgress => StatusCode::CONFLICT,
             PushToError::DetectionFailed(_)
             | PushToError::SolveFailed(_)
             | PushToError::NotEnoughStars { .. }
@@ -137,6 +137,7 @@ mod tests {
             PushToError::DatabaseLoadFailed("no d80 files".into()).status_code(),
             StatusCode::BAD_REQUEST
         );
+        assert_eq!(PushToError::InstallInProgress.status_code(), StatusCode::CONFLICT);
         assert_eq!(
             PushToError::SolveFailed("x".into()).status_code(),
             StatusCode::INTERNAL_SERVER_ERROR

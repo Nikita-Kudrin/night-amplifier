@@ -10,11 +10,14 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::request::Parts;
-use tracing::info;
+use tracing::{info, warn};
+
+use super::CLOSE_UNRESPONSIVE;
 
 use crate::session::state::{AppState, CameraRole, FrameStream, Resolution, StreamKind, ViewerGuard};
 
@@ -120,6 +123,65 @@ impl Attachment {
     }
 }
 
+/// A frame send this slow is worth a warning: the `pong` the page's liveness check waits
+/// for queues behind it, and past that window (`IMAGE_LIVENESS_MS`, `useImageStream`) the
+/// page drops the socket mid-frame and reconnects — over and over, on a link that slow.
+#[cfg(not(test))]
+const SLOW_FRAME_SEND: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const SLOW_FRAME_SEND: Duration = Duration::ZERO;
+
+/// Sends one client its frames, timing each: the last one's size and duration are what
+/// explain a page that dropped the socket as unresponsive.
+struct FrameSender {
+    client: StreamClient,
+    last: Option<(usize, Duration)>,
+}
+
+impl FrameSender {
+    fn new(client: StreamClient) -> Self {
+        Self { client, last: None }
+    }
+
+    /// `false` once the socket is gone.
+    async fn send(&mut self, socket: &mut WebSocket, payload: bytes::Bytes) -> bool {
+        let bytes = payload.len();
+        let started = Instant::now();
+        let delivered = socket.send(Message::Binary(payload)).await.is_ok();
+        let took = started.elapsed();
+        self.last = Some((bytes, took));
+        if took >= SLOW_FRAME_SEND {
+            warn!(
+                page = self.client.endpoint.page(),
+                peer = %describe_peer(self.client.peer),
+                bytes,
+                took = ?took,
+                kib_per_s = (bytes as f64 / 1024.0 / took.as_secs_f64().max(1e-6)).round(),
+                delivered,
+                "Image stream frame was slow to send; past its liveness window the page drops the socket mid-frame"
+            );
+        }
+        delivered
+    }
+
+    /// Warn when the page closed the socket because nothing came back to its ping, naming
+    /// the frame that was in flight.
+    fn closed(&self, frame: Option<&CloseFrame>) {
+        let Some(frame) = frame.filter(|frame| frame.code == CLOSE_UNRESPONSIVE) else {
+            return;
+        };
+        let (bytes, took) = self.last.map_or((None, None), |(bytes, took)| (Some(bytes), Some(took)));
+        warn!(
+            page = self.client.endpoint.page(),
+            peer = %describe_peer(self.client.peer),
+            reason = %frame.reason,
+            last_frame_bytes = ?bytes,
+            last_frame_took = ?took,
+            "The page dropped the image stream as unresponsive"
+        );
+    }
+}
+
 /// The resolution a family streams at now — the same live setting the producers read.
 pub(super) async fn configured_resolution(state: &AppState, kind: StreamKind) -> Resolution {
     state.settings.snapshot().stream_resolution(kind)
@@ -149,8 +211,9 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
         "Image stream client connected"
     );
 
+    let mut sender = FrameSender::new(client);
     let mut last_sent: u64 = 0;
-    if send_current(&mut socket, &state, &attached.stream, kind, &mut last_sent).await == Delivery::Closed {
+    if send_current(&mut socket, &mut sender, &state, &attached.stream, kind, &mut last_sent).await == Delivery::Closed {
         return;
     }
 
@@ -163,7 +226,11 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
                             break;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(Message::Close(frame))) => {
+                        sender.closed(frame.as_ref());
+                        break;
+                    }
+                    Some(Err(_)) | None => break,
                     _ => {}
                 }
             }
@@ -182,7 +249,7 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
                 let Some(payload) = attached.stream.payload(kind, current) else {
                     continue;
                 };
-                if socket.send(Message::Binary(payload)).await.is_err() {
+                if !sender.send(&mut socket, payload).await {
                     break;
                 }
                 last_sent = current;
@@ -207,7 +274,8 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
                     peer = %describe_peer(client.peer),
                     "Image stream client switched camera"
                 );
-                let delivery = send_current(&mut socket, &state, &attached.stream, kind, &mut last_sent).await;
+                let delivery =
+                    send_current(&mut socket, &mut sender, &state, &attached.stream, kind, &mut last_sent).await;
                 // The client still shows the previous camera's picture, and with nothing to
                 // replace it would go on showing it as this camera's, indefinitely.
                 if delivery == Delivery::NothingToSend
@@ -235,6 +303,7 @@ enum Delivery {
 /// Send the frame `stream` shows now, if it has one.
 async fn send_current(
     socket: &mut WebSocket,
+    sender: &mut FrameSender,
     state: &AppState,
     stream: &Arc<FrameStream>,
     kind: StreamKind,
@@ -243,7 +312,7 @@ async fn send_current(
     let Some((counter, payload)) = payload_for_client(state, stream, kind).await else {
         return Delivery::NothingToSend;
     };
-    if socket.send(Message::Binary(payload)).await.is_err() {
+    if !sender.send(socket, payload).await {
         return Delivery::Closed;
     }
     *last_sent = counter;

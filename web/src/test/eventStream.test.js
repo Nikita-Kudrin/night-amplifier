@@ -1,5 +1,6 @@
 import {mount} from '@vue/test-utils'
-import {createEventStreamStub} from './eventStream.js'
+import {createEventStreamStub, serverEvent} from './eventStream.js'
+import {SERVER_EVENTS} from '../composables/api.events.js'
 import {useEventStream} from '../composables/useEventStream.js'
 import {MockWebSocket, setupGlobalWebSocketMock} from '../composables/__tests__/webSocketTestUtils.js'
 
@@ -49,5 +50,17 @@ describe('createEventStreamStub', () => {
         stub.clearError()
         expect(stub.lastError.value).toBeNull()
         expect(stub.clearError).toHaveBeenCalledOnce()
+    })
+})
+
+describe('serverEvent', () => {
+    it('builds every event the server sends', () => {
+        for (const type of Object.keys(SERVER_EVENTS)) expect(serverEvent(type).type).toBe(type)
+    })
+
+    it('refuses an event the server never sends, or a field it does not carry', () => {
+        expect(() => serverEvent('capture_count')).toThrow("no 'capture_count' event")
+        expect(() => serverEvent('frame_dropped', {dropped: 3})).toThrow("'frame_dropped' carries no dropped")
+        expect(serverEvent('frame_dropped', {dropped_count: 3})).toEqual({type: 'frame_dropped', dropped_count: 3})
     })
 })

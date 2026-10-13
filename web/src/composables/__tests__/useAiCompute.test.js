@@ -8,7 +8,7 @@ vi.mock('../api.js', async (importOriginal) =>
 import {effectScope, nextTick, ref} from 'vue'
 import {getAiCompute} from '../api.js'
 import {AI_COMPUTE_POLL_MS, __resetForTests as resetAiCompute, useAiCompute} from '../useAiCompute.js'
-import {createEventStreamStub, emitEvent} from '../../test/eventStream.js'
+import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream.js'
 
 const report = (state, extra = {}) => ({state, generation: 1, rungs: [], ...extra})
 
@@ -130,10 +130,18 @@ describe('useAiCompute', () => {
         expect(getAiCompute).toHaveBeenCalledTimes(1)
     })
 
-    it('polls a benchmark while the socket is down, and refetches once it reopens', async () => {
+    /** The socket coming up, and the server's sync that follows. */
+    async function reopen(stream) {
+        stream.connected.value = true
+        await nextTick()
+        emitSync(stream)
+    }
+
+    it('polls a benchmark while the socket is down, and refetches on the sync once it reopens', async () => {
         getAiCompute.mockResolvedValue(report('benchmarking'))
         const {store, stream} = connected()
         await store.refresh()
+        emitSync(stream)
 
         stream.connected.value = false
         await nextTick()
@@ -141,34 +149,46 @@ describe('useAiCompute', () => {
         expect(getAiCompute).toHaveBeenCalledTimes(3)
 
         getAiCompute.mockResolvedValue(report('ready'))
-        stream.connected.value = true
-        await nextTick()
+        await reopen(stream)
         await vi.runOnlyPendingTimersAsync()
         expect(store.report.value.state).toBe('ready')
         await vi.advanceTimersByTimeAsync(10 * AI_COMPUTE_POLL_MS)
         expect(getAiCompute).toHaveBeenCalledTimes(4)
     })
 
-    it('does not refetch a report App loaded when the socket first opens', async () => {
+    // The socket stayed up, but the `ai_compute_changed` that ended the benchmark was lost.
+    it('refetches on a sync after this client lagged', async () => {
+        getAiCompute.mockResolvedValueOnce(report('benchmarking')).mockResolvedValue(report('ready'))
+        const {store, stream} = connected()
+        await store.refresh()
+        emitSync(stream)
+        await vi.runOnlyPendingTimersAsync()
+
+        emitSync(stream, {cause: 'lagged', dropped: 144})
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getAiCompute).toHaveBeenCalledTimes(2)
+        expect(store.benchmarking.value).toBe(false)
+    })
+
+    it('does not refetch a report App loaded on the first sync', async () => {
         getAiCompute.mockResolvedValue(report('ready'))
         const {store, stream} = connected({up: false})
         await store.refresh()
 
-        stream.connected.value = true
-        await nextTick()
+        await reopen(stream)
         await vi.runOnlyPendingTimersAsync()
 
         expect(getAiCompute).toHaveBeenCalledTimes(1)
     })
 
-    it('waits out a first load in flight when the socket first opens, without a second read', async () => {
+    it('waits out a first load in flight on the first sync, without a second read', async () => {
         let answer
         getAiCompute.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
         const {store, stream} = connected({up: false})
         const loading = store.refresh()
 
-        stream.connected.value = true
-        await nextTick()
+        await reopen(stream)
         answer(report('ready'))
         await loading
         await vi.runOnlyPendingTimersAsync()
@@ -177,13 +197,12 @@ describe('useAiCompute', () => {
     })
 
     // With the socket up nothing polls, so a failed first load was never retried.
-    it('retries a failed first load when the socket first opens', async () => {
+    it('retries a failed first load on the first sync', async () => {
         getAiCompute.mockRejectedValueOnce(new Error('Server starting')).mockResolvedValue(report('ready'))
         const {store, stream} = connected({up: false})
         const loading = store.refresh()
 
-        stream.connected.value = true
-        await nextTick()
+        await reopen(stream)
         await loading
         await vi.runOnlyPendingTimersAsync()
 

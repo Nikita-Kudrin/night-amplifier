@@ -6,13 +6,11 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use futures_util::StreamExt;
 use serde_json::{json, Value};
-use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
 
 use super::helpers::create_test_state;
-use super::image_stream_clients::{start_server, Client};
+use super::image_stream_clients::{events_until_synced, start_server};
 use crate::render::display::RenderReadyFrame;
 use crate::session::events::ServerEvent;
 use crate::session::state::{AppState, CameraRole, ConnectedCameraInfo};
@@ -164,13 +162,6 @@ async fn a_guide_camera_with_no_frame_yet_has_no_snapshot() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-async fn next_event(client: &mut Client) -> Value {
-    match tokio::time::timeout(Duration::from_secs(5), client.next()).await {
-        Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str(&text).unwrap(),
-        other => panic!("expected a JSON event, got {other:?}"),
-    }
-}
-
 /// A reloaded `/` must show the toggle where the operator left it.
 #[tokio::test]
 async fn the_events_socket_opens_with_the_guide_camera_when_it_is_viewed() {
@@ -179,9 +170,9 @@ async fn the_events_socket_opens_with_the_guide_camera_when_it_is_viewed() {
     crate::session::services::CameraService::select_viewed_camera(&server.state, CameraRole::Guide).unwrap();
 
     let mut client = server.connect("/ws/events").await;
-    let opening: Vec<Value> = [next_event(&mut client).await, next_event(&mut client).await, next_event(&mut client).await].into();
+    let opening = events_until_synced(&mut client).await;
 
-    assert_eq!(opening[2], json!({"type": "viewed_camera_changed", "camera": "guide"}));
+    assert!(opening.contains(&json!({"type": "viewed_camera_changed", "camera": "guide"})), "{opening:?}");
 }
 
 /// A client that fell behind may have missed the toggle; it is told again.
@@ -193,24 +184,15 @@ async fn a_lagged_events_client_is_told_the_viewed_camera_again() {
     let server = start_server().await;
     install_guide(&server.state);
     let mut client = server.connect("/ws/events").await;
-    for _ in 0..3 {
-        next_event(&mut client).await;
-    }
+    events_until_synced(&mut client).await;
 
     crate::session::services::CameraService::select_viewed_camera(&server.state, CameraRole::Guide).unwrap();
     for i in 0..400 {
         server.state.send_error(format!("burst {i}"));
     }
 
-    let mut seen = Vec::new();
-    loop {
-        let event = next_event(&mut client).await;
-        let after_warning = seen.iter().any(|e: &Value| e["type"] == "warning");
-        seen.push(event.clone());
-        if after_warning && event["type"] == "viewed_camera_changed" {
-            assert_eq!(event["camera"], "guide");
-            return;
-        }
-        assert!(seen.len() < 1000, "no viewed camera after the lag warning: {:?}", &seen[..5]);
-    }
+    let resync = events_until_synced(&mut client).await;
+    assert_eq!(resync.last().unwrap()["cause"], "lagged");
+    let viewed: Vec<_> = resync.iter().filter(|e| e["type"] == "viewed_camera_changed").collect();
+    assert_eq!(viewed, [&json!({"type": "viewed_camera_changed", "camera": "guide"})]);
 }

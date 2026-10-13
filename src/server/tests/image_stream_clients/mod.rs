@@ -211,6 +211,27 @@ pub(super) async fn next_frame(client: &mut Client) -> Vec<u8> {
     .expect("no frame arrived")
 }
 
+/// The `/ws/events` messages up to and including the next `synced`, which ends a sync.
+pub(super) async fn events_until_synced(client: &mut Client) -> Vec<serde_json::Value> {
+    events_until(client, |event| event["type"] == "synced").await
+}
+
+/// The `/ws/events` messages up to and including the first `last` accepts.
+pub(super) async fn events_until(client: &mut Client, last: impl Fn(&serde_json::Value) -> bool) -> Vec<serde_json::Value> {
+    let mut events = Vec::new();
+    loop {
+        let event = match tokio::time::timeout(Duration::from_secs(5), client.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            other => panic!("expected a JSON event, got {other:?} after {} events", events.len()),
+        };
+        let done = last(&event);
+        events.push(event);
+        if done {
+            return events;
+        }
+    }
+}
+
 /// Asserts no binary frame arrives within `wait`.
 pub(super) async fn assert_no_frame(client: &mut Client, wait: Duration, context: &str) {
     let got = tokio::time::timeout(wait, async {

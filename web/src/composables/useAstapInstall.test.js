@@ -2,17 +2,18 @@ import {defineComponent, h, nextTick, ref} from 'vue'
 import {flushPromises, mount} from '@vue/test-utils'
 import {astapStatus, databaseType} from '../test/fixtures.js'
 import {DEFAULT_ASTAP_DATABASE, fetchAstapState, INSTALL_SETTLE_MS, useAstapInstall} from './useAstapInstall.js'
+import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents.js'
 
 vi.mock('./api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
-import {getAstapDatabases, getAstapStatus, installAstap} from './api.js'
+import {ApiError, getAstapDatabases, getAstapStatus, installAstap} from './api.js'
 
 const NOT_INSTALLED = astapStatus({binary_installed: false, database_installed: false, installed_databases: [], ready: false})
 
-function mountInstall(options = {}) {
+function mountInstall(options = {}, eventStream = null) {
     const progress = ref(null)
-    const eventStream = {astapInstallProgress: progress, clearAstapInstallProgress: vi.fn()}
+    eventStream ??= {astapInstallProgress: progress, clearAstapInstallProgress: vi.fn()}
     let install
     const Host = defineComponent({
         setup() {
@@ -170,5 +171,152 @@ describe('useAstapInstall', () => {
         expect(getAstapStatus).not.toHaveBeenCalled()
         expect(onComplete).not.toHaveBeenCalled()
         expect(eventStream.clearAstapInstallProgress).toHaveBeenCalled()
+    })
+})
+
+/** The events as the stream dispatches them, through the real install event table. */
+describe('useAstapInstall after a sync', () => {
+    function mountWithEvents(options = {}) {
+        const {handlers, state} = createInstallEvents()
+        return {...mountInstall(options, state), handlers}
+    }
+
+    beforeEach(() => {
+        vi.clearAllMocks()
+        getAstapStatus.mockResolvedValue(NOT_INSTALLED)
+        getAstapDatabases.mockResolvedValue([databaseType()])
+        vi.useFakeTimers()
+    })
+    afterEach(() => vi.useRealTimers())
+
+    it('finishes an install whose end it missed on a completed status', async () => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        install.selectedDatabases.value = ['D80', 'G05']
+        await install.startInstall()
+        handlers.astap_install_completed({component: 'D80 Database', stage: 'Database Installed', overall_percent: 50})
+        await nextTick()
+
+        getAstapStatus.mockResolvedValue(astapStatus())
+        handlers.astap_install_status({state: 'completed'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(onComplete).toHaveBeenCalledOnce()
+        expect(onComplete).toHaveBeenCalledWith(astapStatus())
+        expect(install.installing.value).toBe(false)
+    })
+
+    it('says an install a server restart cut short did not finish', async () => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        await install.startInstall()
+        handlers.astap_install_completed({component: 'ASTAP CLI', stage: 'ASTAP CLI Installed', overall_percent: 20})
+        await nextTick()
+
+        handlers.astap_install_status({state: 'idle'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(install.error.value).toBe(`Installation failed: ${INSTALL_INTERRUPTED}`)
+        expect(install.installing.value).toBe(false)
+        expect(install.installComplete.value).toBe(false)
+        expect(onComplete).not.toHaveBeenCalled()
+    })
+
+    it('keeps an install whose request is still on the way through a sync saying idle', async () => {
+        let accept
+        installAstap.mockImplementationOnce(() => new Promise((resolve) => (accept = resolve)))
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+        const started = install.startInstall()
+
+        handlers.astap_install_status({state: 'idle'})
+        await nextTick()
+        accept({message: 'Installation started.'})
+
+        expect(await started).toBe(true)
+        expect(install.installing.value).toBe(true)
+        expect(install.error.value).toBeNull()
+    })
+
+    it('follows the install another page is running after its own click is refused', async () => {
+        installAstap.mockRejectedValueOnce(new ApiError('An installation is already running', 409))
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+
+        expect(await install.startInstall()).toBe(false)
+        handlers.astap_install_progress({
+            component: 'D80 Database', bytes_downloaded: 1024, total_bytes: 4096, percent: 25,
+            stage: 'Downloading Database', overall_percent: 40,
+        })
+        await nextTick()
+
+        expect(install.installing.value).toBe(true)
+        expect(install.error.value).toBeNull()
+    })
+
+    it('shows the error of a failure it missed', async () => {
+        const {install, handlers} = mountWithEvents()
+        await flushPromises()
+        await install.startInstall()
+
+        handlers.astap_install_status({state: 'failed', error: 'network'})
+        await nextTick()
+
+        expect(install.error.value).toBe('Installation failed: network')
+        expect(install.installing.value).toBe(false)
+    })
+
+    it('joins an install another page started, and finishes with it', async () => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+
+        handlers.astap_install_status({
+            state: 'running',
+            progress: {
+                type: 'astap_install_progress', component: 'G05 Database', bytes_downloaded: 512 * 1024,
+                total_bytes: 1024 * 1024, percent: 50, stage: 'Downloading Database', overall_percent: 60,
+            },
+        })
+        await nextTick()
+
+        expect(install.installing.value).toBe(true)
+        expect(install.canInstall.value).toBe(false)
+        expect(install.progressText.value).toBe('Downloading G05 Database: 512 KB / 1.0 MB (50.0%)')
+        expect(install.progressPercent.value).toBe(60)
+
+        getAstapStatus.mockResolvedValue(astapStatus())
+        handlers.astap_install_completed({component: 'G05 Database', stage: 'Database Installed', overall_percent: 100})
+        handlers.astap_install_status({state: 'completed'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(onComplete).toHaveBeenCalledOnce()
+        expect(install.installing.value).toBe(false)
+    })
+
+    it.each(['idle', 'completed', 'failed'])('does nothing on a connect that finds it %s', async (state) => {
+        const onComplete = vi.fn()
+        const {install, handlers} = mountWithEvents({onComplete})
+        await flushPromises()
+        getAstapStatus.mockClear()
+
+        handlers.astap_install_status({state, error: 'an old failure'})
+        await nextTick()
+        await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)
+        await flushPromises()
+
+        expect(onComplete).not.toHaveBeenCalled()
+        expect(getAstapStatus).not.toHaveBeenCalled()
+        expect(install.installing.value).toBe(false)
+        expect(install.error.value).toBeNull()
+        expect(install.progressText.value).toBe('')
     })
 })

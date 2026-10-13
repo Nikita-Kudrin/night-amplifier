@@ -23,9 +23,9 @@ vi.mock('./composables/useAppState.js', () => ({
   }))
 }))
 
-vi.mock('./composables/useEventStream.js', async () => {
+vi.mock('./composables/useEventStream.js', async (importOriginal) => {
   const { createEventStreamStub } = await import('./test/eventStream.js')
-  return { useEventStream: vi.fn(() => createEventStreamStub()) }
+  return { ...await importOriginal(), useEventStream: vi.fn(() => createEventStreamStub()) }
 })
 
 vi.mock('./composables/api.js', async (importOriginal) =>
@@ -159,6 +159,7 @@ describe('App.vue Routing', () => {
 
     expect(appState.connectEvents).toHaveBeenCalledExactlyOnceWith(events)
     expect(events.on).toHaveBeenCalledWith('ai_compute_changed', expect.any(Function))
+    expect(events.onSync).toHaveBeenCalled()
   })
 
   it('leaves the app interactive when there is no benchmark', async () => {

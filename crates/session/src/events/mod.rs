@@ -4,19 +4,25 @@
 
 mod ai_compute;
 mod camera_list;
+#[cfg(any(test, feature = "api-schema"))]
+mod examples;
 mod install;
+mod push_to;
+mod sync;
 
 pub use ai_compute::spawn_ai_compute_watcher;
 pub use camera_list::{CameraInfoResponse, CameraListEntry, SensorModeDto};
-pub use install::push_to_events;
+pub use push_to::{PushDirection, PushToTarget, SolveStage, SolveStatus, SolveVerdict};
+pub use sync::{SyncCause, Topic, TopicKind};
 
 use night_amplifier_core::push_to::PushToDirectionResponse;
 use serde::Serialize;
 
-use super::state::{CameraPhase, CameraRole, CaptureState};
+use super::state::{CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus};
 
 /// Where the main stream's frames were cut from the stack, in the stack's pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct StreamCrop {
     pub x: usize,
     pub y: usize,
@@ -29,6 +35,7 @@ pub struct StreamCrop {
 
 /// The size of the `/ws/stream` frame a [`ServerEvent::StackCropChanged`] arrives with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct StreamFrameSize {
     pub width: usize,
     pub height: usize,
@@ -36,6 +43,7 @@ pub struct StreamFrameSize {
 
 /// Event types sent to WebSocket clients
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerEvent {
     /// Capture state changed
@@ -148,6 +156,7 @@ pub enum ServerEvent {
     /// somebody intervenes.
     CameraReconnectFailed {
         name: String,
+        role: CameraRole,
         attempts: u32,
         reason: String,
     },
@@ -155,6 +164,10 @@ pub enum ServerEvent {
     /// A reconnect succeeded and the interrupted capture resumed, keeping the
     /// stack it had already accumulated.
     CaptureResumed { name: String, stacked_count: u64 },
+
+    /// `role` has no recovery to report: its camera came back, or the observer disconnected
+    /// or replaced it. The "none" of `camera_reconnecting` / `camera_reconnect_failed`.
+    CameraRecoveryCleared { role: CameraRole },
 
     /// The server left Focus/Finder mode on its own: a running capture switched to stacking,
     /// which needs the correction the mode holds off. Pressing Start stays silent — the
@@ -183,8 +196,23 @@ pub enum ServerEvent {
         delivered_count: u64,
     },
 
-    /// Warning message (e.g., client too slow)
+    /// Every frame counter at once, replacing the client's: sent when a client connects
+    /// and after it fell behind, since the per-frame events carry only some of them.
+    CaptureCounts {
+        frame_count: u64,
+        stacked_count: u64,
+        rejected_count: u64,
+        dropped_count: u64,
+        delivered_count: u64,
+        last_rejection_reason: Option<String>,
+    },
+
+    /// Warning message
     Warning { message: String },
+
+    /// The sync snapshot just sent is complete: the client re-reads every
+    /// [`TopicKind::Refetch`] topic. `dropped` counts the events a lagged client missed.
+    Synced { cause: SyncCause, dropped: u64 },
 
     // ========================================================================
     // Push-To Navigation Events
@@ -237,24 +265,17 @@ pub enum ServerEvent {
     /// is `None` once solving is possible again, which clears the notice.
     PushToBlocked { reason: Option<String> },
 
-    /// Push direction updated. `solved_camera` names the camera whose solve oriented
-    /// `angle_deg` — see [`PushToDirectionResponse::solved_camera`].
-    PushDirectionUpdated {
-        angle_deg: f64,
-        distance_deg: f64,
-        direction_hint: String,
-        is_close: bool,
-        fov_deg: Option<f64>,
-        solved_camera: Option<String>,
-    },
+    /// Push direction updated.
+    PushDirectionUpdated(PushDirection),
+
+    /// No push direction: no target, or none computed for the current one yet.
+    PushDirectionCleared,
+
+    /// The whole solve state, as the sync snapshot restates it.
+    PlateSolvingStatus(SolveStatus),
 
     /// Target changed
-    TargetChanged {
-        name: Option<String>,
-        designation: Option<String>,
-        ra_degrees: f64,
-        dec_degrees: f64,
-    },
+    TargetChanged(PushToTarget),
 
     /// Target cleared
     TargetCleared,
@@ -323,10 +344,24 @@ pub enum ServerEvent {
 
     /// Catalog installation failed
     CatalogInstallFailed { error: String },
+
+    /// Where the ASTAP install stands: sent as one begins and ends, and restated by a sync
+    /// so a page that missed the end stops waiting on it.
+    AstapInstallStatus {
+        #[serde(flatten)]
+        status: InstallStatus,
+    },
+
+    /// Where the catalog install stands, as [`ServerEvent::AstapInstallStatus`].
+    CatalogInstallStatus {
+        #[serde(flatten)]
+        status: InstallStatus,
+    },
 }
 
 /// DTO for CaptureState serialization
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "PascalCase")]
 pub enum CaptureStateDto {
     Idle,
@@ -352,6 +387,7 @@ impl From<CaptureState> for CaptureStateDto {
 
 /// One camera in [`ServerEvent::CameraPhases`].
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CameraPhaseEntry {
     pub name: String,
     pub role: CameraRole,
@@ -496,11 +532,13 @@ impl ServerEvent {
 
     pub fn camera_reconnect_failed(
         name: impl Into<String>,
+        role: CameraRole,
         attempts: u32,
         reason: impl Into<String>,
     ) -> Self {
         ServerEvent::CameraReconnectFailed {
             name: name.into(),
+            role,
             attempts,
             reason: reason.into(),
         }
@@ -533,6 +571,17 @@ impl ServerEvent {
         ServerEvent::FrameDropped {
             dropped_count,
             delivered_count,
+        }
+    }
+
+    pub fn capture_counts(counts: FrameCounts, last_rejection_reason: Option<String>) -> Self {
+        ServerEvent::CaptureCounts {
+            frame_count: counts.frames,
+            stacked_count: counts.stacked,
+            rejected_count: counts.rejected,
+            dropped_count: counts.dropped,
+            delivered_count: counts.delivered,
+            last_rejection_reason,
         }
     }
 
@@ -577,32 +626,7 @@ impl ServerEvent {
     }
 
     pub fn push_direction_updated(direction: PushToDirectionResponse, fov_deg: Option<f64>) -> Self {
-        ServerEvent::PushDirectionUpdated {
-            angle_deg: direction.angle_deg,
-            distance_deg: direction.distance_deg,
-            direction_hint: direction.direction_hint,
-            is_close: direction.is_close,
-            fov_deg,
-            solved_camera: direction.solved_camera,
-        }
-    }
-
-    pub fn target_changed(
-        name: Option<String>,
-        designation: Option<String>,
-        ra_degrees: f64,
-        dec_degrees: f64,
-    ) -> Self {
-        ServerEvent::TargetChanged {
-            name,
-            designation,
-            ra_degrees,
-            dec_degrees,
-        }
-    }
-
-    pub fn target_cleared() -> Self {
-        ServerEvent::TargetCleared
+        ServerEvent::PushDirectionUpdated(PushDirection::new(direction, fov_deg))
     }
 
     /// Serialize to JSON string
@@ -724,11 +748,11 @@ mod tests {
 
     #[test]
     fn test_warning_serialization() {
-        let event = ServerEvent::warning("Dropped 5 events");
+        let event = ServerEvent::warning("Disk nearly full");
         let json: serde_json::Value = serde_json::from_str(&event.to_json()).unwrap();
 
         assert_eq!(json["type"], "warning");
-        assert_eq!(json["message"], "Dropped 5 events");
+        assert_eq!(json["message"], "Disk nearly full");
     }
 
     #[test]

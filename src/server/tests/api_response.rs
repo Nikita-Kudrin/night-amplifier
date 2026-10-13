@@ -100,7 +100,7 @@ fn test_capture_status_response_from_session() {
     assert_eq!(response.frame_count, 100);
     assert_eq!(response.stacked_count, 95);
     assert_eq!(response.rejected_count, 5);
-    assert_eq!(response.last_error, None);
+    assert_eq!(response.last_rejection_reason, None);
     assert_eq!(response.started_at, Some(1234567890));
     assert_eq!(response.exposure_us, 2_000_000);
     assert_eq!(response.gain, 150);

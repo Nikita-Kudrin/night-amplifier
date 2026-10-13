@@ -1,6 +1,7 @@
 import {computed, readonly, ref} from 'vue'
 import {listCameras} from './api.js'
 import {findCamera, isSimulator} from './appContext.js'
+import {onEvents, resyncOn} from './useEventStream.js'
 import {CAMERA_PHASES} from '../constants'
 
 function withoutKey(map, key) {
@@ -8,13 +9,6 @@ function withoutKey(map, key) {
     const next = {...map}
     delete next[key]
     return next
-}
-
-/** Whether the snapshot names exactly the cameras the list holds as connected. */
-function sameCameraNames(snapshot, list) {
-    const named = new Set((snapshot ?? []).map((camera) => camera.name))
-    const connected = list.filter((camera) => camera.connected)
-    return named.size === connected.length && connected.every((camera) => named.has(camera.name))
 }
 
 /**
@@ -26,6 +20,7 @@ function sameCameraNames(snapshot, list) {
  */
 export function createCameraStore({loading = () => false} = {}) {
     const cameras = ref([])
+    let listed = false
     const selectedCameraId = ref(null)
     // Latest live camera status keyed by camera name (cooled cameras)
     const cameraStatus = ref({})
@@ -55,10 +50,15 @@ export function createCameraStore({loading = () => false} = {}) {
     const selectedCameraRole = computed(() => selectedCamera.value?.role || 'main')
     const isSimulatorCamera = computed(() => isSimulator(selectedCamera.value))
 
-    async function refreshCameras() {
+    /**
+     * @param {{discover?: boolean}} [options] - `discover: false` reads what the server's
+     *   last enumeration found instead of enumerating the USB bus again.
+     */
+    async function refreshCameras({discover = true} = {}) {
         try {
             const requestedAt = Date.now()
-            cameras.value = await listCameras()
+            cameras.value = await listCameras({discover})
+            listed = true
             seedCameraPhases(cameras.value, requestedAt)
             // Drop a selection whose camera has gone, so the settings panel never edits a
             // camera that is no longer there.
@@ -165,18 +165,22 @@ export function createCameraStore({loading = () => false} = {}) {
 
     let listing = null
     let relist = false
+    let relistDiscovers = false
 
     /**
      * The list again for an event, one request at a time: asked during one, it reads once
-     * more after it, since that answer may predate the event. `refreshCameras` logs a
-     * failure; an event has no caller to hand it to.
+     * more after it, since that answer may predate the event, enumerating if any of the
+     * askers wanted that. `refreshCameras` logs a failure; an event has no caller to hand it to.
      */
-    function refreshQuietly() {
+    function refreshQuietly({discover = true} = {}) {
         relist = true
+        relistDiscovers ||= discover
         listing ??= (async () => {
             while (relist) {
+                const enumerate = relistDiscovers
                 relist = false
-                await refreshCameras().catch(() => {})
+                relistDiscovers = false
+                await refreshCameras({discover: enumerate}).catch(() => {})
             }
             listing = null
         })()
@@ -198,14 +202,10 @@ export function createCameraStore({loading = () => false} = {}) {
         },
         camera_phases(event) {
             replaceCameraPhases(event.cameras)
-            // Sent on (re)connect: a camera connected or disconnected while this page was
-            // away has no other way to reach the list. Not during the first load, which is
-            // fetching the list already.
-            if (!loading() && !sameCameraNames(event.cameras, cameras.value)) refreshQuietly()
         },
         // Any client's connect, this page's included: the list is the only place a new
         // camera's id and role reach, so another tab once showed no guide camera at all.
-        camera_connected: refreshQuietly,
+        camera_connected: () => refreshQuietly(),
         camera_disconnected(event) {
             updateCameraPhase(event.name, CAMERA_PHASES.DISCONNECTED)
             refreshQuietly()
@@ -213,6 +213,18 @@ export function createCameraStore({loading = () => false} = {}) {
         camera_discovered(event) {
             addDiscoveredCamera(event.camera)
         },
+    }
+
+    /**
+     * Subscribes to `stream` (`useEventStream()`); the caller's scope owns it. A sync lists
+     * the cameras again, since a connect or disconnect may have been missed meanwhile; the
+     * first only when nothing has listed them yet or is listing them. Without enumerating:
+     * a sync follows every reconnect and lag of every page, and each enumeration opens
+     * every idle QHY/ZWO device for seconds, mid-capture too.
+     */
+    function connectEvents(stream) {
+        onEvents(stream, handlers)
+        resyncOn(stream, () => refreshQuietly({discover: false}), {skipFirst: () => listed || loading()})
     }
 
     return {
@@ -237,6 +249,6 @@ export function createCameraStore({loading = () => false} = {}) {
         updateCameraPhase,
         replaceCameraPhases,
         addDiscoveredCamera,
-        handlers,
+        connectEvents,
     }
 }

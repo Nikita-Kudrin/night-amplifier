@@ -7,6 +7,7 @@ import {
     SA09_CHUNK_DESCRIPTOR_SIZE,
     SA09_HEADER_SIZE,
 } from '../../utils/frameDecoder.js'
+import {serverEvent} from '../../test/eventStream.js'
 
 // --- Constants ---
 const WS_STATES = {
@@ -41,9 +42,10 @@ export class MockWebSocket {
         MockWebSocket.lastSent = data
     }
 
-    close() {
+    close(code = 1000, reason = '') {
         this.readyState = MockWebSocket.CLOSED
-        this.onclose?.({code: 1000})
+        this.closedWith = {code, reason}
+        this.onclose?.({code, reason})
     }
 
     simulateOpen() {
@@ -106,8 +108,15 @@ export async function openWebSocket() {
     await nextTick()
 }
 
+/** Sends `eventData`, held to the server's catalogue (`serverEvent`), on the first socket. */
 export async function sendEvent(eventData) {
-    getWebSocket().simulateMessage(JSON.stringify(eventData))
+    getWebSocket().simulateMessage(JSON.stringify(serverEvent(eventData.type, eventData)))
+    await nextTick()
+}
+
+/** Ends a sync on the newest socket, as the server's `synced` does after its snapshot. */
+export async function syncWebSocket({cause = 'connect', dropped = 0} = {}) {
+    MockWebSocket.latest.simulateMessage(JSON.stringify({type: 'synced', cause, dropped}))
     await nextTick()
 }
 

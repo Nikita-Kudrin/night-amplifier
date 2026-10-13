@@ -14,9 +14,9 @@ vi.mock('./composables/api.js', async (importOriginal) =>
         getAstapStatus: vi.fn().mockResolvedValue({ready: true, installed_databases: []}),
     }))
 
-vi.mock('./composables/useEventStream.js', async () => {
+vi.mock('./composables/useEventStream.js', async (importOriginal) => {
     const {createEventStreamStub} = await import('./test/eventStream.js')
-    return {useEventStream: vi.fn(() => createEventStreamStub())}
+    return {...await importOriginal(), useEventStream: vi.fn(() => createEventStreamStub())}
 })
 
 const settingsRef = ref(null)

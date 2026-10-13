@@ -2,6 +2,10 @@ import {ref, toValue} from 'vue'
 import {tryOnScopeDispose} from './lifecycle.js'
 import {WS_RECONNECT} from '../constants'
 
+/** Sent closing a socket that answered nothing for its liveness window: `CLOSE_UNRESPONSIVE` on the server. */
+export const WS_CLOSE_UNRESPONSIVE = 4000
+const UNRESPONSIVE_REASON = 'No answer to ping'
+
 /**
  * WebSocket connection manager composable
  * @param {string} path - WebSocket path (e.g., '/ws/events')
@@ -18,6 +22,10 @@ export function useWebSocket(path, options = {}) {
         onOpen = null,
         onClose = null,
         onError = null,
+        // How long a pinged socket may answer nothing before it is dropped as dead; `null`
+        // never drops one. Any message answers, so a socket whose single message takes
+        // longer to arrive than this — a big frame on weak Wi-Fi — needs a longer window.
+        livenessTimeout = 2 * WS_RECONNECT.pingInterval,
     } = options
 
     const connected = ref(false)
@@ -27,6 +35,7 @@ export function useWebSocket(path, options = {}) {
     let ws = null
     let reconnectTimer = null
     let pingTimer = null
+    let livenessTimer = null
 
     /**
      * Get the WebSocket URL
@@ -69,13 +78,7 @@ export function useWebSocket(path, options = {}) {
 
             socket.onclose = (event) => {
                 if (ws !== socket) return
-                connected.value = false
-                stopPing()
-                onClose?.(event)
-
-                if (reconnect) {
-                    scheduleReconnect()
-                }
+                lost(event)
             }
 
             socket.onerror = (event) => {
@@ -86,6 +89,8 @@ export function useWebSocket(path, options = {}) {
 
             socket.onmessage = (event) => {
                 if (ws !== socket) return
+                clearTimeout(livenessTimer)
+                livenessTimer = null
                 if (event.data === 'pong') {
                     return // Ignore ping responses
                 }
@@ -97,6 +102,30 @@ export function useWebSocket(path, options = {}) {
                 scheduleReconnect()
             }
         }
+    }
+
+    /** The current socket is gone: tell the caller, and reconnect if asked to. */
+    function lost(event) {
+        connected.value = false
+        stopPing()
+        onClose?.(event)
+        if (reconnect) {
+            scheduleReconnect()
+        }
+    }
+
+    /**
+     * A socket whose peer vanished (a server host asleep, a Wi-Fi handover) can stay OPEN
+     * for minutes before the browser notices, and the page sits on stale state. Unanswered
+     * for `livenessTimeout`, it is dropped as dead and replaced, and the new socket syncs.
+     * The close code tells the server why, which logs it with the frame that was in flight.
+     */
+    function dropDead() {
+        const socket = ws
+        // Cleared first, so the late `onclose` of the abandoned socket is ignored.
+        ws = null
+        socket?.close(WS_CLOSE_UNRESPONSIVE, UNRESPONSIVE_REASON)
+        lost({code: WS_CLOSE_UNRESPONSIVE, reason: UNRESPONSIVE_REASON})
     }
 
     /**
@@ -161,7 +190,8 @@ export function useWebSocket(path, options = {}) {
     function startPing() {
         stopPing()
         pingTimer = setInterval(() => {
-            send('ping')
+            if (!send('ping') || livenessTimeout == null) return
+            livenessTimer ??= setTimeout(dropDead, livenessTimeout)
         }, WS_RECONNECT.pingInterval)
     }
 
@@ -170,6 +200,8 @@ export function useWebSocket(path, options = {}) {
      */
     function stopPing() {
         clearInterval(pingTimer)
+        clearTimeout(livenessTimer)
+        livenessTimer = null
     }
 
     // Auto-connect if enabled

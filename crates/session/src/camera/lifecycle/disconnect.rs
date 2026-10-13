@@ -398,6 +398,10 @@ pub async fn finalize_disconnect(
     // follow only after `sync_solver_rig`, and a monitor call returning in that window
     // parked its handle in the emptied slot instead of closing it.
     let removed = state.roster.remove(role, camera_name);
+    // The observer ended it: a recovery under way, or one that gave up earlier, is over.
+    if cause == DisconnectCause::Requested {
+        state.recovery_status.clear(role);
+    }
     // After the removal, never before: see `ViewedCamera::select`. A fault that recovery
     // suspended returned above, so a USB hiccup keeps the viewers on the guide camera.
     if role == CameraRole::Guide {

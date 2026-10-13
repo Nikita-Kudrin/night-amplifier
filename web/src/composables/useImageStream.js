@@ -8,6 +8,14 @@ import {WS} from '../constants/endpoints.js'
 export const NO_FRAME = 'no_frame'
 
 /**
+ * How long an image socket may answer nothing before it is replaced. Far longer than the
+ * events socket's: the `pong` queues behind the frame being sent, and one lossless frame
+ * (megabytes) on weak Wi-Fi outlasted a minute — the socket was cut mid-frame, over and
+ * over, and the page never showed a picture. Still bounded, so a dead peer is replaced.
+ */
+export const IMAGE_LIVENESS_MS = 5 * 60 * 1000
+
+/**
  * WebSocket composable for the image streams: receives JPEG (SA10) or RGB8+LZ4 (SA09)
  * frames, exposing `frameData`/`dimensions`. The server decides size from the Streaming
  * Resolution settings and sends every client of an endpoint the same frame — nothing to negotiate here.
@@ -68,6 +76,7 @@ export function useImageStream(options = {}) {
     }
 
     const {connected, error, connect, disconnect} = useWebSocket(resolveEndpoint, {
+        livenessTimeout: IMAGE_LIVENESS_MS,
         onOpen: () => {
             startFpsTimer()
         },

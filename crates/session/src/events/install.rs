@@ -1,12 +1,9 @@
 //! The Push-To plugin's events on the wire: each [`PushToEvent`] is one `/ws/events`
 //! message, field for field.
 
-use tokio::sync::broadcast;
-
 use super::ServerEvent;
-use std::sync::Arc;
 
-use night_amplifier_core::push_to::{PushToEvent, PushToEvents};
+use night_amplifier_core::push_to::PushToEvent;
 
 impl From<PushToEvent> for ServerEvent {
     fn from(event: PushToEvent) -> Self {
@@ -72,21 +69,6 @@ impl From<PushToEvent> for ServerEvent {
             }
             PushToEvent::CatalogInstallFailed { error } => Self::CatalogInstallFailed { error },
         }
-    }
-}
-
-/// The event bus as a plugin's `PushToEvents` port. Every `/ws/events` client hears the
-/// plugin; a send with none connected is not an error.
-pub fn push_to_events(sender: &broadcast::Sender<ServerEvent>) -> Arc<dyn PushToEvents> {
-    Arc::new(Broadcast(sender.clone()))
-}
-
-/// A newtype only because the trait and `broadcast::Sender` both live in other crates.
-struct Broadcast(broadcast::Sender<ServerEvent>);
-
-impl PushToEvents for Broadcast {
-    fn emit(&self, event: PushToEvent) {
-        let _ = self.0.send(event.into());
     }
 }
 
@@ -177,16 +159,6 @@ mod tests {
         for (event, wire) in cases {
             let json = serde_json::to_string(&ServerEvent::from(event.clone())).unwrap();
             assert_eq!(json, wire, "{event:?}");
-        }
-    }
-
-    #[test]
-    fn the_broadcast_port_delivers_to_every_listener() {
-        let (sender, mut first) = broadcast::channel(4);
-        let mut second = sender.subscribe();
-        push_to_events(&sender).emit(PushToEvent::CatalogInstallStarting);
-        for receiver in [&mut first, &mut second] {
-            assert!(matches!(receiver.try_recv(), Ok(ServerEvent::CatalogInstallStarting)));
         }
     }
 }
