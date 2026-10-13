@@ -6,12 +6,13 @@ import CaptureControls from './CaptureControls.vue'
 import PushToPanel from './PushToPanel.vue'
 
 // Mock dependencies that aren't injections
-vi.mock('../composables/api.js', () => ({
-    updateSettings: vi.fn(),
-    getStackingTypes: vi.fn().mockResolvedValue([]),
-    getAstapStatus: vi.fn().mockResolvedValue({ready: false}),
-    getSimulatorConfig: vi.fn().mockResolvedValue({}),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        updateSettings: vi.fn(),
+        getStackingTypes: vi.fn().mockResolvedValue([]),
+        getAstapStatus: vi.fn().mockResolvedValue({ready: false}),
+        getSimulatorConfig: vi.fn().mockResolvedValue({}),
+    }))
 
 describe('Injection Resilience', () => {
     const commonStubs = {

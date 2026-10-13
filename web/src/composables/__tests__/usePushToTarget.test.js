@@ -15,13 +15,14 @@ function usePushToTarget(...args) {
 }
 import * as api from '../api.js'
 
-vi.mock('../api.js', () => ({
-    getPushToStatus: vi.fn(),
-    setTargetByName: vi.fn(),
-    setTargetByCoordinates: vi.fn(),
-    clearTarget: vi.fn(),
-    cancelPushToSolve: vi.fn(),
-}))
+vi.mock('../api.js', async (importOriginal) =>
+    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+        getPushToStatus: vi.fn(),
+        setTargetByName: vi.fn(),
+        setTargetByCoordinates: vi.fn(),
+        clearTarget: vi.fn(),
+        cancelPushToSolve: vi.fn(),
+    }))
 
 describe('usePushToTarget', () => {
     beforeEach(() => {

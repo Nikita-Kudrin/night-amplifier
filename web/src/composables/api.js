@@ -1,56 +1,87 @@
 /**
- * API client for Night Amplifier REST endpoints
+ * API client for Night Amplifier REST endpoints. Every call resolves with the envelope's
+ * `data` or rejects with an `ApiError`; none returns an error value.
  */
+import {API_BASE} from '../constants/endpoints.js'
 
-const BASE_URL = '/api'
+const SERVER_UNAVAILABLE = 'Server unavailable. Please ensure the server is running.'
 
 /**
- * Make an API request
- * @param {string} endpoint - API endpoint
- * @param {object} options - Fetch options
- * @returns {Promise<object>} API response data
+ * A refused or failed request. `status` is the HTTP status, 0 when the server could not be
+ * reached: 403 is a Pro-only route on a Community server (or a lapsed licence), 409 a
+ * request the server's state refuses, 503 a busy one.
  */
-async function request(endpoint, options = {}) {
-    const url = `${BASE_URL}${endpoint}`
-    const config = {
-        cache: 'no-store',
-        headers: {
-            'Content-Type': 'application/json',
-            ...options.headers,
-        },
-        ...options,
+export class ApiError extends Error {
+    constructor(message, status = 0) {
+        super(message)
+        this.name = 'ApiError'
+        this.status = status
     }
-
-    if (options.body && typeof options.body === 'object') {
-        config.body = JSON.stringify(options.body)
-    }
-
-    let response
-    try {
-        response = await fetch(url, config)
-    } catch {
-        throw new Error('Server unavailable. Please ensure the server is running.')
-    }
-
-    // Handle empty responses or non-JSON responses
-    const text = await response.text()
-    if (!text) {
-        throw new Error('Server unavailable. Please ensure the server is running.')
-    }
-
-    let data
-    try {
-        data = JSON.parse(text)
-    } catch {
-        throw new Error('Server returned invalid response. Please ensure the server is running.')
-    }
-
-    if (!data.success) {
-        throw new Error(data.error || 'API request failed')
-    }
-
-    return data.data
 }
+
+/** Whether a failure is the server declining a Pro feature it does not have. */
+export function isProOnly(error) {
+    return error?.status === 403
+}
+
+/**
+ * For a caller to whom a Pro feature is optional: the 403 a Community server answers is
+ * expected and swallowed, anything else is logged rather than lost.
+ */
+export function ignoreProOnly(error, what) {
+    if (!isProOnly(error)) console.warn(`${what} failed:`, error?.message ?? error)
+}
+
+/**
+ * Send one request. `body` goes as JSON, and only then with a Content-Type; `query` is
+ * encoded onto the URL, skipping `null`/`undefined` values.
+ */
+async function send(path, {method = 'GET', query, body} = {}) {
+    const init = {method, cache: 'no-store'}
+    if (body !== undefined) {
+        init.headers = {'Content-Type': 'application/json'}
+        init.body = JSON.stringify(body)
+    }
+    try {
+        return await fetch(withQuery(`${API_BASE}${path}`, query), init)
+    } catch {
+        throw new ApiError(SERVER_UNAVAILABLE)
+    }
+}
+
+function withQuery(url, query) {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query ?? {})) {
+        if (value != null) params.append(key, String(value))
+    }
+    const encoded = params.toString()
+    return encoded ? `${url}?${encoded}` : url
+}
+
+/** A JSON route: unwraps the server's `{success, data, error}` envelope. */
+async function request(path, options) {
+    const response = await send(path, options)
+    const text = await response.text()
+    // A proxy with no server behind it answers with an empty body.
+    if (!text) throw new ApiError(SERVER_UNAVAILABLE, response.status)
+
+    let envelope
+    try {
+        envelope = JSON.parse(text)
+    } catch {
+        throw new ApiError(
+            'Server returned invalid response. Please ensure the server is running.',
+            response.status
+        )
+    }
+    if (!envelope.success) throw new ApiError(envelope.error || 'API request failed', response.status)
+    return envelope.data
+}
+
+const get = (path, query) => request(path, {query})
+const post = (path, body) => request(path, {method: 'POST', body})
+const put = (path, body) => request(path, {method: 'PUT', body})
+const del = (path) => request(path, {method: 'DELETE'})
 
 // ============================================================================
 // Capabilities
@@ -61,7 +92,7 @@ async function request(endpoint, options = {}) {
  * @returns {Promise<Capabilities>}
  */
 export async function getCapabilities() {
-    return request('/capabilities')
+    return get('/capabilities')
 }
 
 /**
@@ -70,7 +101,7 @@ export async function getCapabilities() {
  * @returns {Promise<object>}
  */
 export async function getAiCompute() {
-    return request('/ai-compute')
+    return get('/ai-compute')
 }
 
 /**
@@ -79,7 +110,7 @@ export async function getAiCompute() {
  * @returns {Promise<object>} the report as it stands
  */
 export async function remeasureAiCompute() {
-    return request('/ai-compute/benchmark', {method: 'POST'})
+    return post('/ai-compute/benchmark')
 }
 
 // ============================================================================
@@ -121,14 +152,7 @@ export async function fetchEyepieceSnapshot(circular) {
     const giveUpAt = Date.now() + SNAPSHOT_RETRY_WINDOW_MS
 
     for (;;) {
-        let response
-        try {
-            response = await fetch(`${BASE_URL}/eyepiece/snapshot?circular=${circular}`, {
-                cache: 'no-store',
-            })
-        } catch {
-            throw new Error('Server unavailable. Please ensure the server is running.')
-        }
+        const response = await send('/eyepiece/snapshot', {query: {circular}})
 
         if (response.ok) {
             return {
@@ -136,13 +160,15 @@ export async function fetchEyepieceSnapshot(circular) {
                 filename: snapshotFilename(response.headers.get('content-disposition')),
             }
         }
-        if (response.status === 404) throw new Error('No frame to download yet.')
-        if (response.status !== 503) throw new Error(`Download failed (${response.status}).`)
+        if (response.status === 404) throw new ApiError('No frame to download yet.', 404)
+        if (response.status !== 503) {
+            throw new ApiError(`Download failed (${response.status}).`, response.status)
+        }
 
         // Busy. Only wait if the whole wait still fits inside the window, so the
         // last attempt is made before it closes rather than after.
         if (Date.now() + SNAPSHOT_RETRY_MS > giveUpAt) {
-            throw new Error('Server busy rendering another download. Try again shortly.')
+            throw new ApiError('Server busy rendering another download. Try again shortly.', 503)
         }
         await sleep(SNAPSHOT_RETRY_MS)
     }
@@ -162,10 +188,7 @@ export async function startCapture(cameraId = null, role = 'main') {
     const body = {}
     if (cameraId) body.camera_id = cameraId
     if (role !== 'main') body.role = role
-    return request('/capture/start', {
-        method: 'POST',
-        body,
-    })
+    return post('/capture/start', body)
 }
 
 /**
@@ -176,17 +199,7 @@ export async function startCapture(cameraId = null, role = 'main') {
  * @param {'main'|'guide'} [role] - Which camera to stop
  */
 export async function stopCapture(role = 'main') {
-    const options = {method: 'POST'}
-    if (role !== 'main') options.body = {role}
-    return request('/capture/stop', options)
-}
-
-/**
- * Get capture status
- * @returns {Promise<CaptureStatus>}
- */
-export async function getCaptureStatus() {
-    return request('/capture/status')
+    return post('/capture/stop', role === 'main' ? undefined : {role})
 }
 
 // ============================================================================
@@ -198,7 +211,7 @@ export async function getCaptureStatus() {
  * @returns {Promise<Settings>}
  */
 export async function getSettings() {
-    return request('/settings')
+    return get('/settings')
 }
 
 /**
@@ -207,10 +220,7 @@ export async function getSettings() {
  * @returns {Promise<Settings>}
  */
 export async function updateSettings(settings) {
-    return request('/settings', {
-        method: 'POST',
-        body: settings,
-    })
+    return post('/settings', settings)
 }
 
 /**
@@ -218,28 +228,21 @@ export async function updateSettings(settings) {
  * @returns {Promise<StackingType[]>}
  */
 export async function getStackingTypes() {
-    return request('/settings/stacking-types')
+    return get('/settings/stacking-types')
 }
 
 // ============================================================================
 // Cameras
 // ============================================================================
 
+const cameraPath = (cameraId, action) => `/cameras/${encodeURIComponent(cameraId)}/${action}`
+
 /**
  * List available cameras
  * @returns {Promise<Camera[]>}
  */
 export async function listCameras() {
-    return request('/cameras')
-}
-
-/**
- * Get camera info
- * @param {string} cameraId - Camera ID
- * @returns {Promise<CameraInfo>}
- */
-export async function getCameraInfo(cameraId) {
-    return request(`/cameras/${encodeURIComponent(cameraId)}`)
+    return get('/cameras')
 }
 
 /**
@@ -248,10 +251,7 @@ export async function getCameraInfo(cameraId) {
  * @param {'main'|'guide'} [role] - Which position it takes. Omitted means the imaging camera.
  */
 export async function connectCamera(cameraId, role = 'main') {
-    return request(`/cameras/${encodeURIComponent(cameraId)}/connect`, {
-        method: 'POST',
-        body: {role},
-    })
+    return post(cameraPath(cameraId, 'connect'), {role})
 }
 
 /**
@@ -262,10 +262,7 @@ export async function connectCamera(cameraId, role = 'main') {
  * @returns {Promise<{message: string, camera_id: string, warming_up: boolean, warmup_remaining_s?: number}>}
  */
 export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
-    return request(`/cameras/${encodeURIComponent(cameraId)}/disconnect`, {
-        method: 'POST',
-        ...(skipWarmup ? {body: {skip_warmup: true}} : {}),
-    })
+    return post(cameraPath(cameraId, 'disconnect'), skipWarmup ? {skip_warmup: true} : undefined)
 }
 
 /**
@@ -275,10 +272,7 @@ export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
  * @returns {Promise<{camera: 'main'|'guide'}>}
  */
 export async function setViewedCamera(camera) {
-    return request('/view/camera', {
-        method: 'PUT',
-        body: {camera},
-    })
+    return put('/view/camera', {camera})
 }
 
 // ============================================================================
@@ -291,10 +285,7 @@ export async function setViewedCamera(camera) {
  * @returns {Promise<SimulatorConfig>}
  */
 export async function configureSimulator(directory) {
-    return request('/simulator/configure', {
-        method: 'POST',
-        body: {directory},
-    })
+    return post('/simulator/configure', {directory})
 }
 
 /**
@@ -302,7 +293,7 @@ export async function configureSimulator(directory) {
  * @returns {Promise<SimulatorConfig>}
  */
 export async function getSimulatorConfig() {
-    return request('/simulator/config')
+    return get('/simulator/config')
 }
 
 /**
@@ -311,9 +302,7 @@ export async function getSimulatorConfig() {
  * @returns {Promise<SimulatorConfig>}
  */
 export async function removeSimulatedCamera(index) {
-    return request(`/simulator/${index}`, {
-        method: 'DELETE',
-    })
+    return del(`/simulator/${index}`)
 }
 
 // ============================================================================
@@ -325,7 +314,7 @@ export async function removeSimulatedCamera(index) {
  * @returns {Promise<PushToStatus>}
  */
 export async function getPushToStatus() {
-    return request('/push-to/status')
+    return get('/push-to/status')
 }
 
 /**
@@ -335,19 +324,16 @@ export async function getPushToStatus() {
  * @returns {Promise<CatalogEntry[]>}
  */
 export async function searchCatalog(query, limit = 20) {
-    return request(`/push-to/catalog/search?query=${encodeURIComponent(query)}&limit=${limit}`)
+    return get('/push-to/catalog/search', {query, limit})
 }
 
 /**
  * Set target by name/designation
  * @param {string} name - Object name or designation (e.g., "M31", "Andromeda")
- * @returns {Promise<{target: TargetInfo}>}
+ * @returns {Promise<TargetInfo>}
  */
 export async function setTargetByName(name) {
-    return request('/push-to/target', {
-        method: 'POST',
-        body: {name},
-    })
+    return post('/push-to/target', {name})
 }
 
 /**
@@ -355,30 +341,17 @@ export async function setTargetByName(name) {
  * @param {number} ra - Right Ascension in degrees
  * @param {number} dec - Declination in degrees
  * @param {string} [name] - Optional name for the target
- * @returns {Promise<{target: TargetInfo}>}
+ * @returns {Promise<TargetInfo>}
  */
 export async function setTargetByCoordinates(ra, dec, name = null) {
-    return request('/push-to/target', {
-        method: 'POST',
-        body: {ra_degrees: ra, dec_degrees: dec, name},
-    })
+    return post('/push-to/target', {ra_degrees: ra, dec_degrees: dec, name})
 }
 
 /**
  * Clear current target
  */
 export async function clearTarget() {
-    return request('/push-to/target', {
-        method: 'DELETE',
-    })
-}
-
-/**
- * Get push direction to target
- * @returns {Promise<PushDirection>}
- */
-export async function getPushDirection() {
-    return request('/push-to/direction')
+    return del('/push-to/target')
 }
 
 /**
@@ -389,43 +362,14 @@ export async function getPushDirection() {
  * @returns {Promise<PushToStatus>}
  */
 export async function updatePushToConfig(config) {
-    return request('/push-to/config', {
-        method: 'POST',
-        body: config,
-    })
+    return post('/push-to/config', config)
 }
 
 /**
  * Cancel current plate solving process
  */
 export async function cancelPushToSolve() {
-    return request('/push-to/cancel', {
-        method: 'POST',
-    })
-}
-
-/**
- * Get all Messier objects
- * @returns {Promise<CatalogEntry[]>}
- */
-export async function getMessierCatalog() {
-    return request('/push-to/catalog/messier')
-}
-
-/**
- * Get NGC objects
- * @returns {Promise<CatalogEntry[]>}
- */
-export async function getNGCCatalog() {
-    return request('/push-to/catalog/ngc')
-}
-
-/**
- * Get IC objects
- * @returns {Promise<CatalogEntry[]>}
- */
-export async function getICCatalog() {
-    return request('/push-to/catalog/ic')
+    return post('/push-to/cancel')
 }
 
 // ============================================================================
@@ -437,7 +381,7 @@ export async function getICCatalog() {
  * @returns {Promise<AstapStatus>}
  */
 export async function getAstapStatus() {
-    return request('/astap/status')
+    return get('/astap/status')
 }
 
 /**
@@ -445,7 +389,7 @@ export async function getAstapStatus() {
  * @returns {Promise<DatabaseType[]>}
  */
 export async function getAstapDatabases() {
-    return request('/astap/databases')
+    return get('/astap/databases')
 }
 
 /**
@@ -454,10 +398,7 @@ export async function getAstapDatabases() {
  * @returns {Promise<{message: string}>}
  */
 export async function installAstap(databaseTypes = ['D80']) {
-    return request('/astap/install', {
-        method: 'POST',
-        body: {database_types: databaseTypes},
-    })
+    return post('/astap/install', {database_types: databaseTypes})
 }
 
 // ============================================================================
@@ -469,7 +410,7 @@ export async function installAstap(databaseTypes = ['D80']) {
  * @returns {Promise<CatalogStatus>}
  */
 export async function getCatalogStatus() {
-    return request('/catalog/status')
+    return get('/catalog/status')
 }
 
 /**
@@ -478,10 +419,7 @@ export async function getCatalogStatus() {
  * @returns {Promise<{message: string}>}
  */
 export async function installCatalog(includeStars = false) {
-    return request('/catalog/install', {
-        method: 'POST',
-        body: { include_stars: includeStars },
-    })
+    return post('/catalog/install', {include_stars: includeStars})
 }
 
 // ============================================================================
@@ -493,19 +431,16 @@ export async function installCatalog(includeStars = false) {
  * @returns {Promise<{active: boolean, details: object|null}>}
  */
 export async function getLicenseStatus() {
-    return request('/about/license')
+    return get('/about/license')
 }
 
 /**
  * Update the Pro license token
- * @param {string} token 
+ * @param {string} token
  * @returns {Promise<{active: boolean, details: object}>}
  */
 export async function updateLicense(token) {
-    return request('/about/license', {
-        method: 'POST',
-        body: { token }
-    })
+    return post('/about/license', {token})
 }
 
 /**
@@ -513,24 +448,7 @@ export async function updateLicense(token) {
  * @returns {Promise<{version: string, core_license: string, third_party_licenses: string|null}>}
  */
 export async function getSoftwareLicenses() {
-    return request('/about/software-licenses')
-}
-
-// ============================================================================
-// INDI
-// ============================================================================
-
-/**
- * Test connection to an INDI server
- * @param {string} host - INDI server host
- * @param {number} port - INDI server port
- * @returns {Promise<{success: boolean, message: string}>}
- */
-export async function testIndiConnection(host, port) {
-    return request('/indi/test', {
-        method: 'POST',
-        body: {host, port},
-    })
+    return get('/about/software-licenses')
 }
 
 // Type definitions are in api.types.js

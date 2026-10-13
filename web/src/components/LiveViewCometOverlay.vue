@@ -55,7 +55,7 @@ defineEmits(['cancel'])
 
     <!-- ROI selection prompt -->
     <div v-if="isSelectingCometRoi" class="roi-prompt">
-      <div class="roi-prompt-content">
+      <div class="hud-chip roi-prompt-content">
         <span>Draw a box around the comet nucleus</span>
         <button class="btn btn-sm" @click="$emit('cancel')">Cancel</button>
       </div>
@@ -67,9 +67,9 @@ defineEmits(['cancel'])
 .comet-roi-overlay {
   position: absolute;
   border: 2px solid var(--primary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
-  z-index: 5;
+  z-index: var(--z-raised);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
@@ -77,20 +77,20 @@ defineEmits(['cancel'])
   position: absolute;
   top: -20px;
   left: 0;
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--primary);
   background: var(--surface-elevated);
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   white-space: nowrap;
 }
 
 .roi-selection {
   position: absolute;
   border: 2px dashed var(--primary);
-  background: rgba(var(--primary-rgb), 0.1);
+  background: var(--primary-bg);
   pointer-events: none;
-  z-index: 20;
+  z-index: var(--z-hud);
 }
 
 .roi-prompt {
@@ -98,18 +98,15 @@ defineEmits(['cancel'])
   top: 1rem;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 25;
+  z-index: var(--z-hud-top);
 }
 
 .roi-prompt-content {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  background: var(--surface-elevated);
   padding: 0.5rem 0.75rem;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  font-size: 0.875rem;
-  color: var(--text);
+  font-size: var(--fs-base);
+  color: var(--text-primary);
 }
 </style>

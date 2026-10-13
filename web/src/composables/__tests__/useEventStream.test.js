@@ -14,10 +14,11 @@ import {
 setupGlobalWebSocketMock()
 
 // Opening the socket loads the Push-To status; unmocked, every test fetched it for real.
-const IDLE_STATUS = {solver_ready: true, is_solving: false, current_target: null, last_position: null, direction: null}
-vi.mock('../api.js', () => ({getPushToStatus: vi.fn(async () => IDLE_STATUS)}))
+vi.mock('../api.js', async (importOriginal) =>
+    (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
 
-import {getPushToStatus} from '../api.js'
+import {ApiError, getPushToStatus} from '../api.js'
+import {pushToStatus} from '../../test/fixtures.js'
 import {useEventStream as originalUseEventStream} from '../useEventStream.js'
 import { mount } from '@vue/test-utils'
 
@@ -394,11 +395,10 @@ describe('useEventStream', () => {
         }
 
         it('shows the target and push direction the server already holds', async () => {
-            getPushToStatus.mockResolvedValueOnce({
-                ...IDLE_STATUS,
+            getPushToStatus.mockResolvedValueOnce(pushToStatus({
                 current_target: {designation: 'M31', name: 'Andromeda Galaxy', ra_degrees: 10.68, dec_degrees: 41.27},
                 direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false, solved_camera: 'Main'},
-            })
+            }))
             const {currentTarget, pushDirection} = useEventStream()
 
             await openWebSocket()
@@ -412,8 +412,9 @@ describe('useEventStream', () => {
             })
         })
 
-        it('starts empty when the status request fails', async () => {
-            getPushToStatus.mockRejectedValueOnce(new TypeError('offline'))
+        it('starts empty when the status request fails, and says so', async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+            getPushToStatus.mockRejectedValueOnce(new ApiError('Server unavailable'))
             const {currentTarget, pushDirection} = useEventStream()
 
             await openWebSocket()
@@ -421,6 +422,21 @@ describe('useEventStream', () => {
 
             expect(currentTarget.value).toBeNull()
             expect(pushDirection.value).toBeNull()
+            expect(warn).toHaveBeenCalledWith('Push-To status failed:', 'Server unavailable')
+            warn.mockRestore()
+        })
+
+        it("starts empty without a word on a Community server's refusal", async () => {
+            const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+            getPushToStatus.mockRejectedValueOnce(new ApiError('Push-To requires Pro', 403))
+            const {currentTarget} = useEventStream()
+
+            await openWebSocket()
+            await statusSettled()
+
+            expect(currentTarget.value).toBeNull()
+            expect(warn).not.toHaveBeenCalled()
+            warn.mockRestore()
         })
     })
 

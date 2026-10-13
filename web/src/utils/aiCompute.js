@@ -2,6 +2,7 @@
  * What the "AI compute" selector shows, from `GET /api/ai-compute`: Auto with its pick,
  * then one option per rung, greyed out with the reason when this computer cannot use it.
  */
+import {formatMs} from './format.js'
 
 export const AI_COMPUTE_RUNGS = [
     {value: 'npu', label: 'NPU'},
@@ -15,11 +16,6 @@ export const SYSTEM_DEPENDENCIES_URL = '/night-amplifier/system-dependencies'
 
 export function rungLabel(value) {
     return AI_COMPUTE_RUNGS.find((r) => r.value === value)?.label ?? value
-}
-
-export function formatMs(ms) {
-    if (typeof ms !== 'number' || !Number.isFinite(ms)) return ''
-    return ms < 10 ? `${ms.toFixed(1)} ms` : `${Math.round(ms)} ms`
 }
 
 function rungReport(report, value) {

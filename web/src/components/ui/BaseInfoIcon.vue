@@ -173,11 +173,11 @@ onUnmounted(() => {
 }
 
 .info-icon.warning {
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .info-icon.warning:hover {
-  color: #d97706;
+  color: var(--warning-hover);
   transform: scale(1.1);
 }
 
@@ -191,15 +191,15 @@ onUnmounted(() => {
   width: min(300px, 80vw);
   background: var(--surface-elevated);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0.75rem;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
-  z-index: 1000;
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-popover);
   pointer-events: auto;
 }
 
 .bubble-content {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--text-primary);
   text-align: left;

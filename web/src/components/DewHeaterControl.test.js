@@ -3,9 +3,10 @@ import {mount, flushPromises} from '@vue/test-utils'
 import {h, ref} from 'vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 
-vi.mock('../composables/api.js', () => ({
-    updateSettings: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        updateSettings: vi.fn(),
+    }))
 
 import {updateSettings} from '../composables/api.js'
 

@@ -6,17 +6,17 @@ import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
-import {getAppState} from '../composables/useAppState.js'
+import {useCapabilities} from '../composables/appContext.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
+import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
 
 const eventStream = inject('eventStream')
 const settings = inject('settings')
-const appState = getAppState()
-const capabilities = appState.capabilities
+const {debugLogging} = useCapabilities()
 
 const mainCamera = inject('mainCamera', computed(() => null))
 const guideCamera = inject('guideCamera', computed(() => null))
@@ -24,7 +24,7 @@ const guideCamera = inject('guideCamera', computed(() => null))
 const routePath = window.location.pathname
 // No source in the URL: the server streams whichever camera the operator views on `/`,
 // switching this socket in place.
-const endpoint = routePath === '/eyepiece_quality' ? '/ws/eyepiece_quality' : '/ws/eyepiece'
+const endpoint = eyepieceStreamEndpoint(routePath)
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 const canvasLeftRef = ref(null)
@@ -62,7 +62,7 @@ const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
  * observer puts their eye to. `/eyepiece_quality` still honours the setting.
  */
 const isBinoview = computed(() => {
-  if (routePath === '/eyepiece') return false
+  if (routePath === PAGES.EYEPIECE) return false
   return settings.value?.eyepiece?.binoview ?? true
 })
 const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
@@ -184,7 +184,7 @@ watch(isBinoview, () => {
   }, 10)
 })
 
-const isZoomAllowed = computed(() => routePath === '/eyepiece')
+const isZoomAllowed = computed(() => routePath === PAGES.EYEPIECE)
 const zoom = useEyepieceZoom(() => isZoomAllowed.value && effectiveHasFrame.value)
 const zoomScale = zoom.scale
 const zoomStyle = zoom.style
@@ -482,7 +482,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="capabilities?.debug_logging && effectiveHasFrame" class="debug-overlay">
+      <div v-if="debugLogging && effectiveHasFrame" class="debug-overlay">
         {{ backendLabel }}
       </div>
     </div>
@@ -516,7 +516,7 @@ onUnmounted(() => {
   position: absolute;
   bottom: 1rem;
   right: 1rem;
-  z-index: 10;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -530,39 +530,39 @@ onUnmounted(() => {
 }
 
 .eyepiece-btn {
-  background: rgba(30, 30, 30, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  color: #fff;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  color: var(--on-primary);
   padding: 0.5rem 1rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background var(--transition-normal);
 }
 
 .eyepiece-btn:hover {
-  background: rgba(50, 50, 50, 0.9);
+  background: var(--glass-bg-hover);
 }
 
 .eyepiece-btn:active {
-  background: rgba(70, 70, 70, 0.9);
+  background: var(--glass-bg-active);
 }
 
 /* The split button's own halves, styled to match the plain buttons beside it. */
 .download-btn :deep(.btn) {
-  background: rgba(30, 30, 30, 0.8);
+  background: var(--glass-bg);
   backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
+  border: 1px solid var(--glass-border);
+  color: var(--on-primary);
   padding: 0.5rem 0.75rem;
 }
 
 .download-btn :deep(.btn:hover:not(:disabled)) {
-  background: rgba(50, 50, 50, 0.9);
+  background: var(--glass-bg-hover);
 }
 
 .download-btn :deep(.btn:disabled) {
@@ -571,34 +571,25 @@ onUnmounted(() => {
 }
 
 .download-btn :deep(.split-button-main) {
-  border-radius: 8px 0 0 8px;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
 }
 
 .download-btn :deep(.split-button-toggle) {
-  border-radius: 0 8px 8px 0;
-  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  border-left: 1px solid var(--glass-border);
 }
 
 .download-error {
-  background: rgba(30, 30, 30, 0.85);
-  border: 1px solid var(--error, #ef4444);
-  border-radius: 8px;
-  color: #fff;
-  font-size: 0.8rem;
+  background: var(--glass-bg);
+  border: 1px solid var(--error);
+  border-radius: var(--radius-lg);
+  color: var(--on-primary);
+  font-size: var(--fs-md);
   padding: 0.4rem 0.6rem;
 }
 
-.overlay-fade {
-  transition: opacity 0.35s ease;
-}
-
-.overlay-hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
 .placeholder {
-  color: #fff;
+  color: var(--on-primary);
   font-family: sans-serif;
   display: flex;
   flex-direction: column;
@@ -625,7 +616,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid #333;
+  border-right: 1px solid var(--border);
   container-type: size;
 }
 
@@ -658,11 +649,11 @@ onUnmounted(() => {
 
 .debug-overlay {
   background: rgba(0, 0, 0, 0.6);
-  color: #fff;
+  color: var(--on-primary);
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   pointer-events: none;
 }
 </style>

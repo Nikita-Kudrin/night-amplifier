@@ -245,36 +245,7 @@ export function changeFullscreen(element) {
     document.dispatchEvent(new Event('fullscreenchange'))
 }
 
-/**
- * A `ResizeObserver` fired by hand: happy-dom does no layout, so it never reports a
- * reshape on its own. Undo with `vi.unstubAllGlobals()`.
- */
-export function installResizeObserverStub() {
-    const callbacks = new Set()
-    vi.stubGlobal('ResizeObserver', class {
-        constructor(callback) {
-            this.callback = callback
-        }
-
-        observe() {
-            callbacks.add(this.callback)
-        }
-
-        unobserve() {}
-
-        disconnect() {
-            callbacks.delete(this.callback)
-        }
-    })
-    return {
-        /** Lays the mounted view out at `width`x`height` and reports it. */
-        resizeContainer(wrapper, width, height) {
-            wrapper.element.getBoundingClientRect = () =>
-                ({left: 0, top: 0, x: 0, y: 0, width, height, right: width, bottom: height})
-            callbacks.forEach((callback) => callback([]))
-        },
-    }
-}
+export {installResizeObserverStub} from '../../../test/dom.js'
 
 /** happy-dom has no `screen.orientation`; install before mounting. */
 export function installScreenOrientationStub() {
@@ -347,7 +318,8 @@ export function setupMocks() {
     useCanvas2DRenderer.mockReturnValue(mockCanvas2DRenderer)
     usePanZoom.mockReturnValue(mockPanZoom)
 
-    HTMLCanvasElement.prototype.getContext = vi.fn((contextType) => {
+    // A spy, so `vi.restoreAllMocks()` gives happy-dom its own `getContext` back.
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((contextType) => {
         if (contextType === 'webgl2' || contextType === 'webgl') {
             return mockWebGLContext
         }

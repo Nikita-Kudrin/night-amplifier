@@ -45,18 +45,71 @@
     --error-hover: #ee6666;
     --error-bg: rgba(221, 85, 85, 0.15);
 
+    /* Text and marks on a coloured fill: primary/success/error buttons, badges, knobs */
+    --on-primary: #fff;
+
+    /* Category hues tell kinds apart (catalog, camera role, sensor mode), never state; the
+       only hues outside the red theme. A pill or badge tints its own background from them. */
+    --category-blue: #4a9eff;
+    --category-orange: #ff9f4a;
+    --category-purple: #9f4aff;
+    --category-yellow: #facc15;
+    --category-green: #4ade80;
+
+    /* Behind a modal, and the eyepiece's grey glass controls over the image */
+    --backdrop: rgba(0, 0, 0, 0.7);
+    --glass-bg: rgba(30, 30, 30, 0.8);
+    --glass-bg-hover: rgba(50, 50, 50, 0.9);
+    --glass-bg-active: rgba(70, 70, 70, 0.9);
+    --glass-border: rgba(255, 255, 255, 0.2);
+
     /* Typography */
     --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
 
-    /* Spacing */
+    /* Type scale for UI text; headings above 1rem are one-offs and stay literal */
+    --fs-3xs: 0.6rem;
+    --fs-2xs: 0.65rem;
+    --fs-xs: 0.7rem;
+    --fs-sm: 0.75rem;
+    --fs-md: 0.8rem;
+    --fs-base: 0.875rem;
+    --fs-lg: 0.95rem;
+    --fs-xl: 1rem;
+
+    /* Corner radii */
+    --radius-xs: 3px;
     --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-pill: 999px;
+
+    /* Shadows: floating chips, dropdowns, popovers */
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+
+    /* Stacking order. Popovers sit above modals, since a help bubble or a split-button
+       menu can open inside one. */
+    --z-raised: 5;
+    --z-overlay: 10;
+    --z-hud: 20;
+    --z-hud-top: 25;
+    --z-dropdown: 100;
+    --z-modal: 1000;
+    --z-popover: 1100;
+    --z-blocking: 2000;
 
     /* Transitions */
     --transition-fast: 0.15s ease;
     --transition-normal: 0.2s ease;
+    --transition-slow: 0.3s ease;
+
+    /* The one layout breakpoint is `max-width: 768px` (phones, and a sidebar over the
+       image); media queries cannot read a custom property, so it is repeated as a literal. */
+    --sidebar-width: 320px;
+    --sidebar-width-landscape: 280px;
 }
 
 /* Base styles */
@@ -67,7 +120,7 @@ html {
 
 body {
     font-family: var(--font-sans);
-    font-size: 0.875rem;
+    font-size: var(--fs-base);
     line-height: 1.5;
     color: var(--text-primary);
     background: var(--bg);
@@ -109,13 +162,13 @@ button {
     justify-content: center;
     gap: 0.375rem;
     padding: 0.5rem 1rem;
-    font-size: 0.875rem;
+    font-size: var(--fs-base);
     font-weight: 500;
     line-height: 1.25;
     color: var(--text-primary);
     background: var(--surface-elevated);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     cursor: pointer;
     transition: background var(--transition-fast), border-color var(--transition-fast);
     white-space: nowrap;
@@ -137,14 +190,14 @@ button {
 
 .btn-sm {
     padding: 0.25rem 0.5rem;
-    font-size: 0.75rem;
+    font-size: var(--fs-sm);
 }
 
 .btn-icon {
     width: 32px;
     height: 32px;
     padding: 0.375rem;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
 }
 
 .btn-icon svg {
@@ -154,7 +207,7 @@ button {
 
 .btn-icon.active {
     background: var(--primary);
-    color: white;
+    color: var(--on-primary);
 }
 
 .btn-icon.loading {
@@ -164,7 +217,7 @@ button {
 .btn-primary {
     background: var(--primary);
     border-color: var(--primary);
-    color: white;
+    color: var(--on-primary);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -182,16 +235,45 @@ button {
     background: var(--error-bg);
 }
 
+/* Secondary action in a dialog: no fill until hovered */
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--surface-elevated);
+}
+
+.btn-block {
+    width: 100%;
+}
+
+/* A button that reads as a link */
+.btn-link {
+    padding: 0.25rem 0;
+    background: none;
+    border: none;
+    color: var(--primary);
+    font-size: var(--fs-md);
+    text-decoration: underline;
+}
+
+.btn-link:hover:not(:disabled) {
+    background: none;
+    color: var(--primary-hover);
+}
+
 /* Input styles */
 .input,
 .select {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
+    font-size: var(--fs-base);
     color: var(--text-primary);
     background: var(--surface-elevated);
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
@@ -204,6 +286,26 @@ button {
 
 .input::placeholder {
     color: var(--text-muted);
+}
+
+.input:disabled,
+.select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Dense field for the Push-To panel's forms */
+.input-dense {
+    padding: 0.375rem 0.5rem;
+    font-size: var(--fs-sm);
+    border-radius: var(--radius-sm);
+}
+
+/* The settings panel's right-aligned select beside a label */
+.select-compact {
+    width: 150px;
+    height: 32px;
+    padding: 0.25rem 2rem 0.25rem 0.5rem;
 }
 
 /* Select */
@@ -222,7 +324,7 @@ button {
     width: 100%;
     height: 6px;
     background: var(--surface-elevated);
-    border-radius: 3px;
+    border-radius: var(--radius-xs);
     outline: none;
 }
 
@@ -273,7 +375,7 @@ input[type="number"]::-webkit-inner-spin-button {
 
 ::-webkit-scrollbar-thumb {
     background: var(--border);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -283,7 +385,7 @@ input[type="number"]::-webkit-inner-spin-button {
 /* Selection */
 ::selection {
     background: var(--primary);
-    color: white;
+    color: var(--on-primary);
 }
 
 /* Focus visible */
@@ -355,11 +457,14 @@ input[type="checkbox"]:disabled {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.375rem;
     margin-bottom: 0.375rem;
 }
 
+/* Fills the row, so a collapse toggle before it and actions after it keep their edges */
 .panel-header h2 {
-    font-size: 0.63rem;
+    flex: 1;
+    font-size: var(--fs-2xs);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
@@ -369,7 +474,7 @@ input[type="checkbox"]:disabled {
 
 /* Section title - used within panels */
 .section-title {
-    font-size: 0.715rem;
+    font-size: var(--fs-xs);
     font-weight: 500;
     color: var(--text-muted);
     margin: 0 0 0.375rem 0;
@@ -377,9 +482,39 @@ input[type="checkbox"]:disabled {
     border-bottom: 1px solid var(--border);
 }
 
+/* A titled block of the settings panel */
+.settings-section {
+    margin-bottom: 0.625rem;
+}
+
+/* Section title without its rule, for a title that sits in a header row */
+.section-title-plain {
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+/* Small uppercase heading over a group in the Push-To panel and the setup dialogs */
+.eyebrow {
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin: 0 0 0.375rem;
+}
+
 /* Control group - form control wrapper */
 .control-group {
     margin-bottom: 0.375rem;
+}
+
+/* A slider block, given room for its value readout */
+.control-group-roomy {
+    margin-bottom: 1.5rem;
+}
+
+/* The first group under a heading or toggle */
+.control-group-offset {
+    margin-top: 0.5rem;
 }
 
 .control-group:last-child {
@@ -391,10 +526,16 @@ input[type="checkbox"]:disabled {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    font-size: 0.825rem;
+    font-size: var(--fs-md);
     font-weight: 500;
     color: var(--text-secondary);
     margin-bottom: 0.25rem;
+}
+
+/* A label sharing its row with a control on the right */
+.control-label-inline {
+    flex: 1;
+    margin-bottom: 0;
 }
 
 /* Current value display (monospace) */
@@ -437,7 +578,7 @@ input[type="checkbox"]:disabled {
     background: none;
     border: none;
     color: inherit;
-    font-size: 1rem;
+    font-size: var(--fs-xl);
     cursor: pointer;
     padding: 0 0.125rem;
     line-height: 1;
@@ -458,8 +599,8 @@ input[type="checkbox"]:disabled {
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 3px;
-    transition: color 0.15s;
+    border-radius: var(--radius-xs);
+    transition: color var(--transition-fast);
 }
 
 .collapse-toggle:hover {
@@ -467,7 +608,7 @@ input[type="checkbox"]:disabled {
 }
 
 .collapse-toggle svg {
-    transition: transform 0.2s;
+    transition: transform var(--transition-normal);
 }
 
 .collapse-toggle svg.collapsed {
@@ -477,7 +618,7 @@ input[type="checkbox"]:disabled {
 /* Hint text - small helper text */
 .hint {
     display: block;
-    font-size: 0.715rem;
+    font-size: var(--fs-xs);
     color: var(--text-muted);
     margin-top: 0.125rem;
 }
@@ -494,7 +635,7 @@ input[type="checkbox"]:disabled {
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    font-size: 0.65rem;
+    font-size: var(--fs-2xs);
     font-weight: 500;
     color: var(--text-secondary);
     text-transform: uppercase;
@@ -525,6 +666,12 @@ input[type="checkbox"]:disabled {
 }
 
 /* Animations */
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 @keyframes blink {
     0%, 100% {
         opacity: 1;
@@ -543,18 +690,6 @@ input[type="checkbox"]:disabled {
         opacity: 0.6;
         transform: scale(0.9);
     }
-}
-
-.animate-blink {
-    animation: blink 1s infinite;
-}
-
-.animate-pulse {
-    animation: pulse 1.5s infinite;
-}
-
-.animate-pulse-fast {
-    animation: pulse 0.5s infinite;
 }
 
 /* Generic state layouts */
@@ -579,11 +714,109 @@ input[type="checkbox"]:disabled {
     text-align: center;
     padding: 0.75rem 0.5rem;
     color: var(--text-muted);
-    font-size: 0.825rem;
+    font-size: var(--fs-md);
 }
 
 .empty-state p {
     margin: 0 0 0.5rem 0;
+}
+
+/* Muted text, e.g. a label whose control is locked */
+.text-muted {
+    color: var(--text-muted);
+}
+
+/*
+ * Pill: a short rounded tag whose background is tinted from its own colour, so a tone is
+ * a single `color`. State tones use the theme; category tones only tell kinds apart.
+ */
+.pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.05rem 0.375rem;
+    border-radius: var(--radius-pill);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.pill-primary { color: var(--primary); }
+.pill-success { color: var(--success); }
+.pill-warning { color: var(--warning); }
+.pill-error { color: var(--error); }
+.pill-muted { color: var(--text-muted); background: var(--surface-hover); }
+
+.category-blue { color: var(--category-blue); }
+.category-orange { color: var(--category-orange); }
+.category-purple { color: var(--category-purple); }
+.category-yellow { color: var(--category-yellow); }
+.category-green { color: var(--category-green); }
+
+/* Progress bar: `.progress-bar` is the track, `.progress-fill` its width-driven fill */
+.progress-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+}
+
+.progress-bar-lg {
+    height: 8px;
+    border-radius: var(--radius-sm);
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width var(--transition-slow);
+}
+
+/* A suggestion list under a search field */
+.dropdown-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 0.25rem;
+    max-height: 200px;
+    overflow-y: auto;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    z-index: var(--z-dropdown);
+}
+
+.dropdown-item {
+    padding: 0.5rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+}
+
+.dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.dropdown-item:hover {
+    background: var(--surface-hover);
+}
+
+/* A control floating over the live image */
+.hud-chip {
+    background: var(--surface-elevated);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Overlays over an image that fade out while the viewer is idle (`useOverlayVisibility`) */
+.overlay-fade {
+    transition: opacity 0.35s ease;
+}
+
+.overlay-hidden {
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* Secondary button variant */

@@ -27,7 +27,7 @@ defineProps({
 .base-spinner {
   display: inline-block;
   border-radius: 50%;
-  animation: base-spin 1s linear infinite;
+  animation: spin 1s linear infinite;
   flex-shrink: 0;
 }
 
@@ -54,11 +54,6 @@ defineProps({
 
 .spinner-light {
   border-color: rgba(255, 255, 255, 0.3);
-  border-top-color: white;
-}
-
-@keyframes base-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  border-top-color: var(--on-primary);
 }
 </style>

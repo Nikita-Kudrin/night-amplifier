@@ -1,5 +1,6 @@
 import {ref, computed} from 'vue'
-import {getPushToStatus} from './api.js'
+import {getPushToStatus, ignoreProOnly} from './api.js'
+import {WS} from '../constants/endpoints.js'
 import {useWebSocket} from './useWebSocket.js'
 
 /**
@@ -321,15 +322,15 @@ export function useEventStream() {
         },
     }
 
-    const {connected, error, connect, disconnect} = useWebSocket('/ws/events', {
+    const {connected, error, connect, disconnect} = useWebSocket(WS.EVENTS, {
         onOpen: async () => {
             try {
                 // Fetch the initial state upon connection
                 const status = await getPushToStatus()
                 currentTarget.value = status.current_target || null
                 pushDirection.value = status.direction ? pushDirectionFrom(status.direction) : null
-            } catch {
-                // Ignore
+            } catch (e) {
+                ignoreProOnly(e, 'Push-To status')
             }
         },
         onMessage: (event) => {

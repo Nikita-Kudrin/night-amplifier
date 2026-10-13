@@ -3,29 +3,27 @@ import {computed, inject, ref, watch} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {useError} from '../composables/useError.js'
-import {BaseSlider, BaseToggle} from './ui'
+import {useSelectedCamera} from '../composables/appContext.js'
+import {formatPercent} from '../utils/format.js'
+import {BaseAlert, BaseSlider, BaseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
 import {HELP_TEXTS} from '../constants'
 
 const settings = inject('settings', ref(null))
 const refreshSettings = inject('refreshSettings', async () => {
 })
-const cameras = inject('cameras', ref([]))
-const selectedCameraId = inject('selectedCamera', ref(null))
 const cameraStatus = inject('cameraStatus', ref({}))
 // Same reason as the cooler: each camera carries its own dew-heater state.
 const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 
-const {error, withErrorHandling} = useError()
+const {error, clearError, withErrorHandling} = useError()
 
 const cameraSettings = computed(() => {
   if (!settings.value) return null
   return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
 })
 
-const currentCamera = computed(() =>
-    (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
-)
+const currentCamera = useSelectedCamera()
 
 const hasDewHeater = computed(() => Boolean(currentCamera.value?.info?.has_dew_heater))
 
@@ -71,8 +69,9 @@ function handlePowerChange(value) {
   debouncedApply({dew_heater_power: value}, settingsRole.value)
 }
 
-function formatPercent(v) {
-  return `${Math.round(v)}%`
+/** The power control runs 0–100. */
+function formatPower(v) {
+  return formatPercent(v / 100)
 }
 </script>
 
@@ -80,7 +79,7 @@ function formatPercent(v) {
   <div v-if="hasDewHeater" class="settings-section dew-heater-control">
     <h3 class="section-title">Dew Heater <SelectedCameraTag/></h3>
 
-    <div v-if="error" class="heater-error">{{ error }}</div>
+    <BaseAlert v-if="error" @dismiss="clearError">{{ error }}</BaseAlert>
 
     <div class="control-group">
       <BaseToggle
@@ -98,12 +97,12 @@ function formatPercent(v) {
         :min="0"
         :max="100"
         :step="1"
-        :format-value="formatPercent"
+        :format-value="formatPower"
         :help="HELP_TEXTS.dew_heater_power"
         @change="handlePowerChange"
     >
       <template #label-left>
-        <span class="status-pill" :class="liveStatus?.dew_heater_on ? 'tone-good' : 'tone-idle'">
+        <span class="pill status-pill" :class="liveStatus?.dew_heater_on ? 'pill-success' : 'pill-muted'">
           {{ liveStatus?.dew_heater_on ? 'On' : 'Off' }}
         </span>
       </template>
@@ -112,33 +111,8 @@ function formatPercent(v) {
 </template>
 
 <style scoped>
-.dew-heater-control {
-  margin-bottom: 0.625rem;
-}
-
 .status-pill {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.tone-idle {
-  background: var(--surface-hover);
-  color: var(--text-muted);
-}
-
-.tone-good {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-}
-
-.heater-error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
 }
 </style>

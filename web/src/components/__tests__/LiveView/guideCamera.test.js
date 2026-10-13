@@ -3,12 +3,13 @@ import {ref} from 'vue'
 import {flushPromises} from '@vue/test-utils'
 import {lastImageStreamOptions, mountLiveView, setupMocks} from './setup.js'
 
-vi.mock('../../../composables/api.js', () => ({
-    setViewedCamera: vi.fn(async (camera) => ({camera})),
-}))
+vi.mock('../../../composables/api.js', async (importOriginal) =>
+    (await import('../../../test/mockApi.js')).mockApi(await importOriginal(), {
+        setViewedCamera: vi.fn(async (camera) => ({camera})),
+    }))
 
 import {setViewedCamera} from '../../../composables/api.js'
-import {getAppState} from '../../../composables/useAppState.js'
+import {useAppState} from '../../../composables/useAppState.js'
 
 function readEndpoint() {
     const endpoint = lastImageStreamOptions().endpoint
@@ -20,7 +21,7 @@ describe('LiveView guide camera source', () => {
         setupMocks()
         setViewedCamera.mockClear()
         setViewedCamera.mockImplementation(async (camera) => ({camera}))
-        getAppState().clearGlobalError()
+        useAppState().clearGlobalError()
     })
 
     it('hides the source toggle when no guide camera is connected', () => {
@@ -96,7 +97,7 @@ describe('LiveView guide camera source', () => {
 
         expect(wrapper.find('.guide-toggle').classes()).not.toContain('active')
         expect(readEndpoint()).toBe('/ws/stream')
-        expect(getAppState().globalError.value).toContain('No guide camera')
+        expect(useAppState().globalError.value).toContain('No guide camera')
     })
 
     /// The server falls back when the guide camera goes away; the toggle follows.

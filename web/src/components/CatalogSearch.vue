@@ -41,7 +41,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
         v-model="searchQuery"
         type="text"
         placeholder="Search Messier, NGC, Stars..."
-        class="search-input"
+        class="input search-input"
         :disabled="solving"
         @focus="revealResults"
     />
@@ -57,11 +57,11 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
       Cancel
     </button>
 
-    <div v-if="showResults && searchResults.length > 0" class="search-results">
+    <div v-if="showResults && searchResults.length > 0" class="dropdown-menu search-results">
       <div
           v-for="entry in searchResults"
           :key="entry.designation"
-          class="search-result-item"
+          class="dropdown-item search-result-item"
           @click="select(entry)"
       >
         <div class="result-main">
@@ -89,22 +89,9 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 }
 
 .search-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: var(--primary);
-}
-
-.search-input::placeholder {
-  color: var(--text-muted);
+  font-size: var(--fs-md);
+  border-radius: var(--radius-md);
 }
 
 .search-spinner-wrapper {
@@ -116,35 +103,6 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
   align-items: center;
 }
 
-.search-results {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-top: 0.25rem;
-  max-height: 200px;
-  overflow-y: auto;
-  z-index: 100;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-}
-
-.search-result-item {
-  padding: 0.5rem;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border);
-}
-
-.search-result-item:last-child {
-  border-bottom: none;
-}
-
-.search-result-item:hover {
-  background: var(--surface-hover);
-}
-
 .result-main {
   display: flex;
   align-items: center;
@@ -153,30 +111,27 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 }
 
 .catalog-badge {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   padding: 0.125rem 0.375rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor 19%, transparent);
 }
 
 .badge-messier {
-  background: #4a9eff30;
-  color: #4a9eff;
+  color: var(--category-blue);
 }
 
 .badge-ngc {
-  background: #ff9f4a30;
-  color: #ff9f4a;
+  color: var(--category-orange);
 }
 
 .badge-ic {
-  background: #9f4aff30;
-  color: #9f4aff;
+  color: var(--category-purple);
 }
 
 .badge-star {
-  background: #facc1530;
-  color: #facc15;
+  color: var(--category-yellow);
 }
 
 .badge-other {
@@ -185,7 +140,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 }
 
 .result-name {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -193,7 +148,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 }
 
 .result-matched {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -204,7 +159,7 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 .result-details {
   display: flex;
   gap: 0.5rem;
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
 }
 
@@ -216,16 +171,16 @@ onUnmounted(() => document.removeEventListener('click', handleClickOutside))
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   padding: 0.2rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  z-index: 5;
+  z-index: var(--z-raised);
 }
 
 .btn-cancel-solve:hover {
   background: var(--surface-hover);
-  color: var(--danger);
-  border-color: var(--danger);
+  color: var(--error);
+  border-color: var(--error);
 }
 </style>

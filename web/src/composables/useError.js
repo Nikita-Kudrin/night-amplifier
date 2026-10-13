@@ -1,5 +1,8 @@
 import {ref} from 'vue'
 
+/** The `withErrorHandling` of a caller handed none: runs the operation, errors propagate. */
+export const runDirectly = (operation) => operation()
+
 /**
  * Composable for consistent error handling in components
  * Provides error state management and async operation wrapper

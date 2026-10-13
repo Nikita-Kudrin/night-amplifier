@@ -192,12 +192,12 @@ onUnmounted(() => {
 }
 
 .split-button-toggle svg {
-  transition: transform 0.15s ease;
+  transition: transform var(--transition-fast);
 }
 
 .split-button-menu {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-popover);
   /* Sized to its widest item rather than to a fixed 160px, which left a third of the
      menu empty to the right of a single short option. `min-width` is the floor that
      keeps a one-word option from becoming a sliver too small to aim at; `max-width`
@@ -209,8 +209,8 @@ onUnmounted(() => {
   padding: 0.25rem;
   background: var(--surface-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .split-button-item {
@@ -219,15 +219,15 @@ onUnmounted(() => {
   padding: 0.45rem 0.6rem;
   background: none;
   border: none;
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--fs-base);
   text-align: left;
   cursor: pointer;
 }
 
 .split-button-item:hover:not(:disabled) {
-  background: var(--surface-hover, rgba(255, 255, 255, 0.08));
+  background: var(--surface-hover);
 }
 
 .split-button-item:disabled {

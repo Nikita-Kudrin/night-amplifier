@@ -66,15 +66,14 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 
     <div class="control-group">
       <div class="control-row">
-        <label class="control-label" style="margin-bottom: 0; flex: 1">
+        <label class="control-label control-label-inline">
           Frame Weighting
           <BaseInfoIcon :message="HELP.weighting_preset"/>
         </label>
         <select
             id="weighting-preset-select"
             v-model="local.weighting_preset"
-            class="select"
-            style="width: 120px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            class="select select-compact weighting-select"
             @change="apply('weighting_preset', $event.target.value)"
         >
           <option v-for="opt in WEIGHTING_PRESET_OPTIONS" :key="opt.value" :value="opt.value">
@@ -86,7 +85,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 
     <div class="control-group">
       <div class="control-row">
-        <label class="control-label" style="margin-bottom: 0; flex: 1">
+        <label class="control-label control-label-inline">
           Rejection Method
           <BaseProLock v-if="!advancedRejectionAvailable" feature="Advanced Rejection"/>
           <BaseInfoIcon :message="HELP.rejection_method"/>
@@ -94,8 +93,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
         <select
             id="rejection-method-select"
             v-model="local.rejection_method"
-            class="select"
-            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            class="select select-compact"
             @change="apply('rejection_method', $event.target.value)"
         >
           <option
@@ -165,7 +163,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </template>
 
 <style scoped>
-.settings-section {
-  margin-bottom: 0.625rem;
+.weighting-select {
+  width: 120px;
 }
 </style>

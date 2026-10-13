@@ -4,44 +4,60 @@ import {ref} from 'vue'
 import PushToPanel from './PushToPanel.vue'
 
 // Mock the full API module used by PushToPanel and its composables
-vi.mock('../composables/api.js', () => ({
-    getAstapStatus: vi.fn(),
-    getAstapDatabases: vi.fn(),
-    updateSettings: vi.fn().mockResolvedValue({}),
-    updatePushToConfig: vi.fn().mockResolvedValue({}),
-    searchCatalog: vi.fn().mockResolvedValue([]),
-    getPushToStatus: vi.fn().mockResolvedValue({
-        current_target: null,
-        last_position: null,
-        direction: null,
-        is_solving: false,
-    }),
-    setTargetByName: vi.fn(),
-    setTargetByCoordinates: vi.fn(),
-    clearTarget: vi.fn(),
-    cancelPushToSolve: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        getAstapStatus: vi.fn(),
+        getAstapDatabases: vi.fn(),
+        updateSettings: vi.fn().mockResolvedValue({}),
+        updatePushToConfig: vi.fn().mockResolvedValue({}),
+        searchCatalog: vi.fn().mockResolvedValue([]),
+        getPushToStatus: vi.fn().mockResolvedValue({
+            current_target: null,
+            last_position: null,
+            direction: null,
+            is_solving: false,
+        }),
+        setTargetByName: vi.fn(),
+        setTargetByCoordinates: vi.fn(),
+        clearTarget: vi.fn(),
+        cancelPushToSolve: vi.fn(),
+    }))
 
-import {getAstapStatus, getAstapDatabases, updatePushToConfig, searchCatalog, setTargetByName} from '../composables/api.js'
+import {
+    getAstapStatus,
+    getAstapDatabases,
+    updatePushToConfig,
+    searchCatalog,
+    setTargetByName,
+    setTargetByCoordinates,
+} from '../composables/api.js'
+import ManualCoordinates from './ManualCoordinates.vue'
+import {fieldOfViewDeg} from '../utils/optics.js'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
-// The frontend computes:  fovY = (h * py_um / 1000) / fl * (180 / PI)
-// With fl=10 mm and py=4.63 μm the coefficient is ≈ 0.026528°/px.
-//
+// The frontend computes fovY = 2·atan(h·py / 2fl) (`utils/optics.js`), as Pro's solver does.
 // These helpers produce settings that yield a specific, predictable fovY.
 
 const FL = 10       // focal length mm
 const PY = 4.63     // pixel size μm (square pixels)
 const W = 100       // sensor width px (arbitrary — does not affect fovY)
 
-/**
- * Return sensor height (px) that produces approximately the target fovY.
- * The formula is exact for the small-angle approximation used by the frontend.
- */
-function heightForFov(targetFovDeg) {
-    return Math.round(targetFovDeg / (PY / 1000 / FL * (180 / Math.PI)))
+/** The (fractional) sensor height whose fovY is exactly `fovDeg`. */
+function exactHeightForFov(fovDeg) {
+    return (2 * FL * Math.tan((fovDeg * Math.PI) / 360)) / (PY / 1000)
 }
+
+/** Sensor height (px) that produces approximately the target fovY. */
+function heightForFov(targetFovDeg) {
+    return Math.round(exactHeightForFov(targetFovDeg))
+}
+
+// The whole-pixel heights just inside and just outside a database's FOV range.
+const insideMin = (fovDeg) => Math.ceil(exactHeightForFov(fovDeg))
+const insideMax = (fovDeg) => Math.floor(exactHeightForFov(fovDeg))
+const belowMin = (fovDeg) => insideMin(fovDeg) - 1
+const aboveMax = (fovDeg) => insideMax(fovDeg) + 1
 
 /** Build a settings ref that drives the telescope composable to the given fovY. */
 function settingsForFov(sensorHeightPx) {
@@ -125,7 +141,7 @@ function mountPanel(settings, mockedAstapStatus, mockedDatabases = databases(), 
 
 /** Computed fovY for a sensor height using the frontend formula */
 function computedFovY(h) {
-    return (h * PY / 1000) / FL * (180 / Math.PI)
+    return fieldOfViewDeg(h, PY, FL)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -179,15 +195,15 @@ describe('PushToPanel – FOV warning', () => {
         // ── Per-database in-range tests ─────────────────────────────────────
 
         it.each([
-            {db: 'D80', h: 6, minFov: 0.15, op: 'gte', label: 'minimum'},
+            {db: 'D80', h: insideMin(0.15), minFov: 0.15, op: 'gte', label: 'minimum'},
             {db: 'D80', h: heightForFov(2.5), label: 'mid-range (≈2.5°)'},
-            {db: 'D80', h: 226, maxFov: 6.0, op: 'lte', label: 'maximum'},
-            {db: 'G05', h: 114, minFov: 3.0, op: 'gte', label: 'minimum'},
+            {db: 'D80', h: insideMax(6), maxFov: 6.0, op: 'lte', label: 'maximum'},
+            {db: 'G05', h: insideMin(3), minFov: 3.0, op: 'gte', label: 'minimum'},
             {db: 'G05', h: heightForFov(10), label: 'mid-range (≈10°)'},
-            {db: 'G05', h: 753, maxFov: 20.0, op: 'lte', label: 'maximum'},
-            {db: 'W08', h: 755, minFov: 20.0, op: 'gte', label: 'minimum'},
+            {db: 'G05', h: insideMax(20), maxFov: 20.0, op: 'lte', label: 'maximum'},
+            {db: 'W08', h: insideMin(20), minFov: 20.0, op: 'gte', label: 'minimum'},
             {db: 'W08', h: heightForFov(50), label: 'mid-range (≈50°)'},
-            {db: 'W08', h: 3015, maxFov: 80.0, op: 'lte', label: 'maximum'},
+            {db: 'W08', h: insideMax(80), maxFov: 80.0, op: 'lte', label: 'maximum'},
         ])('$db: no warning at $label boundary', async ({db, h, minFov, maxFov, op}) => {
             if (op === 'gte') expect(computedFovY(h)).toBeGreaterThanOrEqual(minFov)
             if (op === 'lte') expect(computedFovY(h)).toBeLessThanOrEqual(maxFov)
@@ -201,12 +217,12 @@ describe('PushToPanel – FOV warning', () => {
 
     describe('warning shown when', () => {
         it.each([
-            {db: 'D80', h: 4, threshold: 0.15, op: 'lt', direction: 'too narrow'},
-            {db: 'D80', h: 227, threshold: 6.0, op: 'gt', direction: 'too wide'},
-            {db: 'G05', h: 113, threshold: 3.0, op: 'lt', direction: 'too narrow'},
-            {db: 'G05', h: 754, threshold: 20.0, op: 'gt', direction: 'too wide'},
-            {db: 'W08', h: 753, threshold: 20.0, op: 'lt', direction: 'too narrow'},
-            {db: 'W08', h: 3017, threshold: 80.0, op: 'gt', direction: 'too wide'},
+            {db: 'D80', h: belowMin(0.15), threshold: 0.15, op: 'lt', direction: 'too narrow'},
+            {db: 'D80', h: aboveMax(6), threshold: 6.0, op: 'gt', direction: 'too wide'},
+            {db: 'G05', h: belowMin(3), threshold: 3.0, op: 'lt', direction: 'too narrow'},
+            {db: 'G05', h: aboveMax(20), threshold: 20.0, op: 'gt', direction: 'too wide'},
+            {db: 'W08', h: belowMin(20), threshold: 20.0, op: 'lt', direction: 'too narrow'},
+            {db: 'W08', h: aboveMax(80), threshold: 80.0, op: 'gt', direction: 'too wide'},
         ])('$db: shows warning icon when FOV is $direction', async ({db, h, threshold, op}) => {
             if (op === 'lt') expect(computedFovY(h)).toBeLessThan(threshold)
             if (op === 'gt') expect(computedFovY(h)).toBeGreaterThan(threshold)
@@ -216,12 +232,12 @@ describe('PushToPanel – FOV warning', () => {
         })
 
         it.each([
-            {db: 'D80', h: 4, direction: 'too narrow'},
-            {db: 'D80', h: 227, direction: 'too wide'},
-            {db: 'G05', h: 113, direction: 'too narrow'},
-            {db: 'G05', h: 754, direction: 'too wide'},
-            {db: 'W08', h: 753, direction: 'too narrow'},
-            {db: 'W08', h: 3017, direction: 'too wide'},
+            {db: 'D80', h: belowMin(0.15), direction: 'too narrow'},
+            {db: 'D80', h: aboveMax(6), direction: 'too wide'},
+            {db: 'G05', h: belowMin(3), direction: 'too narrow'},
+            {db: 'G05', h: aboveMax(20), direction: 'too wide'},
+            {db: 'W08', h: belowMin(20), direction: 'too narrow'},
+            {db: 'W08', h: aboveMax(80), direction: 'too wide'},
         ])('$db: message says "$direction" and mentions database name', async ({db, h, direction}) => {
             const wrapper = mountPanel(settingsForFov(h), astapStatus(db))
             await flushPromises()
@@ -236,57 +252,56 @@ describe('PushToPanel – FOV warning', () => {
 
     describe('boundary edge cases', () => {
         it('D80/G05 overlap: FOV 6° fits D80 but also G05 — correct active DB determines warning', async () => {
-            // fovY ≈ 5.995° (within both D80 and G05)
-            const h = 226 // fovY ≈ 5.995°
+            const h = insideMax(6) // just under 6°, within both D80 and G05
 
-            // Active DB = D80 → no warning (5.995° ≤ D80 max 6°)
+            // Active DB = D80 → no warning (≤ D80 max 6°)
             const wrapperD80 = mountPanel(settingsForFov(h), astapStatus('D80'))
             await flushPromises()
             expect(wrapperD80.find('.fov-warning-btn').exists()).toBe(false)
 
-            // Active DB = G05 → no warning (5.995° ≥ G05 min 3°)
+            // Active DB = G05 → no warning (≥ G05 min 3°)
             const wrapperG05 = mountPanel(settingsForFov(h), astapStatus('G05'))
             await flushPromises()
             expect(wrapperG05.find('.fov-warning-btn').exists()).toBe(false)
         })
 
-        it('D80/G05 overlap: FOV 6.02° is too wide for D80 but fine for G05', async () => {
-            const h = 227 // fovY ≈ 6.022°
+        it('D80/G05 overlap: FOV just over 6° is too wide for D80 but fine for G05', async () => {
+            const h = aboveMax(6) // just over 6°
 
-            // Active DB = D80 → warning (6.022° > D80 max 6°)
+            // Active DB = D80 → warning (> D80 max 6°)
             const wrapperD80 = mountPanel(settingsForFov(h), astapStatus('D80'))
             await flushPromises()
             expect(wrapperD80.find('.fov-warning-btn').exists()).toBe(true)
 
-            // Active DB = G05 → no warning (6.022° is within G05 3°–20°)
+            // Active DB = G05 → no warning (within G05 3°–20°)
             const wrapperG05 = mountPanel(settingsForFov(h), astapStatus('G05'))
             await flushPromises()
             expect(wrapperG05.find('.fov-warning-btn').exists()).toBe(false)
         })
 
-        it('G05/W08 boundary: FOV 19.97° is fine for G05 but too narrow for W08', async () => {
-            const h = 753 // fovY ≈ 19.975° (below 20°)
+        it('G05/W08 boundary: FOV just under 20° is fine for G05 but too narrow for W08', async () => {
+            const h = insideMax(20) // just under 20°
 
-            // Active DB = G05 → no warning (19.975° ≤ G05 max 20°)
+            // Active DB = G05 → no warning (≤ G05 max 20°)
             const wrapperG05 = mountPanel(settingsForFov(h), astapStatus('G05'))
             await flushPromises()
             expect(wrapperG05.find('.fov-warning-btn').exists()).toBe(false)
 
-            // Active DB = W08 → warning (19.975° < W08 min 20°)
+            // Active DB = W08 → warning (< W08 min 20°)
             const wrapperW08 = mountPanel(settingsForFov(h), astapStatus('W08'))
             await flushPromises()
             expect(wrapperW08.find('.fov-warning-btn').exists()).toBe(true)
         })
 
-        it('G05/W08 boundary: FOV 20.002° is too wide for G05 but fine for W08', async () => {
-            const h = 754 // fovY ≈ 20.002° (above 20°)
+        it('G05/W08 boundary: FOV just over 20° is too wide for G05 but fine for W08', async () => {
+            const h = aboveMax(20) // just over 20°
 
-            // Active DB = G05 → warning (20.002° > G05 max 20°)
+            // Active DB = G05 → warning (> G05 max 20°)
             const wrapperG05 = mountPanel(settingsForFov(h), astapStatus('G05'))
             await flushPromises()
             expect(wrapperG05.find('.fov-warning-btn').exists()).toBe(true)
 
-            // Active DB = W08 → no warning (20.002° ≥ W08 min 20°)
+            // Active DB = W08 → no warning (≥ W08 min 20°)
             const wrapperW08 = mountPanel(settingsForFov(h), astapStatus('W08'))
             await flushPromises()
             expect(wrapperW08.find('.fov-warning-btn').exists()).toBe(false)
@@ -302,9 +317,9 @@ describe('PushToPanel – FOV warning', () => {
         })
 
         it('FOV above all databases is a warning for W08', async () => {
-            // h=3020 → fovY ≈ 80.1° — above W08 max (80°)
-            expect(computedFovY(3020)).toBeGreaterThan(80.0)
-            const wrapper = mountPanel(settingsForFov(3020), astapStatus('W08'))
+            // Just above W08 max (80°)
+            expect(computedFovY(aboveMax(80))).toBeGreaterThan(80.0)
+            const wrapper = mountPanel(settingsForFov(aboveMax(80)), astapStatus('W08'))
             await flushPromises()
 
             expect(wrapper.find('.fov-warning-btn').exists()).toBe(true)
@@ -434,9 +449,9 @@ describe('PushToPanel – FOV warning', () => {
         })
 
         it('shows no suggestion when FOV is above all databases', async () => {
-            // fovY ≈ 80.1° — above W08 max (80°)
+            // Just above W08 max (80°)
             const wrapper = mountPanel(
-                settingsForFov(3020),
+                settingsForFov(aboveMax(80)),
                 astapStatus('W08'),
                 databases(['D80', 'G05', 'W08']),
             )
@@ -703,5 +718,39 @@ describe('PushToPanel – Equipment heading', () => {
         await flushPromises()
 
         expect(wrapper.find('.equipment-header').text()).toContain('Main · ASI533MC Pro')
+    })
+})
+
+describe('PushToPanel – manual coordinates', () => {
+    beforeEach(() => {
+        vi.clearAllMocks()
+    })
+
+    // The server answers with the target itself; reading a `.target` off it blanked the
+    // current target until the next event arrived.
+    it('shows the target the server answers with', async () => {
+        setTargetByCoordinates.mockResolvedValue({name: null, ra_degrees: 83.82, dec_degrees: -5.39})
+        const wrapper = mountPanel(settingsForFov(heightForFov(1)), astapStatus('D80'))
+        await flushPromises()
+
+        const took = await wrapper.findComponent(ManualCoordinates).props('submit')({ra: 83.82, dec: -5.39})
+        await flushPromises()
+
+        expect(took).toBe(true)
+        expect(setTargetByCoordinates).toHaveBeenCalledWith(83.82, -5.39)
+        expect(wrapper.find('.current-target').text()).toContain('Custom')
+    })
+
+    it('keeps the fields when the server refuses', async () => {
+        setTargetByCoordinates.mockRejectedValue(new Error('Catalog not installed'))
+        const wrapper = mountPanel(settingsForFov(heightForFov(1)), astapStatus('D80'))
+        await flushPromises()
+
+        const took = await wrapper.findComponent(ManualCoordinates).props('submit')({ra: 1, dec: 2})
+        await flushPromises()
+
+        expect(took).toBe(false)
+        expect(wrapper.find('.current-target').exists()).toBe(false)
+        expect(wrapper.text()).toContain('Catalog not installed')
     })
 })

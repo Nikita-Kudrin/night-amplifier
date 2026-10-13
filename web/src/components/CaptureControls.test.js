@@ -1,14 +1,16 @@
 import {mount, flushPromises} from '@vue/test-utils'
-import {ref} from 'vue'
+import {readonly, ref} from 'vue'
 import CaptureControls from './CaptureControls.vue'
+import {DEFAULT_CAPABILITIES} from '../constants'
 
 // Mock the API module
-vi.mock('../composables/api.js', () => ({
-    startCapture: vi.fn(),
-    stopCapture: vi.fn(),
-    updateSettings: vi.fn(),
-    getStackingTypes: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        startCapture: vi.fn(),
+        stopCapture: vi.fn(),
+        updateSettings: vi.fn(),
+        getStackingTypes: vi.fn(),
+    }))
 
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
 
@@ -608,6 +610,35 @@ describe('CaptureControls', () => {
             await wrapper.find('.btn-close').trigger('click')
 
             expect(wrapper.find('.alert-error').exists()).toBe(false)
+        })
+    })
+
+    // App provides the capabilities as a read-only ref, which a script-side read must unwrap:
+    // reading it as a plain object locked comet stacking for every Pro user.
+    describe('Comet Pro lock', () => {
+        const comet = (proStacking) => ({
+            settings: {stacking_type: 'comet'},
+            capabilities: {...DEFAULT_CAPABILITIES, comet: {pro_stacking: proStacking}},
+        })
+
+        it('locks comet stacking without the Pro comet plugin', async () => {
+            const wrapper = mountCaptureControls(comet(false))
+            await flushPromises()
+            expect(wrapper.find('.comet-pro-lock').exists()).toBe(true)
+        })
+
+        it('unlocks it for Pro when the capabilities arrive as App provides them', async () => {
+            const wrapper = mount(CaptureControls, {
+                global: {
+                    provide: {
+                        ...createMockProvides(comet(true)),
+                        capabilities: readonly(ref(comet(true).capabilities)),
+                    },
+                    stubs: {BaseProLock: true},
+                },
+            })
+            await flushPromises()
+            expect(wrapper.find('.comet-pro-lock').exists()).toBe(false)
         })
     })
 })

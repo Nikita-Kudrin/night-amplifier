@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { installResizeObserverStub } from '../../test/dom.js'
 import { mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 
@@ -34,18 +35,22 @@ vi.mock('../../composables/useCanvas2DRenderer.js', () => ({
 }))
 
 const mockSnapshotFilename = 'eyepiece_05-09-2026_21-14-03.png'
-vi.mock('../../composables/api.js', () => ({
-  fetchEyepieceSnapshot: vi.fn(async () => ({
-    blob: new Blob(['png'], { type: 'image/png' }),
-    filename: mockSnapshotFilename,
-  })),
-}))
+vi.mock('../../composables/api.js', async (importOriginal) =>
+  (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+    fetchEyepieceSnapshot: vi.fn(async () => ({
+      blob: new Blob(['png'], { type: 'image/png' }),
+      filename: mockSnapshotFilename,
+    })),
+  }))
+
+// Tests switch to fake timers inside their bodies; a failed assertion must not leave
+// them on for the next test.
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 /** The backend readout is debug-only, so its layout can only be tested with it on. */
 const mockCapabilities = ref({ debug_logging: false })
-vi.mock('../../composables/useAppState.js', () => ({
-  getAppState: () => ({ capabilities: mockCapabilities }),
-}))
 
 import { useImageStream } from '../../composables/useImageStream.js'
 import { fetchEyepieceSnapshot } from '../../composables/api.js'
@@ -56,6 +61,7 @@ function mountEyepiece(settings = { binoview: true, circular_view: true }, overr
     global: {
       provide: {
         settings: ref({ eyepiece: settings, ...overrides.settings }),
+        capabilities: mockCapabilities,
         eventStream: {
           pushDirection: ref(null),
           currentTarget: ref(null),
@@ -231,12 +237,7 @@ describe('EyepieceView.vue Layout', () => {
   })
 
   it('renders GuideArrow when pushDirection and currentTarget are present', async () => {
-    // We need to mock ResizeObserver
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
 
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
@@ -257,11 +258,7 @@ describe('EyepieceView.vue Layout', () => {
   })
 
   it('does not render GuideArrow when pushDirection is null', async () => {
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
 
     const EyepieceView = (await import('../EyepieceView.vue')).default
     const wrapper = mount(EyepieceView, {
@@ -293,11 +290,7 @@ describe('EyepieceView.vue Monocular Route', () => {
     vi.clearAllMocks()
     originalLocation = window.location
     delete window.location
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
   })
 
   afterEach(() => {
@@ -349,11 +342,7 @@ describe('EyepieceView.vue Fullscreen', () => {
     originalLocation = window.location
     delete window.location
     window.location = { ...originalLocation, pathname: '/eyepiece' }
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
     Element.prototype.requestFullscreen = vi.fn().mockResolvedValue(undefined)
     document.exitFullscreen = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(document, 'fullscreenElement', {
@@ -461,11 +450,7 @@ describe('EyepieceView.vue Download', () => {
     originalLocation = window.location
     delete window.location
     window.location = { ...originalLocation, pathname: '/eyepiece' }
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
     global.URL.createObjectURL = vi.fn(() => 'blob:snapshot')
     global.URL.revokeObjectURL = vi.fn()
     await loadEyepieceView()
@@ -646,11 +631,7 @@ describe('EyepieceView.vue Overlay layout', () => {
     originalLocation = window.location
     delete window.location
     window.location = { ...originalLocation, pathname: '/eyepiece' }
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
     mockCapabilities.value = { debug_logging: true }
     await loadEyepieceView()
   })
@@ -683,11 +664,7 @@ describe('EyepieceView.vue Overlay auto-hide', () => {
     originalLocation = window.location
     delete window.location
     window.location = { ...originalLocation, pathname: '/eyepiece' }
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
     await loadEyepieceView()
   })
 
@@ -810,11 +787,7 @@ describe('EyepieceView.vue follows the operator', () => {
     vi.clearAllMocks()
     originalLocation = window.location
     delete window.location
-    global.ResizeObserver = class ResizeObserver {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    }
+    installResizeObserverStub()
   })
 
   afterEach(() => {

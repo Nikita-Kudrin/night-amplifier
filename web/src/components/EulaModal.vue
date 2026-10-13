@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getSoftwareLicenses, updateSettings } from '../composables/api.js'
-import { BaseModal, BaseSpinner } from './ui'
+import { BaseAlert, BaseModal, BaseSpinner } from './ui'
 
 const emit = defineEmits(['accepted'])
 
@@ -92,9 +92,9 @@ onMounted(() => {
         </div>
 
         <!-- Error -->
-        <div v-if="acceptError" class="eula-error">
+        <BaseAlert v-if="acceptError" bordered :dismissible="false">
           {{ acceptError }}
-        </div>
+        </BaseAlert>
 
         <!-- Agreement -->
         <div class="eula-agreement">
@@ -148,7 +148,7 @@ onMounted(() => {
 
 .eula-subtitle {
   margin: 0.125rem 0 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
@@ -170,7 +170,7 @@ onMounted(() => {
 .eula-intro {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   line-height: 1.5;
 }
 
@@ -183,7 +183,7 @@ onMounted(() => {
 
 .eula-section-title {
   margin: 0 0 0.5rem;
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -193,25 +193,15 @@ onMounted(() => {
   padding: 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 250px;
   overflow-y: auto;
   line-height: 1.6;
-}
-
-/* Error */
-.eula-error {
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 /* Agreement footer */
@@ -228,7 +218,7 @@ onMounted(() => {
   align-items: center;
   gap: 0.625rem;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   color: var(--text-primary);
   user-select: none;
 }
@@ -244,12 +234,12 @@ onMounted(() => {
   width: 18px;
   height: 18px;
   border: 2px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: all var(--transition-fast);
   background: var(--surface);
 }
 
@@ -263,7 +253,7 @@ onMounted(() => {
   display: block;
   width: 5px;
   height: 9px;
-  border: solid white;
+  border: solid var(--on-primary);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
   margin-top: -1px;
@@ -278,16 +268,8 @@ onMounted(() => {
   align-self: flex-end;
   padding: 0.625rem 2rem;
   font-weight: 600;
-  font-size: 0.95rem;
-  border-radius: 8px;
-}
-
-.eula-accept-btn {
-  align-self: flex-end;
-  padding: 0.625rem 2rem;
-  font-weight: 600;
-  font-size: 0.95rem;
-  border-radius: 8px;
+  font-size: var(--fs-lg);
+  border-radius: var(--radius-lg);
 }
 
 /* Mobile */

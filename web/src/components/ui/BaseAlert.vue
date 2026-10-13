@@ -9,13 +9,18 @@ defineProps({
     type: Boolean,
     default: true,
   },
+  /** Dialog size: roomier, with a rule in its own colour. */
+  bordered: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['dismiss'])
 </script>
 
 <template>
-  <div class="alert" :class="`alert-${type}`">
+  <div class="alert" :class="[`alert-${type}`, {bordered}]">
     <slot/>
     <button v-if="dismissible" class="btn-close" @click="emit('dismiss')">&times;</button>
   </div>
@@ -29,9 +34,9 @@ const emit = defineEmits(['dismiss'])
   align-items: center;
   justify-content: space-between;
   padding: 0.375rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-bottom: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   gap: 0.5rem;
 }
 
@@ -53,5 +58,13 @@ const emit = defineEmits(['dismiss'])
 .alert-success {
   background: var(--success-bg);
   color: var(--success);
+}
+
+.alert.bordered {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-base);
 }
 </style>

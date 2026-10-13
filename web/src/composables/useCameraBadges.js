@@ -1,4 +1,5 @@
 import {ref, watch, onUnmounted, unref} from 'vue'
+import {formatResolution, formatTemperature} from '../utils/format.js'
 
 /** "Main" or "Guide" for a connected camera; null for one in neither role. */
 export function roleLabel(cam) {
@@ -19,17 +20,15 @@ export function roleLabel(cam) {
  * @param {import('vue').Ref<object|null>} sources.settings - The server settings.
  */
 export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings}) {
-    function formatResolution(cam) {
-        const {max_width: width, max_height: height} = cam?.info ?? {}
-        // A camera listed without being opened (held elsewhere, or it failed to open) reports 0x0.
-        return width && height ? `${width}x${height}` : '—'
+    function resolutionOf(cam) {
+        return formatResolution(cam?.info?.max_width, cam?.info?.max_height)
     }
 
     function temperaturePill(cam) {
         if (!cam?.info?.has_cooler) return null
         const status = unref(cameraStatus)?.[cam.name]
         if (!status) return null
-        return `${status.temperature_c.toFixed(1)}°C`
+        return formatTemperature(status.temperature_c)
     }
 
     function phaseOf(cam) {
@@ -96,5 +95,5 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
         return (match ?? modes[0]).name
     }
 
-    return {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill}
+    return {roleLabel, formatResolution: resolutionOf, temperaturePill, isWarmingUp, phaseLabel, sensorModePill}
 }

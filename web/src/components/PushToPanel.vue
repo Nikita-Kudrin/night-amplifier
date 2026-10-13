@@ -2,13 +2,20 @@
 import {ref, onMounted, inject, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
-import {formatRA, formatDec} from '../composables/useCoordinates.js'
+import {useCapabilities, useSelectedCamera} from '../composables/appContext.js'
+import {formatDec, formatRA} from '../utils/coordinates.js'
+import {formatFov} from '../utils/format.js'
 import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 import CatalogSearch from './CatalogSearch.vue'
 import EquipmentSection from './EquipmentSection.vue'
 import ManualCoordinates from './ManualCoordinates.vue'
-import {getAstapStatus, getAstapDatabases, updatePushToConfig} from '../composables/api.js'
+import {
+  getAstapStatus,
+  getAstapDatabases,
+  ignoreProOnly,
+  updatePushToConfig,
+} from '../composables/api.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -30,8 +37,8 @@ async function fetchAstapStatus() {
     ])
     astapStatus.value = statusData
     availableDatabases.value = dbData
-  } catch {
-    // Ignore — plugin may not be available in Community version
+  } catch (e) {
+    ignoreProOnly(e, 'ASTAP status')
   }
 }
 
@@ -94,44 +101,29 @@ const fovWarning = computed(() => {
 })
 
 const eventStream = inject('eventStream')
-const cameras = inject('cameras', ref([]))
-const selectedCamera = inject('selectedCamera', ref(null))
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false},
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-})
-
-const hasProSolver = computed(() => capabilities?.value?.push_to?.astap_solver ?? false)
+const selectedCamera = useSelectedCamera()
+const {astapSolver: hasProSolver} = useCapabilities()
 const showProOverlay = computed(() => !hasProSolver.value)
 
 // Target management
-const {currentTarget, selectTargetByName, clearTarget, isSolving, cancelSolve} = usePushToTarget({
+const {
+  currentTarget,
+  selectTargetByName,
+  selectTargetByCoordinates,
+  clearTarget,
+  isSolving,
+  cancelSolve,
+} = usePushToTarget({
   withErrorHandling,
   eventStream,
 })
 
 // Connected camera info for auto-fill and profile switching
-const connectedCameraInfo = computed(() => {
-  if (!selectedCamera?.value || !cameras?.value) return null
-  const cam = cameras.value.find(c => c.id === selectedCamera.value)
-  return cam?.info || null
-})
-
-function formatFov(deg) {
-  if (deg >= 1) return `${deg.toFixed(2)}\u00B0`
-  return `${(deg * 60).toFixed(1)}'`
-}
+const connectedCameraInfo = computed(() => selectedCamera.value?.info || null)
 
 /** Resolves `true` once the target took, so `ManualCoordinates` can clear its fields. */
 async function setCoordinateTarget(coords) {
-  return withErrorHandling(async () => {
-    const {setTargetByCoordinates} = await import('../composables/api.js')
-    const result = await setTargetByCoordinates(coords.ra, coords.dec)
-    currentTarget.value = result.target
-    return true
-  })
+  return (await selectTargetByCoordinates(coords.ra, coords.dec)) !== undefined
 }
 
 onMounted(fetchAstapStatus)
@@ -189,7 +181,7 @@ onMounted(fetchAstapStatus)
       <!-- Pro Only Overlay -->
       <div v-if="showProOverlay" class="pro-overlay">
         <div class="pro-message">
-          <BaseProLock feature="Plate Solving" size="32px" style="margin-bottom: 0.5rem"/>
+          <BaseProLock feature="Plate Solving" size="32px" class="pro-message-lock"/>
           <h3>Pro Feature</h3>
           <p>Plate solving and Push-To navigation require Night Amplifier Pro.</p>
           <a href="https://skycontrast.com/software/night-amplifier-pro" target="_blank" class="btn btn-primary btn-sm">Upgrade
@@ -258,7 +250,7 @@ onMounted(fetchAstapStatus)
 
 .current-target {
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.5rem;
   border-left: 3px solid var(--primary);
 }
@@ -271,7 +263,7 @@ onMounted(fetchAstapStatus)
 }
 
 .target-label {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   text-transform: uppercase;
 }
@@ -287,7 +279,7 @@ onMounted(fetchAstapStatus)
 }
 
 .btn-clear:hover {
-  color: var(--danger);
+  color: var(--error);
 }
 
 .target-info {
@@ -298,20 +290,20 @@ onMounted(fetchAstapStatus)
 }
 
 .target-name {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .target-designation {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--primary);
 }
 
 .target-coords {
   display: flex;
   gap: 1rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   font-family: monospace;
 }
@@ -326,26 +318,30 @@ onMounted(fetchAstapStatus)
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 10;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--backdrop);
   backdrop-filter: blur(6px);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1.5rem 1rem;
   text-align: center;
   border: 1px dashed var(--border);
 }
 
+.pro-message-lock {
+  margin-bottom: 0.5rem;
+}
+
 .pro-message h3 {
-  font-size: 1rem;
+  font-size: var(--fs-xl);
   margin: 0.5rem 0;
   color: var(--text-primary);
 }
 
 .pro-message p {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   color: var(--text-secondary);
   margin-bottom: 1rem;
 }
@@ -354,7 +350,7 @@ onMounted(fetchAstapStatus)
   background: none;
   border: none;
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   cursor: pointer;
   text-decoration: underline;
   padding: 0.25rem 0;
@@ -370,7 +366,7 @@ onMounted(fetchAstapStatus)
   border: none;
   padding: 0.1rem 0.2rem;
   cursor: pointer;
-  color: #f59e0b;
+  color: var(--warning);
   display: flex;
   align-items: center;
   flex-shrink: 0;
@@ -378,7 +374,7 @@ onMounted(fetchAstapStatus)
 }
 
 .fov-warning-btn:hover {
-  color: #d97706;
+  color: var(--warning-hover);
 }
 
 .header-warning-icon {

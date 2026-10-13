@@ -27,7 +27,7 @@ async function setTarget() {
 <template>
   <div class="section manual-coords-section">
     <div class="manual-coords-header">
-      <h3 class="section-title">Manual Coordinates</h3>
+      <h3 class="eyebrow">Manual Coordinates</h3>
       <BaseToggle :model-value="enabled" size="small" @update:model-value="enabled = $event"/>
     </div>
     <div v-if="enabled" class="manual-coords-content">
@@ -38,7 +38,7 @@ async function setTarget() {
               v-model="raInput"
               type="text"
               placeholder="HH:MM:SS or degrees"
-              class="coord-input"
+              class="input input-dense coord-input"
           />
         </div>
         <div class="coord-field">
@@ -47,7 +47,7 @@ async function setTarget() {
               v-model="decInput"
               type="text"
               placeholder="DD:MM:SS or degrees"
-              class="coord-input"
+              class="input input-dense coord-input"
           />
         </div>
       </div>
@@ -64,15 +64,6 @@ async function setTarget() {
 </template>
 
 <style scoped>
-.section-title {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  margin-bottom: 0.375rem;
-  padding-bottom: 0;
-  border-bottom: none;
-}
-
 .manual-coords-header {
   display: flex;
   justify-content: space-between;
@@ -80,7 +71,7 @@ async function setTarget() {
   margin-bottom: 0.375rem;
 }
 
-.manual-coords-header .section-title {
+.manual-coords-header .eyebrow {
   margin-bottom: 0;
 }
 
@@ -102,24 +93,13 @@ async function setTarget() {
 }
 
 .coord-field label {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
 }
 
 .coord-input {
-  width: 100%;
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  border-radius: 4px;
   padding: 0.375rem;
-  font-size: 0.75rem;
-  color: var(--text-primary);
   font-family: monospace;
-}
-
-.coord-input:focus {
-  outline: none;
-  border-color: var(--primary);
 }
 
 .coord-input::placeholder {
@@ -128,12 +108,8 @@ async function setTarget() {
 }
 
 .coord-error {
-  font-size: 0.65rem;
-  color: var(--danger);
+  font-size: var(--fs-2xs);
+  color: var(--error);
   margin-bottom: 0.25rem;
-}
-
-.set_coords-btn {
-  width: 100%;
 }
 </style>

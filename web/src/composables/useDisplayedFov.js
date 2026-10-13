@@ -1,4 +1,5 @@
 import {computed, toValue} from 'vue'
+import {fieldOfViewDeg} from '../utils/optics.js'
 
 /**
  * Field of view of the camera on screen, in degrees of image height.
@@ -17,14 +18,13 @@ export function useDisplayedFov(camera, settings, pushDirection) {
         const current = toValue(settings)
         const name = toValue(camera)?.name
         const optics = (name && current?.camera_telescope_profiles?.[name]) || current?.telescope
-        const fl = optics?.focal_length_mm
-        const py = optics?.pixel_size_y_um
-        const h = optics?.sensor_height_px
-        if (!fl || !py || !h) return toValue(pushDirection)?.fovDeg || 0
-
-        const effectiveFl = fl * (optics.barlow_coeff || 1)
-        const sensorHeightMm = (h * py) / 1000
-        return (2 * Math.atan(sensorHeightMm / (2 * effectiveFl)) * 180) / Math.PI
+        const fov = fieldOfViewDeg(
+            optics?.sensor_height_px,
+            optics?.pixel_size_y_um,
+            optics?.focal_length_mm,
+            optics?.barlow_coeff
+        )
+        return fov ?? (toValue(pushDirection)?.fovDeg || 0)
     })
 }
 

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getLicenseStatus, updateLicense, getSoftwareLicenses } from '../composables/api.js'
-import { BaseModal, BaseSpinner } from './ui'
+import { BaseAlert, BaseModal, BaseSpinner } from './ui'
 defineEmits(['close'])
 
 const activeTab = ref('license') // 'license' | 'software'
@@ -182,17 +182,17 @@ onMounted(() => {
           <div class="update-license-section">
             <h3 class="section-subtitle">Update License Key</h3>
             
-            <div v-if="licenseError" class="alert error-alert">
+            <BaseAlert v-if="licenseError" bordered :dismissible="false">
               {{ licenseError }}
-            </div>
-            
-            <div v-if="licenseSuccess" class="alert success-alert">
+            </BaseAlert>
+
+            <BaseAlert v-if="licenseSuccess" type="success" bordered :dismissible="false">
               License updated successfully! Enjoy NightAmplifier Pro.
-            </div>
+            </BaseAlert>
 
             <textarea 
-              v-model="licenseToken" 
-              class="license-input" 
+              v-model="licenseToken"
+              class="input license-input"
               placeholder="Paste your license here..."
               rows="4"
             ></textarea>
@@ -234,12 +234,12 @@ onMounted(() => {
 
 <style scoped>
 .version-badge {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: normal;
   color: var(--text-muted);
   background: var(--surface-hover);
   padding: 0.25rem 0.5rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-left: 0.75rem;
 }
 
@@ -258,9 +258,9 @@ onMounted(() => {
   border-bottom: 2px solid transparent;
   color: var(--text-secondary);
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--transition-normal);
 }
 
 .tab-btn:hover {
@@ -271,7 +271,7 @@ onMounted(() => {
 .tab-btn.active {
   color: var(--primary);
   border-bottom-color: var(--primary);
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--primary-bg);
 }
 
 /* Content Area */
@@ -289,7 +289,7 @@ onMounted(() => {
 .active-license-card, .no-license-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1.25rem;
   margin-bottom: 1.5rem;
 }
@@ -299,9 +299,9 @@ onMounted(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-weight: 600;
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
   margin-bottom: 1rem;
 }
 
@@ -311,15 +311,15 @@ onMounted(() => {
 }
 
 .status-badge.success {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
 }
 
 .status-badge.warning {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
 }
 
 .license-details {
@@ -337,7 +337,7 @@ onMounted(() => {
 
 .detail-label {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   width: 90px;
 }
 
@@ -357,7 +357,7 @@ onMounted(() => {
   color: var(--text-secondary);
   line-height: 1.5;
   margin: 0;
-  font-size: 0.95rem;
+  font-size: var(--fs-lg);
 }
 
 /* Update License Section */
@@ -369,51 +369,23 @@ onMounted(() => {
 
 .section-subtitle {
   margin: 0;
-  font-size: 1.05rem;
+  font-size: var(--fs-xl);
   color: var(--text-primary);
   font-weight: 600;
 }
 
 .license-input {
-  width: 100%;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
   padding: 0.75rem;
-  color: var(--text-primary);
   font-family: monospace;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   resize: vertical;
   min-height: 100px;
-}
-
-.license-input:focus {
-  outline: none;
-  border-color: var(--primary);
+  background: var(--surface);
 }
 
 .update-btn {
   align-self: flex-end;
   padding: 0.5rem 1.5rem;
-}
-
-/* Alerts */
-.alert {
-  padding: 0.75rem 1rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
-}
-
-.error-alert {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.success-alert {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 /* Software Licenses Text */
@@ -442,10 +414,10 @@ onMounted(() => {
   padding: 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-secondary);
   font-family: monospace;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 400px;

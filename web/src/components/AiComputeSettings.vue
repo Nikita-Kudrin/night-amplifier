@@ -101,7 +101,7 @@ async function remeasure() {
 
   <div class="control-group" data-test="ai-compute">
     <div class="control-row">
-      <label class="control-label" for="ai-compute-select" style="margin-bottom: 0; flex: 1">
+      <label class="control-label control-label-inline" for="ai-compute-select">
         AI compute
         <BaseProLock v-if="!aiDenoiseAvailable" feature="AI Denoising"/>
         <BaseInfoIcon :message="HELP.ai_compute"/>
@@ -109,7 +109,7 @@ async function remeasure() {
       <select
           id="ai-compute-select"
           v-model="local.ai_compute"
-          class="select ai-compute-select"
+          class="select select-compact ai-compute-select"
           data-test="ai-compute-select"
           :disabled="computeLocked"
           @change="applyCompute($event.target.value)"
@@ -151,8 +151,6 @@ async function remeasure() {
 <style scoped>
 .ai-compute-select {
   width: 190px;
-  padding: 0.25rem 2rem 0.25rem 0.5rem;
-  height: 32px;
 }
 
 .ai-compute-remeasure {

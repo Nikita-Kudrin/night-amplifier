@@ -8,17 +8,15 @@
  * edits the last camera's profile): naming nobody let the imaging scope's focal length
  * land in the guide's profile before either was connected.
  */
-import {computed, inject, ref} from 'vue'
+import {computed} from 'vue'
 import {roleLabel} from '../composables/useCameraBadges.js'
+import {useSelectedCamera} from '../composables/appContext.js'
 
 const props = defineProps({
   fallbackName: {type: String, default: null},
 })
 
-const cameras = inject('cameras', ref([]))
-const selectedCamera = inject('selectedCamera', ref(null))
-
-const camera = computed(() => (cameras.value ?? []).find((c) => c.id === selectedCamera.value) ?? null)
+const camera = useSelectedCamera()
 const role = computed(() => roleLabel(camera.value))
 </script>
 
@@ -36,6 +34,6 @@ const role = computed(() => roleLabel(camera.value))
   margin-left: 0.25rem;
   font-weight: 400;
   text-transform: none;
-  color: var(--text);
+  color: var(--text-primary);
 }
 </style>

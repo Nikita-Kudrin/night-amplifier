@@ -1,11 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {
-    parseCoordinate,
-    formatRA,
-    formatDec,
-    formatDistance,
-    useCoordinateInput,
-} from '../useCoordinates.js'
+import {formatDec, formatRA, parseCoordinate} from './coordinates.js'
 
 describe('parseCoordinate', () => {
     describe('RA parsing - decimal degrees', () => {
@@ -88,70 +82,24 @@ describe('formatDec', () => {
     })
 })
 
-describe('formatDistance', () => {
-    it('formats distance in degrees', () => {
-        expect(formatDistance(5)).toBe('5.0°')
-        expect(formatDistance(1.5)).toBe('1.5°')
+// Rounded before splitting: flooring first showed a value just under a minute as `60.0s`.
+describe('carrying a rounded second', () => {
+    it('carries into the next minute of RA', () => {
+        expect(formatRA((5 + 34 / 60 + 59.96 / 3600) * 15)).toBe('5h 35m 0.0s')
     })
 
-    it('formats small distances in arcminutes', () => {
-        expect(formatDistance(0.5)).toBe("30.0'")
-        expect(formatDistance(0.1)).toBe("6.0'")
+    it('carries through the hour, and wraps 24h to 0h', () => {
+        expect(formatRA((5 + 59 / 60 + 59.97 / 3600) * 15)).toBe('6h 0m 0.0s')
+        expect(formatRA(359.99999)).toBe('0h 0m 0.0s')
     })
 
-    it('handles null and undefined', () => {
-        expect(formatDistance(null)).toBe('--')
-        expect(formatDistance(undefined)).toBe('--')
-    })
-})
-
-describe('useCoordinateInput', () => {
-    it('provides reactive input refs', () => {
-        const {raInput, decInput, coordError} = useCoordinateInput()
-        expect(raInput.value).toBe('')
-        expect(decInput.value).toBe('')
-        expect(coordError.value).toBe('')
+    it('carries into the next arcminute and degree of Dec, either sign', () => {
+        expect(formatDec(41 + 15 / 60 + 59.96 / 3600)).toBe('+41° 16\' 0.0"')
+        expect(formatDec(-(5 + 59 / 60 + 59.98 / 3600))).toBe('-6° 0\' 0.0"')
     })
 
-    it('validates coordinates successfully', () => {
-        const {raInput, decInput, validateCoordinates} = useCoordinateInput()
-        raInput.value = '180'
-        decInput.value = '45'
-
-        const result = validateCoordinates()
-        expect(result).toEqual({ra: 180, dec: 45})
-    })
-
-    it('sets error for invalid RA', () => {
-        const {raInput, decInput, coordError, validateCoordinates} = useCoordinateInput()
-        raInput.value = 'invalid'
-        decInput.value = '45'
-
-        const result = validateCoordinates()
-        expect(result).toBeNull()
-        expect(coordError.value).toContain('RA')
-    })
-
-    it('sets error for invalid Dec', () => {
-        const {raInput, decInput, coordError, validateCoordinates} = useCoordinateInput()
-        raInput.value = '180'
-        decInput.value = 'invalid'
-
-        const result = validateCoordinates()
-        expect(result).toBeNull()
-        expect(coordError.value).toContain('Dec')
-    })
-
-    it('clears inputs', () => {
-        const {raInput, decInput, coordError, clearInputs} = useCoordinateInput()
-        raInput.value = '180'
-        decInput.value = '45'
-        coordError.value = 'some error'
-
-        clearInputs()
-
-        expect(raInput.value).toBe('')
-        expect(decInput.value).toBe('')
-        expect(coordError.value).toBe('')
+    it('keeps a value that rounds down where it is', () => {
+        expect(formatRA((5 + 34 / 60 + 59.94 / 3600) * 15)).toBe('5h 34m 59.9s')
     })
 })
+

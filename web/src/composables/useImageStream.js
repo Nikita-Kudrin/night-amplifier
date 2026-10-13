@@ -1,6 +1,7 @@
 import {ref, onUnmounted, shallowRef, toValue, watch} from 'vue'
 import {decodeFrame} from '../utils/frameDecoder.js'
 import {useWebSocket} from './useWebSocket.js'
+import {WS} from '../constants/endpoints.js'
 
 /** Text the server sends when an eyepiece socket switches to a camera with no frame yet. */
 export const NO_FRAME = 'no_frame'
@@ -10,17 +11,17 @@ export const NO_FRAME = 'no_frame'
  * frames, exposing `frameData`/`dimensions`. The server decides size from the Streaming
  * Resolution settings and sends every client of an endpoint the same frame — nothing to negotiate here.
  * @param {object} options - Stream options
- * @param {string} options.endpoint - WebSocket endpoint (default: '/ws/stream')
+ * @param {string} options.endpoint - WebSocket endpoint (default: `WS.STREAM`)
  * @returns {object} Image stream state and methods
  */
 export function useImageStream(options = {}) {
     // May be a plain string, a ref or a getter — the live view passes a getter so the
     // Guide camera toggle can move this socket to the other source.
-    const endpointSource = options.endpoint ?? '/ws/stream'
-    const resolveEndpoint = () => toValue(endpointSource) || '/ws/stream'
+    const endpointSource = options.endpoint ?? WS.STREAM
+    const resolveEndpoint = () => toValue(endpointSource) || WS.STREAM
 
     // Selects the decoder.
-    const isDynamicJpeg = !resolveEndpoint().startsWith('/ws/eyepiece_quality')
+    const isDynamicJpeg = !resolveEndpoint().startsWith(WS.EYEPIECE_QUALITY)
 
     // Use shallowRef for large binary data to avoid deep reactivity overhead
     const frameData = shallowRef(null)

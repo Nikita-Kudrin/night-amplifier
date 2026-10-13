@@ -16,12 +16,11 @@ vi.mock('./composables/useAppState.js', () => ({
     updateCameraPhase: vi.fn(),
     replaceCameraPhases: vi.fn(),
     addDiscoveredCamera: vi.fn(),
-    _settingsRef: ref({}),
-    _camerasRef: ref([]),
-    _selectedCameraIdRef: ref(null),
-    _cameraStatusRef: ref(null),
-    _cameraPhaseRef: ref(null),
-    _warmupEndsAtRef: ref({}),
+    cameras: ref([]),
+    selection: ref(null),
+    cameraStatus: ref(null),
+    cameraPhase: ref(null),
+    warmupEndsAt: ref({}),
     capabilities: ref({}),
   }))
 }))
@@ -32,11 +31,12 @@ vi.mock('./composables/useEventStream.js', () => ({
   }))
 }))
 
-vi.mock('./composables/api.js', () => ({
-  getAstapStatus: vi.fn().mockResolvedValue({ ready: true }),
-  getCatalogStatus: vi.fn().mockResolvedValue({ installed: true }),
-  getAiCompute: vi.fn().mockResolvedValue({ state: 'unavailable', rungs: [] }),
-}))
+vi.mock('./composables/api.js', async (importOriginal) =>
+  (await import('./test/mockApi.js')).mockApi(await importOriginal(), {
+    getAstapStatus: vi.fn().mockResolvedValue({ ready: true }),
+    getCatalogStatus: vi.fn().mockResolvedValue({ installed: true }),
+    getAiCompute: vi.fn().mockResolvedValue({ state: 'unavailable', rungs: [] }),
+  }))
 
 // We must mock App.vue import so that window.location is set BEFORE module is evaluated
 // But we can also just use vi.doMock or isolateModules if needed.
@@ -168,7 +168,7 @@ describe('App.vue Routing', () => {
     expect(appState.replaceCameraPhases).toHaveBeenCalledWith(cameras)
     expect(appState.refreshCameras).toHaveBeenCalledTimes(1)
 
-    appState._camerasRef.value = [{ name: 'Neptune-C II', connected: true }]
+    appState.cameras.value = [{ name: 'Neptune-C II', connected: true }]
     events.lastEvent.value = { type: 'camera_phases', cameras: [...cameras] }
     await flushPromises()
     expect(appState.refreshCameras).toHaveBeenCalledTimes(1)

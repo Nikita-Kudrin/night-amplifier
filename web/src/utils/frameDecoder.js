@@ -70,8 +70,8 @@ export function decodeRgb8Lz4(buffer, view) {
     return {width, height, frameData: decompressedBuffer}
 }
 
-const SA09_HEADER_SIZE = 20
-const SA09_CHUNK_DESCRIPTOR_SIZE = 8
+export const SA09_HEADER_SIZE = 20
+export const SA09_CHUNK_DESCRIPTOR_SIZE = 8
 
 /**
  * Decode chunked RGB8+LZ4 binary stream format (SA09)

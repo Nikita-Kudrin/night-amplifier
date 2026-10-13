@@ -115,7 +115,7 @@ function handleChange(event) {
 }
 
 .current-value {
-  font-size: 0.77rem;
+  font-size: var(--fs-sm);
 }
 
 .label-text-wrapper {
