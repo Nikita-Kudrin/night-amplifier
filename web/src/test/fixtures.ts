@@ -1,22 +1,34 @@
 /**
  * Whole wire objects for tests, each overridable field by field. A test that hands a
- * component a partial object never sees the shape the server sends; these follow
- * `api.types.js`, which `fixtures.test.js` checks.
+ * component a partial object never sees the shape the server sends; each of these is
+ * typed by the `api.types.ts` answer it stands in for.
  */
 import {DEFAULT_CAPABILITIES, defaultSettings, STACKING_TYPES} from '../constants'
+import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
+import type {
+    AstapStatus,
+    Camera,
+    CameraInfo,
+    Capabilities,
+    CatalogEntry,
+    CatalogStatus,
+    DatabaseType,
+    PushToStatus,
+    Settings,
+    StackingType,
+    StackingTypeInfo,
+} from '../composables/api.types.js'
 
-/** @returns {import('../composables/api.types.js').Settings} */
-export function settings(overrides = {}) {
+export function settings(overrides: Partial<Settings> = {}): Settings {
     return {...defaultSettings(), ...overrides}
 }
 
-/** @returns {import('../composables/api.types.js').Capabilities} */
-export function capabilities(overrides = {}) {
+export function capabilities(overrides: Partial<Capabilities> = {}): Capabilities {
     return {...structuredClone(DEFAULT_CAPABILITIES), ...overrides}
 }
 
 /** Every Pro plugin active. */
-export function proCapabilities() {
+export function proCapabilities(): Capabilities {
     return {
         has_pro: true,
         deep_sky: {
@@ -33,8 +45,7 @@ export function proCapabilities() {
     }
 }
 
-/** @returns {import('../composables/api.types.js').CameraInfo} */
-export function cameraInfo(overrides = {}) {
+export function cameraInfo(overrides: Partial<CameraInfo> = {}): CameraInfo {
     return {
         id: 'zwo_0',
         name: 'ASI533MC Pro',
@@ -55,11 +66,8 @@ export function cameraInfo(overrides = {}) {
     }
 }
 
-/**
- * A camera list entry; connected as the imaging camera unless told otherwise.
- * @returns {import('../composables/api.types.js').Camera}
- */
-export function camera(overrides = {}) {
+/** A camera list entry; connected as the imaging camera unless told otherwise. */
+export function camera(overrides: Partial<Omit<Camera, 'info'>> & {info?: Partial<CameraInfo>} = {}): Camera {
     const {info, ...rest} = overrides
     const id = rest.id ?? 'zwo_0'
     const name = rest.name ?? 'ASI533MC Pro'
@@ -76,8 +84,7 @@ export function camera(overrides = {}) {
     }
 }
 
-/** @returns {import('../composables/api.types.js').AstapStatus} */
-export function astapStatus(overrides = {}) {
+export function astapStatus(overrides: Partial<AstapStatus> = {}): AstapStatus {
     return {
         binary_installed: true,
         binary_path: '/opt/astap/astap_cli',
@@ -90,8 +97,7 @@ export function astapStatus(overrides = {}) {
     }
 }
 
-/** @returns {import('../composables/api.types.js').DatabaseType} */
-export function databaseType(overrides = {}) {
+export function databaseType(overrides: Partial<DatabaseType> = {}): DatabaseType {
     return {
         id: 'D80',
         description: 'General Purpose',
@@ -103,8 +109,7 @@ export function databaseType(overrides = {}) {
     }
 }
 
-/** @returns {import('../composables/api.types.js').CatalogStatus} */
-export function catalogStatus(overrides = {}) {
+export function catalogStatus(overrides: Partial<CatalogStatus> = {}): CatalogStatus {
     return {
         installed: true,
         catalog_path: '/opt/catalog',
@@ -116,8 +121,7 @@ export function catalogStatus(overrides = {}) {
     }
 }
 
-/** @returns {import('../composables/api.types.js').PushToStatus} */
-export function pushToStatus(overrides = {}) {
+export function pushToStatus(overrides: Partial<PushToStatus> = {}): PushToStatus {
     return {
         solver_ready: true,
         is_solving: false,
@@ -130,8 +134,7 @@ export function pushToStatus(overrides = {}) {
     }
 }
 
-/** @returns {import('../composables/api.types.js').CatalogEntry} */
-export function catalogEntry(overrides = {}) {
+export function catalogEntry(overrides: Partial<CatalogEntry> = {}): CatalogEntry {
     return {
         designation: 'NGC 1976',
         name: 'Orion Nebula',
@@ -148,8 +151,10 @@ export function catalogEntry(overrides = {}) {
     }
 }
 
-/** What `StackingType::info()` says of each type, in `StackingType::all()` order. */
-const STACKING_TYPE_INFO = {
+type StackingTypeText = Pick<StackingTypeInfo, 'name' | 'description' | 'uses_star_registration'>
+
+/** What `StackingType::info()` says of each type. */
+const STACKING_TYPE_INFO: Record<StackingType, StackingTypeText> = {
     [STACKING_TYPES.DEEP_SKY]: {
         name: 'Deep Sky',
         description: 'Star-based registration with sigma clipping for nebulae, galaxies, and star clusters',
@@ -167,8 +172,7 @@ const STACKING_TYPE_INFO = {
     },
 }
 
-/** @returns {import('../composables/api.types.js').StackingTypeInfo} */
-export function stackingTypeInfo(overrides = {}) {
+export function stackingTypeInfo(overrides: Partial<StackingTypeInfo> = {}): StackingTypeInfo {
     const id = overrides.id ?? STACKING_TYPES.DEEP_SKY
     return {
         id,
@@ -180,6 +184,6 @@ export function stackingTypeInfo(overrides = {}) {
 }
 
 /** `GET /api/settings/stacking-types` as the server answers it. */
-export function stackingTypes() {
-    return Object.keys(STACKING_TYPE_INFO).map((id) => stackingTypeInfo({id}))
+export function stackingTypes(): StackingTypeInfo[] {
+    return STACKING_TYPE_VALUES.map((id) => stackingTypeInfo({id}))
 }

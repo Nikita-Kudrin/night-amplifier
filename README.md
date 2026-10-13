@@ -314,13 +314,14 @@ npm install
 npm run dev       # development server, proxies API to localhost:9955
 npm run build     # production build to web/dist/, which the server binary embeds
 npm test          # tests in watch mode (npm run test:run: single run)
+npm run typecheck # vue-tsc over the TypeScript (CI runs it; build does not)
 npm run lint      # check for issues (npm run lint:fix: auto-fix)
 npm run format    # format with Prettier
 ```
 
-`src/composables/api.types.js` (JSDoc types of the server's answers) is generated from the Rust types,
-`src/composables/api.settings.js` (default settings and the ranges the server clamps them to) from the code that
-enforces them, and `src/composables/api.events.js` (every `/ws/events` event, and `SERVER_EVENTS`: the topic each
+`src/composables/api.types.ts` (TypeScript types of the server's answers) is generated from the Rust types,
+`src/composables/api.settings.ts` (default settings and the ranges the server clamps them to) from the code that
+enforces them, and `src/composables/api.events.ts` (every `/ws/events` event, and `SERVER_EVENTS`: the topic each
 states) from `ServerEvent` and one sample per variant (`ServerEvent::examples()`); after changing any, run
 `UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types` from the repository root. A new event
 needs a sample, and the frontend's guard tests (`useEventStream.catalogue.test.js`) fail one that states a topic

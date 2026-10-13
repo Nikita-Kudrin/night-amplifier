@@ -1,6 +1,7 @@
 import {mount} from '@vue/test-utils'
 import {createEventStreamStub, serverEvent} from './eventStream.js'
 import {SERVER_EVENTS} from '../composables/api.events.js'
+import type {ServerEventType} from '../composables/api.events.js'
 import {useEventStream} from '../composables/useEventStream.js'
 import {MockWebSocket, setupGlobalWebSocketMock} from '../composables/__tests__/webSocketTestUtils.js'
 
@@ -15,7 +16,7 @@ describe('createEventStreamStub', () => {
     })
 
     it('has every field and action the real event stream has', () => {
-        let real
+        let real: ReturnType<typeof useEventStream> | undefined
         const wrapper = mount({
             setup() {
                 real = useEventStream()
@@ -23,12 +24,12 @@ describe('createEventStreamStub', () => {
             },
         })
 
-        expect(Object.keys(createEventStreamStub()).sort()).toEqual(Object.keys(real).sort())
+        expect(Object.keys(createEventStreamStub()).sort()).toEqual(Object.keys(real!).sort())
         wrapper.unmount()
     })
 
     it('starts where the real one starts', () => {
-        let real
+        let real: ReturnType<typeof useEventStream> | undefined
         const wrapper = mount({
             setup() {
                 real = useEventStream()
@@ -37,9 +38,8 @@ describe('createEventStreamStub', () => {
         })
         const stub = createEventStreamStub()
 
-        for (const key of ['captureState', 'viewedCamera', 'stackCrop', 'plateSolving', 'currentTarget', 'droppedCount']) {
-            expect(stub[key].value, key).toEqual(real[key].value)
-        }
+        const keys = ['captureState', 'viewedCamera', 'stackCrop', 'plateSolving', 'currentTarget', 'droppedCount'] as const
+        for (const key of keys) expect(stub[key].value, key).toEqual(real![key].value)
         wrapper.unmount()
     })
 
@@ -55,12 +55,17 @@ describe('createEventStreamStub', () => {
 
 describe('serverEvent', () => {
     it('builds every event the server sends', () => {
-        for (const type of Object.keys(SERVER_EVENTS)) expect(serverEvent(type).type).toBe(type)
+        for (const type of Object.keys(SERVER_EVENTS) as ServerEventType[]) expect(serverEvent(type).type).toBe(type)
     })
 
-    it('refuses an event the server never sends, or a field it does not carry', () => {
+    // Type-level: `tsconfig.vitest.json` is part of `npm run typecheck`.
+    it('takes only the fields an event carries, with their wire types', () => {
+        // @ts-expect-error the server sends no 'capture_count' event
         expect(() => serverEvent('capture_count')).toThrow("no 'capture_count' event")
-        expect(() => serverEvent('frame_dropped', {dropped: 3})).toThrow("'frame_dropped' carries no dropped")
+        // @ts-expect-error 'frame_dropped' carries `dropped_count`, not `dropped`
+        serverEvent('frame_dropped', {dropped: 3})
+        // @ts-expect-error `role` is a `CameraRole`
+        serverEvent('camera_reconnecting', {role: 'imaging'})
         expect(serverEvent('frame_dropped', {dropped_count: 3})).toEqual({type: 'frame_dropped', dropped_count: 3})
     })
 })

@@ -503,7 +503,7 @@ describe('SettingsPanel', () => {
             expect(slider).toBeDefined()
             // The negative end is one nominal sky level, where the hard floor clips
             // exactly at the sky; it comes from the backend's `BLACK_FLOOR_RANGE`
-            // (`api.settings.js`) and moves whenever the stretch is retuned.
+            // (`api.settings.ts`) and moves whenever the stretch is retuned.
             expect(slider.props('min')).toBe(-0.045)
             expect(slider.props('max')).toBe(0.15)
         })

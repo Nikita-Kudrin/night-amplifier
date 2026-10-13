@@ -31,6 +31,7 @@ settings.json
 /OpenNGC/
 /captures/
 /web/dist/
+/web/coverage/
 /tests.tar.zst
 /dist/
 /license*

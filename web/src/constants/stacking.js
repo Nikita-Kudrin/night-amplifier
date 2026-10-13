@@ -1,7 +1,7 @@
 /** Stacking: the stacking types, outlier rejection and frame weighting. */
 import {serverLimits} from './serverSettings.js'
 
-/** `StackingType` (`api.types.js`), by name. */
+/** `StackingType` (`api.types.ts`), by name. */
 export const STACKING_TYPES = Object.freeze({
     DEEP_SKY: 'deep_sky',
     PLANETARY: 'planetary',

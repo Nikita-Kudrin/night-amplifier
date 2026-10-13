@@ -1,0 +1,12 @@
+{
+    // `api.js`'s JSDoc, loosely, until item 5 of plans/TYPESCRIPT_PLAN.md makes it `api.ts`: a
+    // type it names that `api.types.ts` does not generate (`TargetInfo` once) fails here.
+    "extends": "./tsconfig.app.json",
+    "include": [],
+    "files": ["env.d.ts", "src/composables/api.js"],
+    "compilerOptions": {
+        "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.jsdoc.tsbuildinfo",
+        "checkJs": true,
+        "strict": false
+    }
+}

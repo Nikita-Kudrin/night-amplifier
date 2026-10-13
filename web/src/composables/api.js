@@ -1,6 +1,15 @@
 /**
  * API client for Night Amplifier REST endpoints. Every call resolves with the envelope's
  * `data` or rejects with an `ApiError`; none returns an error value.
+ *
+ * Its JSDoc is checked (`tsconfig.jsdoc.json`) until this file is TypeScript, so a type it
+ * names must be one `api.types.ts` generates.
+ */
+/**
+ * @import {
+ *     AstapStatus, Camera, Capabilities, CatalogEntry, CatalogStatus, Coordinate, DatabaseType,
+ *     PushToStatus, Settings, SimulatorConfig, StackingTypeInfo,
+ * } from './api.types.js'
  */
 import {API_BASE} from '../constants/endpoints.js'
 
@@ -70,10 +79,22 @@ async function withTimeout(timeoutMs, exchange) {
 }
 
 /**
+ * @typedef {object} RequestOptions
+ * @property {string} [method]
+ * @property {Record<string, unknown>} [query]
+ * @property {unknown} [body]
+ * @property {number} [timeoutMs]
+ */
+
+/**
  * Send one request. `body` goes as JSON, and only then with a Content-Type; `query` is
  * encoded onto the URL, skipping `null`/`undefined` values.
+ * @param {string} path
+ * @param {Omit<RequestOptions, 'timeoutMs'>} [options]
+ * @param {AbortSignal} [signal]
  */
 function send(path, {method = 'GET', query, body} = {}, signal) {
+    /** @type {RequestInit} */
     const init = {method, cache: 'no-store', signal}
     if (body !== undefined) {
         init.headers = {'Content-Type': 'application/json'}
@@ -91,7 +112,11 @@ function withQuery(url, query) {
     return encoded ? `${url}?${encoded}` : url
 }
 
-/** A JSON route: unwraps the server's `{success, data, error}` envelope. */
+/**
+ * A JSON route: unwraps the server's `{success, data, error}` envelope.
+ * @param {string} path
+ * @param {RequestOptions} [options]
+ */
 function request(path, {timeoutMs = REQUEST_TIMEOUT_MS, ...options} = {}) {
     return withTimeout(timeoutMs, async (signal) => {
         const response = await send(path, options, signal)
@@ -515,4 +540,4 @@ export async function getSoftwareLicenses() {
     return get('/about/software-licenses')
 }
 
-// Type definitions are in api.types.js
+// Type definitions are in api.types.ts

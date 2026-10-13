@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct LicenseDetails {
     pub name: String,
     pub email: String,
@@ -9,7 +10,9 @@ pub struct LicenseDetails {
     pub expires_at: String,
 }
 
+/// What `GET`/`POST /api/about/license` answer.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct LicenseStatus {
     pub active: bool,
     pub details: Option<LicenseDetails>,

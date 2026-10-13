@@ -1,7 +1,7 @@
-//! The frontend's `api.types.js`, written from the Rust wire types so the two cannot drift
+//! The frontend's `api.types.ts`, written from the Rust wire types so the two cannot drift
 //! (the hand-kept file once described 8 of ~60 settings and push directions by field
-//! names the server never sent), `api.settings.js`: the default settings and the ranges
-//! the server clamps them to, read off the code that enforces them, and `api.events.js`
+//! names the server never sent), `api.settings.ts`: the default settings and the ranges
+//! the server clamps them to, read off the code that enforces them, and `api.events.ts`
 //! (`events`): every `/ws/events` event and the topic it states.
 //!
 //! `cargo test --features api-schema --test api_types` fails when any file is stale;
@@ -12,29 +12,36 @@
 #[path = "api_types/events.rs"]
 mod events;
 
+use night_amplifier::license::LicenseStatus;
 use night_amplifier::push_to::{
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, DatabaseTypeResponse,
 };
+use night_amplifier::render::denoise::AiComputeReport;
 use night_amplifier::server::{
-    CapabilitiesResponse, CaptureStatusResponse, SettingsResponse, SimulatorConfigResponse,
+    AstapInstallRequest, CapabilitiesResponse, CaptureStatusResponse, CatalogInstallRequest,
+    ConfigureSimulatorRequest, ConnectCameraRequest, DisconnectCameraRequest, DisconnectResponse,
+    MessageResponse, PushToConfigRequest, SearchCatalogRequest, SetTargetRequest, SettingsResponse,
+    SimulatorConfigResponse, SoftwareLicensesResponse, StartCaptureRequest, StopCaptureRequest,
+    UpdateLicenseRequest, ViewedCameraBody,
 };
 use night_amplifier::session::capture::BLACK_FLOOR_RANGE;
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
-use night_amplifier::session::services::PushToStatus;
+use night_amplifier::session::services::{PushToStatus, UpdateSettingsRequest};
 use night_amplifier::session::state::{CaptureSettings, StackingTypeInfo};
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
 use serde_json::{json, Map, Value};
+use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
-const TYPES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.types.js");
+const TYPES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.types.ts");
 const SETTINGS_FILE: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.settings.js");
-const EVENTS_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.events.js");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.settings.ts");
+const EVENTS_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.events.ts");
 
 const HEADER: &str = "\
 /**
- * JSDoc types of the server's JSON answers, generated from the Rust wire types by
+ * TypeScript types of the server's JSON answers, generated from the Rust wire types by
  * `tests/api_types.rs`. Do not edit: change the Rust type, then run
  *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
  */
@@ -48,13 +55,17 @@ const SETTINGS_HEADER: &str = "\
  */
 ";
 
+/// A root's TypeScript name and the Rust name of its definition.
+type Root = (String, Value);
+
+fn root<T: JsonSchema>(generator: &mut SchemaGenerator, name: &str) -> Root {
+    let reference = generator.subschema_for::<T>().to_value();
+    let key = reference["$ref"].as_str().expect("a named type").rsplit('/').next().unwrap();
+    (name.to_string(), Value::String(key.to_string()))
+}
+
 /// The answers `api.js` documents, by the name it uses for each.
-fn roots(generator: &mut SchemaGenerator) -> Vec<(&'static str, Value)> {
-    fn root<T: JsonSchema>(generator: &mut SchemaGenerator, name: &'static str) -> (&'static str, Value) {
-        let reference = generator.subschema_for::<T>().to_value();
-        let key = reference["$ref"].as_str().expect("a named type").rsplit('/').next().unwrap();
-        (name, Value::String(key.to_string()))
-    }
+fn roots(generator: &mut SchemaGenerator) -> Vec<Root> {
     vec![
         root::<SettingsResponse>(generator, "Settings"),
         root::<StackingTypeInfo>(generator, "StackingTypeInfo"),
@@ -68,39 +79,118 @@ fn roots(generator: &mut SchemaGenerator) -> Vec<(&'static str, Value)> {
         root::<AstapStatusResponse>(generator, "AstapStatus"),
         root::<DatabaseTypeResponse>(generator, "DatabaseType"),
         root::<CatalogStatusResponse>(generator, "CatalogStatus"),
+        root::<AiComputeReport>(generator, "AiComputeReport"),
+        root::<LicenseStatus>(generator, "LicenseStatus"),
+        root::<SoftwareLicensesResponse>(generator, "SoftwareLicenses"),
+        root::<DisconnectResponse>(generator, "Disconnection"),
+        root::<MessageResponse>(generator, "Message"),
+        root::<ViewedCameraBody>(generator, "ViewedCamera"),
     ]
 }
 
-/// A definition's JSDoc name: the root's name, else the Rust name less `Response`/`Dto`.
-fn js_name(rust: &str, roots: &[(&str, Value)]) -> String {
+/// The bodies (and the one query) `api.js` sends, as the server reads them.
+fn request_roots(generator: &mut SchemaGenerator) -> Vec<Root> {
+    vec![
+        root::<UpdateSettingsRequest>(generator, "UpdateSettingsRequest"),
+        root::<StartCaptureRequest>(generator, "StartCaptureRequest"),
+        root::<StopCaptureRequest>(generator, "StopCaptureRequest"),
+        root::<ConnectCameraRequest>(generator, "ConnectCameraRequest"),
+        root::<DisconnectCameraRequest>(generator, "DisconnectCameraRequest"),
+        root::<ViewedCameraBody>(generator, "ViewedCameraRequest"),
+        root::<ConfigureSimulatorRequest>(generator, "ConfigureSimulatorRequest"),
+        root::<SetTargetRequest>(generator, "SetTargetRequest"),
+        root::<SearchCatalogRequest>(generator, "SearchCatalogRequest"),
+        root::<PushToConfigRequest>(generator, "PushToConfigRequest"),
+        root::<AstapInstallRequest>(generator, "AstapInstallRequest"),
+        root::<CatalogInstallRequest>(generator, "CatalogInstallRequest"),
+        root::<UpdateLicenseRequest>(generator, "UpdateLicenseRequest"),
+    ]
+}
+
+/// A definition's TypeScript name: the root's name, else the Rust name less `Response`/`Dto`.
+fn js_name(rust: &str, roots: &[Root]) -> String {
     if let Some((name, _)) = roots.iter().find(|(_, key)| key == rust) {
         return name.to_string();
     }
     rust.trim_end_matches("Response").trim_end_matches("Dto").to_string()
 }
 
-/// The first paragraph of a doc comment, on one line.
-fn summary(schema: &Value) -> Option<String> {
-    let text = schema.get("description")?.as_str()?;
-    let first = text.split("\n\n").next()?.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!first.is_empty()).then_some(first)
+fn snake(pascal: &str) -> String {
+    let mut out = String::new();
+    for c in pascal.chars() {
+        if c.is_uppercase() && !out.is_empty() {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
 }
 
-fn type_expr(schema: &Value, roots: &[(&str, Value)]) -> String {
+/// A doc comment at `indent`, every paragraph and line of the Rust doc kept as written.
+fn doc_comment(schema: &Value, indent: &str) -> String {
+    let Some(text) = schema.get("description").and_then(Value::as_str).map(str::trim) else {
+        return String::new();
+    };
+    if text.is_empty() {
+        return String::new();
+    }
+    let text = text.replace("*/", "*\\/");
+    if !text.contains('\n') {
+        return format!("{indent}/** {text} */\n");
+    }
+    let mut out = format!("{indent}/**\n");
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            out.push_str(&format!("{indent} *\n"));
+        } else {
+            out.push_str(&format!("{indent} * {line}\n"));
+        }
+    }
+    out.push_str(&format!("{indent} */\n"));
+    out
+}
+
+fn string_literal(value: &Value) -> String {
+    format!("'{}'", value.as_str().expect("a string literal").replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// The values of a union of string literals, or `None` for any other type.
+fn string_union(schema: &Value) -> Option<Vec<Value>> {
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        return values.iter().all(Value::is_string).then(|| values.clone());
+    }
+    let variants = ["oneOf", "anyOf"].iter().find_map(|union| schema.get(union)?.as_array())?;
+    let values: Vec<Value> = variants
+        .iter()
+        .map(|variant| match variant.get("const") {
+            Some(constant) if constant.is_string() => Some(vec![constant.clone()]),
+            _ => string_union(variant),
+        })
+        .collect::<Option<Vec<_>>>()?
+        .concat();
+    Some(values)
+}
+
+fn type_expr(schema: &Value, roots: &[Root]) -> String {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         return js_name(reference.rsplit('/').next().unwrap(), roots);
     }
     if let Some(constant) = schema.get("const") {
-        return constant.to_string().replace('"', "'");
+        return if constant.is_string() { string_literal(constant) } else { constant.to_string() };
     }
     if let Some(values) = schema.get("enum").and_then(Value::as_array) {
-        return values.iter().map(|v| v.to_string().replace('"', "'")).collect::<Vec<_>>().join("|");
+        return values
+            .iter()
+            .map(|v| if v.is_string() { string_literal(v) } else { v.to_string() })
+            .collect::<Vec<_>>()
+            .join(" | ");
     }
     for union in ["anyOf", "oneOf"] {
         if let Some(variants) = schema.get(union).and_then(Value::as_array) {
             let mut parts: Vec<String> = variants.iter().map(|v| type_expr(v, roots)).collect();
             parts.dedup();
-            return parts.join("|");
+            return parts.join(" | ");
         }
     }
     match schema.get("type") {
@@ -112,56 +202,88 @@ fn type_expr(schema: &Value, roots: &[(&str, Value)]) -> String {
                 type_expr(&single, roots)
             })
             .collect::<Vec<_>>()
-            .join("|"),
+            .join(" | "),
         Some(Value::String(t)) => match t.as_str() {
             "integer" | "number" => "number".into(),
             "string" => "string".into(),
             "boolean" => "boolean".into(),
             "null" => "null".into(),
             "array" => match schema.get("items") {
-                Some(items) => format!("Array<{}>", type_expr(items, roots)),
-                None => "Array<*>".into(),
+                Some(items) => {
+                    let item = type_expr(items, roots);
+                    if item.contains(' ') { format!("({item})[]") } else { format!("{item}[]") }
+                }
+                None => "unknown[]".into(),
             },
             "object" => match schema.get("additionalProperties") {
                 Some(values) if values.is_object() => {
-                    format!("Object<string, {}>", type_expr(values, roots))
+                    format!("Record<string, {}>", type_expr(values, roots))
                 }
-                _ => "object".into(),
+                _ => "Record<string, unknown>".into(),
             },
             other => panic!("unhandled JSON Schema type {other}"),
         },
-        _ => "*".into(),
+        _ => "unknown".into(),
     }
 }
 
-fn typedef(name: &str, schema: &Value, roots: &[(&str, Value)]) -> String {
-    let mut out = String::from("/**\n");
-    if let Some(text) = summary(schema) {
-        out.push_str(&format!(" * {text}\n"));
-    }
-    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-        out.push_str(&format!(" * @typedef {{{}}} {name}\n */\n", type_expr(schema, roots)));
+fn property_key(field: &str) -> String {
+    let mut chars = field.chars();
+    let identifier = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if identifier { field.to_string() } else { string_literal(&Value::String(field.to_string())) }
+}
+
+/// An `interface` for an object, a values list and the type derived from it for a string
+/// union (so the list is exhaustive by construction), else a `type` alias.
+fn declaration(name: &str, schema: &Value, roots: &[Root]) -> String {
+    let mut out = doc_comment(schema, "");
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        let required = strings(schema.get("required"));
+        out.push_str(&format!("export interface {name} {{\n"));
+        for (field, property) in properties {
+            let optional = if required.contains(field) { "" } else { "?" };
+            out.push_str(&doc_comment(property, "    "));
+            out.push_str(&format!("    {}{optional}: {}\n", property_key(field), type_expr(property, roots)));
+        }
+        out.push_str("}\n");
         return out;
-    };
-    let required: Vec<&str> = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .map(|r| r.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
-    out.push_str(&format!(" * @typedef {{object}} {name}\n"));
-    for (field, property) in properties {
-        let field = if required.contains(&field.as_str()) { field.clone() } else { format!("[{field}]") };
-        let description = summary(property).map(|d| format!(" - {d}")).unwrap_or_default();
-        out.push_str(&format!(" * @property {{{}}} {field}{description}\n", type_expr(property, roots)));
     }
-    out.push_str(" */\n");
+    if let Some(values) = string_union(schema) {
+        let constant = format!("{}_VALUES", snake(name).to_uppercase());
+        let values: Vec<String> = values.iter().map(string_literal).collect();
+        let line = format!("export const {constant} = [{}] as const\n", values.join(", "));
+        if line.len() <= 110 {
+            out.push_str(&line);
+        } else {
+            out.push_str(&format!("export const {constant} = [\n    {},\n] as const\n", values.join(",\n    ")));
+        }
+        out.push_str(&format!("export type {name} = (typeof {constant})[number]\n"));
+        return out;
+    }
+    out.push_str(&format!("export type {name} = {}\n", type_expr(schema, roots)));
     out
 }
 
-/// `api.types.js`'s definitions by Rust name, and the roots that name some of them.
-fn type_definitions() -> (Vec<(&'static str, Value)>, Map<String, Value>) {
+fn strings(value: Option<&Value>) -> BTreeSet<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// `api.types.ts`'s answers by Rust name, and the roots that name some of them.
+fn type_definitions() -> (Vec<Root>, Map<String, Value>) {
     let mut generator = SchemaSettings::draft2020_12().for_serialize().into_generator();
     let roots = roots(&mut generator);
+    (roots, generator.take_definitions(true))
+}
+
+/// The request bodies' definitions, read as the server deserializes them: a field with a
+/// `#[serde(default)]` may be left out.
+fn request_definitions() -> (Vec<Root>, Map<String, Value>) {
+    let mut generator = SchemaSettings::draft2020_12().for_deserialize().into_generator();
+    let roots = request_roots(&mut generator);
     (roots, generator.take_definitions(true))
 }
 
@@ -179,7 +301,32 @@ fn generate() -> String {
     let mut out = String::from(HEADER);
     for key in order {
         out.push('\n');
-        out.push_str(&typedef(&js_name(key, &roots), &definitions[key], &roots));
+        out.push_str(&declaration(&js_name(key, &roots), &definitions[key], &roots));
+    }
+
+    // What reads exactly as it is sent is written once, under its answer's name; a type the
+    // server reads more leniently than it sends (defaults) is written again as `…Input`.
+    let (request_roots, requests) = request_definitions();
+    let differs = |key: &str| definitions.get(key) != Some(&requests[key]);
+    let mut names: Vec<Root> =
+        request_roots.iter().filter(|(_, key)| differs(key.as_str().unwrap())).cloned().collect();
+    let mut nested: Vec<&String> = requests
+        .keys()
+        .filter(|key| differs(key) && !request_roots.iter().any(|(_, root)| root == *key))
+        .collect();
+    nested.sort_by_key(|key| js_name(key, &roots));
+    for key in nested {
+        let name = js_name(key, &roots);
+        let name = if definitions.contains_key(key) { format!("{name}Input") } else { name };
+        names.push((name, json!(key)));
+    }
+    let emitted: Vec<String> = names.iter().map(|(_, key)| key.as_str().unwrap().to_owned()).collect();
+    names.extend(roots.iter().cloned());
+
+    out.push_str("\n// Request bodies, as the server reads them: a field it defaults may be left out.\n");
+    for key in emitted {
+        out.push('\n');
+        out.push_str(&declaration(&js_name(&key, &names), &requests[&key], &names));
     }
     out
 }
@@ -252,14 +399,16 @@ fn generate_settings() -> String {
     ranges.insert("eyepiece.black_floor".to_string(), range(BLACK_FLOOR_RANGE));
     format!(
         "{SETTINGS_HEADER}\n\
-         /** @type {{import('./api.types.js').Settings}} */\n\
-         export const SERVER_DEFAULT_SETTINGS = {}\n\n\
+         import type {{Settings}} from './api.types.js'\n\n\
+         export const SERVER_DEFAULT_SETTINGS = {} satisfies Settings\n\n\
          /**\n \
          * The range the server clamps each ranged setting to, by its dotted path in `Settings`;\n \
          * `null` is an open end.\n \
-         * @type {{Object<string, {{min: number|null, max: number|null}}>}}\n \
          */\n\
-         export const SERVER_SETTING_RANGES = {}\n",
+         export const SERVER_SETTING_RANGES = {} as const satisfies \
+         Record<string, {{min: number | null; max: number | null}}>\n\n\
+         /** A setting the server clamps, by its dotted path in `Settings`. */\n\
+         export type ClampedPath = keyof typeof SERVER_SETTING_RANGES\n",
         defaults.unwrap(),
         serde_json::to_string_pretty(&ranges).unwrap(),
     )
@@ -281,16 +430,66 @@ fn assert_current(path: &str, generated: &str) {
 }
 
 #[test]
-fn api_types_js_is_current() {
+fn api_types_ts_is_current() {
     assert_current(TYPES_FILE, &generate());
 }
 
 #[test]
-fn api_settings_js_is_current() {
+fn api_settings_ts_is_current() {
     assert_current(SETTINGS_FILE, &generate_settings());
 }
 
 #[test]
-fn api_events_js_is_current() {
+fn api_events_ts_is_current() {
     assert_current(EVENTS_FILE, &events::generate());
+}
+
+#[test]
+fn an_optional_field_and_a_nullable_one_stay_apart() {
+    let schema = json!({
+        "description": "A thing.",
+        "properties": {
+            "always": { "type": "string" },
+            "maybe_null": { "type": ["number", "null"] },
+            "left_out": { "type": "boolean" },
+            "not-an-identifier": { "type": "integer" },
+        },
+        "required": ["always", "maybe_null", "not-an-identifier"],
+    });
+    assert_eq!(
+        declaration("Thing", &schema, &[]),
+        "/** A thing. */\nexport interface Thing {\n    always: string\n    maybe_null: number | null\n    \
+         left_out?: boolean\n    'not-an-identifier': number\n}\n"
+    );
+}
+
+#[test]
+fn a_string_union_is_its_values_list() {
+    let schema = json!({ "oneOf": [{ "const": "deep_sky", "description": "Stars" }, { "enum": ["comet"] }] });
+    assert_eq!(
+        declaration("StackingType", &schema, &[]),
+        "export const STACKING_TYPE_VALUES = ['deep_sky', 'comet'] as const\n\
+         export type StackingType = (typeof STACKING_TYPE_VALUES)[number]\n"
+    );
+}
+
+#[test]
+fn a_union_inside_an_array_or_a_map_keeps_its_meaning() {
+    let union = json!({ "anyOf": [{ "$ref": "#/$defs/CatalogEntryResponse" }, { "type": "null" }] });
+    let roots = [("CatalogEntry".to_string(), json!("CatalogEntryResponse"))];
+    assert_eq!(type_expr(&json!({ "type": "array", "items": union }), &roots), "(CatalogEntry | null)[]");
+    assert_eq!(
+        type_expr(&json!({ "type": "object", "additionalProperties": union }), &roots),
+        "Record<string, CatalogEntry | null>"
+    );
+    assert_eq!(type_expr(&json!({}), &roots), "unknown");
+}
+
+#[test]
+fn a_doc_comment_keeps_its_paragraphs_and_cannot_be_closed_early() {
+    let schema = json!({ "description": "First line\nsecond line.\n\nSee `a/*/b` and */ here." });
+    assert_eq!(
+        doc_comment(&schema, "    "),
+        "    /**\n     * First line\n     * second line.\n     *\n     * See `a/*\\/b` and *\\/ here.\n     */\n"
+    );
 }

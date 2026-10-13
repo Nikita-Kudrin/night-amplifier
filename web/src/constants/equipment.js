@@ -1,7 +1,7 @@
 /** Cameras and optics: camera phases, cooler, dew heater, telescope, simulator. */
 import {serverLimits} from './serverSettings.js'
 
-/** `CameraPhase` (`api.types.js`), by name. */
+/** `CameraPhase` (`api.types.ts`), by name. */
 export const CAMERA_PHASES = Object.freeze({
     DISCONNECTED: 'disconnected',
     IDLE: 'idle',

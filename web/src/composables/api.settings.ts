@@ -4,7 +4,8 @@
  *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
  */
 
-/** @type {import('./api.types.js').Settings} */
+import type {Settings} from './api.types.js'
+
 export const SERVER_DEFAULT_SETTINGS = {
   "exposure_us": 1000000,
   "gain": 0,
@@ -98,12 +99,11 @@ export const SERVER_DEFAULT_SETTINGS = {
   "indi_server_host": "127.0.0.1",
   "indi_server_port": 7624,
   "focus_mode": false
-}
+} satisfies Settings
 
 /**
  * The range the server clamps each ranged setting to, by its dotted path in `Settings`;
  * `null` is an open end.
- * @type {Object<string, {min: number|null, max: number|null}>}
  */
 export const SERVER_SETTING_RANGES = {
   "rejection_sigma": {
@@ -162,4 +162,7 @@ export const SERVER_SETTING_RANGES = {
     "min": -0.045,
     "max": 0.5
   }
-}
+} as const satisfies Record<string, {min: number | null; max: number | null}>
+
+/** A setting the server clamps, by its dotted path in `Settings`. */
+export type ClampedPath = keyof typeof SERVER_SETTING_RANGES

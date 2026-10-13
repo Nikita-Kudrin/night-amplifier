@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 /// ASTAP installation request
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct AstapInstallRequest {
     /// Which databases to install (D80, G05, W08)
     #[serde(default)]
@@ -28,6 +29,7 @@ impl AstapInstallRequest {
 
 /// Catalog installation request
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CatalogInstallRequest {
     /// Whether to also download the HYG star database (~15MB compressed)
     #[serde(default)]

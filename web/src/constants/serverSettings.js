@@ -7,7 +7,7 @@ export function serverDefault(path) {
 
 /**
  * `{min, max, default}` of a setting the server clamps, read from the generated
- * `api.settings.js`: the range it enforces and the default it starts from. `ui` adds the
+ * `api.settings.ts`: the range it enforces and the default it starts from. `ui` adds the
  * presentation (`step`) and may narrow the range to what the control offers, never widen
  * it (`serverSettings.test.js` checks).
  */

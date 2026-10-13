@@ -8,7 +8,7 @@ function deepFreeze(value) {
 }
 
 /**
- * `CaptureSettings::default()` as `/api/settings` sends it, generated into `api.settings.js`.
+ * `CaptureSettings::default()` as `/api/settings` sends it, generated into `api.settings.ts`.
  * The hand copy this replaced had drifted from the server twice (a key it never sent, two
  * defaults missing). Frozen: take `defaultSettings()` for a copy to edit.
  * @type {Readonly<import('../composables/api.types.js').Settings>}

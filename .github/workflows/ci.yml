@@ -51,8 +51,8 @@ jobs:
       # Nothing else compiles the telemetry feature; 1a243da broke it unnoticed for three days
       - name: Check telemetry build
         run: cargo check --lib --no-default-features --features telemetry
-      # web/src/composables/api.types.js is written from the Rust wire types; fails when stale
-      - name: Check api.types.js is current
+      # web/src/composables/api.{types,settings,events}.ts are written from the Rust wire types; fails when stale
+      - name: Check generated API types are current
         run: cargo test --no-default-features --features api-schema --test api_types
       - name: Pack benchmarks
         uses: ./.github/actions/pack-benchmarks
@@ -170,6 +170,9 @@ jobs:
       - name: Run web unit tests
         working-directory: ./web
         run: npm run test:run
+      - name: Type-check web
+        working-directory: ./web
+        run: npm run typecheck
       - name: Run web linting
         working-directory: ./web
         run: npm run lint
