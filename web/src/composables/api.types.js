@@ -60,6 +60,17 @@
  */
 
 /**
+ * Comprehensive information about a stacking type
+ * @typedef {object} StackingTypeInfo
+ * @property {StackingType} id - The stacking type identifier
+ * @property {string} name - Human-readable display name
+ * @property {string} description - Description of when to use this type
+ * @property {boolean} uses_star_registration - Whether this type uses star-based registration
+ * @property {boolean} supports_stacking - Whether live stacking is supported
+ * @property {boolean} supports_quality_weighting - Whether quality-based frame weighting is supported
+ */
+
+/**
  * What `GET /api/capabilities` answers: which Pro plugins are active.
  * @typedef {object} Capabilities
  * @property {boolean} has_pro

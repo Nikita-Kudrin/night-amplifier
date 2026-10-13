@@ -53,7 +53,7 @@ const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bou
 const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 
 const isOnTarget = computed(() => {
-  return distanceDeg.value < 0.1 || directionHint.value === 'OnTarget'
+  return distanceDeg.value < 0.1 || directionHint.value === 'OK'
 })
 
 const containerStyle = computed(() => {

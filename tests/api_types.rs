@@ -21,7 +21,7 @@ use night_amplifier::server::{
 use night_amplifier::session::capture::BLACK_FLOOR_RANGE;
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
 use night_amplifier::session::services::PushToStatus;
-use night_amplifier::session::state::CaptureSettings;
+use night_amplifier::session::state::{CaptureSettings, StackingTypeInfo};
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
 use serde_json::{json, Map, Value};
@@ -57,6 +57,7 @@ fn roots(generator: &mut SchemaGenerator) -> Vec<(&'static str, Value)> {
     }
     vec![
         root::<SettingsResponse>(generator, "Settings"),
+        root::<StackingTypeInfo>(generator, "StackingTypeInfo"),
         root::<CapabilitiesResponse>(generator, "Capabilities"),
         root::<CaptureStatusResponse>(generator, "CaptureStatus"),
         root::<CameraListEntry>(generator, "Camera"),

@@ -86,7 +86,7 @@ describe('GuideArrow', () => {
         })
 
         it('still says on target, which needs no orientation', () => {
-            const wrapper = mountArrow({...OTHER, distanceDeg: 0.05, isClose: true, directionHint: 'OnTarget'})
+            const wrapper = mountArrow({...OTHER, distanceDeg: 0.05, isClose: true, directionHint: 'OK'})
 
             expect(wrapper.find('.on-target').exists()).toBe(true)
         })
@@ -111,18 +111,20 @@ describe('GuideArrow', () => {
             const wrapper = mountArrow({
                 distanceDeg: 0.05,
                 isClose: true,
-                directionHint: 'OnTarget',
+                directionHint: 'OK',
             })
 
             expect(wrapper.find('.on-target').exists()).toBe(true)
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
         })
 
-        it('renders on-target indicator when directionHint is OnTarget', () => {
+        // 'OK' is the wire's on-target hint (Pro's `DirectionHint::OnTarget`); the branch once
+        // compared 'OnTarget', never sent, so only the distance below 0.1° ever carried it.
+        it('renders on-target indicator when directionHint is OK', () => {
             const wrapper = mountArrow({
-                distanceDeg: 0.08,
+                distanceDeg: 0.1,
                 isClose: true,
-                directionHint: 'OnTarget',
+                directionHint: 'OK',
             })
 
             expect(wrapper.find('.on-target').exists()).toBe(true)
@@ -145,7 +147,7 @@ describe('GuideArrow', () => {
             const wrapper = mountArrow({
                 distanceDeg: 0.05,
                 isClose: true,
-                directionHint: 'OnTarget',
+                directionHint: 'OK',
             })
 
             expect(wrapper.find('.distance-info').exists()).toBe(false)
@@ -746,7 +748,7 @@ describe('GuideArrow', () => {
             it('centers on-target indicator on image', () => {
                 const wrapper = mountArrow({
                     distanceDeg: 0.05,
-                    directionHint: 'OnTarget',
+                    directionHint: 'OK',
                     imageLeft: 100,
                     imageTop: 50,
                     imageWidth: 600,
@@ -759,11 +761,11 @@ describe('GuideArrow', () => {
                 expect(pos.top).toBe(250) // 50 + 400/2
             })
 
-            it('stays centered even with high distance if directionHint is OnTarget', () => {
+            it('stays centered even off screen if directionHint is OK', () => {
                 const wrapper = mountArrow({
                     angleDeg: 45,
-                    distanceDeg: 0.08,
-                    directionHint: 'OnTarget',
+                    distanceDeg: 5,
+                    directionHint: 'OK',
                     ...IMAGE_PROPS,
                     fovDeg: 2,
                 })

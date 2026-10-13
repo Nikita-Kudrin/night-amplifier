@@ -141,12 +141,12 @@ describe('LiveView - Guide Arrow Integration', () => {
     })
 
     describe('on target state', () => {
-        it('shows guide arrow with OnTarget hint when very close', () => {
+        it('shows guide arrow with the OK hint when very close', () => {
             const wrapper = mountLiveView({
                 pushDirection: {
                     angleDeg: 0,
                     distanceDeg: 0.05,
-                    directionHint: 'OnTarget',
+                    directionHint: 'OK',
                     isClose: true,
                 },
                 currentTarget: {
@@ -158,7 +158,7 @@ describe('LiveView - Guide Arrow Integration', () => {
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
             expect(guideArrow.exists()).toBe(true)
-            expect(guideArrow.props('direction').directionHint).toBe('OnTarget')
+            expect(guideArrow.props('direction').directionHint).toBe('OK')
             expect(guideArrow.props('direction').distanceDeg).toBe(0.05)
         })
     })

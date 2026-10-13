@@ -1,7 +1,9 @@
 import {mount, flushPromises} from '@vue/test-utils'
 import {readonly, ref} from 'vue'
 import CaptureControls from './CaptureControls.vue'
-import {DEFAULT_CAPABILITIES} from '../constants'
+import {BaseProLock} from './ui'
+import {DEFAULT_CAPABILITIES, HELP_TEXTS} from '../constants'
+import {stackingTypes} from '../test/fixtures.js'
 
 // Mock the API module
 vi.mock('../composables/api.js', async (importOriginal) =>
@@ -21,10 +23,7 @@ describe('CaptureControls', () => {
         startCapture.mockResolvedValue({message: 'Started'})
         stopCapture.mockResolvedValue({message: 'Stopped'})
         updateSettings.mockResolvedValue({})
-        getStackingTypes.mockResolvedValue([
-            {id: 'deep_sky', name: 'Deep Sky'},
-            {id: 'planetary', name: 'Planetary'},
-        ])
+        getStackingTypes.mockResolvedValue(stackingTypes())
     })
 
     function createMockProvides(overrides = {}) {
@@ -627,6 +626,16 @@ describe('CaptureControls', () => {
             expect(wrapper.find('.comet-pro-lock').exists()).toBe(true)
         })
 
+        // The lock once took `title`/`message` it does not declare: the help never showed,
+        // and the title replaced the tooltip naming the feature.
+        it('says what Pro adds and names the feature on the lock', async () => {
+            const wrapper = mountCaptureControls(comet(false))
+            await flushPromises()
+            const lock = wrapper.find('.comet-pro-lock')
+            expect(lock.text()).toContain(HELP_TEXTS.comet_pro)
+            expect(wrapper.findComponent(BaseProLock).props('feature')).toBe('Comet stacking')
+        })
+
         it('unlocks it for Pro when the capabilities arrive as App provides them', async () => {
             const wrapper = mount(CaptureControls, {
                 global: {
@@ -640,6 +649,15 @@ describe('CaptureControls', () => {
             await flushPromises()
             expect(wrapper.find('.comet-pro-lock').exists()).toBe(false)
         })
+    })
+
+    it("offers the server's stacking types by name", async () => {
+        const wrapper = mountCaptureControls()
+        await flushPromises()
+
+        const options = wrapper.findAll('.type-select option')
+        expect(options.map((option) => option.text())).toEqual(['Deep Sky', 'Planetary', 'Comet'])
+        expect(options.map((option) => option.element.value)).toEqual(['deep_sky', 'planetary', 'comet'])
     })
 
     // An empty Type select said nothing about why; the failure was only logged.

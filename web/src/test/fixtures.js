@@ -3,7 +3,7 @@
  * component a partial object never sees the shape the server sends; these follow
  * `api.types.js`, which `fixtures.test.js` checks.
  */
-import {DEFAULT_CAPABILITIES, defaultSettings} from '../constants'
+import {DEFAULT_CAPABILITIES, defaultSettings, STACKING_TYPES} from '../constants'
 
 /** @returns {import('../composables/api.types.js').Settings} */
 export function settings(overrides = {}) {
@@ -146,4 +146,40 @@ export function catalogEntry(overrides = {}) {
         messier: 'M42',
         ...overrides,
     }
+}
+
+/** What `StackingType::info()` says of each type, in `StackingType::all()` order. */
+const STACKING_TYPE_INFO = {
+    [STACKING_TYPES.DEEP_SKY]: {
+        name: 'Deep Sky',
+        description: 'Star-based registration with sigma clipping for nebulae, galaxies, and star clusters',
+        uses_star_registration: true,
+    },
+    [STACKING_TYPES.PLANETARY]: {
+        name: 'Planetary',
+        description: 'Correlation-based alignment with quality selection for Moon, planets, and Sun',
+        uses_star_registration: false,
+    },
+    [STACKING_TYPES.COMET]: {
+        name: 'Comet',
+        description: 'ROI centroid alignment with aggressive rejection for comets (stars rejected as outliers)',
+        uses_star_registration: false,
+    },
+}
+
+/** @returns {import('../composables/api.types.js').StackingTypeInfo} */
+export function stackingTypeInfo(overrides = {}) {
+    const id = overrides.id ?? STACKING_TYPES.DEEP_SKY
+    return {
+        id,
+        ...STACKING_TYPE_INFO[id],
+        supports_stacking: true,
+        supports_quality_weighting: true,
+        ...overrides,
+    }
+}
+
+/** `GET /api/settings/stacking-types` as the server answers it. */
+export function stackingTypes() {
+    return Object.keys(STACKING_TYPE_INFO).map((id) => stackingTypeInfo({id}))
 }
