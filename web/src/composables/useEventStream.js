@@ -1,6 +1,7 @@
 import {ref, computed} from 'vue'
 import {getPushToStatus, ignoreProOnly} from './api.js'
 import {WS} from '../constants/endpoints.js'
+import {CAMERA_PHASES} from '../constants'
 import {useWebSocket} from './useWebSocket.js'
 
 /**
@@ -166,7 +167,7 @@ export function useEventStream() {
             // A camera that came back needs no warning, and a guide camera or an idle
             // one gets no `capture_resumed` to clear it. Matched on role too where both
             // sides carry one: two bodies of one model share a name.
-            const healthy = data.phase !== 'recovering' && data.phase !== 'disconnected'
+            const healthy = data.phase !== CAMERA_PHASES.RECOVERING && data.phase !== CAMERA_PHASES.DISCONNECTED
             const warned = unresponsiveCamera.value
             const sameCamera = warned?.name === data.name
                 && (!warned.role || !data.role || warned.role === data.role)
@@ -315,7 +316,7 @@ export function useEventStream() {
             }
         },
         catalog_install_completed(data) {
-            catalogInstallProgress.value = {stage: 'completed', object_count: data.object_count, error: null}
+            catalogInstallProgress.value = {stage: 'completed', objectCount: data.object_count, error: null}
         },
         catalog_install_failed(data) {
             catalogInstallProgress.value = {stage: 'failed', error: data.error}

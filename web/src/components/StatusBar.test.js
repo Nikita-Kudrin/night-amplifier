@@ -194,7 +194,7 @@ describe('StatusBar', () => {
                 eventStream: {lastError: ref(null)},
             })
 
-            expect(wrapper.find('.error').exists()).toBe(false)
+            expect(wrapper.find('.tone-error').exists()).toBe(false)
         })
 
         it('shows error message when lastError is set', () => {
@@ -202,7 +202,7 @@ describe('StatusBar', () => {
                 eventStream: {lastError: ref('Camera disconnected')},
             })
 
-            const error = wrapper.find('.error')
+            const error = wrapper.find('.tone-error')
             expect(error.exists()).toBe(true)
             expect(error.text()).toContain('Camera disconnected')
         })
@@ -216,7 +216,7 @@ describe('StatusBar', () => {
                 },
             })
 
-            await wrapper.find('.error').trigger('click')
+            await wrapper.find('.tone-error').trigger('click')
 
             expect(clearError).toHaveBeenCalled()
         })
@@ -228,7 +228,7 @@ describe('StatusBar', () => {
                 eventStream: {unresponsiveWarning: ref(null)},
             })
 
-            expect(wrapper.find('.error').exists()).toBe(false)
+            expect(wrapper.find('.tone-error').exists()).toBe(false)
         })
 
         it('shows one row, not two, when an error accompanies the warning', () => {
@@ -240,8 +240,8 @@ describe('StatusBar', () => {
             })
 
             // Both describe the same incident; stacking them just doubles the noise.
-            expect(wrapper.findAll('.error')).toHaveLength(1)
-            expect(wrapper.find('.error').text()).toContain('has stopped responding')
+            expect(wrapper.findAll('.tone-error')).toHaveLength(1)
+            expect(wrapper.find('.tone-error').text()).toContain('has stopped responding')
         })
 
         it('shows the resume notice after a capture picks back up', () => {
@@ -278,7 +278,7 @@ describe('StatusBar', () => {
                 eventStream: {unresponsiveWarning: ref('Camera is persistently unresponsive')},
             })
 
-            const error = wrapper.find('.error')
+            const error = wrapper.find('.tone-error')
             expect(error.exists()).toBe(true)
             expect(error.text()).toContain('Camera is persistently unresponsive')
         })
@@ -292,7 +292,7 @@ describe('StatusBar', () => {
                 },
             })
 
-            await wrapper.find('.error').trigger('click')
+            await wrapper.find('.tone-error').trigger('click')
 
             expect(clearUnresponsiveWarning).toHaveBeenCalled()
         })
@@ -319,6 +319,73 @@ describe('StatusBar', () => {
             const result = wrapper.find('.solve-result')
             expect(result.exists() && result.classes().includes('success')).toBe(false)
             expect(wrapper.text()).toContain('Telescope is moving')
+        })
+    })
+
+    describe('Push-To chip', () => {
+        const solving = (overrides) => ({inProgress: false, targetName: 'M31', lastResult: null, ...overrides})
+
+        it('shows a running solve ahead of a blocker and the last result, with a spinner', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    plateSolving: ref(solving({inProgress: true, lastResult: 'failed'})),
+                    solvingMessage: ref('Searching: M31'),
+                    pushToBlocked: ref('Telescope is moving'),
+                },
+            })
+
+            expect(wrapper.findAll('.status-chip')).toHaveLength(1)
+            expect(wrapper.find('.solving').text()).toBe('Searching: M31')
+            expect(wrapper.find('.solving .base-spinner').exists()).toBe(true)
+        })
+
+        it.each([
+            ['success', 'tone-success'],
+            ['cancelled', 'tone-muted'],
+            ['failed', 'tone-error'],
+        ])('tints a %s result and clears it on a click', async (result, tone) => {
+            const clearPlateSolving = vi.fn()
+            const wrapper = mountStatusBar({
+                eventStream: {plateSolving: ref(solving({lastResult: result})), solvingMessage: ref('M31'), clearPlateSolving},
+            })
+
+            const chip = wrapper.find('.solve-result')
+            expect(chip.classes()).toContain(tone)
+            await chip.trigger('click')
+            expect(clearPlateSolving).toHaveBeenCalled()
+        })
+
+        it('cannot dismiss a blocker: it clears when the situation does', async () => {
+            const wrapper = mountStatusBar({eventStream: {pushToBlocked: ref('No target selected')}})
+
+            expect(wrapper.find('.push-to-blocked .btn-dismiss').exists()).toBe(false)
+        })
+    })
+
+    describe('Notices', () => {
+        it('dismisses the slow-disk warning on a click', async () => {
+            const clearDiskWriterWarning = vi.fn()
+            const wrapper = mountStatusBar({eventStream: {diskWriterWarning: ref(12), clearDiskWriterWarning}})
+
+            const notice = wrapper.find('.disk-warning')
+            expect(notice.text()).toContain('Slow disk: 12 frames queued')
+            expect(notice.classes()).toContain('tone-warning')
+            await notice.trigger('click')
+            expect(clearDiskWriterWarning).toHaveBeenCalled()
+        })
+
+        it('shows every notice at once, in a fixed order', () => {
+            const wrapper = mountStatusBar({
+                eventStream: {
+                    diskWriterWarning: ref(3),
+                    resumeNotice: ref('Capture resumed'),
+                    focusModeNotice: ref('Focus mode off'),
+                    lastError: ref('Boom'),
+                },
+            })
+
+            const texts = wrapper.findAll('.status-chip-text').map((chip) => chip.text())
+            expect(texts).toEqual(['Slow disk: 3 frames queued', 'Capture resumed', 'Focus mode off', 'Boom'])
         })
     })
 

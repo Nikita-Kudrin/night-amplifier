@@ -441,8 +441,9 @@ describe('SettingsPanel', () => {
             await wandererToggle.trigger('change')
             await flushPromises()
 
+            // A switch the server left out goes back as its default, never as missing.
             expect(updateSettings).toHaveBeenCalledWith({
-                raw_frame_saving: {live_view: false, wanderer: true, stacking: true},
+                raw_frame_saving: {live_view: false, wanderer: true, stacking: true, guide: false},
             })
         })
 

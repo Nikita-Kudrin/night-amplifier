@@ -79,7 +79,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
-            expect(guideArrow.props('angleDeg')).toBe(135)
+            expect(guideArrow.props('direction').angleDeg).toBe(135)
         })
 
         it('passes correct distance to GuideArrow', () => {
@@ -98,7 +98,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
-            expect(guideArrow.props('distanceDeg')).toBe(25.5)
+            expect(guideArrow.props('direction').distanceDeg).toBe(25.5)
         })
 
         it('passes correct isClose flag to GuideArrow', () => {
@@ -117,7 +117,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
-            expect(guideArrow.props('isClose')).toBe(true)
+            expect(guideArrow.props('direction').isClose).toBe(true)
         })
 
         it('passes correct directionHint to GuideArrow', () => {
@@ -136,7 +136,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
-            expect(guideArrow.props('directionHint')).toBe('SouthWest')
+            expect(guideArrow.props('direction').directionHint).toBe('SouthWest')
         })
     })
 
@@ -158,8 +158,8 @@ describe('LiveView - Guide Arrow Integration', () => {
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
             expect(guideArrow.exists()).toBe(true)
-            expect(guideArrow.props('directionHint')).toBe('OnTarget')
-            expect(guideArrow.props('distanceDeg')).toBe(0.05)
+            expect(guideArrow.props('direction').directionHint).toBe('OnTarget')
+            expect(guideArrow.props('direction').distanceDeg).toBe(0.05)
         })
     })
 
@@ -181,7 +181,7 @@ describe('LiveView - Guide Arrow Integration', () => {
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
             expect(guideArrow.exists()).toBe(true)
-            expect(guideArrow.props('distanceDeg')).toBe(12)
+            expect(guideArrow.props('direction').distanceDeg).toBe(12)
         })
     })
 
@@ -215,8 +215,8 @@ describe('LiveView - Guide Arrow Integration', () => {
 
                 const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
                 expect(guideArrow.exists()).toBe(true)
-                expect(guideArrow.props('angleDeg')).toBe(angle)
-                expect(guideArrow.props('directionHint')).toBe(hint)
+                expect(guideArrow.props('direction').angleDeg).toBe(angle)
+                expect(guideArrow.props('direction').directionHint).toBe(hint)
             })
         })
     })

@@ -15,10 +15,15 @@ const IMAGE_PROPS = {
     imageHeight: 600,
 }
 
+/** Mounts from flat props, as the tables below spell them: direction and image box split out. */
 function mountArrow(propsOverrides = {}) {
-    return mount(GuideArrow, {
-        props: {...DEFAULT_PROPS, ...propsOverrides},
-    })
+    const {angleDeg, distanceDeg, isClose, directionHint, imageLeft, imageTop, imageWidth, imageHeight, ...rest} =
+        {...DEFAULT_PROPS, ...propsOverrides}
+    const props = {direction: {angleDeg, distanceDeg, isClose, directionHint}, ...rest}
+    if (imageWidth !== undefined) {
+        props.bounds = {left: imageLeft ?? 0, top: imageTop ?? 0, width: imageWidth, height: imageHeight}
+    }
+    return mount(GuideArrow, {props})
 }
 
 function getPosition(wrapper) {

@@ -168,7 +168,6 @@ describe('Sidebar tabs and the settings round trip', () => {
         slider.vm.$emit('change', 2.6)
 
         await openTab('settings')
-        expect(updateSettings).not.toHaveBeenCalled()
         await vi.advanceTimersByTimeAsync(300)
 
         expect(updateSettings).toHaveBeenCalledTimes(1)

@@ -22,3 +22,13 @@ export function touchCenter(touches) {
         y: (touches[0].clientY + touches[1].clientY) / 2,
     }
 }
+
+/** An element's layout box within its offset parent — where an overlay beside it goes. */
+export function offsetBounds(element) {
+    return {
+        left: element.offsetLeft,
+        top: element.offsetTop,
+        width: element.offsetWidth,
+        height: element.offsetHeight,
+    }
+}

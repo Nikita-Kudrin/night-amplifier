@@ -13,37 +13,15 @@ import {
 } from '../utils/guideArrowLayout.js'
 
 const props = defineProps({
-  angleDeg: {
-    type: Number,
+  // `pushDirection` from the event stream: {angleDeg, distanceDeg, isClose, directionHint}.
+  direction: {
+    type: Object,
     required: true,
   },
-  distanceDeg: {
-    type: Number,
-    required: true,
-  },
-  isClose: {
-    type: Boolean,
-    default: false,
-  },
-  directionHint: {
-    type: String,
-    default: '',
-  },
-  imageLeft: {
-    type: Number,
-    default: 0,
-  },
-  imageTop: {
-    type: Number,
-    default: 0,
-  },
-  imageWidth: {
-    type: Number,
-    default: 400,
-  },
-  imageHeight: {
-    type: Number,
-    default: 300,
+  // Where the image sits in the arrow's positioned parent, in CSS pixels.
+  bounds: {
+    type: Object,
+    default: () => ({left: 0, top: 0, width: 400, height: 300}),
   },
   fovDeg: {
     type: Number,
@@ -61,47 +39,52 @@ const props = defineProps({
   },
 })
 
+const angleDeg = computed(() => props.direction.angleDeg)
+const distanceDeg = computed(() => props.direction.distanceDeg)
+const directionHint = computed(() => props.direction.directionHint ?? '')
+
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
 
-const screenSizes = computed(() => screensAway(props.distanceDeg, props.fovDeg))
+const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg))
 const offScreen = computed(() => isOffScreen(screenSizes.value))
-const arrowScale = computed(() => scaleFor(props.distanceDeg, screenSizes.value))
-const responsiveBaseSize = computed(() => baseSize(props.imageWidth, props.imageHeight, offScreen.value))
+const arrowScale = computed(() => scaleFor(distanceDeg.value, screenSizes.value))
+const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bounds.height, offScreen.value))
 const arrowSize = computed(() => responsiveBaseSize.value * arrowScale.value)
 
 const isOnTarget = computed(() => {
-  return props.distanceDeg < 0.1 || props.directionHint === 'OnTarget'
+  return distanceDeg.value < 0.1 || directionHint.value === 'OnTarget'
 })
 
 const containerStyle = computed(() => {
   const pinned = offScreen.value && !isOnTarget.value && !props.otherCamera
   const offset = pinned
       ? edgeOffset({
-        angleDeg: props.angleDeg,
+        angleDeg: angleDeg.value,
         arrowSize: arrowSize.value,
-        imageWidth: props.imageWidth,
-        imageHeight: props.imageHeight,
+        imageWidth: props.bounds.width,
+        imageHeight: props.bounds.height,
         isCircular: props.isCircular,
       })
       : {x: 0, y: 0}
+  const {left, top, width, height} = props.bounds
   return {
     position: 'absolute',
-    top: `${props.imageTop + props.imageHeight / 2 + offset.y}px`,
-    left: `${props.imageLeft + props.imageWidth / 2 + offset.x}px`,
+    top: `${top + height / 2 + offset.y}px`,
+    left: `${left + width / 2 + offset.x}px`,
     transform: 'translate(-50%, -50%)',
   }
 })
 
 const rotationStyle = computed(() => {
   return {
-    transform: `rotate(${props.angleDeg}deg)`,
+    transform: `rotate(${angleDeg.value}deg)`,
   }
 })
 
 const distanceInfoStyle = computed(() => {
   if (props.otherCamera) return {}
-  const offset = infoOffset(props.angleDeg, arrowSize.value)
+  const offset = infoOffset(angleDeg.value, arrowSize.value)
   return {
     top: `calc(50% + ${offset.y}px)`,
     left: `calc(50% + ${offset.x}px)`,

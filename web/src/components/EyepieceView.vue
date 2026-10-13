@@ -1,8 +1,8 @@
 <script setup>
 import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
-import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
-import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
+import {useFrameRenderer} from '../composables/useFrameRenderer.js'
+import {useEventListener} from '../composables/useEventListener.js'
 import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
@@ -11,6 +11,7 @@ import {useCapabilities} from '../composables/appContext.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
+import {offsetBounds} from '../utils/viewGeometry.js'
 import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
@@ -29,26 +30,6 @@ const routePath = window.location.pathname
 const endpoint = eyepieceStreamEndpoint(routePath)
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
-const canvasLeftRef = ref(null)
-const canvasRightRef = ref(null)
-const canvasSingleRef = ref(null)
-
-const webglLeft = useWebGLRenderer({onRestored: renderFrame})
-const canvas2dLeft = useCanvas2DRenderer()
-
-const webglRight = useWebGLRenderer({onRestored: renderFrame})
-const canvas2dRight = useCanvas2DRenderer()
-
-const webglSingle = useWebGLRenderer({onRestored: renderFrame})
-const canvas2dSingle = useCanvas2DRenderer()
-
-const leftEyeRef = ref(null)
-const rightEyeRef = ref(null)
-const singleEyeRef = ref(null)
-
-const leftEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
-const rightEyeBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
-const singleViewBounds = ref({ left: 0, top: 0, width: 0, height: 0 })
 
 const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
 const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
@@ -74,117 +55,63 @@ const forceFocusImageNow = computed(() => settings.value?.force_focus_image_now 
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 const effectiveHasFrame = computed(() => hasFrame.value && !forceFocusImageNow.value)
 
-// Active renderer backend (assuming both eyes use same backend)
-const renderBackend = computed(() => {
-  if (isJpeg.value) return 'jpeg'
-  if (isBinoview.value) {
-    if (webglLeft.isInitialized()) return webglLeft.backend.value
-    if (canvas2dLeft.isInitialized()) return canvas2dLeft.backend.value
+/** The eyes on screen, by class name: each one is a canvas drawn from the same frame. */
+const BINOVIEW_EYES = ['left-eye', 'right-eye']
+const SINGLE_EYES = ['single-view']
+const eyes = computed(() => (isBinoview.value ? BINOVIEW_EYES : SINGLE_EYES))
+
+const eyeElements = {}
+const canvasElements = {}
+const eyeBounds = ref({})
+const NO_BOUNDS = Object.freeze({left: 0, top: 0, width: 0, height: 0})
+
+let resizeObserver = null
+
+function setEye(eye, element) {
+  const previous = eyeElements[eye]
+  if (previous === element) return
+  if (previous) resizeObserver?.unobserve(previous)
+  if (element) {
+    eyeElements[eye] = element
+    resizeObserver?.observe(element)
   } else {
-    if (webglSingle.isInitialized()) return webglSingle.backend.value
-    if (canvas2dSingle.isInitialized()) return canvas2dSingle.backend.value
-  }
-  return 'none'
-})
-
-// Map backend names to user-friendly labels
-const backendLabel = computed(() => {
-  const res = dimensions.value.width > 0 
-    ? ` (${dimensions.value.width}x${dimensions.value.height})`
-    : ''
-
-  const labels = {
-    jpeg: `Dynamic JPEG${res}`,
-    'webgl2-16bit': `WebGL2 16-bit${res}`,
-    'webgl2-8bit': `WebGL2 8-bit${res}`,
-    webgl1: `WebGL1${res}`,
-    canvas2d: `Canvas 2D${res}`,
-    none: 'No renderer',
-    unknown: '...',
-  }
-  const label = labels[renderBackend.value] || renderBackend.value
-  return showsGuideCamera.value ? `${label} · Guide camera` : label
-})
-
-function initRenderer() {
-  if (canvasLeftRef.value) {
-    if (!webglLeft.init(canvasLeftRef.value)) canvas2dLeft.init(canvasLeftRef.value)
-  }
-  if (canvasRightRef.value) {
-    if (!webglRight.init(canvasRightRef.value)) canvas2dRight.init(canvasRightRef.value)
-  }
-  if (canvasSingleRef.value) {
-    if (!webglSingle.init(canvasSingleRef.value)) canvas2dSingle.init(canvasSingleRef.value)
+    delete eyeElements[eye]
   }
 }
 
-/** The size last drawn, so a change of it — a camera switch — re-measures the arrows. */
-let drawnSize = null
+function setCanvas(eye, element) {
+  if (element) canvasElements[eye] = element
+  else delete canvasElements[eye]
+}
 
-/**
- * Off the circular view the canvas takes the frame's own aspect, so a new size moves it
- * inside an eye that stays put, and the eye's ResizeObserver never fires.
- */
-function noteDrawnSize(width, height) {
-  if (drawnSize?.width === width && drawnSize?.height === height) return
-  drawnSize = {width, height}
+function updateBounds() {
+  const bounds = {}
+  for (const eye of eyes.value) {
+    const canvas = canvasElements[eye]
+    if (canvas) bounds[eye] = offsetBounds(canvas)
+  }
+  eyeBounds.value = bounds
+}
+
+// Off the circular view the canvas takes the frame's own aspect, so a new size moves it
+// inside an eye that stays put, and the eye's ResizeObserver never fires.
+const {label: rendererLabel, redraw} = useFrameRenderer({
+  frameData,
+  dimensions,
+  isJpeg,
+  canvases: () => eyes.value.map((eye) => canvasElements[eye]),
+  onSizeChange: updateBounds,
+})
+
+const backendLabel = computed(() =>
+  showsGuideCamera.value ? `${rendererLabel.value} · Guide camera` : rendererLabel.value
+)
+
+// Switching layout mounts new canvases: draw the held frame on them and measure them.
+watch(eyes, () => {
+  redraw()
   updateBounds()
-}
-
-function renderFrame() {
-  if (!frameData.value) return
-  const {width, height} = dimensions.value
-
-  if (isJpeg.value) {
-    window.createImageBitmap(frameData.value).then((bitmap) => {
-      if (isBinoview.value) {
-        if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dLeft.isInitialized()) canvas2dLeft.render(canvasLeftRef.value, bitmap, bitmap.width, bitmap.height)
-    
-        if (webglRight.isInitialized()) webglRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dRight.isInitialized()) canvas2dRight.render(canvasRightRef.value, bitmap, bitmap.width, bitmap.height)
-      } else {
-        if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
-        else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, bitmap, bitmap.width, bitmap.height)
-      }
-      noteDrawnSize(bitmap.width, bitmap.height)
-      bitmap.close()
-    }).catch(() => { /* frame was replaced before decode finished */ })
-    return
-  }
-
-  if (isBinoview.value) {
-    if (webglLeft.isInitialized()) webglLeft.render(canvasLeftRef.value, frameData.value, width, height)
-    else if (canvas2dLeft.isInitialized()) canvas2dLeft.render(canvasLeftRef.value, frameData.value, width, height)
-
-    if (webglRight.isInitialized()) webglRight.render(canvasRightRef.value, frameData.value, width, height)
-    else if (canvas2dRight.isInitialized()) canvas2dRight.render(canvasRightRef.value, frameData.value, width, height)
-  } else {
-    if (webglSingle.isInitialized()) webglSingle.render(canvasSingleRef.value, frameData.value, width, height)
-    else if (canvas2dSingle.isInitialized()) canvas2dSingle.render(canvasSingleRef.value, frameData.value, width, height)
-  }
-  noteDrawnSize(width, height)
-}
-
-function cleanupRenderer() {
-  webglLeft.cleanup()
-  canvas2dLeft.cleanup()
-  webglRight.cleanup()
-  canvas2dRight.cleanup()
-  webglSingle.cleanup()
-  canvas2dSingle.cleanup()
-}
-
-watch(frameData, () => {
-  if (frameData.value) renderFrame()
-})
-
-watch(isBinoview, () => {
-  // Re-render immediately if we switch views so it's not blank
-  later(() => {
-    if (frameData.value) renderFrame()
-  }, 10)
-})
+}, {flush: 'post'})
 
 const isZoomAllowed = computed(() => routePath === PAGES.EYEPIECE)
 const zoom = useEyepieceZoom(() => isZoomAllowed.value && effectiveHasFrame.value)
@@ -288,72 +215,31 @@ function handleTouchEnd(e) {
   zoom.touchEnd(e)
 }
 
-let resizeObserver = null
-let windowResizeTimeout = null
-
-function handleWindowResize() {
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
-  windowResizeTimeout = setTimeout(() => {
-    // Fullscreen only, for the same reason as the live view: a windowed resize
-    // must not throw away a zoom the user set deliberately.
-    if (isFullscreen.value) resetZoom()
-  }, 200)
-}
-
-function updateBounds() {
-  if (isBinoview.value) {
-    if (leftEyeRef.value && canvasLeftRef.value) {
-      leftEyeBounds.value = {
-        left: canvasLeftRef.value.offsetLeft,
-        top: canvasLeftRef.value.offsetTop,
-        width: canvasLeftRef.value.offsetWidth,
-        height: canvasLeftRef.value.offsetHeight,
-      }
-    }
-    if (rightEyeRef.value && canvasRightRef.value) {
-      rightEyeBounds.value = {
-        left: canvasRightRef.value.offsetLeft,
-        top: canvasRightRef.value.offsetTop,
-        width: canvasRightRef.value.offsetWidth,
-        height: canvasRightRef.value.offsetHeight,
-      }
-    }
-  } else {
-    if (singleEyeRef.value && canvasSingleRef.value) {
-      singleViewBounds.value = {
-        left: canvasSingleRef.value.offsetLeft,
-        top: canvasSingleRef.value.offsetTop,
-        width: canvasSingleRef.value.offsetWidth,
-        height: canvasSingleRef.value.offsetHeight,
-      }
-    }
-  }
-}
-
 watch(hasFrame, (newVal) => {
   if (newVal) later(updateBounds, 10)
 })
 
+// Fullscreen only, for the same reason as the live view: a windowed resize must not
+// throw away a zoom the user set deliberately. Rotation is listened to three ways, as
+// the live view does: Safari before 16.4 has no `screen.orientation`, and mobile Safari
+// rotates without always firing a `resize`.
+function handleWindowResize() {
+  if (isFullscreen.value) resetZoom()
+}
+
+useEventListener(window, 'resize', handleWindowResize)
+useEventListener(window, 'orientationchange', handleWindowResize)
+useEventListener(window.screen.orientation, 'change', handleWindowResize)
+useEventListener(document, 'fullscreenchange', handleFullscreenChange)
+
 onMounted(() => {
-  window.addEventListener('resize', handleWindowResize)
-  // Not redundant with `resize`: mobile Safari rotates without always firing one.
-  window.addEventListener('orientationchange', handleWindowResize)
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  initRenderer()
   updateBounds()
   resizeObserver = new ResizeObserver(updateBounds)
-  if (leftEyeRef.value) resizeObserver.observe(leftEyeRef.value)
-  if (rightEyeRef.value) resizeObserver.observe(rightEyeRef.value)
-  if (singleEyeRef.value) resizeObserver.observe(singleEyeRef.value)
+  Object.values(eyeElements).forEach((element) => resizeObserver.observe(element))
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', handleWindowResize)
-  window.removeEventListener('orientationchange', handleWindowResize)
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  if (windowResizeTimeout) clearTimeout(windowResizeTimeout)
   if (errorTimer) clearTimeout(errorTimer)
-  cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
@@ -384,59 +270,26 @@ onUnmounted(() => {
     </div>
 
     <div v-show="effectiveHasFrame" class="zoom-wrapper" :style="zoomStyle">
-      <div v-show="isBinoview" class="binoview-container">
-        <div ref="leftEyeRef" class="eye left-eye">
-          <canvas ref="canvasLeftRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
+      <div class="eyes" :class="{ 'binoview-container': isBinoview }">
+        <div
+            v-for="eye in eyes"
+            :key="eye"
+            :ref="(element) => setEye(eye, element)"
+            :class="['eye', eye]"
+        >
+          <canvas
+              :ref="(element) => setCanvas(eye, element)"
+              :class="['live-canvas', {circular: isCircularView}]"
+          ></canvas>
           <GuideArrow
-            v-if="showGuideArrow"
-            :angle-deg="pushDirection.angleDeg"
-            :distance-deg="pushDirection.distanceDeg"
-            :is-close="pushDirection.isClose"
-            :direction-hint="pushDirection.directionHint"
-            :image-left="leftEyeBounds.left"
-            :image-top="leftEyeBounds.top"
-            :image-width="leftEyeBounds.width"
-            :image-height="leftEyeBounds.height"
-            :fov-deg="displayedFovDeg"
-            :other-camera="arrowCamera"
-            :is-circular="isCircularView"
+              v-if="showGuideArrow"
+              :direction="pushDirection"
+              :bounds="eyeBounds[eye] ?? NO_BOUNDS"
+              :fov-deg="displayedFovDeg"
+              :other-camera="arrowCamera"
+              :is-circular="isCircularView"
           />
         </div>
-        <div ref="rightEyeRef" class="eye right-eye">
-          <canvas ref="canvasRightRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-          <GuideArrow
-            v-if="showGuideArrow"
-            :angle-deg="pushDirection.angleDeg"
-            :distance-deg="pushDirection.distanceDeg"
-            :is-close="pushDirection.isClose"
-            :direction-hint="pushDirection.directionHint"
-            :image-left="rightEyeBounds.left"
-            :image-top="rightEyeBounds.top"
-            :image-width="rightEyeBounds.width"
-            :image-height="rightEyeBounds.height"
-            :fov-deg="displayedFovDeg"
-            :other-camera="arrowCamera"
-            :is-circular="isCircularView"
-          />
-        </div>
-      </div>
-
-      <div v-show="!isBinoview" ref="singleEyeRef" class="single-view">
-        <canvas ref="canvasSingleRef" :class="['live-canvas', {circular: isCircularView}]"></canvas>
-        <GuideArrow
-          v-if="showGuideArrow"
-          :angle-deg="pushDirection.angleDeg"
-          :distance-deg="pushDirection.distanceDeg"
-          :is-close="pushDirection.isClose"
-          :direction-hint="pushDirection.directionHint"
-          :image-left="singleViewBounds.left"
-          :image-top="singleViewBounds.top"
-          :image-width="singleViewBounds.width"
-          :image-height="singleViewBounds.height"
-          :fov-deg="displayedFovDeg"
-          :other-camera="arrowCamera"
-          :is-circular="isCircularView"
-        />
       </div>
     </div>
 
@@ -606,7 +459,7 @@ onUnmounted(() => {
   opacity: 0.8;
 }
 
-.binoview-container {
+.eyes {
   display: flex;
   width: 100%;
   height: 100%;
@@ -624,16 +477,6 @@ onUnmounted(() => {
 
 .eye:last-child {
   border-right: none;
-}
-
-.single-view {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  container-type: size;
 }
 
 .live-canvas {

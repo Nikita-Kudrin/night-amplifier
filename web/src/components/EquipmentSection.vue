@@ -2,10 +2,11 @@
 import {ref, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
+import {useClickOutside} from '../composables/useClickOutside.js'
 import {formatFov} from '../utils/format.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
-import {BaseAlert, BaseToggle, BaseInfoIcon} from './ui'
+import {BaseAlert, BaseToggle, BaseInfoIcon, CollapseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
 
 const props = defineProps({
@@ -57,11 +58,10 @@ function fillFromConnectedCamera() {
   }
 }
 
-function handleClickOutside(event) {
-  if (!event.target.closest('.camera-search-container')) {
-    showCameraResults.value = false
-  }
-}
+const cameraSearchRef = ref(null)
+useClickOutside([cameraSearchRef], () => {
+  showCameraResults.value = false
+})
 
 const hasMultipleDatabases = computed(() => props.installedDatabases.length > 1)
 
@@ -71,17 +71,7 @@ defineExpose({calculatedFov})
 <template>
   <div class="section equipment-section">
     <div class="equipment-header" @click="equipmentCollapsed = !equipmentCollapsed">
-      <svg
-          :class="['collapse-chevron', { collapsed: equipmentCollapsed }]"
-          viewBox="0 0 24 24"
-          width="10"
-          height="10"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path d="M6 9l6 6 6-6"/>
-      </svg>
+      <CollapseToggle v-model="equipmentCollapsed" title="Toggle equipment" :size="10"/>
       <h3 class="eyebrow">Equipment <SelectedCameraTag :fallback-name="profileName"/></h3>
       <span v-if="calculatedFov && equipmentCollapsed" class="fov-badge">
         {{ formatFov(calculatedFov.x) }} &times; {{ formatFov(calculatedFov.y) }}
@@ -93,7 +83,7 @@ defineExpose({calculatedFov})
       {{ error }}
     </BaseAlert>
 
-    <div v-show="!equipmentCollapsed" class="equipment-content" @click="handleClickOutside">
+    <div v-show="!equipmentCollapsed" class="equipment-content">
       <!-- Focal Length -->
       <div class="eq-row">
         <label class="eq-label">
@@ -119,7 +109,7 @@ defineExpose({calculatedFov})
           Camera
           <BaseInfoIcon :message="HELP_TEXTS.telescope_camera_sensor"/>
         </label>
-        <div class="camera-search-container eq-input-area">
+        <div ref="cameraSearchRef" class="camera-search-container eq-input-area">
           <input
               v-model="cameraSearchQuery"
               type="text"
@@ -166,17 +156,12 @@ defineExpose({calculatedFov})
       <!-- Manual Sensor Specs -->
       <div class="manual-sensor-section">
         <div class="manual-sensor-header" @click="manualSensorExpanded = !manualSensorExpanded">
-          <svg
-              :class="['collapse-chevron', { collapsed: !manualSensorExpanded }]"
-              viewBox="0 0 24 24"
-              width="9"
-              height="9"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-          >
-            <path d="M6 9l6 6 6-6"/>
-          </svg>
+          <CollapseToggle
+              :model-value="!manualSensorExpanded"
+              title="Toggle manual sensor specs"
+              :size="9"
+              @update:model-value="manualSensorExpanded = !$event"
+          />
           <span class="manual-sensor-label">Manual sensor specs</span>
           <BaseToggle
               :model-value="manualPixelSize"
@@ -305,16 +290,6 @@ defineExpose({calculatedFov})
 .equipment-header .eyebrow {
   margin-bottom: 0;
   flex: 1;
-}
-
-.collapse-chevron {
-  transition: transform var(--transition-fast);
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.collapse-chevron.collapsed {
-  transform: rotate(-90deg);
 }
 
 .fov-badge {

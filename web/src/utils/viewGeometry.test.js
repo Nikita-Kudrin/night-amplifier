@@ -1,4 +1,4 @@
-import {clamp, fitScale, touchCenter, touchDistance} from './viewGeometry.js'
+import {clamp, fitScale, offsetBounds, touchCenter, touchDistance} from './viewGeometry.js'
 
 const touch = (clientX, clientY) => ({clientX, clientY})
 
@@ -20,5 +20,10 @@ describe('viewGeometry', () => {
         expect(touchDistance(touches)).toBe(50)
         expect(touchCenter(touches)).toEqual({x: 15, y: 20})
         expect(touchCenter([touch(7, 9)])).toEqual({x: 7, y: 9})
+    })
+
+    it('reads an element\'s offset box', () => {
+        const element = {offsetLeft: 10, offsetTop: 175, offsetWidth: 800, offsetHeight: 450}
+        expect(offsetBounds(element)).toEqual({left: 10, top: 175, width: 800, height: 450})
     })
 })

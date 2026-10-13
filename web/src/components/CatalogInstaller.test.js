@@ -60,13 +60,13 @@ describe('CatalogInstaller', () => {
         await flushPromises()
         await wrapper.find('.btn-primary').trigger('click')
 
-        progress.value = {stage: 'downloading', file_name: 'NGC.csv', percent: 50, bytes_downloaded: 512 * 1024, total_bytes: 1024 * 1024}
+        progress.value = {stage: 'downloading', fileName: 'NGC.csv', percent: 50, bytesDownloaded: 512 * 1024, totalBytes: 1024 * 1024}
         await flushPromises()
 
         expect(wrapper.text()).toContain('Downloading NGC.csv: 512 KB / 1.0 MB')
         expect(wrapper.find('.progress-fill').attributes('style')).toContain('width: 50%')
 
-        progress.value = {stage: 'downloading', file_name: 'hyg.csv', percent: null, bytes_downloaded: 2048}
+        progress.value = {stage: 'downloading', fileName: 'hyg.csv', percent: null, bytesDownloaded: 2048}
         await flushPromises()
         expect(wrapper.text()).toContain('Downloading hyg.csv: 2 KB')
         expect(wrapper.find('.progress-bar').exists()).toBe(false)
@@ -79,7 +79,7 @@ describe('CatalogInstaller', () => {
         await wrapper.find('.btn-primary').trigger('click')
 
         getCatalogStatus.mockResolvedValue(catalogStatus())
-        progress.value = {stage: 'downloading', object_count: 13957}
+        progress.value = {stage: 'completed', objectCount: 13957}
         await flushPromises()
         expect(wrapper.text()).toContain('Catalog installed')
 
@@ -96,7 +96,7 @@ describe('CatalogInstaller', () => {
         const {wrapper, progress} = mountInstaller()
         await flushPromises()
         await wrapper.find('.btn-primary').trigger('click')
-        progress.value = {stage: 'completed', object_count: 13957}
+        progress.value = {stage: 'completed', objectCount: 13957}
         await flushPromises()
         getCatalogStatus.mockClear()
 

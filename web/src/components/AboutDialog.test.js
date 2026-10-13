@@ -78,20 +78,35 @@ describe('AboutDialog', () => {
 
     it('shows the software licences on their tab', async () => {
         const wrapper = await mountDialog()
-        await wrapper.findAll('.tab-btn')[1].trigger('click')
+        await wrapper.findAll('.tabs .btn-option')[1].trigger('click')
 
         const texts = wrapper.findAll('.license-text').map((pre) => pre.text())
         expect(texts).toEqual(['CORE TEXT', 'THIRD PARTY'])
     })
 
-    it('keeps the tab usable when the software licences fail to load', async () => {
-        vi.spyOn(console, 'error').mockImplementation(() => {})
+    // The tab used to show two empty boxes and only log the failure.
+    it('says why the software licences did not load, and retries', async () => {
         getSoftwareLicenses.mockRejectedValueOnce(new Error('offline'))
         const wrapper = await mountDialog()
-        await wrapper.findAll('.tab-btn')[1].trigger('click')
+        await wrapper.findAll('.tabs .btn-option')[1].trigger('click')
 
         expect(wrapper.find('.version-badge').exists()).toBe(false)
-        expect(wrapper.find('.licenses-container').exists()).toBe(true)
+        expect(wrapper.find('.alert-error').text()).toContain('offline')
+
+        await wrapper.find('.retry-btn').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.findAll('.license-text').map((pre) => pre.text())).toEqual(['CORE TEXT', 'THIRD PARTY'])
+        expect(wrapper.find('.version-badge').text()).toBe('v1.2.3')
+    })
+
+    it('marks the active tab', async () => {
+        const wrapper = await mountDialog()
+        const tabs = () => wrapper.findAll('.tabs .btn-option').map((tab) => tab.classes().includes('active'))
+
+        expect(tabs()).toEqual([true, false])
+        await wrapper.findAll('.tabs .btn-option')[1].trigger('click')
+        expect(tabs()).toEqual([false, true])
     })
 
     it('closes from its own close button', async () => {

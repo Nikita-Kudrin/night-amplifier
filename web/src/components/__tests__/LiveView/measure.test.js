@@ -55,16 +55,16 @@ describe('LiveView - measuring the canvas', () => {
         layOut(wrapper, mocks)
         await showFrame(400, 300)
         const arrow = () => wrapper.findComponent({name: 'GuideArrow'})
-        expect(arrow().props('imageLeft')).toBe(100)
+        expect(arrow().props('bounds').left).toBe(100)
 
         mocks.mockPanZoom.position.value = {x: -30, y: 20}
         await nextTick()
-        expect(arrow().props('imageLeft')).toBe(70)
-        expect(arrow().props('imageTop')).toBe(70)
+        expect(arrow().props('bounds').left).toBe(70)
+        expect(arrow().props('bounds').top).toBe(70)
 
         mocks.mockPanZoom.scale.value = 2
         await nextTick()
-        expect(arrow().props('imageWidth')).toBe(800)
+        expect(arrow().props('bounds').width).toBe(800)
     })
 
     it('leaves no timer behind when it goes away', async () => {

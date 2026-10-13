@@ -8,9 +8,9 @@
  * in place, so the mirror follows the prop deeply: a stale copy would undo them.
  */
 import {reactive, watch} from 'vue'
-import {BaseToggle, BaseInfoIcon} from './ui'
+import {BaseToggle, BaseInfoIcon, SettingSelect} from './ui'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
-import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS} from '../constants'
+import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS, SETTINGS_DEBOUNCE_MS} from '../constants'
 
 const props = defineProps({
   eyepiece: {type: Object, required: true},
@@ -32,8 +32,8 @@ function apply() {
   emit('apply', 'eyepiece', {...local})
 }
 
-/** Screen sizes are typed digit by digit, so they are sent 300 ms after the last edit. */
-const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
+/** Screen sizes are typed digit by digit, so they are sent a moment after the last edit. */
+const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
 </script>
 
 <template>
@@ -60,26 +60,14 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
     </div>
 
     <div class="control-group">
-      <div class="control-row">
-        <label class="control-label control-label-inline">
-          Eyepiece Streaming Resolution
-          <BaseInfoIcon :message="HELP.eyepiece_stream_resolution"/>
-        </label>
-        <select
-            id="eyepiece-stream-resolution-select"
-            v-model="local.stream_resolution"
-            class="select select-compact"
-            @change="apply"
-        >
-          <option
-              v-for="opt in EYEPIECE_STREAM_RESOLUTION_OPTIONS"
-              :key="opt.value"
-              :value="opt.value"
-          >
-            {{ opt.label }}
-          </option>
-        </select>
-      </div>
+      <SettingSelect
+          id="eyepiece-stream-resolution-select"
+          v-model="local.stream_resolution"
+          label="Eyepiece Streaming Resolution"
+          :help="HELP.eyepiece_stream_resolution"
+          :options="EYEPIECE_STREAM_RESOLUTION_OPTIONS"
+          @change="apply"
+      />
     </div>
 
     <div

@@ -18,3 +18,14 @@ export function wireTypes() {
     }
     return types
 }
+
+/**
+ * The members of a string-union `@typedef` in `api.types.js` (`CameraPhase`,
+ * `StackingType`, …), so a hand-written table of them can be held to the server's enum.
+ * @returns {string[]}
+ */
+export function wireEnum(name) {
+    const match = new RegExp(`@typedef \\{([^}]*)\\} ${name}\\b`).exec(source)
+    if (!match) throw new Error(`no @typedef ${name} in api.types.js`)
+    return [...match[1].matchAll(/'([^']*)'/g)].map(([, member]) => member)
+}

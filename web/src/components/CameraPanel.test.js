@@ -10,9 +10,16 @@ vi.mock('../composables/api.js', async (importOriginal) =>
         disconnectCamera: vi.fn(),
         configureSimulator: vi.fn(),
         getSimulatorConfig: vi.fn(),
+        removeSimulatedCamera: vi.fn(),
     }))
 
-import {connectCamera, disconnectCamera, getSimulatorConfig} from '../composables/api.js'
+import {
+    configureSimulator,
+    connectCamera,
+    disconnectCamera,
+    getSimulatorConfig,
+    removeSimulatedCamera,
+} from '../composables/api.js'
 
 describe('CameraPanel', () => {
     beforeEach(() => {
@@ -841,5 +848,73 @@ describe('CameraPanel', () => {
 
             expect(refreshCameras).toHaveBeenCalled()
         })
+    })
+
+    describe('Simulator', () => {
+        const SIM = {id: 'sim_0', name: 'Simulator 1', provider: 'Simulator', index: 0, connected: true, info: {max_width: 100, max_height: 100}}
+        const REAL = {id: 'zwo_0', name: 'ZWO ASI533', provider: 'ZWO', connected: true, info: {max_width: 3008, max_height: 3008}}
+
+        it('adds a simulated camera from a directory, then lists it', async () => {
+            configureSimulator.mockResolvedValue({configured: true, camera_count: 1})
+            const provides = createMockProvides({simulatorEnabled: true})
+            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            await flushPromises()
+
+            await wrapper.find('.simulator-add .btn').trigger('click')
+            await wrapper.find('.directory-input').setValue('  /data/m42  ')
+            await wrapper.find('.config-body .btn-primary').trigger('click')
+            await flushPromises()
+
+            expect(configureSimulator).toHaveBeenCalledWith('/data/m42')
+            expect(provides.refreshCameras).toHaveBeenCalled()
+            expect(wrapper.find('.directory-input').exists()).toBe(false)
+            expect(wrapper.find('.simulator-count').text()).toBe('1 configured')
+        })
+
+        it('asks for a path instead of sending an empty one', async () => {
+            const wrapper = mountCameraPanel({simulatorEnabled: true})
+            await flushPromises()
+
+            await wrapper.find('.simulator-add .btn').trigger('click')
+            await wrapper.find('.config-body .btn-primary').trigger('click')
+
+            expect(configureSimulator).not.toHaveBeenCalled()
+            expect(wrapper.find('.alert-error').text()).toContain('Please enter a directory path')
+        })
+
+        it('removes a simulated camera, and moves the selection off it', async () => {
+            removeSimulatedCamera.mockResolvedValue({})
+            const provides = createMockProvides({simulatorEnabled: true, cameras: [SIM, REAL], selectedCamera: 'sim_0'})
+            provides.refreshCameras.mockImplementation(async () => {
+                provides.cameras.value = [REAL]
+            })
+            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            await flushPromises()
+
+            await wrapper.find('.btn-icon').trigger('click')
+            await flushPromises()
+
+            expect(removeSimulatedCamera).toHaveBeenCalledWith(0)
+            expect(provides.selectedCamera.value).toBe('zwo_0')
+            expect(getSimulatorConfig).toHaveBeenCalledTimes(2)
+        })
+
+        it('offers no removal while a capture runs on a connected one', async () => {
+            const wrapper = mountCameraPanel({simulatorEnabled: true, cameras: [SIM], captureState: 'Capturing'})
+            await flushPromises()
+
+            expect(wrapper.find('.btn-icon').element.disabled).toBe(true)
+        })
+    })
+
+    it('names the selected camera while the list is folded', async () => {
+        const camera = {id: 'zwo_0', name: 'ZWO ASI533', provider: 'ZWO', connected: true, info: {max_width: 3008, max_height: 3008}}
+        const wrapper = mountCameraPanel({cameras: [camera], selectedCamera: 'zwo_0'})
+
+        await wrapper.find('.collapse-toggle').trigger('click')
+
+        expect(wrapper.find('.cameras-container').attributes('style')).toContain('display: none')
+        expect(wrapper.find('.collapsed-summary').text()).toContain('ZWO ASI533')
+        expect(wrapper.find('.collapsed-summary').text()).toContain('3008x3008')
     })
 })

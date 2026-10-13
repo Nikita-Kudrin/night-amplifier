@@ -1,53 +1,32 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getSoftwareLicenses, updateSettings } from '../composables/api.js'
-import { BaseAlert, BaseModal, BaseSpinner } from './ui'
+import {ref, computed} from 'vue'
+import {updateSettings} from '../composables/api.js'
+import {useError} from '../composables/useError.js'
+import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
+import {BaseAlert, BaseModal, BaseSpinner} from './ui'
+import LicenseTexts from './LicenseTexts.vue'
 
 const emit = defineEmits(['accepted'])
 
-const coreLicense = ref('')
-const thirdPartyLicenses = ref('')
-const isLoading = ref(true)
-const isAccepting = ref(false)
+const {
+  coreLicense,
+  thirdPartyLicenses,
+  loading: isLoading,
+  error: loadError,
+  load: fetchLicenses,
+} = useSoftwareLicenses()
+const {error: acceptError, loading: isAccepting, withErrorHandling} = useError()
 const agreed = ref(false)
-const acceptError = ref(null)
-const loadError = ref(null)
 // Agreeing to a text never shown is no agreement.
 const canAccept = computed(() => agreed.value && !!coreLicense.value && !isAccepting.value)
 
-async function fetchLicenses() {
-  try {
-    isLoading.value = true
-    loadError.value = null
-    const res = await getSoftwareLicenses()
-    coreLicense.value = res.core_license
-    thirdPartyLicenses.value = res.third_party_licenses
-    if (!coreLicense.value) loadError.value = 'The server sent no license text.'
-  } catch (err) {
-    console.error('Failed to load licenses:', err)
-    loadError.value = err.message || 'Could not load the license text.'
-  } finally {
-    isLoading.value = false
-  }
-}
-
 async function handleAccept() {
   if (!canAccept.value) return
-  try {
-    isAccepting.value = true
-    acceptError.value = null
-    await updateSettings({ eula_accepted: true })
+  await withErrorHandling(async () => {
+    await updateSettings({eula_accepted: true})
     emit('accepted')
-  } catch (err) {
-    acceptError.value = err.message
-  } finally {
-    isAccepting.value = false
-  }
+  })
 }
-
-onMounted(() => {
-  fetchLicenses()
-})
 </script>
 
 <template>
@@ -92,19 +71,12 @@ onMounted(() => {
           Please review and accept the following license agreements to use NightAmplifier.
         </p>
 
-        <div class="eula-sections">
-          <!-- Core License -->
-          <div class="eula-section">
-            <h3 class="eula-section-title">Software License</h3>
-            <pre id="eula-core-license" class="eula-text">{{ coreLicense }}</pre>
-          </div>
-
-          <!-- Third Party -->
-          <div v-if="thirdPartyLicenses" class="eula-section">
-            <h3 class="eula-section-title">Third-Party Software</h3>
-            <pre id="eula-third-party" class="eula-text">{{ thirdPartyLicenses }}</pre>
-          </div>
-        </div>
+        <LicenseTexts
+            :core="coreLicense"
+            :third-party="thirdPartyLicenses"
+            core-title="Software License"
+            id-prefix="eula"
+        />
 
         <!-- Error -->
         <BaseAlert v-if="acceptError" bordered :dismissible="false">
@@ -189,36 +161,6 @@ onMounted(() => {
   line-height: 1.5;
 }
 
-/* Sections */
-.eula-sections {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.eula-section-title {
-  margin: 0 0 0.5rem;
-  font-size: var(--fs-lg);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.eula-text {
-  margin: 0;
-  padding: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 250px;
-  overflow-y: auto;
-  line-height: 1.6;
-}
-
 /* Agreement footer */
 .eula-agreement {
   display: flex;
@@ -289,10 +231,6 @@ onMounted(() => {
 
 /* Mobile */
 @media (max-width: 768px) {
-  .eula-text {
-    max-height: 180px;
-  }
-
   .eula-accept-btn {
     align-self: stretch;
     text-align: center;

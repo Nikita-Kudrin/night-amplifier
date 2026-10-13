@@ -50,9 +50,7 @@ export function useCanvas2DRenderer() {
             imageData = ctx2d.createImageData(width, height)
         }
 
-        const rgba8 = rgb8ToRgba8(frameData, width, height)
-        imageData.data.set(rgba8)
-
+        rgb8ToRgba8(frameData, imageData.data)
         ctx2d.putImageData(imageData, 0, 0)
     }
 

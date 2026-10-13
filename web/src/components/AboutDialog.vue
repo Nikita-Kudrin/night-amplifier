@@ -1,66 +1,50 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { getLicenseStatus, updateLicense, getSoftwareLicenses } from '../composables/api.js'
-import { BaseAlert, BaseModal, BaseSpinner } from './ui'
+import {ref, onMounted} from 'vue'
+import {getLicenseStatus, updateLicense} from '../composables/api.js'
+import {useError} from '../composables/useError.js'
+import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
+import {BaseAlert, BaseModal, BaseSpinner, ButtonGroup} from './ui'
+import LicenseTexts from './LicenseTexts.vue'
+
 defineEmits(['close'])
 
-const activeTab = ref('license') // 'license' | 'software'
+const TABS = [
+  {value: 'license', label: 'Pro License'},
+  {value: 'software', label: 'Legal & Software'},
+]
+const activeTab = ref('license')
 
-// License State
 const licenseStatus = ref(null)
 const licenseToken = ref('')
 const isLoadingLicense = ref(true)
-const isUpdatingLicense = ref(false)
-const licenseError = ref(null)
 const licenseSuccess = ref(false)
+const {error: licenseError, loading: isUpdatingLicense, withErrorHandling} = useError()
 
-// Software Licenses State
-const version = ref('')
-const coreLicense = ref('')
-const thirdPartyLicenses = ref('')
-const isLoadingSoftware = ref(true)
+const {
+  version,
+  coreLicense,
+  thirdPartyLicenses,
+  loading: isLoadingSoftware,
+  error: softwareError,
+  load: loadSoftware,
+} = useSoftwareLicenses()
 
 async function fetchLicenseStatus() {
-  try {
-    isLoadingLicense.value = true
+  await withErrorHandling(async () => {
     licenseStatus.value = await getLicenseStatus()
-  } catch (err) {
-    licenseError.value = err.message
-  } finally {
-    isLoadingLicense.value = false
-  }
-}
-
-async function fetchSoftwareLicenses() {
-  try {
-    isLoadingSoftware.value = true
-    const res = await getSoftwareLicenses()
-    version.value = res.version
-    coreLicense.value = res.core_license
-    thirdPartyLicenses.value = res.third_party_licenses
-  } catch (err) {
-    console.error('Failed to load software licenses:', err)
-  } finally {
-    isLoadingSoftware.value = false
-  }
+  })
+  isLoadingLicense.value = false
 }
 
 async function handleUpdateLicense() {
-  if (!licenseToken.value.trim()) return
-
-  try {
-    isUpdatingLicense.value = true
-    licenseError.value = null
-    licenseSuccess.value = false
-    
-    licenseStatus.value = await updateLicense(licenseToken.value.trim())
+  const token = licenseToken.value.trim()
+  if (!token) return
+  licenseSuccess.value = false
+  await withErrorHandling(async () => {
+    licenseStatus.value = await updateLicense(token)
     licenseSuccess.value = true
-    licenseToken.value = '' // Clear input on success
-  } catch (err) {
-    licenseError.value = err.message
-  } finally {
-    isUpdatingLicense.value = false
-  }
+    licenseToken.value = ''
+  })
 }
 
 function formatDate(dateString) {
@@ -81,10 +65,7 @@ function getDaysLeft(expiresAt) {
   return Math.ceil(diff / (1000 * 60 * 60 * 24))
 }
 
-onMounted(() => {
-  fetchLicenseStatus()
-  fetchSoftwareLicenses()
-})
+onMounted(fetchLicenseStatus)
 </script>
 
 <template>
@@ -94,37 +75,13 @@ onMounted(() => {
     no-padding
     @close="$emit('close')"
   >
-    <template #header>
-      <h2 class="base-modal-title">
-        About NightAmplifier
-        <span v-if="version" class="version-badge">v{{ version }}</span>
-      </h2>
-      <button class="btn-close" title="Close" @click="$emit('close')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+    <template #title-extra>
+      <span v-if="version" class="version-badge">v{{ version }}</span>
     </template>
 
     <template #default>
       <!-- Tabs -->
-      <div class="tabs">
-        <button 
-          class="tab-btn" 
-          :class="{ active: activeTab === 'license' }"
-          @click="activeTab = 'license'"
-        >
-          Pro License
-        </button>
-        <button 
-          class="tab-btn" 
-          :class="{ active: activeTab === 'software' }"
-          @click="activeTab = 'software'"
-        >
-          Legal & Software
-        </button>
-      </div>
+      <ButtonGroup v-model="activeTab" class="tabs" :options="TABS"/>
 
       <!-- Content: License -->
       <div v-if="activeTab === 'license'" class="tab-content">
@@ -215,18 +172,20 @@ onMounted(() => {
           <BaseSpinner size="md" />
           <p>Loading license information...</p>
         </div>
-        
-        <div v-else class="licenses-container">
-          <div class="license-block">
-            <h3 class="license-heading">NightAmplifier License</h3>
-            <pre class="license-text">{{ coreLicense }}</pre>
-          </div>
-          
-          <div v-if="thirdPartyLicenses" class="license-block">
-            <h3 class="license-heading">Third-Party Software</h3>
-            <pre class="license-text">{{ thirdPartyLicenses }}</pre>
-          </div>
-        </div>
+
+        <template v-else-if="softwareError">
+          <BaseAlert bordered :dismissible="false">
+            Could not load the license information: {{ softwareError }}
+          </BaseAlert>
+          <button class="btn btn-primary retry-btn" @click="loadSoftware">Retry</button>
+        </template>
+
+        <LicenseTexts
+            v-else
+            :core="coreLicense"
+            :third-party="thirdPartyLicenses"
+            id-prefix="about"
+        />
       </div>
     </template>
   </BaseModal>
@@ -243,35 +202,15 @@ onMounted(() => {
   margin-left: 0.75rem;
 }
 
-/* Tabs */
+/* The two tabs: a segmented control at tab size. */
 .tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  padding: 0.75rem 1.5rem 0;
 }
 
-.tab-btn {
-  flex: 1;
-  padding: 1rem;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-secondary);
-  font-weight: 600;
+.tabs :deep(.btn-option) {
+  padding: 0.5rem;
   font-size: var(--fs-lg);
-  cursor: pointer;
-  transition: all var(--transition-normal);
-}
-
-.tab-btn:hover {
-  color: var(--text-primary);
-  background: var(--surface-hover);
-}
-
-.tab-btn.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
-  background: var(--primary-bg);
+  font-weight: 600;
 }
 
 /* Content Area */
@@ -281,8 +220,8 @@ onMounted(() => {
   flex: 1;
 }
 
-.software-tab {
-  padding: 0; /* Let inner container handle padding so pre block scrolls well */
+.retry-btn {
+  margin-top: 1rem;
 }
 
 /* License Info Styles */
@@ -386,41 +325,5 @@ onMounted(() => {
 .update-btn {
   align-self: flex-end;
   padding: 0.5rem 1.5rem;
-}
-
-/* Software Licenses Text */
-.licenses-container {
-  display: flex;
-  flex-direction: column;
-}
-
-.license-block {
-  padding: 1.5rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.license-block:last-child {
-  border-bottom: none;
-}
-
-.license-heading {
-  margin: 0 0 1rem 0;
-  color: var(--text-primary);
-  font-size: 1.1rem;
-}
-
-.license-text {
-  margin: 0;
-  padding: 1rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  font-family: monospace;
-  font-size: var(--fs-md);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 400px;
-  overflow-y: auto;
 }
 </style>

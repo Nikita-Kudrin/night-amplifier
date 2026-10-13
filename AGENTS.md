@@ -167,11 +167,16 @@ visible and locked (`BaseProLock`) on `/api/capabilities`. `useCatalogSearch` sk
 Sockets: `useWebSocket` (reconnect, ping), `useEventStream` (a table from event type to state), `useImageStream`.
 **`api.types.js` is generated** from the Rust wire types (`tests/api_types.rs`, feature `api-schema`, which derives
 `schemars::JsonSchema` only in that build); CI fails a stale one. A settings panel section is its own component that
-mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one that must await the save takes it as a prop.
+mirrors its keys of the panel's `settingsMirror` (`useSectionMirror`) and emits `apply(key, value)`; one that must
+await the save takes it as a prop. Only a typed number debounces (`SETTINGS_DEBOUNCE_MS`); a slider release or a
+select sends at once. Cooler and dew heater save through `useCameraHardwareSettings`, which names `camera_role`.
 **Debounce through `useDebouncedCall`**, which flushes on unmount: Vue drops an `emit` from an unmounted component,
 so a hand-rolled timer lost an edit made just before its panel closed; a one-shot delay goes through `useTimeouts`,
-cleared on unmount. A canvas hands out one context type for life, so `useWebGLRenderer` probes each GL version on a
-scratch canvas first — a WebGL2 shader failure on the real one once left it blank, with no Canvas2D fallback. The sidebar is **one tab at a time**
+and a window/document listener through `useEventListener` (`useClickOutside`), both cleared on unmount.
+**Both views draw through `useFrameRenderer`**: WebGL2 → WebGL1 → Canvas2D per canvas, a JPEG decoded once for every
+eye with only the newest decode drawn, the last image held for a restored context or a new canvas. A canvas hands out
+one context type for life, so `useWebGLRenderer` probes each GL version on a scratch canvas first — a WebGL2 shader
+failure on the real one once left it blank, with no Canvas2D fallback. The sidebar is **one tab at a time**
 (`useSidebarTabs`: Main, Push-To, Settings), each mounted on first visit and then only hidden (`v-show`) —
 remounting dropped typed coordinates and refetched. A hidden panel's watchers keep running, so mounting writes only
 to record the selected camera, never optics (`useTelescopeSetup` once rewrote the telescope block on every Push-To
@@ -189,8 +194,9 @@ splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`.
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.js` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
 components' error icons). Test helpers live in `src/test/`: `mockApi`, fixtures held to `api.types.js`,
-`createEventStreamStub` held to `useEventStream`, `mountWithDefaults`, `stubFetch`; tests sit beside their source
-(`X.test.js`, `X.<aspect>.test.js`).
+`createEventStreamStub` held to `useEventStream`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
+browser hands them out); tests sit beside their source (`X.test.js`, `X.<aspect>.test.js`). Wire enums the UI
+spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to `api.types.js`.
 
 ## Camera Notes
 

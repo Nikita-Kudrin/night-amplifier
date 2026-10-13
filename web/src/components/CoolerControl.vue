@@ -1,30 +1,15 @@
 <script setup>
-import {computed, inject, ref, watch} from 'vue'
-import {updateSettings} from '../composables/api.js'
-import {useDebouncedCall} from '../composables/useDebouncedCall.js'
-import {useError} from '../composables/useError.js'
-import {useSelectedCamera} from '../composables/appContext.js'
+import {computed, ref, watch} from 'vue'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
 import {formatPercent, formatTemperature, MISSING} from '../utils/format.js'
 import {BaseAlert, BaseSlider, BaseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
-import {COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants'
+import {COOLER_STABLE_BAND_C, COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants'
 
-const settings = inject('settings', ref(null))
-const refreshSettings = inject('refreshSettings', async () => {
-})
-const cameraStatus = inject('cameraStatus', ref({}))
 // The guide camera keeps its own cooler settings; the selection says which set these
 // controls are showing and editing.
-const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
-
-const {error, clearError, withErrorHandling} = useError()
-
-const cameraSettings = computed(() => {
-  if (!settings.value) return null
-  return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
-})
-
-const currentCamera = useSelectedCamera()
+const {cameraSettings, currentCamera, liveStatus, error, clearError, apply, applyDebounced} =
+    useCameraHardwareSettings()
 
 const hasCooler = computed(() => Boolean(currentCamera.value?.info?.has_cooler))
 
@@ -48,11 +33,6 @@ watch(
     {immediate: true}
 )
 
-const liveStatus = computed(() => {
-  const name = currentCamera.value?.name
-  return name ? cameraStatus.value?.[name] : null
-})
-
 const statusBadge = computed(() => {
   if (!liveStatus.value) return {label: 'Idle', tone: 'muted'}
   if (!liveStatus.value.cooler_on) return {label: 'Off', tone: 'muted'}
@@ -60,38 +40,26 @@ const statusBadge = computed(() => {
     return {label: 'Cooling', tone: 'warning'}
   }
   const delta = Math.abs(liveStatus.value.temperature_c - liveStatus.value.target_temp_c)
-  if (delta <= 0.5) return {label: 'Stable', tone: 'success'}
+  if (delta <= COOLER_STABLE_BAND_C) return {label: 'Stable', tone: 'success'}
   if (liveStatus.value.temperature_c > liveStatus.value.target_temp_c) {
     return {label: 'Cooling', tone: 'warning'}
   }
   return {label: 'Warming', tone: 'warning'}
 })
 
-/** `role` is the camera selected when the edit was made, not when a debounce fires. */
-async function applySetting(payload, role = settingsRole.value) {
-  await withErrorHandling(async () => {
-    await updateSettings({camera_role: role, ...payload})
-    await refreshSettings()
-  })
-}
-
-const {schedule: debouncedApply, flush: flushPending} = useDebouncedCall(applySetting, 300)
-// A pending edit is the outgoing camera's: sent now, it is never coalesced with the next one's.
-watch(settingsRole, flushPending)
-
 function handleCoolerToggle(enabled) {
   localCoolerEnabled.value = enabled
-  applySetting({cooler_enabled: enabled})
+  apply({cooler_enabled: enabled})
 }
 
 function handleTargetChange(value) {
   localTargetTemp.value = value
-  debouncedApply({target_temp_c: value}, settingsRole.value)
+  applyDebounced({target_temp_c: value})
 }
 
 function handleFastModeToggle(enabled) {
   localCoolerFastMode.value = enabled
-  applySetting({cooler_fast_mode: enabled})
+  apply({cooler_fast_mode: enabled})
 }
 
 /** The camera reports cooler power as 0–100. */
@@ -166,7 +134,7 @@ function formatPower(v) {
       </div>
       <div class="status-item">
         <span class="status-label">State</span>
-        <span class="pill status-pill" :class="`pill-${statusBadge.tone}`">
+        <span class="pill pill-status" :class="`pill-${statusBadge.tone}`">
           {{ statusBadge.label }}
         </span>
       </div>
@@ -212,10 +180,6 @@ function formatPower(v) {
   font-variant-numeric: tabular-nums;
 }
 
-.status-pill {
-  font-size: var(--fs-xs);
-  padding: 0.1rem 0.5rem;
-}
 
 .cooler-hint {
   font-size: var(--fs-xs);

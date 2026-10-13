@@ -135,6 +135,13 @@ export const HOT_PIXEL_SIGMA_LIMITS = {
 }
 
 // Simulated camera preload limits
+/** Sigma clipping's threshold, in standard deviations from the pixel's mean. */
+export const REJECTION_SIGMA_LIMITS = {
+    min: 0.5,
+    max: 10.0,
+    step: 0.1,
+}
+
 export const SIMULATED_PRELOAD_LIMITS = {
     min: 1,
     max: 20,
@@ -245,6 +252,57 @@ export function isCaptureRunning(state) {
     return state === CAPTURE_STATES.CAPTURING || state === CAPTURE_STATES.RECOVERING
 }
 
+/** Where "Upgrade to Pro" leads. */
+export const PRO_UPGRADE_URL = 'https://skycontrast.com/software/night-amplifier-pro'
+
+/** `CameraPhase` (`api.types.js`), by name. */
+export const CAMERA_PHASES = Object.freeze({
+    DISCONNECTED: 'disconnected',
+    IDLE: 'idle',
+    PRECOOLING: 'precooling',
+    CAPTURING: 'capturing',
+    GUIDING: 'guiding',
+    WARMING_UP: 'warming_up',
+    RECOVERING: 'recovering',
+})
+
+/** `StackingType` (`api.types.js`), by name. */
+export const STACKING_TYPES = Object.freeze({
+    DEEP_SKY: 'deep_sky',
+    PLANETARY: 'planetary',
+    COMET: 'comet',
+})
+
+/**
+ * The capture panel's modes. Only the imaging camera has one: nothing the guide camera
+ * produces is stacked, and offering the others for it would write the *imaging*
+ * camera's mode, since the setting is global.
+ */
+export const CAPTURE_MODE_OPTIONS = Object.freeze([
+    {value: 'off', label: 'Live view'},
+    {value: 'wanderer', label: 'Wanderer'},
+    {value: 'stacking', label: 'Stacking'},
+])
+export const GUIDE_CAPTURE_MODE_OPTIONS = Object.freeze([CAPTURE_MODE_OPTIONS[0]])
+
+/**
+ * How the status bar shows each capture state: `tone` names its indicator's style. A
+ * capture paused for a reconnect reads as Capturing, as `isCaptureRunning` has it.
+ */
+export const CAPTURE_STATE_DISPLAY = Object.freeze({
+    [CAPTURE_STATES.IDLE]: {tone: 'idle', label: 'Idle'},
+    [CAPTURE_STATES.STARTING]: {tone: 'starting', label: 'Starting...'},
+    [CAPTURE_STATES.CAPTURING]: {tone: 'capturing', label: 'Capturing'},
+    [CAPTURE_STATES.RECOVERING]: {tone: 'capturing', label: 'Capturing'},
+    [CAPTURE_STATES.STOPPING]: {tone: 'stopping', label: 'Stopping...'},
+    [CAPTURE_STATES.ERROR]: {tone: 'error', label: 'Error'},
+})
+
+/** `CAPTURE_STATE_DISPLAY`'s entry for `state`; a state this build does not know is Idle. */
+export function captureStateDisplay(state) {
+    return CAPTURE_STATE_DISPLAY[state] ?? CAPTURE_STATE_DISPLAY[CAPTURE_STATES.IDLE]
+}
+
 // WebSocket reconnection settings
 export const WS_RECONNECT = {
     // Base of an exponential backoff that doubles to `maxInterval` and then retries at
@@ -287,6 +345,19 @@ export const COOLER_TEMP_LIMITS = {
     step: 1,
     default: -10,
 }
+
+/** How close to its target the sensor must be for the cooler to read "Stable", in °C. */
+export const COOLER_STABLE_BAND_C = 0.5
+
+/** Dew heater power, in percent of full. */
+export const DEW_HEATER_POWER_LIMITS = {
+    min: 0,
+    max: 100,
+    step: 1,
+}
+
+/** How long a settings control waits after the last edit before it saves. */
+export const SETTINGS_DEBOUNCE_MS = 300
 
 /**
  * `/api/capabilities` before it answers: Community only, every Pro control locked.
@@ -394,6 +465,20 @@ export function defaultSettings() {
 
 // Help tooltips for UI elements
 export const HELP_TEXTS = {
+    simulator_directory: 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).',
+    push_to_without_optics:
+        'Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can increase the success rate of Push-To.',
+    push_to_pro: 'Plate solving and Push-To navigation require Night Amplifier Pro.',
+    comet_pro: 'Comet centroid tracking and aggressive star rejection are available in Night Amplifier Pro.',
+    precooling: 'Sensor is still cooling — capture will start with elevated dark current.',
+    frame_counts:
+        'Total: Frames captured and processed. Rejected: Captured frames that failed alignment or quality checks. Dropped: Frames discarded because the CPU was too busy to process them.',
+    planetary_auto_tracking: "Automatically track the planet's centroid in the ROI to prevent drift.",
+    planetary_multi_point_alignment:
+        'Use Inverse Distance Weighting on multiple surface points to combat seeing distortion.',
+    cameras:
+        'Choose the camera to configure. One imaging camera and one guide camera can be connected at once — use the arrow next to Connect to attach a guide camera.',
+    focus_mode_held: 'Greyed settings are held off by Focus/Finder mode.',
     bin: 'Combines adjacent pixels to increase sensitivity and Signal-to-Noise Ratio (SNR) at the cost of resolution. 2x2 binning is 4x more sensitive. Changing binning will automatically reset the current stack.',
     auto_stretch:
         'Automatically transforms the image to make faint details and colors visible - stretching',
