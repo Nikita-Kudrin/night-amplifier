@@ -1,11 +1,16 @@
-import {mount} from '@vue/test-utils'
-import {nextTick, ref} from 'vue'
+import {flushPromises, mount} from '@vue/test-utils'
+import {computed, nextTick, ref} from 'vue'
 import AdvancedSettings from './AdvancedSettings.vue'
+import SettingsPanel from './SettingsPanel.vue'
 import {settingsMirror} from '../utils/settings.js'
 import {findToggleByLabel} from '../test/settingsPanel.js'
+import {mountWithDefaults} from '../test/mount.js'
+import {settings} from '../test/fixtures.js'
 
 vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+
+import {updateSettings} from '../composables/api.js'
 
 function mountSection(server = {}, simulatorEnabled = ref(false)) {
     const wrapper = mount(AdvancedSettings, {
@@ -15,13 +20,39 @@ function mountSection(server = {}, simulatorEnabled = ref(false)) {
     return {wrapper, simulatorEnabled}
 }
 
+const binButton = (wrapper, label) => wrapper.findAll('.btn-option').find((b) => b.text() === label)
+
 describe('AdvancedSettings', () => {
-    it('sends a binning choice', async () => {
+    beforeEach(() => vi.clearAllMocks())
+
+    it('sends a binning choice for the selected camera', async () => {
         const {wrapper} = mountSection({bin: 1})
 
-        await wrapper.findAll('.btn-group button, button').find((b) => b.text().includes('2x2')).trigger('click')
+        await binButton(wrapper, '2x2').trigger('click')
 
-        expect(wrapper.emitted('apply')).toEqual([['bin', 2]])
+        expect(updateSettings).toHaveBeenCalledExactlyOnceWith({camera_role: 'main', bin: 2})
+        expect(wrapper.emitted('apply')).toBeUndefined()
+    })
+
+    // `bin` is per camera: the server writes it to the camera `camera_role` names, and the
+    // guide keeps its own in `guide_camera.bin`. Shown and posted as the top-level one, a
+    // click with the guide selected rebinned (and reset the stack of) the imaging camera.
+    it('shows and edits the selected guide camera\'s binning, naming it', async () => {
+        const applySettings = vi.fn(async () => settings())
+        const wrapper = mountWithDefaults(SettingsPanel, {
+            provide: {
+                settings: settings({bin: 1, guide_camera: {...settings().guide_camera, bin: 2}}),
+                selectedCameraRole: computed(() => 'guide'),
+                applySettings,
+            },
+        })
+
+        expect(binButton(wrapper, '2x2').classes()).toContain('active')
+
+        await binButton(wrapper, '4x4').trigger('click')
+        await flushPromises()
+        expect(applySettings).toHaveBeenCalledExactlyOnceWith({camera_role: 'guide', bin: 4})
+        expect(binButton(wrapper, '4x4').classes()).toContain('active')
     })
 
     it('switches the simulator in the app and on the server', async () => {

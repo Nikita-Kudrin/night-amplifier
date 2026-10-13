@@ -163,8 +163,25 @@ export function createCameraStore({loading = () => false} = {}) {
         }
     }
 
-    // Each logs its own failure; an event has no caller to hand one to.
-    const refreshQuietly = () => refreshCameras().catch(() => {})
+    let listing = null
+    let relist = false
+
+    /**
+     * The list again for an event, one request at a time: asked during one, it reads once
+     * more after it, since that answer may predate the event. `refreshCameras` logs a
+     * failure; an event has no caller to hand it to.
+     */
+    function refreshQuietly() {
+        relist = true
+        listing ??= (async () => {
+            while (relist) {
+                relist = false
+                await refreshCameras().catch(() => {})
+            }
+            listing = null
+        })()
+        return listing
+    }
 
     const handlers = {
         camera_status_updated(event) {
@@ -186,6 +203,9 @@ export function createCameraStore({loading = () => false} = {}) {
             // fetching the list already.
             if (!loading() && !sameCameraNames(event.cameras, cameras.value)) refreshQuietly()
         },
+        // Any client's connect, this page's included: the list is the only place a new
+        // camera's id and role reach, so another tab once showed no guide camera at all.
+        camera_connected: refreshQuietly,
         camera_disconnected(event) {
             updateCameraPhase(event.name, CAMERA_PHASES.DISCONNECTED)
             refreshQuietly()

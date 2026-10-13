@@ -152,7 +152,8 @@ the whole tree). Always run `cargo test` after changes, `npm run test:run` too. 
 
 Axum: REST `/api/*`; WS `/ws/stream` + `/ws/eyepiece` (JPEG), `/ws/eyepiece_quality` (lossless LZ4), `/ws/events`
 (JSON). `/ws/events` opens with `state_changed` + `camera_phases` + `viewed_camera_changed` + `stack_crop_changed` and
-resends them after a `Lagged` client; `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
+resends them after a `Lagged` client, plus `ai_compute_changed` and `settings_updated` (no snapshot carries either,
+and a dropped one left the benchmark overlay up); `GET /api/cameras` carries `phase`/`warmup_remaining_s` for every client, not just the one that acted.
 **Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
 show `AppState::viewed_camera` (set by `/`'s Guide toggle via `PUT /api/view/camera`, snapshot route too) and switch
 in place; their viewers have no control. A guide *disconnect* falls back to Main only after the roster says so
@@ -168,10 +169,14 @@ Sockets: `useWebSocket` (reconnect, ping), `useEventStream`, `useImageStream`.
 **`/ws/events` has one dispatch path**: `useEventStream` is the socket plus `on(type, fn)`, every message handed to
 its type's subscribers in order — the domain tables in `composables/events/` first, then the stores, which subscribe
 through `connectEvents` from `App.vue` (a `lastEvent` watcher saw one of two events landing in a tick). **One writer
-per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`),
+per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`);
+its status read on open drops a field only if *that* field was written meanwhile (one shared counter lost the target
+to any progress event),
 settings only by `settingsStore`: `applySettings` (`useApplySettings`) adopts the POST's answer, and `refresh` never
 runs beside a write, coalesces, and drops an answer older than the one adopted — an edit is one POST and at most one
-GET (it was a POST and 2-3 GETs). Stores are `createX()` + a module default + `__resetForTests()`; a composable's
+GET (it was a POST and 2-3 GETs). Settings, Push-To and AI compute are read again on every reopen; a refresh asked
+during a request reads once more after it. Every `api.js` call has a deadline (15 s; 120 s for connect, capture
+start/stop, installs, snapshot): one hung POST held every settings refresh behind it. Stores are `createX()` + a module default + `__resetForTests()`; a composable's
 lifecycle hooks go through `lifecycle.js` (`tryOn*`), which a bare call or a module store skips. Polling only while
 the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on open.
 **`api.types.js` and `api.settings.js` are generated** from the Rust wire types and the code that clamps settings
@@ -179,14 +184,19 @@ the socket is down: AI compute follows `ai_compute_changed` and the saved choice
 stale one. `DEFAULT_SETTINGS` *is* the server's default, and a control's range comes from `serverLimits(path, ui)`,
 which may narrow but never widen it (`constants/serverSettings.test.js`); constants live by domain behind
 `constants/index.js`, help copy per panel in `constants/help/`. A settings panel section is its own component that
-mirrors its keys of the panel's `settingsMirror` (`useSectionMirror`) and emits `apply(key, value)`; one that must
-await the save takes it as a prop. Only a typed number debounces (`SETTINGS_DEBOUNCE_MS`); a slider release or a
-select sends at once. Cooler and dew heater save through `useCameraHardwareSettings`, which names `camera_role`.
+mirrors its keys of the panel's `settingsMirror` (`useSectionMirror`, which leaves keys edited but not yet sent out
+of syncs) and emits `apply(key, value)`; one that must await the save takes it as a prop. The server replaces the
+`eyepiece` group whole and two sections edit it, so they emit only changed fields and the panel (`applyEyepiece`)
+sends them over its copy — a section's stale copy reverted the other's typed screen size. An emptied number field
+sends nothing and reads its last value again (`''` was a 422, `Number('')` a 0). Only a typed number debounces (`SETTINGS_DEBOUNCE_MS`); a slider release or a
+select sends at once. Cooler, dew heater and binning save through `useCameraHardwareSettings`, which names `camera_role` (binning
+without it rebinned the imaging camera while the guide was selected).
 **Debounce through `useDebouncedCall`**, which flushes on unmount: Vue drops an `emit` from an unmounted component,
 so a hand-rolled timer lost an edit made just before its panel closed; a one-shot delay goes through `useTimeouts`,
 and a window/document listener through `useEventListener` (`useClickOutside`), both cleared on unmount.
 **Both views draw through `useFrameRenderer`**: WebGL2 → WebGL1 → Canvas2D per canvas, a JPEG decoded once for every
-eye with only the newest decode drawn, the last image held for a restored context or a new canvas. A canvas hands out
+eye, one decode at a time with the newest waiting frame next (dropping every overtaken decode froze a view whenever
+decoding was slower than the frame rate), the last image held for a restored context or a new canvas. A canvas hands out
 one context type for life, so `useWebGLRenderer` probes each GL version on a scratch canvas first — a WebGL2 shader
 failure on the real one once left it blank, with no Canvas2D fallback. The sidebar is **one tab at a time**
 (`useSidebarTabs`: Main, Push-To, Settings), each mounted on first visit and then only hidden (`v-show`) —

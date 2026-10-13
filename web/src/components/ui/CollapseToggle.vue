@@ -1,8 +1,9 @@
 <script setup>
 /**
  * The chevron that folds a section: down while open, turned left while folded.
- * `v-model` is whether it is folded. Its click does not reach a header that toggles on
- * click itself, so one click folds once.
+ * `v-model` is whether it is folded. Its click bubbles on, so `useClickOutside` popovers
+ * close when a panel folds; inside a header that folds on click itself, bind only
+ * `:model-value` and let the header fold, or one click folds twice.
  */
 const collapsed = defineModel({type: Boolean, default: false})
 
@@ -18,7 +19,7 @@ defineProps({
       class="collapse-toggle"
       :title="title"
       :aria-expanded="!collapsed"
-      @click.stop="collapsed = !collapsed"
+      @click="collapsed = !collapsed"
   >
     <svg
         :class="{ collapsed }"

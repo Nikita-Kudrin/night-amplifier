@@ -3,7 +3,7 @@ import {mount} from '@vue/test-utils'
 import {BACKEND_LABELS, backendLabel, useFrameRenderer} from './useFrameRenderer.js'
 import {installCanvasContexts, quietly} from '../test/renderStubs.js'
 
-/** A JPEG decode resolved by hand, so a test can finish decodes out of order. */
+/** A JPEG decode resolved by hand, so a test decides when each one finishes. */
 function installDecoder() {
     const pending = []
     const bitmaps = []
@@ -159,27 +159,63 @@ describe('useFrameRenderer', () => {
             expect(contextOf(left).uploads).toHaveLength(2)
             expect(rightContext.uploads).toHaveLength(1)
             expect(rightContext.deleteTexture).toHaveBeenCalled()
+            expect(rightContext.loseContext).toHaveBeenCalled()
+            expect(contextOf(left).loseContext).not.toHaveBeenCalled()
         })
     })
 
     describe('JPEG decodes', () => {
-        it('never paints an older frame whose decode finished last', async () => {
+        // A phone decoding a 1440p JPEG slower than Focus mode's frame rate: each decode
+        // finishes after the next frame arrived. Dropping those froze the view.
+        it('keeps drawing when every decode outlasts the gap to the next frame', async () => {
+            const {contextOf} = installCanvasContexts()
+            const decoder = installDecoder()
+            const view = mountRenderer({isJpeg: true})
+            await view.showJpeg(10, 10)
+            for (let i = 1; i < 6; i++) {
+                await view.showJpeg(10, 10)
+                decoder.pending[i - 1].resolve()
+                await flush()
+            }
+
+            const drawn = contextOf(view.canvases[0]).texImage2D.mock.calls.map((call) => call.at(-1))
+            expect(drawn).toEqual(decoder.bitmaps)
+        })
+
+        it('decodes only the newest of the frames that arrived during a decode, in order', async () => {
             const {contextOf} = installCanvasContexts()
             const decoder = installDecoder()
             const view = mountRenderer({isJpeg: true})
             await view.showJpeg(10, 10)
             await view.showJpeg(20, 20)
+            await view.showJpeg(30, 30)
+            expect(window.createImageBitmap).toHaveBeenCalledTimes(1)
 
-            decoder.pending[1].resolve()
-            await flush()
             decoder.pending[0].resolve()
+            await flush()
+            expect(decoder.pending.map((decode) => decode.blob.width)).toEqual([10, 30])
+            decoder.pending[1].resolve()
             await flush()
 
             const drawn = contextOf(view.canvases[0]).texImage2D.mock.calls.map((call) => call.at(-1))
-            const [newer, older] = decoder.bitmaps
-            expect(drawn).toEqual([newer])
-            expect(older.close).toHaveBeenCalled()
-            expect(newer.close).not.toHaveBeenCalled()
+            expect(drawn).toEqual(decoder.bitmaps)
+        })
+
+        it('never paints a decode over an RGB frame drawn after it started', async () => {
+            const {contextOf} = installCanvasContexts()
+            const decoder = installDecoder()
+            const view = mountRenderer({isJpeg: true})
+            await view.showJpeg(10, 10)
+            view.stream.isJpeg.value = false
+            await view.showRgb(4, 4)
+
+            decoder.pending[0].resolve()
+            await flush()
+
+            const gl = contextOf(view.canvases[0])
+            expect(gl.texImage2D).toHaveBeenCalledTimes(1)
+            expect(gl.uploads).toEqual([{width: 4, height: 4}])
+            expect(decoder.bitmaps[0].close).toHaveBeenCalled()
         })
 
         it('closes the bitmap it held once the next frame is drawn', async () => {
@@ -233,6 +269,23 @@ describe('useFrameRenderer', () => {
             expect(decoder.bitmaps[0].close).toHaveBeenCalled()
             expect(decoder.bitmaps[1].close).toHaveBeenCalled()
         })
+
+        it('drops the frame waiting behind a decode when the frame is cleared', async () => {
+            const {contextOf} = installCanvasContexts()
+            const decoder = installDecoder()
+            const view = mountRenderer({isJpeg: true})
+            await view.showJpeg(10, 10)
+            await view.showJpeg(20, 20)
+
+            view.stream.frameData.value = null
+            await nextTick()
+            decoder.pending[0].resolve()
+            await flush()
+
+            expect(window.createImageBitmap).toHaveBeenCalledTimes(1)
+            expect(contextOf(view.canvases[0]).texImage2D).not.toHaveBeenCalled()
+            expect(decoder.bitmaps[0].close).toHaveBeenCalled()
+        })
     })
 
     it('reports a new drawn size once, not every frame', async () => {
@@ -244,6 +297,25 @@ describe('useFrameRenderer', () => {
         await view.showRgb(4, 4)
         await view.showRgb(6, 4)
 
+        expect(onSizeChange.mock.calls).toEqual([[{width: 4, height: 4}], [{width: 6, height: 4}]])
+    })
+
+    // The guide arrow and comet ROI measure the canvas: a size "drawn" while the context
+    // was lost never resized it, and the restore's redraw must still report it.
+    it('reports a size first drawn after a lost context came back', async () => {
+        installCanvasContexts()
+        const onSizeChange = vi.fn()
+        const view = mountRenderer({onSizeChange})
+        await view.showRgb(4, 4)
+        const canvas = view.canvases[0]
+
+        quietly(() => canvas.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+        await view.showRgb(6, 4)
+        expect(onSizeChange.mock.calls).toEqual([[{width: 4, height: 4}]])
+
+        quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
+
+        expect(canvas.width).toBe(6)
         expect(onSizeChange.mock.calls).toEqual([[{width: 4, height: 4}], [{width: 6, height: 4}]])
     })
 
@@ -270,6 +342,7 @@ describe('useFrameRenderer', () => {
         view.wrapper.unmount()
 
         expect(contextOf(view.canvases[0]).deleteProgram).toHaveBeenCalled()
+        expect(contextOf(view.canvases[0]).loseContext).toHaveBeenCalled()
         expect(decoder.bitmaps[0].close).toHaveBeenCalled()
     })
 })

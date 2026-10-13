@@ -1,7 +1,8 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
-import {h, ref, nextTick} from 'vue'
+import {ref, nextTick} from 'vue'
 import CoolerControl from './CoolerControl.vue'
+import {COOLER_TEMP_LIMITS} from '../constants'
 
 vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
@@ -149,7 +150,9 @@ describe('CoolerControl', () => {
         expect(wrapper.text()).toContain('Cooling')
     })
 
-    it('calls updateSettings when the cooler is toggled on', async () => {
+    // The server's default setpoint is null; the slider shows the default, which must be
+    // the one the camera is told to cool to.
+    it('sends the shown setpoint with Cool when the camera has none stored', async () => {
         const wrapper = mountControl({
             cameras: [
                 {
@@ -166,7 +169,24 @@ describe('CoolerControl', () => {
         await toggle.setValue(true)
         await nextTick()
 
-        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', cooler_enabled: true})
+        expect(updateSettings).toHaveBeenCalledWith({
+            camera_role: 'main',
+            cooler_enabled: true,
+            target_temp_c: COOLER_TEMP_LIMITS.default,
+        })
+    })
+
+    it('sends Cool alone when the camera has a setpoint stored', async () => {
+        const wrapper = mountControl({
+            cameras: [{id: 'cam1', name: 'Cool Cam', info: {has_cooler: true}}],
+            selectedCamera: 'cam1',
+            settings: {cooler_enabled: false, target_temp_c: -20},
+        })
+        await flushPromises()
+
+        await wrapper.find('input[type="checkbox"]').setValue(true)
+
+        expect(updateSettings).toHaveBeenCalledExactlyOnceWith({camera_role: 'main', cooler_enabled: true})
     })
 
     it('renders the Fast toggle when the camera has a cooler', async () => {
@@ -249,52 +269,39 @@ describe('CoolerControl', () => {
             slider.vm.$emit('change', value)
         }
 
-        it('sends the last value once, 300 ms after the drag ends', async () => {
-            vi.useFakeTimers()
-            const wrapper = mountControl(cooled)
-            await flushPromises()
-
-            dragTarget(wrapper, -12)
-            dragTarget(wrapper, -15)
-            expect(updateSettings).not.toHaveBeenCalled()
-            await vi.advanceTimersByTimeAsync(300)
-
-            expect(updateSettings).toHaveBeenCalledTimes(1)
-            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -15})
-        })
-
-        it('sends a pending value when the Settings tab is torn down', async () => {
-            vi.useFakeTimers()
-            const wrapper = mount({render: () => h(CoolerControl)}, {global: {provide: createMockProvides(cooled)}})
-            await flushPromises()
-
-            dragTarget(wrapper, -18)
-            wrapper.unmount()
-            await flushPromises()
-
-            expect(updateSettings).toHaveBeenCalledTimes(1)
-            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -18})
-        })
-
-        it('sends a pending value to its own camera when the selection changes', async () => {
+        // A slider release sends at once, like every other settings slider.
+        it('sends the released value at once, naming the camera', async () => {
             vi.useFakeTimers()
             const hardware = {cooler_enabled: true, target_temp_c: -10}
+            const wrapper = mountControl({...cooled, settings: {...hardware, guide_camera: hardware}, role: 'guide'})
+            await flushPromises()
+
+            dragTarget(wrapper, -15)
+            await flushPromises()
+
+            expect(updateSettings).toHaveBeenCalledExactlyOnceWith({camera_role: 'guide', target_temp_c: -15})
+        })
+
+        // The guide's setpoint is the server's default, null: the previous camera's -25 °C
+        // stayed on the slider.
+        it('shows the default, not the last camera\'s setpoint, for a camera with none', async () => {
             const provide = createMockProvides({
                 ...cooled,
-                settings: {...hardware, guide_camera: hardware},
-                role: 'guide',
+                settings: {
+                    cooler_enabled: true,
+                    target_temp_c: -25,
+                    guide_camera: {cooler_enabled: true, target_temp_c: null},
+                },
             })
             const wrapper = mount(CoolerControl, {global: {provide}})
+            const target = () => wrapper.findComponent({name: 'BaseSlider'}).props('modelValue')
+            await flushPromises()
+            expect(target()).toBe(-25)
+
+            provide.selectedCameraRole.value = 'guide'
             await flushPromises()
 
-            dragTarget(wrapper, -5)
-            provide.selectedCameraRole.value = 'main'
-            await flushPromises()
-            expect(updateSettings).toHaveBeenCalledTimes(1)
-            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'guide', target_temp_c: -5})
-
-            await vi.advanceTimersByTimeAsync(300)
-            expect(updateSettings).toHaveBeenCalledTimes(1)
+            expect(target()).toBe(COOLER_TEMP_LIMITS.default)
         })
     })
 })

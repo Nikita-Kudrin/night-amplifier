@@ -104,9 +104,10 @@ function formatFovRange(db) {
   background: var(--primary-bg);
 }
 
+/* Settled, not chosen: untinted, so it does not read as one more selected row (both tints are red). */
 .database-option.installed {
-  border-color: var(--success);
-  background: var(--success-bg);
+  border-color: var(--success-border);
+  background: var(--surface);
   cursor: default;
 }
 

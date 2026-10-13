@@ -14,8 +14,11 @@ export function splitExposure(us) {
 
 /**
  * An exposure typed in `unit`, in whole microseconds: the server's field is an integer,
- * and 4.1 s is 4099999.9999999995 µs in floating point, which it refused.
+ * and 4.1 s is 4099999.9999999995 µs in floating point, which it refused. `null` for a
+ * field holding no exposure (emptied, negative, under 1 µs): `''` read as 0 and was sent.
  */
 export function toMicros(value, unit) {
-    return Math.round(value * (EXPOSURE_UNITS[unit] ?? 1))
+    if (value === '' || value === null) return null
+    const us = Math.round(Number(value) * (EXPOSURE_UNITS[unit] ?? 1))
+    return Number.isFinite(us) && us >= 1 ? us : null
 }

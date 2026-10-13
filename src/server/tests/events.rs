@@ -134,3 +134,42 @@ async fn the_events_socket_opens_with_the_capture_state_phases_and_viewed_camera
     );
     assert_eq!(*viewed, serde_json::json!({"type": "viewed_camera_changed", "camera": "main"}));
 }
+
+/// The AI compute report and the settings have no snapshot: a lag could hide the benchmark's
+/// end (the overlay stayed up) or another client's edit. Both are announced again.
+///
+/// Single-threaded on purpose, as `a_lagged_events_client_is_told_the_viewed_camera_again`:
+/// the burst is sent without yielding, so the handler's receiver lags.
+#[tokio::test(flavor = "current_thread")]
+async fn a_lagged_events_client_is_told_to_reread_what_it_may_have_missed() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let server = super::image_stream_clients::start_server().await;
+    let mut client = server.connect("/ws/events").await;
+    let mut next_event = async || match tokio::time::timeout(std::time::Duration::from_secs(5), client.next()).await {
+        Ok(Some(Ok(Message::Text(text)))) => serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+        other => panic!("expected a JSON event, got {other:?}"),
+    };
+    for _ in 0..4 {
+        let opening = next_event().await;
+        for refetched in ["ai_compute_changed", "settings_updated"] {
+            assert_ne!(opening["type"], refetched, "a fresh client reads it itself");
+        }
+    }
+
+    for i in 0..400 {
+        server.state.send_error(format!("burst {i}"));
+    }
+
+    let mut seen = Vec::new();
+    let mut missing = vec!["ai_compute_changed", "settings_updated"];
+    while !missing.is_empty() {
+        let event = next_event().await;
+        if seen.iter().any(|e: &serde_json::Value| e["type"] == "warning") {
+            missing.retain(|kind| event["type"] != *kind);
+        }
+        seen.push(event);
+        assert!(seen.len() < 1000, "{missing:?} not announced after the lag warning: {:?}", &seen[..5]);
+    }
+}

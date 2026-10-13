@@ -44,6 +44,12 @@ describe('stylesheets', () => {
         expect(sources[path].match(/var\(--[a-z0-9-]+\s*,[^)]*\)/g)).toBeNull()
     })
 
+    // Safari before 16.2 drops the whole declaration, and Vite does not transpile it: tints
+    // are precomputed in `:root`.
+    it.each(Object.keys(sources))('%s uses no color-mix()', (path) => {
+        expect(sources[path].replace(/\/\*[\s\S]*?\*\//g, '')).not.toMatch(/color-mix\(/)
+    })
+
     // The UI is red for dark adaptation; a hue belongs in `:root` with a name. Shadows and
     // scrims stay neutral black or white and may be written in place.
     it.each(Object.keys(sources))('%s takes every colour from the theme', (path) => {

@@ -18,6 +18,16 @@ describe('useCoordinateInput', () => {
         expect(result).toEqual({ra: 180, dec: 45})
     })
 
+    it('reads the sexagesimal form its placeholder offers', () => {
+        const {raInput, decInput, validateCoordinates} = useCoordinateInput()
+        raInput.value = '05:35:17'
+        decInput.value = '-05:23:28'
+
+        const {ra, dec} = validateCoordinates()
+        expect(ra).toBeCloseTo((5 + 35 / 60 + 17 / 3600) * 15, 9)
+        expect(dec).toBeCloseTo(-(5 + 23 / 60 + 28 / 3600), 9)
+    })
+
     it('sets error for invalid RA', () => {
         const {raInput, decInput, coordError, validateCoordinates} = useCoordinateInput()
         raInput.value = 'invalid'

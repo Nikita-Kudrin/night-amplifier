@@ -8,8 +8,7 @@ import {COOLER_STABLE_BAND_C, COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants
 
 // The guide camera keeps its own cooler settings; the selection says which set these
 // controls are showing and editing.
-const {cameraSettings, currentCamera, liveStatus, error, clearError, apply, applyDebounced} =
-    useCameraHardwareSettings()
+const {cameraSettings, currentCamera, liveStatus, error, clearError, apply} = useCameraHardwareSettings()
 
 const hasCooler = computed(() => Boolean(currentCamera.value?.info?.has_cooler))
 
@@ -20,14 +19,18 @@ const localCoolerEnabled = ref(false)
 const localTargetTemp = ref(COOLER_TEMP_LIMITS.default)
 const localCoolerFastMode = ref(false)
 
+function hasSetpoint(hardware) {
+  return typeof hardware?.target_temp_c === 'number'
+}
+
 watch(
     cameraSettings,
     (hardware) => {
       if (!hardware) return
       localCoolerEnabled.value = hardware.cooler_enabled ?? false
-      if (typeof hardware.target_temp_c === 'number') {
-        localTargetTemp.value = hardware.target_temp_c
-      }
+      // Every camera's own, or the default: keeping the last number showed the previous
+      // camera's setpoint for a guide that has none (the server's default is null).
+      localTargetTemp.value = hasSetpoint(hardware) ? hardware.target_temp_c : COOLER_TEMP_LIMITS.default
       localCoolerFastMode.value = hardware.cooler_fast_mode ?? false
     },
     {immediate: true}
@@ -47,14 +50,16 @@ const statusBadge = computed(() => {
   return {label: 'Warming', tone: 'warning'}
 })
 
+/** Turning Cool on with no stored setpoint sends the one shown, which was never saved. */
 function handleCoolerToggle(enabled) {
   localCoolerEnabled.value = enabled
-  apply({cooler_enabled: enabled})
+  const setpoint = enabled && !hasSetpoint(cameraSettings.value) ? {target_temp_c: localTargetTemp.value} : {}
+  apply({cooler_enabled: enabled, ...setpoint})
 }
 
 function handleTargetChange(value) {
   localTargetTemp.value = value
-  applyDebounced({target_temp_c: value})
+  apply({target_temp_c: value})
 }
 
 function handleFastModeToggle(enabled) {

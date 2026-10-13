@@ -17,7 +17,8 @@ function changing(report) {
 export function createAiComputeStore() {
     const report = ref(null)
     let timer = null
-    let pending = null
+    let inFlight = null
+    let stale = false
     let events = null
 
     function schedule() {
@@ -28,23 +29,37 @@ export function createAiComputeStore() {
         }
     }
 
+    async function drain() {
+        while (stale) {
+            stale = false
+            try {
+                report.value = await getAiCompute()
+            } catch {
+                // Keeps the last report; see `refresh`.
+            }
+        }
+        inFlight = null
+        schedule()
+    }
+
     /**
-     * Fetch the report now. Concurrent calls share one request. A server without the
+     * Fetch the report now; the promise settles once it is in place. One request at a
+     * time: a call during one reads again after it, since that answer may predate what
+     * the caller learnt (an `ai_compute_changed` racing the read once left the report
+     * `benchmarking` behind the overlay, with nothing polling). A server without the
      * endpoint (or unreachable) leaves the last report as it was; the overlay then shows
      * nothing rather than blocking on a request that will not succeed.
      */
     function refresh() {
-        if (pending) return pending
-        pending = getAiCompute()
-            .then((value) => {
-                report.value = value
-            })
-            .catch(() => {})
-            .finally(() => {
-                pending = null
-                schedule()
-            })
-        return pending
+        stale = true
+        inFlight ??= drain()
+        return inFlight
+    }
+
+    /** The first open retries a first load that failed, once whatever is in flight settles. */
+    async function loadIfMissing() {
+        await inFlight
+        if (report.value === null) await refresh()
     }
 
     /**
@@ -57,6 +72,7 @@ export function createAiComputeStore() {
         let opened = stream.connected.value
         watch(stream.connected, (up) => {
             if (up && opened) refresh()
+            else if (up) loadIfMissing()
             opened ||= up
             schedule()
         })

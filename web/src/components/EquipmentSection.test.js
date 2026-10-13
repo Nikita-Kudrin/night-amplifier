@@ -44,4 +44,19 @@ describe('EquipmentSection', () => {
         await typeFocalLength(wrapper, 1000)
         expect(wrapper.find('.alert-error').exists()).toBe(false)
     })
+
+    // The header folds on click; the chevron inside it only shows the state, or a click on it folded twice.
+    it('folds once per click on the header chevron or the header itself', async () => {
+        const wrapper = mountWithDefaults(EquipmentSection)
+        const content = () => wrapper.find('.equipment-content').attributes('style') ?? ''
+
+        await wrapper.find('.equipment-header .collapse-toggle').trigger('click')
+        expect(content()).not.toContain('display: none')
+
+        await wrapper.find('.equipment-header h3').trigger('click')
+        expect(content()).toContain('display: none')
+
+        await wrapper.find('.manual-sensor-header .collapse-toggle').trigger('click')
+        expect(wrapper.find('.manual-sensor-content').attributes('style') ?? '').not.toContain('display: none')
+    })
 })

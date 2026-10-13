@@ -68,4 +68,27 @@ describe('ExposureControl', () => {
         expect(field(wrapper).element.value).toBe('300')
         expect(unit(wrapper).element.value).toBe('us')
     })
+
+    // An emptied field read as exposure 0, committed on change and sent by Start.
+    it('keeps the model and commits nothing for an emptied field, then shows the exposure again', async () => {
+        const onUpdate = vi.fn()
+        const wrapper = mountControl({modelValue: 2000000, 'onUpdate:modelValue': onUpdate})
+
+        await field(wrapper).setValue('')
+        await nextTick()
+
+        expect(onUpdate).not.toHaveBeenCalled()
+        expect(wrapper.emitted('apply')).toBeUndefined()
+        expect(field(wrapper).element.value).toBe('2')
+        expect(unit(wrapper).element.value).toBe('s')
+    })
+
+    it('commits nothing for a zero exposure', async () => {
+        const wrapper = mountControl()
+
+        await field(wrapper).setValue(0)
+
+        expect(wrapper.emitted('apply')).toBeUndefined()
+        expect(field(wrapper).element.value).toBe('500')
+    })
 })

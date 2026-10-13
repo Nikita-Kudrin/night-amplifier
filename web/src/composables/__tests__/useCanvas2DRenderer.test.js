@@ -44,7 +44,7 @@ describe('useCanvas2DRenderer', () => {
         init(canvas)
 
         const frameData = new Uint8Array(10 * 10 * 3)
-        render(canvas, frameData, 10, 10)
+        expect(render(canvas, frameData, 10, 10)).toBe(true)
 
         expect(ctx2d.createImageData).toHaveBeenCalledWith(10, 10)
         expect(ctx2d.putImageData).toHaveBeenCalled()
@@ -61,11 +61,18 @@ describe('useCanvas2DRenderer', () => {
         global.ImageBitmap = MockImageBitmap
 
         const frameData = new MockImageBitmap()
-        render(canvas, frameData, 10, 10)
+        expect(render(canvas, frameData, 10, 10)).toBe(true)
 
         expect(ctx2d.drawImage).toHaveBeenCalledWith(frameData, 0, 0)
         expect(ctx2d.putImageData).not.toHaveBeenCalled()
         
         delete global.ImageBitmap
+    })
+
+    it('reports that it drew nothing before init or without a frame', () => {
+        const { init, render } = useCanvas2DRenderer()
+        expect(render(canvas, new Uint8Array(10 * 10 * 3), 10, 10)).toBe(false)
+        init(canvas)
+        expect(render(canvas, null, 10, 10)).toBe(false)
     })
 })

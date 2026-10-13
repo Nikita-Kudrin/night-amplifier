@@ -54,13 +54,41 @@ describe('useAiCompute', () => {
         expect(getAiCompute).toHaveBeenCalledTimes(3)
     })
 
-    it('shares one report and one request between every user', async () => {
-        getAiCompute.mockResolvedValue(report('ready'))
+    it('shares one report between every user, one request at a time', async () => {
+        let answerFirst
+        getAiCompute
+            .mockReturnValueOnce(new Promise((resolve) => (answerFirst = resolve)))
+            .mockResolvedValue(report('ready'))
         const first = useAiCompute()
         const second = useAiCompute()
-        await Promise.all([first.refresh(), second.refresh()])
+
+        const both = Promise.all([first.refresh(), second.refresh(), second.refresh()])
         expect(getAiCompute).toHaveBeenCalledTimes(1)
+        answerFirst(report('benchmarking'))
+        await both
+
+        // The calls made during the first read share one more, so each sees a newer answer.
+        expect(getAiCompute).toHaveBeenCalledTimes(2)
         expect(second.report.value).toBe(first.report.value)
+        expect(first.report.value.state).toBe('ready')
+    })
+
+    // The benchmark finished after the server read the report: the older read lands last,
+    // and with the socket up nothing polls, so App stayed `inert` behind the overlay.
+    it('reads the report again when a change is announced during a request', async () => {
+        const {store, stream} = connected()
+        let answerFirst
+        getAiCompute
+            .mockReturnValueOnce(new Promise((resolve) => (answerFirst = resolve)))
+            .mockResolvedValue(report('ready'))
+
+        const first = store.refresh()
+        emitEvent(stream, {type: 'ai_compute_changed'})
+        answerFirst(report('benchmarking'))
+        await first
+
+        expect(store.benchmarking.value).toBe(false)
+        expect(getAiCompute).toHaveBeenCalledTimes(2)
     })
 
     it('refetches when the server announces a change, and on nothing else', async () => {
@@ -121,10 +149,46 @@ describe('useAiCompute', () => {
         expect(getAiCompute).toHaveBeenCalledTimes(4)
     })
 
-    it('does not refetch when the socket first opens: App loads the report itself', async () => {
-        connected({up: false}).stream.connected.value = true
+    it('does not refetch a report App loaded when the socket first opens', async () => {
+        getAiCompute.mockResolvedValue(report('ready'))
+        const {store, stream} = connected({up: false})
+        await store.refresh()
+
+        stream.connected.value = true
         await nextTick()
-        expect(getAiCompute).not.toHaveBeenCalled()
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getAiCompute).toHaveBeenCalledTimes(1)
+    })
+
+    it('waits out a first load in flight when the socket first opens, without a second read', async () => {
+        let answer
+        getAiCompute.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+        const {store, stream} = connected({up: false})
+        const loading = store.refresh()
+
+        stream.connected.value = true
+        await nextTick()
+        answer(report('ready'))
+        await loading
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getAiCompute).toHaveBeenCalledTimes(1)
+    })
+
+    // With the socket up nothing polls, so a failed first load was never retried.
+    it('retries a failed first load when the socket first opens', async () => {
+        getAiCompute.mockRejectedValueOnce(new Error('Server starting')).mockResolvedValue(report('ready'))
+        const {store, stream} = connected({up: false})
+        const loading = store.refresh()
+
+        stream.connected.value = true
+        await nextTick()
+        await loading
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getAiCompute).toHaveBeenCalledTimes(2)
+        expect(store.report.value.state).toBe('ready')
     })
 
     /** An older or unreachable server must not leave the UI blocked or polling forever. */

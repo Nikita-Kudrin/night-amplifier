@@ -21,4 +21,18 @@ describe('useSectionMirror', () => {
 
         expect(source.eyepiece.intensity).toBe(0.3)
     })
+
+    // A typed edit waiting out its debounce was overwritten by another section's save.
+    it('leaves a held key to the section, following the rest', async () => {
+        const source = reactive({screen_width: 120, intensity: 0.3})
+        const held = new Set()
+        const local = useSectionMirror(() => source, ['screen_width', 'intensity'], held)
+
+        local.screen_width = 150
+        held.add('screen_width')
+        Object.assign(source, {screen_width: 120, intensity: 0.6})
+        await nextTick()
+
+        expect(local).toEqual({screen_width: 150, intensity: 0.6})
+    })
 })

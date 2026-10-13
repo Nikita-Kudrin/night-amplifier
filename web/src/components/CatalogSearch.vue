@@ -110,23 +110,26 @@ useClickOutside([containerRef], hideResults)
   font-weight: 600;
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, currentColor 19%, transparent);
 }
 
 .badge-messier {
   color: var(--category-blue);
+  background: var(--category-blue-bg);
 }
 
 .badge-ngc {
   color: var(--category-orange);
+  background: var(--category-orange-bg);
 }
 
 .badge-ic {
-  color: var(--category-purple);
+  color: var(--category-purple-text);
+  background: var(--category-purple-bg);
 }
 
 .badge-star {
   color: var(--category-yellow);
+  background: var(--category-yellow-bg);
 }
 
 .badge-other {

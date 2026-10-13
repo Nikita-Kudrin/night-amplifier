@@ -3,14 +3,20 @@
  * Settings → Advanced: binning, the AI compute unit (`AiComputeSettings`), the simulated
  * camera and the focus image. Mirrors its keys and emits `apply(key, value)`.
  *
+ * Binning is per camera, so it reads and saves the selected camera's like the cooler does
+ * (`useCameraHardwareSettings`): posted without `camera_role`, a click with the guide
+ * selected rebinned the imaging camera and reset its stack.
+ *
  * `save` and `guard` are only handed on: the AI section must await its save, so it takes
  * the panel's save rather than an emit (see `AiComputeSettings`).
  */
-import {computed, inject} from 'vue'
-import {BaseToggle, BaseSlider, BaseInfoIcon, ButtonGroup} from './ui'
+import {computed, inject, ref, watch} from 'vue'
+import {BaseAlert, BaseToggle, BaseSlider, BaseInfoIcon, ButtonGroup} from './ui'
 import AiComputeSettings from './AiComputeSettings.vue'
+import SelectedCameraTag from './SelectedCameraTag.vue'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
-import {BINNING_OPTIONS, HELP_TEXTS, SIMULATED_PRELOAD_LIMITS} from '../constants'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
+import {BINNING_OPTIONS, DEFAULT_SETTINGS, HELP_TEXTS, SIMULATED_PRELOAD_LIMITS} from '../constants'
 
 const props = defineProps({
   /** The panel's settings mirror (`settingsMirror`). */
@@ -28,11 +34,25 @@ const emit = defineEmits(['apply'])
 const HELP = HELP_TEXTS
 
 const local = useSectionMirror(() => props.settings, [
-  'bin',
   'simulated_preload_images',
   'show_focus_image',
   'force_focus_image_now',
 ])
+
+const {
+  cameraSettings,
+  error: binError,
+  clearError: clearBinError,
+  apply: applyHardware,
+} = useCameraHardwareSettings()
+
+const bin = ref(DEFAULT_SETTINGS.bin)
+watch(() => cameraSettings.value?.bin, (value) => (bin.value = value ?? DEFAULT_SETTINGS.bin), {immediate: true})
+
+function applyBin(value) {
+  bin.value = value
+  applyHardware({bin: value})
+}
 
 /** The app's own switch (it decides which cameras the list offers), mirrored to the server. */
 const simulatorEnabledRef = inject('simulatorEnabled', null)
@@ -49,16 +69,14 @@ const simulatorEnabled = computed({
     <h3 class="section-title">Advanced</h3>
 
     <div class="control-group">
+      <BaseAlert v-if="binError" @dismiss="clearBinError">{{ binError }}</BaseAlert>
       <div class="control-row">
         <label class="type-label-inline">
           Binning
           <BaseInfoIcon :message="HELP.bin"/>
+          <SelectedCameraTag/>
         </label>
-        <ButtonGroup
-            v-model="local.bin"
-            :options="BINNING_OPTIONS"
-            @update:model-value="emit('apply', 'bin', $event)"
-        />
+        <ButtonGroup :model-value="bin" :options="BINNING_OPTIONS" @update:model-value="applyBin"/>
       </div>
     </div>
 

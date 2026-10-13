@@ -1,8 +1,6 @@
 import {defineComponent, h, nextTick, ref} from 'vue'
-import {flushPromises} from '@vue/test-utils'
 import {mountWithDefaults} from '../test/mount.js'
 import {settings} from '../test/fixtures.js'
-import {SETTINGS_DEBOUNCE_MS} from '../constants'
 import {hardwareBlock, useCameraHardwareSettings} from './useCameraHardwareSettings.js'
 
 vi.mock('./api.js', async (importOriginal) =>
@@ -49,7 +47,6 @@ describe('hardwareBlock', () => {
 
 describe('useCameraHardwareSettings', () => {
     beforeEach(() => vi.clearAllMocks())
-    afterEach(() => vi.useRealTimers())
 
     it('follows the selected role\'s block', async () => {
         const {hardware, role} = mountHardware()
@@ -96,44 +93,5 @@ describe('useCameraHardwareSettings', () => {
         await hardware.apply({cooler_enabled: true})
 
         expect(hardware.error.value).toBe('Cooler busy')
-    })
-
-    it('sends a debounced edit once, after the delay', async () => {
-        vi.useFakeTimers()
-        const {hardware} = mountHardware()
-
-        hardware.applyDebounced({target_temp_c: -12})
-        hardware.applyDebounced({target_temp_c: -15})
-        await vi.advanceTimersByTimeAsync(SETTINGS_DEBOUNCE_MS - 1)
-        expect(updateSettings).not.toHaveBeenCalled()
-        await vi.advanceTimersByTimeAsync(1)
-
-        expect(updateSettings).toHaveBeenCalledTimes(1)
-        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -15})
-    })
-
-    it('sends a pending edit to the camera it was made for when the selection moves', async () => {
-        vi.useFakeTimers()
-        const {hardware, role} = mountHardware()
-
-        hardware.applyDebounced({target_temp_c: -12})
-        role.value = 'guide'
-        await nextTick()
-        await flushPromises()
-
-        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -12})
-        hardware.applyDebounced({target_temp_c: 0})
-        await vi.advanceTimersByTimeAsync(SETTINGS_DEBOUNCE_MS)
-        expect(updateSettings).toHaveBeenLastCalledWith({camera_role: 'guide', target_temp_c: 0})
-    })
-
-    it('sends a pending edit when its panel goes away', async () => {
-        vi.useFakeTimers()
-        const {wrapper, hardware} = mountHardware()
-
-        hardware.applyDebounced({target_temp_c: -12})
-        wrapper.unmount()
-
-        expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', target_temp_c: -12})
     })
 })

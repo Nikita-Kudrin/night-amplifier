@@ -5,7 +5,8 @@
  * field was never blurred. `apply(us)` is a commit: a change, or a preset.
  *
  * A new value from outside (the server, another camera selected) is shown in its own
- * unit, unless it is what the field already reads: 0.5 s must not flip to 500 ms.
+ * unit, unless it is what the field already reads: 0.5 s must not flip to 500 ms. A field
+ * holding no exposure (emptied, 0) leaves the model alone and reads it again on change.
  */
 import {computed, ref, watch} from 'vue'
 import {BaseInfoIcon} from './ui'
@@ -31,13 +32,19 @@ watch(model, (us) => {
 }, {immediate: true})
 
 watch([value, unit], () => {
-  model.value = toMicros(value.value, unit.value)
+  const us = toMicros(value.value, unit.value)
+  if (us !== null) model.value = us
 })
 
 const presets = computed(() => EXPOSURE_PRESETS[unit.value] || EXPOSURE_PRESETS.ms)
 
 function commit() {
-  emit('apply', toMicros(value.value, unit.value))
+  const us = toMicros(value.value, unit.value)
+  if (us === null) {
+    ;({value: value.value, unit: unit.value} = splitExposure(model.value))
+    return
+  }
+  emit('apply', us)
 }
 </script>
 

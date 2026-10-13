@@ -41,6 +41,18 @@ describe('format', () => {
         expect(formatBytes(1261887242)).toBe('1.18 GB')
     })
 
+    // The unit used to be picked before rounding: `1024 KB`, `60.0'`.
+    it('rounds before picking the unit', () => {
+        expect(formatBytes(1023.6)).toBe('1 KB')
+        expect(formatBytes(1048575)).toBe('1.0 MB')
+        expect(formatBytes(1048575 * 1024)).toBe('1.00 GB')
+        expect(formatBytes(1024 * 1024 * 1023.94)).toBe('1023.9 MB')
+        expect(formatAngle(0.99999)).toBe('1.0°')
+        expect(formatFov(0.99999)).toBe('1.00°')
+        expect(formatFov(0.9991)).toBe("59.9'")
+        expect(formatAngle(-0.99999)).toBe('-1.0°')
+    })
+
     it('formats short durations', () => {
         expect(formatMs(4.26)).toBe('4.3 ms')
         expect(formatMs(219.3)).toBe('219 ms')

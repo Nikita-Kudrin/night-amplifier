@@ -28,4 +28,9 @@ describe('exposure', () => {
             expect(toMicros(value, unit)).toBe(us)
         }
     })
+
+    // An emptied field read as 0, which the Start button then sent.
+    it.each([[''], [null], [0], [-2], [0.0001]])('reads %j as no exposure', (typed) => {
+        expect(toMicros(typed, 'ms')).toBeNull()
+    })
 })

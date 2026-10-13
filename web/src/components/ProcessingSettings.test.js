@@ -35,24 +35,26 @@ describe('ProcessingSettings', () => {
         expect(wrapper.emitted('apply')).toEqual([['saturation_boost_strength', 0.7]])
     })
 
-    it('sends a tone field as the whole eyepiece group', async () => {
-        const wrapper = mountSection({}, {eyepiece: {binoview: false, intensity: 0.3}})
+    // Eyepiece edits the same group, so only the changed field goes; the panel lays it over
+    // its own copy (`SettingsPanel.applyEyepiece`).
+    it('hands over only the tone field it changed', async () => {
+        const wrapper = mountSection({}, {eyepiece: {binoview: false, intensity: 0.3, dither: false}})
 
         await release(wrapper, 'Black level', 0.4)
+        await findToggleByLabel(wrapper, 'Dithering').setValue(true)
 
-        const [[key, eyepiece]] = wrapper.emitted('apply')
-        expect(key).toBe('eyepiece')
-        expect(eyepiece).toMatchObject({binoview: false, intensity: 0.4})
+        expect(wrapper.emitted('apply')).toEqual([
+            ['eyepiece', {intensity: 0.4}],
+            ['eyepiece', {dither: true}],
+        ])
     })
 
-    // The Eyepiece section edits the same group: a stale copy here would undo its edit.
-    it('follows an eyepiece edit made elsewhere', async () => {
-        const wrapper = mountSection({}, {eyepiece: {binoview: true}})
+    it('follows a tone edit made elsewhere', async () => {
+        const wrapper = mountSection({}, {eyepiece: {black_floor: 0.02}})
 
-        await wrapper.setProps({settings: settingsMirror({eyepiece: {binoview: false}})})
-        await release(wrapper, 'Black floor', -0.02)
+        await wrapper.setProps({settings: settingsMirror({eyepiece: {black_floor: -0.03}})})
 
-        expect(wrapper.emitted('apply')[0][1]).toMatchObject({binoview: false, black_floor: -0.02})
+        expect(slider(wrapper, 'Black floor').props('modelValue')).toBe(-0.03)
     })
 
     it('keeps its edits off the panel\'s copy until it emits them', async () => {
