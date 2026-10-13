@@ -1,5 +1,7 @@
 <script setup>
-import {ref, computed, watch, onMounted, onUnmounted, nextTick, useSlots} from 'vue'
+import {ref, computed, watch, nextTick, useSlots} from 'vue'
+import {useClickOutside} from '../../composables/useClickOutside.js'
+import {useEventListener} from '../../composables/useEventListener.js'
 
 const props = defineProps({
   /**
@@ -92,24 +94,12 @@ function choose(option) {
   emit('select', option.value)
 }
 
-function handleClickOutside(e) {
-  if (open.value && rootRef.value && !rootRef.value.contains(e.target)) {
-    if (menuRef.value && menuRef.value.contains(e.target)) return
-    open.value = false
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-  window.addEventListener('resize', positionMenu)
-  window.addEventListener('scroll', positionMenu, true)
+// The menu is teleported, so a click in it is outside the root but not outside the button.
+useClickOutside([rootRef, menuRef], () => {
+  open.value = false
 })
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('resize', positionMenu)
-  window.removeEventListener('scroll', positionMenu, true)
-})
+useEventListener(window, 'resize', positionMenu)
+useEventListener(window, 'scroll', positionMenu, true)
 </script>
 
 <template>

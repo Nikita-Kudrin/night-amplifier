@@ -51,7 +51,7 @@ onUnmounted(() => {
     <div class="base-modal-panel" :style="{ maxWidth: maxWidth }" role="dialog" aria-modal="true">
       <div v-if="title || $slots.header" class="base-modal-header">
         <slot name="header">
-          <h2 class="base-modal-title">{{ title }}</h2>
+          <h2 class="base-modal-title">{{ title }}<slot name="title-extra"/></h2>
           <button v-if="showCloseButton" class="btn-close" title="Close" @click="emit('close')">&times;</button>
         </slot>
       </div>

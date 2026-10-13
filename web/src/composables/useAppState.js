@@ -1,7 +1,7 @@
 import {ref, computed, readonly} from 'vue'
 import {getSettings, listCameras, getCapabilities} from './api.js'
 import {findCamera, isSimulator} from './appContext.js'
-import {DEFAULT_CAPABILITIES} from '../constants'
+import {CAMERA_PHASES, DEFAULT_CAPABILITIES} from '../constants'
 
 /**
  * Centralized application state management
@@ -206,7 +206,7 @@ function updateCameraStatus(name, status) {
 function updateCameraPhase(name, phase, warmupRemainingS) {
     const now = Date.now()
     phaseEventAt.set(name, now)
-    if (phase !== 'warming_up') {
+    if (phase !== CAMERA_PHASES.WARMING_UP) {
         warmupEndsAt.value = withoutKey(warmupEndsAt.value, name)
     } else if (warmupRemainingS != null) {
         warmupEndsAt.value = {...warmupEndsAt.value, [name]: now + warmupRemainingS * 1000}

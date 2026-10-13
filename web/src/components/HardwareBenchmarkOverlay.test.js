@@ -31,7 +31,7 @@ describe('HardwareBenchmarkOverlay', () => {
         expect(overlay.attributes('role')).toBe('alertdialog')
         expect(overlay.attributes('aria-modal')).toBe('true')
         expect(wrapper.text()).toContain('Benchmarking hardware')
-        expect(wrapper.find('[data-test="benchmark-step"]').text()).toBe('Testing Integrated GPU — Intel(R) Graphics (2 of 3)')
+        expect(wrapper.find('.progress-text').text()).toBe('Testing Integrated GPU — Intel(R) Graphics (2 of 3)')
         expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('33')
 
         report.value = {state: 'ready', rungs: []}
@@ -55,7 +55,7 @@ describe('HardwareBenchmarkOverlay', () => {
         report.value = {state: 'benchmarking', progress: {done: 3, total: 3, testing: null}}
         const wrapper = mount(HardwareBenchmarkOverlay)
         await nextTick()
-        expect(wrapper.find('[data-test="benchmark-step"]').text()).toBe('Finishing…')
+        expect(wrapper.find('.progress-text').text()).toBe('Finishing…')
         expect(wrapper.find('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
     })
 })

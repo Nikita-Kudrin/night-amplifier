@@ -252,9 +252,9 @@ describe('EyepieceView.vue Layout', () => {
       }
     })
 
-    // 2 in binoview, 1 in single-view (which is hidden by v-show on the parent)
+    // `/eyepiece` is monocular: one eye, one arrow, and no hidden binoview pair beside it.
     const arrows = wrapper.findAllComponents({ name: 'GuideArrow' })
-    expect(arrows.length).toBe(3)
+    expect(arrows.length).toBe(1)
   })
 
   it('does not render GuideArrow when pushDirection is null', async () => {
@@ -298,9 +298,9 @@ describe('EyepieceView.vue Monocular Route', () => {
     vi.resetModules()
   })
 
-  /** `v-show` keeps both layouts mounted, so the hidden one is the one display:none'd. */
+  /** Only the eyes of the layout on screen are mounted. */
   function isHidden(wrapper, selector) {
-    return (wrapper.find(selector).attributes('style') || '').includes('display: none')
+    return !wrapper.find(selector).exists()
   }
 
   it('stays monocular on /eyepiece even with binoview enabled', async () => {
@@ -424,6 +424,27 @@ describe('EyepieceView.vue Fullscreen', () => {
 
     expect(wrapper.find('.fit-all-btn').exists()).toBe(false)
     vi.useRealTimers()
+  })
+
+  // Rotation fires no `orientationchange` on some browsers, only `screen.orientation`'s.
+  it('fits all on a screen orientation change while fullscreen', async () => {
+    const orientation = new window.EventTarget()
+    Object.defineProperty(window.screen, 'orientation', { value: orientation, configurable: true })
+    try {
+      const wrapper = mountEyepiece()
+      await landFrame()
+      document.fullscreenElement = document.body
+      document.dispatchEvent(new Event('fullscreenchange'))
+      await wrapper.trigger('wheel', {deltaY: -2000, clientX: 100, clientY: 100})
+      expect(wrapper.find('.fit-all-btn').exists()).toBe(true)
+
+      orientation.dispatchEvent(new Event('change'))
+      await nextTick()
+
+      expect(wrapper.find('.fit-all-btn').exists()).toBe(false)
+    } finally {
+      delete window.screen.orientation
+    }
   })
 
   // Windowed, the zoom is the user's own and a resize must not throw it away.
@@ -854,7 +875,7 @@ describe('EyepieceView.vue follows the operator', () => {
   })
 
   it('keeps the chevron only on the camera whose solve oriented it', async () => {
-    window.location = { ...originalLocation, pathname: '/eyepiece' }
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
     await loadEyepieceView()
     const viewedCamera = ref('guide')
     const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
@@ -870,10 +891,10 @@ describe('EyepieceView.vue follows the operator', () => {
     })
     const others = () => wrapper.findAllComponents({ name: 'GuideArrow' }).map((a) => a.props('otherCamera'))
 
-    expect(others()).toEqual(['', '', ''])
+    expect(others()).toEqual(['', ''])
     viewedCamera.value = 'main'
     await nextTick()
-    expect(others()).toEqual(['Guide Cam', 'Guide Cam', 'Guide Cam'])
+    expect(others()).toEqual(['Guide Cam', 'Guide Cam'])
   })
 
   /**
@@ -914,9 +935,7 @@ describe('EyepieceView.vue follows the operator', () => {
       stream = useImageStream.mock.results.at(-1).value
       stream.isJpeg.value = jpeg
       const arrowBox = () => {
-        // The last arrow is the single view's; the binoview pair stays mounted, hidden.
-        const p = wrapper.findAllComponents({ name: 'GuideArrow' }).at(-1).props()
-        return { left: p.imageLeft, top: p.imageTop, width: p.imageWidth, height: p.imageHeight }
+        return wrapper.findComponent({ name: 'GuideArrow' }).props('bounds')
       }
       const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
 

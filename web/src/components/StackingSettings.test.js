@@ -1,6 +1,5 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount} from '@vue/test-utils'
-import {h} from 'vue'
 import StackingSettings from './StackingSettings.vue'
 
 const PROPS = {
@@ -27,29 +26,31 @@ describe('StackingSettings', () => {
     beforeEach(() => vi.useFakeTimers())
     afterEach(() => vi.useRealTimers())
 
-    it('sends the sigma once, 300 ms after the last drag', async () => {
+    // One rule for every settings slider: a release is a decision, sent at once; only a
+    // typed number waits for the typing to stop. The sigma used to wait 300 ms.
+    it('sends the sigma on each release, at once', async () => {
         const wrapper = mount(StackingSettings, {props: PROPS})
 
         await dragSigma(wrapper, 2.5)
+        expect(wrapper.emitted('apply')).toEqual([['rejection_sigma', 2.5]])
         await dragSigma(wrapper, 2.2)
-        expect(wrapper.emitted('apply')).toBeUndefined()
 
-        vi.advanceTimersByTime(300)
-        expect(wrapper.emitted('apply')).toEqual([['rejection_sigma', 2.2]])
+        expect(wrapper.emitted('apply')).toEqual([['rejection_sigma', 2.5], ['rejection_sigma', 2.2]])
     })
 
-    // Vue drops an emit from an unmounted component, so a sigma dragged just before the
-    // Settings tab closed never reached the server.
-    it('sends a pending sigma when it unmounts', async () => {
-        const onApply = vi.fn()
-        const wrapper = mount({render: () => h(StackingSettings, {...PROPS, onApply})})
+    it('offers the Pro rejection methods locked, and sends a choice', async () => {
+        const wrapper = mount(StackingSettings, {
+            props: {...PROPS, advancedRejectionAvailable: false},
+            global: {stubs: {BaseProLock: true}},
+        })
+        const options = wrapper.findAll('#rejection-method-select option')
+        const locked = options.filter((o) => o.element.disabled).map((o) => o.text())
 
-        await dragSigma(wrapper.findComponent(StackingSettings), 2.5)
-        wrapper.unmount()
+        expect(locked.length).toBeGreaterThan(0)
+        expect(locked.every((text) => text.endsWith('🔒'))).toBe(true)
+        expect(wrapper.findComponent({name: 'BaseProLock'}).exists()).toBe(true)
 
-        expect(onApply).toHaveBeenCalledTimes(1)
-        expect(onApply).toHaveBeenCalledWith('rejection_sigma', 2.5)
-        vi.advanceTimersByTime(300)
-        expect(onApply).toHaveBeenCalledTimes(1)
+        await wrapper.find('#weighting-preset-select').setValue('nebulae')
+        expect(wrapper.emitted('apply')).toEqual([['weighting_preset', 'nebulae']])
     })
 })

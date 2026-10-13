@@ -6,8 +6,9 @@
  * A pick puts the object's name in the field without searching for it again; see
  * `useCatalogSearch` for why that is decided by value rather than by a flag.
  */
-import {onMounted, onUnmounted} from 'vue'
+import {ref} from 'vue'
 import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
+import {useClickOutside} from '../composables/useClickOutside.js'
 import {BaseSpinner} from './ui'
 
 defineProps({
@@ -25,18 +26,12 @@ function select(entry) {
   emit('select', entry.designation)
 }
 
-function handleClickOutside(event) {
-  if (!event.target.closest('.search-container')) {
-    hideResults()
-  }
-}
-
-onMounted(() => document.addEventListener('click', handleClickOutside))
-onUnmounted(() => document.removeEventListener('click', handleClickOutside))
+const containerRef = ref(null)
+useClickOutside([containerRef], hideResults)
 </script>
 
 <template>
-  <div class="search-container">
+  <div ref="containerRef" class="search-container">
     <input
         v-model="searchQuery"
         type="text"

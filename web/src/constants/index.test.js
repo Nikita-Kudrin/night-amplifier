@@ -1,5 +1,14 @@
-import {DEFAULT_CAPABILITIES, DEFAULT_SETTINGS, defaultSettings} from './index.js'
-import {wireTypes} from '../test/apiTypes.js'
+import {
+    CAMERA_PHASES,
+    CAPTURE_STATE_DISPLAY,
+    CAPTURE_STATES,
+    captureStateDisplay,
+    DEFAULT_CAPABILITIES,
+    DEFAULT_SETTINGS,
+    defaultSettings,
+    STACKING_TYPES,
+} from './index.js'
+import {wireEnum, wireTypes} from '../test/apiTypes.js'
 
 const types = wireTypes()
 
@@ -37,5 +46,25 @@ describe('DEFAULT_CAPABILITIES', () => {
         expect(Object.keys(DEFAULT_CAPABILITIES.deep_sky).sort()).toEqual([...types.DeepSkyCapabilities.all].sort())
         const flags = JSON.stringify(DEFAULT_CAPABILITIES).match(/true/g)
         expect(flags).toBeNull()
+    })
+})
+
+describe('captureStateDisplay', () => {
+    it('reads a capture paused for a reconnect as still capturing', () => {
+        expect(captureStateDisplay(CAPTURE_STATES.RECOVERING)).toEqual(captureStateDisplay(CAPTURE_STATES.CAPTURING))
+    })
+
+    it('has an entry for every capture state, and shows an unknown one as Idle', () => {
+        for (const state of Object.values(CAPTURE_STATES)) expect(CAPTURE_STATE_DISPLAY[state], state).toBeTruthy()
+        expect(captureStateDisplay('Teleporting')).toEqual({tone: 'idle', label: 'Idle'})
+    })
+})
+
+describe('wire enums', () => {
+    it.each([
+        ['CameraPhase', CAMERA_PHASES],
+        ['StackingType', STACKING_TYPES],
+    ])('names every %s the server sends, and no other', (typedef, table) => {
+        expect(Object.values(table).sort()).toEqual(wireEnum(typedef).sort())
     })
 })

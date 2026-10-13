@@ -1,7 +1,6 @@
 <script setup>
 import {computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
-import {useTimeouts} from '../composables/useTimeouts.js'
 import AstapStatusSection from './AstapStatusSection.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
@@ -21,9 +20,8 @@ const {
   loading, installing, error, status, databases, selectedDatabases,
   installProgress, stageCompletion,
   canInstall, hasUninstalledDatabases, progressText, overallProgressText, progressPercent,
-  loadStatus, startInstall, isInstallationComplete,
-} = useAstapInstall()
-const {later} = useTimeouts()
+  loadStatus, startInstall,
+} = useAstapInstall({onComplete: handleInstalled})
 
 // Opened on a solver that is already ready and not managing: close at once. The first
 // load only — the reload after an install announces itself, and both once emitted twice.
@@ -34,23 +32,11 @@ watch(loading, (isLoading, wasLoading) => {
   }
 }, {once: true})
 
-// Handle installation completion
-watch(
-    () => isInstallationComplete(),
-    (complete) => {
-      if (!complete) return
-      later(async () => {
-        await loadStatus()
-        installing.value = false
-        if (status.value?.ready) {
-          emit('installed')
-          if (!props.allowManage) {
-            emit('close')
-          }
-        }
-      }, 500)
-    }
-)
+function handleInstalled(installed) {
+  if (!installed?.ready) return
+  emit('installed')
+  if (!props.allowManage) emit('close')
+}
 
 // Overlay-specific computed
 const stages = computed(() => {

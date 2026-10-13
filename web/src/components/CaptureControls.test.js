@@ -641,4 +641,27 @@ describe('CaptureControls', () => {
             expect(wrapper.find('.comet-pro-lock').exists()).toBe(false)
         })
     })
+
+    // An empty Type select said nothing about why; the failure was only logged.
+    it('says so when the stacking types cannot be loaded', async () => {
+        getStackingTypes.mockRejectedValueOnce(new Error('Server unavailable'))
+        const wrapper = mountCaptureControls()
+        await flushPromises()
+
+        expect(wrapper.text()).toContain('Could not load the stacking types: Server unavailable')
+    })
+
+    it('starts with the exposure as typed, in whole microseconds', async () => {
+        const wrapper = mountCaptureControls()
+        await flushPromises()
+        const field = wrapper.find('.input-group input[type="number"]')
+
+        field.element.value = '4.1'
+        await field.trigger('input')
+        await wrapper.find('.btn-start').trigger('click')
+        await flushPromises()
+
+        expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({exposure_us: 4100000}))
+        expect(startCapture).toHaveBeenCalled()
+    })
 })

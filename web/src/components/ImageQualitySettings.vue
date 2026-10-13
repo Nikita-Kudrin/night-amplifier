@@ -8,7 +8,7 @@
  * slider at drag end) — the parent stays sole owner of the settings.
  */
 import {computed, reactive, watch} from 'vue'
-import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'
+import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
 import {formatPercent, formatSigma} from '../utils/format.js'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
@@ -112,7 +112,7 @@ function applyValue(key, value) {
   <div class="settings-section">
     <h3 class="section-title">Sensor</h3>
 
-    <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+    <span v-if="focusMode" class="hint">{{ HELP.focus_mode_held }}</span>
 
     <div class="control-group control-group-offset control-group-roomy">
       <BaseSlider
@@ -153,41 +153,25 @@ function applyValue(key, value) {
     <h3 class="section-title">Preview</h3>
 
     <div class="control-group control-group-offset">
-      <div class="control-row">
-        <label class="control-label control-label-inline">
-          Processing Resolution
-          <BaseInfoIcon :message="HELP.preview_resolution"/>
-        </label>
-        <select
-            id="preview-resolution-select"
-            v-model="local.preview_resolution"
-            class="select select-compact"
-            @change="applyValue('preview_resolution', $event.target.value)"
-        >
-          <option v-for="opt in PREVIEW_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
-      </div>
+      <SettingSelect
+          id="preview-resolution-select"
+          v-model="local.preview_resolution"
+          label="Processing Resolution"
+          :help="HELP.preview_resolution"
+          :options="PREVIEW_RESOLUTION_OPTIONS"
+          @change="applyValue('preview_resolution', $event)"
+      />
     </div>
 
     <div class="control-group">
-      <div class="control-row">
-        <label class="control-label control-label-inline">
-          Streaming Resolution
-          <BaseInfoIcon :message="HELP.streaming_resolution"/>
-        </label>
-        <select
-            id="streaming-resolution-select"
-            v-model="local.streaming_resolution"
-            class="select select-compact"
-            @change="applyValue('streaming_resolution', $event.target.value)"
-        >
-          <option v-for="opt in STREAMING_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
-      </div>
+      <SettingSelect
+          id="streaming-resolution-select"
+          v-model="local.streaming_resolution"
+          label="Streaming Resolution"
+          :help="HELP.streaming_resolution"
+          :options="STREAMING_RESOLUTION_OPTIONS"
+          @change="applyValue('streaming_resolution', $event)"
+      />
     </div>
   </div>
 
@@ -198,7 +182,7 @@ function applyValue(key, value) {
       <BaseProLock v-if="!denoiseAvailable" feature="Noise Reduction"/>
     </h3>
 
-    <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
+    <span v-if="focusMode" class="hint">{{ HELP.focus_mode_held }}</span>
     <span v-if="aiReplacing" class="hint">
       AI denoising (Settings → Advanced) replaces Structure strength and Detail while it runs.
     </span>

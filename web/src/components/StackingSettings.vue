@@ -5,12 +5,16 @@
  * stacking is on.
  *
  * Mirrors its values and emits `apply(key, value)` per setting, as `ImageQualitySettings`
- * does. The sigma slider is sent 300 ms after the last drag.
+ * does; the sigma slider sends on release, as every slider does.
  */
 import {reactive, watch} from 'vue'
-import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'
-import {useDebouncedCall} from '../composables/useDebouncedCall.js'
-import {WEIGHTING_PRESET_OPTIONS, REJECTION_METHOD_OPTIONS, HELP_TEXTS} from '../constants'
+import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
+import {
+  HELP_TEXTS,
+  REJECTION_METHOD_OPTIONS,
+  REJECTION_SIGMA_LIMITS,
+  WEIGHTING_PRESET_OPTIONS,
+} from '../constants'
 
 const props = defineProps({
   weightingPreset: {type: String, required: true},
@@ -56,8 +60,6 @@ watch(
 function apply(key, value) {
   emit('apply', key, value)
 }
-
-const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </script>
 
 <template>
@@ -65,59 +67,40 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
     <h3 class="section-title">Stacking</h3>
 
     <div class="control-group">
-      <div class="control-row">
-        <label class="control-label control-label-inline">
-          Frame Weighting
-          <BaseInfoIcon :message="HELP.weighting_preset"/>
-        </label>
-        <select
-            id="weighting-preset-select"
-            v-model="local.weighting_preset"
-            class="select select-compact weighting-select"
-            @change="apply('weighting_preset', $event.target.value)"
-        >
-          <option v-for="opt in WEIGHTING_PRESET_OPTIONS" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </option>
-        </select>
-      </div>
+      <SettingSelect
+          id="weighting-preset-select"
+          v-model="local.weighting_preset"
+          label="Frame Weighting"
+          :help="HELP.weighting_preset"
+          :options="WEIGHTING_PRESET_OPTIONS"
+          select-class="weighting-select"
+          @change="apply('weighting_preset', $event)"
+      />
     </div>
 
     <div class="control-group">
-      <div class="control-row">
-        <label class="control-label control-label-inline">
-          Rejection Method
-          <BaseProLock v-if="!advancedRejectionAvailable" feature="Advanced Rejection"/>
-          <BaseInfoIcon :message="HELP.rejection_method"/>
-        </label>
-        <select
-            id="rejection-method-select"
-            v-model="local.rejection_method"
-            class="select select-compact"
-            @change="apply('rejection_method', $event.target.value)"
-        >
-          <option
-              v-for="opt in REJECTION_METHOD_OPTIONS"
-              :key="opt.value"
-              :value="opt.value"
-              :disabled="opt.pro && !advancedRejectionAvailable"
-          >
-            {{ opt.label }} {{ opt.pro && !advancedRejectionAvailable ? '🔒' : '' }}
-          </option>
-        </select>
-      </div>
+      <SettingSelect
+          id="rejection-method-select"
+          v-model="local.rejection_method"
+          label="Rejection Method"
+          :help="HELP.rejection_method"
+          :options="REJECTION_METHOD_OPTIONS"
+          :locked="!advancedRejectionAvailable"
+          pro-feature="Advanced Rejection"
+          @change="apply('rejection_method', $event)"
+      />
     </div>
 
     <BaseSlider
         v-if="local.rejection_method !== 'None'"
         v-model="local.rejection_sigma"
         label="Rejection Sigma"
-        :min="0.5"
-        :max="10.0"
-        :step="0.1"
+        :min="REJECTION_SIGMA_LIMITS.min"
+        :max="REJECTION_SIGMA_LIMITS.max"
+        :step="REJECTION_SIGMA_LIMITS.step"
         :disabled="!advancedRejectionAvailable"
         :help="HELP.rejection_sigma"
-        @change="applyDebounced('rejection_sigma', local.rejection_sigma)"
+        @change="apply('rejection_sigma', $event)"
     >
       <template #label-extra>
         <BaseProLock v-if="!advancedRejectionAvailable" feature="Advanced Rejection"/>
@@ -141,7 +124,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
       <BaseToggle
           v-model="local.planetary_auto_tracking"
           label="Auto Tracking"
-          help="Automatically track the planet's centroid in the ROI to prevent drift."
+:help="HELP.planetary_auto_tracking"
           @update:model-value="apply('planetary_auto_tracking', $event)"
       />
     </div>
@@ -150,7 +133,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
       <BaseToggle
           v-model="local.planetary_multi_point_alignment"
           label="Multi-Point Alignment"
-          help="Use Inverse Distance Weighting on multiple surface points to combat seeing distortion."
+:help="HELP.planetary_multi_point_alignment"
           :disabled="!advancedPlanetaryAvailable"
           @update:model-value="apply('planetary_multi_point_alignment', $event)"
       >
@@ -163,7 +146,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </template>
 
 <style scoped>
-.weighting-select {
+:deep(.weighting-select) {
   width: 120px;
 }
 </style>

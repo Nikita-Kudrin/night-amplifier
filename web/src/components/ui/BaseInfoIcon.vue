@@ -1,5 +1,7 @@
 <script setup>
-import {ref, onMounted, onUnmounted, nextTick} from 'vue'
+import {ref, nextTick} from 'vue'
+import {useClickOutside} from '../../composables/useClickOutside.js'
+import {useEventListener} from '../../composables/useEventListener.js'
 
 defineProps({
   message: {
@@ -81,21 +83,10 @@ function calculatePosition() {
   arrowPosition.value = `${Math.max(10, Math.min(90, arrowPercent))}%`
 }
 
-function handleClickOutside(e) {
-  if (showTooltip.value && iconRef.value && !iconRef.value.contains(e.target)) {
-    showTooltip.value = false
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-  window.addEventListener('resize', calculatePosition)
+useClickOutside([iconRef], () => {
+  showTooltip.value = false
 })
-
-onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside)
-  window.removeEventListener('resize', calculatePosition)
-})
+useEventListener(window, 'resize', calculatePosition)
 </script>
 
 <template>

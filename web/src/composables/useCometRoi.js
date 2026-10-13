@@ -1,5 +1,6 @@
 import {ref, computed} from 'vue'
 import {updateSettings} from '../composables/api.js'
+import {STACKING_TYPES} from '../constants'
 
 /**
  * Composable for managing Comet ROI selection and display
@@ -16,7 +17,7 @@ export function useCometRoi(settings, dimensions, canvasBounds, containerRef) {
     const roiSelectionStart = ref(null)
     const roiSelectionEnd = ref(null)
 
-    const isCometMode = computed(() => settings.value?.stacking_type === 'comet')
+    const isCometMode = computed(() => settings.value?.stacking_type === STACKING_TYPES.COMET)
     const currentCometRoi = computed(() => settings.value?.comet_roi)
     const hasFrame = computed(() => dimensions.value.width > 0)
 

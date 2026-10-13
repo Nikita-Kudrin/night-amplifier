@@ -4,18 +4,15 @@ import {useError} from '../composables/useError.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
 import {useCapabilities, useSelectedCamera} from '../composables/appContext.js'
 import {formatDec, formatRA} from '../utils/coordinates.js'
-import {formatFov} from '../utils/format.js'
-import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel} from './ui'
+import {fovWarning as warnOnFov} from '../utils/fovWarning.js'
+import {BaseAlert, BaseProLock, BaseInfoIcon, BasePanel, CollapseToggle} from './ui'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 import CatalogSearch from './CatalogSearch.vue'
+import {HELP_TEXTS, PRO_UPGRADE_URL} from '../constants'
 import EquipmentSection from './EquipmentSection.vue'
 import ManualCoordinates from './ManualCoordinates.vue'
-import {
-  getAstapStatus,
-  getAstapDatabases,
-  ignoreProOnly,
-  updatePushToConfig,
-} from '../composables/api.js'
+import {ignoreProOnly, updatePushToConfig} from '../composables/api.js'
+import {fetchAstapState} from '../composables/useAstapInstall.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -31,12 +28,9 @@ const showFovWarning = ref(false)
 
 async function fetchAstapStatus() {
   try {
-    const [statusData, dbData] = await Promise.all([
-      getAstapStatus(),
-      getAstapDatabases(),
-    ])
-    astapStatus.value = statusData
-    availableDatabases.value = dbData
+    const state = await fetchAstapState()
+    astapStatus.value = state.status
+    availableDatabases.value = state.databases
   } catch (e) {
     ignoreProOnly(e, 'ASTAP status')
   }
@@ -60,45 +54,12 @@ async function selectDatabase(dbId) {
 }
 
 // Compute FOV warning: check height FOV (used by ASTAP) against the active database range
-const fovWarning = computed(() => {
-  if (!astapStatus.value?.database_type || !calculatedFov.value) return null
-  const activeDb = astapStatus.value.installed_databases?.find(
-      db => db.id === astapStatus.value.database_type
-  )
-  if (!activeDb) return null
-
-  const fovY = calculatedFov.value.y
-  if (fovY >= activeDb.min_fov_deg && fovY <= activeDb.max_fov_deg) return null
-
-  const fovStr = formatFov(fovY)
-  const direction = fovY < activeDb.min_fov_deg ? 'too narrow' : 'too wide'
-  let message = `FOV ${fovStr} is ${direction} for the ${activeDb.id} database (${activeDb.min_fov_deg}°–${activeDb.max_fov_deg}°). Plate solving may fail with this setup.`
-
-  // Suggest alternative databases that cover the user's FOV
-  const matching = availableDatabases.value.filter(
-      db => db.id !== activeDb.id && fovY >= db.min_fov_deg && fovY <= db.max_fov_deg
-  )
-  let suggestion = null
-  if (matching.length > 0) {
-    const installed = matching.filter(db => db.installed)
-    const notInstalled = matching.filter(db => !db.installed)
-    const parts = []
-    if (installed.length > 0) {
-      parts.push(`Switch to ${installed.map(db => db.id).join(', ')}`)
-    }
-    if (notInstalled.length > 0) {
-      parts.push(`download ${notInstalled.map(db => db.id).join(', ')}`)
-    }
-    suggestion = parts.join(' or ')
-  }
-
-  return {
-    database_id: activeDb.id,
-    current_fov: fovStr,
-    message,
-    suggestion,
-  }
-})
+const fovWarning = computed(() => warnOnFov({
+  fovDeg: calculatedFov.value?.y ?? null,
+  activeId: astapStatus.value?.database_type ?? null,
+  installed: installedDatabases.value,
+  available: availableDatabases.value,
+}))
 
 const eventStream = inject('eventStream')
 const selectedCamera = useSelectedCamera()
@@ -132,19 +93,7 @@ onMounted(fetchAstapStatus)
 <template>
   <BasePanel class="push-to-panel" :bordered="false">
     <template #header>
-      <button class="collapse-toggle" title="Toggle Push-To panel" @click="collapsed = !collapsed">
-        <svg
-            :class="{ collapsed }"
-            viewBox="0 0 24 24"
-            width="12"
-            height="12"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-        >
-          <path d="M6 9l6 6 6-6"/>
-        </svg>
-      </button>
+      <CollapseToggle v-model="collapsed" title="Toggle Push-To panel"/>
       <h2>Push-To Navigation</h2>
       <button
           v-if="fovWarning"
@@ -162,7 +111,7 @@ onMounted(fetchAstapStatus)
       <BaseInfoIcon
           v-if="!calculatedFov && hasProSolver"
           type="warning"
-          message="Push-To might not work reliably. By specifying the focal length and sensor pixel size, you can increase the success rate of Push-To."
+          :message="HELP_TEXTS.push_to_without_optics"
           class="header-warning-icon"
       />
     </template>
@@ -183,9 +132,8 @@ onMounted(fetchAstapStatus)
         <div class="pro-message">
           <BaseProLock feature="Plate Solving" size="32px" class="pro-message-lock"/>
           <h3>Pro Feature</h3>
-          <p>Plate solving and Push-To navigation require Night Amplifier Pro.</p>
-          <a href="https://skycontrast.com/software/night-amplifier-pro" target="_blank" class="btn btn-primary btn-sm">Upgrade
-            to Pro</a>
+          <p>{{ HELP_TEXTS.push_to_pro }}</p>
+          <a :href="PRO_UPGRADE_URL" target="_blank" rel="noopener" class="btn btn-primary btn-sm">Upgrade to Pro</a>
         </div>
       </div>
 

@@ -1,133 +1,26 @@
 <script setup>
-import {ref, computed, onMounted, onUnmounted, inject, watch} from 'vue'
-import {getCatalogStatus, installCatalog} from '../composables/api.js'
-import {formatBytes} from '../utils/format.js'
-import {useTimeouts} from '../composables/useTimeouts.js'
-import {BaseSpinner, InstallStatusList, SetupSection} from './ui'
+import {computed, ref, watch} from 'vue'
+import {useCatalogInstall} from '../composables/useCatalogInstall.js'
+import {BaseSpinner, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
 
-// State
-const loading = ref(true)
-const error = ref(null)
-const status = ref(null)
-const installing = ref(false)
 const includeStars = ref(true)
 
-// Installation progress
-const progress = ref({
-  fileName: '',
-  percent: null,
-  bytesDownloaded: 0,
-  totalBytes: null,
-  stage: '', // 'starting', 'downloading', 'completed', 'failed'
-  error: null,
+const {loading, installing, status, error, progress, canInstall, progressText, loadStatus, startInstall} =
+    useCatalogInstall()
+
+// Every load that finds the catalog there says so: the first, and the one after an install.
+watch(status, (data) => {
+  if (data?.installed) emit('installed', data)
 })
-
-// Event stream for receiving WebSocket events
-const eventStream = inject('eventStream', null)
-const {later} = useTimeouts()
-
-// Computed
-const canInstall = computed(() => !installing.value)
-
-const progressText = computed(() => {
-  const p = progress.value
-  if (p.stage === 'starting') return 'Starting download...'
-  if (p.stage === 'downloading') {
-    if (p.percent !== null && p.totalBytes !== null) {
-      return `Downloading ${p.fileName}: ${formatBytes(p.bytesDownloaded)} / ${formatBytes(p.totalBytes)}`
-    }
-    return `Downloading ${p.fileName}: ${formatBytes(p.bytesDownloaded)}`
-  }
-  if (p.stage === 'completed') return 'Catalog installed'
-  if (p.stage === 'failed') return `Failed: ${p.error}`
-  return ''
-})
-
-// Methods
-async function loadStatus() {
-  loading.value = true
-  error.value = null
-  try {
-    const data = await getCatalogStatus()
-    status.value = data
-    if (data.installed) {
-      emit('installed', data)
-    }
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-}
-
-async function startInstall() {
-  if (!canInstall.value) return
-
-  installing.value = true
-  emit('state-change', true)
-  error.value = null
-  progress.value = {
-    fileName: '',
-    percent: null,
-    bytesDownloaded: 0,
-    totalBytes: null,
-    stage: 'starting',
-    error: null,
-  }
-
-  try {
-    await installCatalog(includeStars.value)
-  } catch (e) {
-    error.value = e.message
-    installing.value = false
-    emit('state-change', false)
-  }
-}
-
-function handleProgress(p) {
-  if (!p) return
-
-  progress.value = {
-    fileName: p.file_name || p.fileName || '',
-    percent: p.percent,
-    bytesDownloaded: p.bytes_downloaded || p.bytesDownloaded || 0,
-    totalBytes: p.total_bytes || p.totalBytes,
-    stage: p.stage || 'downloading',
-    error: p.error,
-  }
-
-  if (p.stage === 'completed' || p.object_count !== undefined) {
-    progress.value.stage = 'completed'
-    later(async () => {
-      await loadStatus()
-      installing.value = false
-      emit('state-change', false)
-    }, 500)
-  } else if (p.stage === 'failed' || p.error) {
-    error.value = `Installation failed: ${p.error}`
-    installing.value = false
-    emit('state-change', false)
-  }
-}
-
-// Watch for progress updates
-watch(
-    () => eventStream?.catalogInstallProgress?.value,
-    (p) => p && handleProgress(p),
-    {deep: true}
-)
+watch(installing, (busy) => emit('state-change', busy))
 
 const statusItems = computed(() => [
   {label: 'NGC.csv', ok: Boolean(status.value?.ngc_file_exists)},
   {label: 'addendum.csv', ok: Boolean(status.value?.addendum_file_exists)},
   {label: 'hyg_stars.csv', ok: Boolean(status.value?.hyg_file_exists)},
 ])
-
-// Lifecycle
-onMounted(loadStatus)
-onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
 </script>
 
 <template>
@@ -152,13 +45,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
 
     <!-- Installing -->
     <div v-else-if="installing" class="section-installing">
-      <div class="install-progress-compact">
-        <BaseSpinner size="sm" />
-        <span>{{ progressText }}</span>
-      </div>
-      <div v-if="progress.percent !== null" class="progress-bar">
-        <div class="progress-fill" :style="{ width: progress.percent + '%' }"></div>
-      </div>
+      <InstallProgressBar compact :progress-text="progressText" :progress-percent="progress.percent"/>
     </div>
 
     <!-- Ready to install -->
@@ -177,7 +64,7 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
       <button
           class="btn btn-primary btn-block"
           :disabled="!canInstall"
-          @click="startInstall"
+          @click="startInstall(includeStars)"
       >
         Install Catalog
       </button>
@@ -186,10 +73,6 @@ onUnmounted(() => eventStream?.clearCatalogInstallProgress?.())
 </template>
 
 <style scoped>
-.status-check {
-  font-weight: bold;
-}
-
 .checkbox-label {
   display: flex;
   align-items: center;

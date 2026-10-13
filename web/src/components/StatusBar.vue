@@ -1,47 +1,19 @@
 <script setup>
 import {computed, inject} from 'vue'
-import {CAPTURE_STATES, isCaptureRunning} from '../constants'
+import {captureStateDisplay, HELP_TEXTS} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
+import BaseSpinner from './ui/BaseSpinner.vue'
+import StatusIcon from './ui/StatusIcon.vue'
+import StatusNotice from './StatusNotice.vue'
 import {useSelectedCamera} from '../composables/appContext.js'
 import {formatPercent} from '../utils/format.js'
 
 const eventStream = inject('eventStream')
 const currentCamera = useSelectedCamera()
 
-const stateClass = computed(() => {
-  const state = eventStream.captureState.value
-  if (isCaptureRunning(state)) return 'capturing'
-  switch (state) {
-    case CAPTURE_STATES.STARTING:
-      return 'starting'
-    case CAPTURE_STATES.STOPPING:
-      return 'stopping'
-    case CAPTURE_STATES.ERROR:
-      return 'error'
-    default:
-      return 'idle'
-  }
-})
+const captureState = computed(() => captureStateDisplay(eventStream.captureState.value))
 
-const stateLabel = computed(() => {
-  const state = eventStream.captureState.value
-  if (isCaptureRunning(state)) return 'Capturing'
-  switch (state) {
-    case CAPTURE_STATES.STARTING:
-      return 'Starting...'
-    case CAPTURE_STATES.STOPPING:
-      return 'Stopping...'
-    case CAPTURE_STATES.ERROR:
-      return 'Error'
-    default:
-      return 'Idle'
-  }
-})
-
-const connectionStatus = computed(() => {
-  if (!eventStream.connected.value) return 'disconnected'
-  return 'connected'
-})
+const connected = computed(() => eventStream.connected.value)
 
 const rejectedCount = computed(() => eventStream.rejectedCount.value)
 
@@ -57,282 +29,133 @@ const dropRate = computed(() => {
 // "Rejected 9" on its own leaves the user with no idea whether to refocus,
 // wait out a cloud, or check the mount. The server already decides why.
 const framesTooltip = computed(() => {
-  const base = 'Total: Frames captured and processed. Rejected: Captured frames that failed alignment or quality checks. Dropped: Frames discarded because the CPU was too busy to process them.'
+  const base = HELP_TEXTS.frame_counts
   const reason = eventStream.lastRejectionReason.value
   return reason ? `${base} Most recent rejection: ${reason}.` : base
 })
 
+const SOLVE_RESULT_CHIPS = {
+  success: {tone: 'success', icon: 'check'},
+  cancelled: {tone: 'muted', icon: 'stop'},
+  failed: {tone: 'error', icon: 'cross'},
+}
 
+/**
+ * Push-To's one chip: a solve running, else why Push-To is idle (no target, ASTAP
+ * missing, a backoff, a scope being pushed), else the last result. A blocker outranks the
+ * result because it is *newer* — the same precedence `solvingMessage` uses; behind it, a
+ * blocker was announced with the previous solve's green tick, so pushing away from M31
+ * read as a fresh success.
+ */
+const pushToChip = computed(() => {
+  const solving = eventStream.plateSolving.value
+  if (solving?.inProgress) {
+    return {kind: 'solving', tone: 'primary', spinner: true, text: eventStream.solvingMessage.value}
+  }
+  const blocked = eventStream.pushToBlocked?.value
+  if (blocked) return {kind: 'push-to-blocked', tone: 'plain', icon: 'blocked', text: blocked}
+  const result = solving?.lastResult
+  if (!result) return null
+  return {
+    kind: `solve-result ${result}`,
+    ...(SOLVE_RESULT_CHIPS[result] ?? SOLVE_RESULT_CHIPS.failed),
+    text: eventStream.solvingMessage.value,
+    dismiss: () => eventStream.clearPlateSolving(),
+  }
+})
+
+/** The dismissible notices, in the order they show. */
+const notices = computed(() => {
+  const es = eventStream
+  const list = []
+  if (es.diskWriterWarning.value) {
+    list.push({
+      kind: 'disk-warning', tone: 'warning', icon: 'warning',
+      text: `Slow disk: ${es.diskWriterWarning.value} frames queued`, dismiss: es.clearDiskWriterWarning,
+    })
+  }
+  if (es.unresponsiveWarning.value) {
+    list.push({
+      kind: 'unresponsive', tone: 'error', icon: 'alert',
+      text: es.unresponsiveWarning.value, dismiss: es.clearUnresponsiveWarning,
+    })
+  }
+  if (es.resumeNotice.value) {
+    list.push({kind: 'resumed', tone: 'success', icon: 'resume', text: es.resumeNotice.value, dismiss: es.clearResumeNotice})
+  }
+  // The server left Focus/Finder mode because the running capture switched to stacking.
+  if (es.focusModeNotice.value) {
+    list.push({
+      kind: 'resumed focus-mode-left', tone: 'success', icon: 'info',
+      text: es.focusModeNotice.value, dismiss: es.clearFocusModeNotice,
+    })
+  }
+  // Not beside a camera warning: the two describe the same incident, and stacking them
+  // just doubles the noise.
+  if (es.lastError.value && !es.unresponsiveWarning.value) {
+    list.push({kind: 'last-error', tone: 'error', icon: 'alert', text: es.lastError.value, dismiss: es.clearError})
+  }
+  return list
+})
 </script>
 
 <template>
   <footer class="status-bar">
-    <!-- Connection status -->
-    <div class="status-item connection" :class="connectionStatus">
+    <div class="status-item connection" :class="connected ? 'connected' : 'disconnected'">
       <span class="status-dot"></span>
-      <span class="status-text">{{
-          connectionStatus === 'connected' ? 'Connected' : 'Disconnected'
-        }}</span>
+      <span class="status-text">{{ connected ? 'Connected' : 'Disconnected' }}</span>
     </div>
 
-    <!-- Camera info -->
     <div v-if="currentCamera" class="status-item camera">
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/>
-        <circle cx="12" cy="13" r="4"/>
-      </svg>
+      <StatusIcon name="camera"/>
       <span>{{ currentCamera.name }}</span>
     </div>
 
-    <!-- Spacer -->
     <div class="spacer"></div>
 
-    <!-- Plate solving indicator -->
-    <div v-if="eventStream.plateSolving.value?.inProgress" class="status-item solving">
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="solving-spinner"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 6v6l4 2"/>
-      </svg>
-      <span>{{ eventStream.solvingMessage.value }}</span>
-    </div>
-
-    <!-- Why Push-To is idle: no target, ASTAP missing, waiting out a backoff, or
-         the ordinary states of a scope being pushed. Ordered ahead of the last
-         result because it is *newer* — the same precedence `solvingMessage` uses.
-         Behind it, a blocker was announced with the previous solve's green tick and
-         its `success` class, so pushing away from M31 read as a fresh success. -->
-    <div
-        v-else-if="eventStream.pushToBlocked?.value"
-        class="status-item push-to-blocked"
+    <StatusNotice
+        v-if="pushToChip"
+        :class="pushToChip.kind"
+        :tone="pushToChip.tone"
+        :icon="pushToChip.icon"
+        :text="pushToChip.text"
+        :dismissible="Boolean(pushToChip.dismiss)"
+        @dismiss="pushToChip.dismiss()"
     >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 8v5M12 16h.01"/>
-      </svg>
-      <span>{{ eventStream.pushToBlocked?.value }}</span>
-    </div>
+      <template v-if="pushToChip.spinner" #icon>
+        <BaseSpinner size="xs"/>
+      </template>
+    </StatusNotice>
 
-    <!-- Plate solve result -->
-    <div
-        v-else-if="eventStream.plateSolving.value?.lastResult"
-        class="status-item solve-result"
-        :class="eventStream.plateSolving.value.lastResult"
-        @click="eventStream.clearPlateSolving()"
-    >
-      <svg
-          v-if="eventStream.plateSolving.value.lastResult === 'success'"
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path d="M20 6L9 17l-5-5"/>
-      </svg>
-      <svg
-          v-else-if="eventStream.plateSolving.value.lastResult === 'cancelled'"
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M9 9h6v6H9z"/>
-      </svg>
-      <svg
-          v-else
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M15 9l-6 6M9 9l6 6"/>
-      </svg>
-      <span>{{ eventStream.solvingMessage.value }}</span>
-    </div>
+    <StatusNotice
+        v-for="notice in notices"
+        :key="notice.kind"
+        :class="notice.kind"
+        :tone="notice.tone"
+        :icon="notice.icon"
+        :text="notice.text"
+        dismissible
+        @dismiss="notice.dismiss()"
+    />
 
-    <!-- Disk writer warning -->
-    <div
-        v-if="eventStream.diskWriterWarning.value"
-        class="status-item warning"
-        @click="eventStream.clearDiskWriterWarning()"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path
-            d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
-        />
-        <path d="M12 9v4M12 17h.01"/>
-      </svg>
-      <span>Slow disk: {{ eventStream.diskWriterWarning.value }} frames queued</span>
-      <button class="btn-close btn-dismiss">&times;</button>
-    </div>
-
-    <!-- Unresponsive camera warning -->
-    <div
-        v-if="eventStream.unresponsiveWarning.value"
-        class="status-item error"
-        @click="eventStream.clearUnresponsiveWarning()"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 8v4M12 16h.01"/>
-      </svg>
-      <span>{{ eventStream.unresponsiveWarning.value }}</span>
-      <button class="btn-close btn-dismiss">&times;</button>
-    </div>
-
-    <!-- Capture resumed after a reconnect -->
-    <div
-        v-if="eventStream.resumeNotice.value"
-        class="status-item resumed"
-        @click="eventStream.clearResumeNotice()"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path d="M20 12a8 8 0 11-2.34-5.66"/>
-        <path d="M20 4v4h-4"/>
-      </svg>
-      <span>{{ eventStream.resumeNotice.value }}</span>
-      <button class="btn-close btn-dismiss">&times;</button>
-    </div>
-
-    <!-- The server left Focus/Finder mode because the running capture switched to stacking -->
-    <div
-        v-if="eventStream.focusModeNotice.value"
-        class="status-item resumed focus-mode-left"
-        @click="eventStream.clearFocusModeNotice()"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 16v-4"/>
-        <path d="M12 8h.01"/>
-      </svg>
-      <span>{{ eventStream.focusModeNotice.value }}</span>
-      <button class="btn-close btn-dismiss">&times;</button>
-    </div>
-
-    <!-- Error indicator. Suppressed while a camera warning is showing: the two
-         describe the same incident, and stacking them just doubles the noise. -->
-    <div
-        v-if="eventStream.lastError.value && !eventStream.unresponsiveWarning.value"
-        class="status-item error"
-        @click="eventStream.clearError()"
-    >
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 8v4M12 16h.01"/>
-      </svg>
-      <span>{{ eventStream.lastError.value }}</span>
-      <button class="btn-close btn-dismiss">&times;</button>
-    </div>
-
-    <!-- Frame counter -->
     <div v-if="eventStream.frameCount.value > 0" class="status-item frames">
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-        <circle cx="8.5" cy="8.5" r="1.5"/>
-        <polyline points="21,15 16,10 5,21"/>
-      </svg>
+      <StatusIcon name="frames"/>
       <span v-if="rejectedCount > 0">Rejected {{ rejectedCount }} | Total {{ eventStream.frameCount.value }}</span>
       <span v-else>Total {{ eventStream.frameCount.value }}</span>
-      
-      <BaseInfoIcon 
-        v-if="eventStream.frameCount.value > 0 || eventStream.droppedCount.value > 0"
-        :message="framesTooltip" 
-      />
+      <BaseInfoIcon :message="framesTooltip"/>
     </div>
 
-    <!-- Dropped frames counter -->
     <div v-if="eventStream.droppedCount.value > 0" class="status-item frames dropped">
-      <svg
-          viewBox="0 0 24 24"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-      >
-        <path d="M12 2v6l-2 2M12 22v-6l2-2M2 12h6l2 2M22 12h-6l-2-2"/>
-      </svg>
+      <StatusIcon name="dropped"/>
       <span>
         Dropped: {{ eventStream.droppedCount.value }}<template v-if="dropRate !== null">
           ({{ formatPercent(dropRate) }})</template>
       </span>
     </div>
 
-    <!-- Capture state -->
-    <div class="status-item state" :class="stateClass">
+    <div class="status-item state" :class="captureState.tone">
       <span class="state-indicator"></span>
-      <span>{{ stateLabel }}</span>
+      <span>{{ captureState.label }}</span>
     </div>
   </footer>
 </template>
@@ -373,47 +196,6 @@ const framesTooltip = computed(() => {
   animation: blink 1s infinite;
 }
 
-/* A dismissible notice: tinted by its tone, clipped to one line */
-.status-item.warning,
-.status-item.error,
-.status-item.resumed {
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  max-width: 300px;
-}
-
-.status-item.warning span,
-.status-item.error span,
-.status-item.resumed span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.status-item.warning {
-  color: var(--warning);
-  background: var(--warning-bg);
-}
-
-.status-item.error {
-  color: var(--error);
-  background: var(--error-bg);
-}
-
-.status-item.resumed {
-  color: var(--success);
-  background: var(--success-bg);
-}
-
-/* btn-dismiss uses global .btn-close from main.css with opacity variant */
-.btn-dismiss {
-  opacity: 0.7;
-}
-
-.btn-dismiss:hover {
-  opacity: 1;
-}
-
 .state-indicator {
   width: 8px;
   height: 8px;
@@ -448,44 +230,6 @@ const framesTooltip = computed(() => {
 
 .frames.dropped {
   color: var(--warning);
-}
-
-.status-item.solving {
-  color: var(--primary);
-  padding: 0.25rem 0.5rem;
-}
-
-/* Uses global @keyframes spin from main.css */
-.solving-spinner {
-  animation: spin 1.5s linear infinite;
-}
-
-.status-item.solve-result {
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm);
-}
-
-.status-item.solve-result.success {
-  color: var(--success);
-  background: var(--success-bg);
-}
-
-.status-item.solve-result.failed {
-  color: var(--error);
-  background: var(--error-bg);
-}
-
-/* A cancel is the user's own doing, not a fault: muted, not red. */
-.status-item.solve-result.cancelled {
-  color: var(--text-secondary);
-  background: var(--surface-hover);
-}
-
-.status-item.push-to-blocked {
-  padding: 0.25rem 0.5rem;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
 }
 
 /* Mobile adjustments */

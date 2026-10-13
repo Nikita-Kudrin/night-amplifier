@@ -1,19 +1,17 @@
 <script setup>
 import {ref, computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
-import {useTimeouts} from '../composables/useTimeouts.js'
-import {BaseSpinner, DatabaseSelector, InstallStatusList, SetupSection} from './ui'
+import {BaseSpinner, DatabaseSelector, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
+
+const showAddDatabases = ref(false)
 
 const {
   loading, installing, error, status, databases, selectedDatabases,
   installProgress, canInstall, hasUninstalledDatabases, progressText,
-  loadStatus, startInstall, isInstallationComplete,
-} = useAstapInstall()
-
-const showAddDatabases = ref(false)
-const {later} = useTimeouts()
+  loadStatus, startInstall,
+} = useAstapInstall({onComplete: () => (showAddDatabases.value = false)})
 
 // Emit 'installed' when status loads as ready
 watch(loading, (isLoading, wasLoading) => {
@@ -24,19 +22,6 @@ watch(loading, (isLoading, wasLoading) => {
 
 // Emit state-change when installing changes
 watch(installing, (val) => emit('state-change', val))
-
-// Handle installation completion
-watch(
-    () => isInstallationComplete(),
-    (complete) => {
-      if (!complete) return
-      later(async () => {
-        await loadStatus()
-        installing.value = false
-        showAddDatabases.value = false
-      }, 500)
-    }
-)
 
 // Installer-specific computed
 const installedDbIds = computed(() => {
@@ -100,13 +85,11 @@ const statusItems = computed(() => [
 
     <!-- Installing -->
     <div v-else-if="installing" class="section-installing">
-      <div class="install-progress-compact">
-        <BaseSpinner size="sm" />
-        <span>{{ progressText }}</span>
-      </div>
-      <div v-if="installProgress.overallPercent !== null" class="progress-bar">
-        <div class="progress-fill" :style="{ width: installProgress.overallPercent + '%' }"></div>
-      </div>
+      <InstallProgressBar
+          compact
+          :progress-text="progressText"
+          :progress-percent="installProgress.overallPercent"
+      />
     </div>
 
     <!-- Ready to install (fresh) -->
@@ -131,10 +114,6 @@ const statusItems = computed(() => [
 </template>
 
 <style scoped>
-.status-check {
-  font-weight: bold;
-}
-
 .add-databases {
   margin-top: 0.5rem;
 }

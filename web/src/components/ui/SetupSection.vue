@@ -98,17 +98,12 @@ defineProps({
   color: var(--success);
 }
 
-:slotted(.section-status.padded) {
-  padding: 0.75rem 1rem;
+:slotted(.status-check) {
+  font-weight: bold;
 }
 
-:slotted(.install-progress-compact) {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-  font-size: var(--fs-md);
-  color: var(--text-secondary);
+:slotted(.section-status.padded) {
+  padding: 0.75rem 1rem;
 }
 
 :slotted(.section-hint) {

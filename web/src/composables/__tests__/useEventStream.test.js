@@ -387,6 +387,45 @@ describe('useEventStream', () => {
         })
     })
 
+    // One casing at the boundary: the installer reads these fields and no snake_case twin.
+    describe('catalog installation events', () => {
+        it.each([
+            {
+                event: {type: 'catalog_install_starting'},
+                expected: {stage: 'starting', fileName: '', percent: null, bytesDownloaded: 0, totalBytes: null, error: null},
+            },
+            {
+                event: {type: 'catalog_install_progress', file_name: 'NGC.csv', percent: 50, bytes_downloaded: 512, total_bytes: 1024},
+                expected: {stage: 'downloading', fileName: 'NGC.csv', percent: 50, bytesDownloaded: 512, totalBytes: 1024, error: null},
+            },
+            {
+                event: {type: 'catalog_install_completed', object_count: 13957},
+                expected: {stage: 'completed', objectCount: 13957, error: null},
+            },
+            {
+                event: {type: 'catalog_install_failed', error: 'disk full'},
+                expected: {stage: 'failed', error: 'disk full'},
+            },
+        ])('maps $event.type to camelCase', async ({event, expected}) => {
+            const {catalogInstallProgress} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent(event)
+
+            expect(catalogInstallProgress.value).toEqual(expected)
+        })
+
+        it('keeps the download readout through a file completing', async () => {
+            const {catalogInstallProgress} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'catalog_install_progress', file_name: 'NGC.csv', percent: 100, bytes_downloaded: 1024, total_bytes: 1024})
+            await sendEvent({type: 'catalog_file_completed', file_name: 'NGC.csv'})
+
+            expect(catalogInstallProgress.value).toMatchObject({stage: 'file_completed', fileName: 'NGC.csv', bytesDownloaded: 1024})
+        })
+    })
+
     describe('Push-To status on connect', () => {
         /** Lets `onOpen` finish with the status reply it awaited. */
         async function statusSettled() {

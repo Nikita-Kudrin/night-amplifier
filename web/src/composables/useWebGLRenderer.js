@@ -138,6 +138,7 @@ export function useWebGLRenderer({onRestored} = {}) {
     let texture = null
     let positionBuffer = null
     let texCoordBuffer = null
+    let locations = null
 
     function setupBuffers() {
         const positions = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1])
@@ -165,6 +166,12 @@ export function useWebGLRenderer({onRestored} = {}) {
     function setupResources() {
         program = createProgram(gl, version)
         if (!program) return false
+        // Fixed once linked; looking them up per frame was three driver round trips.
+        locations = {
+            position: gl.getAttribLocation(program, 'a_position'),
+            texCoord: gl.getAttribLocation(program, 'a_texCoord'),
+            texture: gl.getUniformLocation(program, 'u_texture'),
+        }
         setupBuffers()
         setupTexture()
         return true
@@ -172,6 +179,7 @@ export function useWebGLRenderer({onRestored} = {}) {
 
     function forgetResources() {
         program = null
+        locations = null
         texture = null
         positionBuffer = null
         texCoordBuffer = null
@@ -255,18 +263,15 @@ export function useWebGLRenderer({onRestored} = {}) {
 
         gl.useProgram(program)
 
-        const positionLoc = gl.getAttribLocation(program, 'a_position')
         gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer)
-        gl.enableVertexAttribArray(positionLoc)
-        gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0)
+        gl.enableVertexAttribArray(locations.position)
+        gl.vertexAttribPointer(locations.position, 2, gl.FLOAT, false, 0, 0)
 
-        const texCoordLoc = gl.getAttribLocation(program, 'a_texCoord')
         gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer)
-        gl.enableVertexAttribArray(texCoordLoc)
-        gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0)
+        gl.enableVertexAttribArray(locations.texCoord)
+        gl.vertexAttribPointer(locations.texCoord, 2, gl.FLOAT, false, 0, 0)
 
-        const textureLoc = gl.getUniformLocation(program, 'u_texture')
-        gl.uniform1i(textureLoc, 0)
+        gl.uniform1i(locations.texture, 0)
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }

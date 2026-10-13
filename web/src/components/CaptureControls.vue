@@ -3,26 +3,29 @@ import {ref, inject, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
 import {findCamera, useCapabilities} from '../composables/appContext.js'
+import {hardwareBlock} from '../composables/useCameraHardwareSettings.js'
+import {useCaptureTarget} from '../composables/useCaptureTarget.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
+import ExposureControl from './ExposureControl.vue'
 import {
-  EXPOSURE_PRESETS,
+  CAMERA_PHASES,
+  CAPTURE_MODE_OPTIONS,
   GAIN_LIMITS,
-  CAPTURE_STATES,
-  isCaptureRunning,
+  GUIDE_CAPTURE_MODE_OPTIONS,
   DEFAULT_SETTINGS,
+  STACKING_TYPES,
   STRETCH_AGGRESSIVENESS_OPTIONS,
   HELP_TEXTS
 } from '../constants'
 
 const settings = inject('settings')
 const selectedCamera = inject('selectedCamera')
-const eventStream = inject('eventStream')
 const refreshSettings = inject('refreshSettings')
 const cameras = inject('cameras', {value: []})
 const cameraPhase = inject('cameraPhase', {value: {}})
 const {cometPro} = useCapabilities()
 
-const {error, loading, clearError, withErrorHandling} = useError()
+const {error, loading, clearError, setError, withErrorHandling} = useError()
 
 /**
  * Which camera this panel addresses.
@@ -33,22 +36,26 @@ const {error, loading, clearError, withErrorHandling} = useError()
  */
 const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 const mainCamera = inject('mainCamera', computed(() => null))
-const guideCamera = inject('guideCamera', computed(() => null))
 
-const isEditingGuide = computed(() => settingsRole.value === 'guide')
+const {
+  isGuide: isEditingGuide,
+  mainCapturing,
+  isCapturing,
+  isStopping,
+  canStart,
+  startLabel,
+  stopLabel,
+} = useCaptureTarget({role: settingsRole, busy: loading})
 
 /** The hardware block belonging to the camera currently selected. */
-const cameraSettings = computed(() => {
-  if (!settings?.value) return null
-  return isEditingGuide.value ? settings.value.guide_camera : settings.value
-})
+const cameraSettings = computed(() => hardwareBlock(settings?.value, settingsRole.value))
 
-const exposure = ref(100)
-const exposureUnit = ref('ms')
+/** The exposure as typed, in microseconds; Start sends it even if never blurred. */
+const exposureUs = ref(100000)
 const gain = ref(GAIN_LIMITS.default)
 
 const stackingTypes = ref([])
-const selectedStackingType = ref('deep_sky')
+const selectedStackingType = ref(STACKING_TYPES.DEEP_SKY)
 const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
@@ -67,19 +74,9 @@ watch(
     [settings, settingsRole],
     ([allSettings]) => {
       const newSettings = allSettings
-      const hardware = isEditingGuide.value ? allSettings?.guide_camera : allSettings
+      const hardware = hardwareBlock(allSettings, settingsRole.value)
       if (newSettings && hardware) {
-        const us = hardware.exposure_us
-        if (us >= 1000000) {
-          exposure.value = us / 1000000
-          exposureUnit.value = 's'
-        } else if (us >= 1000) {
-          exposure.value = us / 1000
-          exposureUnit.value = 'ms'
-        } else {
-          exposure.value = us
-          exposureUnit.value = 'us'
-        }
+        exposureUs.value = hardware.exposure_us
         gain.value = hardware.gain
         if (newSettings.stacking_type) {
           selectedStackingType.value = newSettings.stacking_type
@@ -104,73 +101,16 @@ watch(
     {immediate: true}
 )
 
+// Without the list the Type select is empty, so say why rather than only logging it.
 onMounted(async () => {
   try {
     stackingTypes.value = await getStackingTypes()
   } catch (e) {
-    console.error('Failed to load stacking types:', e)
+    setError(`Could not load the stacking types: ${e.message}`)
   }
 })
 
-const mainCapturing = computed(
-    () =>
-        isCaptureRunning(eventStream.captureState.value) ||
-        eventStream.captureState.value === CAPTURE_STATES.STARTING
-)
-
-const mainStopping = computed(() => eventStream.captureState.value === CAPTURE_STATES.STOPPING)
-
-/**
- * Whether the guide camera's loop is running.
- *
- * Read from the camera's phase rather than from `captureState`: `Guiding` is a phase of
- * its own precisely because a guide loop is not a capture session, and the backend
- * already stamps it whenever the loop takes or gives back the handle.
- */
-const isGuideRunning = computed(() => {
-  const name = guideCamera.value?.name
-  return Boolean(name) && cameraPhase.value?.[name] === 'guiding'
-})
-
-/**
- * Start/Stop addresses whichever camera the list has selected, the same way the
- * exposure and gain controls above do. Selecting the guide camera and pressing Stop
- * stops its loop — and with it the raw frames it was saving.
- */
-const isCapturing = computed(() =>
-    isEditingGuide.value ? isGuideRunning.value : mainCapturing.value
-)
-
-// The guide camera has no Stopping state to broadcast: its stop is one request that
-// returns once the loop has handed its handle back, so the in-flight request is the
-// only signal there is.
-const isStopping = computed(() =>
-    isEditingGuide.value ? loading.value && isGuideRunning.value : mainStopping.value
-)
-
-const canStart = computed(() => {
-  if (isCapturing.value || isStopping.value) return false
-  return isEditingGuide.value ? Boolean(guideCamera.value) : Boolean(selectedCamera.value)
-})
-
-/** Names the target, so it is never ambiguous which camera the button acts on. */
-const startLabel = computed(() => (isEditingGuide.value ? 'Start guide' : 'Start'))
-const stopLabel = computed(() => (isEditingGuide.value ? 'Stop guide' : 'Stop'))
-
-/**
- * Only the imaging camera has a capture mode. Nothing the guide camera produces is
- * stacked, so Wanderer and Stacking are not choices it has — and offering them here
- * would have written the *imaging* camera's mode, since the setting is global.
- */
-const captureModeOptions = computed(() =>
-    isEditingGuide.value
-        ? [{value: 'off', label: 'Live view'}]
-        : [
-          {value: 'off', label: 'Live view'},
-          {value: 'wanderer', label: 'Wanderer'},
-          {value: 'stacking', label: 'Stacking'},
-        ]
-)
+const captureModeOptions = computed(() => (isEditingGuide.value ? GUIDE_CAPTURE_MODE_OPTIONS : CAPTURE_MODE_OPTIONS))
 
 const selectedCameraName = computed(() => {
   const id = selectedCamera.value
@@ -184,22 +124,9 @@ const selectedCameraPhase = computed(() => {
 })
 
 const showPrecoolWarning = computed(
-    () => selectedCameraPhase.value === 'precooling' && !isCapturing.value
+    () => selectedCameraPhase.value === CAMERA_PHASES.PRECOOLING && !isCapturing.value
 )
 
-const exposureUs = computed(() => {
-  const val = exposure.value
-  switch (exposureUnit.value) {
-    case 's':
-      return val * 1000000
-    case 'ms':
-      return val * 1000
-    default:
-      return val
-  }
-})
-
-const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || EXPOSURE_PRESETS.ms)
 
 async function handleStart() {
   await withErrorHandling(async () => {
@@ -241,9 +168,8 @@ async function applySetting(settings, onError = null) {
 /** Hardware edits carry the role, so they land on the camera the user selected. */
 const applyHardware = (patch) => applySetting({camera_role: settingsRole.value, ...patch})
 
-const applyExposure = () => applyHardware({exposure_us: exposureUs.value})
+const applyExposure = (us) => applyHardware({exposure_us: us})
 const applyGain = () => applyHardware({gain: gain.value})
-const setExposurePreset = (us) => applyHardware({exposure_us: us})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
 const applyStretchAggressiveness = () => applySetting({stretch_aggressiveness: stretchAggressiveness.value})
@@ -260,7 +186,7 @@ const focusModeBlocked = computed(
         !focusMode.value &&
         mainCapturing.value &&
         stackingMode.value !== 'off' &&
-        selectedStackingType.value !== 'planetary'
+        selectedStackingType.value !== STACKING_TYPES.PLANETARY
 )
 
 // A pipeline setting, not a hardware one: it goes through `applySetting` rather than
@@ -286,7 +212,7 @@ function applyStackingMode(val) {
 
 const showCometLock = computed(() => {
   if (isEditingGuide.value) return false
-  return selectedStackingType.value === 'comet' && !cometPro.value
+  return selectedStackingType.value === STACKING_TYPES.COMET && !cometPro.value
 })
 
 const HELP = HELP_TEXTS
@@ -338,7 +264,7 @@ const HELP = HELP_TEXTS
       <div v-if="showCometLock" class="comet-pro-lock">
         <BaseProLock
             title="Comet Stacking"
-            message="Comet centroid tracking and aggressive star rejection are available in Night Amplifier Pro."
+            :message="HELP.comet_pro"
         />
       </div>
 
@@ -369,45 +295,16 @@ const HELP = HELP_TEXTS
     </div>
 
     <div v-if="showPrecoolWarning" class="precool-warning">
-      Sensor is still cooling — capture will start with elevated dark current.
+      {{ HELP.precooling }}
     </div>
 
-    <!-- Exposure control -->
     <div class="control-group" :class="{ 'control-disabled': showCometLock }">
-      <div class="control-row">
-        <label class="type-label-inline">
-          Exposure
-          <BaseInfoIcon :message="HELP.exposure"/>
-        </label>
-        <div class="input-group">
-          <input
-              v-model.number="exposure"
-              type="number"
-              min="0.001"
-              step="0.1"
-              class="input"
-              :disabled="showCometLock"
-              @change="applyExposure"
-          />
-          <select v-model="exposureUnit" class="select" :disabled="showCometLock" @change="applyExposure">
-            <option value="us">us</option>
-            <option value="ms">ms</option>
-            <option value="s">s</option>
-          </select>
-        </div>
-      </div>
-      <div class="presets">
-        <button
-            v-for="preset in exposurePresets"
-            :key="preset.us"
-            class="btn btn-preset"
-            :class="{ active: cameraSettings?.exposure_us === preset.us }"
-            :disabled="showCometLock"
-            @click="setExposurePreset(preset.us)"
-        >
-          {{ preset.label }}
-        </button>
-      </div>
+      <ExposureControl
+          v-model="exposureUs"
+          :active-us="cameraSettings?.exposure_us ?? null"
+          :disabled="showCometLock"
+          @apply="applyExposure"
+      />
     </div>
 
     <div class="control-group" :class="{ 'control-disabled': showCometLock }">
@@ -547,34 +444,6 @@ const HELP = HELP_TEXTS
 .slider-control-wrapper {
   flex: 1;
   min-width: 0;
-}
-
-.control-row .input-group {
-  flex: 1;
-}
-
-.presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.25rem;
-}
-
-.btn-preset {
-  padding: 0.125rem 0.375rem;
-  font-size: var(--fs-2xs);
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-}
-
-.btn-preset:hover {
-  background: var(--surface-hover);
-}
-
-.btn-preset.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: var(--on-primary);
 }
 
 .stretch-controls {

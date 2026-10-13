@@ -1,40 +1,25 @@
 <script setup>
-import {computed, inject, ref, watch} from 'vue'
-import {updateSettings} from '../composables/api.js'
-import {useDebouncedCall} from '../composables/useDebouncedCall.js'
-import {useError} from '../composables/useError.js'
-import {useSelectedCamera} from '../composables/appContext.js'
+import {computed, ref, watch} from 'vue'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
 import {formatPercent} from '../utils/format.js'
 import {BaseAlert, BaseSlider, BaseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
-import {HELP_TEXTS} from '../constants'
+import {DEFAULT_SETTINGS, DEW_HEATER_POWER_LIMITS, HELP_TEXTS} from '../constants'
 
-const settings = inject('settings', ref(null))
-const refreshSettings = inject('refreshSettings', async () => {
-})
-const cameraStatus = inject('cameraStatus', ref({}))
 // Same reason as the cooler: each camera carries its own dew-heater state.
-const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
-
-const {error, clearError, withErrorHandling} = useError()
-
-const cameraSettings = computed(() => {
-  if (!settings.value) return null
-  return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
-})
-
-const currentCamera = useSelectedCamera()
+const {cameraSettings, currentCamera, liveStatus, error, clearError, apply, applyDebounced} =
+    useCameraHardwareSettings()
 
 const hasDewHeater = computed(() => Boolean(currentCamera.value?.info?.has_dew_heater))
 
-const localHeaterEnabled = ref(true)
-const localHeaterPower = ref(10)
+const localHeaterEnabled = ref(DEFAULT_SETTINGS.dew_heater_enabled)
+const localHeaterPower = ref(DEFAULT_SETTINGS.dew_heater_power)
 
 watch(
     cameraSettings,
     (hardware) => {
       if (!hardware) return
-      localHeaterEnabled.value = hardware.dew_heater_enabled ?? true
+      localHeaterEnabled.value = hardware.dew_heater_enabled ?? DEFAULT_SETTINGS.dew_heater_enabled
       if (typeof hardware.dew_heater_power === 'number') {
         localHeaterPower.value = hardware.dew_heater_power
       }
@@ -42,31 +27,14 @@ watch(
     {immediate: true}
 )
 
-const liveStatus = computed(() => {
-  const name = currentCamera.value?.name
-  return name ? cameraStatus.value?.[name] : null
-})
-
-/** `role` is the camera selected when the edit was made, not when a debounce fires. */
-async function applySetting(payload, role = settingsRole.value) {
-  await withErrorHandling(async () => {
-    await updateSettings({camera_role: role, ...payload})
-    await refreshSettings()
-  })
-}
-
-const {schedule: debouncedApply, flush: flushPending} = useDebouncedCall(applySetting, 300)
-// A pending edit is the outgoing camera's: sent now, it is never coalesced with the next one's.
-watch(settingsRole, flushPending)
-
 function handleHeaterToggle(enabled) {
   localHeaterEnabled.value = enabled
-  applySetting({dew_heater_enabled: enabled})
+  apply({dew_heater_enabled: enabled})
 }
 
 function handlePowerChange(value) {
   localHeaterPower.value = value
-  debouncedApply({dew_heater_power: value}, settingsRole.value)
+  applyDebounced({dew_heater_power: value})
 }
 
 /** The power control runs 0–100. */
@@ -94,15 +62,15 @@ function formatPower(v) {
         v-if="localHeaterEnabled"
         v-model="localHeaterPower"
         label="Heater Power"
-        :min="0"
-        :max="100"
-        :step="1"
+        :min="DEW_HEATER_POWER_LIMITS.min"
+        :max="DEW_HEATER_POWER_LIMITS.max"
+        :step="DEW_HEATER_POWER_LIMITS.step"
         :format-value="formatPower"
         :help="HELP_TEXTS.dew_heater_power"
         @change="handlePowerChange"
     >
       <template #label-left>
-        <span class="pill status-pill" :class="liveStatus?.dew_heater_on ? 'pill-success' : 'pill-muted'">
+        <span class="pill pill-status" :class="liveStatus?.dew_heater_on ? 'pill-success' : 'pill-muted'">
           {{ liveStatus?.dew_heater_on ? 'On' : 'Off' }}
         </span>
       </template>
@@ -110,9 +78,3 @@ function formatPower(v) {
   </div>
 </template>
 
-<style scoped>
-.status-pill {
-  font-size: var(--fs-xs);
-  padding: 0.1rem 0.5rem;
-}
-</style>

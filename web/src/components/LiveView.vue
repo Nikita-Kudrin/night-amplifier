@@ -1,8 +1,8 @@
 <script setup>
 import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
-import {useWebGLRenderer} from '../composables/useWebGLRenderer.js'
-import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
+import {useFrameRenderer} from '../composables/useFrameRenderer.js'
+import {useEventListener} from '../composables/useEventListener.js'
 import {usePanZoom} from '../composables/usePanZoom.js'
 import {useAutoFit} from '../composables/useAutoFit.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
@@ -78,10 +78,6 @@ const canvasRef = ref(null)
 const containerSize = ref({width: 400, height: 300})
 const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
 
-// Renderers
-const webglRenderer = useWebGLRenderer({onRestored: renderFrame})
-const canvas2dRenderer = useCanvas2DRenderer()
-
 const {
   requestFit,
   handleContainerResize,
@@ -131,70 +127,17 @@ const {
   handleMouseUp: handleRoiMouseUp,
 } = useCometRoi(settings, dimensions, canvasBounds, containerRef)
 
-// Active renderer backend
-const renderBackend = computed(() => {
-  if (isJpeg.value) return 'jpeg'
-  if (webglRenderer.isInitialized()) {
-    return webglRenderer.backend.value
-  }
-  if (canvas2dRenderer.isInitialized()) {
-    return canvas2dRenderer.backend.value
-  }
-  return 'none'
-})
-
 const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 const hasFrame = computed(() => frameData.value !== null && dimensions.value.width > 0)
 
-function initRenderer() {
-  const canvas = canvasRef.value
-  if (!canvas) return false
-  if (webglRenderer.init(canvas)) return true
-  if (canvas2dRenderer.init(canvas)) return true
-  return false
-}
-
-/** The size last drawn: a new one resizes the canvas, which the arrow and ROI follow. */
-let drawnSize = null
-
-function noteDrawnSize(width, height) {
-  if (drawnSize?.width === width && drawnSize?.height === height) return
-  drawnSize = {width, height}
-  updateContainerSize()
-}
-
-function renderFrame() {
-  if (!frameData.value) return
-  const canvas = canvasRef.value
-  if (!canvas) return
-  const {width, height} = dimensions.value
-
-  if (isJpeg.value) {
-    // Decode JPEG blob into ImageBitmap and draw onto canvas (avoids blob URL
-    // allocation churn and keeps pan/zoom working via the canvas path).
-    window.createImageBitmap(frameData.value).then((bitmap) => {
-      if (webglRenderer.isInitialized()) {
-        webglRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
-      } else if (canvas2dRenderer.isInitialized()) {
-        canvas2dRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
-      }
-      noteDrawnSize(bitmap.width, bitmap.height)
-      bitmap.close()
-    }).catch(() => { /* frame was replaced before decode finished */ })
-    return
-  }
-  if (webglRenderer.isInitialized()) {
-    webglRenderer.render(canvas, frameData.value, width, height)
-  } else if (canvas2dRenderer.isInitialized()) {
-    canvas2dRenderer.render(canvas, frameData.value, width, height)
-  }
-  noteDrawnSize(width, height)
-}
-
-function cleanupRenderer() {
-  webglRenderer.cleanup()
-  canvas2dRenderer.cleanup()
-}
+// A new frame size resizes the canvas, which the arrow and the comet ROI follow.
+const {label: backendLabel} = useFrameRenderer({
+  frameData,
+  dimensions,
+  isJpeg,
+  canvases: () => [canvasRef.value],
+  onSizeChange: () => updateContainerSize(),
+})
 
 function fitToView() {
   if (!containerRef.value) return
@@ -269,13 +212,6 @@ function handleMouseUp(e) {
   handlePanMouseUp()
 }
 
-// Watch for new frame data and render
-watch(frameData, () => {
-  if (frameData.value) {
-    renderFrame()
-  }
-})
-
 // Fit the view on the very first frame
 watch(hasFrame, (newHasFrame, oldHasFrame) => {
   if (newHasFrame && !oldHasFrame) {
@@ -319,8 +255,8 @@ watch(() => eventStream.captureState.value, (newState, oldState) => {
 })
 
 // The arrow and the comet ROI follow the canvas: re-measure once the view has moved it.
-// A new frame size re-measures from `noteDrawnSize` — not every frame, which forced
-// two layouts per frame.
+// A new frame size re-measures from the renderer's `onSizeChange` — not every frame,
+// which forced two layouts per frame.
 watch([scale, position, hasFrame], () => updateContainerSize(), {flush: 'post'})
 
 let resizeObserver = null
@@ -365,12 +301,12 @@ function updateContainerSize() {
   }
 }
 
+useEventListener(document, 'fullscreenchange', handleFullscreenChange)
+useEventListener(window, 'resize', handleWindowResize)
+useEventListener(window, 'orientationchange', handleOrientationChange)
+useEventListener(window.screen.orientation, 'change', handleOrientationChange)
+
 onMounted(() => {
-  document.addEventListener('fullscreenchange', handleFullscreenChange)
-  window.addEventListener('resize', handleWindowResize)
-  window.addEventListener('orientationchange', handleOrientationChange)
-  window.screen.orientation?.addEventListener('change', handleOrientationChange)
-  initRenderer()
   updateContainerSize()
   resizeObserver = new ResizeObserver(updateContainerSize)
   if (containerRef.value) {
@@ -379,36 +315,12 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  document.removeEventListener('fullscreenchange', handleFullscreenChange)
-  window.removeEventListener('resize', handleWindowResize)
-  window.removeEventListener('orientationchange', handleOrientationChange)
-  window.screen.orientation?.removeEventListener('change', handleOrientationChange)
   disposeAutoFit()
-  cleanupRenderer()
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
   }
 })
-
-// Map backend names to user-friendly labels
-const backendLabel = computed(() => {
-  const res = dimensions.value.width > 0 
-    ? ` (${dimensions.value.width}x${dimensions.value.height})`
-    : ''
-
-  const labels = {
-    jpeg: `Dynamic JPEG${res}`,
-    'webgl2-16bit': `WebGL2 16-bit${res}`,
-    'webgl2-8bit': `WebGL2 8-bit${res}`,
-    webgl1: `WebGL1${res}`,
-    canvas2d: `Canvas 2D${res}`,
-    none: 'No renderer',
-    unknown: '...',
-  }
-  return labels[renderBackend.value] || renderBackend.value
-})
-
 </script>
 
 <template>
@@ -455,14 +367,8 @@ const backendLabel = computed(() => {
     <!-- Guide arrow -->
     <GuideArrow
         v-if="showGuideArrow"
-        :angle-deg="pushDirection.angleDeg"
-        :distance-deg="pushDirection.distanceDeg"
-        :is-close="pushDirection.isClose"
-        :direction-hint="pushDirection.directionHint"
-        :image-left="canvasBounds.left"
-        :image-top="canvasBounds.top"
-        :image-width="canvasBounds.width"
-        :image-height="canvasBounds.height"
+        :direction="pushDirection"
+        :bounds="canvasBounds"
         :fov-deg="displayedFovDeg"
         :other-camera="arrowCamera"
     />

@@ -1,19 +1,51 @@
 import {ref, computed, watch, onMounted, onUnmounted, inject} from 'vue'
 import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
+import {useTimeouts} from './useTimeouts.js'
 import {formatBytes, formatPercent} from '../utils/format.js'
+
+/** The database a fresh install offers: the one sized for most fields of view. */
+export const DEFAULT_ASTAP_DATABASE = 'D80'
+
+/** How long after an install's last event the status is read again. */
+export const INSTALL_SETTLE_MS = 500
+
+/** ASTAP's status and the databases it offers, fetched together as every caller wants them. */
+export async function fetchAstapState() {
+    const [status, databases] = await Promise.all([getAstapStatus(), getAstapDatabases()])
+    return {status, databases}
+}
+
+/**
+ * Once `complete()` turns true, waits `INSTALL_SETTLE_MS`, reloads the status, and hands
+ * it to `onComplete`. The wait is the component's, cleared if it goes away first.
+ */
+export function useInstallSettle(complete, {loadStatus, installing, status, onComplete}) {
+    const {later} = useTimeouts()
+    watch(complete, (done) => {
+        if (!done) return
+        later(async () => {
+            await loadStatus()
+            installing.value = false
+            onComplete?.(status.value)
+        }, INSTALL_SETTLE_MS)
+    })
+}
 
 /**
  * Composable for managing ASTAP installation state and progress.
  * Handles status checking, database selection, installation progress tracking,
  * and WebSocket event integration. Supports multi-database selection.
+ * @param {Object} [options]
+ * @param {(status: Object) => void} [options.onComplete] - The install finished and the
+ *   status was reloaded; `installing` is false again.
  */
-export function useAstapInstall() {
+export function useAstapInstall({onComplete} = {}) {
     // Core state
     const loading = ref(true)
     const installing = ref(false)
     const status = ref(null)
     const databases = ref([])
-    const selectedDatabases = ref(['D80'])
+    const selectedDatabases = ref([DEFAULT_ASTAP_DATABASE])
     const error = ref(null)
 
     // Installation progress
@@ -53,10 +85,10 @@ export function useAstapInstall() {
         loading.value = true
         error.value = null
         try {
-            const [statusData, dbData] = await Promise.all([getAstapStatus(), getAstapDatabases()])
-            status.value = statusData
-            databases.value = dbData
-            return statusData
+            const state = await fetchAstapState()
+            status.value = state.status
+            databases.value = state.databases
+            return state.status
         } catch (e) {
             error.value = e.message
             return null
@@ -107,13 +139,15 @@ export function useAstapInstall() {
         }
     }
 
-    function isInstallationComplete() {
+    // Each database reports its own completion; the install is done with the last one's.
+    const installComplete = computed(() => {
         const p = installProgress.value
         if (p.stage !== 'completed') return false
-        // Check if the last selected database has completed
         const lastDb = selectedDatabases.value[selectedDatabases.value.length - 1]
-        return p.component && p.component.includes(lastDb)
-    }
+        return Boolean(p.component?.includes(lastDb))
+    })
+
+    useInstallSettle(installComplete, {loadStatus, installing, status, onComplete})
 
     function resetState() {
         installProgress.value = createEmptyProgress()
@@ -159,11 +193,11 @@ export function useAstapInstall() {
         progressText,
         overallProgressText,
         progressPercent,
+        installComplete,
         // Methods
         loadStatus,
         startInstall,
         handleProgressUpdate,
-        isInstallationComplete,
         resetState,
     }
 }

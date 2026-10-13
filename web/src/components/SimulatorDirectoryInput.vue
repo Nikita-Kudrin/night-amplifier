@@ -5,6 +5,7 @@
  */
 import {ref} from 'vue'
 import {BaseInfoIcon} from './ui'
+import {HELP_TEXTS} from '../constants'
 
 defineProps({
   /** The panel is configuring the simulator. */
@@ -12,8 +13,6 @@ defineProps({
 })
 
 const emit = defineEmits(['submit', 'close'])
-
-const HELP_DIRECTORY = 'The local path where the simulator looks for source images (FITS, TIFF, or PNG).'
 
 const directoryPath = ref('')
 
@@ -27,7 +26,7 @@ function submit() {
     <div class="config-header">
       <span>
         Configure Simulator Directory
-        <BaseInfoIcon :message="HELP_DIRECTORY"/>
+        <BaseInfoIcon :message="HELP_TEXTS.simulator_directory"/>
       </span>
       <button class="btn-close" @click="emit('close')">&times;</button>
     </div>

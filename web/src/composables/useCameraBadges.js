@@ -1,5 +1,6 @@
 import {ref, watch, onUnmounted, unref} from 'vue'
 import {formatResolution, formatTemperature} from '../utils/format.js'
+import {CAMERA_PHASES, STACKING_TYPES} from '../constants'
 
 /** "Main" or "Guide" for a connected camera; null for one in neither role. */
 export function roleLabel(cam) {
@@ -36,7 +37,7 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
     }
 
     function isWarmingUp(cam) {
-        return phaseOf(cam) === 'warming_up'
+        return phaseOf(cam) === CAMERA_PHASES.WARMING_UP
     }
 
     // Minute resolution is enough for a countdown of a few minutes; ticks only while a
@@ -62,8 +63,8 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
 
     function phaseLabel(cam) {
         const phase = phaseOf(cam)
-        if (phase === 'precooling') return 'Precooling'
-        if (phase === 'warming_up') {
+        if (phase === CAMERA_PHASES.PRECOOLING) return 'Precooling'
+        if (phase === CAMERA_PHASES.WARMING_UP) {
             const left = warmupLeft(cam)
             return left ? `Warming up, ${left}` : 'Warming up'
         }
@@ -88,7 +89,7 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
         // with it (see `applyStackingMode` in CaptureControls.vue). Never true
         // for the guide camera: nothing it produces is stacked.
         const isActivelyStacking =
-            !isGuide && settings.value?.stacking && settings.value?.stacking_type !== 'planetary'
+            !isGuide && settings.value?.stacking && settings.value?.stacking_type !== STACKING_TYPES.PLANETARY
         const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
         const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
         const match = modes.find((m) => needle.test(m.name))

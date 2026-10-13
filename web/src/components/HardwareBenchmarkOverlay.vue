@@ -1,7 +1,7 @@
 <script setup>
 import {computed, nextTick, ref, watch} from 'vue'
 import {useAiCompute} from '../composables/useAiCompute.js'
-import {BaseSpinner} from './ui'
+import {BaseSpinner, InstallProgressBar} from './ui'
 
 /**
  * Covers the whole app while the server measures which unit runs AI denoising (once per
@@ -51,10 +51,7 @@ watch(benchmarking, async (on) => {
         Night Amplifier is measuring which processor runs AI denoising fastest on this computer.
         This happens once; the result is remembered.
       </p>
-      <p v-if="step" class="benchmark-step" data-test="benchmark-step">{{ step }}</p>
-      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent">
-        <div class="progress-fill" :style="{width: `${percent}%`}"></div>
-      </div>
+      <InstallProgressBar compact :spinner="false" :progress-text="step" :progress-percent="percent"/>
     </div>
   </div>
 </template>
@@ -93,14 +90,16 @@ watch(benchmarking, async (on) => {
   color: var(--text-primary);
 }
 
-.benchmark-text,
-.benchmark-step {
+.benchmark-text {
   margin: 0;
   font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
-.benchmark-step {
+/* The step under the centred explanation, not a left-aligned status line. */
+.benchmark-panel :deep(.progress-text) {
+  justify-content: center;
+  font-size: var(--fs-base);
   color: var(--text-primary);
 }
 </style>

@@ -746,6 +746,12 @@ input[type="checkbox"]:disabled {
 .pill-error { color: var(--error); }
 .pill-muted { color: var(--text-muted); background: var(--surface-hover); }
 
+/* A status readout's pill (cooler state, dew heater on/off). */
+.pill-status {
+    font-size: var(--fs-xs);
+    padding: 0.1rem 0.5rem;
+}
+
 .category-blue { color: var(--category-blue); }
 .category-orange { color: var(--category-orange); }
 .category-purple { color: var(--category-purple); }
