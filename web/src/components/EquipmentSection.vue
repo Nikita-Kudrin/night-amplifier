@@ -5,7 +5,7 @@ import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
 import {formatFov} from '../utils/format.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
-import {BaseToggle, BaseInfoIcon} from './ui'
+import {BaseAlert, BaseToggle, BaseInfoIcon} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
 
 const props = defineProps({
@@ -16,7 +16,7 @@ const props = defineProps({
 
 const emit = defineEmits(['fov-changed', 'database-select'])
 
-const {withErrorHandling} = useError()
+const {error, clearError, withErrorHandling} = useError()
 
 const equipmentCollapsed = ref(true)
 const manualSensorExpanded = ref(false)
@@ -87,6 +87,11 @@ defineExpose({calculatedFov})
         {{ formatFov(calculatedFov.x) }} &times; {{ formatFov(calculatedFov.y) }}
       </span>
     </div>
+
+    <!-- Outside the collapsible part: a save refused while the section is folded still shows. -->
+    <BaseAlert v-if="error" type="error" @dismiss="clearError">
+      {{ error }}
+    </BaseAlert>
 
     <div v-show="!equipmentCollapsed" class="equipment-content" @click="handleClickOutside">
       <!-- Focal Length -->

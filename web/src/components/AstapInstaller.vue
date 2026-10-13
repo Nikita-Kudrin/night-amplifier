@@ -1,6 +1,7 @@
 <script setup>
 import {ref, computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
+import {useTimeouts} from '../composables/useTimeouts.js'
 import {BaseSpinner, DatabaseSelector, InstallStatusList, SetupSection} from './ui'
 
 const emit = defineEmits(['installed', 'state-change'])
@@ -12,6 +13,7 @@ const {
 } = useAstapInstall()
 
 const showAddDatabases = ref(false)
+const {later} = useTimeouts()
 
 // Emit 'installed' when status loads as ready
 watch(loading, (isLoading, wasLoading) => {
@@ -28,7 +30,7 @@ watch(
     () => isInstallationComplete(),
     (complete) => {
       if (!complete) return
-      setTimeout(async () => {
+      later(async () => {
         await loadStatus()
         installing.value = false
         showAddDatabases.value = false

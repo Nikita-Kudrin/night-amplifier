@@ -6,6 +6,7 @@ import {useCanvas2DRenderer} from '../composables/useCanvas2DRenderer.js'
 import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
+import {useTimeouts} from '../composables/useTimeouts.js'
 import {useCapabilities} from '../composables/appContext.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
@@ -17,6 +18,7 @@ import {BaseSpinner, BaseSplitButton} from './ui'
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 const {debugLogging} = useCapabilities()
+const {later} = useTimeouts()
 
 const mainCamera = inject('mainCamera', computed(() => null))
 const guideCamera = inject('guideCamera', computed(() => null))
@@ -31,13 +33,13 @@ const canvasLeftRef = ref(null)
 const canvasRightRef = ref(null)
 const canvasSingleRef = ref(null)
 
-const webglLeft = useWebGLRenderer()
+const webglLeft = useWebGLRenderer({onRestored: renderFrame})
 const canvas2dLeft = useCanvas2DRenderer()
 
-const webglRight = useWebGLRenderer()
+const webglRight = useWebGLRenderer({onRestored: renderFrame})
 const canvas2dRight = useCanvas2DRenderer()
 
-const webglSingle = useWebGLRenderer()
+const webglSingle = useWebGLRenderer({onRestored: renderFrame})
 const canvas2dSingle = useCanvas2DRenderer()
 
 const leftEyeRef = ref(null)
@@ -179,7 +181,7 @@ watch(frameData, () => {
 
 watch(isBinoview, () => {
   // Re-render immediately if we switch views so it's not blank
-  setTimeout(() => {
+  later(() => {
     if (frameData.value) renderFrame()
   }, 10)
 })
@@ -329,7 +331,7 @@ function updateBounds() {
 }
 
 watch(hasFrame, (newVal) => {
-  if (newVal) setTimeout(updateBounds, 10)
+  if (newVal) later(updateBounds, 10)
 })
 
 onMounted(() => {

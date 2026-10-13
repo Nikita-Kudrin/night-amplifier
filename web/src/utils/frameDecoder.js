@@ -2,6 +2,15 @@ import lz4 from 'lz4js'
 import {RGB8_MAGIC, RGB8_CHUNKED_MAGIC, SA10_MAGIC} from '../constants'
 
 /**
+ * Logs and drops a frame whose header disagrees with its own bytes. Unchecked, a
+ * truncated frame threw a `RangeError` inside the socket's async `onMessage`.
+ */
+function malformed(format, reason) {
+    console.error(`${format} frame dropped: ${reason}`)
+    return null
+}
+
+/**
  * Decode a binary WebSocket frame, dispatching by magic number.
  *
  * @param {ArrayBuffer} buffer - Raw binary data from WebSocket
@@ -51,17 +60,21 @@ export function decodeRgb8Lz4(buffer, view) {
     const height = view.getUint32(8, true)
     const compressedSize = view.getUint32(12, true)
 
-    const compressedData = new Uint8Array(buffer, 16, compressedSize)
-    const decompressedSize =
-        compressedData[0] | (compressedData[1] << 8) |
-        (compressedData[2] << 16) | (compressedData[3] << 24)
+    if (compressedSize < 4 || 16 + compressedSize > buffer.byteLength) {
+        return malformed('SA08', `payload of ${compressedSize} bytes in a ${buffer.byteLength}-byte frame`)
+    }
+    const decompressedSize = view.getUint32(16, true)
+    if (decompressedSize !== width * height * 3) {
+        return malformed('SA08', `${decompressedSize} bytes of pixels for ${width}x${height}`)
+    }
 
     const lz4BlockData = new Uint8Array(buffer, 20, compressedSize - 4)
 
     let decompressedBuffer
     try {
         decompressedBuffer = lz4.makeBuffer(decompressedSize)
-        lz4.decompressBlock(lz4BlockData, decompressedBuffer, 0, lz4BlockData.length, 0)
+        const end = lz4.decompressBlock(lz4BlockData, decompressedBuffer, 0, lz4BlockData.length, 0)
+        if (end !== decompressedSize) return malformed('SA08', `decompressed to ${end} of ${decompressedSize} bytes`)
     } catch (e) {
         console.error('SA08 decompression failed:', e)
         return null
@@ -101,25 +114,46 @@ export function decodeRgb8Lz4Chunked(buffer, view) {
     const width = view.getUint32(4, true)
     const height = view.getUint32(8, true)
     const chunkCount = view.getUint32(16, true)
-
     const totalDecompressed = width * height * 3
-    const output = lz4.makeBuffer(totalDecompressed)
 
+    // Every descriptor is checked before the output is allocated from the header's size.
     const descriptorsSize = chunkCount * SA09_CHUNK_DESCRIPTOR_SIZE
-    let dataOffset = SA09_HEADER_SIZE + descriptorsSize
+    if (SA09_HEADER_SIZE + descriptorsSize > buffer.byteLength) {
+        return malformed('SA09', `${chunkCount} chunk descriptors in a ${buffer.byteLength}-byte frame`)
+    }
+    const chunks = []
+    let dataEnd = SA09_HEADER_SIZE + descriptorsSize
+    let declared = 0
+    for (let i = 0; i < chunkCount; i++) {
+        const descOffset = SA09_HEADER_SIZE + i * SA09_CHUNK_DESCRIPTOR_SIZE
+        const chunk = {
+            offset: dataEnd,
+            compressedSize: view.getUint32(descOffset, true),
+            decompressedSize: view.getUint32(descOffset + 4, true),
+        }
+        dataEnd += chunk.compressedSize
+        declared += chunk.decompressedSize
+        chunks.push(chunk)
+    }
+    if (dataEnd > buffer.byteLength) {
+        return malformed('SA09', `chunks run to byte ${dataEnd} of ${buffer.byteLength}`)
+    }
+    if (declared !== totalDecompressed) {
+        return malformed('SA09', `chunks hold ${declared} bytes of pixels for ${width}x${height}`)
+    }
+
+    const output = lz4.makeBuffer(totalDecompressed)
     let outputOffset = 0
 
     try {
-        for (let i = 0; i < chunkCount; i++) {
-            const descOffset = SA09_HEADER_SIZE + i * SA09_CHUNK_DESCRIPTOR_SIZE
-            const compressedSize = view.getUint32(descOffset, true)
-            const decompressedSize = view.getUint32(descOffset + 4, true)
-
-            const chunkData = new Uint8Array(buffer, dataOffset, compressedSize)
-            lz4.decompressBlock(chunkData, output, 0, compressedSize, outputOffset)
-
-            outputOffset += decompressedSize
-            dataOffset += compressedSize
+        for (const {offset, compressedSize, decompressedSize} of chunks) {
+            const chunkData = new Uint8Array(buffer, offset, compressedSize)
+            const end = lz4.decompressBlock(chunkData, output, 0, compressedSize, outputOffset)
+            // A chunk spilling over its stripe would land in the next one's rows.
+            if (end !== outputOffset + decompressedSize) {
+                return malformed('SA09', `a chunk decompressed to ${end - outputOffset} of ${decompressedSize} bytes`)
+            }
+            outputOffset = end
         }
     } catch (e) {
         console.error('SA09 decompression failed:', e)

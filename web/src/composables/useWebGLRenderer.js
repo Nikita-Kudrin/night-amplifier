@@ -61,28 +61,79 @@ function createShader(gl, type, source) {
     return shader
 }
 
-function createProgram(glCtx, vertexShader, fragmentShader) {
-    const prog = glCtx.createProgram()
-    glCtx.attachShader(prog, vertexShader)
-    glCtx.attachShader(prog, fragmentShader)
-    glCtx.linkProgram(prog)
+/** A linked program, or null; the shaders are freed either way (the program keeps them). */
+function createProgram(gl, version) {
+    const vertexShader = createShader(gl, gl.VERTEX_SHADER, version.vertexShader)
+    const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, version.fragmentShader)
+    if (!vertexShader || !fragmentShader) {
+        if (vertexShader) gl.deleteShader(vertexShader)
+        if (fragmentShader) gl.deleteShader(fragmentShader)
+        console.error(`[WebGLRenderer] ${version.name} shader compilation failed`)
+        return null
+    }
 
-    if (!glCtx.getProgramParameter(prog, glCtx.LINK_STATUS)) {
-        console.error('Program link error:', glCtx.getProgramInfoLog(prog))
-        glCtx.deleteProgram(prog)
+    const prog = gl.createProgram()
+    gl.attachShader(prog, vertexShader)
+    gl.attachShader(prog, fragmentShader)
+    gl.linkProgram(prog)
+    gl.deleteShader(vertexShader)
+    gl.deleteShader(fragmentShader)
+
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error(`[WebGLRenderer] ${version.name} program link error:`, gl.getProgramInfoLog(prog))
+        gl.deleteProgram(prog)
         return null
     }
     return prog
 }
 
+const VERSIONS = [
+    {
+        name: 'WebGL2', backend: 'webgl2-8bit', contextTypes: ['webgl2'],
+        vertexShader: vertexShaderSourceGL2, fragmentShader: fragmentShaderSourceGL2,
+    },
+    {
+        name: 'WebGL1', backend: 'webgl1', contextTypes: ['webgl', 'experimental-webgl'],
+        vertexShader: vertexShaderSourceGL1, fragmentShader: fragmentShaderSourceGL1,
+    },
+]
+
+function getContext(canvas, version) {
+    for (const type of version.contextTypes) {
+        const ctx = canvas.getContext(type)
+        if (ctx) return ctx
+    }
+    return null
+}
+
+/**
+ * Whether `version` gets a context and builds its program, judged on a throwaway canvas.
+ * A canvas hands out one context type for life, so a WebGL2 context whose shaders then
+ * failed left the real canvas unable to fall back to WebGL1 or Canvas2D: it stayed blank.
+ */
+function versionWorks(version) {
+    const ctx = getContext(document.createElement('canvas'), version)
+    if (!ctx) return false
+    const prog = createProgram(ctx, version)
+    if (prog) ctx.deleteProgram(prog)
+    // Browsers cap live contexts (~16); don't wait for the GC to free this one.
+    ctx.getExtension('WEBGL_lose_context')?.loseContext()
+    return prog !== null
+}
+
 /**
  * WebGL renderer composable for high-performance image rendering
  * Supports WebGL2 and WebGL1 with standard 8-bit RGB textures
+ * @param {Object} [options]
+ * @param {Function} [options.onRestored] - Redraws after the browser restored a lost
+ *   context: the canvas is blank until then, and an idle stream sends no new frame.
  */
-export function useWebGLRenderer() {
+export function useWebGLRenderer({onRestored} = {}) {
     const backend = ref('unknown') // 'webgl2-8bit', 'webgl1', 'none'
 
     let gl = null
+    let version = null
+    let boundCanvas = null
     let program = null
     let texture = null
     let positionBuffer = null
@@ -111,73 +162,32 @@ export function useWebGLRenderer() {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     }
 
-    function initWebGL2(canvas) {
-        console.log('[WebGLRenderer] Attempting WebGL2 initialization...')
-
-        const gl2 = canvas.getContext('webgl2')
-        if (!gl2) {
-            console.warn('[WebGLRenderer] WebGL2 not available')
-            return false
-        }
-
-        console.log('[WebGLRenderer] WebGL2 context created')
-        console.log('[WebGLRenderer] Renderer:', gl2.getParameter(gl2.RENDERER))
-
-        gl = gl2
-
-        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSourceGL2)
-        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceGL2)
-        program = createProgram(gl, vertexShader, fragmentShader)
-
-        if (!program) {
-            console.error('[WebGLRenderer] WebGL2 shader compilation/linking failed')
-            gl = null
-            return false
-        }
-
+    function setupResources() {
+        program = createProgram(gl, version)
+        if (!program) return false
         setupBuffers()
         setupTexture()
-
-        backend.value = 'webgl2-8bit'
-        console.log('[WebGLRenderer] WebGL2 initialization complete -', backend.value)
         return true
     }
 
-    function initWebGL1(canvas) {
-        console.log('[WebGLRenderer] Attempting WebGL1 initialization...')
+    function forgetResources() {
+        program = null
+        texture = null
+        positionBuffer = null
+        texCoordBuffer = null
+    }
 
-        const gl1 = canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
-        if (!gl1) {
-            console.warn('[WebGLRenderer] WebGL1 not available')
-            return false
-        }
+    // The context's objects die with it; `preventDefault` asks the browser to restore it.
+    function handleContextLost(event) {
+        event.preventDefault()
+        console.warn(`[WebGLRenderer] ${version.name} context lost`)
+        forgetResources()
+    }
 
-        console.log('[WebGLRenderer] WebGL1 context created')
-
-        gl = gl1
-
-        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSourceGL1)
-        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSourceGL1)
-
-        if (!vertexShader || !fragmentShader) {
-            console.error('[WebGLRenderer] WebGL1 shader compilation failed')
-            gl = null
-            return false
-        }
-
-        program = createProgram(gl, vertexShader, fragmentShader)
-        if (!program) {
-            console.error('[WebGLRenderer] WebGL1 program linking failed')
-            gl = null
-            return false
-        }
-
-        setupBuffers()
-        setupTexture()
-
-        backend.value = 'webgl1'
-        console.log('[WebGLRenderer] WebGL1 initialization complete')
-        return true
+    function handleContextRestored() {
+        if (!setupResources()) return
+        console.log(`[WebGLRenderer] ${version.name} context restored`)
+        onRestored?.()
     }
 
     function init(canvas) {
@@ -186,11 +196,26 @@ export function useWebGLRenderer() {
             return false
         }
 
-        if (initWebGL2(canvas)) {
-            return true
-        }
-
-        if (initWebGL1(canvas)) {
+        for (const candidate of VERSIONS) {
+            if (!versionWorks(candidate)) {
+                console.warn(`[WebGLRenderer] ${candidate.name} not available`)
+                continue
+            }
+            const ctx = getContext(canvas, candidate)
+            if (!ctx) continue
+            gl = ctx
+            version = candidate
+            if (!setupResources()) {
+                // The canvas is spoken for now; nothing else can be tried on it.
+                console.error(`[WebGLRenderer] ${candidate.name} failed on the canvas after passing its probe`)
+                gl = null
+                break
+            }
+            boundCanvas = canvas
+            canvas.addEventListener('webglcontextlost', handleContextLost)
+            canvas.addEventListener('webglcontextrestored', handleContextRestored)
+            backend.value = candidate.backend
+            console.log(`[WebGLRenderer] ${candidate.name} initialization complete -`, gl.getParameter(gl.RENDERER))
             return true
         }
 
@@ -253,11 +278,12 @@ export function useWebGLRenderer() {
             if (texCoordBuffer) gl.deleteBuffer(texCoordBuffer)
             if (program) gl.deleteProgram(program)
         }
+        boundCanvas?.removeEventListener('webglcontextlost', handleContextLost)
+        boundCanvas?.removeEventListener('webglcontextrestored', handleContextRestored)
+        boundCanvas = null
         gl = null
-        program = null
-        texture = null
-        positionBuffer = null
-        texCoordBuffer = null
+        version = null
+        forgetResources()
         backend.value = 'unknown'
     }
 

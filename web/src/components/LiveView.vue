@@ -7,6 +7,7 @@ import {usePanZoom} from '../composables/usePanZoom.js'
 import {useAutoFit} from '../composables/useAutoFit.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
+import {useTimeouts} from '../composables/useTimeouts.js'
 import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming.js'
 import {CAPTURE_STATES, isCaptureRunning, liveStreamEndpoint} from '../constants'
 import GuideArrow from './GuideArrow.vue'
@@ -26,6 +27,7 @@ const FIT_AFTER_LAYOUT_MS = 10
 const eventStream = inject('eventStream')
 const settings = inject('settings')
 const {setGlobalError} = useAppState()
+const {later} = useTimeouts()
 const {debugLogging} = useCapabilities()
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const guideCamera = inject('guideCamera', computed(() => null))
@@ -77,7 +79,7 @@ const containerSize = ref({width: 400, height: 300})
 const canvasBounds = ref({left: 0, top: 0, width: 400, height: 300})
 
 // Renderers
-const webglRenderer = useWebGLRenderer()
+const webglRenderer = useWebGLRenderer({onRestored: renderFrame})
 const canvas2dRenderer = useCanvas2DRenderer()
 
 const {
@@ -127,7 +129,7 @@ const {
   handleMouseDown: handleRoiMouseDown,
   handleMouseMove: handleRoiMouseMove,
   handleMouseUp: handleRoiMouseUp,
-} = useCometRoi(settings, dimensions, canvasRef, containerRef)
+} = useCometRoi(settings, dimensions, canvasBounds, containerRef)
 
 // Active renderer backend
 const renderBackend = computed(() => {
@@ -152,6 +154,15 @@ function initRenderer() {
   return false
 }
 
+/** The size last drawn: a new one resizes the canvas, which the arrow and ROI follow. */
+let drawnSize = null
+
+function noteDrawnSize(width, height) {
+  if (drawnSize?.width === width && drawnSize?.height === height) return
+  drawnSize = {width, height}
+  updateContainerSize()
+}
+
 function renderFrame() {
   if (!frameData.value) return
   const canvas = canvasRef.value
@@ -167,6 +178,7 @@ function renderFrame() {
       } else if (canvas2dRenderer.isInitialized()) {
         canvas2dRenderer.render(canvas, bitmap, bitmap.width, bitmap.height)
       }
+      noteDrawnSize(bitmap.width, bitmap.height)
       bitmap.close()
     }).catch(() => { /* frame was replaced before decode finished */ })
     return
@@ -176,6 +188,7 @@ function renderFrame() {
   } else if (canvas2dRenderer.isInitialized()) {
     canvas2dRenderer.render(canvas, frameData.value, width, height)
   }
+  noteDrawnSize(width, height)
 }
 
 function cleanupRenderer() {
@@ -266,7 +279,7 @@ watch(frameData, () => {
 // Fit the view on the very first frame
 watch(hasFrame, (newHasFrame, oldHasFrame) => {
   if (newHasFrame && !oldHasFrame) {
-    setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
+    later(fitToView, FIT_AFTER_LAYOUT_MS)
   }
 })
 
@@ -294,7 +307,7 @@ watch([dimensions, frameData], ([newDims], [oldDims]) => {
       return
     }
   }
-  if (resized) setTimeout(fitToView, FIT_AFTER_LAYOUT_MS)
+  if (resized) later(fitToView, FIT_AFTER_LAYOUT_MS)
 })
 
 // Clear frame data when a new capture session starts. A capture resuming after a camera
@@ -305,10 +318,10 @@ watch(() => eventStream.captureState.value, (newState, oldState) => {
   }
 })
 
-// Update canvas bounds when scale changes or frame data changes
-watch([scale, frameData, hasFrame], () => {
-  setTimeout(updateContainerSize, 10)
-})
+// The arrow and the comet ROI follow the canvas: re-measure once the view has moved it.
+// A new frame size re-measures from `noteDrawnSize` — not every frame, which forced
+// two layouts per frame.
+watch([scale, position, hasFrame], () => updateContainerSize(), {flush: 'post'})
 
 let resizeObserver = null
 

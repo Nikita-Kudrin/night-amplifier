@@ -133,16 +133,27 @@ export function createRgb8PixelData(width, height, fillValue = 100) {
     return data
 }
 
+/**
+ * An LZ4 block of `data`. lz4js answers 0 for input it cannot shrink (a 2x2 frame), where
+ * a real encoder, the server's among them, writes the bytes as one literal run.
+ */
+function lz4Block(data) {
+    const block = lz4.makeBuffer(lz4.compressBound(data.length))
+    const size = lz4.compressBlock(data, block, 0, data.length, [])
+    if (size > 0) return block.subarray(0, size)
+
+    const lengthBytes = []
+    if (data.length >= 15) {
+        let rest = data.length - 15
+        for (; rest >= 255; rest -= 255) lengthBytes.push(255)
+        lengthBytes.push(rest)
+    }
+    return new Uint8Array([Math.min(data.length, 15) << 4, ...lengthBytes, ...data])
+}
+
 export function createRgb8Lz4Buffer(width, height, rgb8Data) {
-    const maxCompressedSize = lz4.compressBound(rgb8Data.length)
-    const compressedBlock = lz4.makeBuffer(maxCompressedSize)
-    const actualCompressedSize = lz4.compressBlock(
-        rgb8Data,
-        compressedBlock,
-        0,
-        rgb8Data.length,
-        []
-    )
+    const compressedBlock = lz4Block(rgb8Data)
+    const actualCompressedSize = compressedBlock.length
 
     const decompressedSize = rgb8Data.length
     const payloadSize = 4 + actualCompressedSize
@@ -152,7 +163,7 @@ export function createRgb8Lz4Buffer(width, height, rgb8Data) {
     payload[1] = (decompressedSize >> 8) & 0xff
     payload[2] = (decompressedSize >> 16) & 0xff
     payload[3] = (decompressedSize >> 24) & 0xff
-    payload.set(compressedBlock.subarray(0, actualCompressedSize), 4)
+    payload.set(compressedBlock, 4)
 
     const header = new ArrayBuffer(RGB8_HEADER_SIZE)
     const headerView = new DataView(header)
@@ -183,7 +194,8 @@ export function createInvalidMagicBuffer() {
     return buffer
 }
 
-export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fillValue = 100) {    const rgb8Data = createRgb8PixelData(width, height, fillValue)
+export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fillValue = 100) {
+    const rgb8Data = createRgb8PixelData(width, height, fillValue)
     const rowBytes = width * RGB8_BYTES_PER_PIXEL
     const totalRows = height
     const rowsPerChunk = Math.floor(totalRows / chunkCount)
@@ -197,13 +209,7 @@ export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fi
         const end = (rowOffset + rows) * rowBytes
         const stripe = rgb8Data.subarray(start, end)
 
-        const maxSize = lz4.compressBound(stripe.length)
-        const compressed = lz4.makeBuffer(maxSize)
-        const compressedSize = lz4.compressBlock(stripe, compressed, 0, stripe.length, [])
-        chunks.push({
-            compressed: compressed.subarray(0, compressedSize),
-            decompressedSize: stripe.length,
-        })
+        chunks.push({compressed: lz4Block(stripe), decompressedSize: stripe.length})
         rowOffset += rows
     }
 

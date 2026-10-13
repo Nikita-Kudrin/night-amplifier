@@ -1,6 +1,7 @@
 <script setup>
 import {computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
+import {useTimeouts} from '../composables/useTimeouts.js'
 import AstapStatusSection from './AstapStatusSection.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
@@ -22,21 +23,23 @@ const {
   canInstall, hasUninstalledDatabases, progressText, overallProgressText, progressPercent,
   loadStatus, startInstall, isInstallationComplete,
 } = useAstapInstall()
+const {later} = useTimeouts()
 
-// Handle initial load: if already installed and not managing, close immediately
-watch(loading, async (isLoading, wasLoading) => {
+// Opened on a solver that is already ready and not managing: close at once. The first
+// load only — the reload after an install announces itself, and both once emitted twice.
+watch(loading, (isLoading, wasLoading) => {
   if (wasLoading && !isLoading && status.value?.ready && !props.allowManage) {
     emit('installed')
     emit('close')
   }
-})
+}, {once: true})
 
 // Handle installation completion
 watch(
     () => isInstallationComplete(),
     (complete) => {
       if (!complete) return
-      setTimeout(async () => {
+      later(async () => {
         await loadStatus()
         installing.value = false
         if (status.value?.ready) {

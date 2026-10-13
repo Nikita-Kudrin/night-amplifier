@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref, nextTick} from 'vue'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
@@ -443,6 +443,71 @@ describe('AstapInstallOverlay', () => {
             wrapper.unmount()
 
             expect(clearAstapInstallProgress).toHaveBeenCalled()
+        })
+    })
+
+    describe('Settling after an install', () => {
+        let wrapper
+
+        afterEach(() => vi.useRealTimers())
+
+        async function completeInstall(progressRef) {
+            await flushPromises()
+            await wrapper.find('.btn-primary').trigger('click')
+            await flushPromises()
+            progressRef.value = {component: 'D80 Database', stage: 'completed', stageName: 'Database Installed', overallPercent: 100}
+            await flushPromises()
+        }
+
+        it('reloads the status and closes once the install settled', async () => {
+            vi.useFakeTimers()
+            const progressRef = ref(null)
+            wrapper = mountOverlay(progressRef)
+            await completeInstall(progressRef)
+            getAstapStatus.mockResolvedValue({binary_installed: true, database_installed: true, installed_databases: [{id: 'D80'}], ready: true})
+
+            await vi.advanceTimersByTimeAsync(500)
+            await flushPromises()
+
+            expect(getAstapStatus).toHaveBeenCalledTimes(2)
+            expect(wrapper.emitted('installed')).toHaveLength(1)
+            expect(wrapper.emitted('close')).toHaveLength(1)
+        })
+
+        it('closes once when opened on a solver that is already ready', async () => {
+            getAstapStatus.mockResolvedValue({binary_installed: true, database_installed: true, installed_databases: [{id: 'D80'}], ready: true})
+            wrapper = mountOverlay()
+            await flushPromises()
+
+            expect(wrapper.emitted('installed')).toHaveLength(1)
+            expect(wrapper.emitted('close')).toHaveLength(1)
+        })
+
+        it('announces a managed install once and stays open', async () => {
+            vi.useFakeTimers()
+            const progressRef = ref(null)
+            wrapper = mountOverlay(progressRef, {allowManage: true})
+            await completeInstall(progressRef)
+            getAstapStatus.mockResolvedValue({binary_installed: true, database_installed: true, installed_databases: [{id: 'D80'}], ready: true})
+
+            await vi.advanceTimersByTimeAsync(500)
+            await flushPromises()
+
+            expect(wrapper.emitted('installed')).toHaveLength(1)
+            expect(wrapper.emitted('close')).toBeUndefined()
+        })
+
+        it('drops the status reload when it goes away first', async () => {
+            vi.useFakeTimers()
+            const progressRef = ref(null)
+            wrapper = mountOverlay(progressRef)
+            await completeInstall(progressRef)
+            getAstapStatus.mockClear()
+
+            wrapper.unmount()
+            await vi.advanceTimersByTimeAsync(500)
+
+            expect(getAstapStatus).not.toHaveBeenCalled()
         })
     })
 

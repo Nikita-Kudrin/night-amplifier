@@ -6,11 +6,12 @@ import {updateSettings} from '../composables/api.js'
  *
  * @param {import('vue').Ref} settings - App settings ref
  * @param {import('vue').Ref} dimensions - Image dimensions ref {width, height}
- * @param {import('vue').Ref} canvasRef - Target canvas element ref
+ * @param {import('vue').Ref} canvasBounds - The canvas's box in container coordinates, kept
+ *   current by the view; a `computed` reading `getBoundingClientRect` went stale on zoom or pan
  * @param {import('vue').Ref} containerRef - Container element ref
  * @returns {Object} ROI selection state and handlers
  */
-export function useCometRoi(settings, dimensions, canvasRef, containerRef) {
+export function useCometRoi(settings, dimensions, canvasBounds, containerRef) {
     const isSelectingCometRoi = ref(false)
     const roiSelectionStart = ref(null)
     const roiSelectionEnd = ref(null)
@@ -38,23 +39,16 @@ export function useCometRoi(settings, dimensions, canvasRef, containerRef) {
 
     // Computed ROI rectangle in screen coordinates for display
     const roiDisplayRect = computed(() => {
-        if (!currentCometRoi.value || !canvasRef.value || !hasFrame.value) return null
+        if (!currentCometRoi.value || !hasFrame.value) return null
 
         const roi = currentCometRoi.value
-        const canvas = canvasRef.value
-        const canvasRect = canvas.getBoundingClientRect()
-        const containerRect = containerRef.value?.getBoundingClientRect() || {left: 0, top: 0}
-
-        // Convert image coordinates to screen coordinates
-        const scaleX = canvasRect.width / dimensions.value.width
-        const scaleY = canvasRect.height / dimensions.value.height
-
-        const canvasLeft = canvasRect.left - containerRect.left
-        const canvasTop = canvasRect.top - containerRect.top
+        const bounds = canvasBounds.value
+        const scaleX = bounds.width / dimensions.value.width
+        const scaleY = bounds.height / dimensions.value.height
 
         return {
-            left: roi.x * scaleX + canvasLeft,
-            top: roi.y * scaleY + canvasTop,
+            left: roi.x * scaleX + bounds.left,
+            top: roi.y * scaleY + bounds.top,
             width: roi.width * scaleX,
             height: roi.height * scaleY,
         }
@@ -95,11 +89,7 @@ export function useCometRoi(settings, dimensions, canvasRef, containerRef) {
 
     async function handleMouseUp() {
         if (!isSelectingCometRoi.value || !roiSelectionStart.value || !roiSelectionEnd.value) return
-        if (!canvasRef.value || !hasFrame.value) return
-
-        const canvas = canvasRef.value
-        const canvasRect = canvas.getBoundingClientRect()
-        const containerRect = containerRef.value.getBoundingClientRect()
+        if (!hasFrame.value) return
 
         // Get selection bounds relative to container
         const startX = Math.min(roiSelectionStart.value.x, roiSelectionEnd.value.x)
@@ -113,19 +103,16 @@ export function useCometRoi(settings, dimensions, canvasRef, containerRef) {
             return
         }
 
-        // Convert screen coordinates to image coordinates
-        const canvasLeft = canvasRect.left - containerRect.left
-        const canvasTop = canvasRect.top - containerRect.top
-
         // Clamp to canvas bounds
-        const clampedStartX = Math.max(startX - canvasLeft, 0)
-        const clampedStartY = Math.max(startY - canvasTop, 0)
-        const clampedEndX = Math.min(endX - canvasLeft, canvasRect.width)
-        const clampedEndY = Math.min(endY - canvasTop, canvasRect.height)
+        const bounds = canvasBounds.value
+        const clampedStartX = Math.max(startX - bounds.left, 0)
+        const clampedStartY = Math.max(startY - bounds.top, 0)
+        const clampedEndX = Math.min(endX - bounds.left, bounds.width)
+        const clampedEndY = Math.min(endY - bounds.top, bounds.height)
 
         // Convert to image pixel coordinates
-        const scaleX = dimensions.value.width / canvasRect.width
-        const scaleY = dimensions.value.height / canvasRect.height
+        const scaleX = dimensions.value.width / bounds.width
+        const scaleY = dimensions.value.height / bounds.height
 
         const imageRoi = {
             x: Math.round(clampedStartX * scaleX),

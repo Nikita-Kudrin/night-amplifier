@@ -5,6 +5,14 @@ const isSliding = ref(false)
 let isTouching = false
 let startX = 0
 let startY = 0
+// The touchend grace period. A gesture starting inside it is a new one, whose intent
+// the old timer must not reset halfway through deciding.
+let releaseTimer = null
+
+function clearRelease() {
+  clearTimeout(releaseTimer)
+  releaseTimer = null
+}
 
 let listenersInitialized = false
 
@@ -13,6 +21,7 @@ export function useScrollProtect() {
     if (typeof window !== 'undefined') {
       window.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) return
+        clearRelease()
         isTouching = true
         isScrolling.value = false
         isSliding.value = false
@@ -36,13 +45,16 @@ export function useScrollProtect() {
 
       window.addEventListener('touchend', () => {
         isTouching = false
-        setTimeout(() => {
+        clearRelease()
+        releaseTimer = setTimeout(() => {
+          releaseTimer = null
           isScrolling.value = false
           isSliding.value = false
         }, 50)
       }, { passive: true, capture: true })
       
       window.addEventListener('touchcancel', () => {
+        clearRelease()
         isTouching = false
         isScrolling.value = false
         isSliding.value = false

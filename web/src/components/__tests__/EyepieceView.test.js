@@ -940,3 +940,34 @@ describe('EyepieceView.vue follows the operator', () => {
     }
   })
 })
+
+describe('EyepieceView.vue Teardown', () => {
+  let originalLocation
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    originalLocation = window.location
+    delete window.location
+    window.location = { ...originalLocation, pathname: '/eyepiece_quality' }
+    installResizeObserverStub()
+    await loadEyepieceView()
+  })
+
+  afterEach(() => {
+    window.location = originalLocation
+    vi.resetModules()
+  })
+
+  it('leaves no timer behind when it goes away mid-layout', async () => {
+    vi.useFakeTimers()
+    const settings = ref({ eyepiece: { binoview: true, circular_view: true } })
+    const wrapper = mountEyepiece(undefined, { provide: { settings } })
+    await landFrame()
+    settings.value = { eyepiece: { binoview: false, circular_view: true } }
+    await nextTick()
+
+    wrapper.unmount()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})

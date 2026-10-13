@@ -169,7 +169,9 @@ Sockets: `useWebSocket` (reconnect, ping), `useEventStream` (a table from event 
 `schemars::JsonSchema` only in that build); CI fails a stale one. A settings panel section is its own component that
 mirrors its group and emits `apply(key, value)` (`ImageQualitySettings`); one that must await the save takes it as a prop.
 **Debounce through `useDebouncedCall`**, which flushes on unmount: Vue drops an `emit` from an unmounted component,
-so a hand-rolled timer lost an edit made just before its panel closed. The sidebar is **one tab at a time**
+so a hand-rolled timer lost an edit made just before its panel closed; a one-shot delay goes through `useTimeouts`,
+cleared on unmount. A canvas hands out one context type for life, so `useWebGLRenderer` probes each GL version on a
+scratch canvas first — a WebGL2 shader failure on the real one once left it blank, with no Canvas2D fallback. The sidebar is **one tab at a time**
 (`useSidebarTabs`: Main, Push-To, Settings), each mounted on first visit and then only hidden (`v-show`) —
 remounting dropped typed coordinates and refetched. A hidden panel's watchers keep running, so mounting writes only
 to record the selected camera, never optics (`useTelescopeSetup` once rewrote the telescope block on every Push-To
