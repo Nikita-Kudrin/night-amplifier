@@ -9,7 +9,7 @@ export function serverDefault(path) {
  * `{min, max, default}` of a setting the server clamps, read from the generated
  * `api.settings.js`: the range it enforces and the default it starts from. `ui` adds the
  * presentation (`step`) and may narrow the range to what the control offers, never widen
- * it (`index.test.js` checks).
+ * it (`serverSettings.test.js` checks).
  */
 export function serverLimits(path, ui = {}) {
     const range = SERVER_SETTING_RANGES[path]

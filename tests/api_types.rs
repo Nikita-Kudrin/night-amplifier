@@ -228,8 +228,14 @@ fn generate_settings() -> String {
     let defaults = serde_json::to_string_pretty(&SettingsResponse::from(&CaptureSettings::default()));
     let mut ranges = Map::new();
     for probe in CLAMPED {
-        let bounds = json!({ "min": clamp_end(probe, -1e9), "max": clamp_end(probe, 1e9) });
-        ranges.insert(probe.0.to_string(), bounds);
+        let (min, max) = (clamp_end(probe, -1e9), clamp_end(probe, 1e9));
+        // Else a probe that stopped clamping (or sets the wrong field) silently drops its bound.
+        assert!(
+            !(min.is_null() && max.is_null()),
+            "{}: `sanitized` clamps neither end; fix its probe or drop it from CLAMPED",
+            probe.0
+        );
+        ranges.insert(probe.0.to_string(), json!({ "min": min, "max": max }));
     }
     // Clamped where the renderer reads it, not in `sanitized`.
     ranges.insert("eyepiece.black_floor".to_string(), range(BLACK_FLOOR_RANGE));

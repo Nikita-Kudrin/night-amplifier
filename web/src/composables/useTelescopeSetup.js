@@ -4,6 +4,7 @@ import {useDebouncedCall} from './useDebouncedCall.js'
 import {runDirectly} from './useError.js'
 import {fieldOfViewDeg} from '../utils/optics.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
+import {SETTINGS_DEBOUNCE_MS} from '../constants'
 
 const TELESCOPE_FIELDS = [
     'focal_length_mm',
@@ -231,7 +232,7 @@ export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCam
         syncFrom(saved ? settings.value : held)
     }
 
-    const {schedule: scheduleSettingsSave} = useDebouncedCall(saveSettings, 500)
+    const {schedule: scheduleSettingsSave} = useDebouncedCall(saveSettings, SETTINGS_DEBOUNCE_MS)
 
     const telescopeParams = [focalLength, pixelSizeX, pixelSizeY, sensorWidthPx, sensorHeightPx, barlowCoeff]
 

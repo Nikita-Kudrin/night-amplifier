@@ -73,8 +73,15 @@ export function createAppState() {
         events = stream
         onEvents(stream, settingsStore.handlers)
         onEvents(stream, cameraHandlers)
+        // No snapshot carries the settings, so a `settings_updated` sent while the socket
+        // was down is read again on every reopen. The first open only retries a failed
+        // load: the first load is reading them already.
+        let opened = stream.connected.value
         watch(stream.connected, (up) => {
-            if (up && loadFailed) initializeState()
+            if (!up) return
+            if (loadFailed) initializeState()
+            else if (opened) settingsStore.refresh().catch(() => {})
+            opened = true
         })
     }
 

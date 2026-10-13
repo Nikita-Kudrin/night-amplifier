@@ -199,11 +199,38 @@ describe('useWebGLRenderer', () => {
         it('stops listening once cleaned up', () => {
             const onRestored = vi.fn()
             const { cleanup } = initQuietly({onRestored})
+            const gl = contextOf(canvas)
+            const programsBefore = gl.createProgram.mock.calls.length
 
             cleanup()
             quietly(() => canvas.dispatchEvent(new Event('webglcontextrestored')))
 
             expect(onRestored).not.toHaveBeenCalled()
+            expect(gl.createProgram.mock.calls.length).toBe(programsBefore)
+        })
+
+        // Browsers cap live contexts (~16); a binoview toggle makes new canvases each time.
+        it('releases the canvas\'s context on cleanup, not on a context loss', () => {
+            const { cleanup } = initQuietly()
+            const gl = contextOf(canvas)
+
+            quietly(() => canvas.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+            expect(gl.loseContext).not.toHaveBeenCalled()
+
+            cleanup()
+            expect(gl.loseContext).toHaveBeenCalledTimes(1)
+        })
+
+        it('reports whether it drew', () => {
+            const { render, cleanup } = initQuietly()
+            const frame = new Uint8Array(4 * 4 * 3)
+            expect(render(canvas, frame, 4, 4)).toBe(true)
+
+            quietly(() => canvas.dispatchEvent(new Event('webglcontextlost', {cancelable: true})))
+            expect(render(canvas, frame, 4, 4)).toBe(false)
+
+            cleanup()
+            expect(render(canvas, frame, 4, 4)).toBe(false)
         })
     })
 })

@@ -173,14 +173,55 @@ describe('useAppState loading', () => {
         expect(getSettings).toHaveBeenCalledTimes(2)
         expect(app.globalError.value).toBeNull()
 
-        // Loaded: a later reconnect has nothing to retry.
+        // Loaded: a later reconnect re-reads only the settings, which no snapshot carries.
         stream.connected.value = false
         await nextTick()
         stream.connected.value = true
         await nextTick()
-        expect(getSettings).toHaveBeenCalledTimes(2)
+        await vi.runOnlyPendingTimersAsync()
+        expect(getSettings).toHaveBeenCalledTimes(3)
+        expect(listCameras).toHaveBeenCalledTimes(2)
+        expect(getCapabilities).toHaveBeenCalledTimes(2)
         scope.stop()
         vi.restoreAllMocks()
+    })
+
+    // A `settings_updated` sent while the socket was down (a phone asleep, another
+    // client's edit, a server restart) reached no one, and kept-mounted panels followed
+    // the old values.
+    it('reads the settings again whenever the socket reopens', async () => {
+        getSettings.mockResolvedValueOnce(settings({gain: 100})).mockResolvedValue(settings({gain: 300}))
+        const app = await freshAppState()
+        const stream = createEventStreamStub({connected: true})
+        const scope = effectScope()
+        scope.run(() => app.connectEvents(stream))
+        await app.initializeState()
+
+        stream.connected.value = false
+        await nextTick()
+        stream.connected.value = true
+        await nextTick()
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getSettings).toHaveBeenCalledTimes(2)
+        expect(app.settings.value.gain).toBe(300)
+        scope.stop()
+    })
+
+    it('reads the settings once at startup when the socket first opens during the first load', async () => {
+        const app = await freshAppState()
+        const stream = createEventStreamStub({connected: false})
+        const scope = effectScope()
+        scope.run(() => app.connectEvents(stream))
+
+        const loading = app.initializeState()
+        stream.connected.value = true
+        await nextTick()
+        await loading
+        await vi.runOnlyPendingTimersAsync()
+
+        expect(getSettings).toHaveBeenCalledTimes(1)
+        scope.stop()
     })
 
     it('polls a server that keeps the socket up while refusing the load', async () => {
@@ -357,6 +398,24 @@ describe('useAppState events', () => {
 
         emitEvent(stream, {type: 'camera_discovered', camera: camera({id: 'sim_0', connected: false})})
         expect(app.cameras.value.map((c) => c.id)).toContain('sim_0')
+    })
+
+    // Another client's connect: this page's list held no guide camera, so no Guide toggle.
+    it('refetches the list when any client connects a camera, once for a burst', async () => {
+        await loaded()
+        let answer
+        listCameras
+            .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+            .mockResolvedValue([guide('idle')])
+
+        emitEvent(stream, {type: 'camera_connected', name: 'Neptune-C II'})
+        emitEvent(stream, {type: 'camera_disconnected', name: 'Old cam'})
+        emitEvent(stream, {type: 'camera_connected', name: 'Neptune-C II'})
+        expect(listCameras).toHaveBeenCalledTimes(1)
+        answer([])
+
+        await vi.waitFor(() => expect(app.hasGuideCamera.value).toBe(true))
+        expect(listCameras).toHaveBeenCalledTimes(2)
     })
 
     it('reads the settings again when the server says they changed', async () => {

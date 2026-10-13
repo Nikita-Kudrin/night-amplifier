@@ -231,8 +231,9 @@ export function useWebGLRenderer({onRestored} = {}) {
         return false
     }
 
+    /** Whether it drew: not while the context is lost, when the canvas keeps its old size. */
     function render(canvas, frameData, width, height) {
-        if (!gl || !program || !texture || !frameData) return
+        if (!gl || !program || !texture || !frameData) return false
 
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width
@@ -274,6 +275,7 @@ export function useWebGLRenderer({onRestored} = {}) {
         gl.uniform1i(locations.texture, 0)
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+        return true
     }
 
     function cleanup() {
@@ -285,6 +287,9 @@ export function useWebGLRenderer({onRestored} = {}) {
         }
         boundCanvas?.removeEventListener('webglcontextlost', handleContextLost)
         boundCanvas?.removeEventListener('webglcontextrestored', handleContextRestored)
+        // Browsers cap live contexts (~16) and each binoview toggle makes new canvases;
+        // the listeners are gone first, so nothing rebuilds on a canvas being torn down.
+        gl?.getExtension('WEBGL_lose_context')?.loseContext()
         boundCanvas = null
         gl = null
         version = null

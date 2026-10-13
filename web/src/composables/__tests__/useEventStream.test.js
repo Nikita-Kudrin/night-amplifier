@@ -586,6 +586,60 @@ describe('useEventStream', () => {
             expect(currentTarget.value).toBeNull()
         })
 
+        // Only the field an event wrote is stale: a page opened mid-solve gets progress
+        // events, none of which names the target the status alone carries.
+        it('keeps the target and direction of a status answer a solve event overtook', async () => {
+            let answer
+            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+            const {currentTarget, pushDirection, plateSolving} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'plate_solving_progress', stage: 'hinted', attempt: 2, total: 4})
+            await sendEvent({type: 'push_to_blocked', reason: 'Waiting'})
+            answer(pushToStatus({
+                current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27},
+                direction: {angle_deg: 120, distance_deg: 4.5, direction_hint: 'SE', is_close: false},
+                is_solving: false,
+            }))
+            await statusSettled()
+
+            expect(currentTarget.value).toMatchObject({designation: 'M31'})
+            expect(pushDirection.value).toMatchObject({angleDeg: 120})
+            expect(plateSolving.value).toMatchObject({inProgress: true, stage: {attempt: 2, total: 4}})
+        })
+
+        it('keeps a direction that arrived while the status was in flight', async () => {
+            let answer
+            getPushToStatus.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)))
+            const {currentTarget, pushDirection} = useEventStream()
+
+            await openWebSocket()
+            await sendEvent({type: 'push_direction_updated', angle_deg: 7, distance_deg: 1, direction_hint: 'N', is_close: false})
+            answer(pushToStatus({current_target: {designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}}))
+            await statusSettled()
+
+            expect(currentTarget.value).toMatchObject({designation: 'M31'})
+            expect(pushDirection.value).toMatchObject({angleDeg: 7})
+        })
+
+        // `position_solved` was sent while the socket was down; the status read on reopen
+        // is all that says the solve is over, and it does not say how it ended.
+        it('ends a solve the status says is over, without inventing a verdict', async () => {
+            const {plateSolving} = useEventStream()
+            await openWebSocket()
+            await statusSettled()
+            await sendEvent({type: 'plate_solving_started', target_name: 'M31'})
+            await sendEvent({type: 'plate_solving_progress', stage: 'blind', attempt: 3, total: 4})
+
+            getPushToStatus.mockResolvedValueOnce(pushToStatus({is_solving: false}))
+            getWebSocket().simulateClose()
+            vi.advanceTimersByTime(1000)
+            MockWebSocket.instances.at(-1).simulateOpen()
+            await statusSettled()
+
+            expect(plateSolving.value).toEqual({inProgress: false, targetName: 'M31', lastResult: null, stage: null})
+        })
+
         it('reads the status again whenever the socket reopens', async () => {
             getPushToStatus.mockClear()
             useEventStream()

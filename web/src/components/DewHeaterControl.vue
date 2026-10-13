@@ -7,8 +7,7 @@ import SelectedCameraTag from './SelectedCameraTag.vue'
 import {DEFAULT_SETTINGS, DEW_HEATER_POWER_LIMITS, HELP_TEXTS} from '../constants'
 
 // Same reason as the cooler: each camera carries its own dew-heater state.
-const {cameraSettings, currentCamera, liveStatus, error, clearError, apply, applyDebounced} =
-    useCameraHardwareSettings()
+const {cameraSettings, currentCamera, liveStatus, error, clearError, apply} = useCameraHardwareSettings()
 
 const hasDewHeater = computed(() => Boolean(currentCamera.value?.info?.has_dew_heater))
 
@@ -20,9 +19,7 @@ watch(
     (hardware) => {
       if (!hardware) return
       localHeaterEnabled.value = hardware.dew_heater_enabled ?? DEFAULT_SETTINGS.dew_heater_enabled
-      if (typeof hardware.dew_heater_power === 'number') {
-        localHeaterPower.value = hardware.dew_heater_power
-      }
+      localHeaterPower.value = hardware.dew_heater_power ?? DEFAULT_SETTINGS.dew_heater_power
     },
     {immediate: true}
 )
@@ -34,7 +31,7 @@ function handleHeaterToggle(enabled) {
 
 function handlePowerChange(value) {
   localHeaterPower.value = value
-  applyDebounced({dew_heater_power: value})
+  apply({dew_heater_power: value})
 }
 
 /** The power control runs 0–100. */

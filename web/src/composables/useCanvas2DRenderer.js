@@ -32,8 +32,9 @@ export function useCanvas2DRenderer() {
         return true
     }
 
+    /** Whether it drew, as `useWebGLRenderer`'s does. */
     function render(canvas, frameData, width, height) {
-        if (!ctx2d || !frameData) return
+        if (!ctx2d || !frameData) return false
 
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width
@@ -43,7 +44,7 @@ export function useCanvas2DRenderer() {
 
         if (typeof ImageBitmap !== 'undefined' && frameData instanceof ImageBitmap) {
             ctx2d.drawImage(frameData, 0, 0)
-            return
+            return true
         }
 
         if (!imageData || imageData.width !== width || imageData.height !== height) {
@@ -52,6 +53,7 @@ export function useCanvas2DRenderer() {
 
         rgb8ToRgba8(frameData, imageData.data)
         ctx2d.putImageData(imageData, 0, 0)
+        return true
     }
 
     function cleanup() {

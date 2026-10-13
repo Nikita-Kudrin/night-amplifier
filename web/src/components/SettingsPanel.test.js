@@ -69,7 +69,7 @@ describe('SettingsPanel', () => {
             await binButtons[2].trigger('click') // 3x3
             await flushPromises()
 
-            expect(updateSettings).toHaveBeenCalledWith({bin: 3})
+            expect(updateSettings).toHaveBeenCalledWith({camera_role: 'main', bin: 3})
         })
     })
 

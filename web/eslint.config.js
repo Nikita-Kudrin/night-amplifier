@@ -19,6 +19,7 @@ export default [
                 WebSocket: 'readonly',
                 URL: 'readonly',
                 URLSearchParams: 'readonly',
+                AbortController: 'readonly',
                 setTimeout: 'readonly',
                 clearTimeout: 'readonly',
                 setInterval: 'readonly',

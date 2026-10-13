@@ -34,8 +34,25 @@ export function createPushToEvents() {
     // ASTAP not installed, waiting out a retry backoff). The server sends this only on a
     // transition, so it is safe to render directly.
     const pushToBlocked = ref(null)
-    // Bumped by every write, so a status answer that left the server before one is dropped.
-    let revision = 0
+    // Each field the status carries counts its own writes, so a status answer that left the
+    // server before one drops only that field. One shared counter once dropped the whole
+    // answer on any progress event, and a page opened mid-solve never learnt its target.
+    const revisions = {target: 0, direction: 0, solve: 0}
+
+    function setTarget(target) {
+        revisions.target++
+        currentTarget.value = target
+    }
+
+    function setDirection(direction) {
+        revisions.direction++
+        pushDirection.value = direction
+    }
+
+    function setSolving(solving) {
+        revisions.solve++
+        plateSolving.value = solving
+    }
 
     const solvingMessage = computed(() => {
         const {inProgress, lastResult, targetName, stage} = plateSolving.value
@@ -80,35 +97,38 @@ export function createPushToEvents() {
     })
 
     function finishSolve(lastResult) {
-        plateSolving.value = {inProgress: false, targetName: plateSolving.value.targetName, lastResult, stage: null}
+        setSolving({inProgress: false, targetName: plateSolving.value.targetName, lastResult, stage: null})
     }
 
     function clearPlateSolving() {
-        plateSolving.value = {...NOT_SOLVING}
+        setSolving({...NOT_SOLVING})
         pushToBlocked.value = null
     }
 
     function clearPushDirection() {
-        pushDirection.value = null
+        setDirection(null)
     }
 
     function aimAt(target) {
-        revision++
-        currentTarget.value = target
-        pushDirection.value = null
+        setTarget(target)
+        setDirection(null)
         return target
     }
 
     function forgetTarget() {
-        revision++
-        currentTarget.value = null
-        pushDirection.value = null
+        setTarget(null)
+        setDirection(null)
         clearPlateSolving()
     }
 
-    /** The server's Push-To state, read when the socket opens: no event resends it. */
+    /**
+     * The server's Push-To state, read when the socket opens: no event resends it. Each
+     * field is adopted unless written since the request left. `is_solving` is adopted both
+     * ways, since a solve may have ended while the socket was down; ending it this way
+     * records no verdict, as the status does not say how it ended.
+     */
     async function loadStatus() {
-        const asked = revision
+        const asked = {...revisions}
         let status
         try {
             status = await getPushToStatus()
@@ -116,27 +136,30 @@ export function createPushToEvents() {
             ignoreProOnly(e, 'Push-To status')
             return
         }
-        if (revision !== asked) return
-        currentTarget.value = status.current_target || null
-        pushDirection.value = status.direction ? pushDirectionFrom(status.direction) : null
-        if (status.is_solving) plateSolving.value = {...plateSolving.value, inProgress: true}
+        if (revisions.target === asked.target) currentTarget.value = status.current_target || null
+        if (revisions.direction === asked.direction) {
+            pushDirection.value = status.direction ? pushDirectionFrom(status.direction) : null
+        }
+        const solving = Boolean(status.is_solving)
+        if (revisions.solve === asked.solve && solving !== plateSolving.value.inProgress) {
+            plateSolving.value = {...plateSolving.value, inProgress: solving, stage: null}
+        }
     }
 
-    // Each wrapped so it bumps `revision`; see `loadStatus`.
-    const handlers = Object.fromEntries(Object.entries({
+    const handlers = {
         plate_solving_started(data) {
-            plateSolving.value = {inProgress: true, targetName: data.target_name, lastResult: null, stage: null}
+            setSolving({inProgress: true, targetName: data.target_name, lastResult: null, stage: null})
             // Solving has resumed, so whatever was holding it up no longer is.
             pushToBlocked.value = null
         },
         plate_solving_progress(data) {
             // A cold solve works down several strategies and the last one can run for
             // a minute. Without the stage the indicator is indistinguishable from a hang.
-            plateSolving.value = {
+            setSolving({
                 ...plateSolving.value,
                 inProgress: true,
                 stage: {label: data.stage, attempt: data.attempt, total: data.total},
-            }
+            })
         },
         position_solved: () => finishSolve('success'),
         position_solve_failed: () => finishSolve('failed'),
@@ -152,21 +175,18 @@ export function createPushToEvents() {
             pushToBlocked.value = data.reason ?? null
         },
         push_direction_updated(data) {
-            pushDirection.value = pushDirectionFrom(data)
+            setDirection(pushDirectionFrom(data))
         },
         target_changed(data) {
-            currentTarget.value = {
+            setTarget({
                 name: data.name,
                 designation: data.designation,
                 ra_degrees: data.ra_degrees,
                 dec_degrees: data.dec_degrees,
-            }
+            })
         },
         target_cleared: forgetTarget,
-    }).map(([type, handle]) => [type, (data) => {
-        revision++
-        handle(data)
-    }]))
+    }
 
     return {
         handlers,

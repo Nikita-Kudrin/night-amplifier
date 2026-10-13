@@ -5,11 +5,30 @@
 import {API_BASE} from '../constants/endpoints.js'
 
 const SERVER_UNAVAILABLE = 'Server unavailable. Please ensure the server is running.'
+const TIMED_OUT = 'The server did not answer in time. Please ensure the server is running.'
+
+/**
+ * How long a request may take before it is abandoned. The settings store runs no read beside
+ * a write, so one hung POST held every settings refresh behind it for good.
+ */
+export const REQUEST_TIMEOUT_MS = 15000
+
+/**
+ * For a request the server legitimately takes long over: a camera's SDK open, a stop that cuts
+ * an in-flight sub short (up to 15 s), a native-size snapshot render, an install starting.
+ */
+export const LONG_REQUEST_TIMEOUT_MS = 120000
+
+/** How much of a plain-text refusal (axum's 422 for a body it cannot read) the message keeps. */
+const REASON_MAX_CHARS = 300
+
+/** Gateway statuses: the proxy answered, the server behind it did not. */
+const GATEWAY_STATUSES = new Set([502, 504])
 
 /**
  * A refused or failed request. `status` is the HTTP status, 0 when the server could not be
- * reached: 403 is a Pro-only route on a Community server (or a lapsed licence), 409 a
- * request the server's state refuses, 503 a busy one.
+ * reached or did not answer in time: 403 is a Pro-only route on a Community server (or a
+ * lapsed licence), 409 a request the server's state refuses, 503 a busy one.
  */
 export class ApiError extends Error {
     constructor(message, status = 0) {
@@ -33,20 +52,34 @@ export function ignoreProOnly(error, what) {
 }
 
 /**
+ * Run `exchange(signal)` (a request and the read of its body) under a deadline; an abort
+ * rejects as a timed-out `ApiError`, a network failure as an unreachable server.
+ */
+async function withTimeout(timeoutMs, exchange) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+        return await exchange(controller.signal)
+    } catch (e) {
+        if (controller.signal.aborted) throw new ApiError(TIMED_OUT)
+        if (e instanceof ApiError) throw e
+        throw new ApiError(SERVER_UNAVAILABLE)
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
+/**
  * Send one request. `body` goes as JSON, and only then with a Content-Type; `query` is
  * encoded onto the URL, skipping `null`/`undefined` values.
  */
-async function send(path, {method = 'GET', query, body} = {}) {
-    const init = {method, cache: 'no-store'}
+function send(path, {method = 'GET', query, body} = {}, signal) {
+    const init = {method, cache: 'no-store', signal}
     if (body !== undefined) {
         init.headers = {'Content-Type': 'application/json'}
         init.body = JSON.stringify(body)
     }
-    try {
-        return await fetch(withQuery(`${API_BASE}${path}`, query), init)
-    } catch {
-        throw new ApiError(SERVER_UNAVAILABLE)
-    }
+    return fetch(withQuery(`${API_BASE}${path}`, query), init)
 }
 
 function withQuery(url, query) {
@@ -59,27 +92,41 @@ function withQuery(url, query) {
 }
 
 /** A JSON route: unwraps the server's `{success, data, error}` envelope. */
-async function request(path, options) {
-    const response = await send(path, options)
-    const text = await response.text()
+function request(path, {timeoutMs = REQUEST_TIMEOUT_MS, ...options} = {}) {
+    return withTimeout(timeoutMs, async (signal) => {
+        const response = await send(path, options, signal)
+        return unwrap(await response.text(), response)
+    })
+}
+
+function unwrap(text, {ok, status}) {
     // A proxy with no server behind it answers with an empty body.
-    if (!text) throw new ApiError(SERVER_UNAVAILABLE, response.status)
+    if (!text.trim()) throw new ApiError(SERVER_UNAVAILABLE, status)
 
     let envelope
     try {
         envelope = JSON.parse(text)
     } catch {
-        throw new ApiError(
-            'Server returned invalid response. Please ensure the server is running.',
-            response.status
-        )
+        throw new ApiError(plainTextReason(text, ok, status), status)
     }
-    if (!envelope.success) throw new ApiError(envelope.error || 'API request failed', response.status)
+    if (!envelope.success) throw new ApiError(envelope.error || 'API request failed', status)
     return envelope.data
 }
 
+/**
+ * The message for an answer outside the envelope. A refusal the server wrote itself (axum's
+ * 422 for a body it cannot read) keeps its reason: "ensure the server is running" sent the
+ * user looking in the wrong place, and dropped what the server said.
+ */
+function plainTextReason(text, ok, status) {
+    if (GATEWAY_STATUSES.has(status)) return SERVER_UNAVAILABLE
+    if (ok) return 'Server returned an invalid response.'
+    const reason = text.trim()
+    return reason.length > REASON_MAX_CHARS ? `${reason.slice(0, REASON_MAX_CHARS)}…` : reason
+}
+
 const get = (path, query) => request(path, {query})
-const post = (path, body) => request(path, {method: 'POST', body})
+const post = (path, body, timeoutMs) => request(path, {method: 'POST', body, timeoutMs})
 const put = (path, body) => request(path, {method: 'PUT', body})
 const del = (path) => request(path, {method: 'DELETE'})
 
@@ -152,18 +199,21 @@ export async function fetchEyepieceSnapshot(circular) {
     const giveUpAt = Date.now() + SNAPSHOT_RETRY_WINDOW_MS
 
     for (;;) {
-        const response = await send('/eyepiece/snapshot', {query: {circular}})
-
-        if (response.ok) {
-            return {
-                blob: await response.blob(),
-                filename: snapshotFilename(response.headers.get('content-disposition')),
+        const snapshot = await withTimeout(LONG_REQUEST_TIMEOUT_MS, async (signal) => {
+            const response = await send('/eyepiece/snapshot', {query: {circular}}, signal)
+            if (response.ok) {
+                return {
+                    blob: await response.blob(),
+                    filename: snapshotFilename(response.headers.get('content-disposition')),
+                }
             }
-        }
-        if (response.status === 404) throw new ApiError('No frame to download yet.', 404)
-        if (response.status !== 503) {
-            throw new ApiError(`Download failed (${response.status}).`, response.status)
-        }
+            if (response.status === 404) throw new ApiError('No frame to download yet.', 404)
+            if (response.status !== 503) {
+                throw new ApiError(`Download failed (${response.status}).`, response.status)
+            }
+            return null
+        })
+        if (snapshot) return snapshot
 
         // Busy. Only wait if the whole wait still fits inside the window, so the
         // last attempt is made before it closes rather than after.
@@ -188,7 +238,7 @@ export async function startCapture(cameraId = null, role = 'main') {
     const body = {}
     if (cameraId) body.camera_id = cameraId
     if (role !== 'main') body.role = role
-    return post('/capture/start', body)
+    return post('/capture/start', body, LONG_REQUEST_TIMEOUT_MS)
 }
 
 /**
@@ -199,7 +249,7 @@ export async function startCapture(cameraId = null, role = 'main') {
  * @param {'main'|'guide'} [role] - Which camera to stop
  */
 export async function stopCapture(role = 'main') {
-    return post('/capture/stop', role === 'main' ? undefined : {role})
+    return post('/capture/stop', role === 'main' ? undefined : {role}, LONG_REQUEST_TIMEOUT_MS)
 }
 
 // ============================================================================
@@ -251,7 +301,7 @@ export async function listCameras() {
  * @param {'main'|'guide'} [role] - Which position it takes. Omitted means the imaging camera.
  */
 export async function connectCamera(cameraId, role = 'main') {
-    return post(cameraPath(cameraId, 'connect'), {role})
+    return post(cameraPath(cameraId, 'connect'), {role}, LONG_REQUEST_TIMEOUT_MS)
 }
 
 /**
@@ -262,7 +312,11 @@ export async function connectCamera(cameraId, role = 'main') {
  * @returns {Promise<{message: string, camera_id: string, warming_up: boolean, warmup_remaining_s?: number}>}
  */
 export async function disconnectCamera(cameraId, {skipWarmup = false} = {}) {
-    return post(cameraPath(cameraId, 'disconnect'), skipWarmup ? {skip_warmup: true} : undefined)
+    return post(
+        cameraPath(cameraId, 'disconnect'),
+        skipWarmup ? {skip_warmup: true} : undefined,
+        LONG_REQUEST_TIMEOUT_MS
+    )
 }
 
 /**
@@ -285,7 +339,7 @@ export async function setViewedCamera(camera) {
  * @returns {Promise<SimulatorConfig>}
  */
 export async function configureSimulator(directory) {
-    return post('/simulator/configure', {directory})
+    return post('/simulator/configure', {directory}, LONG_REQUEST_TIMEOUT_MS)
 }
 
 /**
@@ -398,7 +452,7 @@ export async function getAstapDatabases() {
  * @returns {Promise<{message: string}>}
  */
 export async function installAstap(databaseTypes = ['D80']) {
-    return post('/astap/install', {database_types: databaseTypes})
+    return post('/astap/install', {database_types: databaseTypes}, LONG_REQUEST_TIMEOUT_MS)
 }
 
 // ============================================================================
@@ -419,7 +473,7 @@ export async function getCatalogStatus() {
  * @returns {Promise<{message: string}>}
  */
 export async function installCatalog(includeStars = false) {
-    return post('/catalog/install', {include_stars: includeStars})
+    return post('/catalog/install', {include_stars: includeStars}, LONG_REQUEST_TIMEOUT_MS)
 }
 
 // ============================================================================

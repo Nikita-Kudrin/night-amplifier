@@ -1,7 +1,14 @@
 import {describe, it, expect, vi, afterEach} from 'vitest'
-import {mount} from '@vue/test-utils'
-import {h, nextTick, reactive} from 'vue'
+import {flushPromises, mount} from '@vue/test-utils'
+import {h, nextTick, reactive, ref} from 'vue'
 import EyepieceSettings from './EyepieceSettings.vue'
+import SettingsPanel from './SettingsPanel.vue'
+import {mountWithDefaults} from '../test/mount.js'
+import {settings} from '../test/fixtures.js'
+import {SETTINGS_DEBOUNCE_MS} from '../constants'
+
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 const EYEPIECE = {
     binoview: true,
@@ -15,39 +22,81 @@ const EYEPIECE = {
     screen_resolution_y: 1440,
 }
 
+const field = (wrapper, title) => wrapper.find(`input[title="${title}"]`)
+
 describe('EyepieceSettings', () => {
     afterEach(() => vi.useRealTimers())
 
     it('sends both screen sizes typed in a row once, 300 ms after the last', async () => {
         vi.useFakeTimers()
         const wrapper = mount(EyepieceSettings, {props: {eyepiece: {...EYEPIECE}}})
-        const [width, height] = wrapper.findAll('input[type="number"]')
 
-        await width.setValue(130)
-        await height.setValue(75)
+        await field(wrapper, 'Width').setValue(130)
+        await field(wrapper, 'Height').setValue(75)
         expect(wrapper.emitted('apply')).toBeUndefined()
 
-        vi.advanceTimersByTime(300)
-        expect(wrapper.emitted('apply')).toEqual([
-            ['eyepiece', expect.objectContaining({screen_width: 130, screen_height: 75})],
-        ])
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
+        expect(wrapper.emitted('apply')).toEqual([['eyepiece', {screen_width: 130, screen_height: 75}]])
     })
 
-    // The Processing section edits the same group's tone fields in place; a mirror that
-    // missed them would send the old values back with the next eyepiece edit.
-    it('sends the tone fields the panel edited in place', async () => {
+    // The tone fields are Processing's; the panel lays these over its own copy of the group.
+    it('hands over only the fields it changed, a pending size with them', async () => {
+        vi.useFakeTimers()
+        const wrapper = mount(EyepieceSettings, {props: {eyepiece: {...EYEPIECE}}})
+
+        await field(wrapper, 'Width').setValue(130)
+        await wrapper.find('#eyepiece-stream-resolution-select').setValue('native')
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
+
+        expect(wrapper.emitted('apply')).toEqual([['eyepiece', {screen_width: 130, stream_resolution: 'native'}]])
+    })
+
+    it('keeps a typed size over a sync until it is sent', async () => {
+        vi.useFakeTimers()
         const eyepiece = reactive({...EYEPIECE})
         const wrapper = mount(EyepieceSettings, {props: {eyepiece}})
 
-        eyepiece.intensity = 0.8
+        await field(wrapper, 'Width').setValue(130)
+        Object.assign(eyepiece, {screen_width: 120, screen_height: 80})
         await nextTick()
-        await wrapper.find('#eyepiece-stream-resolution-select').setValue('native')
 
-        expect(wrapper.emitted('apply').at(-1)).toEqual([
-            'eyepiece',
-            expect.objectContaining({intensity: 0.8, stream_resolution: 'native'}),
-        ])
+        expect(field(wrapper, 'Width').element.value).toBe('130')
+        expect(field(wrapper, 'Height').element.value).toBe('80')
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
+        expect(wrapper.emitted('apply')).toEqual([['eyepiece', {screen_width: 130}]])
     })
+
+    // `v-model.number` handed an emptied field over as '', and the server refused the group.
+    it.each([
+        ['Width', ''],
+        ['Width', '-3'],
+        ['Resolution X', ''],
+        ['Resolution X', '1920.5'],
+        ['Resolution Y', '0'],
+    ])('reverts %s set to %j to its last value, sending nothing', async (title, typed) => {
+        vi.useFakeTimers()
+        const wrapper = mount(EyepieceSettings, {props: {eyepiece: {...EYEPIECE}}})
+        const before = field(wrapper, title).element.value
+
+        await field(wrapper, title).setValue(typed)
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
+
+        expect(field(wrapper, title).element.value).toBe(before)
+        expect(wrapper.emitted('apply')).toBeUndefined()
+    })
+
+    it('reverts an emptied size to the one waiting to be sent', async () => {
+        vi.useFakeTimers()
+        const wrapper = mount(EyepieceSettings, {props: {eyepiece: {...EYEPIECE}}})
+
+        await field(wrapper, 'Width').setValue(130)
+        await field(wrapper, 'Width').setValue('')
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
+
+        expect(field(wrapper, 'Width').element.value).toBe('130')
+        expect(wrapper.emitted('apply')).toEqual([['eyepiece', {screen_width: 130}]])
+    })
+
     // Vue drops an emit from an unmounted component, so a size typed just before the
     // Settings tab closed never reached the server.
     it('sends a pending screen size when it unmounts', async () => {
@@ -55,12 +104,91 @@ describe('EyepieceSettings', () => {
         const onApply = vi.fn()
         const wrapper = mount({render: () => h(EyepieceSettings, {eyepiece: {...EYEPIECE}, onApply})})
 
-        await wrapper.find('input[type="number"]').setValue(130)
+        await field(wrapper, 'Width').setValue(130)
         wrapper.unmount()
 
+        expect(onApply).toHaveBeenCalledExactlyOnceWith('eyepiece', {screen_width: 130})
+        vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
         expect(onApply).toHaveBeenCalledTimes(1)
-        expect(onApply).toHaveBeenCalledWith('eyepiece', expect.objectContaining({screen_width: 130}))
-        vi.advanceTimersByTime(300)
-        expect(onApply).toHaveBeenCalledTimes(1)
+    })
+})
+
+describe('EyepieceSettings in the panel', () => {
+    afterEach(() => vi.useRealTimers())
+
+    /** The panel under a stand-in for the settings store: every save's answer is adopted. */
+    function mountPanel() {
+        const server = ref(settings())
+        const applySettings = vi.fn(async (patch) => {
+            server.value = {...server.value, ...JSON.parse(JSON.stringify(patch))}
+            return server.value
+        })
+        const wrapper = mountWithDefaults(SettingsPanel, {provide: {settings: server, applySettings}})
+        return {wrapper, server, applySettings}
+    }
+
+    async function releaseBlackLevel(wrapper, value) {
+        const blackLevel = wrapper.findAllComponents({name: 'BaseSlider'}).find((s) => s.props('label') === 'Black level')
+        const range = blackLevel.find('input[type="range"]')
+        range.element.value = String(value)
+        await range.trigger('input')
+        await range.trigger('change')
+        await nextTick()
+    }
+
+    // Both sections wrote the whole group from their own copies: Processing's (with the old
+    // size) landed inside the debounce, Eyepiece's mirror took it over the typed value, and
+    // the delayed send posted the old size.
+    it('keeps a typed screen size when Processing commits the same group inside the delay', async () => {
+        vi.useFakeTimers()
+        const {wrapper, applySettings, server} = mountPanel()
+        const before = server.value.eyepiece.screen_width
+
+        await field(wrapper, 'Width').setValue(before + 10)
+        await releaseBlackLevel(wrapper, 0.5)
+        await vi.advanceTimersByTimeAsync(SETTINGS_DEBOUNCE_MS)
+        await flushPromises()
+
+        expect(applySettings).toHaveBeenCalledTimes(2)
+        expect(applySettings.mock.calls.at(-1)[0].eyepiece).toMatchObject({screen_width: before + 10, intensity: 0.5})
+        expect(server.value.eyepiece).toMatchObject({screen_width: before + 10, intensity: 0.5})
+    })
+
+    // An answer to the earlier write predates the later one: it must not take the later
+    // write's field back off the screen, or out of the next write.
+    it('keeps a field in flight over an earlier write\'s answer', async () => {
+        vi.useFakeTimers()
+        const answers = []
+        const server = ref(settings())
+        const applySettings = vi.fn((patch) => new Promise((resolve) => answers.push({patch, resolve})))
+        const wrapper = mountWithDefaults(SettingsPanel, {provide: {settings: server, applySettings}})
+
+        await releaseBlackLevel(wrapper, 0.5)
+        await field(wrapper, 'Width').setValue(150)
+        await vi.advanceTimersByTimeAsync(SETTINGS_DEBOUNCE_MS)
+        expect(answers).toHaveLength(2)
+
+        server.value = {...server.value, eyepiece: answers[0].patch.eyepiece}
+        answers[0].resolve(server.value)
+        await flushPromises()
+        expect(field(wrapper, 'Width').element.value).toBe('150')
+
+        await wrapper.find('#eyepiece-stream-resolution-select').setValue('native')
+        expect(applySettings.mock.calls.at(-1)[0].eyepiece).toMatchObject({
+            screen_width: 150,
+            intensity: 0.5,
+            stream_resolution: 'native',
+        })
+    })
+
+    it('never sends an emptied screen size', async () => {
+        vi.useFakeTimers()
+        const {wrapper, applySettings} = mountPanel()
+
+        await field(wrapper, 'Width').setValue('')
+        await vi.advanceTimersByTimeAsync(SETTINGS_DEBOUNCE_MS)
+        await flushPromises()
+
+        expect(applySettings).not.toHaveBeenCalled()
     })
 })

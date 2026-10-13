@@ -55,16 +55,33 @@ import { useScrollProtect } from '../../composables/useScrollProtect.js'
 
 const { blockIfScrolling } = useScrollProtect()
 
+/** The value the number box held when focused: what an emptied one goes back to. */
+let valueAtFocus = null
+
+/** `null` while the number box holds no number: `Number('')` is 0, which an emptied Gain committed. */
+function readNumber(event) {
+  const raw = event.target.value
+  const value = raw === '' ? NaN : Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
 function handleInput(event) {
   if (blockIfScrolling(event, props.modelValue)) return
-  const value = Number(event.target.value)
-  emit('update:modelValue', value)
+  const value = readNumber(event)
+  if (value !== null) emit('update:modelValue', value)
 }
 
 function handleChange(event) {
   if (blockIfScrolling(event, props.modelValue)) return
-  const value = Number(event.target.value)
-  emit('change', value)
+  const value = readNumber(event)
+  if (value !== null) {
+    valueAtFocus = value
+    emit('change', value)
+    return
+  }
+  const previous = valueAtFocus ?? props.modelValue
+  event.target.value = previous
+  if (previous !== props.modelValue) emit('update:modelValue', previous)
 }
 </script>
 
@@ -100,6 +117,7 @@ function handleChange(event) {
           :step="step"
           :disabled="disabled"
           class="input input-sm"
+          @focus="valueAtFocus = modelValue"
           @input="handleInput"
           @change="handleChange"
       />

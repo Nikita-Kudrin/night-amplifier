@@ -15,45 +15,47 @@ function sexagesimal(value) {
     return [whole, minutes, seconds.toFixed(1)]
 }
 
+const DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)$/
+const FIELD = /^\d+(?:\.\d+)?$/
+const SEXAGESIMAL_SEPARATORS = /[\s:hmsd°'′"″]+/i
+const RANGE = {ra: [0, 360], dec: [-90, 90]}
+
 /**
- * Parse coordinate string to degrees
- * @param {string} value - Coordinate string (decimal degrees or HMS/DMS format)
+ * Signed whole units (hours or degrees) of a 2-3 field sexagesimal string, or null. The sign
+ * is read from the text: taken from the whole field, `-00:30` lost it and came out as +0.5°.
+ */
+function parseSexagesimal(text) {
+    const fields = text.replace(/^[+-]/, '').split(SEXAGESIMAL_SEPARATORS)
+    if (fields.at(-1) === '') fields.pop() // a trailing unit, as in `5h35m`
+    if (fields.length < 2 || fields.length > 3 || !fields.every((f) => FIELD.test(f))) return null
+    const [whole, minutes, seconds = 0] = fields.map(Number)
+    if (minutes >= 60 || seconds >= 60) return null
+    return (text.startsWith('-') ? -1 : 1) * (whole + minutes / 60 + seconds / 3600)
+}
+
+function toDegrees(text, type) {
+    if (DECIMAL.test(text)) return Number(text)
+    const units = parseSexagesimal(text)
+    return units !== null && type === 'ra' ? units * 15 : units
+}
+
+/**
+ * Parse a coordinate string to degrees: decimal degrees, or HH:MM:SS (RA) / DD:MM:SS (Dec)
+ * separated by colons, spaces or unit symbols (`5h35m17s`, `−5°23′28″`). Decimal only when the
+ * whole string is a number: `parseFloat` first read `05:35:17` as 5°. RA goes up to 360° / 24h.
+ * @param {string} value - Coordinate string
  * @param {'ra' | 'dec'} type - Coordinate type
  * @returns {number | null} Degrees or null if invalid
  */
 export function parseCoordinate(value, type) {
-    if (!value || !value.trim()) return null
+    // U+2212, the minus sign catalogs and Wikipedia print.
+    const text = value?.trim().replace(/^\u2212/, '-')
+    if (!text) return null
 
-    const trimmed = value.trim()
-
-    // Try decimal degrees first
-    const decimal = parseFloat(trimmed)
-    if (!isNaN(decimal)) {
-        if (type === 'ra' && (decimal < 0 || decimal > 360)) return null
-        if (type === 'dec' && (decimal < -90 || decimal > 90)) return null
-        return decimal
-    }
-
-    // Try HMS/DMS format (e.g., "12:30:45" or "12 30 45")
-    const parts = trimmed.split(/[:\s]+/).map((p) => parseFloat(p))
-    if (parts.length >= 2 && parts.length <= 3 && parts.every((p) => !isNaN(p))) {
-        const [d, m, s = 0] = parts
-        const sign = d < 0 ? -1 : 1
-        let degrees = Math.abs(d) + m / 60 + s / 3600
-
-        if (type === 'ra') {
-            // Convert hours to degrees for RA
-            degrees = degrees * 15
-            if (degrees > 360) return null
-        } else {
-            degrees = sign * degrees
-            if (degrees < -90 || degrees > 90) return null
-        }
-
-        return degrees
-    }
-
-    return null
+    const degrees = toDegrees(text, type)
+    if (degrees === null) return null
+    const [min, max] = RANGE[type]
+    return degrees >= min && degrees <= max ? degrees : null
 }
 
 /**

@@ -125,7 +125,20 @@ async fn send_snapshot(socket: &mut WebSocket, state: &AppState) -> bool {
         state.viewed_camera.event(),
         state.stream_crop.event(),
     ];
-    for event in snapshot {
+    send_all(socket, snapshot).await
+}
+
+/// After a lag, also the announcements whose answer the client refetches, since it may have
+/// dropped one: a lost `ai_compute_changed` left the benchmark overlay up, a lost
+/// `settings_updated` left panels on stale values. Not on connect: a client reads both
+/// itself on every open, and the events there would only cost it a second read.
+async fn send_lag_resync(socket: &mut WebSocket, state: &AppState) -> bool {
+    let refetch = [ServerEvent::AiComputeChanged, ServerEvent::SettingsUpdated];
+    send_snapshot(socket, state).await && send_all(socket, refetch).await
+}
+
+async fn send_all(socket: &mut WebSocket, events: impl IntoIterator<Item = ServerEvent>) -> bool {
+    for event in events {
         if socket.send(Message::Text(event.to_json().into())).await.is_err() {
             return false;
         }
@@ -174,7 +187,7 @@ async fn handle_events(mut socket: WebSocket, state: Arc<AppState>) {
                         // phase change, so it gets the current picture again.
                         let warning = ServerEvent::warning(format!("Dropped {} events (client too slow)", n));
                         let _ = socket.send(Message::Text(warning.to_json().into())).await;
-                        if !send_snapshot(&mut socket, &state).await {
+                        if !send_lag_resync(&mut socket, &state).await {
                             break;
                         }
                     }

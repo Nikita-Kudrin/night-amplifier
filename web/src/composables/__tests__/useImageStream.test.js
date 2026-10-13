@@ -15,6 +15,7 @@ import {
 
 setupGlobalWebSocketMock()
 
+import {nextTick, ref} from 'vue'
 import {NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream.js'
 import { mount } from '@vue/test-utils'
 
@@ -153,6 +154,46 @@ describe('useImageStream', () => {
             await waitForAsyncProcessing()
 
             expect(dimensions.value).toEqual({width: 4, height: 2})
+        })
+
+        // Frames arrive as Blobs: one still being read when the source switches (the live
+        // view's Guide toggle) or the socket closes belongs to what was just left.
+        describe('a frame read across a clear', () => {
+            function slowBlob(buffer) {
+                const blob = new Blob([buffer])
+                let release
+                const read = new Promise((resolve) => { release = () => resolve(buffer) })
+                blob.arrayBuffer = () => read
+                return {blob, release: () => release()}
+            }
+
+            it('drops a frame of the old source that finishes reading after the switch', async () => {
+                const source = ref('/ws/eyepiece_quality')
+                const {frameData} = useImageStream({endpoint: () => source.value})
+                await openWebSocket()
+                const pending = slowBlob(createTestFrame(2, 2))
+                getWebSocket().simulateMessage(pending.blob)
+
+                source.value = '/ws/eyepiece_quality?source=guide'
+                await nextTick()
+                pending.release()
+                await waitForAsyncProcessing()
+
+                expect(frameData.value).toBe(null)
+            })
+
+            it('drops a frame that finishes reading after the socket closed', async () => {
+                const {frameData} = useImageStream({endpoint: '/ws/eyepiece_quality'})
+                await openWebSocket()
+                const pending = slowBlob(createTestFrame(2, 2))
+                getWebSocket().simulateMessage(pending.blob)
+
+                getWebSocket().simulateClose()
+                pending.release()
+                await waitForAsyncProcessing()
+
+                expect(frameData.value).toBe(null)
+            })
         })
 
         it('ignores non-binary messages', async () => {

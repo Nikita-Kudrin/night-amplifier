@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {ref, nextTick} from 'vue'
 import {mount, flushPromises} from '@vue/test-utils'
 import {useTelescopeSetup} from '../useTelescopeSetup.js'
+import {SETTINGS_DEBOUNCE_MS} from '../../constants'
 import * as api from '../api.js'
 
 // Mock API
@@ -571,7 +572,7 @@ describe('useTelescopeSetup', () => {
             }))
             composable.focalLength.value = 750
             await nextTick()
-            vi.advanceTimersByTime(500)
+            vi.advanceTimersByTime(SETTINGS_DEBOUNCE_MS)
             await flushPromises()
             expect(api.updateSettings).toHaveBeenCalledTimes(1)
 

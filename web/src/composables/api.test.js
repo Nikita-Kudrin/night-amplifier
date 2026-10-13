@@ -1,5 +1,5 @@
 import * as api from './api.js'
-import {ApiError, ignoreProOnly, isProOnly} from './api.js'
+import {ApiError, ignoreProOnly, isProOnly, LONG_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS} from './api.js'
 import {envelope, refusal, stubFetch, textResponse} from '../test/http.js'
 
 const JSON_HEADERS = {'Content-Type': 'application/json'}
@@ -62,7 +62,7 @@ describe('API Client', () => {
 
             const result = await api[name](...args)
 
-            const init = {method, cache: 'no-store'}
+            const init = {method, cache: 'no-store', signal: expect.any(globalThis.AbortSignal)}
             if (body !== undefined) Object.assign(init, {headers: JSON_HEADERS, body: JSON.stringify(body)})
             expect(fetchMock).toHaveBeenCalledWith(url, init)
             expect(result).toEqual({answer: name})
@@ -113,13 +113,98 @@ describe('API Client', () => {
             )
         })
 
-        it('throws error on invalid JSON response, keeping the status', async () => {
+        it('reports a non-JSON 200 as an invalid answer, keeping the status', async () => {
+            fetchMock.mockResolvedValue(textResponse('<html>index</html>', 200))
+
+            const error = await api.getSettings().catch((e) => e)
+
+            expect(error.message).toBe('Server returned an invalid response.')
+            expect(error.status).toBe(200)
+        })
+
+        it('reads a gateway error page as an unreachable server, keeping the status', async () => {
             fetchMock.mockResolvedValue(textResponse('<html>Bad Gateway</html>', 502))
 
             const error = await api.getSettings().catch((e) => e)
 
-            expect(error.message).toBe('Server returned invalid response. Please ensure the server is running.')
+            expect(error.message).toBe('Server unavailable. Please ensure the server is running.')
             expect(error.status).toBe(502)
+        })
+
+        // axum answers a body its `Json<UpdateSettingsRequest>` cannot read with 422 and a
+        // plain-text reason; "ensure the server is running" sent the user the wrong way.
+        it('reports a plain-text refusal in the server\'s words, with its status', async () => {
+            const reason = 'Failed to deserialize the JSON body into the target type: eyepiece.screen_width: invalid type'
+            fetchMock.mockResolvedValue(textResponse(`  ${reason}\n`, 422))
+
+            const error = await api.updateSettings({eyepiece: {screen_width: ''}}).catch((e) => e)
+
+            expect(error).toBeInstanceOf(ApiError)
+            expect(error.status).toBe(422)
+            expect(error.message).toBe(reason)
+        })
+
+        it('caps a long plain-text refusal', async () => {
+            fetchMock.mockResolvedValue(textResponse('x'.repeat(5000), 400))
+
+            const error = await api.getSettings().catch((e) => e)
+
+            expect(error.message.length).toBeLessThan(400)
+        })
+    })
+
+    describe('timeouts', () => {
+        afterEach(() => vi.useRealTimers())
+
+        /** A server that never answers: the request settles only when its signal aborts. */
+        function hang() {
+            fetchMock.mockImplementation((url, {signal}) => new Promise((resolve, reject) => {
+                signal.addEventListener('abort', () => reject(new Error('aborted')))
+            }))
+        }
+
+        // The settings store runs no read beside a write: one hung POST held every refresh.
+        it('abandons a request the server does not answer in time', async () => {
+            vi.useFakeTimers()
+            hang()
+
+            const settled = api.updateSettings({gain: 1}).catch((e) => e)
+            await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+            const error = await settled
+
+            expect(error).toBeInstanceOf(ApiError)
+            expect(error.status).toBe(0)
+            expect(error.message).toMatch(/did not answer in time/)
+        })
+
+        it('gives a camera connect the long deadline', async () => {
+            vi.useFakeTimers()
+            hang()
+            let error = null
+            const settled = api.connectCamera('zwo_0').catch((e) => (error = e))
+
+            await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+            expect(error).toBeNull()
+            await vi.advanceTimersByTimeAsync(LONG_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS)
+            await settled
+
+            expect(error.message).toMatch(/did not answer in time/)
+        })
+
+        it('times out a body that stops arriving', async () => {
+            vi.useFakeTimers()
+            fetchMock.mockImplementation(async (url, {signal}) => ({
+                ok: true,
+                status: 200,
+                text: () => new Promise((resolve, reject) => {
+                    signal.addEventListener('abort', () => reject(new Error('aborted')))
+                }),
+            }))
+
+            const settled = api.getSettings().catch((e) => e)
+            await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS)
+
+            expect((await settled).message).toMatch(/did not answer in time/)
         })
     })
 })

@@ -153,7 +153,7 @@ export function createMockWebGLRenderer() {
     return {
         backend: ref('webgl2-10bit'),
         init: vi.fn(() => true),
-        render: vi.fn(),
+        render: vi.fn(() => true), // drew, as a live context does
         cleanup: vi.fn(),
         isInitialized: vi.fn(() => true),
     }
@@ -163,7 +163,7 @@ export function createMockCanvas2DRenderer() {
     return {
         backend: ref('canvas2d'),
         init: vi.fn(() => false),
-        render: vi.fn(),
+        render: vi.fn(() => true),
         cleanup: vi.fn(),
         isInitialized: vi.fn(() => false),
     }

@@ -17,7 +17,7 @@ vi.mock('../../composables/useImageStream.js', () => ({
 vi.mock('../../composables/useWebGLRenderer.js', () => ({
   useWebGLRenderer: vi.fn(() => ({
     init: vi.fn(() => true),
-    render: vi.fn(),
+    render: vi.fn(() => true), // drew, as a live context does
     cleanup: vi.fn(),
     isInitialized: vi.fn(() => true),
     backend: ref('webgl2-8bit'),
@@ -27,7 +27,7 @@ vi.mock('../../composables/useWebGLRenderer.js', () => ({
 vi.mock('../../composables/useCanvas2DRenderer.js', () => ({
   useCanvas2DRenderer: vi.fn(() => ({
     init: vi.fn(() => false),
-    render: vi.fn(),
+    render: vi.fn(() => true),
     cleanup: vi.fn(),
     isInitialized: vi.fn(() => false),
     backend: ref('canvas2d'),

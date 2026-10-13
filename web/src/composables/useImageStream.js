@@ -34,7 +34,8 @@ export function useImageStream(options = {}) {
 
     let framesSinceLastFPS = 0
     let fpsTimer = null
-    // Bumped by every `NO_FRAME`, so a Blob still being read when one arrives is dropped.
+    // Bumped by every clear (`NO_FRAME`, a source switch, a close), so a Blob still being
+    // read across one is dropped rather than shown as the source just left.
     let clearGeneration = 0
 
     /**
@@ -42,6 +43,7 @@ export function useImageStream(options = {}) {
      * Called when starting a new capture session
      */
     function clearFrameData() {
+        clearGeneration++
         frameData.value = null
         dimensions.value = {width: 0, height: 0}
         frameNumber.value = 0
@@ -80,7 +82,6 @@ export function useImageStream(options = {}) {
             if (event.data === NO_FRAME) {
                 // The server switched this socket to a camera with nothing to show yet: the
                 // picture on screen is the other camera's.
-                clearGeneration++
                 clearFrameData()
                 return
             }
@@ -89,7 +90,7 @@ export function useImageStream(options = {}) {
             if (event.data instanceof Blob) {
                 const generation = clearGeneration
                 buffer = await event.data.arrayBuffer()
-                // A frame that arrived before the marker must not land after it.
+                // A frame that arrived before a clear must not land after it.
                 if (generation !== clearGeneration) return
             } else if (event.data instanceof ArrayBuffer) {
                 buffer = event.data

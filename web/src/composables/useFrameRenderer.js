@@ -30,10 +30,11 @@ function createSurface(canvas, onRestored) {
     const webgl = useWebGLRenderer({onRestored})
     const renderer = webgl.init(canvas) ? webgl : useCanvas2DRenderer()
     if (renderer !== webgl && !renderer.init(canvas)) {
-        return {backend: () => 'none', draw() {}, cleanup() {}}
+        return {backend: () => 'none', draw: () => false, cleanup() {}}
     }
     return {
         backend: () => renderer.backend.value,
+        /** Whether it drew: a lost GL context skips the frame, canvas resize included. */
         draw: (image) => renderer.render(canvas, image.source, image.width, image.height),
         cleanup: renderer.cleanup,
     }
@@ -43,10 +44,12 @@ function createSurface(canvas, onRestored) {
  * Draws an image stream's frames onto the canvases `canvases()` names: one for the live
  * view, two for a binoview eyepiece — a frame is decoded once and drawn on each.
  *
- * A JPEG decodes asynchronously, so decodes can finish out of order: only the newest
- * frame's bitmap is drawn, any other is closed. The last image is held, so a restored
- * GL context or a newly shown canvas is drawn without waiting for the next frame (an idle
- * stream sends none); a null frame (`no_frame`, a cleared view) drops it.
+ * A JPEG decodes asynchronously, one at a time: frames arriving meanwhile replace each
+ * other, and the newest is decoded next. Dropping every decode a newer frame overtook
+ * froze the view whenever decoding was slower than the frame rate. The last image is
+ * held, so a restored GL context or a newly shown canvas is drawn without waiting for
+ * the next frame (an idle stream sends none); a null frame (`no_frame`, a cleared view)
+ * drops it, and with it any decode under way.
  *
  * @param {Object} options
  * @param {import('vue').Ref} options.frameData - The stream's frame: RGB8 bytes or a JPEG blob
@@ -55,12 +58,16 @@ function createSurface(canvas, onRestored) {
  * @param {() => (HTMLCanvasElement|null)[]} options.canvases - The canvases on screen now
  * @param {(size: {width: number, height: number}) => void} [options.onSizeChange] - A frame
  *   of a new size was drawn: the canvas was resized, so whatever sits over it re-measures.
+ *   Not while no canvas drew (a lost context): the restore's redraw reports it.
  */
 export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSizeChange}) {
     const surfaces = new Map()
     const rendererBackend = ref('unknown')
     let image = null
+    // Bumped by whatever outdates a decode under way: a clear, an RGB frame, unmount.
     let generation = 0
+    let decoding = false
+    let pendingJpeg = null
     let drawnSize = null
 
     function surfaceFor(canvas) {
@@ -89,7 +96,8 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
     function draw() {
         const ready = attach()
         if (!image) return
-        ready.forEach((surface) => surface.draw(image))
+        const drew = ready.map((surface) => surface.draw(image)).some(Boolean)
+        if (!drew) return
         const {width, height} = image
         if (drawnSize?.width === width && drawnSize?.height === height) return
         drawnSize = {width, height}
@@ -101,29 +109,50 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
         image = next
     }
 
-    async function show(frame) {
-        const current = ++generation
+    function show(frame) {
+        if (frame && isJpeg.value) {
+            pendingJpeg = frame
+            if (!decoding) decodeLatest()
+            return
+        }
+        generation++
+        pendingJpeg = null
         if (!frame) {
             hold(null)
             return
         }
-        if (!isJpeg.value) {
-            hold({source: frame, ...dimensions.value})
-            draw()
-            return
-        }
-        let bitmap
-        try {
-            bitmap = await window.createImageBitmap(frame)
-        } catch {
-            return // not decodable; the next frame replaces it
-        }
-        if (current !== generation) {
-            bitmap.close()
-            return
-        }
-        hold({source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close()})
+        hold({source: frame, ...dimensions.value})
         draw()
+    }
+
+    /** Decodes the newest pending JPEG until none is left; one decode in flight at most. */
+    async function decodeLatest() {
+        decoding = true
+        try {
+            while (pendingJpeg) {
+                const frame = pendingJpeg
+                pendingJpeg = null
+                const current = generation
+                const bitmap = await decode(frame)
+                if (!bitmap) continue
+                if (current !== generation) {
+                    bitmap.close()
+                    continue
+                }
+                hold({source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close()})
+                draw()
+            }
+        } finally {
+            decoding = false
+        }
+    }
+
+    async function decode(frame) {
+        try {
+            return await window.createImageBitmap(frame)
+        } catch {
+            return null // not decodable; the next frame replaces it
+        }
     }
 
     watch(frameData, show)
@@ -132,6 +161,7 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
 
     tryOnBeforeUnmount(() => {
         generation++
+        pendingJpeg = null
         hold(null)
         surfaces.forEach((surface) => surface.cleanup())
         surfaces.clear()

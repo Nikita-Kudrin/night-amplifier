@@ -49,5 +49,25 @@ describe('BaseSlider', () => {
 
             expect(wrapper.emitted('change')[0]).toEqual([200])
         })
+
+        // `Number('')` is 0: an emptied Gain box committed gain 0 on blur.
+        it('commits nothing for an emptied number box, and shows its value from before', async () => {
+            const wrapper = mountSlider({
+                showInput: true,
+                'onUpdate:modelValue': (value) => wrapper.setProps({modelValue: value}),
+            })
+            const input = wrapper.find('input[type="number"]')
+
+            await input.trigger('focus')
+            for (const typed of ['1', '']) {
+                input.element.value = typed
+                await input.trigger('input')
+            }
+            await input.trigger('change')
+
+            expect(wrapper.emitted('update:modelValue')).toEqual([[1], [46]])
+            expect(wrapper.emitted('change')).toBeUndefined()
+            expect(input.element.value).toBe('46')
+        })
     })
 })

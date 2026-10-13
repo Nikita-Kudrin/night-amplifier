@@ -3,9 +3,9 @@
  * Settings → Processing: colour intensity, the eyepiece group's tone fields, background
  * subtraction and the shadow saturation boost.
  *
- * Mirrors those keys of the panel's settings and emits `apply(key, value)`; the tone
- * fields belong to the `eyepiece` group, so they are sent as the whole group, which
- * `EyepieceSettings` follows.
+ * Mirrors those keys of the panel's settings and emits `apply(key, value)`. The tone fields
+ * belong to the `eyepiece` group, which Eyepiece edits too, so only the changed field goes
+ * (`apply('eyepiece', {field})`) and the panel sends it over its own copy of the group.
  */
 import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
@@ -45,6 +45,10 @@ const local = useSectionMirror(() => props.settings, [
 function apply(key) {
   emit('apply', key, copySetting(local[key]))
 }
+
+function applyTone(field) {
+  emit('apply', 'eyepiece', {[field]: local.eyepiece[field]})
+}
 </script>
 
 <template>
@@ -75,7 +79,7 @@ function apply(key) {
           :step="BLACK_LEVEL_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.eyepiece_intensity"
-          @change="apply('eyepiece')"
+          @change="applyTone('intensity')"
       />
     </div>
 
@@ -89,7 +93,7 @@ function apply(key) {
           :step="BLACK_FLOOR_LIMITS.step"
           :format-value="formatPercent"
           :help="HELP.eyepiece_black_floor"
-          @change="apply('eyepiece')"
+          @change="applyTone('black_floor')"
       />
     </div>
 
@@ -99,7 +103,7 @@ function apply(key) {
           label="Darker sky"
           :disabled="local.eyepiece.black_floor >= 0"
           :help="HELP.eyepiece_darker_sky"
-          @update:model-value="apply('eyepiece')"
+          @update:model-value="applyTone('darker_sky')"
       />
     </div>
 
@@ -111,7 +115,7 @@ function apply(key) {
           label="Dithering"
           :help="HELP.eyepiece_dither"
           :disabled="focusMode"
-          @update:model-value="apply('eyepiece')"
+          @update:model-value="applyTone('dither')"
       />
     </div>
 

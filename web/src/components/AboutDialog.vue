@@ -252,13 +252,13 @@ onMounted(fetchLicenseStatus)
 .status-badge.success {
   background: var(--success-bg);
   color: var(--success);
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border: 1px solid var(--success-border);
 }
 
 .status-badge.warning {
   background: var(--warning-bg);
   color: var(--warning);
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border: 1px solid var(--warning-border);
 }
 
 .license-details {

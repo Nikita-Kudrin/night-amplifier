@@ -24,11 +24,13 @@ export function formatTemperature(celsius) {
 
 /**
  * An angle on the sky: arcminutes below a degree, degrees from there. `degreeDigits` sets
- * the precision of the degree form (FOVs show 2, distances 1).
+ * the precision of the degree form (FOVs show 2, distances 1). The unit is picked after
+ * rounding, so 0.99999° reads `1.00°`, not `60.0'`.
  */
 export function formatAngle(degrees, degreeDigits = 1) {
     if (!isNumber(degrees)) return MISSING
-    if (Math.abs(degrees) < 1) return `${(degrees * 60).toFixed(1)}'`
+    const arcminutes = (degrees * 60).toFixed(1)
+    if (Math.abs(Number(arcminutes)) < 60) return `${arcminutes}'`
     return `${degrees.toFixed(degreeDigits)}°`
 }
 
@@ -38,16 +40,20 @@ export function formatFov(degrees) {
 }
 
 const KIB = 1024
-const MIB = KIB * 1024
-const GIB = MIB * 1024
+const BYTE_UNITS = [['B', 0], ['KB', 0], ['MB', 1], ['GB', 2]]
 
-/** A download size in binary units: `"512 KB"`, `"12.3 MB"`, `"1.30 GB"`. */
+/**
+ * A download size in binary units: `"512 KB"`, `"12.3 MB"`, `"1.30 GB"`. Each unit is tried
+ * at its display precision, so 1048575 B reads `1.0 MB`, not `1024 KB`.
+ */
 export function formatBytes(bytes) {
     if (!isNumber(bytes)) return MISSING
-    if (bytes < KIB) return `${Math.round(bytes)} B`
-    if (bytes < MIB) return `${Math.round(bytes / KIB)} KB`
-    if (bytes < GIB) return `${(bytes / MIB).toFixed(1)} MB`
-    return `${(bytes / GIB).toFixed(2)} GB`
+    let value = bytes
+    for (const [index, [unit, digits]] of BYTE_UNITS.entries()) {
+        const shown = value.toFixed(digits)
+        if (Number(shown) < KIB || index === BYTE_UNITS.length - 1) return `${shown} ${unit}`
+        value /= KIB
+    }
 }
 
 /** A short duration: one decimal below 10 ms, whole milliseconds above. */

@@ -45,6 +45,13 @@
     --error-hover: #ee6666;
     --error-bg: rgba(221, 85, 85, 0.15);
 
+    /* A bordered alert or status badge: its tone at 30%. The tints here and below are
+       precomputed: `color-mix()` needs Safari 16.2 and Vite does not transpile it. */
+    --primary-border: rgba(204, 68, 68, 0.3);
+    --success-border: rgba(204, 102, 68, 0.3);
+    --warning-border: rgba(204, 136, 68, 0.3);
+    --error-border: rgba(221, 85, 85, 0.3);
+
     /* Text and marks on a coloured fill: primary/success/error buttons, badges, knobs */
     --on-primary: #fff;
 
@@ -55,6 +62,13 @@
     --category-purple: #9f4aff;
     --category-yellow: #facc15;
     --category-green: #4ade80;
+    --category-blue-bg: rgba(74, 158, 255, 0.18);
+    --category-orange-bg: rgba(255, 159, 74, 0.18);
+    --category-purple-bg: rgba(159, 74, 255, 0.18);
+    --category-yellow-bg: rgba(250, 204, 21, 0.18);
+    --category-green-bg: rgba(74, 222, 128, 0.18);
+    /* Purple as text on its own tint: #9f4aff there is ~3.7:1, this ~6:1. */
+    --category-purple-text: #c084fc;
 
     /* Behind a modal, and the eyepiece's grey glass controls over the image */
     --backdrop: rgba(0, 0, 0, 0.7);
@@ -727,8 +741,8 @@ input[type="checkbox"]:disabled {
 }
 
 /*
- * Pill: a short rounded tag whose background is tinted from its own colour, so a tone is
- * a single `color`. State tones use the theme; category tones only tell kinds apart.
+ * Pill: a short rounded tag, its background a tint of its tone; a tone is one class.
+ * State tones use the theme; category tones only tell kinds apart.
  */
 .pill {
     display: inline-flex;
@@ -737,13 +751,13 @@ input[type="checkbox"]:disabled {
     border-radius: var(--radius-pill);
     font-weight: 500;
     color: var(--text-secondary);
-    background: color-mix(in srgb, currentColor 18%, transparent);
+    background: var(--surface-hover);
 }
 
-.pill-primary { color: var(--primary); }
-.pill-success { color: var(--success); }
-.pill-warning { color: var(--warning); }
-.pill-error { color: var(--error); }
+.pill-primary { color: var(--primary); background: var(--primary-bg); }
+.pill-success { color: var(--success); background: var(--success-bg); }
+.pill-warning { color: var(--warning); background: var(--warning-bg); }
+.pill-error { color: var(--error); background: var(--error-bg); }
 .pill-muted { color: var(--text-muted); background: var(--surface-hover); }
 
 /* A status readout's pill (cooler state, dew heater on/off). */
@@ -752,11 +766,11 @@ input[type="checkbox"]:disabled {
     padding: 0.1rem 0.5rem;
 }
 
-.category-blue { color: var(--category-blue); }
-.category-orange { color: var(--category-orange); }
-.category-purple { color: var(--category-purple); }
-.category-yellow { color: var(--category-yellow); }
-.category-green { color: var(--category-green); }
+.category-blue { color: var(--category-blue); background: var(--category-blue-bg); }
+.category-orange { color: var(--category-orange); background: var(--category-orange-bg); }
+.category-purple { color: var(--category-purple-text); background: var(--category-purple-bg); }
+.category-yellow { color: var(--category-yellow); background: var(--category-yellow-bg); }
+.category-green { color: var(--category-green); background: var(--category-green-bg); }
 
 /* Progress bar: `.progress-bar` is the track, `.progress-fill` its width-driven fill */
 .progress-bar {

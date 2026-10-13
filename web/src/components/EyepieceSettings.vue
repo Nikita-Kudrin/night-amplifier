@@ -3,13 +3,13 @@
  * Settings → Eyepiece: the view's layout (binoview, circular), its stream resolution and
  * the screen geometry binoview needs.
  *
- * Mirrors the `eyepiece` group and emits `apply('eyepiece', value)`, as
- * `ImageQualitySettings` does. The Processing section edits the same group's tone fields
- * in place, so the mirror follows the prop deeply: a stale copy would undo them.
+ * Mirrors its fields of the `eyepiece` group and emits `apply('eyepiece', fields)` with only
+ * the fields it changed: the panel sends them over its own copy of the group, whose tone
+ * fields Processing edits. A typed screen field is held out of syncs until it is sent.
  */
-import {reactive, watch} from 'vue'
 import {BaseToggle, BaseInfoIcon, SettingSelect} from './ui'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
+import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS, SETTINGS_DEBOUNCE_MS} from '../constants'
 
 const props = defineProps({
@@ -20,20 +20,48 @@ const emit = defineEmits(['apply'])
 
 const HELP = HELP_TEXTS
 
-const local = reactive({...props.eyepiece})
-
-watch(
-    () => props.eyepiece,
-    (eyepiece) => Object.assign(local, eyepiece),
-    {deep: true}
-)
-
-function apply() {
-  emit('apply', 'eyepiece', {...local})
-}
+const held = new Set()
+const local = useSectionMirror(() => props.eyepiece, [
+  'binoview',
+  'circular_view',
+  'stream_resolution',
+  'screen_width',
+  'screen_height',
+  'screen_measurement',
+  'screen_resolution_x',
+  'screen_resolution_y',
+], held)
 
 /** Screen sizes are typed digit by digit, so they are sent a moment after the last edit. */
-const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
+const {schedule, cancel} = useDebouncedCall(send, SETTINGS_DEBOUNCE_MS)
+
+/** Sends `fields` with every typed field still waiting, in one request. */
+function send(fields = {}) {
+  const typed = Object.fromEntries([...held].map((key) => [key, local[key]]))
+  held.clear()
+  cancel()
+  emit('apply', 'eyepiece', {...typed, ...fields})
+}
+
+const sendField = (key) => send({[key]: local[key]})
+
+const isSize = (n) => Number.isFinite(n) && n > 0
+const isPixels = (n) => Number.isInteger(n) && n > 0
+
+/**
+ * An emptied or invalid field reads its last value again, and nothing is sent: '' or a
+ * fractional resolution made the server refuse the whole group.
+ */
+function commitTyped(key, event, valid) {
+  const typed = event.target.value === '' ? NaN : Number(event.target.value)
+  if (!valid(typed)) {
+    event.target.value = local[key]
+    return
+  }
+  local[key] = typed
+  held.add(key)
+  schedule()
+}
 </script>
 
 <template>
@@ -47,14 +75,14 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
             label="Binoview"
             size="small"
             :help="HELP.eyepiece_binoview"
-            @update:model-value="apply"
+            @update:model-value="sendField('binoview')"
         />
         <BaseToggle
             v-model="local.circular_view"
             label="Circular view"
             size="small"
             :help="HELP.eyepiece_circular_view"
-            @update:model-value="apply"
+            @update:model-value="sendField('circular_view')"
         />
       </div>
     </div>
@@ -66,7 +94,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
           label="Eyepiece Streaming Resolution"
           :help="HELP.eyepiece_stream_resolution"
           :options="EYEPIECE_STREAM_RESOLUTION_OPTIONS"
-          @change="apply"
+          @change="sendField('stream_resolution')"
       />
     </div>
 
@@ -81,28 +109,28 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
 
       <div class="control-row screen-row screen-size-row">
         <input
-            v-model.number="local.screen_width"
+            :value="local.screen_width"
             type="number"
             min="1"
             step="0.1"
             class="screen-field screen-number"
             title="Width"
-            @change="applyDebounced"
+            @change="commitTyped('screen_width', $event, isSize)"
         />
         <span class="screen-times">x</span>
         <input
-            v-model.number="local.screen_height"
+            :value="local.screen_height"
             type="number"
             min="1"
             step="0.1"
             class="screen-field screen-number"
             title="Height"
-            @change="applyDebounced"
+            @change="commitTyped('screen_height', $event, isSize)"
         />
         <select
             v-model="local.screen_measurement"
             class="screen-field screen-unit"
-            @change="apply"
+            @change="sendField('screen_measurement')"
         >
           <option value="mm">mm</option>
           <option value="inches">inches</option>
@@ -112,23 +140,23 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
       <div class="control-row screen-row">
         <label class="screen-row-label">Resolution</label>
         <input
-            v-model.number="local.screen_resolution_x"
+            :value="local.screen_resolution_x"
             type="number"
             min="1"
             step="1"
             class="screen-field screen-number"
             title="Resolution X"
-            @change="applyDebounced"
+            @change="commitTyped('screen_resolution_x', $event, isPixels)"
         />
         <span class="screen-times">x</span>
         <input
-            v-model.number="local.screen_resolution_y"
+            :value="local.screen_resolution_y"
             type="number"
             min="1"
             step="1"
             class="screen-field screen-number"
             title="Resolution Y"
-            @change="applyDebounced"
+            @change="commitTyped('screen_resolution_y', $event, isPixels)"
         />
       </div>
     </div>

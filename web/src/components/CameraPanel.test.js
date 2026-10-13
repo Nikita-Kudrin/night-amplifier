@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import {ref, watch} from 'vue'
 import CameraPanel from './CameraPanel.vue'
@@ -55,8 +55,9 @@ describe('CameraPanel', () => {
         }
     }
 
-    function mountCameraPanel(provides = {}) {
+    function mountCameraPanel(provides = {}, options = {}) {
         return mount(CameraPanel, {
+            ...options,
             global: {
                 provide: createMockProvides(provides),
             },
@@ -916,5 +917,36 @@ describe('CameraPanel', () => {
         expect(wrapper.find('.cameras-container').attributes('style')).toContain('display: none')
         expect(wrapper.find('.collapsed-summary').text()).toContain('ZWO ASI533')
         expect(wrapper.find('.collapsed-summary').text()).toContain('3008x3008')
+    })
+
+    describe('folding with the Connect menu open', () => {
+        let wrapper
+
+        beforeEach(async () => {
+            const host = document.body.appendChild(document.createElement('div'))
+            // Attached, so a click bubbles to `document` as in the browser.
+            wrapper = mountCameraPanel(
+                {cameras: [{id: 'zwo_0', name: 'ZWO ASI533MC', provider: 'Zwo', connected: false, info: {}}]},
+                {attachTo: host},
+            )
+            await flushPromises()
+            await wrapper.find('.split-button-toggle').trigger('click')
+            expect(document.querySelector('.split-button-menu')).not.toBeNull()
+        })
+
+        afterEach(() => wrapper.unmount())
+
+        it('closes it on a click on another header button', async () => {
+            wrapper.find('button[title="Refresh"]').element.click()
+            await flushPromises()
+            expect(document.querySelector('.split-button-menu')).toBeNull()
+        })
+
+        // The teleported menu once stayed floating, still live, over the folded panel.
+        it('closes it on a click on the fold toggle', async () => {
+            wrapper.find('.collapse-toggle').element.click()
+            await flushPromises()
+            expect(document.querySelector('.split-button-menu')).toBeNull()
+        })
     })
 })

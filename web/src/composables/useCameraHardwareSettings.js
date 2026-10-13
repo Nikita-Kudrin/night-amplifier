@@ -1,8 +1,6 @@
-import {computed, inject, ref, watch} from 'vue'
-import {useDebouncedCall} from './useDebouncedCall.js'
+import {computed, inject, ref} from 'vue'
 import {useError} from './useError.js'
 import {useApplySettings, useSelectedCamera} from './appContext.js'
-import {SETTINGS_DEBOUNCE_MS} from '../constants'
 
 /**
  * The settings block of the camera in `role`: the imaging camera's hardware settings sit at
@@ -14,14 +12,13 @@ export function hardwareBlock(settings, role) {
 }
 
 /**
- * The selected camera's hardware settings (cooler, dew heater), its live status and a
- * save that names the camera.
+ * The selected camera's hardware settings (cooler, dew heater, binning), its live status
+ * and a save that names the camera.
  *
  * These controls save through the API themselves rather than emitting `apply` like a
  * settings section: every request must carry `camera_role`, so that the edit lands on
- * the camera it was made for. A debounced edit is bound to the camera selected when it
- * was made, and is sent at once when the selection moves, so it is never coalesced with
- * the next camera's.
+ * the camera it was made for. Each sends at once (a slider on release), bound to the
+ * camera selected when it was made.
  */
 export function useCameraHardwareSettings() {
     const settings = inject('settings', ref(null))
@@ -45,12 +42,5 @@ export function useCameraHardwareSettings() {
         })
     }
 
-    const {schedule, flush} = useDebouncedCall(apply, SETTINGS_DEBOUNCE_MS)
-    watch(settingsRole, flush)
-
-    function applyDebounced(payload) {
-        schedule(payload, settingsRole.value)
-    }
-
-    return {settingsRole, cameraSettings, currentCamera, liveStatus, error, clearError, apply, applyDebounced}
+    return {settingsRole, cameraSettings, currentCamera, liveStatus, error, clearError, apply}
 }

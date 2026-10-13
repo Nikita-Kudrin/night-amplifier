@@ -71,7 +71,7 @@ defineExpose({calculatedFov})
 <template>
   <div class="section equipment-section">
     <div class="equipment-header" @click="equipmentCollapsed = !equipmentCollapsed">
-      <CollapseToggle v-model="equipmentCollapsed" title="Toggle equipment" :size="10"/>
+      <CollapseToggle :model-value="equipmentCollapsed" title="Toggle equipment" :size="10"/>
       <h3 class="eyebrow">Equipment <SelectedCameraTag :fallback-name="profileName"/></h3>
       <span v-if="calculatedFov && equipmentCollapsed" class="fov-badge">
         {{ formatFov(calculatedFov.x) }} &times; {{ formatFov(calculatedFov.y) }}
@@ -156,12 +156,7 @@ defineExpose({calculatedFov})
       <!-- Manual Sensor Specs -->
       <div class="manual-sensor-section">
         <div class="manual-sensor-header" @click="manualSensorExpanded = !manualSensorExpanded">
-          <CollapseToggle
-              :model-value="!manualSensorExpanded"
-              title="Toggle manual sensor specs"
-              :size="9"
-              @update:model-value="manualSensorExpanded = !$event"
-          />
+          <CollapseToggle :model-value="!manualSensorExpanded" title="Toggle manual sensor specs" :size="9"/>
           <span class="manual-sensor-label">Manual sensor specs</span>
           <BaseToggle
               :model-value="manualPixelSize"

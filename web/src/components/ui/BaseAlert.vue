@@ -43,27 +43,32 @@ const emit = defineEmits(['dismiss'])
 .alert-error {
   background: var(--error-bg);
   color: var(--error);
+  border-color: var(--error-border);
 }
 
 .alert-warning {
   background: var(--warning-bg);
   color: var(--warning);
+  border-color: var(--warning-border);
 }
 
 .alert-info {
   background: var(--primary-bg);
   color: var(--primary);
+  border-color: var(--primary-border);
 }
 
 .alert-success {
   background: var(--success-bg);
   color: var(--success);
+  border-color: var(--success-border);
 }
 
 .alert.bordered {
   padding: 0.75rem 1rem;
   margin-bottom: 0;
-  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-width: 1px;
+  border-style: solid;
   border-radius: var(--radius-md);
   font-size: var(--fs-base);
 }

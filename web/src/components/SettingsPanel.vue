@@ -1,7 +1,8 @@
 <script setup>
 /**
  * Settings: one section component per group, each mirroring its keys of `localSettings`
- * and emitting `apply(key, value)`. The panel owns the one save path and error banner.
+ * and emitting `apply(key, value)`. The panel owns the one save path and error banner, and
+ * is the one writer of the `eyepiece` group (`applyEyepiece`).
  */
 import {ref, inject, watch, computed} from 'vue'
 import {useError} from '../composables/useError.js'
@@ -44,10 +45,17 @@ const stackingType = computed(() => settings?.value?.stacking_type ?? STACKING_T
 
 const localSettings = ref(settingsMirror(null))
 
+/** `eyepiece` fields posted and not yet answered (see `applyEyepiece`). */
+let eyepieceInFlight = {}
+let eyepieceWrites = 0
+
 watch(
     settings,
     (newSettings) => {
-      if (newSettings) localSettings.value = settingsMirror(newSettings)
+      if (!newSettings) return
+      const mirror = settingsMirror(newSettings)
+      Object.assign(mirror.eyepiece, eyepieceInFlight)
+      localSettings.value = mirror
     },
     {immediate: true}
 )
@@ -58,8 +66,25 @@ async function applySetting(key, value) {
   })
 }
 
+/**
+ * The server replaces the `eyepiece` group whole, and two sections edit it (Eyepiece its
+ * layout and screen, Processing its tone). Each hands over only the fields it changed, sent
+ * over the panel's copy: a section's own stale copy reverted the other's field. Fields still
+ * in flight are laid over any answer adopted meanwhile, which an earlier write may predate.
+ */
+function applyEyepiece(fields) {
+  const eyepiece = {...localSettings.value.eyepiece, ...fields}
+  localSettings.value.eyepiece = eyepiece
+  Object.assign(eyepieceInFlight, fields)
+  eyepieceWrites++
+  return applySetting('eyepiece', {...eyepiece}).finally(() => {
+    if (--eyepieceWrites === 0) eyepieceInFlight = {}
+  })
+}
+
 /** Persist a setting a section edited, keeping the panel's own copy in step. */
 function applyGroup(key, value) {
+  if (key === 'eyepiece') return applyEyepiece(value)
   localSettings.value[key] = value
   return applySetting(key, value)
 }
