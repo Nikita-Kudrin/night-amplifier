@@ -1,5 +1,5 @@
 <script setup>
-import {ref, computed, inject, onMounted, onUnmounted, watch} from 'vue'
+import {ref, computed, onMounted, onUnmounted, watch} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
 import {useFrameRenderer} from '../composables/useFrameRenderer.js'
 import {useEventListener} from '../composables/useEventListener.js'
@@ -7,7 +7,13 @@ import {useFullscreen} from '../composables/useFullscreen.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
 import {useTimeouts} from '../composables/useTimeouts.js'
-import {useCapabilities} from '../composables/appContext.js'
+import {
+  useCapabilities,
+  useEventStreamContext,
+  useGuideCamera,
+  useMainCamera,
+  useSettings,
+} from '../composables/appContext.js'
 import {fetchEyepieceSnapshot} from '../composables/api.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {saveBlob} from '../utils/saveBlob.js'
@@ -16,13 +22,13 @@ import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
 
-const eventStream = inject('eventStream')
-const settings = inject('settings')
+const eventStream = useEventStreamContext()
+const settings = useSettings()
 const {debugLogging} = useCapabilities()
 const {later} = useTimeouts()
 
-const mainCamera = inject('mainCamera', computed(() => null))
-const guideCamera = inject('guideCamera', computed(() => null))
+const mainCamera = useMainCamera()
+const guideCamera = useGuideCamera()
 
 const routePath = window.location.pathname
 // No source in the URL: the server streams whichever camera the operator views on `/`,

@@ -15,19 +15,6 @@ describe('createEventStreamStub', () => {
         MockWebSocket.reset()
     })
 
-    it('has every field and action the real event stream has', () => {
-        let real: ReturnType<typeof useEventStream> | undefined
-        const wrapper = mount({
-            setup() {
-                real = useEventStream()
-                return () => null
-            },
-        })
-
-        expect(Object.keys(createEventStreamStub()).sort()).toEqual(Object.keys(real!).sort())
-        wrapper.unmount()
-    })
-
     it('starts where the real one starts', () => {
         let real: ReturnType<typeof useEventStream> | undefined
         const wrapper = mount({

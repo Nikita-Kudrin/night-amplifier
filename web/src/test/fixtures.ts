@@ -6,6 +6,7 @@
 import {DEFAULT_CAPABILITIES, defaultSettings, STACKING_TYPES} from '../constants'
 import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
 import type {
+    AiComputeReport,
     AstapStatus,
     Camera,
     CameraInfo,
@@ -42,6 +43,20 @@ export function proCapabilities(): Capabilities {
         push_to: {astap_solver: true},
         comet: {pro_stacking: true},
         debug_logging: false,
+    }
+}
+
+/** A server with no unit to run the AI denoiser on, so nothing to benchmark. */
+export function aiComputeReport(overrides: Partial<AiComputeReport> = {}): AiComputeReport {
+    return {
+        generation: 0,
+        state: 'unavailable',
+        progress: null,
+        rungs: [],
+        auto: null,
+        effective: null,
+        notice: null,
+        ...overrides,
     }
 }
 

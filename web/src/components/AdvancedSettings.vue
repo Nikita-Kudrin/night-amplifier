@@ -10,7 +10,8 @@
  * `save` and `guard` are only handed on: the AI section must await its save, so it takes
  * the panel's save rather than an emit (see `AiComputeSettings`).
  */
-import {computed, inject, ref, watch} from 'vue'
+import {computed, ref, watch} from 'vue'
+import {useSimulatorEnabled} from '../composables/appContext.js'
 import {BaseAlert, BaseToggle, BaseSlider, BaseInfoIcon, ButtonGroup} from './ui'
 import AiComputeSettings from './AiComputeSettings.vue'
 import SelectedCameraTag from './SelectedCameraTag.vue'
@@ -55,7 +56,7 @@ function applyBin(value) {
 }
 
 /** The app's own switch (it decides which cameras the list offers), mirrored to the server. */
-const simulatorEnabledRef = inject('simulatorEnabled', null)
+const simulatorEnabledRef = useSimulatorEnabled()
 const simulatorEnabled = computed({
   get: () => simulatorEnabledRef?.value ?? false,
   set: (val) => {

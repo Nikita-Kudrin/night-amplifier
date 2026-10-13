@@ -8,6 +8,7 @@ vi.mock('./api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 import {ApiError, getAstapDatabases, getAstapStatus, installAstap} from './api.js'
+import {contextProvides} from './appContext.js'
 
 const NOT_INSTALLED = astapStatus({binary_installed: false, database_installed: false, installed_databases: [], ready: false})
 
@@ -21,7 +22,7 @@ function mountInstall(options = {}, eventStream = null) {
             return () => h('div')
         },
     })
-    const wrapper = mount(Host, {global: {provide: {eventStream}}})
+    const wrapper = mount(Host, {global: {provide: contextProvides({eventStream})}})
     return {wrapper, install, progress, eventStream}
 }
 

@@ -13,6 +13,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import {updateSettings} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 describe('SettingsPanel', () => {
     beforeEach(() => {
@@ -222,7 +223,7 @@ describe('SettingsPanel', () => {
             const simulatorEnabled = ref(false)
             const wrapper = mount(SettingsPanel, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         settings: ref(createDefaultSettings()),
                         refreshSettings: vi.fn(),
                         simulatorEnabled,
@@ -232,7 +233,7 @@ describe('SettingsPanel', () => {
                             planetary: {advanced_stacking: false},
                             push_to: {astap_solver: false},
                         }),
-                    },
+                    }),
                 },
             })
 
@@ -251,7 +252,7 @@ describe('SettingsPanel', () => {
             const settings = ref(createDefaultSettings())
             const wrapper = mount(SettingsPanel, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         settings,
                         refreshSettings: vi.fn(),
                         simulatorEnabled: ref(false),
@@ -261,7 +262,7 @@ describe('SettingsPanel', () => {
                             planetary: {advanced_stacking: false},
                             push_to: {astap_solver: false},
                         }),
-                    },
+                    }),
                 },
             })
 

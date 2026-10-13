@@ -10,7 +10,7 @@ const UNRESPONSIVE_REASON = 'No answer to ping'
  * WebSocket connection manager composable
  * @param {string} path - WebSocket path (e.g., '/ws/events')
  * @param {object} options - Connection options
- * @returns {object} WebSocket state and methods
+ * @returns WebSocket state and methods
  */
 export function useWebSocket(path, options = {}) {
     const {

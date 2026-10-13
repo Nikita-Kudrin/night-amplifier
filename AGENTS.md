@@ -168,8 +168,10 @@ Sticky topics need an end: `Installs` runs one install per kind (409 `InstallInP
 failed the first), and a page that is installing reads a sync's `idle` as interrupted, not done (a restart showed
 "installed"). A recovery give-up stays until a connect into the role or `DELETE /api/cameras/recovery/{role}` — the
 warning's dismiss — since a page-only dismissal came back on every sync, all night.
-`api.events.ts` is generated with every event's topic and kind; `useEventStream.catalogue.test.js` fails a state
-event nobody handles, a handler for an event the server never sends, and a refetch topic not re-read on sync.
+`api.events.ts` is generated with every event's topic and kind. Every handler table is `satisfies EventHandlers`,
+so a handler for an event the server never sends, or a field it does not carry, does not compile;
+`useEventStream.catalogue.test.ts` fails a state event no table handles (type-level, and once wired) and a refetch
+topic not re-read on sync.
 **Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
 show `AppState::viewed_camera` (set by `/`'s Guide toggle via `PUT /api/view/camera`, snapshot route too) and switch
 in place; their viewers have no control. A guide *disconnect* falls back to Main only after the roster says so
@@ -188,18 +190,18 @@ half-open socket with close code 4000, which the server logs beside each frame s
 **`/ws/events` has one dispatch path**: `useEventStream` is the socket plus `on(type, fn)`, every message handed to
 its type's subscribers in order — the domain tables in `composables/events/` first, then the stores, which subscribe
 through `connectEvents` from `App.vue` (a `lastEvent` watcher saw one of two events landing in a tick). **One writer
-per ref**: Push-To's target is written only by `events/pushToEvents.js` (the panel hands it answers via `aimAt`),
+per ref**: Push-To's target is written only by `events/pushToEvents.ts` (the panel hands it answers via `aimAt`),
 settings only by `settingsStore`: `applySettings` (`useApplySettings`) adopts the POST's answer, and `refresh` never
 runs beside a write, coalesces, and drops an answer older than the one adopted — an edit is one POST and at most one
-GET (it was a POST and 2-3 GETs). A refresh asked during a request reads once more after it. Every `api.js` call has a deadline (15 s; 120 s for connect, capture
+GET (it was a POST and 2-3 GETs). A refresh asked during a request reads once more after it. Every `api.ts` call has a deadline (15 s; 120 s for connect, capture
 start/stop, installs, snapshot): one hung POST held every settings refresh behind it. Stores are `createX()` + a module default + `__resetForTests()`; a composable's
 lifecycle hooks go through `lifecycle.js` (`tryOn*`), which a bare call or a module store skips. Polling only while
 the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on sync.
 **`api.types.ts`, `api.settings.ts` and `api.events.ts` are generated** from the Rust wire types, the code that clamps settings and `ServerEvent::examples()`
 (`tests/api_types.rs`, feature `api-schema`, which derives `schemars::JsonSchema` only in that build); CI fails a
 stale one. `DEFAULT_SETTINGS` *is* the server's default, and a control's range comes from `serverLimits(path, ui)`,
-which may narrow but never widen it (`constants/serverSettings.test.js`); constants live by domain behind
-`constants/index.js`, help copy per panel in `constants/help/`. A settings panel section is its own component that
+which may narrow but never widen it (`constants/serverSettings.test.ts`), and takes only a path the server clamps
+(`ClampedPath`); constants live by domain behind `constants/index.ts`, help copy per panel in `constants/help/`. A settings panel section is its own component that
 mirrors its keys of the panel's `settingsMirror` (`useSectionMirror`, which leaves keys edited but not yet sent out
 of syncs) and emits `apply(key, value)`; one that must await the save takes it as a prop. The server replaces the
 `eyepiece` group whole and two sections edit it, so they emit only changed fields and the panel (`applyEyepiece`)
@@ -225,15 +227,18 @@ arriving mid-save is held until the save settles: each gap once posted the previ
 The camera list lives on Main, so a section editing the selected camera names it (`SelectedCameraTag`; Equipment,
 with none selected, names the profile it edits), and a debounced edit is bound to that camera.
 
-**Shared homes**: App state is provided once (`provideAppContext`), read through `useCapabilities()` /
-`useSelectedCamera()` — a script-side read of the provided readonly ref once locked comet stacking for every Pro user. `api.js` rejects with an `ApiError` carrying the HTTP status; a caller to whom a
+**Shared homes**: App state is provided once (`provideAppContext`) under typed `InjectionKey`s (`Symbol.for`, so a
+re-imported module names the same keys), read through one accessor per key in `appContext.ts` (`useSettings()`,
+`useCapabilities()`, `useSelectedCamera()`, …), each with its one default — a script-side read of the provided readonly
+ref once locked comet stacking for every Pro user. Tests provide by name: `mountWithDefaults`, or `contextProvides({…})`
+in a mount's `global.provide`. `api.ts` rejects with an `ApiError` carrying the HTTP status; a caller to whom a
 Pro feature is optional uses `ignoreProOnly`, never a bare `catch {}`. Formatters, coordinates (rounded *before*
 splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`. Styles take tokens from `main.css`
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.js` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
-components' error icons). Test helpers live in `src/test/`: `mockApi`, fixtures typed by `api.types.ts`,
+components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
 `createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
-browser hands them out); tests sit beside their source (`X.test.js`, `X.<aspect>.test.js`). Wire enums the UI
+browser hands them out); tests sit beside their source (`X.test.ts`, `X.<aspect>.test.ts`). Wire enums the UI
 spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to its `*_VALUES`.
 
 ## Camera Notes

@@ -9,6 +9,7 @@ vi.mock('./api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 import {ApiError, getCatalogStatus, installCatalog} from './api.js'
+import {contextProvides} from './appContext.js'
 
 const MISSING = catalogStatus({installed: false})
 
@@ -22,7 +23,7 @@ function mountInstall(options = {}, eventStream = null) {
             return () => h('div')
         },
     })
-    const wrapper = mount(Host, {global: {provide: {eventStream}}})
+    const wrapper = mount(Host, {global: {provide: contextProvides({eventStream})}})
     return {wrapper, install, progress, eventStream}
 }
 

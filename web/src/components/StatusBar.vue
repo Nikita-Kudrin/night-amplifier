@@ -1,14 +1,14 @@
 <script setup>
-import {computed, inject} from 'vue'
+import {computed} from 'vue'
 import {captureStateDisplay, HELP_TEXTS} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 import BaseSpinner from './ui/BaseSpinner.vue'
 import StatusIcon from './ui/StatusIcon.vue'
 import StatusNotice from './StatusNotice.vue'
-import {useSelectedCamera} from '../composables/appContext.js'
+import {useEventStreamContext, useSelectedCamera} from '../composables/appContext.js'
 import {formatPercent} from '../utils/format.js'
 
-const eventStream = inject('eventStream')
+const eventStream = useEventStreamContext()
 const currentCamera = useSelectedCamera()
 
 const captureState = computed(() => captureStateDisplay(eventStream.captureState.value))

@@ -20,6 +20,7 @@ import {
     getSimulatorConfig,
     removeSimulatedCamera,
 } from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 describe('CameraPanel', () => {
     beforeEach(() => {
@@ -59,7 +60,7 @@ describe('CameraPanel', () => {
         return mount(CameraPanel, {
             ...options,
             global: {
-                provide: createMockProvides(provides),
+                provide: contextProvides(createMockProvides(provides)),
             },
         })
     }
@@ -273,7 +274,7 @@ describe('CameraPanel', () => {
             const selectedCamera = ref(null)
             const wrapper = mount(CameraPanel, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         cameras: ref([
                             {
                                 id: 'cam1',
@@ -286,7 +287,7 @@ describe('CameraPanel', () => {
                         refreshCameras: vi.fn(),
                         eventStream: {captureState: ref('Idle')},
                         simulatorEnabled: ref(false),
-                    },
+                    }),
                 },
             })
 
@@ -360,7 +361,7 @@ describe('CameraPanel', () => {
                 }),
             }
             watch(provide.selectedCamera, () => { loadedWhenSelected = settingsLoaded }, {flush: 'sync'})
-            const wrapper = mount(CameraPanel, {global: {provide}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provide)}})
 
             await wrapper.find('.btn-primary').trigger('click')
             await flushPromises()
@@ -388,7 +389,7 @@ describe('CameraPanel', () => {
                 }),
             }
             watch(provide.selectedCamera, () => { loadedWhenSelected = settingsLoaded }, {flush: 'sync'})
-            const wrapper = mount(CameraPanel, {global: {provide}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provide)}})
 
             await wrapper.find('.btn-primary').trigger('click')
             await new Promise((resolve) => setTimeout(resolve, 5))
@@ -466,7 +467,7 @@ describe('CameraPanel', () => {
                 cameras: [{id: 'cam1', name: 'Ares-C PRO', role: 'main', connected: true, info: {}}],
                 cameraPhase: {'Ares-C PRO': 'warming_up'},
             })
-            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provides)}})
 
             await wrapper.find('.btn-danger').trigger('click')
             await flushPromises()
@@ -485,7 +486,7 @@ describe('CameraPanel', () => {
                 cameras: [{id: 'cam1', name: 'Ares-C PRO', role: 'main', connected: true, info: {}}],
                 captureState: 'Capturing',
             })
-            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provides)}})
 
             await wrapper.find('.btn-danger').trigger('click')
             await flushPromises()
@@ -835,13 +836,13 @@ describe('CameraPanel', () => {
             const refreshCameras = vi.fn().mockResolvedValue(undefined)
             const wrapper = mount(CameraPanel, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         cameras: ref([]),
                         selectedCamera: ref(null),
                         refreshCameras,
                         eventStream: {captureState: ref('Idle')},
                         simulatorEnabled: ref(false),
-                    },
+                    }),
                 },
             })
 
@@ -858,7 +859,7 @@ describe('CameraPanel', () => {
         it('adds a simulated camera from a directory, then lists it', async () => {
             configureSimulator.mockResolvedValue({configured: true, camera_count: 1})
             const provides = createMockProvides({simulatorEnabled: true})
-            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provides)}})
             await flushPromises()
 
             await wrapper.find('.simulator-add .btn').trigger('click')
@@ -889,7 +890,7 @@ describe('CameraPanel', () => {
             provides.refreshCameras.mockImplementation(async () => {
                 provides.cameras.value = [REAL]
             })
-            const wrapper = mount(CameraPanel, {global: {provide: provides}})
+            const wrapper = mount(CameraPanel, {global: {provide: contextProvides(provides)}})
             await flushPromises()
 
             await wrapper.find('.btn-icon').trigger('click')

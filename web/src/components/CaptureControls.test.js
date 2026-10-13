@@ -15,6 +15,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     }))
 
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 describe('CaptureControls', () => {
     beforeEach(() => {
@@ -67,7 +68,7 @@ describe('CaptureControls', () => {
     function mountCaptureControls(provides = {}) {
         return mount(CaptureControls, {
             global: {
-                provide: createMockProvides(provides),
+                provide: contextProvides(createMockProvides(provides)),
                 stubs: {
                     BaseProLock: true,
                 },
@@ -448,7 +449,7 @@ describe('CaptureControls', () => {
         it('puts the toggle back when the save fails', async () => {
             updateSettings.mockRejectedValue(new Error('Network down'))
             const provides = createMockProvides({settings: {focus_mode: false}})
-            const wrapper = mount(CaptureControls, {global: {provide: provides}})
+            const wrapper = mount(CaptureControls, {global: {provide: contextProvides(provides)}})
             await flushPromises()
 
             await wrapper.find('.focus-mode-controls .toggle').setValue(true)
@@ -639,10 +640,10 @@ describe('CaptureControls', () => {
         it('unlocks it for Pro when the capabilities arrive as App provides them', async () => {
             const wrapper = mount(CaptureControls, {
                 global: {
-                    provide: {
+                    provide: contextProvides({
                         ...createMockProvides(comet(true)),
                         capabilities: readonly(ref(comet(true).capabilities)),
-                    },
+                    }),
                     stubs: {BaseProLock: true},
                 },
             })

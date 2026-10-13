@@ -7,6 +7,7 @@ vi.mock('../composables/api.js', async (importOriginal) =>
     (await import('../test/mockApi.js')).mockApi(await importOriginal()))
 
 import {getAstapDatabases, getAstapStatus, installAstap} from '../composables/api.js'
+import {contextProvides} from '../composables/appContext.js'
 
 const FRESH = astapStatus({binary_installed: false, database_installed: false, installed_databases: [], ready: false})
 const DATABASES = [databaseType(), databaseType({id: 'G05', description: 'Camera Lenses', min_fov_deg: 3, max_fov_deg: 20})]
@@ -16,7 +17,7 @@ function mountInstaller(status = FRESH, databases = DATABASES) {
     getAstapDatabases.mockResolvedValue(databases)
     const progress = ref(null)
     const eventStream = {astapInstallProgress: progress, clearAstapInstallProgress: vi.fn()}
-    const wrapper = mount(AstapInstaller, {global: {provide: {eventStream}}})
+    const wrapper = mount(AstapInstaller, {global: {provide: contextProvides({eventStream})}})
     return {wrapper, progress}
 }
 
@@ -96,7 +97,7 @@ describe('AstapInstaller', () => {
     it('says why the status could not be read, and retries', async () => {
         getAstapStatus.mockRejectedValueOnce(new Error('Server unavailable'))
         getAstapDatabases.mockResolvedValue(DATABASES)
-        const wrapper = mount(AstapInstaller, {global: {provide: {eventStream: null}}})
+        const wrapper = mount(AstapInstaller, {global: {provide: contextProvides({eventStream: null})}})
         await flushPromises()
         expect(wrapper.find('.section-content.error').text()).toContain('Server unavailable')
 

@@ -1,4 +1,5 @@
-import {computed, inject, ref} from 'vue'
+import {computed} from 'vue'
+import {useCameraPhase, useEventStreamContext, useGuideCamera, useSelectedCameraId} from './appContext.js'
 import {CAMERA_PHASES, CAPTURE_STATES, isCaptureRunning} from '../constants'
 
 /**
@@ -15,10 +16,10 @@ import {CAMERA_PHASES, CAPTURE_STATES, isCaptureRunning} from '../constants'
  * @param {import('vue').Ref<boolean>} options.busy - A start or stop request in flight
  */
 export function useCaptureTarget({role, busy}) {
-    const eventStream = inject('eventStream')
-    const cameraPhase = inject('cameraPhase', ref({}))
-    const selectedCamera = inject('selectedCamera', ref(null))
-    const guideCamera = inject('guideCamera', computed(() => null))
+    const eventStream = useEventStreamContext()
+    const cameraPhase = useCameraPhase()
+    const selectedCamera = useSelectedCameraId()
+    const guideCamera = useGuideCamera()
 
     const isGuide = computed(() => role.value === 'guide')
 
