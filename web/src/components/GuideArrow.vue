@@ -1,5 +1,6 @@
-<script setup>
+<script setup lang="ts">
 import {computed, getCurrentInstance} from 'vue'
+import type {CSSProperties} from 'vue'
 import {formatAngle} from '../utils/format.js'
 import {
   ARROW_ASPECT,
@@ -11,37 +12,31 @@ import {
   isOffScreen,
   screensAway,
 } from '../utils/guideArrowLayout.js'
+import type {ClientPushDirection} from '../composables/events/pushToEvents.js'
+import type {ScreenRect} from '../composables/useCometRoi.js'
 
-const props = defineProps({
-  // `pushDirection` from the event stream: {angleDeg, distanceDeg, isClose, directionHint}.
-  direction: {
-    type: Object,
-    required: true,
-  },
-  // Where the image sits in the arrow's positioned parent, in CSS pixels.
-  bounds: {
-    type: Object,
-    default: () => ({left: 0, top: 0, width: 400, height: 300}),
-  },
-  fovDeg: {
-    type: Number,
-    default: 0,
-  },
-  isCircular: {
-    type: Boolean,
-    default: false,
-  },
-  // Name of the camera the angle was solved on, when it is not the one on screen: the
-  // chevron would carry that camera's rotation, so only distance and compass point show.
-  otherCamera: {
-    type: String,
-    default: '',
-  },
+const props = withDefaults(defineProps<{
+  /** `pushDirection` from the event stream. */
+  direction: ClientPushDirection
+  /** Where the image sits in the arrow's positioned parent, in CSS pixels. */
+  bounds?: ScreenRect
+  fovDeg?: number
+  isCircular?: boolean
+  /**
+   * Name of the camera the angle was solved on, when it is not the one on screen: the
+   * chevron would carry that camera's rotation, so only distance and compass point show.
+   */
+  otherCamera?: string
+}>(), {
+  bounds: () => ({left: 0, top: 0, width: 400, height: 300}),
+  fovDeg: 0,
+  isCircular: false,
+  otherCamera: '',
 })
 
 const angleDeg = computed(() => props.direction.angleDeg)
 const distanceDeg = computed(() => props.direction.distanceDeg)
-const directionHint = computed(() => props.direction.directionHint ?? '')
+const directionHint = computed(() => props.direction.directionHint)
 
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
@@ -56,7 +51,7 @@ const isOnTarget = computed(() => {
   return distanceDeg.value < 0.1 || directionHint.value === 'OK'
 })
 
-const containerStyle = computed(() => {
+const containerStyle = computed((): CSSProperties => {
   const pinned = offScreen.value && !isOnTarget.value && !props.otherCamera
   const offset = pinned
       ? edgeOffset({

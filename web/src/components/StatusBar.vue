@@ -1,14 +1,29 @@
-<script setup>
+<script setup lang="ts">
 import {computed} from 'vue'
 import {captureStateDisplay, HELP_TEXTS} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 import BaseSpinner from './ui/BaseSpinner.vue'
 import StatusIcon from './ui/StatusIcon.vue'
 import StatusNotice from './StatusNotice.vue'
+import type {StatusTone} from './StatusNotice.vue'
+import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
 import {useEventStreamContext, useSelectedCamera} from '../composables/appContext.js'
+import type {SolveVerdict} from '../composables/api.types.js'
 import {formatPercent} from '../utils/format.js'
 
+/** A chip: `kind` is its class, `dismiss` (when it has one) what a click on it clears. */
+interface Chip {
+  kind: string
+  tone: StatusTone
+  icon?: keyof typeof STATUS_ICON_SHAPES
+  spinner?: boolean
+  text: string
+  dismiss?: () => void
+}
+
+// The bar is nothing but a view of the stream `App.vue` provides; it has no stand-in.
 const eventStream = useEventStreamContext()
+if (!eventStream) throw new Error('StatusBar needs the event stream App.vue provides')
 const currentCamera = useSelectedCamera()
 
 const captureState = computed(() => captureStateDisplay(eventStream.captureState.value))
@@ -21,7 +36,7 @@ const rejectedCount = computed(() => eventStream.rejectedCount.value)
 // rounding error at 100 ms. The share of delivered frames is the number that tells the
 // observer they are integrating at a fraction of the cadence they set.
 const dropRate = computed(() => {
-  const delivered = eventStream.deliveredCount?.value ?? 0
+  const delivered = eventStream.deliveredCount.value
   if (!delivered) return null
   return eventStream.droppedCount.value / delivered
 })
@@ -34,10 +49,16 @@ const framesTooltip = computed(() => {
   return reason ? `${base} Most recent rejection: ${reason}.` : base
 })
 
-const SOLVE_RESULT_CHIPS = {
+const SOLVE_RESULT_CHIPS: Record<SolveVerdict, Pick<Chip, 'tone' | 'icon'>> = {
   success: {tone: 'success', icon: 'check'},
   cancelled: {tone: 'muted', icon: 'stop'},
   failed: {tone: 'error', icon: 'cross'},
+}
+
+/** A verdict this build does not know reads as a failure: an old cached tab can meet a newer server. */
+function solveResultChip(result: string) {
+  const byResult: Partial<Record<string, Pick<Chip, 'tone' | 'icon'>>> = SOLVE_RESULT_CHIPS
+  return byResult[result] ?? SOLVE_RESULT_CHIPS.failed
 }
 
 /**
@@ -47,19 +68,19 @@ const SOLVE_RESULT_CHIPS = {
  * blocker was announced with the previous solve's green tick, so pushing away from M31
  * read as a fresh success.
  */
-const pushToChip = computed(() => {
+const pushToChip = computed((): Chip | null => {
   const solving = eventStream.plateSolving.value
-  if (solving?.inProgress) {
-    return {kind: 'solving', tone: 'primary', spinner: true, text: eventStream.solvingMessage.value}
+  if (solving.inProgress) {
+    return {kind: 'solving', tone: 'primary', spinner: true, text: eventStream.solvingMessage.value ?? ''}
   }
-  const blocked = eventStream.pushToBlocked?.value
+  const blocked = eventStream.pushToBlocked.value
   if (blocked) return {kind: 'push-to-blocked', tone: 'plain', icon: 'blocked', text: blocked}
-  const result = solving?.lastResult
+  const result = solving.lastResult
   if (!result) return null
   return {
     kind: `solve-result ${result}`,
-    ...(SOLVE_RESULT_CHIPS[result] ?? SOLVE_RESULT_CHIPS.failed),
-    text: eventStream.solvingMessage.value,
+    ...solveResultChip(result),
+    text: eventStream.solvingMessage.value ?? '',
     dismiss: () => eventStream.clearPlateSolving(),
   }
 })
@@ -67,7 +88,7 @@ const pushToChip = computed(() => {
 /** The dismissible notices, in the order they show. */
 const notices = computed(() => {
   const es = eventStream
-  const list = []
+  const list: Required<Pick<Chip, 'kind' | 'tone' | 'icon' | 'text' | 'dismiss'>>[] = []
   if (es.diskWriterWarning.value) {
     list.push({
       kind: 'disk-warning', tone: 'warning', icon: 'warning',
@@ -120,7 +141,7 @@ const notices = computed(() => {
         :icon="pushToChip.icon"
         :text="pushToChip.text"
         :dismissible="Boolean(pushToChip.dismiss)"
-        @dismiss="pushToChip.dismiss()"
+        @dismiss="pushToChip.dismiss?.()"
     >
       <template v-if="pushToChip.spinner" #icon>
         <BaseSpinner size="xs"/>

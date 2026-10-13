@@ -1,10 +1,10 @@
-<script setup>
+<script setup lang="ts">
 import {ref, computed} from 'vue'
 import AstapInstaller from './AstapInstaller.vue'
 import CatalogInstaller from './CatalogInstaller.vue'
 import { BaseModal } from './ui'
 
-const emit = defineEmits(['close', 'installed'])
+const emit = defineEmits<{close: []; installed: []}>()
 
 // State
 const installingAstap = ref(false)

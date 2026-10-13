@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → Eyepiece: the view's layout (binoview, circular), its stream resolution and
  * the screen geometry binoview needs.
@@ -11,16 +11,21 @@ import {BaseToggle, BaseInfoIcon, SettingSelect} from './ui'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS, SETTINGS_DEBOUNCE_MS} from '../constants'
+import type {EyepieceFields, SettingApply} from '../utils/settings.js'
+import type {EyepieceSettings} from '../composables/api.types.js'
 
-const props = defineProps({
-  eyepiece: {type: Object, required: true},
-})
+const props = defineProps<{
+  eyepiece: EyepieceSettings
+}>()
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 
-const held = new Set()
+/** The fields typed digit by digit. */
+type TypedField = 'screen_width' | 'screen_height' | 'screen_resolution_x' | 'screen_resolution_y'
+
+const held = new Set<TypedField>()
 const local = useSectionMirror(() => props.eyepiece, [
   'binoview',
   'circular_view',
@@ -36,26 +41,28 @@ const local = useSectionMirror(() => props.eyepiece, [
 const {schedule, cancel} = useDebouncedCall(send, SETTINGS_DEBOUNCE_MS)
 
 /** Sends `fields` with every typed field still waiting, in one request. */
-function send(fields = {}) {
-  const typed = Object.fromEntries([...held].map((key) => [key, local[key]]))
+function send(fields: EyepieceFields = {}) {
+  const typed: EyepieceFields = {}
+  for (const key of held) typed[key] = local[key]
   held.clear()
   cancel()
   emit('apply', 'eyepiece', {...typed, ...fields})
 }
 
-const sendField = (key) => send({[key]: local[key]})
+const sendField = (key: keyof typeof local) => send({[key]: local[key]})
 
-const isSize = (n) => Number.isFinite(n) && n > 0
-const isPixels = (n) => Number.isInteger(n) && n > 0
+const isSize = (n: number) => Number.isFinite(n) && n > 0
+const isPixels = (n: number) => Number.isInteger(n) && n > 0
 
 /**
  * An emptied or invalid field reads its last value again, and nothing is sent: '' or a
  * fractional resolution made the server refuse the whole group.
  */
-function commitTyped(key, event, valid) {
-  const typed = event.target.value === '' ? NaN : Number(event.target.value)
+function commitTyped(key: TypedField, event: Event, valid: (n: number) => boolean) {
+  const input = event.target as HTMLInputElement
+  const typed = input.value === '' ? NaN : Number(input.value)
   if (!valid(typed)) {
-    event.target.value = local[key]
+    input.value = String(local[key])
     return
   }
   local[key] = typed

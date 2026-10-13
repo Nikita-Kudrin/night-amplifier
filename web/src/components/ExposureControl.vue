@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Exposure: a number, its unit, and the unit's presets. `v-model` is the exposure as
  * typed, in microseconds, kept current on every keystroke — Start sends it even if the
@@ -11,20 +11,25 @@
 import {computed, ref, watch} from 'vue'
 import {BaseInfoIcon} from './ui'
 import {splitExposure, toMicros} from '../utils/exposure.js'
+import type {ExposureUnit} from '../utils/exposure.js'
 import {EXPOSURE_PRESETS, HELP_TEXTS} from '../constants'
 
-const model = defineModel({type: Number, required: true})
+const model = defineModel<number>({required: true})
 
-defineProps({
+withDefaults(defineProps<{
   /** The exposure the camera has now, whose preset is highlighted. */
-  activeUs: {type: Number, default: null},
-  disabled: {type: Boolean, default: false},
+  activeUs?: number | null
+  disabled?: boolean
+}>(), {
+  activeUs: null,
+  disabled: false,
 })
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: [us: number]}>()
 
-const value = ref(0)
-const unit = ref('ms')
+/** As typed: an emptied field holds `''`. */
+const value = ref<number | ''>(0)
+const unit = ref<ExposureUnit>('ms')
 
 watch(model, (us) => {
   if (toMicros(value.value, unit.value) === us) return

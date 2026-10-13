@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → Storage: raw frames are saved per capture mode, the stack only in Stacking.
  *
@@ -9,15 +9,19 @@ import {computed} from 'vue'
 import {BaseToggle, BaseInfoIcon} from './ui'
 import {useSectionMirror} from '../composables/useSectionMirror.js'
 import {HELP_TEXTS, RAW_FRAME_SAVING_MODES} from '../constants'
+import type {SettingApply} from '../utils/settings.js'
+import type {RawFrameSaving, Settings} from '../composables/api.types.js'
 
-const props = defineProps({
+const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */
-  settings: {type: Object, required: true},
+  settings: Settings
   /** The guide switch is only meaningful with a guide camera attached. */
-  hasGuideCamera: {type: Boolean, default: false},
+  hasGuideCamera?: boolean
+}>(), {
+  hasGuideCamera: false,
 })
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 
@@ -30,7 +34,7 @@ const modes = computed(() =>
 /** The stack is saved only by Stacking itself; Wanderer restarts it and saves none. */
 const savesStack = computed(() => props.settings.stacking && !props.settings.wanderer_mode)
 
-function applyRawFrameSaving(mode, enabled) {
+function applyRawFrameSaving(mode: keyof RawFrameSaving, enabled: boolean) {
   emit('apply', 'raw_frame_saving', {...local.raw_frame_saving, [mode]: enabled})
 }
 </script>

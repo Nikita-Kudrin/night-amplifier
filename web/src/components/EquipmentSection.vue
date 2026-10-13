@@ -1,5 +1,5 @@
-<script setup>
-import {ref, computed, watch} from 'vue'
+<script setup lang="ts">
+import {ref, computed, useTemplateRef, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
 import {useClickOutside} from '../composables/useClickOutside.js'
@@ -8,14 +8,24 @@ import {CAMERA_DATABASE} from '../constants/cameras.js'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseInfoIcon, CollapseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
+import type {CameraOptics, FieldOfView} from '../composables/useTelescopeSetup.js'
+import type {InstalledDatabaseInfo} from '../composables/api.types.js'
 
-const props = defineProps({
-  connectedCameraInfo: {type: Object, default: null},
-  installedDatabases: {type: Array, default: () => []},
-  activeDatabaseType: {type: String, default: null},
+const props = withDefaults(defineProps<{
+  /** The selected camera's info, `null` with none selected. */
+  connectedCameraInfo?: CameraOptics | null
+  installedDatabases?: readonly InstalledDatabaseInfo[]
+  activeDatabaseType?: string | null
+}>(), {
+  connectedCameraInfo: null,
+  installedDatabases: () => [],
+  activeDatabaseType: null,
 })
 
-const emit = defineEmits(['fov-changed', 'database-select'])
+const emit = defineEmits<{
+  'fov-changed': [fov: FieldOfView | null]
+  'database-select': [id: string]
+}>()
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -45,7 +55,7 @@ const filteredCameras = computed(() => {
   ).slice(0, 15)
 })
 
-function selectCameraEntry(entry) {
+function selectCameraEntry(entry: (typeof CAMERA_DATABASE)[number]) {
   selectCamera(entry)
   cameraSearchQuery.value = `${entry.brand} ${entry.model}`
   showCameraResults.value = false
@@ -58,7 +68,7 @@ function fillFromConnectedCamera() {
   }
 }
 
-const cameraSearchRef = ref(null)
+const cameraSearchRef = useTemplateRef<HTMLDivElement>('cameraSearch')
 useClickOutside([cameraSearchRef], () => {
   showCameraResults.value = false
 })
@@ -109,7 +119,7 @@ defineExpose({calculatedFov})
           Camera
           <BaseInfoIcon :message="HELP_TEXTS.telescope_camera_sensor"/>
         </label>
-        <div ref="cameraSearchRef" class="camera-search-container eq-input-area">
+        <div ref="cameraSearch" class="camera-search-container eq-input-area">
           <input
               v-model="cameraSearchQuery"
               type="text"
@@ -158,12 +168,14 @@ defineExpose({calculatedFov})
         <div class="manual-sensor-header" @click="manualSensorExpanded = !manualSensorExpanded">
           <CollapseToggle :model-value="!manualSensorExpanded" title="Toggle manual sensor specs" :size="9"/>
           <span class="manual-sensor-label">Manual sensor specs</span>
-          <BaseToggle
-              :model-value="manualPixelSize"
-              size="small"
-              @click.stop
-              @update:model-value="manualPixelSize = $event; if ($event) manualSensorExpanded = true"
-          />
+          <!-- A click on the switch is not one on the header, which folds the specs. -->
+          <span class="manual-sensor-switch" @click.stop>
+            <BaseToggle
+                :model-value="manualPixelSize"
+                size="small"
+                @update:model-value="manualPixelSize = $event; if ($event) manualSensorExpanded = true"
+            />
+          </span>
         </div>
         <div v-show="manualSensorExpanded" class="manual-sensor-content">
           <div class="eq-row">
@@ -256,7 +268,7 @@ defineExpose({calculatedFov})
           <select
               :value="activeDatabaseType"
               class="input input-dense telescope-input"
-              @change="emit('database-select', $event.target.value)"
+              @change="emit('database-select', ($event.target as HTMLSelectElement).value)"
           >
             <option v-for="db in installedDatabases" :key="db.id" :value="db.id">
               {{ db.id }} ({{ db.min_fov_deg }}°–{{ db.max_fov_deg }}°)
@@ -457,6 +469,11 @@ defineExpose({calculatedFov})
   gap: 0.3rem;
   cursor: pointer;
   user-select: none;
+}
+
+/* No box of its own: the switch sits in the header's row as before. */
+.manual-sensor-switch {
+  display: contents;
 }
 
 .manual-sensor-label {

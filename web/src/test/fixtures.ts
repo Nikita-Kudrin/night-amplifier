@@ -5,6 +5,7 @@
  */
 import {DEFAULT_CAPABILITIES, defaultSettings, STACKING_TYPES} from '../constants'
 import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
+import type {ClientPushDirection} from '../composables/events/pushToEvents.js'
 import type {
     AiComputeReport,
     AstapStatus,
@@ -201,4 +202,17 @@ export function stackingTypeInfo(overrides: Partial<StackingTypeInfo> = {}): Sta
 /** `GET /api/settings/stacking-types` as the server answers it. */
 export function stackingTypes(): StackingTypeInfo[] {
     return STACKING_TYPE_VALUES.map((id) => stackingTypeInfo({id}))
+}
+
+/** A push direction as `events/pushToEvents.ts` hands it to the views: 10° due north. */
+export function clientDirection(overrides: Partial<ClientPushDirection> = {}): ClientPushDirection {
+    return {
+        angleDeg: 0,
+        distanceDeg: 10,
+        directionHint: 'N',
+        isClose: false,
+        fovDeg: 0,
+        solvedCamera: null,
+        ...overrides,
+    }
 }

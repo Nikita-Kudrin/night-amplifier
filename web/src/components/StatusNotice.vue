@@ -1,19 +1,29 @@
-<script setup>
+<script lang="ts">
+/** A chip's tint: `plain` and `primary` are text only, without a background. */
+export type StatusTone = 'success' | 'warning' | 'error' | 'muted' | 'plain' | 'primary'
+</script>
+
+<script setup lang="ts">
 /**
  * One chip in the status bar: an icon, one line of text, tinted by its tone. A
  * dismissible one clears on a click anywhere on it, and shows a × to say so.
  */
 import StatusIcon from './ui/StatusIcon.vue'
+import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
 
-defineProps({
-  /** `success`, `warning`, `error` or `muted`. */
-  tone: {type: String, default: 'muted'},
-  icon: {type: String, default: ''},
-  text: {type: String, required: true},
-  dismissible: {type: Boolean, default: false},
+withDefaults(defineProps<{
+  tone?: StatusTone
+  /** Shown unless the `icon` slot replaces it. */
+  icon?: keyof typeof STATUS_ICON_SHAPES
+  text: string
+  dismissible?: boolean
+}>(), {
+  tone: 'muted',
+  icon: undefined,
+  dismissible: false,
 })
 
-const emit = defineEmits(['dismiss'])
+const emit = defineEmits<{dismiss: []}>()
 </script>
 
 <template>

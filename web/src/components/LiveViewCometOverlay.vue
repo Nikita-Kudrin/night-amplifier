@@ -1,28 +1,23 @@
-<script setup>
-defineProps({
-  isCometMode: {
-    type: Boolean,
-    default: false
-  },
-  hasFrame: {
-    type: Boolean,
-    default: false
-  },
-  roiDisplayRect: {
-    type: Object,
-    default: null
-  },
-  isSelectingCometRoi: {
-    type: Boolean,
-    default: false
-  },
-  selectionRect: {
-    type: Object,
-    default: null
-  },
+<script setup lang="ts">
+import type {ScreenRect} from '../composables/useCometRoi.js'
+
+withDefaults(defineProps<{
+  isCometMode?: boolean
+  hasFrame?: boolean
+  roiDisplayRect?: ScreenRect | null
+  isSelectingCometRoi?: boolean
+  selectionRect?: ScreenRect | null
+}>(), {
+  isCometMode: false,
+  hasFrame: false,
+  roiDisplayRect: null,
+  isSelectingCometRoi: false,
+  selectionRect: null,
 })
 
-defineEmits(['cancel'])
+defineEmits<{
+  cancel: []
+}>()
 </script>
 
 <template>

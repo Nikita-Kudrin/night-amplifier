@@ -1,28 +1,24 @@
-<script setup>
-import {ref, nextTick} from 'vue'
+<script setup lang="ts">
+import {ref, nextTick, useTemplateRef} from 'vue'
+import type {CSSProperties} from 'vue'
 import {useClickOutside} from '../../composables/useClickOutside.js'
 import {useEventListener} from '../../composables/useEventListener.js'
 
-defineProps({
-  message: {
-    type: String,
-    required: true
-  },
-  type: {
-    type: String,
-    default: 'info',
-    validator: (v) => ['info', 'warning'].includes(v)
-  }
+withDefaults(defineProps<{
+  message: string
+  type?: 'info' | 'warning'
+}>(), {
+  type: 'info'
 })
 
 const showTooltip = ref(false)
-const iconRef = ref(null)
-const bubbleRef = ref(null)
-const bubbleStyle = ref({})
+const iconRef = useTemplateRef<HTMLElement>('icon')
+const bubbleRef = useTemplateRef<HTMLElement>('bubble')
+const bubbleStyle = ref<CSSProperties>({})
 const arrowPosition = ref('50%')
 const isFlipped = ref(false)
 
-async function toggleTooltip(e) {
+async function toggleTooltip(e: Event) {
   e.preventDefault()
   e.stopPropagation()
   showTooltip.value = !showTooltip.value
@@ -90,7 +86,7 @@ useEventListener(window, 'resize', calculatePosition)
 </script>
 
 <template>
-  <div ref="iconRef" class="info-icon-container">
+  <div ref="icon" class="info-icon-container">
     <span
         class="info-icon"
         :class="type"
@@ -121,7 +117,7 @@ useEventListener(window, 'resize', calculatePosition)
 
     <div
         v-if="showTooltip"
-        ref="bubbleRef"
+        ref="bubble"
         class="help-bubble animate-fade-in"
         :class="{ 'is-flipped': isFlipped }"
         :style="bubbleStyle"

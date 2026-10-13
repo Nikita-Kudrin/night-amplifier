@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Sensor corrections and noise reduction: raw-mosaic corrections (pre-demosaic) and the
  * spatial filters run at view resolution — the two groups deciding image cleanliness
@@ -20,33 +20,43 @@ import {
   STREAMING_RESOLUTION_OPTIONS,
   HELP_TEXTS,
 } from '../constants'
+import {applyArgs} from '../utils/settings.js'
+import type {SettingApply} from '../utils/settings.js'
+import type {DenoiseSettings, Resolution, SensorCorrectionSettings, Settings} from '../composables/api.types.js'
 
-const props = defineProps({
-  sensorCorrection: {type: Object, required: true},
-  denoise: {type: Object, required: true},
-  previewResolution: {type: String, required: true},
-  streamingResolution: {type: String, required: true},
+const props = withDefaults(defineProps<{
+  sensorCorrection: SensorCorrectionSettings
+  denoise: DenoiseSettings
+  previewResolution: Resolution
+  streamingResolution: Resolution
   /**
    * Focus/Finder mode holds three of these toggles off and owns the snapshot that
    * restores them, so while it is on they are read-only — an edit that looked like it
    * took and then reverted on the next toggle is worse than one the UI refuses.
    */
-  focusMode: {type: Boolean, default: false},
+  focusMode?: boolean
   /**
    * Whether the denoise plugin is present. The filters and every control over them are
    * a Pro feature; without it the section stays visible, locked, so it is clear what
    * the build does not do rather than silently missing.
    */
-  denoiseAvailable: {type: Boolean, default: false},
+  denoiseAvailable?: boolean
   /** Whether the AI denoiser is present; its switch lives in Settings → Advanced. */
-  aiDenoiseAvailable: {type: Boolean, default: false},
+  aiDenoiseAvailable?: boolean
+}>(), {
+  focusMode: false,
+  denoiseAvailable: false,
+  aiDenoiseAvailable: false,
 })
 
-const emit = defineEmits(['apply'])
+const emit = defineEmits<{apply: SettingApply}>()
 
 const HELP = HELP_TEXTS
 
-const local = reactive({
+type Group = 'sensor_correction' | 'denoise'
+type Choice = 'preview_resolution' | 'streaming_resolution'
+
+const local = reactive<Pick<Settings, Group | Choice>>({
   sensor_correction: {...props.sensorCorrection},
   denoise: {...props.denoise},
   preview_resolution: props.previewResolution,
@@ -86,7 +96,7 @@ const detailLocked = computed(
 )
 
 watch(
-    () => [props.sensorCorrection, props.denoise, props.previewResolution, props.streamingResolution],
+    () => [props.sensorCorrection, props.denoise, props.previewResolution, props.streamingResolution] as const,
     ([sensorCorrection, denoise, previewResolution, streamingResolution]) => {
       Object.assign(local.sensor_correction, sensorCorrection)
       Object.assign(local.denoise, denoise)
@@ -96,14 +106,14 @@ watch(
     {deep: true}
 )
 
-function apply(key) {
-  emit('apply', key, {...local[key]})
+function apply(key: Group) {
+  emit('apply', ...applyArgs(local, key, (group) => ({...group})))
 }
 
 /** For the settings that are a bare value rather than a group. */
-function applyValue(key, value) {
+function applyValue(key: Choice, value: Resolution) {
   local[key] = value
-  emit('apply', key, value)
+  emit('apply', ...applyArgs(local, key))
 }
 </script>
 

@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Push-To's manual target: RA/Dec typed as sexagesimal or degrees, behind a switch.
  *
@@ -7,12 +7,12 @@
  */
 import {ref} from 'vue'
 import {useCoordinateInput} from '../composables/useCoordinates.js'
+import type {TypedCoordinates} from '../composables/useCoordinates.js'
 import {BaseToggle} from './ui'
 
-const props = defineProps({
-  /** `({ra, dec}) => Promise<boolean>`. */
-  submit: {type: Function, required: true},
-})
+const props = defineProps<{
+  submit: (coords: TypedCoordinates) => Promise<boolean>
+}>()
 
 const enabled = ref(false)
 const {raInput, decInput, coordError, validateCoordinates, clearInputs} = useCoordinateInput()

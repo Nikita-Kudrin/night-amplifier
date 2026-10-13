@@ -1,60 +1,41 @@
-<script setup>
+<script setup lang="ts">
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
 
-defineProps({
-  scale: {
-    type: Number,
-    default: 1.0
-  },
-  fps: {
-    type: Number,
-    default: 0
-  },
-  backendLabel: {
-    type: String,
-    default: 'Canvas2D'
-  },
-  debugLogging: {
-    type: Boolean,
-    default: false
-  },
-  isFullscreen: {
-    type: Boolean,
-    default: false
-  },
-  hasFrame: {
-    type: Boolean,
-    default: false
-  },
-  isCometMode: {
-    type: Boolean,
-    default: false
-  },
-  isSelectingCometRoi: {
-    type: Boolean,
-    default: false
-  },
+withDefaults(defineProps<{
+  scale?: number
+  fps?: number
+  backendLabel?: string
+  debugLogging?: boolean
+  isFullscreen?: boolean
+  hasFrame?: boolean
+  isCometMode?: boolean
+  isSelectingCometRoi?: boolean
   /** A guide camera is connected, so the source toggle has something to switch to. */
-  hasGuideCamera: {
-    type: Boolean,
-    default: false
-  },
+  hasGuideCamera?: boolean
   /** True while the server views the guide camera — here and on the eyepiece pages. */
-  showGuide: {
-    type: Boolean,
-    default: false
-  },
+  showGuide?: boolean
+}>(), {
+  scale: 1.0,
+  fps: 0,
+  backendLabel: 'Canvas2D',
+  debugLogging: false,
+  isFullscreen: false,
+  hasFrame: false,
+  isCometMode: false,
+  isSelectingCometRoi: false,
+  hasGuideCamera: false,
+  showGuide: false,
 })
 
-defineEmits([
-  'zoomIn',
-  'zoomOut',
-  'fitToView',
-  'resetView',
-  'toggleFullscreen',
-  'startCometRoiSelection',
-  'update:showGuide',
-])
+defineEmits<{
+  zoomIn: []
+  zoomOut: []
+  fitToView: []
+  resetView: []
+  toggleFullscreen: []
+  startCometRoiSelection: []
+  'update:showGuide': [show: boolean]
+}>()
 </script>
 
 <template>

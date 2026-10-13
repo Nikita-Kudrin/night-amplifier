@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings: one section component per group, each mirroring its keys of `localSettings`
  * and emitting `apply(key, value)`. The panel owns the one save path and error banner, and
@@ -8,6 +8,7 @@ import {ref, watch, computed} from 'vue'
 import {useError} from '../composables/useError.js'
 import {useApplySettings, useCapabilities, useHasGuideCamera, useSettings} from '../composables/appContext.js'
 import {settingsMirror} from '../utils/settings.js'
+import type {EyepieceFields, SettingApply, SettingKey} from '../utils/settings.js'
 import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
 import AdvancedSettings from './AdvancedSettings.vue'
@@ -19,6 +20,7 @@ import ProcessingSettings from './ProcessingSettings.vue'
 import ReconnectSettings from './ReconnectSettings.vue'
 import StackingSettings from './StackingSettings.vue'
 import StorageSettings from './StorageSettings.vue'
+import type {Settings, UpdateSettingsRequest} from '../composables/api.types.js'
 
 const settings = useSettings()
 const applySettings = useApplySettings()
@@ -38,15 +40,15 @@ const {error, clearError, withErrorHandling} = useError()
  * Read straight from the server settings rather than the local mirror: the mode is
  * toggled from the capture panel, and the mirror only refreshes on a save from here.
  */
-const focusMode = computed(() => settings?.value?.focus_mode ?? false)
+const focusMode = computed(() => settings.value?.focus_mode ?? false)
 
 /** Chosen on the capture panel; the server omits it only before its first answer. */
-const stackingType = computed(() => settings?.value?.stacking_type ?? STACKING_TYPES.DEEP_SKY)
+const stackingType = computed(() => settings.value?.stacking_type ?? STACKING_TYPES.DEEP_SKY)
 
 const localSettings = ref(settingsMirror(null))
 
 /** `eyepiece` fields posted and not yet answered (see `applyEyepiece`). */
-let eyepieceInFlight = {}
+let eyepieceInFlight: EyepieceFields = {}
 let eyepieceWrites = 0
 
 watch(
@@ -60,9 +62,9 @@ watch(
     {immediate: true}
 )
 
-async function applySetting(key, value) {
+async function applySetting(patch: UpdateSettingsRequest) {
   await withErrorHandling(async () => {
-    await applySettings({[key]: value})
+    await applySettings(patch)
   })
 }
 
@@ -72,21 +74,26 @@ async function applySetting(key, value) {
  * over the panel's copy: a section's own stale copy reverted the other's field. Fields still
  * in flight are laid over any answer adopted meanwhile, which an earlier write may predate.
  */
-function applyEyepiece(fields) {
+function applyEyepiece(fields: EyepieceFields) {
   const eyepiece = {...localSettings.value.eyepiece, ...fields}
   localSettings.value.eyepiece = eyepiece
   Object.assign(eyepieceInFlight, fields)
   eyepieceWrites++
-  return applySetting('eyepiece', {...eyepiece}).finally(() => {
+  return applySetting({eyepiece: {...eyepiece}}).finally(() => {
     if (--eyepieceWrites === 0) eyepieceInFlight = {}
   })
 }
 
-/** Persist a setting a section edited, keeping the panel's own copy in step. */
-function applyGroup(key, value) {
-  if (key === 'eyepiece') return applyEyepiece(value)
+/** The panel's own copy of one setting, set to the value a section sent with its key. */
+function keepLocal<K extends SettingKey>(key: K, value: Settings[K]) {
   localSettings.value[key] = value
-  return applySetting(key, value)
+}
+
+/** Persist a setting a section edited, keeping the panel's own copy in step. */
+function applyGroup(...[key, value]: SettingApply) {
+  if (key === 'eyepiece') return applyEyepiece(value)
+  keepLocal(key, value)
+  return applySetting({[key]: value})
 }
 </script>
 

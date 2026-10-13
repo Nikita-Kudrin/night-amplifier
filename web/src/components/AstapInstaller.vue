@@ -1,9 +1,10 @@
-<script setup>
+<script setup lang="ts">
 import {ref, computed, watch} from 'vue'
 import {useAstapInstall} from '../composables/useAstapInstall.js'
 import {BaseSpinner, DatabaseSelector, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
+import type {AstapStatus} from '../composables/api.types.js'
 
-const emit = defineEmits(['installed', 'state-change'])
+const emit = defineEmits<{installed: [status: AstapStatus]; 'state-change': [installing: boolean]}>()
 
 const showAddDatabases = ref(false)
 
@@ -24,10 +25,7 @@ watch(loading, (isLoading, wasLoading) => {
 watch(installing, (val) => emit('state-change', val))
 
 // Installer-specific computed
-const installedDbIds = computed(() => {
-  if (!status.value?.installed_databases) return []
-  return status.value.installed_databases.map(d => d.id)
-})
+const installedDbIds = computed(() => status.value?.installed_databases.map(d => d.id) ?? [])
 
 const statusItems = computed(() => [
   {label: 'ASTAP CLI', ok: Boolean(status.value?.binary_installed)},

@@ -1,15 +1,18 @@
-<script setup>
+<script setup lang="ts">
 /**
  * The chevron that folds a section: down while open, turned left while folded.
  * `v-model` is whether it is folded. Its click bubbles on, so `useClickOutside` popovers
  * close when a panel folds; inside a header that folds on click itself, bind only
  * `:model-value` and let the header fold, or one click folds twice.
  */
-const collapsed = defineModel({type: Boolean, default: false})
+const collapsed = defineModel<boolean>({default: false})
 
-defineProps({
-  title: {type: String, default: 'Toggle section'},
-  size: {type: Number, default: 12},
+withDefaults(defineProps<{
+  title?: string
+  size?: number
+}>(), {
+  title: 'Toggle section',
+  size: 12,
 })
 </script>
 

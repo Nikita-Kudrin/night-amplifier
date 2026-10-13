@@ -1,12 +1,16 @@
-<script setup>
+<script setup lang="ts">
 import BaseSpinner from './BaseSpinner.vue'
-defineProps({
-  stages: {
-    type: Array,
-    required: true,
-    // Each stage: { label: string, completed: boolean, active: boolean, showSpinner: boolean }
-  },
-})
+
+export interface InstallStage {
+  label: string
+  completed: boolean
+  active: boolean
+  showSpinner: boolean
+}
+
+defineProps<{
+  stages: readonly InstallStage[]
+}>()
 </script>
 
 <template>

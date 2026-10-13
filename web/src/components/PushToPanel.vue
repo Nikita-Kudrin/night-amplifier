@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import {ref, onMounted, computed, watch} from 'vue'
 import {useError} from '../composables/useError.js'
 import {usePushToTarget} from '../composables/usePushToTarget.js'
@@ -13,17 +13,20 @@ import EquipmentSection from './EquipmentSection.vue'
 import ManualCoordinates from './ManualCoordinates.vue'
 import {ignoreProOnly, updatePushToConfig} from '../composables/api.js'
 import {fetchAstapState} from '../composables/useAstapInstall.js'
+import type {TypedCoordinates} from '../composables/useCoordinates.js'
+import type {FieldOfView} from '../composables/useTelescopeSetup.js'
+import type {AstapStatus, DatabaseType} from '../composables/api.types.js'
 
 const {error, clearError, withErrorHandling} = useError()
 
 // Panel state
 const collapsed = ref(false)
 const showDatabaseManager = ref(false)
-const calculatedFov = ref(null)
+const calculatedFov = ref<FieldOfView | null>(null)
 
 // FOV warning state
-const astapStatus = ref(null)
-const availableDatabases = ref([])
+const astapStatus = ref<AstapStatus | null>(null)
+const availableDatabases = ref<DatabaseType[]>([])
 const showFovWarning = ref(false)
 
 async function fetchAstapStatus() {
@@ -43,13 +46,13 @@ watch(showDatabaseManager, (visible) => {
 
 const installedDatabases = computed(() => astapStatus.value?.installed_databases ?? [])
 
-async function selectDatabase(dbId) {
+async function selectDatabase(dbId: string) {
   const db = installedDatabases.value.find(d => d.id === dbId)
   if (!db || dbId === astapStatus.value?.database_type) return
 
   await withErrorHandling(async () => {
     await updatePushToConfig({database_path: db.database_path})
-    astapStatus.value = {...astapStatus.value, database_type: dbId}
+    if (astapStatus.value) astapStatus.value = {...astapStatus.value, database_type: dbId}
   })
 }
 
@@ -62,6 +65,8 @@ const fovWarning = computed(() => warnOnFov({
 }))
 
 const eventStream = useEventStreamContext()
+// No stand-in for the server's socket: the panel cannot follow a target without one.
+if (!eventStream) throw new Error('PushToPanel needs the provided event stream')
 const selectedCamera = useSelectedCamera()
 const {astapSolver: hasProSolver} = useCapabilities()
 const showProOverlay = computed(() => !hasProSolver.value)
@@ -79,11 +84,17 @@ const {
   eventStream,
 })
 
+// A target set by coordinates has neither a name nor a designation.
+const namedTarget = computed(() => {
+  const target = currentTarget.value
+  return target && 'designation' in target ? target : null
+})
+
 // Connected camera info for auto-fill and profile switching
 const connectedCameraInfo = computed(() => selectedCamera.value?.info || null)
 
 /** Resolves `true` once the target took, so `ManualCoordinates` can clear its fields. */
-async function setCoordinateTarget(coords) {
+async function setCoordinateTarget(coords: TypedCoordinates) {
   return (await selectTargetByCoordinates(coords.ra, coords.dec)) !== undefined
 }
 
@@ -144,9 +155,9 @@ onMounted(fetchAstapStatus)
           <button class="btn-clear" title="Clear target" @click="clearTarget">&times;</button>
         </div>
         <div class="target-info">
-          <span class="target-name">{{ currentTarget.name || currentTarget.designation || 'Custom' }}</span>
-          <span v-if="currentTarget.designation" class="target-designation">{{
-              currentTarget.designation
+          <span class="target-name">{{ namedTarget?.name || namedTarget?.designation || 'Custom' }}</span>
+          <span v-if="namedTarget?.designation" class="target-designation">{{
+              namedTarget.designation
             }}</span>
         </div>
         <div class="target-coords">

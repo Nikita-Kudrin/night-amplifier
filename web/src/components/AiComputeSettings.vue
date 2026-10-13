@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 /**
  * Settings → Advanced, AI part: the AI denoising switch and the compute unit it runs on,
  * from the server's one-time benchmark.
@@ -13,15 +13,21 @@ import {useAiCompute} from '../composables/useAiCompute.js'
 import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute.js'
 import {BaseToggle, BaseInfoIcon, BaseProLock} from './ui'
 import {HELP_TEXTS} from '../constants'
+import type {SaveSetting} from '../utils/settings.js'
+import type {ErrorHandler} from '../composables/useError.js'
+import type {AiComputePreference, DenoiseSettings} from '../composables/api.types.js'
 
-const props = defineProps({
-  denoise: {type: Object, required: true},
-  aiDenoiseAvailable: {type: Boolean, default: false},
-  focusMode: {type: Boolean, default: false},
-  /** `(key, value) => Promise`: persists a settings group. */
-  save: {type: Function, required: true},
-  /** `(operation) => Promise`: runs `operation`, reporting a failure to the panel. */
-  guard: {type: Function, required: true},
+const props = withDefaults(defineProps<{
+  denoise: DenoiseSettings
+  aiDenoiseAvailable?: boolean
+  focusMode?: boolean
+  /** Persists a settings group. */
+  save: SaveSetting
+  /** Runs an operation, reporting a failure to the panel. */
+  guard: ErrorHandler
+}>(), {
+  aiDenoiseAvailable: false,
+  focusMode: false,
 })
 
 const HELP = HELP_TEXTS
@@ -56,11 +62,11 @@ const hint = computed(() => aiComputeSummary(report.value))
 const unusable = computed(() => unusableRungs(report.value))
 const computeLocked = computed(() => !props.aiDenoiseAvailable || !isReady(report.value))
 
-function applyAi(value) {
+function applyAi(value: boolean) {
   return props.save('denoise', {...local, ai: value})
 }
 
-async function applyCompute(value) {
+async function applyCompute(value: AiComputePreference) {
   await props.save('denoise', {...local, ai_compute: value})
   refresh()
 }
@@ -112,7 +118,7 @@ async function remeasure() {
           class="select select-compact ai-compute-select"
           data-test="ai-compute-select"
           :disabled="computeLocked"
-          @change="applyCompute($event.target.value)"
+          @change="applyCompute(local.ai_compute)"
       >
         <option
             v-for="opt in optionList"

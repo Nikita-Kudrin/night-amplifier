@@ -1,5 +1,6 @@
-<script setup>
-import {ref, computed, onMounted, onUnmounted, watch} from 'vue'
+<script setup lang="ts">
+import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
+import type {ComponentPublicInstance} from 'vue'
 import {useImageStream} from '../composables/useImageStream.js'
 import {useFrameRenderer} from '../composables/useFrameRenderer.js'
 import {useEventListener} from '../composables/useEventListener.js'
@@ -21,6 +22,7 @@ import {offsetBounds} from '../utils/viewGeometry.js'
 import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
+import type {ScreenRect} from '../composables/useCometRoi.js'
 
 const eventStream = useEventStreamContext()
 const settings = useSettings()
@@ -37,11 +39,11 @@ const endpoint = eyepieceStreamEndpoint(routePath)
 const {connected, frameData, dimensions, isJpeg} = useImageStream({endpoint})
 
 
-const pushDirection = computed(() => eventStream?.pushDirection?.value ?? null)
-const currentTarget = computed(() => eventStream?.currentTarget?.value ?? null)
+const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
+const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 
-const showsGuideCamera = computed(() => eventStream?.viewedCamera?.value === 'guide')
+const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'guide')
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
 const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
@@ -52,9 +54,9 @@ const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
  */
 const isBinoview = computed(() => {
   if (routePath === PAGES.EYEPIECE) return false
-  return settings.value?.eyepiece?.binoview ?? true
+  return settings.value?.eyepiece.binoview ?? true
 })
-const isCircularView = computed(() => settings.value?.eyepiece?.circular_view ?? true)
+const isCircularView = computed(() => settings.value?.eyepiece.circular_view ?? true)
 const showFocusImage = computed(() => settings.value?.show_focus_image ?? false)
 const forceFocusImageNow = computed(() => settings.value?.force_focus_image_now ?? false)
 
@@ -62,18 +64,20 @@ const hasFrame = computed(() => frameData.value !== null && dimensions.value.wid
 const effectiveHasFrame = computed(() => hasFrame.value && !forceFocusImageNow.value)
 
 /** The eyes on screen, by class name: each one is a canvas drawn from the same frame. */
-const BINOVIEW_EYES = ['left-eye', 'right-eye']
-const SINGLE_EYES = ['single-view']
-const eyes = computed(() => (isBinoview.value ? BINOVIEW_EYES : SINGLE_EYES))
+const BINOVIEW_EYES = ['left-eye', 'right-eye'] as const
+const SINGLE_EYES = ['single-view'] as const
+type Eye = (typeof BINOVIEW_EYES)[number] | (typeof SINGLE_EYES)[number]
+const eyes = computed((): readonly Eye[] => (isBinoview.value ? BINOVIEW_EYES : SINGLE_EYES))
 
-const eyeElements = {}
-const canvasElements = {}
-const eyeBounds = ref({})
-const NO_BOUNDS = Object.freeze({left: 0, top: 0, width: 0, height: 0})
+const eyeElements: Partial<Record<Eye, Element>> = {}
+const canvasElements: Partial<Record<Eye, HTMLCanvasElement>> = {}
+const eyeBounds = ref<Partial<Record<Eye, ScreenRect>>>({})
+const NO_BOUNDS: Readonly<ScreenRect> = Object.freeze({left: 0, top: 0, width: 0, height: 0})
 
-let resizeObserver = null
+let resizeObserver: ResizeObserver | null = null
 
-function setEye(eye, element) {
+function setEye(eye: Eye, target: Element | ComponentPublicInstance | null) {
+  const element = target instanceof Element ? target : null
   const previous = eyeElements[eye]
   if (previous === element) return
   if (previous) resizeObserver?.unobserve(previous)
@@ -85,13 +89,14 @@ function setEye(eye, element) {
   }
 }
 
-function setCanvas(eye, element) {
+function setCanvas(eye: Eye, target: Element | ComponentPublicInstance | null) {
+  const element = target instanceof HTMLCanvasElement ? target : null
   if (element) canvasElements[eye] = element
   else delete canvasElements[eye]
 }
 
 function updateBounds() {
-  const bounds = {}
+  const bounds: Partial<Record<Eye, ScreenRect>> = {}
   for (const eye of eyes.value) {
     const canvas = canvasElements[eye]
     if (canvas) bounds[eye] = offsetBounds(canvas)
@@ -125,7 +130,7 @@ const zoomScale = zoom.scale
 const zoomStyle = zoom.style
 const resetZoom = zoom.reset
 
-const rootRef = ref(null)
+const rootRef = useTemplateRef<HTMLDivElement>('root')
 
 // Fit all on both fullscreen edges — the viewport changes size going in and
 // coming out — and again whenever it changes shape under fullscreen, so a
@@ -156,16 +161,16 @@ const {
 const DOWNLOAD_ERROR_MS = 4000
 
 const downloading = ref(false)
-const downloadError = ref(null)
+const downloadError = ref<string | null>(null)
 const menuOpen = ref(false)
-let errorTimer = null
+let errorTimer: ReturnType<typeof setTimeout> | null = null
 
 // The controls stay put while a menu is open or a download is running: a retry
 // against a busy server can take fifteen seconds, and the spinner saying so must
 // not fade out halfway through it.
 watch([menuOpen, downloading], ([open, busy]) => holdOverlay(open || busy))
 
-function reportDownloadError(message) {
+function reportDownloadError(message: string) {
   if (errorTimer) clearTimeout(errorTimer)
   downloadError.value = message
   errorTimer = setTimeout(() => {
@@ -182,7 +187,7 @@ function reportDownloadError(message) {
  * The server names the file (it owns the timestamp); the name travels with the
  * bytes since the fetch's blob carries none of the headers it arrived with.
  */
-async function downloadSnapshot(circular) {
+async function downloadSnapshot(circular: boolean) {
   if (downloading.value) return
   downloading.value = true
   showOverlay()
@@ -190,33 +195,33 @@ async function downloadSnapshot(circular) {
     const {blob, filename} = await fetchEyepieceSnapshot(circular)
     saveBlob(blob, filename)
   } catch (e) {
-    reportDownloadError(e.message || 'Download failed')
+    reportDownloadError((e instanceof Error && e.message) || 'Download failed')
   } finally {
     downloading.value = false
   }
 }
 
-function handleWheel(e) {
+function handleWheel(e: WheelEvent) {
   showOverlay()
   zoom.wheel(e)
 }
 
-function handleTouchStart(e) {
+function handleTouchStart(e: TouchEvent) {
   handlePressStart(e)
   zoom.touchStart(e)
 }
 
-function handleTouchMove(e) {
+function handleTouchMove(e: TouchEvent) {
   showOverlay()
   zoom.touchMove(e)
 }
 
-function handleTouchCancel(e) {
+function handleTouchCancel(e: TouchEvent) {
   cancelPress(e)
   zoom.touchCancel()
 }
 
-function handleTouchEnd(e) {
+function handleTouchEnd(e: TouchEvent) {
   handlePressEnd(e)
   zoom.touchEnd(e)
 }
@@ -240,8 +245,9 @@ useEventListener(document, 'fullscreenchange', handleFullscreenChange)
 
 onMounted(() => {
   updateBounds()
-  resizeObserver = new ResizeObserver(updateBounds)
-  Object.values(eyeElements).forEach((element) => resizeObserver.observe(element))
+  const observer = new ResizeObserver(updateBounds)
+  resizeObserver = observer
+  Object.values(eyeElements).forEach((element) => observer.observe(element))
 })
 
 onUnmounted(() => {
@@ -255,7 +261,7 @@ onUnmounted(() => {
 
 <template>
   <div
-    ref="rootRef"
+    ref="root"
     class="eyepiece-view"
     :class="{ 'zoom-active': isZoomAllowed && zoomScale > 1 }"
     @wheel="handleWheel"
@@ -288,7 +294,7 @@ onUnmounted(() => {
               :class="['live-canvas', {circular: isCircularView}]"
           ></canvas>
           <GuideArrow
-              v-if="showGuideArrow"
+              v-if="showGuideArrow && pushDirection"
               :direction="pushDirection"
               :bounds="eyeBounds[eye] ?? NO_BOUNDS"
               :fov-deg="displayedFovDeg"

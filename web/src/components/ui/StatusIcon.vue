@@ -1,4 +1,7 @@
-<script>
+<script lang="ts">
+/** One element of an icon: its SVG tag and attributes. */
+type IconShape = readonly [tag: string, attrs: Record<string, string | number>]
+
 /** The status bar's 14 px line icons, by name. */
 export const STATUS_ICON_SHAPES = {
   camera: [
@@ -22,13 +25,13 @@ export const STATUS_ICON_SHAPES = {
     ['polyline', {points: '21,15 16,10 5,21'}],
   ],
   dropped: [['path', {d: 'M12 2v6l-2 2M12 22v-6l2-2M2 12h6l2 2M22 12h-6l-2-2'}]],
-}
+} satisfies Record<string, readonly IconShape[]>
 </script>
 
-<script setup>
-defineProps({
-  name: {type: String, required: true, validator: (name) => name in STATUS_ICON_SHAPES},
-})
+<script setup lang="ts">
+defineProps<{
+  name: keyof typeof STATUS_ICON_SHAPES
+}>()
 </script>
 
 <template>

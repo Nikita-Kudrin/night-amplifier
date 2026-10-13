@@ -1,4 +1,4 @@
-<script setup>
+<script setup lang="ts">
 import {computed, ref, watch} from 'vue'
 import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
 import {formatPercent, formatTemperature, MISSING} from '../utils/format.js'
@@ -10,65 +10,68 @@ import {COOLER_STABLE_BAND_C, COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants
 // controls are showing and editing.
 const {cameraSettings, currentCamera, liveStatus, error, clearError, apply} = useCameraHardwareSettings()
 
-const hasCooler = computed(() => Boolean(currentCamera.value?.info?.has_cooler))
+const hasCooler = computed(() => Boolean(currentCamera.value?.info.has_cooler))
 
-const minTemp = computed(() => currentCamera.value?.info?.min_temp_c ?? COOLER_TEMP_LIMITS.min)
-const maxTemp = computed(() => currentCamera.value?.info?.max_temp_c ?? COOLER_TEMP_LIMITS.max)
+const minTemp = computed(() => currentCamera.value?.info.min_temp_c ?? COOLER_TEMP_LIMITS.min)
+const maxTemp = computed(() => currentCamera.value?.info.max_temp_c ?? COOLER_TEMP_LIMITS.max)
 
 const localCoolerEnabled = ref(false)
-const localTargetTemp = ref(COOLER_TEMP_LIMITS.default)
+const localTargetTemp = ref<number>(COOLER_TEMP_LIMITS.default)
 const localCoolerFastMode = ref(false)
 
-function hasSetpoint(hardware) {
-  return typeof hardware?.target_temp_c === 'number'
+/** The stored setpoint; `null` (the server's default) or left out when there is none. */
+function setpointOf(hardware: {readonly target_temp_c?: number | null} | null) {
+  return hardware?.target_temp_c ?? null
 }
 
 watch(
     cameraSettings,
     (hardware) => {
       if (!hardware) return
-      localCoolerEnabled.value = hardware.cooler_enabled ?? false
+      localCoolerEnabled.value = hardware.cooler_enabled
       // Every camera's own, or the default: keeping the last number showed the previous
       // camera's setpoint for a guide that has none (the server's default is null).
-      localTargetTemp.value = hasSetpoint(hardware) ? hardware.target_temp_c : COOLER_TEMP_LIMITS.default
-      localCoolerFastMode.value = hardware.cooler_fast_mode ?? false
+      localTargetTemp.value = setpointOf(hardware) ?? COOLER_TEMP_LIMITS.default
+      localCoolerFastMode.value = hardware.cooler_fast_mode
     },
     {immediate: true}
 )
 
 const statusBadge = computed(() => {
-  if (!liveStatus.value) return {label: 'Idle', tone: 'muted'}
-  if (!liveStatus.value.cooler_on) return {label: 'Off', tone: 'muted'}
-  if (typeof liveStatus.value.target_temp_c !== 'number') {
+  const status = liveStatus.value
+  if (!status) return {label: 'Idle', tone: 'muted'}
+  if (!status.cooler_on) return {label: 'Off', tone: 'muted'}
+  const target = status.target_temp_c
+  if (target === null) {
     return {label: 'Cooling', tone: 'warning'}
   }
-  const delta = Math.abs(liveStatus.value.temperature_c - liveStatus.value.target_temp_c)
+  const delta = Math.abs(status.temperature_c - target)
   if (delta <= COOLER_STABLE_BAND_C) return {label: 'Stable', tone: 'success'}
-  if (liveStatus.value.temperature_c > liveStatus.value.target_temp_c) {
+  if (status.temperature_c > target) {
     return {label: 'Cooling', tone: 'warning'}
   }
   return {label: 'Warming', tone: 'warning'}
 })
 
 /** Turning Cool on with no stored setpoint sends the one shown, which was never saved. */
-function handleCoolerToggle(enabled) {
+function handleCoolerToggle(enabled: boolean) {
   localCoolerEnabled.value = enabled
-  const setpoint = enabled && !hasSetpoint(cameraSettings.value) ? {target_temp_c: localTargetTemp.value} : {}
+  const setpoint = enabled && setpointOf(cameraSettings.value) === null ? {target_temp_c: localTargetTemp.value} : {}
   apply({cooler_enabled: enabled, ...setpoint})
 }
 
-function handleTargetChange(value) {
+function handleTargetChange(value: number) {
   localTargetTemp.value = value
   apply({target_temp_c: value})
 }
 
-function handleFastModeToggle(enabled) {
+function handleFastModeToggle(enabled: boolean) {
   localCoolerFastMode.value = enabled
   apply({cooler_fast_mode: enabled})
 }
 
 /** The camera reports cooler power as 0–100. */
-function formatPower(v) {
+function formatPower(v: number | null | undefined) {
   return v == null ? MISSING : formatPercent(v / 100)
 }
 </script>

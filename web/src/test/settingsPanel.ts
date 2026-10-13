@@ -3,6 +3,7 @@ import {vi} from 'vitest'
 import {mount} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import SettingsPanel from '../components/SettingsPanel.vue'
+import BaseSlider from '../components/ui/BaseSlider.vue'
 import {capabilities, settings} from './fixtures.js'
 import {contextProvides} from '../composables/appContext.js'
 import type {Capabilities, DeepSkyCapabilities, Settings} from '../composables/api.types.js'
@@ -18,7 +19,14 @@ export function findToggleByLabel(wrapper: VueWrapper, label: string) {
         .findAll('.toggle-label')
         .find((el) => el.text().includes(label))
     if (!found) throw new Error(`no toggle labelled "${label}"`)
-    return found.find('input[type="checkbox"]')
+    return found.find<HTMLInputElement>('input[type="checkbox"]')
+}
+
+/** A slider, found by its label. */
+export function findSliderByLabel(wrapper: VueWrapper, label: string) {
+    const found = wrapper.findAllComponents(BaseSlider).find((slider) => slider.props('label') === label)
+    if (!found) throw new Error(`no slider labelled "${label}"`)
+    return found
 }
 
 /** The server's defaults, which the panel's tests start from; each test adds what it is about. */
@@ -26,9 +34,15 @@ export function createDefaultSettings(): Settings {
     return settings()
 }
 
+/**
+ * Settings as the panel's tests give them: each group with only the fields a test is
+ * about, the rest left out, which the panel's mirror (`settingsMirror`) fills from the defaults.
+ */
+export type SettingsOverrides = {[K in keyof Settings]?: Partial<Settings[K]>}
+
 interface PanelOverrides {
     /** `null` mounts the panel as it exists before the first payload arrives. */
-    settings?: Partial<Settings> | null
+    settings?: SettingsOverrides | null
     simulatorEnabled?: boolean
     capabilities?: Partial<Omit<Capabilities, 'deep_sky'>> & {deep_sky?: Partial<DeepSkyCapabilities>}
 }
@@ -42,7 +56,9 @@ export function createMockProvides(overrides: PanelOverrides = {}) {
         settings: ref(
             overrides.settings === null
                 ? null
-                : {...createDefaultSettings(), ...overrides.settings}
+                // A group a test gives replaces the default one whole, its missing fields
+                // and all: what the mirror is to fill, and the wire's types cannot state.
+                : {...createDefaultSettings(), ...overrides.settings} as Settings
         ),
         refreshSettings: vi.fn().mockResolvedValue(undefined),
         simulatorEnabled: ref(overrides.simulatorEnabled ?? false),

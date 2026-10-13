@@ -1,6 +1,8 @@
-<script setup>
+<script setup lang="ts">
 import {ref, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, getStackingTypes} from '../composables/api.js'
+import type {HardwarePatch} from '../composables/api.js'
+import type {StackingType, StackingTypeInfo, UpdateSettingsRequest} from '../composables/api.types.js'
 import {useError} from '../composables/useError.js'
 import {
   findCamera,
@@ -14,6 +16,7 @@ import {
   useSettings,
 } from '../composables/appContext.js'
 import {hardwareBlock} from '../composables/useCameraHardwareSettings.js'
+import type {HardwareEdit} from '../composables/useCameraHardwareSettings.js'
 import {useCaptureTarget} from '../composables/useCaptureTarget.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
 import ExposureControl from './ExposureControl.vue'
@@ -58,21 +61,23 @@ const {
 } = useCaptureTarget({role: settingsRole, busy: loading})
 
 /** The hardware block belonging to the camera currently selected. */
-const cameraSettings = computed(() => hardwareBlock(settings?.value, settingsRole.value))
+const cameraSettings = computed(() => hardwareBlock(settings.value, settingsRole.value))
 
 /** The exposure as typed, in microseconds; Start sends it even if never blurred. */
 const exposureUs = ref(100000)
 const gain = ref(GAIN_LIMITS.default)
 
-const stackingTypes = ref([])
-const selectedStackingType = ref(STACKING_TYPES.DEEP_SKY)
+const stackingTypes = ref<StackingTypeInfo[]>([])
+const selectedStackingType = ref<StackingType>(STACKING_TYPES.DEEP_SKY)
 const stackingEnabled = ref(DEFAULT_SETTINGS.stacking)
 const autoStretch = ref(DEFAULT_SETTINGS.auto_stretch)
 const stretchAggressiveness = ref(DEFAULT_SETTINGS.stretch_aggressiveness)
 const wandererMode = ref(DEFAULT_SETTINGS.wanderer_mode)
 const focusMode = ref(DEFAULT_SETTINGS.focus_mode)
 
-const stackingMode = computed(() => {
+type StackingMode = 'wanderer' | 'stacking' | 'off'
+
+const stackingMode = computed((): StackingMode => {
   if (wandererMode.value) return 'wanderer'
   if (stackingEnabled.value) return 'stacking'
   return 'off'
@@ -88,24 +93,12 @@ watch(
       if (newSettings && hardware) {
         exposureUs.value = hardware.exposure_us
         gain.value = hardware.gain
-        if (newSettings.stacking_type) {
-          selectedStackingType.value = newSettings.stacking_type
-        }
-        if (newSettings.stacking !== undefined) {
-          stackingEnabled.value = newSettings.stacking
-        }
-        if (newSettings.auto_stretch !== undefined) {
-          autoStretch.value = newSettings.auto_stretch
-        }
-        if (newSettings.stretch_aggressiveness !== undefined) {
-          stretchAggressiveness.value = newSettings.stretch_aggressiveness
-        }
-        if (newSettings.wanderer_mode !== undefined) {
-          wandererMode.value = newSettings.wanderer_mode
-        }
-        if (newSettings.focus_mode !== undefined) {
-          focusMode.value = newSettings.focus_mode
-        }
+        selectedStackingType.value = newSettings.stacking_type
+        stackingEnabled.value = newSettings.stacking
+        autoStretch.value = newSettings.auto_stretch
+        stretchAggressiveness.value = newSettings.stretch_aggressiveness
+        wandererMode.value = newSettings.wanderer_mode
+        focusMode.value = newSettings.focus_mode
       }
     },
     {immediate: true}
@@ -116,7 +109,7 @@ onMounted(async () => {
   try {
     stackingTypes.value = await getStackingTypes()
   } catch (e) {
-    setError(`Could not load the stacking types: ${e.message}`)
+    setError(`Could not load the stacking types: ${e instanceof Error ? e.message : e}`)
   }
 })
 
@@ -125,12 +118,12 @@ const captureModeOptions = computed(() => (isEditingGuide.value ? GUIDE_CAPTURE_
 const selectedCameraName = computed(() => {
   const id = selectedCamera.value
   if (!id) return null
-  return findCamera(cameras?.value, id)?.name || null
+  return findCamera(cameras.value, id)?.name || null
 })
 
 const selectedCameraPhase = computed(() => {
   const name = selectedCameraName.value
-  return name ? cameraPhase.value?.[name] || null : null
+  return name ? cameraPhase.value[name] || null : null
 })
 
 const showPrecoolWarning = computed(
@@ -147,7 +140,7 @@ async function handleStart() {
       camera_role: settingsRole.value,
       exposure_us: exposureUs.value,
       gain: gain.value,
-    })
+    } satisfies HardwarePatch)
     if (isEditingGuide.value) {
       // No id: the guide slot holds at most one camera, so the server resolves it.
       await startCapture(null, 'guide')
@@ -168,16 +161,19 @@ async function handleStop() {
   })
 }
 
-async function applySetting(settings, onError = null) {
+async function applySetting(settings: UpdateSettingsRequest, onError: (() => void) | null = null) {
   await withErrorHandling(async () => {
     await applySettings(settings)
   }, onError ? {onError} : {})
 }
 
 /** Hardware edits carry the role, so they land on the camera the user selected. */
-const applyHardware = (patch) => applySetting({camera_role: settingsRole.value, ...patch})
+const applyHardware = (edit: HardwareEdit) => {
+  const patch: HardwarePatch = {camera_role: settingsRole.value, ...edit}
+  return applySetting(patch)
+}
 
-const applyExposure = (us) => applyHardware({exposure_us: us})
+const applyExposure = (us: number) => applyHardware({exposure_us: us})
 const applyGain = () => applyHardware({gain: gain.value})
 const applyStackingType = () => applySetting({stacking_type: selectedStackingType.value})
 const applyAutoStretch = () => applySetting({auto_stretch: autoStretch.value})
@@ -210,8 +206,8 @@ const applyFocusMode = () =>
       focusMode.value = settings?.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
     })
 
-function applyStackingMode(val) {
-  const modes = {
+function applyStackingMode(val: StackingMode) {
+  const modes: Record<StackingMode, UpdateSettingsRequest> = {
     wanderer: {stacking: true, wanderer_mode: true},
     stacking: {stacking: true, wanderer_mode: false},
     off: {stacking: false, wanderer_mode: false},

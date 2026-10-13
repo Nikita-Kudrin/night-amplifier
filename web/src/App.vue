@@ -1,5 +1,5 @@
-<script setup>
-import {ref, onMounted} from 'vue'
+<script setup lang="ts">
+import {ref, onMounted, useTemplateRef} from 'vue'
 import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
 import {provideAppContext} from './composables/appContext.js'
@@ -30,7 +30,7 @@ const {loading, globalError: error, settings, initializeState, capabilities} = a
 
 const showAbout = ref(false)
 
-const sidebar = ref(null)
+const sidebar = useTemplateRef<HTMLElement>('sidebarElement')
 const {
   activeTab,
   visited,
@@ -151,7 +151,7 @@ onMounted(() => {
     <!-- Main content -->
     <main v-else class="main">
       <!-- Left panel: one tab at a time, each kept mounted once visited (useSidebarTabs) -->
-      <aside ref="sidebar" class="sidebar" :class="{ expanded: activeTab !== SIDEBAR_TABS.MAIN }">
+      <aside ref="sidebarElement" class="sidebar" :class="{ expanded: activeTab !== SIDEBAR_TABS.MAIN }">
         <div v-show="activeTab === SIDEBAR_TABS.MAIN" class="sidebar-tab" data-test="sidebar-main">
           <CameraPanel/>
           <CaptureControls/>

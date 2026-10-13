@@ -1,13 +1,10 @@
-<script setup>
-defineProps({
-  title: {
-    type: String,
-    default: '',
-  },
-  bordered: {
-    type: Boolean,
-    default: true,
-  },
+<script setup lang="ts">
+withDefaults(defineProps<{
+  title?: string
+  bordered?: boolean
+}>(), {
+  title: '',
+  bordered: true,
 })
 </script>
 

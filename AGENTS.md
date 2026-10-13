@@ -121,7 +121,7 @@ in Community first. Pro's own `checkout-siblings` does that checkout; step timeo
 
 Frontend commands (install/dev/build/typecheck/lint/test) run from `web/` — see README. **Never `npm run format`**
 (rewrites the whole tree). Always run `cargo test` after changes, `npm run test:run` and `npm run typecheck` too.
-A frontend test that reaches `fetch` unmocked fails (`src/testSetup.js`) even where the code swallows the error:
+A frontend test that reaches `fetch` unmocked fails (`src/testSetup.ts`) even where the code swallows the error:
 happy-dom sends `/api/...` to `localhost:3000`, so one sent 40 real requests a run that anything on that port would
 have answered mid-test.
 
@@ -195,7 +195,7 @@ settings only by `settingsStore`: `applySettings` (`useApplySettings`) adopts th
 runs beside a write, coalesces, and drops an answer older than the one adopted — an edit is one POST and at most one
 GET (it was a POST and 2-3 GETs). A refresh asked during a request reads once more after it. Every `api.ts` call has a deadline (15 s; 120 s for connect, capture
 start/stop, installs, snapshot): one hung POST held every settings refresh behind it. Stores are `createX()` + a module default + `__resetForTests()`; a composable's
-lifecycle hooks go through `lifecycle.js` (`tryOn*`), which a bare call or a module store skips. Polling only while
+lifecycle hooks go through `lifecycle.ts` (`tryOn*`), which a bare call or a module store skips. Polling only while
 the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on sync.
 **`api.types.ts`, `api.settings.ts` and `api.events.ts` are generated** from the Rust wire types, the code that clamps settings and `ServerEvent::examples()`
 (`tests/api_types.rs`, feature `api-schema`, which derives `schemars::JsonSchema` only in that build); CI fails a
@@ -234,7 +234,7 @@ ref once locked comet stacking for every Pro user. Tests provide by name: `mount
 in a mount's `global.provide`. `api.ts` rejects with an `ApiError` carrying the HTTP status; a caller to whom a
 Pro feature is optional uses `ignoreProOnly`, never a bare `catch {}`. Formatters, coordinates (rounded *before*
 splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`. Styles take tokens from `main.css`
-`:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.js` fails an undefined,
+`:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.ts` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
 components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
 `createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a

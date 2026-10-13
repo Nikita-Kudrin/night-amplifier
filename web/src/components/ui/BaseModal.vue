@@ -1,37 +1,26 @@
-<script setup>
+<script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits<{close: []}>()
 
-const props = defineProps({
-  title: {
-    type: String,
-    default: ''
-  },
-  maxWidth: {
-    type: String,
-    default: '600px'
-  },
-  noPadding: {
-    type: Boolean,
-    default: false
-  },
-  overlayClass: {
-    type: String,
-    default: ''
-  },
-  persistent: {
-    type: Boolean,
-    default: false
-  },
-  showCloseButton: {
-    type: Boolean,
-    default: true
-  }
+const props = withDefaults(defineProps<{
+  title?: string
+  maxWidth?: string
+  noPadding?: boolean
+  overlayClass?: string
+  persistent?: boolean
+  showCloseButton?: boolean
+}>(), {
+  title: '',
+  maxWidth: '600px',
+  noPadding: false,
+  overlayClass: '',
+  persistent: false,
+  showCloseButton: true
 })
 
 // Handle escape key
-function handleKeydown(e) {
+function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && !props.persistent) {
     emit('close')
   }
