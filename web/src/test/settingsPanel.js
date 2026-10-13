@@ -2,7 +2,7 @@ import {ref} from 'vue'
 import {vi} from 'vitest'
 import {mount} from '@vue/test-utils'
 import SettingsPanel from '../components/SettingsPanel.vue'
-import {capabilities} from './fixtures.js'
+import {capabilities, settings} from './fixtures.js'
 
 /**
  * A toggle's checkbox, found by the label text next to it.
@@ -18,18 +18,9 @@ export function findToggleByLabel(wrapper, label) {
     return found.find('input[type="checkbox"]')
 }
 
-/** The few settings the panel's tests start from; each test adds what it is about. */
+/** The server's defaults, which the panel's tests start from; each test adds what it is about. */
 export function createDefaultSettings() {
-    return {
-        offset: 10,
-        bin: 1,
-        auto_stretch: true,
-        auto_stretch_intensity: 0.3,
-        stacking: true,
-        background_subtraction: true,
-        raw_frame_saving: {live_view: false, wanderer: false, stacking: false},
-        save_stacked_image: false,
-    }
+    return settings()
 }
 
 /** `overrides.capabilities.deep_sky` merges over a Community server's answer. */

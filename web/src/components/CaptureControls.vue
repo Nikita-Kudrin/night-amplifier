@@ -261,10 +261,8 @@ const HELP = HELP_TEXTS
 
       <!-- Pro lock for Comet mode -->
       <div v-if="showCometLock" class="comet-pro-lock">
-        <BaseProLock
-            title="Comet Stacking"
-            :message="HELP.comet_pro"
-        />
+        <BaseProLock feature="Comet stacking" size="16px"/>
+        <span class="comet-pro-message">{{ HELP.comet_pro }}</span>
       </div>
 
       <template v-else>
@@ -473,11 +471,19 @@ const HELP = HELP_TEXTS
 }
 
 .comet-pro-lock {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 1rem;
   background: var(--surface-elevated);
   border-radius: var(--radius-lg);
   margin-bottom: 0.5rem;
   border: 1px solid var(--border);
+}
+
+.comet-pro-message {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
 }
 
 .control-disabled {

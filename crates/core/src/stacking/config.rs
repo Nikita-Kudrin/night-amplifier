@@ -117,6 +117,7 @@ impl StackingType {
 
 /// Comprehensive information about a stacking type
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct StackingTypeInfo {
     /// The stacking type identifier
     pub id: StackingType,

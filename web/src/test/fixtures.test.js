@@ -1,5 +1,5 @@
 import * as fixtures from './fixtures.js'
-import {wireTypes} from './apiTypes.js'
+import {wireEnum, wireTypes} from './apiTypes.js'
 
 const types = wireTypes()
 
@@ -15,6 +15,7 @@ const BUILDERS = [
     ['databaseType', 'DatabaseType'],
     ['pushToStatus', 'PushToStatus'],
     ['catalogEntry', 'CatalogEntry'],
+    ['stackingTypeInfo', 'StackingTypeInfo'],
 ]
 
 describe('fixtures', () => {
@@ -23,19 +24,19 @@ describe('fixtures', () => {
         expect(unknown).toEqual([])
     })
 
-    // `settings()` builds on the pre-load defaults, which carry only what the UI reads.
-    it.each(BUILDERS.filter(([builder]) => builder !== 'settings'))(
-        '%s() carries every required %s field',
-        (builder, typedef) => {
-            const built = fixtures[builder]()
-            expect(types[typedef].required.filter((key) => !(key in built))).toEqual([])
-        }
-    )
+    it.each(BUILDERS)('%s() carries every required %s field', (builder, typedef) => {
+        const built = fixtures[builder]()
+        expect(types[typedef].required.filter((key) => !(key in built))).toEqual([])
+    })
 
     it('describes installed databases as the server does', () => {
         for (const entry of fixtures.astapStatus().installed_databases) {
             expect(Object.keys(entry).sort()).toEqual([...types.InstalledDatabaseInfo.all].sort())
         }
+    })
+
+    it('lists the stacking types as the server does, one per type', () => {
+        expect(fixtures.stackingTypes().map(({id}) => id)).toEqual(wireEnum('StackingType'))
     })
 
     it('keeps a camera and its info naming the same body', () => {

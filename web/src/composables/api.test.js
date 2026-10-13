@@ -1,6 +1,8 @@
 import * as api from './api.js'
 import {ApiError, ignoreProOnly, isProOnly, LONG_REQUEST_TIMEOUT_MS, REQUEST_TIMEOUT_MS} from './api.js'
+import source from './api.js?raw'
 import {envelope, refusal, stubFetch, textResponse} from '../test/http.js'
+import {wireTypeNames} from '../test/apiTypes.js'
 
 const JSON_HEADERS = {'Content-Type': 'application/json'}
 
@@ -35,7 +37,9 @@ const CALLS = [
     ['searchCatalog', ['M 42 & co'], '/api/push-to/catalog/search?query=M+42+%26+co&limit=20', 'GET'],
     ['searchCatalog', ['M31', 5], '/api/push-to/catalog/search?query=M31&limit=5', 'GET'],
     ['setTargetByName', ['M31'], '/api/push-to/target', 'POST', {name: 'M31'}],
-    ['setTargetByCoordinates', [10.5, 41.2], '/api/push-to/target', 'POST', {ra_degrees: 10.5, dec_degrees: 41.2, name: null}],
+    // The server tries a name first and would aim at it over the coordinates, so none is sent.
+    ['setTargetByCoordinates', [10.5, 41.2], '/api/push-to/target', 'POST', {ra_degrees: 10.5, dec_degrees: 41.2}],
+    ['setTargetByCoordinates', [10.5, 41.2, 'M31'], '/api/push-to/target', 'POST', {ra_degrees: 10.5, dec_degrees: 41.2}],
     ['clearTarget', [], '/api/push-to/target', 'DELETE'],
     ['updatePushToConfig', [{fov_degrees: 1.2}], '/api/push-to/config', 'POST', {fov_degrees: 1.2}],
     ['cancelPushToSolve', [], '/api/push-to/cancel', 'POST'],
@@ -77,6 +81,14 @@ describe('API Client', () => {
             .map(([name]) => name)
             .filter((name) => name !== 'fetchEyepieceSnapshot') // eyepieceSnapshot.test.js
         expect(new Set(CALLS.map(([name]) => name))).toEqual(new Set(endpoints))
+    })
+
+    // `TargetInfo` was named and defined nowhere; until api.js is TypeScript, nothing else checks it.
+    it('documents its answers with types the server generates', () => {
+        const known = new Set([...wireTypeNames(), 'Promise', 'Partial', 'Blob', 'Object'])
+        const named = [...source.matchAll(/@(?:returns|param) \{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g)]
+            .flatMap(([, type]) => type.match(/\b[A-Z]\w*/g) ?? [])
+        expect([...new Set(named)].filter((name) => !known.has(name))).toEqual([])
     })
 
     describe('Error Handling', () => {

@@ -275,7 +275,7 @@ export async function updateSettings(settings) {
 
 /**
  * Get available stacking types
- * @returns {Promise<StackingType[]>}
+ * @returns {Promise<StackingTypeInfo[]>}
  */
 export async function getStackingTypes() {
     return get('/settings/stacking-types')
@@ -395,21 +395,20 @@ export async function searchCatalog(query, limit = 20) {
 /**
  * Set target by name/designation
  * @param {string} name - Object name or designation (e.g., "M31", "Andromeda")
- * @returns {Promise<TargetInfo>}
+ * @returns {Promise<CatalogEntry>} the catalog entry the name resolved to
  */
 export async function setTargetByName(name) {
     return post('/push-to/target', {name})
 }
 
 /**
- * Set target by coordinates
+ * Set target by coordinates. Sends no name: the server resolves one first, over the coordinates.
  * @param {number} ra - Right Ascension in degrees
  * @param {number} dec - Declination in degrees
- * @param {string} [name] - Optional name for the target
- * @returns {Promise<TargetInfo>}
+ * @returns {Promise<Coordinate>}
  */
-export async function setTargetByCoordinates(ra, dec, name = null) {
-    return post('/push-to/target', {ra_degrees: ra, dec_degrees: dec, name})
+export async function setTargetByCoordinates(ra, dec) {
+    return post('/push-to/target', {ra_degrees: ra, dec_degrees: dec})
 }
 
 /**

@@ -1,5 +1,5 @@
 import {vi} from 'vitest'
-import {astapStatus, capabilities, catalogStatus, pushToStatus, settings} from './fixtures.js'
+import {astapStatus, capabilities, catalogStatus, pushToStatus, settings, stackingTypes} from './fixtures.js'
 
 /**
  * A stand-in for `api.js` with every endpoint a `vi.fn()`, so a file mocks the module
@@ -20,7 +20,7 @@ export function mockApi(actual, overrides = {}) {
         updateSettings: () => settings(),
         getCapabilities: () => capabilities(),
         listCameras: () => [],
-        getStackingTypes: () => [],
+        getStackingTypes: () => stackingTypes(),
         getPushToStatus: () => pushToStatus(),
         searchCatalog: () => [],
         getAstapStatus: () => astapStatus(),

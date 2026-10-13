@@ -29,6 +29,11 @@ function typedefs(text) {
     return types
 }
 
+/** Every `@typedef` name in `api.types.js`, objects and unions alike. */
+export function wireTypeNames() {
+    return [...source.matchAll(/@typedef \{[^}]*\} (\w+)/g)].map(([, name]) => name)
+}
+
 /**
  * The members of a string-union `@typedef` in `api.types.js` (`CameraPhase`,
  * `StackingType`, …), so a hand-written table of them can be held to the server's enum.
