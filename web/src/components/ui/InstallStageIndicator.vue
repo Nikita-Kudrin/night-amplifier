@@ -64,7 +64,7 @@ defineProps({
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   background: var(--surface-elevated);
   border: 2px solid var(--border);
@@ -77,13 +77,13 @@ defineProps({
 }
 
 .stage-item.completed .stage-icon {
-  background: var(--success, #22c55e);
-  border-color: var(--success, #22c55e);
-  color: white;
+  background: var(--success);
+  border-color: var(--success);
+  color: var(--on-primary);
 }
 
 .stage-label {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -92,7 +92,7 @@ defineProps({
 }
 
 .stage-item.completed .stage-label {
-  color: var(--success, #22c55e);
+  color: var(--success);
 }
 
 .stage-connector {
@@ -104,6 +104,6 @@ defineProps({
 }
 
 .stage-connector.completed {
-  background: var(--success, #22c55e);
+  background: var(--success);
 }
 </style>

@@ -1,6 +1,7 @@
 import {ref, computed} from 'vue'
 import {FIT_MARGIN, ZOOM_LIMITS} from '../constants'
 import {useFullscreen} from './useFullscreen.js'
+import {clamp, fitScale, touchDistance} from '../utils/viewGeometry.js'
 
 /**
  * Pan and zoom interaction composable for canvas-based views.
@@ -53,9 +54,7 @@ export function usePanZoom(options = {}) {
 
     function handleTouchStart(e) {
         if (e.touches.length === 2) {
-            const dx = e.touches[0].clientX - e.touches[1].clientX
-            const dy = e.touches[0].clientY - e.touches[1].clientY
-            initialPinchDistance = Math.hypot(dx, dy)
+            initialPinchDistance = touchDistance(e.touches)
             initialScale = scale.value
         } else if (e.touches.length === 1) {
             isDragging.value = true
@@ -68,10 +67,7 @@ export function usePanZoom(options = {}) {
 
     function handleTouchMove(e) {
         if (e.touches.length === 2) {
-            const dx = e.touches[0].clientX - e.touches[1].clientX
-            const dy = e.touches[0].clientY - e.touches[1].clientY
-            const distance = Math.hypot(dx, dy)
-            scale.value = clampScale(initialScale * (distance / initialPinchDistance))
+            scale.value = clampScale(initialScale * (touchDistance(e.touches) / initialPinchDistance))
         } else if (e.touches.length === 1 && isDragging.value) {
             position.value = {
                 x: e.touches[0].clientX - dragStart.value.x,
@@ -85,7 +81,7 @@ export function usePanZoom(options = {}) {
     }
 
     function clampScale(value) {
-        return Math.max(ZOOM_LIMITS.min, Math.min(ZOOM_LIMITS.max, value))
+        return clamp(value, ZOOM_LIMITS.min, ZOOM_LIMITS.max)
     }
 
     function zoomIn() {
@@ -104,9 +100,7 @@ export function usePanZoom(options = {}) {
     function fitToView(containerRect, canvasWidth, canvasHeight) {
         if (!containerRect || !canvasWidth || !canvasHeight) return
 
-        const scaleX = containerRect.width / canvasWidth
-        const scaleY = containerRect.height / canvasHeight
-        scale.value = Math.min(scaleX, scaleY, 1) * FIT_MARGIN
+        scale.value = fitScale(containerRect, canvasWidth, canvasHeight, FIT_MARGIN)
         position.value = {x: 0, y: 0}
     }
 

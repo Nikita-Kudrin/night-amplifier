@@ -8,11 +8,12 @@ import {useAutoFit} from '../composables/useAutoFit.js'
 import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
 import {useCometRoi} from '../composables/useCometRoi.js'
 import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming.js'
-import {CAPTURE_STATES, isCaptureRunning} from '../constants'
+import {CAPTURE_STATES, isCaptureRunning, liveStreamEndpoint} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
-import {getAppState} from '../composables/useAppState.js'
+import {useAppState} from '../composables/useAppState.js'
+import {useCapabilities} from '../composables/appContext.js'
 import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
 import {setViewedCamera} from '../composables/api.js'
 
@@ -24,8 +25,8 @@ const FIT_AFTER_LAYOUT_MS = 10
 
 const eventStream = inject('eventStream')
 const settings = inject('settings')
-const appState = getAppState()
-const capabilities = appState.capabilities
+const {setGlobalError} = useAppState()
+const {debugLogging} = useCapabilities()
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
 const guideCamera = inject('guideCamera', computed(() => null))
 const mainCamera = inject('mainCamera', computed(() => null))
@@ -48,13 +49,11 @@ async function setShowGuide(show) {
       eventStream.viewedCamera.value = answer.camera
     }
   } catch (e) {
-    appState.setGlobalError(e.message)
+    setGlobalError(e.message)
   }
 }
 
-const streamEndpoint = computed(() =>
-    showGuide.value ? '/ws/stream?source=guide' : '/ws/stream'
-)
+const streamEndpoint = computed(() => liveStreamEndpoint(showGuide.value ? 'guide' : 'main'))
 
 const {connected, frameData, isJpeg, dimensions, fps, clearFrameData} = useImageStream({
   endpoint: streamEndpoint,
@@ -475,7 +474,7 @@ const backendLabel = computed(() => {
         :scale="scale"
         :fps="fps"
         :backend-label="backendLabel"
-        :debug-logging="capabilities?.debug_logging"
+        :debug-logging="debugLogging"
         :is-fullscreen="isFullscreen"
         :has-frame="hasFrame"
         :is-comet-mode="isCometMode"
@@ -495,7 +494,7 @@ const backendLabel = computed(() => {
     <!-- Connection status -->
     <div
         v-if="!connected"
-        class="connection-status disconnected overlay-fade"
+        class="hud-chip connection-status disconnected overlay-fade"
         :class="{ 'overlay-hidden': !overlayVisible }"
     >
       <span class="status-dot"></span>
@@ -536,7 +535,7 @@ const backendLabel = computed(() => {
 
 .placeholder p {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
 }
 
 .live-canvas {
@@ -554,11 +553,8 @@ const backendLabel = computed(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   padding: 0.375rem 0.75rem;
-  border-radius: 4px;
-  background: var(--surface-elevated);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .status-dot {
@@ -567,16 +563,4 @@ const backendLabel = computed(() => {
   background: var(--error);
   animation: pulse 2s infinite;
 }
-
-/* Applied to `LiveViewControls`' own root as well: a child component's root node
-   carries the parent's scope id, so it matches without reaching into the child. */
-.overlay-fade {
-  transition: opacity 0.35s ease;
-}
-
-.overlay-hidden {
-  opacity: 0;
-  pointer-events: none;
-}
-
 </style>

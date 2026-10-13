@@ -3,30 +3,28 @@ import {computed, inject, ref, watch} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {useError} from '../composables/useError.js'
-import {BaseSlider, BaseToggle} from './ui'
+import {useSelectedCamera} from '../composables/appContext.js'
+import {formatPercent, formatTemperature, MISSING} from '../utils/format.js'
+import {BaseAlert, BaseSlider, BaseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
 import {COOLER_TEMP_LIMITS, HELP_TEXTS} from '../constants'
 
 const settings = inject('settings', ref(null))
 const refreshSettings = inject('refreshSettings', async () => {
 })
-const cameras = inject('cameras', ref([]))
-const selectedCameraId = inject('selectedCamera', ref(null))
 const cameraStatus = inject('cameraStatus', ref({}))
 // The guide camera keeps its own cooler settings; the selection says which set these
 // controls are showing and editing.
 const settingsRole = inject('selectedCameraRole', computed(() => 'main'))
 
-const {error, withErrorHandling} = useError()
+const {error, clearError, withErrorHandling} = useError()
 
 const cameraSettings = computed(() => {
   if (!settings.value) return null
   return settingsRole.value === 'guide' ? settings.value.guide_camera : settings.value
 })
 
-const currentCamera = computed(() =>
-    (cameras.value ?? []).find((c) => c.id === selectedCameraId.value)
-)
+const currentCamera = useSelectedCamera()
 
 const hasCooler = computed(() => Boolean(currentCamera.value?.info?.has_cooler))
 
@@ -56,17 +54,17 @@ const liveStatus = computed(() => {
 })
 
 const statusBadge = computed(() => {
-  if (!liveStatus.value) return {label: 'Idle', tone: 'idle'}
-  if (!liveStatus.value.cooler_on) return {label: 'Off', tone: 'idle'}
+  if (!liveStatus.value) return {label: 'Idle', tone: 'muted'}
+  if (!liveStatus.value.cooler_on) return {label: 'Off', tone: 'muted'}
   if (typeof liveStatus.value.target_temp_c !== 'number') {
-    return {label: 'Cooling', tone: 'busy'}
+    return {label: 'Cooling', tone: 'warning'}
   }
   const delta = Math.abs(liveStatus.value.temperature_c - liveStatus.value.target_temp_c)
-  if (delta <= 0.5) return {label: 'Stable', tone: 'good'}
+  if (delta <= 0.5) return {label: 'Stable', tone: 'success'}
   if (liveStatus.value.temperature_c > liveStatus.value.target_temp_c) {
-    return {label: 'Cooling', tone: 'busy'}
+    return {label: 'Cooling', tone: 'warning'}
   }
-  return {label: 'Warming', tone: 'busy'}
+  return {label: 'Warming', tone: 'warning'}
 })
 
 /** `role` is the camera selected when the edit was made, not when a debounce fires. */
@@ -96,12 +94,9 @@ function handleFastModeToggle(enabled) {
   applySetting({cooler_fast_mode: enabled})
 }
 
-function formatTemp(v) {
-  return `${Number(v).toFixed(1)}°C`
-}
-
+/** The camera reports cooler power as 0–100. */
 function formatPower(v) {
-  return v == null ? '—' : `${Math.round(v)}%`
+  return v == null ? MISSING : formatPercent(v / 100)
 }
 </script>
 
@@ -109,7 +104,7 @@ function formatPower(v) {
   <div v-if="hasCooler" class="settings-section cooler-control">
     <h3 class="section-title">Camera cooler <SelectedCameraTag/></h3>
 
-    <div v-if="error" class="cooler-error">{{ error }}</div>
+    <BaseAlert v-if="error" @dismiss="clearError">{{ error }}</BaseAlert>
 
     <div class="toggles-row">
       <BaseToggle
@@ -153,18 +148,16 @@ function formatPower(v) {
         :min="minTemp"
         :max="maxTemp"
         :step="1"
-        :format-value="formatTemp"
+        :format-value="formatTemperature"
         :help="HELP_TEXTS.target_temp_c"
         @change="handleTargetChange"
     />
-
-
 
     <div class="cooler-status">
       <div class="status-item">
         <span class="status-label">Sensor</span>
         <span class="status-value">
-          {{ liveStatus ? formatTemp(liveStatus.temperature_c) : '—' }}
+          {{ formatTemperature(liveStatus?.temperature_c) }}
         </span>
       </div>
       <div class="status-item">
@@ -173,7 +166,7 @@ function formatPower(v) {
       </div>
       <div class="status-item">
         <span class="status-label">State</span>
-        <span class="status-pill" :class="`tone-${statusBadge.tone}`">
+        <span class="pill status-pill" :class="`pill-${statusBadge.tone}`">
           {{ statusBadge.label }}
         </span>
       </div>
@@ -186,10 +179,6 @@ function formatPower(v) {
 </template>
 
 <style scoped>
-.cooler-control {
-  margin-bottom: 0.625rem;
-}
-
 .toggles-row {
   display: flex;
   align-items: center;
@@ -203,7 +192,7 @@ function formatPower(v) {
   justify-content: space-between;
   padding: 0.375rem 0.5rem;
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-top: 0.5rem;
 }
 
@@ -211,7 +200,7 @@ function formatPower(v) {
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
 }
 
 .status-label {
@@ -224,43 +213,15 @@ function formatPower(v) {
 }
 
 .status-pill {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
-.tone-idle {
-  background: var(--surface-hover);
-  color: var(--text-muted);
-}
-
-.tone-busy {
-  background: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-}
-
-.tone-good {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
 }
 
 .cooler-hint {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   margin: 0.5rem 0 0;
 }
-
-.cooler-error {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border-radius: 4px;
-  padding: 0.375rem 0.5rem;
-  font-size: 0.75rem;
-  margin-bottom: 0.5rem;
-}
-
-
 
 .fast-warning-icon {
   width: 12px;

@@ -14,9 +14,10 @@ function useCatalogSearch() {
     return result
 }
 
-vi.mock('../api.js', () => ({
-    searchCatalog: vi.fn(),
-}))
+vi.mock('../api.js', async (importOriginal) =>
+    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+        searchCatalog: vi.fn(),
+    }))
 
 import {searchCatalog} from '../api.js'
 

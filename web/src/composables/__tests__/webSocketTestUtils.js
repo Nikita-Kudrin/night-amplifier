@@ -1,16 +1,17 @@
 import {nextTick} from 'vue'
+import lz4 from 'lz4js'
+import {RGB8_CHUNKED_MAGIC, RGB8_MAGIC} from '../../constants'
+import {SA09_CHUNK_DESCRIPTOR_SIZE, SA09_HEADER_SIZE} from '../../utils/frameDecoder.js'
 
 // --- Constants ---
-export const WS_STATES = {
+const WS_STATES = {
     CONNECTING: 0,
     OPEN: 1,
     CLOSING: 2,
     CLOSED: 3,
 }
 
-export const RGB8_MAGIC = 0x53413038 // "SA08"
-export const RGB8_CHUNKED_MAGIC = 0x53413039 // "SA09"
-export const RGB8_HEADER_SIZE = 16
+const RGB8_HEADER_SIZE = 16
 export const RGB8_BYTES_PER_PIXEL = 3
 
 // --- MockWebSocket ---
@@ -133,8 +134,6 @@ export function createRgb8PixelData(width, height, fillValue = 100) {
 }
 
 export function createRgb8Lz4Buffer(width, height, rgb8Data) {
-    const lz4 = require('lz4js')
-
     const maxCompressedSize = lz4.compressBound(rgb8Data.length)
     const compressedBlock = lz4.makeBuffer(maxCompressedSize)
     const actualCompressedSize = lz4.compressBlock(
@@ -184,12 +183,7 @@ export function createInvalidMagicBuffer() {
     return buffer
 }
 
-const SA09_HEADER_SIZE = 20
-const SA09_CHUNK_DESCRIPTOR_SIZE = 8
-
-export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fillValue = 100) {
-    const lz4 = require('lz4js')
-    const rgb8Data = createRgb8PixelData(width, height, fillValue)
+export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fillValue = 100) {    const rgb8Data = createRgb8PixelData(width, height, fillValue)
     const rowBytes = width * RGB8_BYTES_PER_PIXEL
     const totalRows = height
     const rowsPerChunk = Math.floor(totalRows / chunkCount)

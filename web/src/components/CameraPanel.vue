@@ -9,6 +9,7 @@ import {
 } from '../composables/api.js'
 import {useCameraBadges} from '../composables/useCameraBadges.js'
 import {useError} from '../composables/useError.js'
+import {isSimulator, useSelectedCamera} from '../composables/appContext.js'
 import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton} from './ui'
 import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
 import {isCaptureRunning} from '../constants'
@@ -25,6 +26,9 @@ const warmupEndsAt = inject('warmupEndsAt', ref({}))
 const settings = inject('settings', ref(null))
 
 const {error, clearError, withErrorHandling} = useError()
+
+/** A role is a kind of camera, not a state: told apart by hue. */
+const ROLE_TONES = {main: 'category-blue', guide: 'category-green'}
 const {roleLabel, formatResolution, temperaturePill, isWarmingUp, phaseLabel, sensorModePill} =
     useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settings})
 
@@ -50,7 +54,7 @@ const filteredCameras = computed(() => {
   if (isSimulatorEnabled.value) {
     return cameras.value
   }
-  return cameras.value.filter((c) => c.provider !== 'Simulator')
+  return cameras.value.filter((c) => !isSimulator(c))
 })
 
 const connectedCameras = computed(() => filteredCameras.value.filter((c) => c.connected))
@@ -68,7 +72,7 @@ const connectOptions = computed(() => [
 
 const availableCameras = computed(() => filteredCameras.value.filter((c) => !c.connected))
 
-const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
+const currentCamera = useSelectedCamera()
 
 const isCapturing = computed(() => isCaptureRunning(eventStream.captureState.value))
 
@@ -198,12 +202,8 @@ function promptSimulatorConfig() {
   clearError()
 }
 
-function isSimulatedCamera(cam) {
-  return cam.provider === 'Simulator'
-}
-
 async function handleRemoveSimulatedCamera(cam) {
-  if (!isSimulatedCamera(cam)) return
+  if (!isSimulator(cam)) return
 
   // The camera index within the Simulator provider
   const index = cam.index
@@ -279,7 +279,7 @@ const HELP = {
     <div v-show="!camerasCollapsed" class="cameras-container">
       <!-- Connected cameras -->
       <div v-if="connectedCameras.length > 0" class="camera-section">
-        <h3 class="section-title">Connected</h3>
+        <h3 class="section-title section-title-plain">Connected</h3>
         <div class="camera-list">
           <div
               v-for="cam in connectedCameras"
@@ -289,7 +289,7 @@ const HELP = {
               @click="selectCamera(cam.id)"
           >
             <button
-                v-if="isSimulatedCamera(cam)"
+                v-if="isSimulator(cam)"
                 class="btn btn-sm btn-icon"
                 :disabled="connecting === cam.id || isCapturing"
                 title="Remove simulated camera"
@@ -312,17 +312,17 @@ const HELP = {
               <span class="camera-name">{{ cam.name }}</span>
               <span class="camera-details">
                 {{ formatResolution(cam) }}
-                <span v-if="roleLabel(cam)" class="role-pill" :class="`role-${cam.role}`">{{
+                <span v-if="roleLabel(cam)" class="pill role-pill" :class="ROLE_TONES[cam.role]">{{
                     roleLabel(cam)
                   }}</span>
-                <span v-if="phaseLabel(cam)" class="phase-pill">
+                <span v-if="phaseLabel(cam)" class="pill pill-warning phase-pill">
                   <BaseSpinner v-if="isWarmingUp(cam)" size="sm" light class="warmup-spinner" aria-hidden="true" />
                   {{ phaseLabel(cam) }}
                 </span>
-                <span v-if="sensorModePill(cam)" class="sensor-mode-pill">{{
+                <span v-if="sensorModePill(cam)" class="pill category-purple sensor-mode-pill">{{
                     sensorModePill(cam)
                   }}</span>
-                <span v-if="temperaturePill(cam)" class="temp-pill">{{
+                <span v-if="temperaturePill(cam)" class="pill pill-primary temp-pill">{{
                     temperaturePill(cam)
                   }}</span>
               </span>
@@ -349,11 +349,11 @@ const HELP = {
 
       <!-- Available cameras -->
       <div v-if="availableCameras.length > 0" class="camera-section">
-        <h3 class="section-title">Available</h3>
+        <h3 class="section-title section-title-plain">Available</h3>
         <div class="camera-list">
           <div v-for="cam in availableCameras" :key="cam.id" class="camera-item available">
             <button
-                v-if="isSimulatedCamera(cam)"
+                v-if="isSimulator(cam)"
                 class="btn btn-sm btn-icon"
                 :disabled="connecting === cam.id"
                 title="Remove simulated camera"
@@ -392,7 +392,7 @@ const HELP = {
 
       <!-- Simulator section - always show when simulator enabled -->
       <div v-if="isSimulatorEnabled" class="camera-section">
-        <h3 class="section-title">Simulator</h3>
+        <h3 class="section-title section-title-plain">Simulator</h3>
         <div class="simulator-add">
           <button class="btn btn-sm btn-secondary" @click="promptSimulatorConfig">
             + Add Simulated Camera
@@ -438,19 +438,8 @@ const HELP = {
 </template>
 
 <style scoped>
-/* Panel header variant with collapse toggle and flex-1 title */
-.panel-header {
-  gap: 0.375rem;
-}
-
-.panel-header h2 {
-  flex: 1;
-}
-
-/* Section title without border (simpler variant) */
+/* Plain: the camera lists sit tight under their titles */
 .section-title {
-  padding-bottom: 0;
-  border-bottom: none;
   margin-bottom: 0.25rem;
 }
 
@@ -480,11 +469,11 @@ const HELP = {
   gap: 0.375rem;
   padding: 0.375rem 0.5rem;
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   border: 1px solid transparent;
-  transition: border-color 0.15s,
-  background 0.15s;
+  transition: border-color var(--transition-fast),
+  background var(--transition-fast);
   min-height: 2.25rem;
 }
 
@@ -510,7 +499,7 @@ const HELP = {
 }
 
 .camera-name {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 500;
   color: var(--text-primary);
   white-space: nowrap;
@@ -519,7 +508,7 @@ const HELP = {
 }
 
 .camera-details {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -527,21 +516,7 @@ const HELP = {
 }
 
 .temp-pill {
-  background: rgba(59, 130, 246, 0.15);
-  color: var(--primary);
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
   font-variant-numeric: tabular-nums;
-}
-
-.phase-pill {
-  display: inline-flex;
-  align-items: center;
-  background: rgba(234, 179, 8, 0.18);
-  color: #eab308;
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
-  font-weight: 500;
 }
 
 .confirm-text {
@@ -549,28 +524,8 @@ const HELP = {
   line-height: 1.5;
 }
 
-.sensor-mode-pill {
-  background: rgba(168, 85, 247, 0.18);
-  color: #c084fc;
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
-  font-weight: 500;
-}
-
 .role-pill {
-  padding: 0.05rem 0.375rem;
-  border-radius: 999px;
   font-weight: 600;
-}
-
-.role-pill.role-main {
-  background: rgba(59, 130, 246, 0.18);
-  color: #60a5fa;
-}
-
-.role-pill.role-guide {
-  background: rgba(34, 197, 94, 0.18);
-  color: #4ade80;
 }
 
 .camera-actions {
@@ -587,21 +542,21 @@ const HELP = {
   padding: 0.25rem;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.15s,
-  background 0.15s,
-  border-color 0.15s;
+  transition: color var(--transition-fast),
+  background var(--transition-fast),
+  border-color var(--transition-fast);
 }
 
 .btn-icon:hover:not(:disabled) {
-  color: var(--danger);
+  color: var(--error);
   background: var(--surface-hover);
-  border-color: var(--danger);
+  border-color: var(--error);
 }
 
 .btn-icon:disabled {
@@ -617,14 +572,12 @@ const HELP = {
 }
 
 .collapsed-summary .camera-name {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
 }
 
 .collapsed-summary .camera-details {
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
 }
-
-/* empty-state and btn-close now in main.css */
 
 .simulator-add {
   display: flex;
@@ -632,13 +585,11 @@ const HELP = {
   gap: 0.5rem;
   padding: 0.375rem;
   background: var(--surface-elevated);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .simulator-count {
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
-
-/* btn-secondary now in main.css */
 </style>

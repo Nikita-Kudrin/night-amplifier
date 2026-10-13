@@ -71,12 +71,12 @@ onUnmounted(() => {
 .base-modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--backdrop);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: var(--z-modal);
   padding: 1rem;
   animation: modal-fade-in 0.2s ease-out;
 }
@@ -84,7 +84,7 @@ onUnmounted(() => {
 .base-modal-panel {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   width: 100%;
   max-height: 90vh;
   display: flex;
@@ -100,7 +100,7 @@ onUnmounted(() => {
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 12px 12px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   flex-shrink: 0;
 }
 
@@ -127,7 +127,7 @@ onUnmounted(() => {
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border);
   background: var(--surface);
-  border-radius: 0 0 12px 12px;
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;

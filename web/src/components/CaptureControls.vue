@@ -2,6 +2,7 @@
 import {ref, inject, computed, watch, onMounted} from 'vue'
 import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
+import {findCamera, useCapabilities} from '../composables/appContext.js'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
 import {
   EXPOSURE_PRESETS,
@@ -19,13 +20,7 @@ const eventStream = inject('eventStream')
 const refreshSettings = inject('refreshSettings')
 const cameras = inject('cameras', {value: []})
 const cameraPhase = inject('cameraPhase', {value: {}})
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {advanced_rejection: false, rbf_background: false},
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-  comet: {pro_stacking: false},
-})
+const {cometPro} = useCapabilities()
 
 const {error, loading, clearError, withErrorHandling} = useError()
 
@@ -180,8 +175,7 @@ const captureModeOptions = computed(() =>
 const selectedCameraName = computed(() => {
   const id = selectedCamera.value
   if (!id) return null
-  const cam = (cameras?.value || []).find((c) => c.id === id)
-  return cam?.name || null
+  return findCamera(cameras?.value, id)?.name || null
 })
 
 const selectedCameraPhase = computed(() => {
@@ -204,7 +198,6 @@ const exposureUs = computed(() => {
       return val
   }
 })
-
 
 const exposurePresets = computed(() => EXPOSURE_PRESETS[exposureUnit.value] || EXPOSURE_PRESETS.ms)
 
@@ -293,7 +286,7 @@ function applyStackingMode(val) {
 
 const showCometLock = computed(() => {
   if (isEditingGuide.value) return false
-  return selectedStackingType.value === 'comet' && !capabilities.comet?.pro_stacking
+  return selectedStackingType.value === 'comet' && !cometPro.value
 })
 
 const HELP = HELP_TEXTS
@@ -500,11 +493,10 @@ const HELP = HELP_TEXTS
   gap: 0.5rem;
 }
 
-
 .type-select {
   width: 100%;
   padding: 0.375rem 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
 }
 
 .type-select:disabled {
@@ -518,9 +510,9 @@ const HELP = HELP_TEXTS
   justify-content: center;
   gap: 0.25rem;
   padding: 0.375rem 0.75rem;
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   white-space: nowrap;
   flex: 1;
   min-width: 80px;
@@ -528,7 +520,7 @@ const HELP = HELP_TEXTS
 
 .btn-start {
   background: var(--success);
-  color: white;
+  color: var(--on-primary);
 }
 
 .btn-start:hover:not(:disabled) {
@@ -537,7 +529,7 @@ const HELP = HELP_TEXTS
 
 .btn-stop {
   background: var(--error);
-  color: white;
+  color: var(--on-primary);
 }
 
 .btn-stop:hover:not(:disabled) {
@@ -570,7 +562,7 @@ const HELP = HELP_TEXTS
 
 .btn-preset {
   padding: 0.125rem 0.375rem;
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   background: var(--surface-elevated);
   border: 1px solid var(--border);
 }
@@ -582,7 +574,7 @@ const HELP = HELP_TEXTS
 .btn-preset.active {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: var(--on-primary);
 }
 
 .stretch-controls {
@@ -595,7 +587,7 @@ const HELP = HELP_TEXTS
 .aggressiveness-select {
   flex: 1;
   padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
 }
 
 .capture-header-row {
@@ -612,26 +604,10 @@ const HELP = HELP_TEXTS
   gap: 0.25rem;
 }
 
-.btn-toggle {
-  background: var(--surface-elevated);
-  border: 1px solid var(--border);
-  min-width: 70px;
-}
-
-.btn-toggle.active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: white;
-}
-
-.btn-toggle:hover:not(.active) {
-  background: var(--surface-hover);
-}
-
 .comet-pro-lock {
   padding: 1rem;
   background: var(--surface-elevated);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   margin-bottom: 0.5rem;
   border: 1px solid var(--border);
 }
@@ -644,10 +620,10 @@ const HELP = HELP_TEXTS
 .precool-warning {
   margin: 0.25rem 0 0.5rem 0;
   padding: 0.35rem 0.5rem;
-  background: rgba(234, 179, 8, 0.12);
-  border-left: 3px solid #eab308;
-  color: #eab308;
-  font-size: 0.72rem;
-  border-radius: 3px;
+  background: var(--warning-bg);
+  border-left: 3px solid var(--warning);
+  color: var(--warning);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-xs);
 }
 </style>

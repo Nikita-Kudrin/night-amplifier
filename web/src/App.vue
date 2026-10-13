@@ -1,11 +1,12 @@
 <script setup>
-import {ref, provide, onMounted, watch} from 'vue'
+import {ref, onMounted, watch} from 'vue'
 import {useEventStream} from './composables/useEventStream.js'
 import {useAppState} from './composables/useAppState.js'
+import {provideAppContext} from './composables/appContext.js'
 import {useAiCompute} from './composables/useAiCompute.js'
 import {useSidebarTabs} from './composables/useSidebarTabs.js'
 import {getAstapStatus, getCatalogStatus} from './composables/api.js'
-import {SIDEBAR_TABS} from './constants'
+import {isEyepiecePage, SIDEBAR_TABS} from './constants'
 
 import CameraPanel from './components/CameraPanel.vue'
 import CaptureControls from './components/CaptureControls.vue'
@@ -21,14 +22,15 @@ import HardwareBenchmarkOverlay from './components/HardwareBenchmarkOverlay.vue'
 import { BaseSpinner } from './components/ui'
 
 // Routing
-const isEyepieceRoute = ref(window.location.pathname === '/eyepiece' || window.location.pathname === '/eyepiece_quality')
+const isEyepieceRoute = ref(isEyepiecePage(window.location.pathname))
 
 // Centralized state management
+const appState = useAppState()
 const {
   loading,
   globalError: error,
-  simulatorEnabled,
   settings,
+  cameras,
   refreshSettings,
   refreshCameras,
   initializeState,
@@ -36,18 +38,8 @@ const {
   updateCameraPhase,
   replaceCameraPhases,
   addDiscoveredCamera,
-  _settingsRef,
-  _camerasRef,
-  _selectedCameraIdRef,
-  _cameraStatusRef,
-  _cameraPhaseRef,
-  _warmupEndsAtRef,
   capabilities,
-  mainCamera,
-  guideCamera,
-  hasGuideCamera,
-  selectedCameraRole,
-} = useAppState()
+} = appState
 
 const showAbout = ref(false)
 
@@ -69,22 +61,7 @@ const eventStream = useEventStream()
 const aiCompute = useAiCompute()
 const benchmarking = aiCompute.benchmarking
 
-// Provide state to children (for backwards compatibility during migration)
-provide('settings', _settingsRef)
-provide('cameras', _camerasRef)
-provide('selectedCamera', _selectedCameraIdRef)
-provide('eventStream', eventStream)
-provide('simulatorEnabled', simulatorEnabled)
-provide('refreshSettings', refreshSettings)
-provide('refreshCameras', refreshCameras)
-provide('capabilities', capabilities)
-provide('cameraStatus', _cameraStatusRef)
-provide('cameraPhase', _cameraPhaseRef)
-provide('warmupEndsAt', _warmupEndsAtRef)
-provide('mainCamera', mainCamera)
-provide('guideCamera', guideCamera)
-provide('hasGuideCamera', hasGuideCamera)
-provide('selectedCameraRole', selectedCameraRole)
+provideAppContext(appState, eventStream)
 
 // Watch for external settings updates to sync our state across instances
 watch(
@@ -110,7 +87,7 @@ watch(
         // Sent on (re)connect: a camera connected or disconnected while this page was
         // away has no other way to reach the list. Not during the first load, which is
         // fetching the list already.
-        if (!loading.value && !sameCameraNames(event.cameras, _camerasRef.value)) refreshCameras()
+        if (!loading.value && !sameCameraNames(event.cameras, cameras.value)) refreshCameras()
       }
       if (event?.type === 'camera_disconnected') {
         updateCameraPhase(event.name, 'disconnected')
@@ -158,7 +135,6 @@ onMounted(() => {
       <button
           class="btn btn-icon btn-header-icon"
           title="About"
-          style="margin-left: 0.25rem;"
           @click="showAbout = true"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -302,13 +278,13 @@ onMounted(() => {
 
 @media (min-width: 769px) {
   .header {
-    width: 320px;
+    width: var(--sidebar-width);
   }
 }
 
 @media (max-width: 768px) and (orientation: landscape) {
   .header {
-    width: 280px;
+    width: var(--sidebar-width-landscape);
   }
 }
 
@@ -317,7 +293,7 @@ onMounted(() => {
 }
 
 .logo {
-  font-size: 0.84rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-secondary);
   margin: 0;
@@ -339,7 +315,7 @@ onMounted(() => {
 .error-icon {
   width: 64px;
   height: 64px;
-  color: var(--warning, #f59e0b);
+  color: var(--warning);
   margin-bottom: 0.5rem;
 }
 
@@ -364,8 +340,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: var(--text-muted, #6b7280);
-  font-size: 0.875rem;
+  color: var(--text-muted);
+  font-size: var(--fs-base);
   margin-top: 0.5rem;
 }
 
@@ -376,7 +352,7 @@ onMounted(() => {
 }
 
 .sidebar {
-  width: 320px;
+  width: var(--sidebar-width);
   max-width: 100%;
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -435,7 +411,7 @@ onMounted(() => {
 @media (max-width: 768px) and (orientation: landscape) {
   .sidebar {
     max-height: none;
-    width: 280px;
+    width: var(--sidebar-width-landscape);
     border-right: 1px solid var(--border);
     border-bottom: none;
   }

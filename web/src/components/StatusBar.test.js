@@ -1,47 +1,11 @@
 import {describe, it, expect, vi} from 'vitest'
-import {mount} from '@vue/test-utils'
 import {ref} from 'vue'
 import StatusBar from './StatusBar.vue'
+import {mountWithDefaults} from '../test/mount.js'
 
 describe('StatusBar', () => {
-    // Helper to create mock provides
-    function createMockProvides(overrides = {}) {
-        return {
-            eventStream: {
-                connected: ref(true),
-                captureState: ref('Idle'),
-                frameCount: ref(0),
-                stackedCount: ref(0),
-                rejectedCount: ref(0),
-                lastRejectionReason: ref(null),
-                droppedCount: ref(0),
-                lastError: ref(null),
-                unresponsiveWarning: ref(null),
-                clearUnresponsiveWarning: vi.fn(),
-                resumeNotice: ref(null),
-                clearResumeNotice: vi.fn(),
-                focusModeNotice: ref(null),
-                clearFocusModeNotice: vi.fn(),
-                clearError: vi.fn(),
-                diskWriterWarning: ref(null),
-                clearDiskWriterWarning: vi.fn(),
-                plateSolving: ref({inProgress: false, targetName: null, lastResult: null}),
-                clearPlateSolving: vi.fn(),
-                solvingMessage: ref(null),
-                pushToBlocked: ref(null),
-                ...overrides.eventStream,
-            },
-            selectedCamera: ref(overrides.selectedCamera ?? null),
-            cameras: ref(overrides.cameras ?? []),
-        }
-    }
-
-    function mountStatusBar(provides = {}) {
-        return mount(StatusBar, {
-            global: {
-                provide: createMockProvides(provides),
-            },
-        })
+    function mountStatusBar(provide = {}) {
+        return mountWithDefaults(StatusBar, {provide})
     }
 
     describe('Connection Status', () => {

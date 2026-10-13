@@ -4,11 +4,12 @@ import {ref, nextTick} from 'vue'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 
 // Mock the API module
-vi.mock('../composables/api.js', () => ({
-    getAstapStatus: vi.fn(),
-    getAstapDatabases: vi.fn(),
-    installAstap: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        getAstapStatus: vi.fn(),
+        getAstapDatabases: vi.fn(),
+        installAstap: vi.fn(),
+    }))
 
 import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
 
@@ -171,9 +172,7 @@ describe('AstapInstallOverlay', () => {
 
             expect(wrapper.find('.installing-state').exists()).toBe(true)
             expect(wrapper.find('.progress-text').text()).toContain('Downloading W08 Database')
-            expect(wrapper.find('.progress-text').text()).toContain('50.0')
-            expect(wrapper.find('.progress-text').text()).toContain('1203.4')
-            expect(wrapper.find('.progress-text').text()).toContain('4.2%')
+            expect(wrapper.find('.progress-text').text()).toContain('50.0 MB / 1.18 GB (4.2%)')
         })
 
         it('shows progress bar with correct width', async () => {
@@ -421,7 +420,7 @@ describe('AstapInstallOverlay', () => {
             const wrapper = mountOverlay()
             await flushPromises()
 
-            const cancelButton = wrapper.find('.btn-secondary')
+            const cancelButton = wrapper.find('.btn-ghost')
             await cancelButton.trigger('click')
 
             expect(wrapper.emitted('close')).toBeTruthy()

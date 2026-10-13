@@ -1,4 +1,5 @@
 import {FIT_MARGIN} from '../constants'
+import {fitScale} from '../utils/viewGeometry.js'
 
 /**
  * Keeps the observer's framing when the server's auto crop moves (`stack_crop_changed`).
@@ -45,7 +46,7 @@ export function reframeForCrop({from, to, oldDims, newDims, view}) {
 /** Whether `view` is the fit `usePanZoom.fitToView` gives `dims` in `container`. */
 export function isFitted(view, container, dims) {
     if (!container?.width || !dims?.width || !dims?.height) return true
-    const fit = Math.min(container.width / dims.width, container.height / dims.height, 1) * FIT_MARGIN
+    const fit = fitScale(container, dims.width, dims.height, FIT_MARGIN)
     const still = view.position.x === 0 && view.position.y === 0
     return still && Math.abs(view.scale - fit) <= fit * 1e-6
 }

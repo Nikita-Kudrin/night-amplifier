@@ -50,7 +50,7 @@ function handleClick(event, value) {
 .btn-option {
   flex: 1;
   padding: 0.25rem;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   background: var(--surface-elevated);
   border: 1px solid var(--border);
 }
@@ -62,7 +62,7 @@ function handleClick(event, value) {
 .btn-option.active {
   background: var(--primary);
   border-color: var(--primary);
-  color: white;
+  color: var(--on-primary);
 }
 
 .btn-option:disabled {

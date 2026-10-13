@@ -61,15 +61,14 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 
     <div class="control-group">
       <div class="control-row">
-        <label class="control-label" style="margin-bottom: 0; flex: 1">
+        <label class="control-label control-label-inline">
           Eyepiece Streaming Resolution
           <BaseInfoIcon :message="HELP.eyepiece_stream_resolution"/>
         </label>
         <select
             id="eyepiece-stream-resolution-select"
             v-model="local.stream_resolution"
-            class="select"
-            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            class="select select-compact"
             @change="apply"
         >
           <option
@@ -85,15 +84,14 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 
     <div
         v-if="local.binoview"
-        class="control-group"
-        style="flex-direction: column; align-items: stretch; margin-top: 0.5rem"
+        class="control-group control-group-offset"
     >
-      <label class="control-label" style="margin-bottom: 0.5rem">
+      <label class="control-label screen-label">
         Screen settings
         <BaseInfoIcon :message="HELP.eyepiece_screen_settings"/>
       </label>
 
-      <div class="control-row" style="justify-content: flex-start; margin-bottom: 0.5rem">
+      <div class="control-row screen-row screen-size-row">
         <input
             v-model.number="local.screen_width"
             type="number"
@@ -103,7 +101,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
             title="Width"
             @change="applyDebounced"
         />
-        <span style="margin: 0 4px">x</span>
+        <span class="screen-times">x</span>
         <input
             v-model.number="local.screen_height"
             type="number"
@@ -115,8 +113,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
         />
         <select
             v-model="local.screen_measurement"
-            class="screen-field"
-            style="margin-left: 8px"
+            class="screen-field screen-unit"
             @change="apply"
         >
           <option value="mm">mm</option>
@@ -124,8 +121,8 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
         </select>
       </div>
 
-      <div class="control-row" style="justify-content: flex-start">
-        <label style="margin-right: 8px; font-size: 0.9em; color: var(--text-secondary)">Resolution</label>
+      <div class="control-row screen-row">
+        <label class="screen-row-label">Resolution</label>
         <input
             v-model.number="local.screen_resolution_x"
             type="number"
@@ -135,7 +132,7 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
             title="Resolution X"
             @change="applyDebounced"
         />
-        <span style="margin: 0 4px">x</span>
+        <span class="screen-times">x</span>
         <input
             v-model.number="local.screen_resolution_y"
             type="number"
@@ -151,19 +148,41 @@ const {schedule: applyDebounced} = useDebouncedCall(apply, 300)
 </template>
 
 <style scoped>
-.settings-section {
-  margin-bottom: 0.625rem;
-}
-
 .screen-field {
   background: var(--surface);
   color: var(--text-primary);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 4px;
 }
 
 .screen-number {
   width: 70px;
+}
+
+.screen-label {
+  margin-bottom: 0.5rem;
+}
+
+.screen-row {
+  justify-content: flex-start;
+}
+
+.screen-size-row {
+  margin-bottom: 0.5rem;
+}
+
+.screen-times {
+  margin: 0 4px;
+}
+
+.screen-unit {
+  margin-left: 8px;
+}
+
+.screen-row-label {
+  margin-right: 8px;
+  font-size: 0.9em;
+  color: var(--text-secondary);
 }
 </style>

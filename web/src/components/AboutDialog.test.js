@@ -1,0 +1,102 @@
+import {flushPromises, mount} from '@vue/test-utils'
+import AboutDialog from './AboutDialog.vue'
+
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+            getLicenseStatus: vi.fn(async () => ({active: false, details: null})),
+            getSoftwareLicenses: vi.fn(async () => ({version: '1.2.3', core_license: 'CORE TEXT', third_party_licenses: 'THIRD PARTY'})),
+    }))
+
+import {getLicenseStatus, getSoftwareLicenses, updateLicense} from '../composables/api.js'
+
+const ACTIVE = {
+    active: true,
+    details: {name: 'Ada Observer', email: 'ada@example.org', expires_at: '2099-01-01T00:00:00Z'},
+}
+
+async function mountDialog() {
+    const wrapper = mount(AboutDialog)
+    await flushPromises()
+    return wrapper
+}
+
+describe('AboutDialog', () => {
+    afterEach(() => {
+        vi.restoreAllMocks()
+    })
+
+    it('names the version and the Community edition without a licence', async () => {
+        const wrapper = await mountDialog()
+
+        expect(wrapper.find('.version-badge').text()).toBe('v1.2.3')
+        expect(wrapper.find('.status-badge.warning').text()).toContain('Pro License Not Active')
+    })
+
+    it('shows who an active licence belongs to and how long it has left', async () => {
+        getLicenseStatus.mockResolvedValueOnce(ACTIVE)
+        const wrapper = await mountDialog()
+
+        const card = wrapper.find('.active-license-card')
+        expect(card.text()).toContain('Ada Observer')
+        expect(card.text()).toContain('ada@example.org')
+        expect(card.find('.days-left').text()).toMatch(/\(\d+ days left\)/)
+    })
+
+    it('updates the licence from a pasted token and clears the field', async () => {
+        updateLicense.mockResolvedValueOnce(ACTIVE)
+        const wrapper = await mountDialog()
+
+        const button = wrapper.find('.update-btn')
+        expect(button.element.disabled).toBe(true)
+        await wrapper.find('.license-input').setValue('  token-123  ')
+        await button.trigger('click')
+        await flushPromises()
+
+        expect(updateLicense).toHaveBeenCalledWith('token-123')
+        expect(wrapper.find('.alert-success').exists()).toBe(true)
+        expect(wrapper.find('.license-input').element.value).toBe('')
+        expect(wrapper.find('.active-license-card').exists()).toBe(true)
+    })
+
+    it('says why a token was refused', async () => {
+        updateLicense.mockRejectedValueOnce(new Error('Invalid signature'))
+        const wrapper = await mountDialog()
+
+        await wrapper.find('.license-input').setValue('bad')
+        await wrapper.find('.update-btn').trigger('click')
+        await flushPromises()
+
+        expect(wrapper.find('.alert-error').text()).toContain('Invalid signature')
+    })
+
+    it('shows the licence status error when it cannot be read', async () => {
+        getLicenseStatus.mockRejectedValueOnce(new Error('Server unavailable'))
+        const wrapper = await mountDialog()
+
+        expect(wrapper.find('.alert-error').text()).toContain('Server unavailable')
+    })
+
+    it('shows the software licences on their tab', async () => {
+        const wrapper = await mountDialog()
+        await wrapper.findAll('.tab-btn')[1].trigger('click')
+
+        const texts = wrapper.findAll('.license-text').map((pre) => pre.text())
+        expect(texts).toEqual(['CORE TEXT', 'THIRD PARTY'])
+    })
+
+    it('keeps the tab usable when the software licences fail to load', async () => {
+        vi.spyOn(console, 'error').mockImplementation(() => {})
+        getSoftwareLicenses.mockRejectedValueOnce(new Error('offline'))
+        const wrapper = await mountDialog()
+        await wrapper.findAll('.tab-btn')[1].trigger('click')
+
+        expect(wrapper.find('.version-badge').exists()).toBe(false)
+        expect(wrapper.find('.licenses-container').exists()).toBe(true)
+    })
+
+    it('closes from its own close button', async () => {
+        const wrapper = await mountDialog()
+        await wrapper.find('.btn-close').trigger('click')
+        expect(wrapper.emitted('close')).toHaveLength(1)
+    })
+})

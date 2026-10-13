@@ -73,7 +73,7 @@ function formatFovRange(db) {
 
 <style scoped>
 .section-hint {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   margin: 0 0 0.75rem;
 }
@@ -90,9 +90,9 @@ function formatFovRange(db) {
   gap: 0.75rem;
   padding: 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color var(--transition-normal), background var(--transition-normal);
 }
 
 .database-option:hover:not(.installed) {
@@ -101,12 +101,12 @@ function formatFovRange(db) {
 
 .database-option.selected {
   border-color: var(--primary);
-  background: rgba(74, 158, 255, 0.1);
+  background: var(--primary-bg);
 }
 
 .database-option.installed {
-  border-color: var(--success, #22c55e);
-  background: rgba(34, 197, 94, 0.05);
+  border-color: var(--success);
+  background: var(--success-bg);
   cursor: default;
 }
 
@@ -122,7 +122,7 @@ function formatFovRange(db) {
 }
 
 .database-name {
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -135,7 +135,7 @@ function formatFovRange(db) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 
@@ -154,9 +154,9 @@ function formatFovRange(db) {
 }
 
 .installed-badge {
-  color: var(--success, #22c55e);
+  color: var(--success);
   font-weight: 600;
-  font-size: 0.7rem;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
 }
 </style>

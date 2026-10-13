@@ -18,6 +18,7 @@ export default [
                 fetch: 'readonly',
                 WebSocket: 'readonly',
                 URL: 'readonly',
+                URLSearchParams: 'readonly',
                 setTimeout: 'readonly',
                 clearTimeout: 'readonly',
                 setInterval: 'readonly',

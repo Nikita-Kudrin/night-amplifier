@@ -1,8 +1,8 @@
 import {ref, computed} from 'vue'
+import {EYEPIECE_ZOOM} from '../constants'
+import {clamp, touchCenter, touchDistance} from '../utils/viewGeometry.js'
 
-/** The eyepiece zooms up to 2x and never out past the screen. */
-const MAX_SCALE = 2
-const WHEEL_SENSITIVITY = 0.001
+const zoomed = (value) => clamp(value, 1, EYEPIECE_ZOOM.max)
 
 /**
  * Wheel and pinch zoom for the eyepiece view, panned with one finger while zoomed.
@@ -39,10 +39,7 @@ export function useEyepieceZoom(enabled) {
         if (s <= 1) return {x: 0, y: 0}
         const minX = window.innerWidth * (1 - s)
         const minY = window.innerHeight * (1 - s)
-        return {
-            x: Math.min(0, Math.max(minX, x)),
-            y: Math.min(0, Math.max(minY, y)),
-        }
+        return {x: clamp(x, minX, 0), y: clamp(y, minY, 0)}
     }
 
     function setView(x, y, s) {
@@ -58,24 +55,8 @@ export function useEyepieceZoom(enabled) {
         panY.value = 0
     }
 
-    function getDist(touches) {
-        const dx = touches[0].clientX - touches[1].clientX
-        const dy = touches[0].clientY - touches[1].clientY
-        return Math.sqrt(dx * dx + dy * dy)
-    }
-
-    function getCenter(touches) {
-        if (touches.length === 1) {
-            return {x: touches[0].clientX, y: touches[0].clientY}
-        }
-        return {
-            x: (touches[0].clientX + touches[1].clientX) / 2,
-            y: (touches[0].clientY + touches[1].clientY) / 2,
-        }
-    }
-
     function anchorGesture(touches) {
-        const center = getCenter(touches)
+        const center = touchCenter(touches)
         initialCx = center.x
         initialCy = center.y
         initialPanX = panX.value
@@ -86,7 +67,7 @@ export function useEyepieceZoom(enabled) {
     function wheel(e) {
         if (!enabled()) return
         const oldScale = scale.value
-        const newScale = Math.min(MAX_SCALE, Math.max(1, oldScale - e.deltaY * WHEEL_SENSITIVITY))
+        const newScale = zoomed(oldScale - e.deltaY * EYEPIECE_ZOOM.wheelSensitivity)
         if (newScale === oldScale) return
 
         const cx = e.clientX
@@ -102,7 +83,7 @@ export function useEyepieceZoom(enabled) {
         if (!enabled()) return
         if (e.touches.length === 2) {
             isPinching.value = true
-            initialDist = getDist(e.touches)
+            initialDist = touchDistance(e.touches)
             initialScale = scale.value
             anchorGesture(e.touches)
         } else if (e.touches.length === 1 && scale.value > 1) {
@@ -113,15 +94,15 @@ export function useEyepieceZoom(enabled) {
     function touchMove(e) {
         if (!enabled()) return
         if (e.touches.length === 2 && isPinching.value) {
-            const newScale = Math.min(MAX_SCALE, Math.max(1, initialScale * (getDist(e.touches) / initialDist)))
-            const center = getCenter(e.touches)
+            const newScale = zoomed(initialScale * (touchDistance(e.touches) / initialDist))
+            const center = touchCenter(e.touches)
             setView(
                 center.x - (initialCx - initialPanX) * (newScale / initialScale),
                 center.y - (initialCy - initialPanY) * (newScale / initialScale),
                 newScale
             )
         } else if (e.touches.length === 1 && scale.value > 1 && !isPinching.value) {
-            const center = getCenter(e.touches)
+            const center = touchCenter(e.touches)
             setView(initialPanX + center.x - initialCx, initialPanY + center.y - initialCy, scale.value)
         }
     }

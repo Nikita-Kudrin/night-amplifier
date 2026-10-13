@@ -2,12 +2,11 @@
 import {computed, inject} from 'vue'
 import {CAPTURE_STATES, isCaptureRunning} from '../constants'
 import BaseInfoIcon from './ui/BaseInfoIcon.vue'
+import {useSelectedCamera} from '../composables/appContext.js'
+import {formatPercent} from '../utils/format.js'
 
 const eventStream = inject('eventStream')
-const selectedCamera = inject('selectedCamera')
-const cameras = inject('cameras')
-
-const currentCamera = computed(() => cameras.value.find((c) => c.id === selectedCamera.value))
+const currentCamera = useSelectedCamera()
 
 const stateClass = computed(() => {
   const state = eventStream.captureState.value
@@ -326,7 +325,7 @@ const framesTooltip = computed(() => {
       </svg>
       <span>
         Dropped: {{ eventStream.droppedCount.value }}<template v-if="dropRate !== null">
-          ({{ (dropRate * 100).toFixed(0) }}%)</template>
+          ({{ formatPercent(dropRate) }})</template>
       </span>
     </div>
 
@@ -346,7 +345,7 @@ const framesTooltip = computed(() => {
   padding: 0.25rem 0.75rem;
   background: var(--surface-elevated);
   border-top: 1px solid var(--border);
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   color: var(--text-secondary);
   flex-shrink: 0;
   overflow-x: auto;
@@ -374,46 +373,36 @@ const framesTooltip = computed(() => {
   animation: blink 1s infinite;
 }
 
-.status-item.warning {
-  color: var(--warning);
-  background: var(--warning-bg, rgba(251, 191, 36, 0.15));
+/* A dismissible notice: tinted by its tone, clipped to one line */
+.status-item.warning,
+.status-item.error,
+.status-item.resumed {
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   max-width: 300px;
 }
 
-.status-item.warning span {
+.status-item.warning span,
+.status-item.error span,
+.status-item.resumed span {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.status-item.warning {
+  color: var(--warning);
+  background: var(--warning-bg);
 }
 
 .status-item.error {
   color: var(--error);
   background: var(--error-bg);
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  max-width: 300px;
-}
-
-.status-item.error span {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .status-item.resumed {
   color: var(--success);
   background: var(--success-bg);
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  cursor: pointer;
-  max-width: 300px;
-}
-
-.status-item.resumed span {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* btn-dismiss uses global .btn-close from main.css with opacity variant */
@@ -466,25 +455,20 @@ const framesTooltip = computed(() => {
   padding: 0.25rem 0.5rem;
 }
 
+/* Uses global @keyframes spin from main.css */
 .solving-spinner {
   animation: spin 1.5s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .status-item.solve-result {
   cursor: pointer;
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .status-item.solve-result.success {
   color: var(--success);
-  background: rgba(34, 197, 94, 0.15);
+  background: var(--success-bg);
 }
 
 .status-item.solve-result.failed {
@@ -495,12 +479,12 @@ const framesTooltip = computed(() => {
 /* A cancel is the user's own doing, not a fault: muted, not red. */
 .status-item.solve-result.cancelled {
   color: var(--text-secondary);
-  background: var(--surface-2, rgba(148, 163, 184, 0.15));
+  background: var(--surface-hover);
 }
 
 .status-item.push-to-blocked {
   padding: 0.25rem 0.5rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
 }
 

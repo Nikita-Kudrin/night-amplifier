@@ -5,17 +5,19 @@ import {
     setTargetByCoordinates,
     clearTarget as apiClearTarget,
     cancelPushToSolve as apiCancelSolve,
+    ignoreProOnly,
 } from './api.js'
 import {pushDirectionFrom} from './useEventStream.js'
+import {runDirectly} from './useError.js'
 
 /**
  * Composable for Push-To target management
  * @param {Object} options - Configuration options
- * @param {Function} options.withErrorHandling - Error handling wrapper function
+ * @param {Function} [options.withErrorHandling] - Error handling wrapper; errors propagate without one
  * @param {Object} options.eventStream - Optional event stream to sync with
  * @returns Reactive target state and methods
  */
-export function usePushToTarget({withErrorHandling, eventStream} = {}) {
+export function usePushToTarget({withErrorHandling = runDirectly, eventStream} = {}) {
     // If eventStream is provided, use its refs to ensure synchronization
     // Otherwise, create local refs (backward compatibility or standalone use)
     const currentTarget = eventStream?.currentTarget || ref(null)
@@ -39,72 +41,43 @@ export function usePushToTarget({withErrorHandling, eventStream} = {}) {
             currentPosition.value = status.last_position
             pushDirection.value = status.direction ? pushDirectionFrom(status.direction) : null
             solvingAtMount.value = status.is_solving
-        } catch {
-            // Ignore - push-to may not be initialized
+        } catch (e) {
+            ignoreProOnly(e, 'Push-To status')
         }
     }
 
-    async function selectTargetByName(designation) {
-        const execute = async () => {
-            const result = await setTargetByName(designation)
-            // api.setTargetByName returns the target object directly
-            currentTarget.value = result
-            pushDirection.value = null
-            return result
-        }
-
-        if (withErrorHandling) {
-            return withErrorHandling(execute)
-        }
-        return execute()
+    /** Takes the target the server answers with; its direction follows on the event stream. */
+    function aimAt(target) {
+        currentTarget.value = target
+        pushDirection.value = null
+        return target
     }
 
-    async function selectTargetByCoordinates(ra, dec) {
-        const execute = async () => {
-            const result = await setTargetByCoordinates(ra, dec)
-            // api.setTargetByCoordinates returns the target object directly
-            currentTarget.value = result
-            pushDirection.value = null
-            return result
-        }
-
-        if (withErrorHandling) {
-            return withErrorHandling(execute)
-        }
-        return execute()
+    function selectTargetByName(designation) {
+        return withErrorHandling(async () => aimAt(await setTargetByName(designation)))
     }
 
-    async function clearTarget() {
-        const execute = async () => {
+    function selectTargetByCoordinates(ra, dec) {
+        return withErrorHandling(async () => aimAt(await setTargetByCoordinates(ra, dec)))
+    }
+
+    function clearTarget() {
+        return withErrorHandling(async () => {
             await apiClearTarget()
             currentTarget.value = null
             pushDirection.value = null
-            if (eventStream?.clearPlateSolving) {
-                eventStream.clearPlateSolving()
-            }
-        }
-
-        if (withErrorHandling) {
-            return withErrorHandling(execute)
-        }
-        return execute()
+            eventStream?.clearPlateSolving?.()
+        })
     }
 
-    async function cancelSolve() {
-        const execute = async () => {
+    function cancelSolve() {
+        return withErrorHandling(async () => {
             await apiCancelSolve()
             solvingAtMount.value = false
             // The server also broadcasts `plate_solving_cancelled`, but clearing here
             // keeps the button from lingering for a round trip.
-            if (eventStream?.clearPlateSolving) {
-                eventStream.clearPlateSolving()
-            }
-        }
-
-        if (withErrorHandling) {
-            return withErrorHandling(execute)
-        }
-        return execute()
+            eventStream?.clearPlateSolving?.()
+        })
     }
 
     onMounted(() => {

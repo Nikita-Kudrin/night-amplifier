@@ -25,9 +25,21 @@ export default defineConfig({
         globals: true,
         include: ['src/**/*.{test,spec}.{js,ts}'],
         setupFiles: ['src/testSetup.js'],
+        // Puts back what `vi.stubGlobal` replaced (`fetch`'s unmocked-call guard among them).
+        unstubGlobals: true,
         coverage: {
             provider: 'v8',
             reporter: ['text', 'html'],
+            // Every source file counts, imported by a test or not; test code never does.
+            include: ['src/**/*.{js,vue}'],
+            exclude: [
+                'src/**/*.test.js',
+                'src/**/__tests__/**',
+                'src/test/**',
+                'src/testSetup.js',
+                'src/main.js',
+                'src/composables/api.types.js',
+            ],
             thresholds: {
                 lines: 80,
                 branches: 80,

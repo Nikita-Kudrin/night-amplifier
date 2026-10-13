@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {aiComputeOptions, aiComputeSummary, formatMs, unusableRungs, SYSTEM_DEPENDENCIES_URL} from './aiCompute.js'
+import {aiComputeOptions, aiComputeSummary, unusableRungs, SYSTEM_DEPENDENCIES_URL} from './aiCompute.js'
 
 /** This laptop's report: Iris Xe usable, the NVIDIA card without a Vulkan driver. */
 function laptop(overrides = {}) {
@@ -86,14 +86,5 @@ describe('unusableRungs', () => {
         expect(rungs[1]).toMatchObject({device: 'NVIDIA [10de:25ba]', installable: true})
         expect(rungs[0].installable).toBe(false)
         expect(SYSTEM_DEPENDENCIES_URL).toBe('/night-amplifier/system-dependencies')
-    })
-})
-
-describe('formatMs', () => {
-    it('keeps a decimal below ten milliseconds and rounds above', () => {
-        expect(formatMs(4.26)).toBe('4.3 ms')
-        expect(formatMs(219.3)).toBe('219 ms')
-        expect(formatMs(null)).toBe('')
-        expect(formatMs(Number.NaN)).toBe('')
     })
 })

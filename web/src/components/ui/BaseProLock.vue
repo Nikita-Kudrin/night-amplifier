@@ -36,14 +36,14 @@ const tooltipText = computed(() => `${props.feature} feature requires Night Ampl
   align-items: center;
   justify-content: center;
   margin-left: 4px;
-  color: var(--primary, #4a9eff);
+  color: var(--primary);
   cursor: help;
   vertical-align: middle;
 }
 
 .pro-lock-icon {
   opacity: 0.8;
-  transition: transform 0.2s;
+  transition: transform var(--transition-normal);
 }
 
 .pro-lock-container:hover .pro-lock-icon {

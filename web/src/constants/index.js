@@ -2,6 +2,8 @@
  * Application constants and configuration values
  */
 
+export * from './endpoints.js'
+
 // Exposure presets by unit
 export const EXPOSURE_PRESETS = {
     us: [
@@ -267,6 +269,12 @@ export const ZOOM_LIMITS = {
     wheelZoomOut: 0.9,
 }
 
+// The eyepiece zooms up to 2x and never out past the screen.
+export const EYEPIECE_ZOOM = {
+    max: 2,
+    wheelSensitivity: 0.001,
+}
+
 // RGB8+LZ4 stream magic numbers
 export const RGB8_MAGIC = 0x53413038 // "SA08" — legacy single-block
 export const RGB8_CHUNKED_MAGIC = 0x53413039 // "SA09" — parallel chunked
@@ -279,6 +287,25 @@ export const COOLER_TEMP_LIMITS = {
     step: 1,
     default: -10,
 }
+
+/**
+ * `/api/capabilities` before it answers: Community only, every Pro control locked.
+ * Frozen, since every component without a provided answer reads this one object.
+ */
+export const DEFAULT_CAPABILITIES = Object.freeze({
+    has_pro: false,
+    deep_sky: Object.freeze({
+        advanced_rejection: false,
+        rbf_background: false,
+        saturation_boost: false,
+        denoise: false,
+        ai_denoise: false,
+    }),
+    planetary: Object.freeze({advanced_stacking: false}),
+    push_to: Object.freeze({astap_solver: false}),
+    comet: Object.freeze({pro_stacking: false}),
+    debug_logging: false,
+})
 
 // Default settings values
 export const DEFAULT_SETTINGS = {
@@ -300,7 +327,7 @@ export const DEFAULT_SETTINGS = {
     auto_stretch_intensity: 0.3,
     saturation_boost: false,
     saturation_boost_strength: 0.5,
-    simulated_camera: false,
+    use_simulated_camera: false,
     simulated_preload_images: 5,
     show_focus_image: true,
     force_focus_image_now: false,

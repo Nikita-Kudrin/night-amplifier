@@ -9,6 +9,7 @@
  */
 import {computed, reactive, watch} from 'vue'
 import {BaseToggle, BaseSlider, BaseInfoIcon, BaseProLock} from './ui'
+import {formatPercent, formatSigma} from '../utils/format.js'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
   BACKGROUND_GRAIN_LIMITS,
@@ -39,8 +40,6 @@ const props = defineProps({
   denoiseAvailable: {type: Boolean, default: false},
   /** Whether the AI denoiser is present; its switch lives in Settings → Advanced. */
   aiDenoiseAvailable: {type: Boolean, default: false},
-  formatPercent: {type: Function, required: true},
-  formatSigma: {type: Function, required: true},
 })
 
 const emit = defineEmits(['apply'])
@@ -115,7 +114,7 @@ function applyValue(key, value) {
 
     <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
 
-    <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
+    <div class="control-group control-group-offset control-group-roomy">
       <BaseSlider
           v-model="local.sensor_correction.hot_pixel_sigma"
           label="Hot Pixel Threshold"
@@ -153,17 +152,16 @@ function applyValue(key, value) {
   <div class="settings-section">
     <h3 class="section-title">Preview</h3>
 
-    <div class="control-group" style="margin-top: 0.5rem">
+    <div class="control-group control-group-offset">
       <div class="control-row">
-        <label class="control-label" style="margin-bottom: 0; flex: 1">
+        <label class="control-label control-label-inline">
           Processing Resolution
           <BaseInfoIcon :message="HELP.preview_resolution"/>
         </label>
         <select
             id="preview-resolution-select"
             v-model="local.preview_resolution"
-            class="select"
-            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            class="select select-compact"
             @change="applyValue('preview_resolution', $event.target.value)"
         >
           <option v-for="opt in PREVIEW_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
@@ -175,15 +173,14 @@ function applyValue(key, value) {
 
     <div class="control-group">
       <div class="control-row">
-        <label class="control-label" style="margin-bottom: 0; flex: 1">
+        <label class="control-label control-label-inline">
           Streaming Resolution
           <BaseInfoIcon :message="HELP.streaming_resolution"/>
         </label>
         <select
             id="streaming-resolution-select"
             v-model="local.streaming_resolution"
-            class="select"
-            style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+            class="select select-compact"
             @change="applyValue('streaming_resolution', $event.target.value)"
         >
           <option v-for="opt in STREAMING_RESOLUTION_OPTIONS" :key="opt.value" :value="opt.value">
@@ -206,7 +203,7 @@ function applyValue(key, value) {
       AI denoising (Settings → Advanced) replaces Structure strength and Detail while it runs.
     </span>
 
-    <div class="control-group" style="margin-top: 0.5rem">
+    <div class="control-group control-group-offset">
       <BaseToggle
           v-model="local.denoise.enabled"
           label="Denoise"
@@ -226,7 +223,7 @@ function applyValue(key, value) {
       />
     </div>
 
-    <div v-if="local.denoise.chroma" class="control-group" style="margin-bottom: 1.5rem">
+    <div v-if="local.denoise.chroma" class="control-group control-group-roomy">
       <BaseSlider
           v-model="local.denoise.chroma_strength"
           label="Colour strength"
@@ -241,7 +238,7 @@ function applyValue(key, value) {
       />
     </div>
 
-    <div class="control-group" style="margin-bottom: 1.5rem">
+    <div class="control-group control-group-roomy">
       <BaseSlider
           v-model="local.denoise.background_grain"
           label="Background Grain"
@@ -259,7 +256,7 @@ function applyValue(key, value) {
       </span>
     </div>
 
-    <div class="control-group" style="margin-bottom: 1.5rem">
+    <div class="control-group control-group-roomy">
       <BaseSlider
           v-model="local.denoise.luma_strength"
           label="Structure strength"
@@ -274,7 +271,7 @@ function applyValue(key, value) {
       />
     </div>
 
-    <div class="control-group" style="margin-bottom: 1.5rem">
+    <div class="control-group control-group-roomy">
       <BaseSlider
           v-model="local.denoise.detail"
           label="Detail"

@@ -2,9 +2,10 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {mount} from '@vue/test-utils'
 import {nextTick} from 'vue'
 
-vi.mock('../composables/api.js', () => ({
-    getAiCompute: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        getAiCompute: vi.fn(),
+    }))
 
 import HardwareBenchmarkOverlay from './HardwareBenchmarkOverlay.vue'
 import {resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'

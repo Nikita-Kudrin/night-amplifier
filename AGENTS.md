@@ -180,6 +180,16 @@ arriving mid-save is held until the save settles: each gap once posted the previ
 The camera list lives on Main, so a section editing the selected camera names it (`SelectedCameraTag`; Equipment,
 with none selected, names the profile it edits), and a debounced edit is bound to that camera.
 
+**Shared homes**: App state is provided once (`provideAppContext`), read through `useCapabilities()` /
+`useSelectedCamera()` — a script-side read of the provided readonly ref once locked comet stacking for every Pro user. `api.js` rejects with an `ApiError` carrying the HTTP status; a caller to whom a
+Pro feature is optional uses `ignoreProOnly`, never a bare `catch {}`. Formatters, coordinates (rounded *before*
+splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`. Styles take tokens from `main.css`
+`:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.js` fails an undefined,
+self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
+components' error icons). Test helpers live in `src/test/`: `mockApi`, fixtures held to `api.types.js`,
+`createEventStreamStub` held to `useEventStream`, `mountWithDefaults`, `stubFetch`; tests sit beside their source
+(`X.test.js`, `X.<aspect>.test.js`).
+
 ## Camera Notes
 
 - **Camera roles**: at most one `Main` and one `Guide`, held per role by `AppState::roster` (`CameraRoster`):

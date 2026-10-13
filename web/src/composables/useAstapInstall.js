@@ -1,5 +1,6 @@
 import {ref, computed, watch, onMounted, onUnmounted, inject} from 'vue'
 import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
+import {formatBytes, formatPercent} from '../utils/format.js'
 
 /**
  * Composable for managing ASTAP installation state and progress.
@@ -38,7 +39,7 @@ export function useAstapInstall() {
     const overallProgressText = computed(() => {
         const p = installProgress.value
         if (p.overallPercent !== null && p.overallPercent !== undefined) {
-            return `Overall progress: ${p.overallPercent.toFixed(0)}%`
+            return `Overall progress: ${formatPercent(p.overallPercent / 100)}`
         }
         return ''
     })
@@ -206,20 +207,18 @@ function formatProgressText(progress) {
 
     if (stage === 'downloading') {
         if (percent !== null && totalBytes !== null) {
-            const downloadedMb = (bytesDownloaded / (1024 * 1024)).toFixed(1)
-            const totalMb = (totalBytes / (1024 * 1024)).toFixed(1)
-            return `Downloading ${component}: ${downloadedMb} / ${totalMb} MB (${percent.toFixed(1)}%)`
+            const sizes = `${formatBytes(bytesDownloaded)} / ${formatBytes(totalBytes)}`
+            return `Downloading ${component}: ${sizes} (${formatPercent(percent / 100, 1)})`
         }
         if (percent !== null) {
-            return `Downloading ${component}: ${percent.toFixed(1)}%`
+            return `Downloading ${component}: ${formatPercent(percent / 100, 1)}`
         }
-        const mb = (bytesDownloaded / (1024 * 1024)).toFixed(1)
-        return `Downloading ${component}: ${mb} MB`
+        return `Downloading ${component}: ${formatBytes(bytesDownloaded)}`
     }
 
     if (stage === 'extracting') {
         if (percent !== null) {
-            return `Extracting ${component}: ${percent.toFixed(1)}%`
+            return `Extracting ${component}: ${formatPercent(percent / 100, 1)}`
         }
         return `Extracting ${component}...`
     }

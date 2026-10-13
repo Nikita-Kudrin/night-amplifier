@@ -1,7 +1,9 @@
 <script setup>
-import {ref, inject, watch, computed, unref} from 'vue'
+import {ref, inject, watch, computed} from 'vue'
 import {updateSettings} from '../composables/api.js'
 import {useError} from '../composables/useError.js'
+import {useCapabilities} from '../composables/appContext.js'
+import {formatPercent} from '../utils/format.js'
 import {useDebouncedCall} from '../composables/useDebouncedCall.js'
 import {
   BasePanel,
@@ -36,18 +38,14 @@ const settings = inject('settings')
 const refreshSettings = inject('refreshSettings')
 const simulatorEnabledRef = inject('simulatorEnabled')
 const hasGuideCamera = inject('hasGuideCamera', computed(() => false))
-const capabilities = inject('capabilities', {
-  has_pro: false,
-  deep_sky: {
-    advanced_rejection: false,
-    rbf_background: false,
-    saturation_boost: false,
-    denoise: false,
-    ai_denoise: false,
-  },
-  planetary: {advanced_stacking: false},
-  push_to: {astap_solver: false},
-})
+const {
+  rbfBackground,
+  saturationBoost,
+  denoise: denoiseAvailable,
+  aiDenoise: aiDenoiseAvailable,
+  advancedRejection,
+  advancedPlanetary,
+} = useCapabilities()
 
 const {error, clearError, withErrorHandling} = useError()
 
@@ -65,9 +63,6 @@ const simulatorEnabled = computed({
 })
 
 const localSettings = ref(defaultSettings())
-
-/** The AI denoiser is Pro; its switch and compute unit live in `AiComputeSettings`. */
-const aiDenoiseAvailable = computed(() => unref(capabilities)?.deep_sky?.ai_denoise ?? false)
 
 watch(
     settings,
@@ -100,7 +95,6 @@ watch(
           saturation_boost: newSettings.saturation_boost ?? DEFAULT_SETTINGS.saturation_boost,
           saturation_boost_strength:
               newSettings.saturation_boost_strength ?? DEFAULT_SETTINGS.saturation_boost_strength,
-          simulated_camera: newSettings.simulated_camera ?? DEFAULT_SETTINGS.simulated_camera,
           simulated_preload_images:
               newSettings.simulated_preload_images ?? DEFAULT_SETTINGS.simulated_preload_images,
           show_focus_image: newSettings.show_focus_image ?? DEFAULT_SETTINGS.show_focus_image,
@@ -153,14 +147,6 @@ async function applySetting(key, value) {
 
 const {schedule: debouncedApply} = useDebouncedCall(applySetting, 300)
 
-function formatPercent(v) {
-  return `${(v * 100).toFixed(0)}%`
-}
-
-function formatSigma(v) {
-  return `${v.toFixed(1)}\u03c3`
-}
-
 const HELP = HELP_TEXTS
 </script>
 
@@ -179,10 +165,8 @@ const HELP = HELP_TEXTS
         :preview-resolution="localSettings.preview_resolution"
         :streaming-resolution="localSettings.streaming_resolution"
         :focus-mode="focusMode"
-        :denoise-available="capabilities.deep_sky?.denoise ?? false"
+        :denoise-available="denoiseAvailable"
         :ai-denoise-available="aiDenoiseAvailable"
-        :format-percent="formatPercent"
-        :format-sigma="formatSigma"
         @apply="applyGroup"
     />
 
@@ -190,7 +174,7 @@ const HELP = HELP_TEXTS
     <div class="settings-section">
       <h3 class="section-title">Processing</h3>
 
-      <div class="control-group" style="margin-top: 0.5rem; margin-bottom: 1.5rem">
+      <div class="control-group control-group-offset control-group-roomy">
         <BaseSlider
             v-model="localSettings.auto_stretch_intensity"
             label="Color Intensity"
@@ -204,7 +188,7 @@ const HELP = HELP_TEXTS
         />
       </div>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
+      <div class="control-group control-group-roomy">
         <BaseSlider
             v-model="localSettings.eyepiece.intensity"
             label="Black level"
@@ -218,7 +202,7 @@ const HELP = HELP_TEXTS
         />
       </div>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
+      <div class="control-group control-group-roomy">
         <BaseSlider
             v-model="localSettings.eyepiece.black_floor"
             label="Black floor"
@@ -232,7 +216,7 @@ const HELP = HELP_TEXTS
         />
       </div>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
+      <div class="control-group control-group-roomy">
         <BaseToggle
             v-model="localSettings.eyepiece.darker_sky"
             label="Darker sky"
@@ -244,7 +228,7 @@ const HELP = HELP_TEXTS
 
       <span v-if="focusMode" class="hint">Greyed settings are held off by Focus/Finder mode.</span>
 
-      <div class="control-group" style="margin-bottom: 1.5rem">
+      <div class="control-group control-group-roomy">
         <BaseToggle
             v-model="localSettings.eyepiece.dither"
             label="Dithering"
@@ -266,25 +250,24 @@ const HELP = HELP_TEXTS
 
       <div v-if="localSettings.background_subtraction" class="control-group">
         <div class="control-row">
-          <label class="control-label" style="margin-bottom: 0; flex: 1">
+          <label class="control-label control-label-inline">
             Algorithm
-            <BaseProLock v-if="!capabilities.deep_sky.rbf_background" feature="RBF Background"/>
+            <BaseProLock v-if="!rbfBackground" feature="RBF Background"/>
             <BaseInfoIcon :message="HELP.background_extraction_algorithm"/>
           </label>
           <select
               id="bg-algorithm-select"
               v-model="localSettings.background_extraction_algorithm"
-              class="select"
-              style="width: 150px; padding: 0.25rem 2rem 0.25rem 0.5rem; height: 32px"
+              class="select select-compact"
               @change="applySetting('background_extraction_algorithm', $event.target.value)"
           >
             <option
                 v-for="opt in BACKGROUND_ALGORITHM_OPTIONS"
                 :key="opt.value"
                 :value="opt.value"
-                :disabled="opt.pro && !capabilities.deep_sky.rbf_background"
+                :disabled="opt.pro && !rbfBackground"
             >
-              {{ opt.label }} {{ opt.pro && !capabilities.deep_sky.rbf_background ? '🔒' : '' }}
+              {{ opt.label }} {{ opt.pro && !rbfBackground ? '🔒' : '' }}
             </option>
           </select>
         </div>
@@ -295,12 +278,12 @@ const HELP = HELP_TEXTS
             v-model="localSettings.saturation_boost"
             label="Shadow Saturation Boost"
             :help="HELP.saturation_boost"
-            :disabled="!capabilities.deep_sky.saturation_boost || focusMode"
+            :disabled="!saturationBoost || focusMode"
             @update:model-value="applySetting('saturation_boost', $event)"
         >
           <template #label-extra>
             <BaseProLock
-                v-if="!capabilities.deep_sky.saturation_boost"
+                v-if="!saturationBoost"
                 feature="Saturation Boost"
             />
           </template>
@@ -317,14 +300,14 @@ const HELP = HELP_TEXTS
           :max="SATURATION_BOOST_LIMITS.max"
           :step="SATURATION_BOOST_LIMITS.step"
           :format-value="formatPercent"
-          :disabled="!capabilities.deep_sky.saturation_boost"
+          :disabled="!saturationBoost"
           :help="HELP.saturation_boost_strength"
           @change="
           debouncedApply('saturation_boost_strength', localSettings.saturation_boost_strength)
         "
       >
         <template #label-extra>
-          <BaseProLock v-if="!capabilities.deep_sky.saturation_boost" feature="Saturation Boost"/>
+          <BaseProLock v-if="!saturationBoost" feature="Saturation Boost"/>
         </template>
       </BaseSlider>
     </div>
@@ -394,8 +377,8 @@ const HELP = HELP_TEXTS
         :planetary="settings?.stacking_type === 'planetary'"
         :auto-crop="localSettings.auto_crop"
         :deep-sky="(settings?.stacking_type ?? 'deep_sky') === 'deep_sky'"
-        :advanced-rejection-available="capabilities.deep_sky.advanced_rejection"
-        :advanced-planetary-available="capabilities.planetary.advanced_stacking"
+        :advanced-rejection-available="advancedRejection"
+        :advanced-planetary-available="advancedPlanetary"
         @apply="applyGroup"
     />
 
@@ -434,7 +417,7 @@ const HELP = HELP_TEXTS
             @update:model-value="applySetting('use_simulated_camera', $event)"
         />
       </div>
-      <div v-if="simulatorEnabled" class="control-group" style="margin-top: 0.5rem">
+      <div v-if="simulatorEnabled" class="control-group control-group-offset">
         <BaseSlider
             v-model="localSettings.simulated_preload_images"
             label="Preload Count"
@@ -474,17 +457,13 @@ const HELP = HELP_TEXTS
 <style scoped>
 /* Uses global .section-title, .control-group, .control-label, .hint from main.css */
 
-.settings-section {
-  margin-bottom: 0.625rem;
-}
-
 /* Heading for a set of related switches, matching .control-label's type without its
    space-between, which would strand the info icon at the far edge. */
 .storage-group-label {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.825rem;
+  font-size: var(--fs-md);
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 0.375rem;

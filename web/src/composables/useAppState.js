@@ -1,5 +1,7 @@
 import {ref, computed, readonly} from 'vue'
 import {getSettings, listCameras, getCapabilities} from './api.js'
+import {findCamera, isSimulator} from './appContext.js'
+import {DEFAULT_CAPABILITIES} from '../constants'
 
 /**
  * Centralized application state management
@@ -13,13 +15,7 @@ const selectedCameraId = ref(null)
 const loading = ref(true)
 const globalError = ref(null)
 const simulatorEnabled = ref(false)
-const capabilities = ref({
-    has_pro: false,
-    deep_sky: {advanced_rejection: false, rbf_background: false},
-    planetary: {advanced_stacking: false},
-    push_to: {astap_solver: false},
-    debug_logging: false,
-})
+const capabilities = ref(DEFAULT_CAPABILITIES)
 // Latest live camera status keyed by camera name (cooled cameras)
 const cameraStatus = ref({})
 // Camera lifecycle phase keyed by camera name: 'idle' | 'precooling' | 'capturing' |
@@ -39,9 +35,7 @@ let retryTimeoutId = null
 const RETRY_INTERVAL_MS = 2000
 
 // Computed getters
-const selectedCamera = computed(
-    () => cameras.value.find((c) => c.id === selectedCameraId.value) || null
-)
+const selectedCamera = computed(() => findCamera(cameras.value, selectedCameraId.value))
 
 const connectedCameras = computed(() => cameras.value.filter((c) => c.connected))
 
@@ -63,7 +57,7 @@ const hasGuideCamera = computed(() => guideCamera.value !== null)
  */
 const selectedCameraRole = computed(() => selectedCamera.value?.role || 'main')
 
-const isSimulatorCamera = computed(() => selectedCamera.value?.provider === 'Simulator')
+const isSimulatorCamera = computed(() => isSimulator(selectedCamera.value))
 
 /**
  * Refresh settings from server
@@ -332,22 +326,7 @@ export function useAppState() {
         replaceCameraPhases,
         addDiscoveredCamera,
 
-        // Direct refs for provide/inject compatibility (temporary)
-        _settingsRef: settings,
-        _camerasRef: cameras,
-        _selectedCameraIdRef: selectedCameraId,
-        _cameraStatusRef: cameraStatus,
-        _cameraPhaseRef: cameraPhase,
-        _warmupEndsAtRef: warmupEndsAt,
+        // The selected camera's id, writable: the camera list selects by setting it.
+        selection: selectedCameraId,
     }
-}
-
-// Singleton instance for global access
-let instance = null
-
-export function getAppState() {
-    if (!instance) {
-        instance = useAppState()
-    }
-    return instance
 }

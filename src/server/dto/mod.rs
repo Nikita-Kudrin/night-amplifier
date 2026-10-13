@@ -29,8 +29,9 @@ pub struct ApiResponse<T: Serialize> {
     pub error: Option<String>,
 }
 
-/// Capabilities response for feature detection
+/// What `GET /api/capabilities` answers: which Pro plugins are active.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CapabilitiesResponse {
     pub has_pro: bool,
     pub deep_sky: DeepSkyCapabilities,
@@ -41,6 +42,7 @@ pub struct CapabilitiesResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct DeepSkyCapabilities {
     pub advanced_rejection: bool,
     pub rbf_background: bool,
@@ -54,16 +56,19 @@ pub struct DeepSkyCapabilities {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PlanetaryCapabilities {
     pub advanced_stacking: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct PushToCapabilities {
     pub astap_solver: bool,
 }
 
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CometCapabilities {
     pub pro_stacking: bool,
 }

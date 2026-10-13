@@ -60,6 +60,17 @@
  */
 
 /**
+ * What `GET /api/capabilities` answers: which Pro plugins are active.
+ * @typedef {object} Capabilities
+ * @property {boolean} has_pro
+ * @property {DeepSkyCapabilities} deep_sky
+ * @property {PlanetaryCapabilities} planetary
+ * @property {PushToCapabilities} push_to
+ * @property {CometCapabilities} comet
+ * @property {boolean} debug_logging
+ */
+
+/**
  * Capture status response
  * @typedef {object} CaptureStatus
  * @property {string} state
@@ -225,12 +236,26 @@
  */
 
 /**
+ * @typedef {object} CometCapabilities
+ * @property {boolean} pro_stacking
+ */
+
+/**
  * Coordinate response (simplified)
  * @typedef {object} Coordinate
  * @property {number} ra_degrees
  * @property {number} dec_degrees
  * @property {string} ra_string
  * @property {string} dec_string
+ */
+
+/**
+ * @typedef {object} DeepSkyCapabilities
+ * @property {boolean} advanced_rejection
+ * @property {boolean} rbf_background
+ * @property {boolean} saturation_boost
+ * @property {boolean} denoise - The spatial denoisers and every control over them — Denoise, Colour Mottle, Background Grain, Structure strength. Without them the Noise Reduction section is locked and the render is the plain one.
+ * @property {boolean} ai_denoise - The AI denoiser behind the "AI denoising" switch; locked without it.
  */
 
 /**
@@ -280,6 +305,16 @@
  * @property {string} database_path - Path to this database's directory
  * @property {number} min_fov_deg - Minimum FOV in degrees this database supports
  * @property {number} max_fov_deg - Maximum FOV in degrees this database supports
+ */
+
+/**
+ * @typedef {object} PlanetaryCapabilities
+ * @property {boolean} advanced_stacking
+ */
+
+/**
+ * @typedef {object} PushToCapabilities
+ * @property {boolean} astap_solver
  */
 
 /**

@@ -11,7 +11,9 @@ use night_amplifier::push_to::{
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, DatabaseTypeResponse,
     PushToStatusResponse,
 };
-use night_amplifier::server::{CaptureStatusResponse, SettingsResponse, SimulatorConfigResponse};
+use night_amplifier::server::{
+    CapabilitiesResponse, CaptureStatusResponse, SettingsResponse, SimulatorConfigResponse,
+};
 use night_amplifier::session::events::{CameraInfoResponse, CameraListEntry};
 use schemars::generate::{SchemaGenerator, SchemaSettings};
 use schemars::JsonSchema;
@@ -36,6 +38,7 @@ fn roots(generator: &mut SchemaGenerator) -> Vec<(&'static str, Value)> {
     }
     vec![
         root::<SettingsResponse>(generator, "Settings"),
+        root::<CapabilitiesResponse>(generator, "Capabilities"),
         root::<CaptureStatusResponse>(generator, "CaptureStatus"),
         root::<CameraListEntry>(generator, "Camera"),
         root::<CameraInfoResponse>(generator, "CameraInfo"),

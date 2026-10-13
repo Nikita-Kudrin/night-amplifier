@@ -5,10 +5,11 @@ import {useTelescopeSetup} from '../useTelescopeSetup.js'
 import * as api from '../api.js'
 
 // Mock API
-vi.mock('../api.js', () => ({
-    updateSettings: vi.fn().mockResolvedValue({}),
-    updatePushToConfig: vi.fn().mockResolvedValue({}),
-}))
+vi.mock('../api.js', async (importOriginal) =>
+    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+        updateSettings: vi.fn().mockResolvedValue({}),
+        updatePushToConfig: vi.fn().mockResolvedValue({}),
+    }))
 
 describe('useTelescopeSetup', () => {
     let settingsRef

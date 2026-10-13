@@ -1,6 +1,8 @@
 import {ref, computed, watch, inject} from 'vue'
 import {updateSettings} from './api.js'
 import {useDebouncedCall} from './useDebouncedCall.js'
+import {runDirectly} from './useError.js'
+import {fieldOfViewDeg} from '../utils/optics.js'
 import {CAMERA_DATABASE} from '../constants/cameras.js'
 
 const TELESCOPE_FIELDS = [
@@ -48,11 +50,11 @@ function changedProfiles(profiles, persisted) {
  * Telescope setup + FOV calculation: focal length, sensor (pixel size/resolution), and
  * barlow coefficient, persisted as the solver's FOV hint; auto-resolves from the camera on connect.
  * @param {Object} options
- * @param {Function} options.withErrorHandling - Error handling wrapper
+ * @param {Function} [options.withErrorHandling] - Error handling wrapper; errors propagate without one
  * @param {import('vue').Ref} options.connectedCameraInfo - Reactive camera info from selected camera
  * @returns Reactive telescope state, computed FOV, and helper methods
  */
-export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {}) {
+export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCameraInfo} = {}) {
     const settings = inject('settings')
     const refreshSettings = inject('refreshSettings', async () => {})
 
@@ -151,21 +153,9 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
 
     // ── FOV calculation ───────────────────────────────────────────────
     const calculatedFov = computed(() => {
-        const fl = focalLength.value
-        const px = pixelSizeX.value
-        const py = pixelSizeY.value
-        const w = sensorWidthPx.value
-        const h = sensorHeightPx.value
-        const bc = barlowCoeff.value || 1.0
-
-        if (!fl || fl <= 0 || !px || px <= 0 || !py || py <= 0 || !w || w <= 0 || !h || h <= 0) {
-            return null
-        }
-
-        const effectiveFl = fl * bc
-        const fovXDeg = (w * px / 1000.0) / effectiveFl * (180.0 / Math.PI)
-        const fovYDeg = (h * py / 1000.0) / effectiveFl * (180.0 / Math.PI)
-        return {x: fovXDeg, y: fovYDeg}
+        const x = fieldOfViewDeg(sensorWidthPx.value, pixelSizeX.value, focalLength.value, barlowCoeff.value)
+        const y = fieldOfViewDeg(sensorHeightPx.value, pixelSizeY.value, focalLength.value, barlowCoeff.value)
+        return x === null || y === null ? null : {x, y}
     })
 
     // ── Persist when params change ────────────────────────────────────
@@ -219,11 +209,7 @@ export function useTelescopeSetup({withErrorHandling, connectedCameraInfo} = {})
         }
 
         try {
-            if (withErrorHandling) {
-                await withErrorHandling(doSave)
-            } else {
-                await doSave()
-            }
+            await withErrorHandling(doSave)
         } finally {
             savesInFlight--
             // A refused save keeps its edits safe from the next sync.

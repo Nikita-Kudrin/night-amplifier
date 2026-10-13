@@ -52,8 +52,8 @@ watch(benchmarking, async (on) => {
         This happens once; the result is remembered.
       </p>
       <p v-if="step" class="benchmark-step" data-test="benchmark-step">{{ step }}</p>
-      <div class="benchmark-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent">
-        <div class="benchmark-bar-fill" :style="{width: `${percent}%`}"></div>
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="percent">
+        <div class="progress-fill" :style="{width: `${percent}%`}"></div>
       </div>
     </div>
   </div>
@@ -63,12 +63,12 @@ watch(benchmarking, async (on) => {
 .benchmark-overlay {
   position: fixed;
   inset: 0;
-  z-index: 2000;
+  z-index: var(--z-blocking);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgba(0, 0, 0, 0.8);
+  background: var(--backdrop);
   backdrop-filter: blur(4px);
   outline: none;
 }
@@ -82,7 +82,7 @@ watch(benchmarking, async (on) => {
   max-width: 420px;
   padding: 1.5rem;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--surface-elevated);
   text-align: center;
 }
@@ -96,25 +96,11 @@ watch(benchmarking, async (on) => {
 .benchmark-text,
 .benchmark-step {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
 .benchmark-step {
   color: var(--text-primary);
-}
-
-.benchmark-bar {
-  width: 100%;
-  height: 6px;
-  border-radius: 3px;
-  overflow: hidden;
-  background: var(--border);
-}
-
-.benchmark-bar-fill {
-  height: 100%;
-  background: var(--primary);
-  transition: width 0.3s ease;
 }
 </style>

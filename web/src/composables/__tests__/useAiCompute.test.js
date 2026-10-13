@@ -1,8 +1,9 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
-vi.mock('../api.js', () => ({
-    getAiCompute: vi.fn(),
-}))
+vi.mock('../api.js', async (importOriginal) =>
+    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+        getAiCompute: vi.fn(),
+    }))
 
 import {getAiCompute} from '../api.js'
 import {AI_COMPUTE_POLL_MS, resetAiCompute, useAiCompute} from '../useAiCompute.js'

@@ -1,21 +1,18 @@
-import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {mount, flushPromises, enableAutoUnmount} from '@vue/test-utils'
+import {describe, it, expect, vi, beforeEach} from 'vitest'
+import {mount, flushPromises} from '@vue/test-utils'
 import {ref, watch} from 'vue'
 import CameraPanel from './CameraPanel.vue'
 
 // Mock the API module
-vi.mock('../composables/api.js', () => ({
-    connectCamera: vi.fn(),
-    disconnectCamera: vi.fn(),
-    configureSimulator: vi.fn(),
-    getSimulatorConfig: vi.fn(),
-}))
+vi.mock('../composables/api.js', async (importOriginal) =>
+    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+        connectCamera: vi.fn(),
+        disconnectCamera: vi.fn(),
+        configureSimulator: vi.fn(),
+        getSimulatorConfig: vi.fn(),
+    }))
 
 import {connectCamera, disconnectCamera, getSimulatorConfig} from '../composables/api.js'
-
-// A wrapper left mounted keeps its teleported nodes; the next test's `<body>` reset pulls
-// them out from under it, and its next render fails.
-enableAutoUnmount(afterEach)
 
 describe('CameraPanel', () => {
     beforeEach(() => {

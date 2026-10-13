@@ -4,6 +4,7 @@ import {
     SNAPSHOT_RETRY_MS,
     SNAPSHOT_RETRY_WINDOW_MS,
 } from '../api.js'
+import {stubFetch} from '../../test/http.js'
 
 const SERVER_FILENAME = 'eyepiece_05-09-2026_21-14-03.png'
 
@@ -36,8 +37,10 @@ async function rejectsWhile(pending, message, advance) {
 }
 
 describe('fetchEyepieceSnapshot', () => {
+    let fetchMock
+
     beforeEach(() => {
-        global.fetch = vi.fn()
+        fetchMock = stubFetch()
     })
 
     afterEach(() => {
@@ -45,22 +48,22 @@ describe('fetchEyepieceSnapshot', () => {
     })
 
     it('asks for the circular shape', async () => {
-        global.fetch.mockResolvedValue(pngResponse())
+        fetchMock.mockResolvedValue(pngResponse())
 
         await fetchEyepieceSnapshot(true)
 
-        expect(global.fetch).toHaveBeenCalledWith(
+        expect(fetchMock).toHaveBeenCalledWith(
             '/api/eyepiece/snapshot?circular=true',
             expect.objectContaining({cache: 'no-store'})
         )
     })
 
     it('asks for the uncropped shape', async () => {
-        global.fetch.mockResolvedValue(pngResponse())
+        fetchMock.mockResolvedValue(pngResponse())
 
         await fetchEyepieceSnapshot(false)
 
-        expect(global.fetch).toHaveBeenCalledWith(
+        expect(fetchMock).toHaveBeenCalledWith(
             '/api/eyepiece/snapshot?circular=false',
             expect.anything()
         )
@@ -68,7 +71,7 @@ describe('fetchEyepieceSnapshot', () => {
 
     // The body is a PNG, so it must not go anywhere near the JSON `request()` path.
     it('returns the response body as a blob', async () => {
-        global.fetch.mockResolvedValue(pngResponse())
+        fetchMock.mockResolvedValue(pngResponse())
 
         const {blob} = await fetchEyepieceSnapshot(true)
 
@@ -82,7 +85,7 @@ describe('fetchEyepieceSnapshot', () => {
      * arrived with — so a name not lifted off here is a name lost.
      */
     it('returns the name the server put in Content-Disposition', async () => {
-        global.fetch.mockResolvedValue(pngResponse())
+        fetchMock.mockResolvedValue(pngResponse())
 
         const {filename} = await fetchEyepieceSnapshot(true)
 
@@ -90,7 +93,7 @@ describe('fetchEyepieceSnapshot', () => {
     })
 
     it('falls back to a name of its own when the header is missing', async () => {
-        global.fetch.mockResolvedValue(pngResponse(null))
+        fetchMock.mockResolvedValue(pngResponse(null))
 
         const {filename} = await fetchEyepieceSnapshot(true)
 
@@ -98,7 +101,7 @@ describe('fetchEyepieceSnapshot', () => {
     })
 
     it('falls back when the header carries no filename', async () => {
-        global.fetch.mockResolvedValue(pngResponse('attachment'))
+        fetchMock.mockResolvedValue(pngResponse('attachment'))
 
         const {filename} = await fetchEyepieceSnapshot(true)
 
@@ -108,20 +111,20 @@ describe('fetchEyepieceSnapshot', () => {
     // 404, not 503: nothing has been rendered yet, and retrying cannot change that
     // until a capture produces a frame.
     it('reports an empty stream without retrying', async () => {
-        global.fetch.mockResolvedValue({ok: false, status: 404})
+        fetchMock.mockResolvedValue({ok: false, status: 404})
 
         await expect(fetchEyepieceSnapshot(true)).rejects.toThrow('No frame to download yet.')
-        expect(global.fetch).toHaveBeenCalledTimes(1)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
     it('reports the status for any other failure', async () => {
-        global.fetch.mockResolvedValue({ok: false, status: 500})
+        fetchMock.mockResolvedValue({ok: false, status: 500})
 
         await expect(fetchEyepieceSnapshot(true)).rejects.toThrow('Download failed (500).')
     })
 
     it('reports an unreachable server', async () => {
-        global.fetch.mockRejectedValue(new TypeError('Failed to fetch'))
+        fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
 
         await expect(fetchEyepieceSnapshot(true)).rejects.toThrow('Server unavailable')
     })
@@ -136,7 +139,7 @@ describe('fetchEyepieceSnapshot', () => {
         afterEach(() => vi.useRealTimers())
 
         it('waits and asks again', async () => {
-            global.fetch
+            fetchMock
                 .mockResolvedValueOnce(busyResponse())
                 .mockResolvedValueOnce(pngResponse())
             const pending = fetchEyepieceSnapshot(true)
@@ -144,22 +147,22 @@ describe('fetchEyepieceSnapshot', () => {
             await vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_MS)
 
             await expect(pending).resolves.toMatchObject({filename: SERVER_FILENAME})
-            expect(global.fetch).toHaveBeenCalledTimes(2)
+            expect(fetchMock).toHaveBeenCalledTimes(2)
         })
 
         it('does not ask again before the retry interval is up', async () => {
-            global.fetch.mockResolvedValue(busyResponse())
+            fetchMock.mockResolvedValue(busyResponse())
             const pending = fetchEyepieceSnapshot(true).catch(() => {})
 
             await vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_MS - 1)
 
-            expect(global.fetch).toHaveBeenCalledTimes(1)
+            expect(fetchMock).toHaveBeenCalledTimes(1)
             await vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_WINDOW_MS)
             await pending
         })
 
         it('keeps trying across the whole window', async () => {
-            global.fetch.mockResolvedValue(busyResponse())
+            fetchMock.mockResolvedValue(busyResponse())
             const pending = fetchEyepieceSnapshot(true).catch((e) => e)
 
             await vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_WINDOW_MS)
@@ -167,12 +170,12 @@ describe('fetchEyepieceSnapshot', () => {
 
             // One attempt up front, then one per interval that fits in the window.
             const expected = Math.ceil(SNAPSHOT_RETRY_WINDOW_MS / SNAPSHOT_RETRY_MS)
-            expect(global.fetch.mock.calls.length).toBeGreaterThanOrEqual(expected - 1)
-            expect(global.fetch.mock.calls.length).toBeLessThanOrEqual(expected + 1)
+            expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(expected - 1)
+            expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(expected + 1)
         })
 
         it('gives up once the window closes', async () => {
-            global.fetch.mockResolvedValue(busyResponse())
+            fetchMock.mockResolvedValue(busyResponse())
 
             await rejectsWhile(fetchEyepieceSnapshot(true), 'Server busy', () =>
                 vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_WINDOW_MS)
@@ -182,7 +185,7 @@ describe('fetchEyepieceSnapshot', () => {
         // The window is a deadline, not a retry count: a slow response eats into it
         // rather than extending it.
         it('stops waiting even when each attempt is slow', async () => {
-            global.fetch.mockImplementation(
+            fetchMock.mockImplementation(
                 () => new Promise((resolve) => setTimeout(() => resolve(busyResponse()), 1500))
             )
             const pending = fetchEyepieceSnapshot(true).catch((e) => e)
@@ -195,7 +198,7 @@ describe('fetchEyepieceSnapshot', () => {
         })
 
         it('succeeds on a late attempt inside the window', async () => {
-            global.fetch
+            fetchMock
                 .mockResolvedValueOnce(busyResponse())
                 .mockResolvedValueOnce(busyResponse())
                 .mockResolvedValueOnce(busyResponse())
@@ -209,7 +212,7 @@ describe('fetchEyepieceSnapshot', () => {
 
         // A 404 arriving mid-retry is still terminal.
         it('stops retrying if the stream goes empty', async () => {
-            global.fetch
+            fetchMock
                 .mockResolvedValueOnce(busyResponse())
                 .mockResolvedValue({ok: false, status: 404})
 
@@ -217,7 +220,7 @@ describe('fetchEyepieceSnapshot', () => {
                 vi.advanceTimersByTimeAsync(SNAPSHOT_RETRY_MS)
             )
 
-            expect(global.fetch).toHaveBeenCalledTimes(2)
+            expect(fetchMock).toHaveBeenCalledTimes(2)
         })
     })
 })

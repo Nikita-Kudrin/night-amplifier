@@ -30,7 +30,7 @@ defineProps({
 
     <p v-if="progressText" class="progress-text">{{ progressText }}</p>
 
-    <div v-if="progressPercent !== null" class="progress-bar">
+    <div v-if="progressPercent !== null" class="progress-bar progress-bar-lg">
       <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
     </div>
 
@@ -60,36 +60,25 @@ defineProps({
 }
 
 .progress-text {
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   color: var(--text-primary);
   margin: 0;
   text-align: center;
 }
 
 .progress-bar {
-  width: 100%;
   max-width: 300px;
-  height: 8px;
-  background: var(--surface-elevated);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--primary);
-  transition: width 0.3s ease;
 }
 
 .overall-progress-text {
-  font-size: 0.8rem;
+  font-size: var(--fs-md);
   color: var(--text-secondary);
   margin: 0.5rem 0 0;
   font-weight: 500;
 }
 
 .progress-hint {
-  font-size: 0.75rem;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
   margin: 0;
   text-align: center;

@@ -9,6 +9,11 @@
  * file stubbing `fetch` itself replaces this for that file only.
  */
 import {afterAll, afterEach} from 'vitest'
+import {enableAutoUnmount} from '@vue/test-utils'
+
+// A wrapper left mounted keeps its watchers, timers and teleported nodes alive into the
+// next test; once the next test resets `<body>`, a teleported node's render then fails.
+enableAutoUnmount(afterEach)
 
 let unmocked = []
 

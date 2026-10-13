@@ -9,20 +9,10 @@ import {mount, flushPromises} from '@vue/test-utils'
 import {ref, computed} from 'vue'
 import {DEFAULT_SETTINGS} from './constants'
 
-vi.mock('./composables/api.js', async (importOriginal) => {
-    const actual = await importOriginal()
-    const mocked = Object.fromEntries(
-        Object.keys(actual).map((name) => [name, vi.fn().mockResolvedValue({})])
-    )
-    return {
-        ...mocked,
-        getStackingTypes: vi.fn().mockResolvedValue([]),
-        getAstapDatabases: vi.fn().mockResolvedValue([]),
+vi.mock('./composables/api.js', async (importOriginal) =>
+    (await import('./test/mockApi.js')).mockApi(await importOriginal(), {
         getAstapStatus: vi.fn().mockResolvedValue({ready: true, installed_databases: []}),
-        getCatalogStatus: vi.fn().mockResolvedValue({installed: true}),
-        getAiCompute: vi.fn().mockResolvedValue({state: 'unavailable', rungs: []}),
-    }
-})
+    }))
 
 // Every field a panel reads is a ref, every `clear*` a no-op.
 vi.mock('./composables/useEventStream.js', () => ({
@@ -61,12 +51,11 @@ vi.mock('./composables/useAppState.js', () => ({
         updateCameraPhase: vi.fn(),
         replaceCameraPhases: vi.fn(),
         addDiscoveredCamera: vi.fn(),
-        _settingsRef: settingsRef,
-        _camerasRef: camerasRef,
-        _selectedCameraIdRef: selectedRef,
-        _cameraStatusRef: ref({}),
-        _cameraPhaseRef: ref({}),
-        _warmupEndsAtRef: ref({}),
+        cameras: camerasRef,
+        selection: selectedRef,
+        cameraStatus: ref({}),
+        cameraPhase: ref({}),
+        warmupEndsAt: ref({}),
         capabilities: ref({
             has_pro: true,
             deep_sky: {advanced_rejection: true, rbf_background: true, denoise: false, ai_denoise: false},
