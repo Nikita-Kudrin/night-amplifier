@@ -386,9 +386,7 @@ export interface AstapInstallProgressEvent {
     total_bytes: number | null
     /** Percentage of current operation (0-100) */
     percent: number | null
-    /** Current installation stage name */
-    stage: string | null
-    /** The same stage as an id, which the UI branches on */
+    /** Current installation stage, which the UI names and branches on */
     stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
@@ -400,9 +398,7 @@ export interface AstapInstallExtractingEvent {
     component: string
     /** Percentage of extraction (0-100) */
     progress: number
-    /** Current installation stage name */
-    stage: string | null
-    /** The same stage as an id, which the UI branches on */
+    /** Current installation stage, which the UI names and branches on */
     stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
@@ -412,9 +408,7 @@ export interface AstapInstallExtractingEvent {
 export interface AstapInstallCompletedEvent {
     type: 'astap_install_completed'
     component: string
-    /** Current installation stage name */
-    stage: string | null
-    /** The same stage as an id, which the UI branches on */
+    /** Current installation stage, which the UI names and branches on */
     stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
@@ -463,20 +457,44 @@ export interface CatalogInstallFailedEvent {
  * Where the ASTAP install stands: sent as one begins and ends, and restated by a sync
  * so a page that missed the end stops waiting on it.
  */
-export interface AstapInstallStatusEvent {
+export type AstapInstallStatusEvent = {
     type: 'astap_install_status'
-    state: 'idle' | 'running' | 'completed' | 'failed'
-    progress?: ServerEvent | null
-    error?: string
-}
+} & (
+    | {
+        state: 'idle'
+    }
+    | {
+        state: 'running'
+        progress: ServerEvent | null
+    }
+    | {
+        state: 'completed'
+    }
+    | {
+        state: 'failed'
+        error: string
+    }
+)
 
 /** Where the catalog install stands, as [`ServerEvent::AstapInstallStatus`]. */
-export interface CatalogInstallStatusEvent {
+export type CatalogInstallStatusEvent = {
     type: 'catalog_install_status'
-    state: 'idle' | 'running' | 'completed' | 'failed'
-    progress?: ServerEvent | null
-    error?: string
-}
+} & (
+    | {
+        state: 'idle'
+    }
+    | {
+        state: 'running'
+        progress: ServerEvent | null
+    }
+    | {
+        state: 'completed'
+    }
+    | {
+        state: 'failed'
+        error: string
+    }
+)
 
 /** Any event `/ws/events` sends. */
 export type ServerEvent =
@@ -546,8 +564,8 @@ export interface CameraPhaseEntry {
 }
 
 /**
- * Where an ASTAP install stands. Sent as `stage_id` beside its label (`stage`), so the UI
- * branches on the id rather than on the label's wording.
+ * Where an ASTAP install stands, sent as `stage_id`: the UI names each stage itself and
+ * branches on the id, never on wording.
  */
 export const INSTALL_STAGE_VALUES = [
     'downloading_cli',

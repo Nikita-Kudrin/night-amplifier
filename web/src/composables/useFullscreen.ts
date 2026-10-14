@@ -20,6 +20,7 @@ export function useFullscreen({onChange}: FullscreenOptions = {}) {
         // Either can be refused (no user gesture, a frame without the permission); the
         // state follows `fullscreenchange`, so a refusal only needs saying.
         const request = document.fullscreenElement ? document.exitFullscreen() : element?.requestFullscreen()
+        // Older Safari returns nothing, whatever the DOM types say.
         request?.catch?.((e: {message?: unknown} | null | undefined) => console.warn('Fullscreen refused:', e?.message ?? e))
     }
 

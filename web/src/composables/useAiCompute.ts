@@ -1,6 +1,7 @@
 import {computed, ref, watch} from 'vue'
 import type {DeepReadonly, Ref} from 'vue'
 import {getAiCompute} from './api'
+import {isMeasuring} from '../utils/aiCompute'
 import {onEvents, resyncOn} from './useEventStream'
 import type {EventStream} from './useEventStream'
 import type {AiComputeReport, Settings} from './api.types'
@@ -8,10 +9,6 @@ import type {EventHandlers} from './events/handlers'
 
 /** How often the report is refetched while it is changing and `/ws/events` is down. */
 export const AI_COMPUTE_POLL_MS = 1000
-
-function changing(report: AiComputeReport | null) {
-    return report?.state === 'checking' || report?.state === 'benchmarking'
-}
 
 /**
  * The AI compute report, shared by the overlay, the settings panel and App: one report,
@@ -29,7 +26,7 @@ export function createAiComputeStore() {
     function schedule() {
         clearTimeout(timer)
         timer = undefined
-        if (changing(report.value) && !events?.connected.value) {
+        if (isMeasuring(report.value) && !events?.connected.value) {
             timer = setTimeout(refresh, AI_COMPUTE_POLL_MS)
         }
     }
@@ -85,7 +82,7 @@ export function createAiComputeStore() {
         resyncOn(stream, (sync) => (sync.first ? loadIfMissing() : refresh()))
         watch(stream.connected, schedule)
         watch(() => settings.value?.denoise.ai_compute, (choice, before) => {
-            if (before !== undefined && choice !== before) refresh()
+            if (before !== undefined && choice !== before) void refresh()
         })
     }
 

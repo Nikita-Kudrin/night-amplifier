@@ -18,7 +18,8 @@ export interface WebSocketOptions<Data extends SocketData = SocketData> {
     reconnect?: boolean
     reconnectInterval?: number
     maxReconnectInterval?: number
-    onMessage?: ((event: MessageEvent<Data>) => void) | null
+    /** May return a promise: a rejection is logged, as nobody else awaits it. */
+    onMessage?: ((event: MessageEvent<Data>) => unknown) | null
     onOpen?: (() => void) | null
     onClose?: ((event: SocketClose) => void) | null
     onError?: ((event: Event) => void) | null
@@ -117,7 +118,8 @@ export function useWebSocket<Data extends SocketData = SocketData>(
                 if (event.data === 'pong') {
                     return // Ignore ping responses
                 }
-                onMessage?.(event)
+                const handled: unknown = onMessage?.(event)
+                if (handled instanceof Promise) handled.catch((e: unknown) => console.error('Socket message handler failed:', e))
             }
         } catch (e) {
             error.value = e instanceof Error ? e.message : String(e)

@@ -40,6 +40,21 @@ export default [
         files: ['**/*.test.ts', 'src/test/**', '**/__tests__/**'],
         rules: {'@typescript-eslint/no-explicit-any': 'off'},
     },
+    // Type-aware, production code only: a promise nobody handles is an unhandled rejection
+    // (a fire-and-forget call says so with `void`), and a promise-returning function where a
+    // void one is expected (an event handler, a watcher) is one nobody awaits either.
+    {
+        files: ['src/**/*.{ts,vue}'],
+        ignores: ['src/**/*.test.ts', 'src/test/**', 'src/**/__tests__/**', 'src/testSetup.ts'],
+        languageOptions: {
+            parserOptions: {projectService: true, tsconfigRootDir: import.meta.dirname},
+        },
+        rules: {
+            '@typescript-eslint/no-floating-promises': 'error',
+            '@typescript-eslint/no-misused-promises': 'error',
+            '@typescript-eslint/switch-exhaustiveness-check': ['error', {considerDefaultExhaustiveForUnions: true}],
+        },
+    },
     {
         ignores: ['dist/', 'coverage/', 'node_modules/'],
     },

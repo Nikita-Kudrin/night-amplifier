@@ -56,8 +56,8 @@ aiCompute.connectEvents({stream: eventStream, settings})
 
 // Initialize on mount
 onMounted(() => {
-  initializeState()
-  aiCompute.refresh()
+  void initializeState()
+  void aiCompute.refresh()
 })
 </script>
 

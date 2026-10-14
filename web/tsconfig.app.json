@@ -17,7 +17,8 @@
         "strict": true,
         "verbatimModuleSyntax": true,
         "erasableSyntaxOnly": true,
-        "noFallthroughCasesInSwitch": true
+        "noFallthroughCasesInSwitch": true,
+        "exactOptionalPropertyTypes": true
     },
     // Rejects unknown props, events and components in templates: an undeclared prop once fell
     // through as an inert attribute and dropped the comet lock's help text (D1). A `data-*`

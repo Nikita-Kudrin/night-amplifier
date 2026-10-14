@@ -5,7 +5,7 @@ import AstapStatusSection from './AstapStatusSection.vue'
 import InstallStageIndicator from './ui/InstallStageIndicator.vue'
 import InstallProgressBar from './ui/InstallProgressBar.vue'
 import DatabaseSelector from './ui/DatabaseSelector.vue'
-import type {InstallStage} from './ui/InstallStageIndicator.vue'
+import type {StageRow} from './ui/InstallStageIndicator.vue'
 import { BaseModal, BaseSpinner } from './ui'
 import type {AstapStatus} from '../composables/api.types'
 
@@ -41,7 +41,7 @@ function handleInstalled(installed: AstapStatus | null) {
 
 // Overlay-specific computed
 const stages = computed(() => {
-  const result: InstallStage[] = []
+  const result: StageRow[] = []
 
   if (!status.value?.binary_installed) {
     result.push({

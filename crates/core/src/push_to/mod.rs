@@ -25,8 +25,8 @@ use crate::detection::StarDetector;
 use crate::frame::Frame;
 use async_trait::async_trait;
 
-/// Where an ASTAP install stands. Sent as `stage_id` beside its label (`stage`), so the UI
-/// branches on the id rather than on the label's wording.
+/// Where an ASTAP install stands, sent as `stage_id`: the UI names each stage itself and
+/// branches on the id, never on wording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -48,19 +48,6 @@ pub enum InstallStage {
 }
 
 impl InstallStage {
-    /// Get a human-readable name for this stage
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::DownloadingCli => "Downloading ASTAP CLI",
-            Self::ExtractingCli => "Extracting ASTAP CLI",
-            Self::CliCompleted => "ASTAP CLI Installed",
-            Self::DownloadingDatabase => "Downloading Database",
-            Self::ExtractingDatabase => "Extracting Database",
-            Self::DatabaseCompleted => "Database Installed",
-            Self::CatalogFiles => "Target Catalog",
-        }
-    }
-
     /// Get overall progress percentage for this stage (0-100)
     pub fn base_progress(&self) -> f32 {
         match self {

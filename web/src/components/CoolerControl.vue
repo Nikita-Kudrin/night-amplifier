@@ -57,17 +57,17 @@ const statusBadge = computed(() => {
 function handleCoolerToggle(enabled: boolean) {
   localCoolerEnabled.value = enabled
   const setpoint = enabled && setpointOf(cameraSettings.value) === null ? {target_temp_c: localTargetTemp.value} : {}
-  apply({cooler_enabled: enabled, ...setpoint})
+  void apply({cooler_enabled: enabled, ...setpoint})
 }
 
 function handleTargetChange(value: number) {
   localTargetTemp.value = value
-  apply({target_temp_c: value})
+  void apply({target_temp_c: value})
 }
 
 function handleFastModeToggle(enabled: boolean) {
   localCoolerFastMode.value = enabled
-  apply({cooler_fast_mode: enabled})
+  void apply({cooler_fast_mode: enabled})
 }
 
 /** The camera reports cooler power as 0–100. */

@@ -16,10 +16,10 @@ interface Setup {
     capabilities?: Capabilities
     astap?: {ready: boolean} | Error
     catalog?: {installed: boolean}
-    scroller?: Ref<{scrollTop: number}>
+    scroller?: Ref<{scrollTop: number}> | null
 }
 
-function setup({capabilities = COMMUNITY, astap = {ready: true}, catalog = {installed: true}, scroller}: Setup = {}) {
+function setup({capabilities = COMMUNITY, astap = {ready: true}, catalog = {installed: true}, scroller = null}: Setup = {}) {
     const getAstapStatus = vi.fn(() => (astap instanceof Error ? Promise.reject(astap) : Promise.resolve(astap)))
     const getCatalogStatus = vi.fn(() => Promise.resolve(catalog))
     const tabs = useSidebarTabs({capabilities: ref(capabilities), getAstapStatus, getCatalogStatus, scroller})

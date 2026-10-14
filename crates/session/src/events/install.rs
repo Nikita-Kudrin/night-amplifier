@@ -3,11 +3,7 @@
 
 use super::ServerEvent;
 
-use night_amplifier_core::push_to::{InstallStage, PushToEvent};
-
-fn label(stage: Option<InstallStage>) -> Option<String> {
-    stage.map(|stage| stage.display_name().to_string())
-}
+use night_amplifier_core::push_to::PushToEvent;
 
 impl From<PushToEvent> for ServerEvent {
     fn from(event: PushToEvent) -> Self {
@@ -29,7 +25,6 @@ impl From<PushToEvent> for ServerEvent {
                 bytes_downloaded,
                 total_bytes,
                 percent,
-                stage: label(stage),
                 stage_id: stage,
                 overall_percent,
             },
@@ -41,7 +36,6 @@ impl From<PushToEvent> for ServerEvent {
             } => Self::AstapInstallExtracting {
                 component,
                 progress,
-                stage: label(stage),
                 stage_id: stage,
                 overall_percent,
             },
@@ -51,7 +45,6 @@ impl From<PushToEvent> for ServerEvent {
                 overall_percent,
             } => Self::AstapInstallCompleted {
                 component,
-                stage: label(stage),
                 stage_id: stage,
                 overall_percent,
             },
@@ -82,6 +75,7 @@ impl From<PushToEvent> for ServerEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use night_amplifier_core::push_to::InstallStage;
 
     /// Captured from the `ServerEvent` constructors these events replaced: the wire is
     /// the contract the frontend reads, so the mapping must reproduce it byte for byte.
@@ -111,11 +105,11 @@ mod tests {
                     Some(2000),
                     Some(&InstallStage::DownloadingDatabase),
                 ),
-                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":2000,"percent":25.0,"stage":"Downloading Database","stage_id":"downloading_database","overall_percent":37.5}"#,
+                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":2000,"percent":25.0,"stage_id":"downloading_database","overall_percent":37.5}"#,
             ),
             (
                 PushToEvent::astap_install_progress("D80 Database", 500, None, None),
-                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":null,"percent":null,"stage":null,"stage_id":null,"overall_percent":null}"#,
+                r#"{"type":"astap_install_progress","component":"D80 Database","bytes_downloaded":500,"total_bytes":null,"percent":null,"stage_id":null,"overall_percent":null}"#,
             ),
             (
                 PushToEvent::astap_install_extracting(
@@ -123,11 +117,11 @@ mod tests {
                     40.0,
                     Some(&InstallStage::ExtractingDatabase),
                 ),
-                r#"{"type":"astap_install_extracting","component":"D80 Database","progress":40.0,"stage":"Extracting Database","stage_id":"extracting_database","overall_percent":94.0}"#,
+                r#"{"type":"astap_install_extracting","component":"D80 Database","progress":40.0,"stage_id":"extracting_database","overall_percent":94.0}"#,
             ),
             (
                 PushToEvent::astap_install_completed("ASTAP CLI", Some(&InstallStage::CliCompleted)),
-                r#"{"type":"astap_install_completed","component":"ASTAP CLI","stage":"ASTAP CLI Installed","stage_id":"cli_completed","overall_percent":20.0}"#,
+                r#"{"type":"astap_install_completed","component":"ASTAP CLI","stage_id":"cli_completed","overall_percent":20.0}"#,
             ),
             (
                 PushToEvent::AstapInstallFailed { component: "ASTAP CLI".into(), error: "network".into() },
@@ -142,7 +136,7 @@ mod tests {
                     stage: Some(InstallStage::DownloadingCli),
                     overall_percent: Some(3.5),
                 },
-                r#"{"type":"astap_install_progress","component":"x","bytes_downloaded":1,"total_bytes":4,"percent":25.0,"stage":"Downloading ASTAP CLI","stage_id":"downloading_cli","overall_percent":3.5}"#,
+                r#"{"type":"astap_install_progress","component":"x","bytes_downloaded":1,"total_bytes":4,"percent":25.0,"stage_id":"downloading_cli","overall_percent":3.5}"#,
             ),
             (PushToEvent::CatalogInstallStarting, r#"{"type":"catalog_install_starting"}"#),
             (

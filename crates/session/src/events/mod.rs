@@ -293,9 +293,7 @@ pub enum ServerEvent {
         total_bytes: Option<u64>,
         /// Percentage of current operation (0-100)
         percent: Option<f32>,
-        /// Current installation stage name
-        stage: Option<String>,
-        /// The same stage as an id, which the UI branches on
+        /// Current installation stage, which the UI names and branches on
         stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
@@ -306,9 +304,7 @@ pub enum ServerEvent {
         component: String,
         /// Percentage of extraction (0-100)
         progress: f32,
-        /// Current installation stage name
-        stage: Option<String>,
-        /// The same stage as an id, which the UI branches on
+        /// Current installation stage, which the UI names and branches on
         stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
@@ -317,9 +313,7 @@ pub enum ServerEvent {
     /// ASTAP installation completed successfully
     AstapInstallCompleted {
         component: String,
-        /// Current installation stage name
-        stage: Option<String>,
-        /// The same stage as an id, which the UI branches on
+        /// Current installation stage, which the UI names and branches on
         stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
@@ -654,7 +648,6 @@ mod tests {
             distance_deg: 26.1,
             is_close: false,
             direction_hint: DirectionHint::NorthEast,
-            direction_full: "North-East".into(),
             current_position: None,
             target: None,
             solved_camera: Some("Neptune-C II".into()),

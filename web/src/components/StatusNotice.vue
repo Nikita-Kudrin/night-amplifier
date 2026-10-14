@@ -14,12 +14,12 @@ import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
 withDefaults(defineProps<{
   tone?: StatusTone
   /** Shown unless the `icon` slot replaces it. */
-  icon?: keyof typeof STATUS_ICON_SHAPES
+  icon?: keyof typeof STATUS_ICON_SHAPES | undefined
   text: string
   dismissible?: boolean
 }>(), {
-  tone: 'muted',
   icon: undefined,
+  tone: 'muted',
   dismissible: false,
 })
 

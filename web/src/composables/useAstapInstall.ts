@@ -45,7 +45,7 @@ interface ProgressEnd {
 
 export interface InstallOptions<S> {
     /** The install finished and the status was reloaded; `installing` is false again. */
-    onComplete?: (status: S) => void
+    onComplete?: ((status: S) => void) | undefined
 }
 
 /** The database a fresh install offers: the one sized for most fields of view. */
@@ -91,10 +91,11 @@ export function useInstallSettle<S>(
     const {later} = useTimeouts()
     watch(complete, (done) => {
         if (!done) return
-        later(async () => {
-            await loadStatus()
-            installing.value = false
-            onComplete?.(status.value)
+        later(() => {
+            void loadStatus().then(() => {
+                installing.value = false
+                onComplete?.(status.value)
+            })
         }, INSTALL_SETTLE_MS)
     })
 }
@@ -244,7 +245,7 @@ export function useAstapInstall({onComplete}: InstallOptions<AstapStatus | null>
     )
 
     // Lifecycle
-    tryOnMounted(loadStatus)
+    tryOnMounted(() => void loadStatus())
 
     tryOnScopeDispose(() => {
         eventStream?.clearAstapInstallProgress()

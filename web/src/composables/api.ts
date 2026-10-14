@@ -135,9 +135,9 @@ type Query = Record<string, unknown>
 
 interface RequestOptions {
     method?: string
-    query?: Query
+    query?: Query | undefined
     body?: unknown
-    timeoutMs?: number
+    timeoutMs?: number | undefined
 }
 
 /** The server's answer to a JSON route. */
@@ -152,7 +152,7 @@ function send(
     {method = 'GET', query, body}: Omit<RequestOptions, 'timeoutMs'> = {},
     signal?: AbortSignal
 ): Promise<Response> {
-    const init: RequestInit = {method, cache: 'no-store', signal}
+    const init: RequestInit = {method, cache: 'no-store', signal: signal ?? null}
     if (body !== undefined) {
         init.headers = {'Content-Type': 'application/json'}
         init.body = JSON.stringify(body)
@@ -432,11 +432,6 @@ export async function removeSimulatedCamera(index: number): Promise<SimulatorCon
 // ============================================================================
 // Push-To Navigation
 // ============================================================================
-
-/** Get Push-To status */
-export async function getPushToStatus(): Promise<PushToStatus> {
-    return get('/push-to/status')
-}
 
 /** Search the catalog for objects, at most `limit` of them */
 export async function searchCatalog(query: string, limit = 20): Promise<CatalogEntry[]> {

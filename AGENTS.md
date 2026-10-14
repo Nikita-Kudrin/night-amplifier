@@ -25,8 +25,9 @@ SOLID Principles:
   problem.
 
 - Files over 500 lines: consider refactoring/extracting.
-- Follow standard Rust conventions for backend; the frontend is strict TypeScript (`plans/TYPESCRIPT_PLAN.md`):
-  no `.js` in `web/src`, relative imports without an extension, no `any`.
+- Follow standard Rust conventions for backend; the frontend is strict TypeScript (`exactOptionalPropertyTypes`,
+  `strictTemplates`, type-aware promise lint): no `.js` in `web/src`, relative imports without an extension, no
+  `any`, and a fire-and-forget promise marked `void` (it must handle its own errors).
 - Write tests for new or changed functionality.
 - Don't write obvious comments — code should be self-describing; comment only non-obvious behavior.
 - Keep comments, doc comments, and prose summaries (module docs, AGENTS.md sections) to 5-10 lines per point: state
@@ -119,8 +120,9 @@ UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types # regenerat
 space); Pro runs them from its Community checkout (branch of the same name, else `main`), so a change to one lands
 in Community first. Pro's own `checkout-siblings` does that checkout; step timeouts stay at the call site.
 
-Frontend commands (install/dev/build/typecheck/lint/test) run from `web/` — see README. **Never `npm run format`**
-(rewrites the whole tree). Always run `cargo test` after changes, `npm run test:run` and `npm run typecheck` too.
+Frontend commands (install/dev/build/typecheck/lint/test) run from `web/` — see README. There is no formatter:
+format by hand as the surrounding file does (Prettier was removed — no config reproduced the code, it rewrote 193
+of 262 files and the generated ones). Always run `cargo test` after changes, `npm run test:run` and `npm run typecheck` too.
 A frontend test that reaches `fetch` unmocked fails (`src/testSetup.ts`) even where the code swallows the error:
 happy-dom sends `/api/...` to `localhost:3000`, so one sent 40 real requests a run that anything on that port would
 have answered mid-test.
@@ -168,8 +170,10 @@ Sticky topics need an end: `Installs` runs one install per kind (409 `InstallInP
 failed the first), and a page that is installing reads a sync's `idle` as interrupted, not done (a restart showed
 "installed"). A recovery give-up stays until a connect into the role or `DELETE /api/cameras/recovery/{role}` — the
 warning's dismiss — since a page-only dismissal came back on every sync, all night.
-`api.events.ts` is generated with every event's topic and kind. Every handler table is `satisfies EventHandlers`,
-so a handler for an event the server never sends, or a field it does not carry, does not compile;
+`api.events.ts` is generated with every event's topic and kind; an event that flattens an enum
+(`*_install_status`) is a union of its branches. Every handler table is `satisfies EventHandlers`, so a handler for
+an event the server never sends, or a field it does not carry, does not compile; a handler may be async (`dispatch`
+logs a rejection as it logs a throw, as `useWebSocket` does for `onMessage`);
 `useEventStream.catalogue.test.ts` fails a state event no table handles (type-level, and once wired) and a refetch
 topic not re-read on sync.
 **Eyepiece sockets follow the operator**: `/ws/stream?source=` is fixed per socket (`/`), but both eyepiece sockets
@@ -197,7 +201,7 @@ GET (it was a POST and 2-3 GETs). A refresh asked during a request reads once mo
 start/stop, installs, snapshot): one hung POST held every settings refresh behind it. Stores are `createX()` + a module default + `__resetForTests()`; a composable's
 lifecycle hooks go through `lifecycle.ts` (`tryOn*`), which a bare call or a module store skips. Polling only while
 the socket is down: AI compute follows `ai_compute_changed` and the saved choice, a failed first load retries on sync.
-**`api.types.ts`, `api.settings.ts` and `api.events.ts` are generated** from the Rust wire types, the code that clamps settings and `ServerEvent::examples()`
+**`api.types.ts`, `api.settings.ts`, `api.events.ts` (and the tests' `src/test/api.examples.ts`) are generated** from the Rust wire types, the code that clamps settings and `ServerEvent::examples()`
 (`tests/api_types.rs`, feature `api-schema`, which derives `schemars::JsonSchema` only in that build); CI fails a
 stale one. `DEFAULT_SETTINGS` *is* the server's default, and a control's range comes from `serverLimits(path, ui)`,
 which may narrow but never widen it (`constants/serverSettings.test.ts`), and takes only a path the server clamps
@@ -237,11 +241,13 @@ splitting), FOV (`2·atan`, as Pro's solver) and view geometry live in `utils/`.
 `:root` (colour, type scale, radii, z-order, shadows) and its shared classes; `src/styles.test.ts` fails an undefined,
 self-referencing or fallback `var()` and any colour literal outside `:root` (an undefined `--danger` once blanked nine
 components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
-`createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
+`createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts` and
+complete (its fields over the event's required ones, a nullable one `null`: a handler reads them without a fallback),
+`settings(overrides)` (a partial group over its default; the panel's `settingsMirror` is a plain copy), `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
 browser hands them out); tests sit beside their source (`X.test.ts`, `X.<aspect>.test.ts`). Wire enums the UI
 spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to its `*_VALUES`. A wire value the UI compares
-against is a Rust enum, never a `String` (`DirectionHint`, `CaptureStatus.state`); an install event's `stage` is
-copy, and the UI branches on its `stage_id`.
+against is a Rust enum, never a `String` (`DirectionHint`, `CaptureStatus.state`, an install event's `stage_id`);
+the server sends no display text the UI does not show.
 
 ## Camera Notes
 

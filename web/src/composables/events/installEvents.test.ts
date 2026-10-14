@@ -1,11 +1,12 @@
 import {createInstallEvents, INSTALL_INTERRUPTED} from './installEvents'
 import {sendTo} from '../../test/eventStream'
-import type {EventOf, ServerEventType} from '../api.events'
+import type {ServerEventType} from '../api.events'
+import type {Fields} from '../../test/eventStream'
 
 /** An install table, and `send(type, fields)` to hand it an event as the stream would. */
 function installEvents() {
     const {handlers, state} = createInstallEvents()
-    const send = <K extends ServerEventType>(type: K, fields: Partial<Omit<EventOf<K>, 'type'>>) =>
+    const send = <K extends ServerEventType>(type: K, fields: Fields<K>) =>
         sendTo(handlers, type, fields)
     return {state, send}
 }
@@ -18,7 +19,7 @@ describe('createInstallEvents', () => {
             state: 'running',
             progress: {
                 type: 'astap_install_progress', component: 'D80 Database', bytes_downloaded: 500,
-                total_bytes: 2000, percent: 25, stage: 'Downloading Database', stage_id: 'downloading_database', overall_percent: 37.5,
+                total_bytes: 2000, percent: 25, stage_id: 'downloading_database', overall_percent: 37.5,
             },
         })
         send('catalog_install_status', {
@@ -80,7 +81,7 @@ describe('createInstallEvents', () => {
     it('marks only a status as ended, never a live event', () => {
         const {send, state} = installEvents()
 
-        send('astap_install_completed', {component: 'D80 Database', stage: 'Database Installed', stage_id: 'database_completed', overall_percent: 100})
+        send('astap_install_completed', {component: 'D80 Database', stage_id: 'database_completed', overall_percent: 100})
         send('catalog_install_completed', {object_count: 13957})
 
         expect(state.astapInstallProgress.value).not.toHaveProperty('ended')

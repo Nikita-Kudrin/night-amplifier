@@ -72,7 +72,7 @@ export function decodeFrame(buffer: ArrayBuffer): DecodedFrame | null {
  *
  * Followed by LZ4-compressed RGB8 pixel data (3 bytes per pixel)
  */
-export function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
+function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
 
     const width = view.getUint32(4, true)
     const height = view.getUint32(8, true)
@@ -118,7 +118,7 @@ export function decodeRgb8Lz4(buffer: ArrayBuffer, view = new DataView(buffer)):
  *
  * Followed by concatenated compressed chunk data
  */
-export function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
+function decodeRgb8Lz4Chunked(buffer: ArrayBuffer, view = new DataView(buffer)): PixelFrame | null {
 
     if (buffer.byteLength < SA09_HEADER_SIZE) return null
 

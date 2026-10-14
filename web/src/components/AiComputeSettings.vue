@@ -68,7 +68,7 @@ function applyAi(value: boolean) {
 
 async function applyCompute(value: AiComputePreference) {
   await props.save('denoise', {...local, ai_compute: value})
-  refresh()
+  void refresh()
 }
 
 /**

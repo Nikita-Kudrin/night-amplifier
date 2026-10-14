@@ -195,7 +195,6 @@ mod tests {
                 distance_deg,
                 is_close,
                 direction_hint: DirectionHint::NorthEast,
-                direction_full: "North-East".into(),
                 current_position: None,
                 target: None,
                 solved_camera: Some("Guide Cam".into()),

@@ -1,4 +1,5 @@
 import {defaultSettings} from '../constants'
+import type {DeepReadonly} from 'vue'
 import type {EyepieceSettings, Settings, UpdateSettingsRequest} from '../composables/api.types'
 
 /**
@@ -53,23 +54,6 @@ export function applyArgs<T extends Partial<Settings>, K extends keyof T & Setti
     return [key, copy(values[key])] as SettingApply
 }
 
-/** What a server may send for `T`, with fields left out or null at any depth. */
-type Lenient<T> = T extends object ? {readonly [K in keyof T]?: Lenient<T[K]> | null} : T
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function mergeOnto<T extends object>(target: T, source: object): T {
-    const fields = target as Record<string, unknown>
-    for (const [key, value] of Object.entries(source)) {
-        if (value === null || value === undefined) continue
-        const current = fields[key]
-        fields[key] = isPlainObject(value) && isPlainObject(current) ? mergeOnto(current, value) : value
-    }
-    return target
-}
-
 /**
  * A deep copy of a settings value. JSON, since settings are JSON off the wire and arrive
  * as reactive proxies, which `structuredClone` refuses.
@@ -79,12 +63,10 @@ export function copySetting<T>(value: T): T {
 }
 
 /**
- * The settings panel's editable copy of the server's settings: every group merged onto a
- * fresh `defaultSettings()`, so a field an older server leaves out (or sends as null)
- * shows its default, and no edit can reach the server's object or the shared defaults.
+ * The settings panel's editable copy of the server's settings, the defaults before the
+ * first answer: no edit can reach the server's object or the shared defaults.
  */
-export function settingsMirror(server: Lenient<Settings> | null | undefined): Settings {
-    const mirror = defaultSettings()
-    if (!server) return mirror
-    return mergeOnto(mirror, copySetting(server))
+export function settingsMirror(server: DeepReadonly<Settings> | null | undefined): Settings {
+    // A deep copy, so nothing of it is read-only any more.
+    return server ? copySetting(server as Settings) : defaultSettings()
 }

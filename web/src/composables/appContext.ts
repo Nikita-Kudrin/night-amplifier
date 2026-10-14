@@ -20,26 +20,26 @@ import type {EventStream} from './useEventStream'
  */
 const key = (name: string) => Symbol.for(`night-amplifier:${name}`)
 
-export const SETTINGS: InjectionKey<AppState['settings']> = key('settings')
-export const CAMERAS: InjectionKey<AppState['cameras']> = key('cameras')
-export const SELECTED_CAMERA: InjectionKey<Ref<string | null>> = key('selectedCamera')
-export const EVENT_STREAM: InjectionKey<EventStream> = key('eventStream')
-export const SIMULATOR_ENABLED: InjectionKey<Ref<boolean>> = key('simulatorEnabled')
-export const REFRESH_SETTINGS: InjectionKey<AppState['refreshSettings']> = key('refreshSettings')
-export const APPLY_SETTINGS: InjectionKey<AppState['applySettings']> = key('applySettings')
-export const REFRESH_CAMERAS: InjectionKey<AppState['refreshCameras']> = key('refreshCameras')
-export const CAPABILITIES: InjectionKey<AppState['capabilities']> = key('capabilities')
-export const CAMERA_STATUS: InjectionKey<AppState['cameraStatus']> = key('cameraStatus')
-export const CAMERA_PHASE: InjectionKey<AppState['cameraPhase']> = key('cameraPhase')
-export const WARMUP_ENDS_AT: InjectionKey<AppState['warmupEndsAt']> = key('warmupEndsAt')
-export const MAIN_CAMERA: InjectionKey<Readonly<Ref<AppState['mainCamera']['value']>>> = key('mainCamera')
-export const GUIDE_CAMERA: InjectionKey<Readonly<Ref<AppState['guideCamera']['value']>>> = key('guideCamera')
-export const HAS_GUIDE_CAMERA: InjectionKey<Readonly<Ref<boolean>>> = key('hasGuideCamera')
-export const SELECTED_CAMERA_ROLE: InjectionKey<Readonly<Ref<AppState['selectedCameraRole']['value']>>> =
+const SETTINGS: InjectionKey<AppState['settings']> = key('settings')
+const CAMERAS: InjectionKey<AppState['cameras']> = key('cameras')
+const SELECTED_CAMERA: InjectionKey<Ref<string | null>> = key('selectedCamera')
+const EVENT_STREAM: InjectionKey<EventStream> = key('eventStream')
+const SIMULATOR_ENABLED: InjectionKey<Ref<boolean>> = key('simulatorEnabled')
+const REFRESH_SETTINGS: InjectionKey<AppState['refreshSettings']> = key('refreshSettings')
+const APPLY_SETTINGS: InjectionKey<AppState['applySettings']> = key('applySettings')
+const REFRESH_CAMERAS: InjectionKey<AppState['refreshCameras']> = key('refreshCameras')
+const CAPABILITIES: InjectionKey<AppState['capabilities']> = key('capabilities')
+const CAMERA_STATUS: InjectionKey<AppState['cameraStatus']> = key('cameraStatus')
+const CAMERA_PHASE: InjectionKey<AppState['cameraPhase']> = key('cameraPhase')
+const WARMUP_ENDS_AT: InjectionKey<AppState['warmupEndsAt']> = key('warmupEndsAt')
+const MAIN_CAMERA: InjectionKey<Readonly<Ref<AppState['mainCamera']['value']>>> = key('mainCamera')
+const GUIDE_CAMERA: InjectionKey<Readonly<Ref<AppState['guideCamera']['value']>>> = key('guideCamera')
+const HAS_GUIDE_CAMERA: InjectionKey<Readonly<Ref<boolean>>> = key('hasGuideCamera')
+const SELECTED_CAMERA_ROLE: InjectionKey<Readonly<Ref<AppState['selectedCameraRole']['value']>>> =
     key('selectedCameraRole')
 
-/** Every key, by the name it is provided under: `provideAppContext` and the tests (`test/mount.ts`) provide by it. */
-export const APP_CONTEXT = {
+/** Every key, by the name it is provided under: `provideAppContext` and the tests (`contextProvides`) provide by it. */
+const APP_CONTEXT = {
     settings: SETTINGS,
     cameras: CAMERAS,
     selectedCamera: SELECTED_CAMERA,

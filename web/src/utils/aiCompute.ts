@@ -48,7 +48,7 @@ export function isReady(report: Report): report is AiComputeReport {
 }
 
 /** Still looking: not an answer yet, unlike `unavailable` (no Pro, no licence), which never becomes one. */
-function checking(report: Report): boolean {
+export function isMeasuring(report: Report): boolean {
     return report?.state === 'checking' || report?.state === 'benchmarking'
 }
 
@@ -56,7 +56,7 @@ export function aiComputeOptions(report: Report): AiComputeOption[] {
     const ready = isReady(report)
     const auto = ready && report.auto
         ? `Auto — ${rungLabel(report.auto)}${timing(rungReport(report, report.auto))}`
-        : checking(report) ? 'Auto (checking hardware…)' : 'Auto'
+        : isMeasuring(report) ? 'Auto (checking hardware…)' : 'Auto'
     const rungs = AI_COMPUTE_RUNGS.map(({value, label}): AiComputeOption => {
         if (!ready) return {value, label, disabled: false, reason: null}
         const rung = rungReport(report, value)

@@ -14,17 +14,15 @@ import {
 
 setupGlobalWebSocketMock()
 
-// A sync once read the Push-To status; mocked, a regression is a call rather than a real fetch.
 vi.mock('../api', async (importOriginal) =>
     (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
-import {getPushToStatus} from '../api'
 import {useEventStream as originalUseEventStream} from '../useEventStream'
 import type {EventStream, Sync} from '../useEventStream'
-import type {EventOf, ServerEventType} from '../api.events'
 import {catalogEntry} from '../../test/fixtures'
 import {serverEvent} from '../../test/eventStream'
-import {mount} from '@vue/test-utils'
+import type {Fields} from '../../test/eventStream'
+import {flushPromises, mount} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 
 let currentApp: VueWrapper | null = null
@@ -39,7 +37,6 @@ function useEventStream(): EventStream {
     return result!
 }
 
-type Fields<K extends ServerEventType> = Partial<Omit<EventOf<K>, 'type'>>
 
 describe('useEventStream', () => {
     beforeEach(createTestContext)
@@ -272,6 +269,23 @@ describe('useEventStream', () => {
 
             consoleSpy.mockRestore()
         })
+
+        // `null`, a number or an object without a `type` is JSON, not an event: it reaches no
+        // handler, and the stream goes on.
+        it('drops JSON that is not an event', async () => {
+            const stream = useEventStream()
+            const consoleSpy = suppressConsoleErrors()
+
+            await openWebSocket()
+            for (const text of ['null', '42', '"synced"', '{"state":"Capturing"}']) {
+                expect(() => getWebSocket().simulateMessage(text)).not.toThrow()
+            }
+            await sendEvent({type: 'state_changed', state: 'Capturing'})
+
+            expect(stream.captureState.value).toBe('Capturing')
+            expect(consoleSpy).not.toHaveBeenCalled()
+            consoleSpy.mockRestore()
+        })
     })
 
     describe('disk and drop counters', () => {
@@ -352,6 +366,24 @@ describe('useEventStream', () => {
 
             expect(seen).toEqual(['Capturing'])
             expect(consoleSpy).toHaveBeenCalled()
+            consoleSpy.mockRestore()
+        })
+
+        it('logs a handler whose promise rejects, as one that throws', async () => {
+            const {on, captureState} = useEventStream()
+            const seen: string[] = []
+            const consoleSpy = suppressConsoleErrors()
+            on('state_changed', async () => {
+                throw new Error('async subscriber')
+            })
+            on('state_changed', () => seen.push(captureState.value))
+
+            await openWebSocket()
+            await sendEvent({type: 'state_changed', state: 'Capturing'})
+            await flushPromises()
+
+            expect(seen).toEqual(['Capturing'])
+            expect(consoleSpy).toHaveBeenCalledWith('Handler for state_changed failed:', expect.objectContaining({message: 'async subscriber'}))
             consoleSpy.mockRestore()
         })
 
@@ -439,7 +471,7 @@ describe('useEventStream', () => {
                     bytes_downloaded: 52428800,
                     total_bytes: 1261887242,
                     percent: 4.15,
-                    stage: 'Downloading Database', stage_id: 'downloading_database',
+                    stage_id: 'downloading_database',
                     overall_percent: 52.08,
                 }),
                 expected: {
@@ -457,7 +489,7 @@ describe('useEventStream', () => {
                 event: serverEvent('astap_install_extracting', {
                     component: 'D80 Database',
                     progress: 45.5,
-                    stage: 'Extracting Database', stage_id: 'extracting_database',
+                    stage_id: 'extracting_database',
                     overall_percent: 72.75,
                 }),
                 expected: {
@@ -472,7 +504,7 @@ describe('useEventStream', () => {
                 name: 'astap_install_completed',
                 event: serverEvent('astap_install_completed', {
                     component: 'D80 Database',
-                    stage: 'Database Installed', stage_id: 'database_completed',
+                    stage_id: 'database_completed',
                     overall_percent: 100,
                 }),
                 expected: {
@@ -640,17 +672,6 @@ describe('useEventStream', () => {
             await sendEvent({type: 'push_direction_cleared'})
 
             expect(pushDirection.value).toBeNull()
-        })
-
-        it('reads no Push-To status on a sync: the snapshot carries it', async () => {
-            vi.mocked(getPushToStatus).mockClear()
-            useEventStream()
-
-            await openWebSocket()
-            await syncWebSocket()
-            await syncWebSocket({cause: 'lagged', dropped: 144})
-
-            expect(getPushToStatus).not.toHaveBeenCalled()
         })
     })
 

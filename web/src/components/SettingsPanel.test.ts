@@ -7,7 +7,7 @@ import BaseToggle from './ui/BaseToggle.vue'
 import {DEFAULT_SETTINGS} from '../constants'
 import {capabilities, settings as settingsFixture} from '../test/fixtures'
 import {createDefaultSettings, findSliderByLabel, findToggleByLabel, mountSettingsPanel} from '../test/settingsPanel'
-import type {SettingsOverrides} from '../test/settingsPanel'
+import type {SettingsOverrides} from '../test/fixtures'
 import type {SectionValues, SettingApply, SettingKey} from '../utils/settings'
 import type * as Api from '../composables/api'
 import type {EyepieceSettings, Settings, StackingType, UpdateSettingsRequest} from '../composables/api.types'
@@ -441,7 +441,7 @@ describe('SettingsPanel', () => {
             await wandererToggle.trigger('change')
             await flushPromises()
 
-            // A switch the server left out goes back as its default, never as missing.
+            // The modes the user did not touch go back as the server holds them.
             expect(updateSettings).toHaveBeenCalledWith({
                 raw_frame_saving: {live_view: false, wanderer: true, stacking: true, guide: false},
             })

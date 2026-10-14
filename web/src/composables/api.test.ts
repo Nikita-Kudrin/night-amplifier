@@ -61,7 +61,6 @@ const CALLS: Call[] = [
     call('configureSimulator', ['/data/subs'], '/api/simulator/configure', 'POST', {directory: '/data/subs'}),
     call('getSimulatorConfig', [], '/api/simulator/config', 'GET'),
     call('removeSimulatedCamera', [2], '/api/simulator/2', 'DELETE'),
-    call('getPushToStatus', [], '/api/push-to/status', 'GET'),
     call('searchCatalog', ['M 42 & co'], '/api/push-to/catalog/search?query=M+42+%26+co&limit=20', 'GET'),
     call('searchCatalog', ['M31', 5], '/api/push-to/catalog/search?query=M31&limit=5', 'GET'),
     call('setTargetByName', ['M31'], '/api/push-to/target', 'POST', {name: 'M31'}),
@@ -124,7 +123,7 @@ describe('API Client', () => {
         it('rejects with the server message and status', async () => {
             fetchMock.mockResolvedValue(refusal('Push-To requires Night Amplifier Pro', 403))
 
-            const error = await apiError(api.getPushToStatus())
+            const error = await apiError(api.getAstapStatus())
 
             expect(error.message).toBe('Push-To requires Night Amplifier Pro')
             expect(error.status).toBe(403)

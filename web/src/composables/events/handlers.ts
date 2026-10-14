@@ -1,13 +1,19 @@
 import type {EventOf, ServerEvent, ServerEventType} from '../api.events'
 
 /**
+ * One event's handler. It may return a promise: the stream logs a rejection as it logs a
+ * throw (`useEventStream`'s `dispatch`).
+ */
+export type EventHandler<E> = (event: E) => unknown
+
+/**
  * A `{type: handler}` table, each handler taking its own event: a field the event does not
  * carry, or a type the server never sends, does not compile. Every domain and store table
  * is one (`… satisfies EventHandlers`).
  */
-export type EventHandlers = {[K in ServerEventType]?: (event: EventOf<K>) => void}
+export type EventHandlers = {[K in ServerEventType]?: EventHandler<EventOf<K>>}
 
-type AnyHandler = (event: ServerEvent) => void
+type AnyHandler = EventHandler<ServerEvent>
 
 /**
  * `table`'s handler for `type`, as one taking any event. The cast is TypeScript's

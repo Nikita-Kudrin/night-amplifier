@@ -217,7 +217,7 @@ export function createCameraStore({loading = () => false}: {loading?: () => bool
         camera_connected: () => refreshQuietly(),
         camera_disconnected(event) {
             updateCameraPhase(event.name, CAMERA_PHASES.DISCONNECTED)
-            refreshQuietly()
+            void refreshQuietly()
         },
         camera_discovered(event) {
             addDiscoveredCamera(event.camera)

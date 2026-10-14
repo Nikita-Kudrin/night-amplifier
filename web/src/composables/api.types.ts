@@ -113,14 +113,14 @@ export interface Settings {
     /** Telescope and camera parameters for FOV calculation */
     telescope: TelescopeSettings
     /** Per-camera telescope profiles keyed by camera name */
-    camera_telescope_profiles?: Record<string, TelescopeSettings>
+    camera_telescope_profiles?: Partial<Record<string, TelescopeSettings>>
     /**
      * Per-camera capture profiles keyed by `"{provider}/{model_name}"`.
      * Holds the seven hardware-specific fields so switching between cameras
      * doesn't leak stale values (e.g. cooler=true from a cooled camera into
      * an uncooled one).
      */
-    camera_profiles?: Record<string, CameraCaptureProfile>
+    camera_profiles?: Partial<Record<string, CameraCaptureProfile>>
     /**
      * The guide camera's live hardware values.
      *
@@ -576,8 +576,8 @@ export interface DenoiseSettings {
 }
 
 /**
- * A push direction's compass label, in the celestial frame. Pro's own direction type
- * maps onto it; the wire spells it `N`…`NW`, and `OK` when on target.
+ * A push direction's compass label, in the celestial frame; the wire spells it `N`…`NW`,
+ * and `OK` when on target.
  */
 export const DIRECTION_HINT_VALUES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'OK'] as const
 export type DirectionHint = (typeof DIRECTION_HINT_VALUES)[number]
@@ -689,8 +689,6 @@ export interface PushToStatusDirection {
     is_close: boolean
     /** Which way to push, in the celestial frame; `OK` once on target. */
     direction_hint: DirectionHint
-    /** Full direction description */
-    direction_full: string
     /** Current position (if solved) */
     current_position: Coordinate | null
     /** Target position */
@@ -918,19 +916,19 @@ export interface UpdateSettingsRequest {
     eyepiece?: EyepieceSettingsInput | null
     telescope?: TelescopeSettingsInput | null
     /** Per-camera telescope profiles keyed by camera name, upserted: one left out is kept */
-    camera_telescope_profiles?: Record<string, TelescopeSettingsInput> | null
+    camera_telescope_profiles?: Partial<Record<string, TelescopeSettingsInput>> | null
     /**
      * Per-camera capture profiles (mainly for tests to seed the map without
      * going through a camera connect).
      */
-    camera_profiles?: Record<string, CameraCaptureProfileInput> | null
+    camera_profiles?: Partial<Record<string, CameraCaptureProfileInput>> | null
     /** Name of the last active camera */
     last_camera_name?: string | null
     /** Whether the cooler should be active during capture */
     cooler_enabled?: boolean | null
     /**
-     * Target sensor temperature in Celsius. Use `Some(None)` is not possible via JSON;
-     * pass `null` to clear by sending `target_temp_c_clear` instead.
+     * Target sensor temperature in Celsius. Absent or `null` leaves the setpoint as it
+     * is: a request cannot clear one.
      */
     target_temp_c?: number | null
     /** Bypass the 5 °C/min cool/warm ramp (advanced users only) */

@@ -10,7 +10,7 @@ use night_amplifier::session::events::{ServerEvent, Topic, TopicKind};
 use schemars::generate::SchemaSettings;
 use serde_json::{json, Map, Value};
 
-use super::{declaration, js_name, snake, strings, type_definitions};
+use super::{declaration, doc_comment, js_name, members, snake, strings, type_definitions};
 
 const HEADER: &str = "\
 /**
@@ -77,17 +77,50 @@ fn fields(schema: &Value, definitions: &Map<String, Value>) -> (Map<String, Valu
     (properties, required)
 }
 
-/// The variant's schema as one flat object, `type` first.
-fn flat_variant(variant: &Value, definitions: &Map<String, Value>) -> Value {
-    let (mut properties, required) = fields(variant, definitions);
+/// `type` first, the rest in declaration order.
+fn type_first(mut properties: Map<String, Value>) -> Map<String, Value> {
     let mut ordered = Map::new();
     ordered.insert("type".into(), properties.shift_remove("type").expect("a tagged variant"));
     ordered.extend(properties);
+    ordered
+}
+
+/// The variant's schema as one flat object, `type` first.
+fn flat_variant(variant: &Value, definitions: &Map<String, Value>) -> Value {
+    let (properties, required) = fields(variant, definitions);
+    let ordered = type_first(properties);
     let mut flat = json!({ "type": "object", "properties": ordered, "required": required });
     if let Some(description) = variant.get("description") {
         flat["description"] = description.clone();
     }
     flat
+}
+
+/// The branches of the enum a variant flattens (`AstapInstallStatus`'s `InstallStatus`), if any.
+fn branches(variant: &Value) -> Option<&Vec<Value>> {
+    variant.get("oneOf").and_then(Value::as_array)
+}
+
+/// A variant that flattens an enum, as its own fields and a union of the enum's branches, so a
+/// field only some branches carry (`error` of `failed`) is typed by the branch that sends it.
+fn union_declaration(name: &str, variant: &Value, definitions: &Map<String, Value>, roots: &[super::Root]) -> String {
+    let mut common = variant.clone();
+    let branches = common.as_object_mut().unwrap().remove("oneOf").expect("a flattened enum");
+    let (properties, required) = fields(&common, definitions);
+    let mut out = doc_comment(variant, "");
+    out.push_str(&format!("export type {name} = {{\n"));
+    out.push_str(&members(&type_first(properties), &required, roots, "    "));
+    out.push_str("} & (\n");
+    for branch in branches.as_array().unwrap() {
+        let (properties, required) = fields(branch, definitions);
+        // The discriminant first: `state: 'failed'`, then what that state carries.
+        let (mut properties, rest): (Map<String, Value>, Map<String, Value>) =
+            properties.into_iter().partition(|(_, property)| property.get("const").is_some());
+        properties.extend(rest);
+        out.push_str(&format!("    | {{\n{}    }}\n", members(&properties, &required, roots, "        ")));
+    }
+    out.push_str(")\n");
+    out
 }
 
 fn tag_of(variant: &Value) -> String {
@@ -125,11 +158,16 @@ fn assert_described(tag: &str, wire: &Value, flat: &Value) {
     assert!(required.is_subset(&keys), "{tag}: lacks required {:?}", &required - &keys);
 }
 
-pub fn generate() -> String {
-    let (roots, type_definitions) = type_definitions();
+/// `ServerEvent`'s definitions by Rust name, its own (whose `oneOf` is the variants) among them.
+fn event_definitions() -> Map<String, Value> {
     let mut generator = SchemaSettings::draft2020_12().for_serialize().into_generator();
     generator.subschema_for::<ServerEvent>();
-    let definitions = generator.take_definitions(true);
+    generator.take_definitions(true)
+}
+
+pub fn generate() -> String {
+    let (roots, type_definitions) = type_definitions();
+    let definitions = event_definitions();
     let variants = definitions["ServerEvent"]["oneOf"].as_array().expect("a tagged enum");
 
     let examples = classified();
@@ -153,7 +191,10 @@ pub fn generate() -> String {
         references(&flat, &mut named);
         let name = format!("{}Event", pascal(&tag));
         body.push('\n');
-        body.push_str(&declaration(&name, &flat, &roots));
+        body.push_str(&match branches(variant) {
+            Some(_) => union_declaration(&name, variant, &definitions, &roots),
+            None => declaration(&name, &flat, &roots),
+        });
         names.push(name);
     }
     body.push_str("\n/** Any event `/ws/events` sends. */\nexport type ServerEvent =\n");
@@ -213,6 +254,127 @@ pub fn generate() -> String {
     }
     out.push_str("} as const satisfies Record<string, 'value' | 'refetch'>\n\nexport type Topic = keyof typeof TOPICS\n");
     out
+}
+
+const EXAMPLES_HEADER: &str = "\
+/**
+ * One event of each type, generated from `ServerEvent::examples()` by `tests/api_types.rs`, for
+ * tests only. Do not edit: change the Rust, then run
+ *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
+ */
+";
+
+/// Whether `schema` lets a value be `null`.
+fn admits_null(schema: &Value, definitions: &Map<String, Value>) -> bool {
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        return admits_null(&definitions[reference.rsplit('/').next().unwrap()], definitions);
+    }
+    let null_type = match schema.get("type") {
+        Some(Value::String(t)) => t == "null",
+        Some(Value::Array(types)) => types.iter().any(|t| t == "null"),
+        _ => false,
+    };
+    null_type
+        || schema.get("const").is_some_and(Value::is_null)
+        || ["anyOf", "oneOf"].iter().any(|union| {
+            schema.get(union).and_then(Value::as_array).is_some_and(|v| v.iter().any(|s| admits_null(s, definitions)))
+        })
+}
+
+/// The branch of a flattened enum `wire` was sent as: the one whose constants it carries.
+fn branch_of<'a>(variant: &'a Value, wire: &Value, definitions: &Map<String, Value>) -> Option<(Map<String, Value>, BTreeSet<String>)> {
+    branches(variant)?.iter().map(|branch| fields(branch, definitions)).find(|(properties, _)| {
+        properties.iter().all(|(name, property)| property.get("const").is_none_or(|c| wire.get(name) == Some(c)))
+    })
+}
+
+/// `wire` cut to the fields its event (and branch) requires, a nullable one `null` and a list
+/// empty: a complete event that says nothing a test did not ask for.
+fn minimal(variant: &Value, wire: &Value, definitions: &Map<String, Value>) -> Value {
+    let (mut properties, mut required) = fields(variant, definitions);
+    if let Some((branch, branch_required)) = branch_of(variant, wire, definitions) {
+        properties.extend(branch);
+        required.extend(branch_required);
+    }
+    let mut out = Map::new();
+    for (name, value) in wire.as_object().unwrap() {
+        if !required.contains(name) {
+            continue;
+        }
+        let neutral = if name != "type" && admits_null(&properties[name], definitions) {
+            Value::Null
+        } else if value.is_array() {
+            json!([])
+        } else {
+            value.clone()
+        };
+        out.insert(name.clone(), neutral);
+    }
+    Value::Object(out)
+}
+
+/// `web/src/test/api.examples.ts`: what the frontend's `serverEvent(type, fields)` starts from.
+pub fn generate_examples() -> String {
+    let definitions = event_definitions();
+    let variants = definitions["ServerEvent"]["oneOf"].as_array().expect("a tagged enum");
+    let examples = classified();
+    let mut out = String::from(EXAMPLES_HEADER);
+    out.push_str(
+        "\nimport type {EventOf, ServerEventType} from '../composables/api.events'\n\n\
+         /**\n \
+         * Each event with only the fields it requires, a nullable one `null`: complete, yet saying\n \
+         * nothing a test did not ask for.\n \
+         */\n\
+         export const SERVER_EVENT_EXAMPLES: {readonly [K in ServerEventType]: EventOf<K>} = {\n",
+    );
+    for variant in variants {
+        let tag = tag_of(variant);
+        let event = minimal(variant, &examples[&tag]["wire"], &definitions);
+        out.push_str(&format!("    {tag}: {},\n", serde_json::to_string(&event).unwrap()));
+    }
+    out.push_str("}\n");
+    out
+}
+
+#[test]
+fn a_minimal_example_keeps_required_fields_and_nulls_the_nullable_ones() {
+    let variant = json!({
+        "properties": {
+            "type": { "const": "thing" },
+            "name": { "type": "string" },
+            "reason": { "type": ["string", "null"] },
+            "note": { "type": "string" },
+            "items": { "type": "array" },
+        },
+        "required": ["type", "name", "reason", "items"],
+        "oneOf": [
+            { "properties": { "state": { "const": "idle" } }, "required": ["state"] },
+            { "properties": { "state": { "const": "failed" }, "error": { "type": "string" } }, "required": ["state", "error"] },
+        ],
+    });
+    let wire = json!({ "type": "thing", "name": "A", "reason": "why", "note": "n", "items": [1], "state": "failed", "error": "e" });
+    assert_eq!(
+        minimal(&variant, &wire, &Map::new()),
+        json!({ "type": "thing", "name": "A", "reason": null, "items": [], "state": "failed", "error": "e" })
+    );
+}
+
+#[test]
+fn a_flattened_enum_is_a_union_of_its_branches_discriminant_first() {
+    let variant = json!({
+        "description": "Where it stands.",
+        "properties": { "type": { "const": "thing_status" } },
+        "required": ["type"],
+        "oneOf": [
+            { "properties": { "state": { "const": "idle" } }, "required": ["state"] },
+            { "properties": { "error": { "type": "string" }, "state": { "const": "failed" } }, "required": ["state", "error"] },
+        ],
+    });
+    assert_eq!(
+        union_declaration("ThingStatusEvent", &variant, &Map::new(), &[]),
+        "/** Where it stands. */\nexport type ThingStatusEvent = {\n    type: 'thing_status'\n} & (\n    | {\n        \
+         state: 'idle'\n    }\n    | {\n        state: 'failed'\n        error: string\n    }\n)\n"
+    );
 }
 
 #[test]

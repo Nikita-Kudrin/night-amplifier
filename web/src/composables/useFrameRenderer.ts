@@ -145,7 +145,7 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
     function show(frame: FrameData | null) {
         if (frame instanceof Blob) {
             pendingJpeg = frame
-            if (!decoding) decodeLatest()
+            if (!decoding) decodeLatest().catch((e: unknown) => console.error('[FrameRenderer] Drawing a frame failed:', e))
             return
         }
         generation++

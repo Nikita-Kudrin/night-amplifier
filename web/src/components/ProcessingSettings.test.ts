@@ -2,16 +2,17 @@ import {mount} from '@vue/test-utils'
 import type {ComponentMountingOptions, VueWrapper} from '@vue/test-utils'
 import {nextTick} from 'vue'
 import ProcessingSettings from './ProcessingSettings.vue'
-import {settingsMirror} from '../utils/settings'
+import {settings} from '../test/fixtures'
+import type {SettingsOverrides} from '../test/fixtures'
 import type {SettingApply} from '../utils/settings'
 import {findSliderByLabel as slider, findToggleByLabel} from '../test/settingsPanel'
 import {HELP_TEXTS} from '../constants'
 
 type Props = ComponentMountingOptions<typeof ProcessingSettings>['props']
 
-function mountSection(props: Partial<Props> = {}, server: Parameters<typeof settingsMirror>[0] = {}) {
+function mountSection(props: Partial<Props> = {}, server: SettingsOverrides = {}) {
     return mount(ProcessingSettings, {
-        props: {settings: settingsMirror(server), rbfBackgroundAvailable: true, saturationBoostAvailable: true, ...props},
+        props: {settings: settings(server), rbfBackgroundAvailable: true, saturationBoostAvailable: true, ...props},
         global: {stubs: {BaseProLock: true}},
     })
 }
@@ -52,19 +53,19 @@ describe('ProcessingSettings', () => {
     it('follows a tone edit made elsewhere', async () => {
         const wrapper = mountSection({}, {eyepiece: {black_floor: 0.02}})
 
-        await wrapper.setProps({settings: settingsMirror({eyepiece: {black_floor: -0.03}})})
+        await wrapper.setProps({settings: settings({eyepiece: {black_floor: -0.03}})})
 
         expect(slider(wrapper, 'Black floor').props('modelValue')).toBe(-0.03)
     })
 
     it('keeps its edits off the panel\'s copy until it emits them', async () => {
-        const settings = settingsMirror({})
-        const wrapper = mountSection({settings})
+        const mirror = settings()
+        const wrapper = mountSection({settings: mirror})
 
         slider(wrapper, 'Black level').vm.$emit('update:modelValue', 0.9)
         await nextTick()
 
-        expect(settings.eyepiece.intensity).not.toBe(0.9)
+        expect(mirror.eyepiece.intensity).not.toBe(0.9)
     })
 
     it('locks the RBF algorithm without the capability', () => {

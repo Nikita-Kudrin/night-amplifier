@@ -135,8 +135,8 @@ pub struct UpdateSettingsRequest {
     /// Whether the cooler should be active during capture
     #[serde(default)]
     pub cooler_enabled: Option<bool>,
-    /// Target sensor temperature in Celsius. Use `Some(None)` is not possible via JSON;
-    /// pass `null` to clear by sending `target_temp_c_clear` instead.
+    /// Target sensor temperature in Celsius. Absent or `null` leaves the setpoint as it
+    /// is: a request cannot clear one.
     #[serde(default)]
     pub target_temp_c: Option<f64>,
     /// Bypass the 5 °C/min cool/warm ramp (advanced users only)

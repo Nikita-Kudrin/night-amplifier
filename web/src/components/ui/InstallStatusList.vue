@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** What an installer has on disk: one row per part, ticked when it is there. */
-export interface InstallStatusItem {
+interface InstallStatusItem {
   label: string
   ok: boolean
 }

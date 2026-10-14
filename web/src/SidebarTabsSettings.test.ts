@@ -248,7 +248,7 @@ describe('Sidebar tabs and the settings round trip', () => {
             await vi.advanceTimersByTimeAsync(1000)
 
             // The server upserts the profiles a save names; any it names must be unchanged.
-            const stored = vi.mocked(updateSettings).mock.calls.reduce<Record<string, TelescopeSettingsInput>>(
+            const stored = vi.mocked(updateSettings).mock.calls.reduce<Partial<Record<string, TelescopeSettingsInput>>>(
                 (profiles, [payload]) => ({...profiles, ...payload.camera_telescope_profiles}),
                 {...settingsRef.value?.camera_telescope_profiles},
             )

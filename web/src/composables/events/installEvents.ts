@@ -135,11 +135,10 @@ export function createInstallEvents() {
     }
 
     /** A `failed` status, or an `idle` one, which can only mean the install was cut short. */
-    function endedFailure(data: AstapInstallStatusEvent | CatalogInstallStatusEvent) {
-        return data.state === 'idle'
-            ? {stage: 'failed', error: INSTALL_INTERRUPTED, ended: true, interrupted: true} as const
-            // The server sends `error` with every `failed`; the generated type flattens the states.
-            : {stage: 'failed', error: data.error ?? '', ended: true} as const
+    function endedFailure(data: Extract<AstapInstallStatusEvent | CatalogInstallStatusEvent, {state: 'idle' | 'failed'}>) {
+        return data.state === 'failed'
+            ? {stage: 'failed', error: data.error, ended: true} as const
+            : {stage: 'failed', error: INSTALL_INTERRUPTED, ended: true, interrupted: true} as const
     }
 
     return {

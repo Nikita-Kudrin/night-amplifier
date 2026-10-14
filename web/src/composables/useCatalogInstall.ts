@@ -108,7 +108,7 @@ export function useCatalogInstall({onComplete}: InstallOptions<CatalogStatus | n
     const installComplete = computed(() => progress.value.stage === 'completed')
     useInstallSettle(installComplete, {loadStatus, installing, status, onComplete})
 
-    tryOnMounted(loadStatus)
+    tryOnMounted(() => void loadStatus())
     tryOnScopeDispose(() => eventStream?.clearCatalogInstallProgress())
 
     return {loading, installing, status, error, progress, canInstall, progressText, installComplete, loadStatus, startInstall}

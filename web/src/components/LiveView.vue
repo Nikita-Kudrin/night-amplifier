@@ -215,7 +215,7 @@ function handleMouseMove(e: MouseEvent) {
 function handleMouseUp(e: MouseEvent) {
   handlePressEnd(e)
   if (isSelectingCometRoi.value) {
-    handleRoiMouseUp()
+    void handleRoiMouseUp()
     return
   }
   handlePanMouseUp()

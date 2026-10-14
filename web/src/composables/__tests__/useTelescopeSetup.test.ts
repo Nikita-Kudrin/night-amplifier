@@ -436,7 +436,7 @@ describe('useTelescopeSetup', () => {
 
         /** The profiles the server holds after `payloads`: it upserts the ones each names. */
         function stored(payloads: UpdateSettingsRequest[]) {
-            return payloads.reduce<Record<string, Partial<TelescopeSettings>>>(
+            return payloads.reduce<Partial<Record<string, Partial<TelescopeSettings>>>>(
                 (profiles, payload) => ({...profiles, ...payload.camera_telescope_profiles}),
                 {...settingsRef.value?.camera_telescope_profiles},
             )
