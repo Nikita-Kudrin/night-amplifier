@@ -1,13 +1,13 @@
 import {ref, computed, watch} from 'vue'
 import type {DeepReadonly, Ref} from 'vue'
-import {useApplySettings, useSettings} from './appContext.js'
-import {useDebouncedCall} from './useDebouncedCall.js'
-import {runDirectly} from './useError.js'
-import type {ErrorHandler} from './useError.js'
-import {fieldOfViewDeg} from '../utils/optics.js'
-import {CAMERA_DATABASE} from '../constants/cameras.js'
+import {useApplySettings, useSettings} from './appContext'
+import {useDebouncedCall} from './useDebouncedCall'
+import {runDirectly} from './useError'
+import type {ErrorHandler} from './useError'
+import {fieldOfViewDeg} from '../utils/optics'
+import {CAMERA_DATABASE} from '../constants/cameras'
 import {SETTINGS_DEBOUNCE_MS} from '../constants'
-import type {CameraInfo, Settings, TelescopeSettings, UpdateSettingsRequest} from './api.types.js'
+import type {CameraInfo, Settings, TelescopeSettings, UpdateSettingsRequest} from './api.types'
 
 /** What this reads of the connected camera: its name, pixel pitch and resolution. */
 export type CameraOptics = Pick<CameraInfo, 'name' | 'pixel_size_x_um' | 'pixel_size_y_um' | 'max_width' | 'max_height'>

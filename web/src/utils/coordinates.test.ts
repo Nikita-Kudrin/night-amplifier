@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {formatDec, formatRA, parseCoordinate} from './coordinates.js'
+import {formatDec, formatRA, parseCoordinate} from './coordinates'
 
 describe('parseCoordinate', () => {
     describe('RA parsing - decimal degrees', () => {

@@ -11,11 +11,11 @@ import {
     installResizeObserverStub,
     installScreenOrientationStub,
     removeScreenOrientationStub,
-} from './setup.js'
-import type {Mocks} from './setup.js'
-import {IDLE_HIDE_MS} from '../../../composables/useOverlayVisibility.js'
-import {FIT_SETTLE_MS} from '../../../composables/useAutoFit.js'
-import {catalogEntry, clientDirection} from '../../../test/fixtures.js'
+} from './setup'
+import type {Mocks} from './setup'
+import {IDLE_HIDE_MS} from '../../../composables/useOverlayVisibility'
+import {FIT_SETTLE_MS} from '../../../composables/useAutoFit'
+import {catalogEntry, clientDirection} from '../../../test/fixtures'
 
 /** The overlay lives on `LiveViewControls`' own root element. */
 function controls(wrapper: VueWrapper) {

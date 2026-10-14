@@ -305,7 +305,7 @@ OpenTelemetry Collector, Prometheus (metrics) and Grafana (dashboards); then run
 
 ### Web Frontend
 
-Vue 3 interface for camera control from any browser: mobile-first, dark theme for night use, real-time WebSocket
+Vue 3 and strict TypeScript interface for camera control from any browser: mobile-first, dark theme for night use, real-time WebSocket
 streaming (dynamic JPEG for WiFi, LZ4 for the lossless eyepiece), WebGL rendering with Canvas2D fallback,
 pinch-to-zoom, and Push-To and Comet Stacking panels (Pro). All npm commands run from `web/`:
 

@@ -4,15 +4,15 @@ import type {VueWrapper} from '@vue/test-utils'
 import {h, nextTick, reactive, ref} from 'vue'
 import EyepieceSettings from './EyepieceSettings.vue'
 import SettingsPanel from './SettingsPanel.vue'
-import {mountWithDefaults} from '../test/mount.js'
-import {settings} from '../test/fixtures.js'
-import {findSliderByLabel} from '../test/settingsPanel.js'
+import {mountWithDefaults} from '../test/mount'
+import {settings} from '../test/fixtures'
+import {findSliderByLabel} from '../test/settingsPanel'
 import {DEFAULT_SETTINGS, SETTINGS_DEBOUNCE_MS} from '../constants'
-import type * as Api from '../composables/api.js'
-import type {EyepieceSettings as Eyepiece, Settings, UpdateSettingsRequest} from '../composables/api.types.js'
+import type * as Api from '../composables/api'
+import type {EyepieceSettings as Eyepiece, Settings, UpdateSettingsRequest} from '../composables/api.types'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>()))
 
 const EYEPIECE: Eyepiece = {
     ...DEFAULT_SETTINGS.eyepiece,

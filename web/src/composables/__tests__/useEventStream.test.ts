@@ -10,20 +10,20 @@ import {
     syncWebSocket,
     suppressConsoleErrors,
     setupGlobalWebSocketMock,
-} from './webSocketTestUtils.js'
+} from './webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
 // A sync once read the Push-To status; mocked, a regression is a call rather than a real fetch.
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
-import {getPushToStatus} from '../api.js'
-import {useEventStream as originalUseEventStream} from '../useEventStream.js'
-import type {EventStream, Sync} from '../useEventStream.js'
-import type {EventOf, ServerEventType} from '../api.events.js'
-import {catalogEntry} from '../../test/fixtures.js'
-import {serverEvent} from '../../test/eventStream.js'
+import {getPushToStatus} from '../api'
+import {useEventStream as originalUseEventStream} from '../useEventStream'
+import type {EventStream, Sync} from '../useEventStream'
+import type {EventOf, ServerEventType} from '../api.events'
+import {catalogEntry} from '../../test/fixtures'
+import {serverEvent} from '../../test/eventStream'
 import {mount} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 
@@ -439,7 +439,7 @@ describe('useEventStream', () => {
                     bytes_downloaded: 52428800,
                     total_bytes: 1261887242,
                     percent: 4.15,
-                    stage: 'Downloading Database',
+                    stage: 'Downloading Database', stage_id: 'downloading_database',
                     overall_percent: 52.08,
                 }),
                 expected: {
@@ -448,7 +448,7 @@ describe('useEventStream', () => {
                     percent: 4.15,
                     bytesDownloaded: 52428800,
                     totalBytes: 1261887242,
-                    stageName: 'Downloading Database',
+                    stageId: 'downloading_database',
                     overallPercent: 52.08,
                 },
             },
@@ -457,14 +457,14 @@ describe('useEventStream', () => {
                 event: serverEvent('astap_install_extracting', {
                     component: 'D80 Database',
                     progress: 45.5,
-                    stage: 'Extracting Database',
+                    stage: 'Extracting Database', stage_id: 'extracting_database',
                     overall_percent: 72.75,
                 }),
                 expected: {
                     component: 'D80 Database',
                     stage: 'extracting',
                     percent: 45.5,
-                    stageName: 'Extracting Database',
+                    stageId: 'extracting_database',
                     overallPercent: 72.75,
                 },
             },
@@ -472,13 +472,13 @@ describe('useEventStream', () => {
                 name: 'astap_install_completed',
                 event: serverEvent('astap_install_completed', {
                     component: 'D80 Database',
-                    stage: 'Database Installed',
+                    stage: 'Database Installed', stage_id: 'database_completed',
                     overall_percent: 100,
                 }),
                 expected: {
                     component: 'D80 Database',
                     stage: 'completed',
-                    stageName: 'Database Installed',
+                    stageId: 'database_completed',
                     overallPercent: 100,
                 },
             },

@@ -3,8 +3,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { ref, h, onMounted } from 'vue'
 import type { SetupContext } from 'vue'
-import { aiComputeReport, astapStatus, capabilities, catalogStatus, settings } from './test/fixtures.js'
-import type { EventStream } from './composables/useEventStream.js'
+import { aiComputeReport, astapStatus, capabilities, catalogStatus, settings } from './test/fixtures'
+import type { EventStream } from './composables/useEventStream'
 
 /** What the mocked `useAppState` hands App: what App, and the children left unstubbed, read. */
 function mockAppState() {
@@ -31,7 +31,7 @@ function mockAppState() {
 const mockAppStates: ReturnType<typeof mockAppState>[] = []
 
 // Mock composables
-vi.mock('./composables/useAppState.js', () => ({
+vi.mock('./composables/useAppState', () => ({
   useAppState: vi.fn(() => {
     const state = mockAppState()
     mockAppStates.push(state)
@@ -39,13 +39,13 @@ vi.mock('./composables/useAppState.js', () => ({
   }),
 }))
 
-vi.mock('./composables/useEventStream.js', async (importOriginal) => {
-  const { createEventStreamStub } = await import('./test/eventStream.js')
+vi.mock('./composables/useEventStream', async (importOriginal) => {
+  const { createEventStreamStub } = await import('./test/eventStream')
   return { ...await importOriginal(), useEventStream: vi.fn(() => createEventStreamStub()) }
 })
 
-vi.mock('./composables/api.js', async (importOriginal) =>
-  (await import('./test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('./composables/api', async (importOriginal) =>
+  (await import('./test/mockApi')).mockApi(await importOriginal(), {
     getAstapStatus: vi.fn(async () => astapStatus({ ready: true })),
     getCatalogStatus: vi.fn(async () => catalogStatus({ installed: true })),
     getAiCompute: vi.fn(async () => aiComputeReport({ state: 'unavailable' })),
@@ -60,7 +60,7 @@ function lastAppState() {
 
 /** The event stream App opened last. */
 async function lastEventStream(): Promise<EventStream> {
-  const { useEventStream } = await import('./composables/useEventStream.js')
+  const { useEventStream } = await import('./composables/useEventStream')
   const result = vi.mocked(useEventStream).mock.results.at(-1)
   if (result?.type !== 'return') throw new Error('App opened no event stream')
   return result.value
@@ -147,7 +147,7 @@ describe('App.vue Routing', () => {
   /** The one-time AI compute benchmark blocks the whole UI until it ends. */
   it('makes the app inert and shows the benchmark overlay while benchmarking', async () => {
     visit('/')
-    const api = await import('./composables/api.js')
+    const api = await import('./composables/api')
     vi.mocked(api.getAiCompute).mockResolvedValueOnce(
       aiComputeReport({ state: 'benchmarking', progress: { done: 0, total: 2, testing: 'CPU — test' } }),
     )
@@ -324,7 +324,7 @@ describe('App.vue sidebar tabs', () => {
 
   it('opens the Push-To tab once the setup overlay has installed what was missing', async () => {
     const { wrapper, appState } = await mountApp()
-    const api = await import('./composables/api.js')
+    const api = await import('./composables/api')
     appState.capabilities.value = capabilities({ push_to: { astap_solver: true } })
     vi.mocked(api.getAstapStatus).mockResolvedValueOnce(astapStatus({ ready: false }))
 

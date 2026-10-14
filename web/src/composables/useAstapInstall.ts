@@ -1,15 +1,16 @@
 import {ref, computed, watch} from 'vue'
 import type {Ref, WatchSource} from 'vue'
-import {useEventStreamContext} from './appContext.js'
-import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
-import {getAstapStatus, getAstapDatabases, installAstap} from './api.js'
-import {useTimeouts} from './useTimeouts.js'
-import {formatBytes, formatPercent} from '../utils/format.js'
-import type {AstapStatus, DatabaseType} from './api.types.js'
-import type {AstapInstallProgress, InstallProgress} from './events/installEvents.js'
+import {useEventStreamContext} from './appContext'
+import {tryOnMounted, tryOnScopeDispose} from './lifecycle'
+import {getAstapStatus, getAstapDatabases, installAstap} from './api'
+import {useTimeouts} from './useTimeouts'
+import {formatBytes, formatPercent} from '../utils/format'
+import type {AstapStatus, DatabaseType} from './api.types'
+import type {InstallStage} from './api.events'
+import type {AstapInstallProgress, InstallProgress} from './events/installEvents'
 
-/** Where an install stands, the same stages for ASTAP and the catalog. */
-export type InstallStage = InstallProgress<object>['stage']
+/** Where an install stands as the client follows it, the same phases for ASTAP and the catalog. */
+export type InstallPhase = InstallProgress<object>['stage']
 
 /**
  * The ASTAP install's progress as the installer shows it: the last event's fields, each
@@ -17,17 +18,17 @@ export type InstallStage = InstallProgress<object>['stage']
  */
 export interface AstapProgressView {
     component: string
-    stage: InstallStage | ''
+    stage: InstallPhase | ''
     percent: number | null
     bytesDownloaded: number
     totalBytes: number | null
-    stageName: string
+    stageId: InstallStage | null
     overallPercent: number | null
     error: string | null
     ended: boolean
 }
 
-/** Which parts of an ASTAP install finished, by the stage names the server reports. */
+/** Which parts of an ASTAP install finished, by the stage ids the server reports. */
 export interface AstapStageCompletion {
     cliDownloaded: boolean
     cliExtracted: boolean
@@ -37,7 +38,7 @@ export interface AstapStageCompletion {
 
 /** What `ignoresProgress` reads of a progress: its stage, and how a status ended it. */
 interface ProgressEnd {
-    stage: InstallStage
+    stage: InstallPhase
     ended?: boolean
     interrupted?: boolean
 }
@@ -54,7 +55,7 @@ export const DEFAULT_ASTAP_DATABASE = 'D80'
 export const INSTALL_SETTLE_MS = 500
 
 /** Stages of an install still under way, which a page that did not start it joins. */
-export const ACTIVE_INSTALL_STAGES: ReadonlySet<InstallStage> =
+export const ACTIVE_INSTALL_STAGES: ReadonlySet<InstallPhase> =
     new Set(['starting', 'downloading', 'extracting', 'file_completed'])
 
 /**
@@ -200,11 +201,11 @@ export function useAstapInstall({onComplete}: InstallOptions<AstapStatus | null>
         installProgress.value = {
             ...createEmptyProgress(),
             ...progress,
-            stageName: progress.stageName || '',
+            stageId: progress.stageId ?? null,
             ended: 'ended' in progress && Boolean(progress.ended),
         }
 
-        updateStageCompletion(stageCompletion.value, stage, progress.stageName, progress.component)
+        updateStageCompletion(stageCompletion.value, stage, progress.stageId, progress.component)
 
         if (stage === 'failed') {
             error.value = `Installation failed: ${progress.error}`
@@ -233,7 +234,7 @@ export function useAstapInstall({onComplete}: InstallOptions<AstapStatus | null>
 
     // Watch for ASTAP install progress updates from eventStream
     const stopWatch = watch(
-        () => eventStream?.astapInstallProgress?.value,
+        () => eventStream?.astapInstallProgress.value,
         (progress) => {
             if (progress) {
                 handleProgressUpdate(progress)
@@ -246,7 +247,7 @@ export function useAstapInstall({onComplete}: InstallOptions<AstapStatus | null>
     tryOnMounted(loadStatus)
 
     tryOnScopeDispose(() => {
-        eventStream?.clearAstapInstallProgress?.()
+        eventStream?.clearAstapInstallProgress()
         stopWatch()
     })
 
@@ -286,7 +287,7 @@ function createEmptyProgress(): AstapProgressView {
         bytesDownloaded: 0,
         totalBytes: null,
         stage: '',
-        stageName: '',
+        stageId: null,
         overallPercent: null,
         error: null,
         ended: false,
@@ -364,26 +365,26 @@ function calculateProgressPercent(progress: AstapProgressView): number | null {
 
 function updateStageCompletion(
     completion: AstapStageCompletion,
-    stage: InstallStage,
-    stageName: string | null | undefined,
+    stage: InstallPhase,
+    stageId: InstallStage | null | undefined,
     component: string,
 ) {
     if (stage === 'downloading') {
-        if (stageName === 'Downloading ASTAP CLI') {
+        if (stageId === 'downloading_cli') {
             completion.cliDownloaded = false
-        } else if (stageName === 'Downloading Database') {
+        } else if (stageId === 'downloading_database') {
             completion.cliCompleted = true
         }
     } else if (stage === 'extracting') {
-        if (stageName === 'Extracting ASTAP CLI') {
+        if (stageId === 'extracting_cli') {
             completion.cliDownloaded = true
             completion.cliExtracted = false
         }
     } else if (stage === 'completed') {
-        if (stageName === 'ASTAP CLI Installed') {
+        if (stageId === 'cli_completed') {
             completion.cliExtracted = true
             completion.cliCompleted = true
-        } else if (stageName === 'Database Installed' && component) {
+        } else if (stageId === 'database_completed' && component) {
             completion.completedDatabases.add(component)
         }
     }

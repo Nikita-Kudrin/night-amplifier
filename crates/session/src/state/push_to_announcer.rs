@@ -177,7 +177,7 @@ impl PushToEvents for PushToAnnouncer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use night_amplifier_core::push_to::PushToDirectionResponse;
+    use night_amplifier_core::push_to::{DirectionHint, PushToDirectionResponse};
 
     fn announcer() -> (PushToAnnouncer, broadcast::Receiver<ServerEvent>) {
         let (events, receiver) = broadcast::channel(16);
@@ -194,7 +194,7 @@ mod tests {
                 angle_deg,
                 distance_deg,
                 is_close,
-                direction_hint: "NE".into(),
+                direction_hint: DirectionHint::NorthEast,
                 direction_full: "North-East".into(),
                 current_position: None,
                 target: None,

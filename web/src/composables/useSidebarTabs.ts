@@ -1,8 +1,8 @@
 import {nextTick, reactive, ref, watch} from 'vue'
 import type {Ref} from 'vue'
 import {SIDEBAR_TABS} from '../constants'
-import type {AppContext} from './appContext.js'
-import type {AstapStatus, CatalogStatus} from './api.types.js'
+import type {AppContext} from './appContext'
+import type {AstapStatus, CatalogStatus} from './api.types'
 
 /** One of the sidebar's tabs. */
 export type SidebarTab = (typeof SIDEBAR_TABS)[keyof typeof SIDEBAR_TABS]

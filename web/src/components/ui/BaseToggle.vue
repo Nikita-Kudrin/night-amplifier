@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{'update:modelValue': [value: boolean]}>()
 
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+import { useScrollProtect } from '../../composables/useScrollProtect'
 
 const { blockIfScrolling } = useScrollProtect()
 

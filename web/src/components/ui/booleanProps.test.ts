@@ -14,7 +14,7 @@ import {
     InstallProgressBar,
     SettingSelect,
     SetupSection,
-} from './index.js'
+} from './index'
 
 /**
  * Vue casts a prop to a boolean only when the runtime type it derives from the declared

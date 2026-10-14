@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal(), {
         getSettings: vi.fn(),
         updateSettings: vi.fn(),
         listCameras: vi.fn(),
@@ -10,15 +10,15 @@ vi.mock('../api.js', async (importOriginal) =>
 
 import {effectScope, nextTick} from 'vue'
 import type {EffectScope} from 'vue'
-import type {Camera, CameraPhase, Settings} from '../api.types.js'
-import type {CameraStatus} from '../cameraStore.js'
-import type {EventStream} from '../useEventStream.js'
-import type {AppState} from '../useAppState.js'
-import {getCapabilities, getSettings, listCameras, updateSettings} from '../api.js'
-import {camera, proCapabilities, settings} from '../../test/fixtures.js'
-import {pending} from '../../test/http.js'
-import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream.js'
-import {__resetForTests, RETRY_INTERVAL_MS, useAppState} from '../useAppState.js'
+import type {Camera, CameraPhase, Settings} from '../api.types'
+import type {CameraStatus} from '../cameraStore'
+import type {EventStream} from '../useEventStream'
+import type {AppState} from '../useAppState'
+import {getCapabilities, getSettings, listCameras, updateSettings} from '../api'
+import {camera, proCapabilities, settings} from '../../test/fixtures'
+import {pending} from '../../test/http'
+import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream'
+import {__resetForTests, RETRY_INTERVAL_MS, useAppState} from '../useAppState'
 
 // The state is a module default; each test gets a fresh one.
 async function freshAppState() {

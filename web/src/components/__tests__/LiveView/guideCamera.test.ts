@@ -1,17 +1,17 @@
 import {describe, it, expect, beforeEach, vi} from 'vitest'
 import {ref, toValue} from 'vue'
 import {flushPromises} from '@vue/test-utils'
-import {lastImageStreamOptions, mountLiveView, setupMocks} from './setup.js'
-import {camera, catalogEntry, clientDirection, settings} from '../../../test/fixtures.js'
-import type {CameraRole} from '../../../composables/api.types.js'
+import {lastImageStreamOptions, mountLiveView, setupMocks} from './setup'
+import {camera, catalogEntry, clientDirection, settings} from '../../../test/fixtures'
+import type {CameraRole} from '../../../composables/api.types'
 
-vi.mock('../../../composables/api.js', async (importOriginal) =>
-    (await import('../../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../../../composables/api', async (importOriginal) =>
+    (await import('../../../test/mockApi')).mockApi(await importOriginal(), {
         setViewedCamera: vi.fn(async (camera: CameraRole) => ({camera})),
     }))
 
-import * as api from '../../../composables/api.js'
-import {useAppState} from '../../../composables/useAppState.js'
+import * as api from '../../../composables/api'
+import {useAppState} from '../../../composables/useAppState'
 
 const setViewedCamera = vi.mocked(api.setViewedCamera)
 
@@ -128,7 +128,7 @@ describe('LiveView guide camera source', () => {
         const wrapper = mountLiveView({
             hasGuideCamera: true,
             currentTarget: catalogEntry({designation: 'M42'}),
-            pushDirection: clientDirection({angleDeg: 45, distanceDeg: 2, isClose: false, directionHint: 'up', fovDeg: 1.2}),
+            pushDirection: clientDirection({angleDeg: 45, distanceDeg: 2, isClose: false, directionHint: 'NE', fovDeg: 1.2}),
         })
 
         expect(wrapper.findComponent({name: 'GuideArrow'}).exists()).toBe(true)
@@ -147,7 +147,7 @@ describe('LiveView guide camera source', () => {
             guideCamera: camera({name: 'Guide Cam'}),
             settings: {camera_telescope_profiles: {'Guide Cam': {...settings().telescope, ...guideOptics}}},
             currentTarget: catalogEntry({designation: 'M42'}),
-            pushDirection: clientDirection({angleDeg: 45, distanceDeg: 2, isClose: false, directionHint: 'up', fovDeg: 0.5}),
+            pushDirection: clientDirection({angleDeg: 45, distanceDeg: 2, isClose: false, directionHint: 'NE', fovDeg: 0.5}),
         })
 
         const expected = (2 * Math.atan((1080 * 2.9) / 1000 / 240) * 180) / Math.PI

@@ -2,7 +2,7 @@
  * API client for Night Amplifier REST endpoints. Every call resolves with the envelope's
  * `data` or rejects with an `ApiError`; none returns an error value.
  */
-import {API_BASE} from '../constants/endpoints.js'
+import {API_BASE} from '../constants/endpoints'
 import type {
     AiComputeReport,
     AstapInstallRequest,
@@ -34,7 +34,7 @@ import type {
     UpdateLicenseRequest,
     UpdateSettingsRequest,
     ViewedCamera,
-} from './api.types.js'
+} from './api.types'
 
 const SERVER_UNAVAILABLE = 'Server unavailable. Please ensure the server is running.'
 const TIMED_OUT = 'The server did not answer in time. Please ensure the server is running.'

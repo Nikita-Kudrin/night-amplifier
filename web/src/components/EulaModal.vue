@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {ref, computed} from 'vue'
-import {useApplySettings} from '../composables/appContext.js'
-import {useError} from '../composables/useError.js'
-import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
+import {useApplySettings} from '../composables/appContext'
+import {useError} from '../composables/useError'
+import {useSoftwareLicenses} from '../composables/useSoftwareLicenses'
 import {BaseAlert, BaseModal, BaseSpinner} from './ui'
 import LicenseTexts from './LicenseTexts.vue'
 

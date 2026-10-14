@@ -1,17 +1,17 @@
 import {readonly, ref} from 'vue'
-import {getCapabilities} from './api.js'
-import {onEvents, resyncOn} from './useEventStream.js'
-import {createSettingsStore} from './settingsStore.js'
-import {createCameraStore} from './cameraStore.js'
+import {getCapabilities} from './api'
+import {onEvents, resyncOn} from './useEventStream'
+import {createSettingsStore} from './settingsStore'
+import {createCameraStore} from './cameraStore'
 import {DEFAULT_CAPABILITIES} from '../constants'
-import type {Capabilities} from './api.types.js'
-import type {EventStream} from './useEventStream.js'
+import type {Capabilities} from './api.types'
+import type {EventStream} from './useEventStream'
 
 /** How long a failed first load waits before it tries again, while `/ws/events` is up. */
 export const RETRY_INTERVAL_MS = 2000
 
 /**
- * The app's server state: settings (`settingsStore.js`), cameras (`cameraStore.js`) and
+ * The app's server state: settings (`settingsStore.ts`), cameras (`cameraStore.ts`) and
  * capabilities, and the first load that fetches them.
  *
  * The page's stores share one convention: `createX()` builds a store, a module default

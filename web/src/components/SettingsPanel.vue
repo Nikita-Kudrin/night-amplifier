@@ -5,10 +5,10 @@
  * is the one writer of the `eyepiece` group (`applyEyepiece`).
  */
 import {ref, watch, computed} from 'vue'
-import {useError} from '../composables/useError.js'
-import {useApplySettings, useCapabilities, useHasGuideCamera, useSettings} from '../composables/appContext.js'
-import {settingsMirror} from '../utils/settings.js'
-import type {EyepieceFields, SettingApply, SettingKey} from '../utils/settings.js'
+import {useError} from '../composables/useError'
+import {useApplySettings, useCapabilities, useHasGuideCamera, useSettings} from '../composables/appContext'
+import {settingsMirror} from '../utils/settings'
+import type {EyepieceFields, SettingApply, SettingKey} from '../utils/settings'
 import {STACKING_TYPES} from '../constants'
 import {BasePanel, BaseAlert} from './ui'
 import AdvancedSettings from './AdvancedSettings.vue'
@@ -20,7 +20,7 @@ import ProcessingSettings from './ProcessingSettings.vue'
 import ReconnectSettings from './ReconnectSettings.vue'
 import StackingSettings from './StackingSettings.vue'
 import StorageSettings from './StorageSettings.vue'
-import type {Settings, UpdateSettingsRequest} from '../composables/api.types.js'
+import type {Settings, UpdateSettingsRequest} from '../composables/api.types'
 
 const settings = useSettings()
 const applySettings = useApplySettings()

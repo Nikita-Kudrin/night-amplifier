@@ -1,4 +1,4 @@
-import {fieldOfViewDeg} from './optics.js'
+import {fieldOfViewDeg} from './optics'
 
 describe('fieldOfViewDeg', () => {
     // The case Pro's `push_to/config.rs` pins: 4000 px of 3.76 µm on 200 mm.

@@ -1,6 +1,6 @@
 import {defineComponent, effectScope, h} from 'vue'
 import {mount} from '@vue/test-utils'
-import {tryOnBeforeUnmount, tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
+import {tryOnBeforeUnmount, tryOnMounted, tryOnScopeDispose} from './lifecycle'
 
 describe('lifecycle hooks for composables', () => {
     it('register as Vue’s own inside a component', () => {

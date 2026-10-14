@@ -1,10 +1,10 @@
 import {ref, shallowRef, toValue, watch} from 'vue'
 import type {MaybeRefOrGetter} from 'vue'
-import {tryOnScopeDispose} from './lifecycle.js'
-import {decodeFrame} from '../utils/frameDecoder.js'
-import type {DecodedFrame} from '../utils/frameDecoder.js'
-import {useWebSocket} from './useWebSocket.js'
-import {WS} from '../constants/endpoints.js'
+import {tryOnScopeDispose} from './lifecycle'
+import {decodeFrame} from '../utils/frameDecoder'
+import type {DecodedFrame} from '../utils/frameDecoder'
+import {useWebSocket} from './useWebSocket'
+import {WS} from '../constants/endpoints'
 
 /** Text the server sends when an eyepiece socket switches to a camera with no frame yet. */
 export const NO_FRAME = 'no_frame'

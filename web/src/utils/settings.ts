@@ -1,5 +1,5 @@
 import {defaultSettings} from '../constants'
-import type {EyepieceSettings, Settings, UpdateSettingsRequest} from '../composables/api.types.js'
+import type {EyepieceSettings, Settings, UpdateSettingsRequest} from '../composables/api.types'
 
 /**
  * A setting by its dotted path in `T`: `'gain'`, `'eyepiece.intensity'`. Paths go into

@@ -3,7 +3,7 @@
  * One camera in the camera list: its name, a details line (the resolution unless the
  * `details` slot says more), its actions, and a remove button for a simulated camera.
  */
-import type {Camera} from '../composables/api.types.js'
+import type {Camera} from '../composables/api.types'
 
 withDefaults(defineProps<{
   camera: Pick<Camera, 'name'>

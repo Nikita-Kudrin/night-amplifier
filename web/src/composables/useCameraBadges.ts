@@ -1,10 +1,10 @@
 import {ref, watch} from 'vue'
 import type {DeepReadonly} from 'vue'
-import {tryOnScopeDispose} from './lifecycle.js'
-import {formatResolution, formatTemperature} from '../utils/format.js'
+import {tryOnScopeDispose} from './lifecycle'
+import {formatResolution, formatTemperature} from '../utils/format'
 import {CAMERA_PHASES, STACKING_TYPES} from '../constants'
-import type {AppContext} from './appContext.js'
-import type {Camera} from './api.types.js'
+import type {AppContext} from './appContext'
+import type {Camera} from './api.types'
 
 /** A camera as the camera list hands it out. */
 type ListedCamera = DeepReadonly<Camera>
@@ -102,7 +102,7 @@ export function useCameraBadges({cameraStatus, cameraPhase, warmupEndsAt, settin
         // with it (see `applyStackingMode` in CaptureControls.vue). Never true
         // for the guide camera: nothing it produces is stacked.
         const isActivelyStacking =
-            !isGuide && settings.value?.stacking && settings.value?.stacking_type !== STACKING_TYPES.PLANETARY
+            !isGuide && settings.value?.stacking && settings.value.stacking_type !== STACKING_TYPES.PLANETARY
         const desired = override ?? (isActivelyStacking ? 'low_readout_noise' : 'normal')
         const needle = desired === 'low_readout_noise' ? /lrn|low/i : /normal/i
         const match = modes.find((m) => needle.test(m.name))

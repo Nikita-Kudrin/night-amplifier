@@ -1,5 +1,5 @@
-import * as fixtures from './fixtures.js'
-import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
+import * as fixtures from './fixtures'
+import {STACKING_TYPE_VALUES} from '../composables/api.types'
 
 // Which fields each builder names and carries is its return type's to say (`fixtures.ts`).
 describe('fixtures', () => {

@@ -1,6 +1,6 @@
 import {nextTick} from 'vue'
-import {setupMocks, mountLiveView} from './setup.js'
-import type {Mocks} from './setup.js'
+import {setupMocks, mountLiveView} from './setup'
+import type {Mocks} from './setup'
 
 describe('LiveView - RGB8 Data Handling', () => {
     let mocks: Mocks

@@ -2,42 +2,41 @@ import {computed, ref, shallowRef} from 'vue'
 import {mount} from '@vue/test-utils'
 
 // Mock useImageStream
-vi.mock('../../../composables/useImageStream.js', () => ({
+vi.mock('../../../composables/useImageStream', () => ({
     useImageStream: vi.fn(),
 }))
 
 // Mock useWebGLRenderer
-vi.mock('../../../composables/useWebGLRenderer.js', () => ({
+vi.mock('../../../composables/useWebGLRenderer', () => ({
     useWebGLRenderer: vi.fn(),
 }))
 
 // Mock useCanvas2DRenderer
-vi.mock('../../../composables/useCanvas2DRenderer.js', () => ({
+vi.mock('../../../composables/useCanvas2DRenderer', () => ({
     useCanvas2DRenderer: vi.fn(),
 }))
 
 // Mock usePanZoom
-vi.mock('../../../composables/usePanZoom.js', () => ({
+vi.mock('../../../composables/usePanZoom', () => ({
     usePanZoom: vi.fn(),
 }))
 
-import {useImageStream} from '../../../composables/useImageStream.js'
-import type {FrameData, FrameSize, ImageStream} from '../../../composables/useImageStream.js'
-import {useWebGLRenderer} from '../../../composables/useWebGLRenderer.js'
-import type {RendererBackend, WebGLRenderer} from '../../../composables/useWebGLRenderer.js'
-import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
-import type {Canvas2DRenderer} from '../../../composables/useCanvas2DRenderer.js'
-import {usePanZoom} from '../../../composables/usePanZoom.js'
-import type {View} from '../../../composables/usePanZoom.js'
-import {useFullscreen} from '../../../composables/useFullscreen.js'
+import {useImageStream} from '../../../composables/useImageStream'
+import type {FrameData, FrameSize, ImageStream} from '../../../composables/useImageStream'
+import {useWebGLRenderer} from '../../../composables/useWebGLRenderer'
+import type {RendererBackend, WebGLRenderer} from '../../../composables/useWebGLRenderer'
+import {useCanvas2DRenderer} from '../../../composables/useCanvas2DRenderer'
+import type {Canvas2DRenderer} from '../../../composables/useCanvas2DRenderer'
+import {usePanZoom} from '../../../composables/usePanZoom'
+import type {View} from '../../../composables/usePanZoom'
+import {useFullscreen} from '../../../composables/useFullscreen'
 import LiveView from '../../LiveView.vue'
-import {contextProvides} from '../../../composables/appContext.js'
-import type {CaptureState} from '../../../composables/api.events.js'
-import type {Camera, CameraRole, Settings} from '../../../composables/api.types.js'
-import type {ClientPushDirection, CurrentTarget} from '../../../composables/events/pushToEvents.js'
-import {createEventStreamStub} from '../../../test/eventStream.js'
-import {installCanvasContexts} from '../../../test/renderStubs.js'
-import {settings} from '../../../test/fixtures.js'
+import {contextProvides} from '../../../composables/appContext'
+import type {Camera, CameraRole, CaptureState, Settings} from '../../../composables/api.types'
+import type {ClientPushDirection, CurrentTarget} from '../../../composables/events/pushToEvents'
+import {createEventStreamStub} from '../../../test/eventStream'
+import {installCanvasContexts} from '../../../test/renderStubs'
+import {settings} from '../../../test/fixtures'
 
 type PanZoom = ReturnType<typeof usePanZoom>
 
@@ -163,7 +162,7 @@ export function changeFullscreen(element: Element | null) {
     document.dispatchEvent(new Event('fullscreenchange'))
 }
 
-export {installResizeObserverStub} from '../../../test/dom.js'
+export {installResizeObserverStub} from '../../../test/dom'
 
 /** happy-dom has no `screen.orientation`; install before mounting. */
 export function installScreenOrientationStub() {

@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use night_amplifier_core::push_to::PushToDirectionResponse;
+use night_amplifier_core::push_to::{DirectionHint, PushToDirectionResponse};
 
 /// The target clients were told about.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -23,7 +23,7 @@ pub struct PushToTarget {
 pub struct PushDirection {
     pub angle_deg: f64,
     pub distance_deg: f64,
-    pub direction_hint: String,
+    pub direction_hint: DirectionHint,
     pub is_close: bool,
     pub fov_deg: Option<f64>,
     pub solved_camera: Option<String>,

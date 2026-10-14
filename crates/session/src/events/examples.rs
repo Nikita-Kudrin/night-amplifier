@@ -9,6 +9,7 @@ use super::{
     SolveStage, SolveStatus, StreamCrop, StreamFrameSize, SyncCause,
 };
 use crate::state::{CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus};
+use night_amplifier_core::push_to::{DirectionHint, InstallStage};
 
 const WARMUP: Duration = Duration::from_secs(300);
 
@@ -101,7 +102,7 @@ impl ServerEvent {
             E::PushDirectionUpdated(PushDirection {
                 angle_deg: 37.0,
                 distance_deg: 2.6,
-                direction_hint: "NE".into(),
+                direction_hint: DirectionHint::NorthEast,
                 is_close: false,
                 fov_deg: Some(1.45),
                 solved_camera: Some("ASI533MC Pro".into()),
@@ -126,16 +127,23 @@ impl ServerEvent {
                 bytes_downloaded: 1024,
                 total_bytes: Some(4096),
                 percent: Some(25.0),
-                stage: Some("Downloading".into()),
+                stage: Some(InstallStage::DownloadingCli.display_name().into()),
+                stage_id: Some(InstallStage::DownloadingCli),
                 overall_percent: Some(10.0),
             },
             E::AstapInstallExtracting {
                 component: "astap".into(),
                 progress: 50.0,
-                stage: Some("Extracting".into()),
+                stage: Some(InstallStage::ExtractingCli.display_name().into()),
+                stage_id: Some(InstallStage::ExtractingCli),
                 overall_percent: Some(60.0),
             },
-            E::AstapInstallCompleted { component: "astap".into(), stage: None, overall_percent: Some(100.0) },
+            E::AstapInstallCompleted {
+                component: "astap".into(),
+                stage: None,
+                stage_id: None,
+                overall_percent: Some(100.0),
+            },
             E::AstapInstallFailed { component: "astap".into(), error: "disk full".into() },
             E::CatalogInstallStarting,
             progress.clone(),

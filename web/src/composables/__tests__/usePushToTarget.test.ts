@@ -1,12 +1,12 @@
-import {usePushToTarget} from '../usePushToTarget.js'
-import {createEventStreamStub} from '../../test/eventStream.js'
-import type {EventStream} from '../useEventStream.js'
-import {catalogEntry} from '../../test/fixtures.js'
-import type {Coordinate} from '../api.types.js'
-import * as api from '../api.js'
+import {usePushToTarget} from '../usePushToTarget'
+import {createEventStreamStub} from '../../test/eventStream'
+import type {EventStream} from '../useEventStream'
+import {catalogEntry} from '../../test/fixtures'
+import type {Coordinate} from '../api.types'
+import * as api from '../api'
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
 describe('usePushToTarget', () => {
     let eventStream: EventStream
@@ -19,7 +19,7 @@ describe('usePushToTarget', () => {
     it('shows the target and direction the event stream holds', () => {
         eventStream.currentTarget.value = catalogEntry({designation: 'M31'})
         eventStream.pushDirection.value = {
-            angleDeg: 0, distanceDeg: 10, directionHint: 'Up', isClose: false, fovDeg: 1, solvedCamera: null,
+            angleDeg: 0, distanceDeg: 10, directionHint: 'N', isClose: false, fovDeg: 1, solvedCamera: null,
         }
         const {currentTarget, pushDirection} = usePushToTarget({eventStream})
 

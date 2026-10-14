@@ -1,4 +1,4 @@
-import {eyepieceStreamEndpoint, isEyepiecePage, liveStreamEndpoint, PAGES, WS} from './endpoints.js'
+import {eyepieceStreamEndpoint, isEyepiecePage, liveStreamEndpoint, PAGES, WS} from './endpoints'
 
 describe('endpoints', () => {
     it("names `/`'s socket per camera", () => {

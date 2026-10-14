@@ -1,21 +1,21 @@
 import {defineComponent, h, nextTick} from 'vue'
 import {flushPromises, mount} from '@vue/test-utils'
-import {catalogStatus} from '../test/fixtures.js'
-import {createEventStreamStub, sendTo} from '../test/eventStream.js'
-import {INSTALL_SETTLE_MS} from './useAstapInstall.js'
-import type {InstallOptions} from './useAstapInstall.js'
-import {useCatalogInstall} from './useCatalogInstall.js'
-import type {CatalogInstall} from './useCatalogInstall.js'
-import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents.js'
-import type {CatalogInstallProgress} from './events/installEvents.js'
-import type {CatalogStatus, Message} from './api.types.js'
-import type {EventOf, ServerEventType} from './api.events.js'
+import {catalogStatus} from '../test/fixtures'
+import {createEventStreamStub, sendTo} from '../test/eventStream'
+import {INSTALL_SETTLE_MS} from './useAstapInstall'
+import type {InstallOptions} from './useAstapInstall'
+import {useCatalogInstall} from './useCatalogInstall'
+import type {CatalogInstall} from './useCatalogInstall'
+import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents'
+import type {CatalogInstallProgress} from './events/installEvents'
+import type {CatalogStatus, Message} from './api.types'
+import type {EventOf, ServerEventType} from './api.events'
 
-vi.mock('./api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('./api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {ApiError, getCatalogStatus, installCatalog} from './api.js'
-import {contextProvides} from './appContext.js'
+import {ApiError, getCatalogStatus, installCatalog} from './api'
+import {contextProvides} from './appContext'
 
 const MISSING = catalogStatus({installed: false})
 

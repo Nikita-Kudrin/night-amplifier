@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue'
-import {useCatalogInstall} from '../composables/useCatalogInstall.js'
+import {useCatalogInstall} from '../composables/useCatalogInstall'
 import {BaseSpinner, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
-import type {CatalogStatus} from '../composables/api.types.js'
+import type {CatalogStatus} from '../composables/api.types'
 
 const emit = defineEmits<{installed: [status: CatalogStatus]; 'state-change': [installing: boolean]}>()
 

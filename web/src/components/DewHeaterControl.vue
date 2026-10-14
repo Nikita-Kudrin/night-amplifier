@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue'
-import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
-import {formatPercent} from '../utils/format.js'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings'
+import {formatPercent} from '../utils/format'
 import {BaseAlert, BaseSlider, BaseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
 import {DEFAULT_SETTINGS, DEW_HEATER_POWER_LIMITS, HELP_TEXTS} from '../constants'

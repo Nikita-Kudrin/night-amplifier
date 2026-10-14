@@ -1,6 +1,6 @@
 import {computed, ref, watch} from 'vue'
 import type {Ref} from 'vue'
-import type {Camera} from './api.types.js'
+import type {Camera} from './api.types'
 
 /** What a confirmation reads of a camera. */
 type ConfirmedCamera = Pick<Camera, 'id' | 'name' | 'connected'>

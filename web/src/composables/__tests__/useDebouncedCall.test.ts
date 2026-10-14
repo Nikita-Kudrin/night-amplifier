@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount} from '@vue/test-utils'
 import {defineComponent, h} from 'vue'
-import {useDebouncedCall} from '../useDebouncedCall.js'
+import {useDebouncedCall} from '../useDebouncedCall'
 
 describe('useDebouncedCall', () => {
     beforeEach(() => vi.useFakeTimers())

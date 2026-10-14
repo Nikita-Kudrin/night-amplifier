@@ -1,19 +1,19 @@
 import {defineComponent, h, nextTick} from 'vue'
 import {flushPromises, mount} from '@vue/test-utils'
-import {astapStatus, databaseType} from '../test/fixtures.js'
-import {createEventStreamStub, sendTo} from '../test/eventStream.js'
-import {DEFAULT_ASTAP_DATABASE, fetchAstapState, INSTALL_SETTLE_MS, useAstapInstall} from './useAstapInstall.js'
-import type {AstapInstall, InstallOptions} from './useAstapInstall.js'
-import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents.js'
-import type {AstapInstallProgress} from './events/installEvents.js'
-import type {AstapStatus, Message} from './api.types.js'
-import type {EventOf, ServerEventType} from './api.events.js'
+import {astapStatus, databaseType} from '../test/fixtures'
+import {createEventStreamStub, sendTo} from '../test/eventStream'
+import {DEFAULT_ASTAP_DATABASE, fetchAstapState, INSTALL_SETTLE_MS, useAstapInstall} from './useAstapInstall'
+import type {AstapInstall, InstallOptions} from './useAstapInstall'
+import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents'
+import type {AstapInstallProgress} from './events/installEvents'
+import type {AstapStatus, Message} from './api.types'
+import type {EventOf, ServerEventType} from './api.events'
 
-vi.mock('./api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('./api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {ApiError, getAstapDatabases, getAstapStatus, installAstap} from './api.js'
-import {contextProvides} from './appContext.js'
+import {ApiError, getAstapDatabases, getAstapStatus, installAstap} from './api'
+import {contextProvides} from './appContext'
 
 const NOT_INSTALLED = astapStatus({binary_installed: false, database_installed: false, installed_databases: [], ready: false})
 
@@ -123,9 +123,9 @@ describe('useAstapInstall', () => {
         const {install, progress} = mountInstall()
         await flushPromises()
 
-        progress.value = {stage: 'completed', stageName: 'ASTAP CLI Installed', component: 'ASTAP CLI', error: null}
+        progress.value = {stage: 'completed', stageId: 'cli_completed', component: 'ASTAP CLI', error: null}
         await nextTick()
-        progress.value = {stage: 'completed', stageName: 'Database Installed', component: 'G05 Database', error: null}
+        progress.value = {stage: 'completed', stageId: 'database_completed', component: 'G05 Database', error: null}
         await nextTick()
 
         expect(install.stageCompletion.value.cliCompleted).toBe(true)
@@ -152,12 +152,12 @@ describe('useAstapInstall', () => {
         install.selectedDatabases.value = ['D80', 'G05']
         await install.startInstall()
 
-        progress.value = {stage: 'completed', stageName: 'Database Installed', component: 'D80 Database', error: null}
+        progress.value = {stage: 'completed', stageId: 'database_completed', component: 'D80 Database', error: null}
         await nextTick()
         expect(install.installComplete.value).toBe(false)
 
         vi.mocked(getAstapStatus).mockResolvedValue(astapStatus())
-        progress.value = {stage: 'completed', stageName: 'Database Installed', component: 'G05 Database', error: null}
+        progress.value = {stage: 'completed', stageId: 'database_completed', component: 'G05 Database', error: null}
         await nextTick()
         expect(install.installComplete.value).toBe(true)
         await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS - 1)
@@ -212,7 +212,7 @@ describe('useAstapInstall after a sync', () => {
         await flushPromises()
         install.selectedDatabases.value = ['D80', 'G05']
         await install.startInstall()
-        send('astap_install_completed', {component: 'D80 Database', stage: 'Database Installed', overall_percent: 50})
+        send('astap_install_completed', {component: 'D80 Database', stage: 'Database Installed', stage_id: 'database_completed', overall_percent: 50})
         await nextTick()
 
         vi.mocked(getAstapStatus).mockResolvedValue(astapStatus())
@@ -226,12 +226,31 @@ describe('useAstapInstall after a sync', () => {
         expect(install.installing.value).toBe(false)
     })
 
+    // The label is copy the server may reword; the id is what the UI branches on.
+    it('follows the stage ids, whatever the labels say', async () => {
+        const {install, send} = mountWithEvents()
+        await flushPromises()
+        await install.startInstall()
+
+        send('astap_install_completed', {component: 'ASTAP CLI', stage: 'CLI ready', stage_id: 'cli_completed'})
+        await nextTick()
+        expect(install.stageCompletion.value).toMatchObject({cliExtracted: true, cliCompleted: true})
+
+        send('astap_install_completed', {component: 'D80 Database', stage: 'Database ready', stage_id: 'database_completed'})
+        await nextTick()
+        expect([...install.stageCompletion.value.completedDatabases]).toEqual(['D80 Database'])
+
+        send('astap_install_completed', {component: 'G05 Database', stage: 'Database Installed', stage_id: null})
+        await nextTick()
+        expect([...install.stageCompletion.value.completedDatabases]).toEqual(['D80 Database'])
+    })
+
     it('says an install a server restart cut short did not finish', async () => {
         const onComplete = vi.fn()
         const {install, send} = mountWithEvents({onComplete})
         await flushPromises()
         await install.startInstall()
-        send('astap_install_completed', {component: 'ASTAP CLI', stage: 'ASTAP CLI Installed', overall_percent: 20})
+        send('astap_install_completed', {component: 'ASTAP CLI', stage: 'ASTAP CLI Installed', stage_id: 'cli_completed', overall_percent: 20})
         await nextTick()
 
         send('astap_install_status', {state: 'idle'})
@@ -269,7 +288,7 @@ describe('useAstapInstall after a sync', () => {
         expect(await install.startInstall()).toBe(false)
         send('astap_install_progress', {
             component: 'D80 Database', bytes_downloaded: 1024, total_bytes: 4096, percent: 25,
-            stage: 'Downloading Database', overall_percent: 40,
+            stage: 'Downloading Database', stage_id: 'downloading_database', overall_percent: 40,
         })
         await nextTick()
 
@@ -298,7 +317,7 @@ describe('useAstapInstall after a sync', () => {
             state: 'running',
             progress: {
                 type: 'astap_install_progress', component: 'G05 Database', bytes_downloaded: 512 * 1024,
-                total_bytes: 1024 * 1024, percent: 50, stage: 'Downloading Database', overall_percent: 60,
+                total_bytes: 1024 * 1024, percent: 50, stage: 'Downloading Database', stage_id: 'downloading_database', overall_percent: 60,
             },
         })
         await nextTick()
@@ -309,7 +328,7 @@ describe('useAstapInstall after a sync', () => {
         expect(install.progressPercent.value).toBe(60)
 
         vi.mocked(getAstapStatus).mockResolvedValue(astapStatus())
-        send('astap_install_completed', {component: 'G05 Database', stage: 'Database Installed', overall_percent: 100})
+        send('astap_install_completed', {component: 'G05 Database', stage: 'Database Installed', stage_id: 'database_completed', overall_percent: 100})
         send('astap_install_status', {state: 'completed'})
         await nextTick()
         await vi.advanceTimersByTimeAsync(INSTALL_SETTLE_MS)

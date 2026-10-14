@@ -15,7 +15,7 @@ pub use error::{PushToError, PushToResult};
 pub use events::{PushToEvent, PushToEvents};
 pub use types::{
     AstapStatusResponse, CatalogEntryResponse, CatalogStatusResponse, CoordinateResponse,
-    DatabaseTypeResponse, InstalledDatabaseInfo, PushToDirectionResponse, PushToPositionResponse,
+    DatabaseTypeResponse, DirectionHint, InstalledDatabaseInfo, PushToDirectionResponse, PushToPositionResponse,
     PushToStatusResponse, TelescopeSettings,
 };
 
@@ -25,7 +25,11 @@ use crate::detection::StarDetector;
 use crate::frame::Frame;
 use async_trait::async_trait;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Where an ASTAP install stands. Sent as `stage_id` beside its label (`stage`), so the UI
+/// branches on the id rather than on the label's wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum InstallStage {
     /// Downloading ASTAP CLI binary
     DownloadingCli,

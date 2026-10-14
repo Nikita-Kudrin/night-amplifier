@@ -1,4 +1,4 @@
-import * as constants from './index.js'
+import * as constants from './index'
 import {
     CAMERA_PHASES,
     CAPTURE_STATES,
@@ -8,7 +8,7 @@ import {
     defaultSettings,
     EYEPIECE_STREAM_RESOLUTION_OPTIONS,
     HELP_TEXTS,
-} from './index.js'
+} from './index'
 import type {
     BACKGROUND_ALGORITHM_OPTIONS,
     CAPTURE_STATE_DISPLAY,
@@ -19,13 +19,13 @@ import type {
     STREAMING_RESOLUTION_OPTIONS,
     STRETCH_AGGRESSIVENESS_OPTIONS,
     WEIGHTING_PRESET_OPTIONS,
-} from './index.js'
-import {HELP_SECTIONS} from './help/index.js'
-import type {CaptureState} from '../composables/api.events.js'
+} from './index'
+import {HELP_SECTIONS} from './help'
 import type {
     BackgroundExtractionAlgorithm,
     CameraPhase,
     Capabilities,
+    CaptureState,
     EyepieceStreamResolution,
     RawFrameSaving,
     RejectionMethod,
@@ -33,7 +33,7 @@ import type {
     StackingType,
     StretchAggressiveness,
     WeightingPreset,
-} from '../composables/api.types.js'
+} from '../composables/api.types'
 
 // Every domain module behind the barrel; `export *` silently drops a name two of them share.
 // `serverSettings` and `tables` are the modules' own helpers, not constants.

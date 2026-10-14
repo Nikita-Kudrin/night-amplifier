@@ -1,13 +1,13 @@
 import {flushPromises, mount} from '@vue/test-utils'
 import CatalogInstaller from './CatalogInstaller.vue'
-import {catalogStatus} from '../test/fixtures.js'
-import {createEventStreamStub} from '../test/eventStream.js'
+import {catalogStatus} from '../test/fixtures'
+import {createEventStreamStub} from '../test/eventStream'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {getCatalogStatus, installCatalog} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
+import {getCatalogStatus, installCatalog} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
 
 const MISSING = catalogStatus({installed: false, ngc_file_exists: true, addendum_file_exists: false, hyg_file_exists: false})
 

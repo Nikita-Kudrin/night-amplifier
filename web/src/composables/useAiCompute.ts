@@ -1,10 +1,10 @@
 import {computed, ref, watch} from 'vue'
 import type {DeepReadonly, Ref} from 'vue'
-import {getAiCompute} from './api.js'
-import {onEvents, resyncOn} from './useEventStream.js'
-import type {EventStream} from './useEventStream.js'
-import type {AiComputeReport, Settings} from './api.types.js'
-import type {EventHandlers} from './events/handlers.js'
+import {getAiCompute} from './api'
+import {onEvents, resyncOn} from './useEventStream'
+import type {EventStream} from './useEventStream'
+import type {AiComputeReport, Settings} from './api.types'
+import type {EventHandlers} from './events/handlers'
 
 /** How often the report is refetched while it is changing and `/ws/events` is down. */
 export const AI_COMPUTE_POLL_MS = 1000
@@ -84,7 +84,7 @@ export function createAiComputeStore() {
         onEvents(stream, handlers)
         resyncOn(stream, (sync) => (sync.first ? loadIfMissing() : refresh()))
         watch(stream.connected, schedule)
-        watch(() => settings.value?.denoise?.ai_compute, (choice, before) => {
+        watch(() => settings.value?.denoise.ai_compute, (choice, before) => {
             if (before !== undefined && choice !== before) refresh()
         })
     }

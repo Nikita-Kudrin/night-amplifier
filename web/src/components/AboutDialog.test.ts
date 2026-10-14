@@ -1,14 +1,14 @@
 import {flushPromises, mount} from '@vue/test-utils'
 import AboutDialog from './AboutDialog.vue'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
             getLicenseStatus: vi.fn(async () => ({active: false, details: null})),
             getSoftwareLicenses: vi.fn(async () => ({version: '1.2.3', core_license: 'CORE TEXT', third_party_licenses: 'THIRD PARTY'})),
     }))
 
-import {getLicenseStatus, getSoftwareLicenses, updateLicense} from '../composables/api.js'
-import type {LicenseStatus} from '../composables/api.types.js'
+import {getLicenseStatus, getSoftwareLicenses, updateLicense} from '../composables/api'
+import type {LicenseStatus} from '../composables/api.types'
 
 const ACTIVE: LicenseStatus = {
     active: true,

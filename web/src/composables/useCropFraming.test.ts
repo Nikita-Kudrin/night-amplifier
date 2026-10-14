@@ -1,8 +1,8 @@
 import {describe, it, expect} from 'vitest'
-import {isFitted, reframeForCrop, useCropFraming} from './useCropFraming.js'
+import {isFitted, reframeForCrop, useCropFraming} from './useCropFraming'
 import {FIT_MARGIN} from '../constants'
-import type {View} from './usePanZoom.js'
-import type {StreamCrop} from './api.events.js'
+import type {View} from './usePanZoom'
+import type {StreamCrop} from './api.events'
 
 const SOURCE = {source_width: 400, source_height: 300}
 const CROP: StreamCrop = {x: 40, y: 32, width: 320, height: 240, ...SOURCE}

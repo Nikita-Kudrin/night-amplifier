@@ -7,7 +7,7 @@ import {
     infoOffset,
     isOffScreen,
     screensAway,
-} from './guideArrowLayout.js'
+} from './guideArrowLayout'
 
 describe('guideArrowLayout', () => {
     it('counts screens only once the FOV is known', () => {

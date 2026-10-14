@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {ref, computed, watch} from 'vue'
-import {useAstapInstall} from '../composables/useAstapInstall.js'
+import {useAstapInstall} from '../composables/useAstapInstall'
 import {BaseSpinner, DatabaseSelector, InstallProgressBar, InstallStatusList, SetupSection} from './ui'
-import type {AstapStatus} from '../composables/api.types.js'
+import type {AstapStatus} from '../composables/api.types'
 
 const emit = defineEmits<{installed: [status: AstapStatus]; 'state-change': [installing: boolean]}>()
 

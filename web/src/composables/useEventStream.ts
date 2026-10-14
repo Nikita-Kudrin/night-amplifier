@@ -1,15 +1,15 @@
-import {tryOnScopeDispose} from './lifecycle.js'
-import {WS} from '../constants/endpoints.js'
-import {useWebSocket} from './useWebSocket.js'
-import {createCaptureEvents} from './events/captureEvents.js'
-import {createPushToEvents} from './events/pushToEvents.js'
-import {createInstallEvents} from './events/installEvents.js'
-import {handlerEntries} from './events/handlers.js'
-import type {EventHandlers} from './events/handlers.js'
-import type {EventOf, ServerEvent, ServerEventType, SyncedEvent} from './api.events.js'
+import {tryOnScopeDispose} from './lifecycle'
+import {WS} from '../constants/endpoints'
+import {useWebSocket} from './useWebSocket'
+import {createCaptureEvents} from './events/captureEvents'
+import {createPushToEvents} from './events/pushToEvents'
+import {createInstallEvents} from './events/installEvents'
+import {handlerEntries} from './events/handlers'
+import type {EventHandlers} from './events/handlers'
+import type {EventOf, ServerEvent, ServerEventType, SyncedEvent} from './api.events'
 
-export {pushDirectionFrom} from './events/pushToEvents.js'
-export type {EventHandlers} from './events/handlers.js'
+export {pushDirectionFrom} from './events/pushToEvents'
+export type {EventHandlers} from './events/handlers'
 
 /** What `onSync` hands its callback: the `synced` event's fields, and whether it is the stream's first. */
 export type Sync = Pick<SyncedEvent, 'cause' | 'dropped'> & {first: boolean}

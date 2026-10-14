@@ -1,6 +1,6 @@
 /**
  * Fails any test whose code reaches the network. happy-dom resolves `/api/...` against
- * `http://localhost:3000`, so an unmocked `api.js` call went out for real: refused and
+ * `http://localhost:3000`, so an unmocked `api.ts` call went out for real: refused and
  * swallowed by the caller's `catch` (40 stacks a run from `useEventStream`'s `onOpen`),
  * or, with anything listening on that port, answered mid-test.
  *
@@ -28,7 +28,7 @@ function reportUnmocked() {
     if (!unmocked.length) return
     const urls = unmocked
     unmocked = []
-    throw new Error(`unmocked fetch (mock api.js or stub fetch): ${urls.join(', ')}`)
+    throw new Error(`unmocked fetch (mock api.ts or stub fetch): ${urls.join(', ')}`)
 }
 
 afterEach(reportUnmocked)

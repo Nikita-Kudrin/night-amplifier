@@ -15,9 +15,9 @@ import {
   REJECTION_SIGMA_LIMITS,
   WEIGHTING_PRESET_OPTIONS,
 } from '../constants'
-import type {Option} from '../constants/tables.js'
-import type {SettingApply} from '../utils/settings.js'
-import type {RejectionMethod, Settings, WeightingPreset} from '../composables/api.types.js'
+import type {Option} from '../constants/tables'
+import type {SettingApply} from '../utils/settings'
+import type {RejectionMethod, Settings, WeightingPreset} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   weightingPreset: WeightingPreset

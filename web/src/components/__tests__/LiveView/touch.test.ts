@@ -1,7 +1,7 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick} from 'vue'
-import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
-import type {Mocks} from './setup.js'
+import {setupMocks, mountLiveView, createMockFrameData} from './setup'
+import type {Mocks} from './setup'
 
 describe('LiveView - Touch Interactions', () => {
     let mocks: Mocks

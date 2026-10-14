@@ -1,12 +1,12 @@
 import {computed, readonly, ref} from 'vue'
-import {listCameras} from './api.js'
-import {findCamera, isSimulator} from './appContext.js'
-import {onEvents, resyncOn} from './useEventStream.js'
+import {listCameras} from './api'
+import {findCamera, isSimulator} from './appContext'
+import {onEvents, resyncOn} from './useEventStream'
 import {CAMERA_PHASES} from '../constants'
-import type {Camera, CameraPhase, CameraRole} from './api.types.js'
-import type {CameraPhaseEntry, CameraStatusUpdatedEvent} from './api.events.js'
-import type {EventHandlers} from './events/handlers.js'
-import type {EventStream} from './useEventStream.js'
+import type {Camera, CameraPhase, CameraRole} from './api.types'
+import type {CameraPhaseEntry, CameraStatusUpdatedEvent} from './api.events'
+import type {EventHandlers} from './events/handlers'
+import type {EventStream} from './useEventStream'
 
 /** A cooled camera's latest status sample, as `camera_status_updated` reports it. */
 export type CameraStatus = Pick<CameraStatusUpdatedEvent, 'temperature_c' | 'cooler_on' | 'dew_heater_on'> & {

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {IDLE_HIDE_MS, useOverlayVisibility} from './useOverlayVisibility.js'
+import {IDLE_HIDE_MS, useOverlayVisibility} from './useOverlayVisibility'
 
 /** The image a press lands on, and a control over it. */
 const image = document.createElement('canvas')

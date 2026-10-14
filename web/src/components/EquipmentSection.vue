@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import {ref, computed, useTemplateRef, watch} from 'vue'
-import {useError} from '../composables/useError.js'
-import {useTelescopeSetup} from '../composables/useTelescopeSetup.js'
-import {useClickOutside} from '../composables/useClickOutside.js'
-import {formatFov} from '../utils/format.js'
-import {CAMERA_DATABASE} from '../constants/cameras.js'
+import {useError} from '../composables/useError'
+import {useTelescopeSetup} from '../composables/useTelescopeSetup'
+import {useClickOutside} from '../composables/useClickOutside'
+import {formatFov} from '../utils/format'
+import {CAMERA_DATABASE} from '../constants/cameras'
 import {TELESCOPE_LIMITS, HELP_TEXTS} from '../constants'
 import {BaseAlert, BaseToggle, BaseInfoIcon, CollapseToggle} from './ui'
 import SelectedCameraTag from './SelectedCameraTag.vue'
-import type {CameraOptics, FieldOfView} from '../composables/useTelescopeSetup.js'
-import type {InstalledDatabaseInfo} from '../composables/api.types.js'
+import type {CameraOptics, FieldOfView} from '../composables/useTelescopeSetup'
+import type {InstalledDatabaseInfo} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   /** The selected camera's info, `null` with none selected. */

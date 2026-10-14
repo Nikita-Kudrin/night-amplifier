@@ -1,5 +1,5 @@
 import {nextTick, reactive} from 'vue'
-import {useSectionMirror} from './useSectionMirror.js'
+import {useSectionMirror} from './useSectionMirror'
 
 describe('useSectionMirror', () => {
     it('copies only its keys, and follows a deep change to them', async () => {

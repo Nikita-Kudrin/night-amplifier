@@ -286,7 +286,7 @@ pub async fn solve_frame(state: &Arc<AppState>, frame: Arc<Frame>, source: Solve
 
             if let Some(dir) = outcome.direction {
                 let direction = PushDirection::new(dir, fov_deg);
-                let (angle, hint) = (direction.angle_deg, direction.direction_hint.clone());
+                let (angle, hint) = (direction.angle_deg, direction.direction_hint.as_str());
                 let camera = direction.solved_camera.clone();
                 if state.push_to_announcer.announce_direction(direction) {
                     info!(

@@ -1,15 +1,15 @@
 import {computed} from 'vue'
 import type {DeepReadonly} from 'vue'
-import {useError} from './useError.js'
+import {useError} from './useError'
 import {
     useApplySettings,
     useCameraStatus,
     useSelectedCamera,
     useSelectedCameraRole,
     useSettings,
-} from './appContext.js'
-import type {HardwarePatch} from './api.js'
-import type {CameraCaptureProfile, CameraRole, Settings} from './api.types.js'
+} from './appContext'
+import type {HardwarePatch} from './api'
+import type {CameraCaptureProfile, CameraRole, Settings} from './api.types'
 
 /** A hardware edit, before `apply` names the camera it is for. */
 export type HardwareEdit = Omit<HardwarePatch, 'camera_role'>
@@ -48,7 +48,7 @@ export function useCameraHardwareSettings() {
 
     const liveStatus = computed(() => {
         const name = currentCamera.value?.name
-        return name ? cameraStatus.value?.[name] : null
+        return name ? cameraStatus.value[name] : null
     })
 
     async function apply(edit: HardwareEdit, role: CameraRole = settingsRole.value) {

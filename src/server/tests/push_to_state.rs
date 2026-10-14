@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use super::helpers::create_test_state;
-use crate::push_to::{PushToDirectionResponse, TelescopeSettings};
+use crate::push_to::{DirectionHint, PushToDirectionResponse, TelescopeSettings};
 use crate::server::dto::UpdateSettingsRequest;
 use crate::session::services::PushToState;
 use crate::session::services::{optics_change, OpticsChange};
@@ -518,7 +518,7 @@ fn pointing() -> PushToDirectionResponse {
         angle_deg: 37.0,
         distance_deg: 2.5,
         is_close: false,
-        direction_hint: "NE".into(),
+        direction_hint: DirectionHint::NorthEast,
         direction_full: "North-East".into(),
         current_position: None,
         target: None,

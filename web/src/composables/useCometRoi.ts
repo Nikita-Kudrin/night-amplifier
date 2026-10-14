@@ -1,9 +1,9 @@
 import {ref, computed} from 'vue'
 import type {Ref} from 'vue'
-import {updateSettings} from '../composables/api.js'
+import {updateSettings} from '../composables/api'
 import {COMET_ROI_MIN_PX, STACKING_TYPES} from '../constants'
-import type {AppContext} from './appContext.js'
-import type {UpdateSettingsRequest} from './api.types.js'
+import type {AppContext} from './appContext'
+import type {UpdateSettingsRequest} from './api.types'
 
 /** A box on screen, in the container's pixels. */
 export interface ScreenRect {

@@ -1,5 +1,5 @@
 import {describe, it, expect, beforeEach, vi} from 'vitest'
-import {useEyepieceZoom} from '../useEyepieceZoom.js'
+import {useEyepieceZoom} from '../useEyepieceZoom'
 
 const touch = (x: number, y: number) => ({clientX: x, clientY: y})
 

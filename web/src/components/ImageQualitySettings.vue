@@ -9,7 +9,7 @@
  */
 import {computed, reactive, watch} from 'vue'
 import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
-import {formatPercent, formatSigma} from '../utils/format.js'
+import {formatPercent, formatSigma} from '../utils/format'
 import {
   DENOISE_CHROMA_STRENGTH_LIMITS,
   BACKGROUND_GRAIN_LIMITS,
@@ -20,9 +20,9 @@ import {
   STREAMING_RESOLUTION_OPTIONS,
   HELP_TEXTS,
 } from '../constants'
-import {applyArgs} from '../utils/settings.js'
-import type {SettingApply} from '../utils/settings.js'
-import type {DenoiseSettings, Resolution, SensorCorrectionSettings, Settings} from '../composables/api.types.js'
+import {applyArgs} from '../utils/settings'
+import type {SettingApply} from '../utils/settings'
+import type {DenoiseSettings, Resolution, SensorCorrectionSettings, Settings} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   sensorCorrection: SensorCorrectionSettings

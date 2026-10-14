@@ -3,15 +3,15 @@ import {mount, flushPromises} from '@vue/test-utils'
 import {ref} from 'vue'
 import DewHeaterControl from './DewHeaterControl.vue'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         updateSettings: vi.fn(),
     }))
 
-import {updateSettings} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
-import {camera, settings} from '../test/fixtures.js'
-import type {CameraRole} from '../composables/api.types.js'
+import {updateSettings} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
+import {camera, settings} from '../test/fixtures'
+import type {CameraRole} from '../composables/api.types'
 import type {VueWrapper} from '@vue/test-utils'
 
 function provides(role: CameraRole = 'main') {

@@ -183,7 +183,7 @@ pub fn generate() -> String {
 
     let mut out = String::from(HEADER);
     let imported = imported.join(",\n    ");
-    out.push_str(&format!("\nimport type {{\n    {imported},\n}} from './api.types.js'\n"));
+    out.push_str(&format!("\nimport type {{\n    {imported},\n}} from './api.types'\n"));
     out.push_str(&body);
     out.push_str(
         "\n/**\n \

@@ -2,27 +2,24 @@ import {computed, isRef, ref} from 'vue'
 import type {UnwrapRef} from 'vue'
 import {vi} from 'vitest'
 import type {Mock} from 'vitest'
-import {SERVER_EVENTS} from '../composables/api.events.js'
-import type {CaptureState, EventOf, ServerEvent, ServerEventType, SyncedEvent} from '../composables/api.events.js'
-import type {CameraRole} from '../composables/api.types.js'
-import type {EventHandlers, EventStream, Sync} from '../composables/useEventStream.js'
-import {handlerOf} from '../composables/events/handlers.js'
-import type {StackCrop} from '../composables/events/captureEvents.js'
-import {NOT_SOLVING} from '../composables/events/pushToEvents.js'
-import type {ClientPushDirection, CurrentTarget, PlateSolving} from '../composables/events/pushToEvents.js'
-import type {AstapInstallProgress, CatalogInstallProgress} from '../composables/events/installEvents.js'
+import type {EventOf, ServerEvent, ServerEventType, SyncedEvent} from '../composables/api.events'
+import type {CameraRole, CaptureState} from '../composables/api.types'
+import type {EventHandlers, EventStream, Sync} from '../composables/useEventStream'
+import {handlerOf} from '../composables/events/handlers'
+import type {StackCrop} from '../composables/events/captureEvents'
+import {NOT_SOLVING} from '../composables/events/pushToEvents'
+import type {ClientPushDirection, CurrentTarget, PlateSolving} from '../composables/events/pushToEvents'
+import type {AstapInstallProgress, CatalogInstallProgress} from '../composables/events/installEvents'
 
 /**
- * `{type, ...fields}`, typed by `api.events.ts`: a field its event does not carry, or a value
- * of the wrong type, does not compile. Fields may be left out: a handler under test reads
- * only some. A JS caller is not type-checked, so it still meets a runtime refusal of a type
- * the server never sends.
+ * `{type, ...fields}`, typed by `api.events.ts`: a type the server never sends, a field its
+ * event does not carry, or a value of the wrong type, does not compile. Fields may be left
+ * out: a handler under test reads only some.
  */
 export function serverEvent<K extends ServerEventType>(
     type: K,
     fields: Partial<Omit<EventOf<K>, 'type'>> = {},
 ): EventOf<K> {
-    if (!(type in SERVER_EVENTS)) throw new Error(`the server sends no '${type}' event`)
     return {...fields, type} as EventOf<K>
 }
 

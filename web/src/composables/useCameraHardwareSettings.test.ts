@@ -1,17 +1,17 @@
 import {defineComponent, h, nextTick, ref} from 'vue'
-import {mountWithDefaults} from '../test/mount.js'
-import type {ProvideOverrides} from '../test/mount.js'
-import {camera, settings} from '../test/fixtures.js'
-import {hardwareBlock, useCameraHardwareSettings} from './useCameraHardwareSettings.js'
-import type {HardwareEdit} from './useCameraHardwareSettings.js'
-import type {HardwarePatch} from './api.js'
-import type {CameraStatus} from './cameraStore.js'
-import type {CameraRole} from './api.types.js'
+import {mountWithDefaults} from '../test/mount'
+import type {ProvideOverrides} from '../test/mount'
+import {camera, settings} from '../test/fixtures'
+import {hardwareBlock, useCameraHardwareSettings} from './useCameraHardwareSettings'
+import type {HardwareEdit} from './useCameraHardwareSettings'
+import type {HardwarePatch} from './api'
+import type {CameraStatus} from './cameraStore'
+import type {CameraRole} from './api.types'
 
-vi.mock('./api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('./api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {ApiError, updateSettings} from './api.js'
+import {ApiError, updateSettings} from './api'
 
 const CAMERAS = [
     camera({id: 'main1', name: 'Imaging Cam', info: {has_cooler: true}}),

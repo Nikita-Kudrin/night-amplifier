@@ -2,15 +2,15 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {mount} from '@vue/test-utils'
 import {nextTick} from 'vue'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         getAiCompute: vi.fn(),
     }))
 
 import HardwareBenchmarkOverlay from './HardwareBenchmarkOverlay.vue'
-import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
-import {aiComputeReport} from '../test/fixtures.js'
-import type {BenchmarkState} from '../composables/api.types.js'
+import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute'
+import {aiComputeReport} from '../test/fixtures'
+import type {BenchmarkState} from '../composables/api.types'
 
 describe('HardwareBenchmarkOverlay', () => {
     beforeEach(() => resetAiCompute())

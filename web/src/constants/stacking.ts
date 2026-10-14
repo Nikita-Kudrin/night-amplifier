@@ -1,9 +1,9 @@
 /** Stacking: the stacking types, outlier rejection and frame weighting. */
-import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
-import type {RejectionMethod, WeightingPreset} from '../composables/api.types.js'
-import {serverLimits} from './serverSettings.js'
-import {byName} from './tables.js'
-import type {Option} from './tables.js'
+import {STACKING_TYPE_VALUES} from '../composables/api.types'
+import type {RejectionMethod, WeightingPreset} from '../composables/api.types'
+import {serverLimits} from './serverSettings'
+import {byName} from './tables'
+import type {Option} from './tables'
 
 /** `StackingType` (`api.types.ts`), by name. */
 export const STACKING_TYPES = byName(STACKING_TYPE_VALUES)

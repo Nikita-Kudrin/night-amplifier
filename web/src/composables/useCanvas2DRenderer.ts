@@ -1,6 +1,6 @@
 import {ref} from 'vue'
-import {rgb8ToRgba8} from '../utils/pixelConversion.js'
-import type {RenderSource, RendererBackend} from './useWebGLRenderer.js'
+import {rgb8ToRgba8} from '../utils/pixelConversion'
+import type {RenderSource, RendererBackend} from './useWebGLRenderer'
 
 /** As `useWebGLRenderer`'s; local, since tests mock that module whole. */
 function isImageBitmap(source: RenderSource): source is ImageBitmap {

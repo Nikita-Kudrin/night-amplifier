@@ -1,8 +1,8 @@
 import {ref, computed} from 'vue'
 import {FIT_MARGIN, ZOOM_LIMITS} from '../constants'
-import {useFullscreen} from './useFullscreen.js'
-import type {FullscreenOptions} from './useFullscreen.js'
-import {clamp, fitScale, touchDistance} from '../utils/viewGeometry.js'
+import {useFullscreen} from './useFullscreen'
+import type {FullscreenOptions} from './useFullscreen'
+import {clamp, fitScale, touchDistance} from '../utils/viewGeometry'
 
 /** What a gesture reads of an event's touches: `TouchList`, or a test's stand-in. */
 export type GestureTouches = Parameters<typeof touchDistance>[0]

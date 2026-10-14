@@ -1,11 +1,11 @@
 import {assert} from 'vitest'
-import {decodeFrame, decodeRgb8Jpeg, SA09_HEADER_SIZE, SA10_MAGIC} from './frameDecoder.js'
-import type {DecodedFrame} from './frameDecoder.js'
+import {decodeFrame, decodeRgb8Jpeg, SA09_HEADER_SIZE, SA10_MAGIC} from './frameDecoder'
+import type {DecodedFrame} from './frameDecoder'
 import {
     createChunkedTestFrame,
     createInvalidMagicBuffer,
     createTestFrame,
-} from '../composables/__tests__/webSocketTestUtils.js'
+} from '../composables/__tests__/webSocketTestUtils'
 
 function jpegFrame(width: number, height: number, payload: number[]): ArrayBuffer {
     const buffer = new ArrayBuffer(16 + payload.length)

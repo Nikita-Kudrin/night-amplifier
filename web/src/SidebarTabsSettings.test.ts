@@ -9,17 +9,17 @@ import {mount, flushPromises} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import {ref, computed} from 'vue'
 import {DEFAULT_SETTINGS} from './constants'
-import {findSliderByLabel} from './test/settingsPanel.js'
-import type * as Api from './composables/api.js'
-import type {Settings, TelescopeSettings, TelescopeSettingsInput, UpdateSettingsRequest} from './composables/api.types.js'
+import {findSliderByLabel} from './test/settingsPanel'
+import type * as Api from './composables/api'
+import type {Settings, TelescopeSettings, TelescopeSettingsInput, UpdateSettingsRequest} from './composables/api.types'
 
-vi.mock('./composables/api.js', async (importOriginal) =>
-    (await import('./test/mockApi.js')).mockApi(await importOriginal<typeof Api>(), {
+vi.mock('./composables/api', async (importOriginal) =>
+    (await import('./test/mockApi')).mockApi(await importOriginal<typeof Api>(), {
         getAstapStatus: vi.fn().mockResolvedValue({ready: true, installed_databases: []}),
     }))
 
-vi.mock('./composables/useEventStream.js', async (importOriginal) => {
-    const {createEventStreamStub} = await import('./test/eventStream.js')
+vi.mock('./composables/useEventStream', async (importOriginal) => {
+    const {createEventStreamStub} = await import('./test/eventStream')
     return {...await importOriginal(), useEventStream: vi.fn(() => createEventStreamStub())}
 })
 
@@ -32,7 +32,7 @@ const CAMERA_INFO = {name: 'Camera A', pixel_size_x_um: 3.76, pixel_size_y_um: 3
 const CAMERA_A = {id: 'cam-a', name: 'Camera A', provider: 'ZWO', connected: true, role: 'main', info: CAMERA_INFO}
 const camerasRef = ref([CAMERA_A])
 
-vi.mock('./composables/useAppState.js', () => ({
+vi.mock('./composables/useAppState', () => ({
     useAppState: vi.fn(() => ({
         loading: ref(false),
         globalError: errorRef,
@@ -40,7 +40,7 @@ vi.mock('./composables/useAppState.js', () => ({
         settings: settingsRef,
         refreshSettings: vi.fn().mockResolvedValue(undefined),
         // Posts only: the answer `mockApi` gives is a fixture, not these settings.
-        applySettings: vi.fn(async (patch: UpdateSettingsRequest) => (await import('./composables/api.js')).updateSettings(patch)),
+        applySettings: vi.fn(async (patch: UpdateSettingsRequest) => (await import('./composables/api')).updateSettings(patch)),
         refreshCameras: vi.fn(),
         initializeState: vi.fn(),
         connectEvents: vi.fn(),
@@ -63,7 +63,7 @@ vi.mock('./composables/useAppState.js', () => ({
 }))
 
 import App from './App.vue'
-import {updateSettings} from './composables/api.js'
+import {updateSettings} from './composables/api'
 
 const TELESCOPE: TelescopeSettings = {
     focal_length_mm: 650,

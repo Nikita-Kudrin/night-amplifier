@@ -1,4 +1,4 @@
-import {tryOnBeforeUnmount} from './lifecycle.js'
+import {tryOnBeforeUnmount} from './lifecycle'
 
 /**
  * Calls `fn` `ms` after the last `schedule`, with that call's arguments.

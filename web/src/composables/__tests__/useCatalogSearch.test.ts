@@ -1,9 +1,9 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {getCatalogClass, messierLabel, useCatalogSearch as originalUseCatalogSearch} from '../useCatalogSearch.js'
+import {getCatalogClass, messierLabel, useCatalogSearch as originalUseCatalogSearch} from '../useCatalogSearch'
 import { mount } from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
-import {catalogEntry} from '../../test/fixtures.js'
-import type {CatalogEntry} from '../api.types.js'
+import {catalogEntry} from '../../test/fixtures'
+import type {CatalogEntry} from '../api.types'
 
 let currentApp: VueWrapper | null = null;
 function useCatalogSearch() {
@@ -17,12 +17,12 @@ function useCatalogSearch() {
     return result
 }
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal(), {
         searchCatalog: vi.fn(),
     }))
 
-import {searchCatalog} from '../api.js'
+import {searchCatalog} from '../api'
 
 describe('getCatalogClass', () => {
     it('returns badge-messier for Messier objects', () => {

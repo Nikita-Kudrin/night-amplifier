@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type {ScreenRect} from '../composables/useCometRoi.js'
+import type {ScreenRect} from '../composables/useCometRoi'
 
 withDefaults(defineProps<{
   isCometMode?: boolean

@@ -4,8 +4,8 @@ import {
     fetchEyepieceSnapshot,
     SNAPSHOT_RETRY_MS,
     SNAPSHOT_RETRY_WINDOW_MS,
-} from '../api.js'
-import {stubFetch} from '../../test/http.js'
+} from '../api'
+import {stubFetch} from '../../test/http'
 
 const SERVER_FILENAME = 'eyepiece_05-09-2026_21-14-03.png'
 

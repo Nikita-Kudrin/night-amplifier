@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import type {Mock} from 'vitest'
-import {useAutoFit, FIT_SETTLE_MS} from './useAutoFit.js'
+import {useAutoFit, FIT_SETTLE_MS} from './useAutoFit'
 
 describe('useAutoFit', () => {
     let fit: Mock<() => void>

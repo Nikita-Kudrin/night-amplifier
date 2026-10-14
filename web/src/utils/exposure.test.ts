@@ -1,4 +1,4 @@
-import {splitExposure, toMicros} from './exposure.js'
+import {splitExposure, toMicros} from './exposure'
 
 describe('exposure', () => {
     it.each([

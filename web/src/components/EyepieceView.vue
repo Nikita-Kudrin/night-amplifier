@@ -1,28 +1,28 @@
 <script setup lang="ts">
 import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
 import type {ComponentPublicInstance} from 'vue'
-import {useImageStream} from '../composables/useImageStream.js'
-import {useFrameRenderer} from '../composables/useFrameRenderer.js'
-import {useEventListener} from '../composables/useEventListener.js'
-import {useFullscreen} from '../composables/useFullscreen.js'
-import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
-import {useEyepieceZoom} from '../composables/useEyepieceZoom.js'
-import {useTimeouts} from '../composables/useTimeouts.js'
+import {useImageStream} from '../composables/useImageStream'
+import {useFrameRenderer} from '../composables/useFrameRenderer'
+import {useEventListener} from '../composables/useEventListener'
+import {useFullscreen} from '../composables/useFullscreen'
+import {useOverlayVisibility} from '../composables/useOverlayVisibility'
+import {useEyepieceZoom} from '../composables/useEyepieceZoom'
+import {useTimeouts} from '../composables/useTimeouts'
 import {
   useCapabilities,
   useEventStreamContext,
   useGuideCamera,
   useMainCamera,
   useSettings,
-} from '../composables/appContext.js'
-import {fetchEyepieceSnapshot} from '../composables/api.js'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
-import {saveBlob} from '../utils/saveBlob.js'
-import {offsetBounds} from '../utils/viewGeometry.js'
+} from '../composables/appContext'
+import {fetchEyepieceSnapshot} from '../composables/api'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {saveBlob} from '../utils/saveBlob'
+import {offsetBounds} from '../utils/viewGeometry'
 import {eyepieceStreamEndpoint, PAGES} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import {BaseSpinner, BaseSplitButton} from './ui'
-import type {ScreenRect} from '../composables/useCometRoi.js'
+import type {ScreenRect} from '../composables/useCometRoi'
 
 const eventStream = useEventStreamContext()
 const settings = useSettings()

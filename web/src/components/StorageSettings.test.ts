@@ -1,8 +1,8 @@
 import {mount} from '@vue/test-utils'
 import StorageSettings from './StorageSettings.vue'
 import ReconnectSettings from './ReconnectSettings.vue'
-import {settingsMirror} from '../utils/settings.js'
-import {findToggleByLabel} from '../test/settingsPanel.js'
+import {settingsMirror} from '../utils/settings'
+import {findToggleByLabel} from '../test/settingsPanel'
 
 describe('StorageSettings', () => {
     function mountSection(server: Parameters<typeof settingsMirror>[0] = {}, props: {hasGuideCamera?: boolean} = {}) {

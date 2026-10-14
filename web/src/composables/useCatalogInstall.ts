@@ -1,19 +1,19 @@
 import {computed, ref, watch} from 'vue'
-import {useEventStreamContext} from './appContext.js'
-import {tryOnMounted, tryOnScopeDispose} from './lifecycle.js'
-import {getCatalogStatus, installCatalog} from './api.js'
-import {ACTIVE_INSTALL_STAGES, ignoresProgress, useInstallSettle} from './useAstapInstall.js'
-import type {InstallOptions, InstallStage} from './useAstapInstall.js'
-import {formatBytes} from '../utils/format.js'
-import type {CatalogStatus} from './api.types.js'
-import type {CatalogInstallProgress} from './events/installEvents.js'
+import {useEventStreamContext} from './appContext'
+import {tryOnMounted, tryOnScopeDispose} from './lifecycle'
+import {getCatalogStatus, installCatalog} from './api'
+import {ACTIVE_INSTALL_STAGES, ignoresProgress, useInstallSettle} from './useAstapInstall'
+import type {InstallOptions, InstallPhase} from './useAstapInstall'
+import {formatBytes} from '../utils/format'
+import type {CatalogStatus} from './api.types'
+import type {CatalogInstallProgress} from './events/installEvents'
 
 /**
  * The catalog install's progress as the installer shows it: the last event over an empty
  * one, so a field its stage has none of is empty. `stage` is '' before any event.
  */
 export type CatalogProgressView = {
-    stage: InstallStage | ''
+    stage: InstallPhase | ''
     fileName: string
     percent: number | null
     bytesDownloaded: number
@@ -21,7 +21,7 @@ export type CatalogProgressView = {
     error: string | null
 } & Partial<Pick<CatalogInstallProgress, 'objectCount'>>
 
-function emptyProgress(stage: InstallStage | '' = ''): CatalogProgressView {
+function emptyProgress(stage: InstallPhase | '' = ''): CatalogProgressView {
     return {stage, fileName: '', percent: null, bytesDownloaded: 0, totalBytes: null, error: null}
 }
 
@@ -103,13 +103,13 @@ export function useCatalogInstall({onComplete}: InstallOptions<CatalogStatus | n
         }
     }
 
-    watch(() => eventStream?.catalogInstallProgress?.value, (p) => p && handleProgress(p), {deep: true})
+    watch(() => eventStream?.catalogInstallProgress.value, (p) => p && handleProgress(p), {deep: true})
 
     const installComplete = computed(() => progress.value.stage === 'completed')
     useInstallSettle(installComplete, {loadStatus, installing, status, onComplete})
 
     tryOnMounted(loadStatus)
-    tryOnScopeDispose(() => eventStream?.clearCatalogInstallProgress?.())
+    tryOnScopeDispose(() => eventStream?.clearCatalogInstallProgress())
 
     return {loading, installing, status, error, progress, canInstall, progressText, installComplete, loadStatus, startInstall}
 }

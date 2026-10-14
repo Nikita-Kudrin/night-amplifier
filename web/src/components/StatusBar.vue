@@ -7,9 +7,9 @@ import StatusIcon from './ui/StatusIcon.vue'
 import StatusNotice from './StatusNotice.vue'
 import type {StatusTone} from './StatusNotice.vue'
 import type {STATUS_ICON_SHAPES} from './ui/StatusIcon.vue'
-import {useEventStreamContext, useSelectedCamera} from '../composables/appContext.js'
-import type {SolveVerdict} from '../composables/api.types.js'
-import {formatPercent} from '../utils/format.js'
+import {useEventStreamContext, useSelectedCamera} from '../composables/appContext'
+import type {SolveVerdict} from '../composables/api.types'
+import {formatPercent} from '../utils/format'
 
 /** A chip: `kind` is its class, `dismiss` (when it has one) what a click on it clears. */
 interface Chip {

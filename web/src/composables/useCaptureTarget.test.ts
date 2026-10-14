@@ -1,13 +1,12 @@
 import {computed, defineComponent, h, nextTick, ref} from 'vue'
 import type {Ref} from 'vue'
 import {mount} from '@vue/test-utils'
-import {mountWithDefaults} from '../test/mount.js'
-import {camera} from '../test/fixtures.js'
-import {useCaptureTarget} from './useCaptureTarget.js'
-import {contextProvides} from './appContext.js'
-import type {CaptureState} from './api.events.js'
-import type {Camera, CameraPhase, CameraRole} from './api.types.js'
-import type {ByCameraName} from './cameraStore.js'
+import {mountWithDefaults} from '../test/mount'
+import {camera} from '../test/fixtures'
+import {useCaptureTarget} from './useCaptureTarget'
+import {contextProvides} from './appContext'
+import type {Camera, CameraPhase, CameraRole, CaptureState} from './api.types'
+import type {ByCameraName} from './cameraStore'
 
 interface Setup {
     role?: CameraRole

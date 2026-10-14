@@ -5,7 +5,7 @@ use crate::camera::{CameraInfo, SensorType};
 use crate::session::state::{
     CaptureSettings, CaptureState, RawFrameSaving, SessionStats, StackingType,
 };
-use crate::server::{CameraInfoResponse, CaptureStatusResponse, SettingsResponse};
+use crate::server::{CameraInfoResponse, CaptureStateDto, CaptureStatusResponse, SettingsResponse};
 
 // ============================================================================
 // API Response Format Tests
@@ -96,7 +96,7 @@ fn test_capture_status_response_from_session() {
 
     let response = CaptureStatusResponse::new(CaptureState::Capturing, &stats, &settings);
 
-    assert_eq!(response.state, "Capturing");
+    assert_eq!(response.state, CaptureStateDto::Capturing);
     assert_eq!(response.frame_count, 100);
     assert_eq!(response.stacked_count, 95);
     assert_eq!(response.rejected_count, 5);

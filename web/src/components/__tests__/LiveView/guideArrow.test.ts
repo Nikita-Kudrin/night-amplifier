@@ -1,6 +1,6 @@
-import {setupMocks, mountLiveView} from './setup.js'
-import {camera, clientDirection} from '../../../test/fixtures.js'
-import type {PushToTarget} from '../../../composables/api.events.js'
+import {setupMocks, mountLiveView} from './setup'
+import {camera, clientDirection} from '../../../test/fixtures'
+import type {PushToTarget} from '../../../composables/api.events'
 
 describe('LiveView - Guide Arrow Integration', () => {
     beforeEach(() => {
@@ -37,7 +37,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 45,
                     distanceDeg: 10,
-                    directionHint: 'NorthEast',
+                    directionHint: 'NE',
                     isClose: false,
                 }),
                 currentTarget: null,
@@ -51,7 +51,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 45,
                     distanceDeg: 10,
-                    directionHint: 'NorthEast',
+                    directionHint: 'NE',
                     isClose: false,
                 }),
                 currentTarget: {
@@ -72,7 +72,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 135,
                     distanceDeg: 15,
-                    directionHint: 'SouthEast',
+                    directionHint: 'SE',
                     isClose: false,
                 }),
                 currentTarget: {
@@ -92,7 +92,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 90,
                     distanceDeg: 25.5,
-                    directionHint: 'East',
+                    directionHint: 'E',
                     isClose: false,
                 }),
                 currentTarget: {
@@ -112,7 +112,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 0,
                     distanceDeg: 0.5,
-                    directionHint: 'North',
+                    directionHint: 'N',
                     isClose: true,
                 }),
                 currentTarget: {
@@ -132,7 +132,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 225,
                     distanceDeg: 8,
-                    directionHint: 'SouthWest',
+                    directionHint: 'SW',
                     isClose: false,
                 }),
                 currentTarget: {
@@ -144,7 +144,7 @@ describe('LiveView - Guide Arrow Integration', () => {
             })
 
             const guideArrow = wrapper.findComponent({name: 'GuideArrow'})
-            expect(guideArrow.props('direction').directionHint).toBe('SouthWest')
+            expect(guideArrow.props('direction').directionHint).toBe('SW')
         })
     })
 
@@ -178,7 +178,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 pushDirection: clientDirection({
                     angleDeg: 180,
                     distanceDeg: 12,
-                    directionHint: 'South',
+                    directionHint: 'S',
                     isClose: false,
                 }),
                 currentTarget: {
@@ -197,15 +197,15 @@ describe('LiveView - Guide Arrow Integration', () => {
 
     describe('all direction hints', () => {
         const directions = [
-            {hint: 'North', angle: 0},
-            {hint: 'NorthEast', angle: 45},
-            {hint: 'East', angle: 90},
-            {hint: 'SouthEast', angle: 135},
-            {hint: 'South', angle: 180},
-            {hint: 'SouthWest', angle: 225},
-            {hint: 'West', angle: 270},
-            {hint: 'NorthWest', angle: 315},
-        ]
+            {hint: 'N', angle: 0},
+            {hint: 'NE', angle: 45},
+            {hint: 'E', angle: 90},
+            {hint: 'SE', angle: 135},
+            {hint: 'S', angle: 180},
+            {hint: 'SW', angle: 225},
+            {hint: 'W', angle: 270},
+            {hint: 'NW', angle: 315},
+        ] as const
 
         directions.forEach(({hint, angle}) => {
             it(`renders guide arrow for ${hint} direction`, () => {

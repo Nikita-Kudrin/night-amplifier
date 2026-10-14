@@ -1,7 +1,7 @@
 import {assert} from 'vitest'
-import type {DatabaseType, InstalledDatabaseInfo} from '../composables/api.types.js'
-import {databaseType} from '../test/fixtures.js'
-import {fovWarning} from './fovWarning.js'
+import type {DatabaseType, InstalledDatabaseInfo} from '../composables/api.types'
+import {databaseType} from '../test/fixtures'
+import {fovWarning} from './fovWarning'
 
 const D80 = databaseType({id: 'D80', min_fov_deg: 0.15, max_fov_deg: 6, installed: true})
 const D05 = databaseType({id: 'D05', min_fov_deg: 0.6, max_fov_deg: 10, installed: true})

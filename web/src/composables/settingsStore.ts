@@ -1,7 +1,7 @@
 import {readonly, ref} from 'vue'
-import {getSettings, updateSettings} from './api.js'
-import type {Settings, UpdateSettingsRequest} from './api.types.js'
-import type {EventHandlers} from './events/handlers.js'
+import {getSettings, updateSettings} from './api'
+import type {Settings, UpdateSettingsRequest} from './api.types'
+import type {EventHandlers} from './events/handlers'
 
 interface Queued {
     promise: Promise<Settings | null>
@@ -37,7 +37,7 @@ export function createSettingsStore() {
     let queued: Queued | null = null
 
     function adopt(at: number, value: Settings) {
-        if (!value || at < adopted) return
+        if (at < adopted) return
         adopted = at
         settings.value = value
         simulatorEnabled.value = value.use_simulated_camera

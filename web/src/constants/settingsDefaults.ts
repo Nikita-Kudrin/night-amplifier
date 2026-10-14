@@ -1,7 +1,7 @@
 /** The settings a UI falls back on before (or without) the server's answer. */
 import type {DeepReadonly} from 'vue'
-import {SERVER_DEFAULT_SETTINGS} from '../composables/api.settings.js'
-import type {Settings} from '../composables/api.types.js'
+import {SERVER_DEFAULT_SETTINGS} from '../composables/api.settings'
+import type {Settings} from '../composables/api.types'
 
 function deepFreeze<T extends object>(value: T): DeepReadonly<T> {
     for (const child of Object.values(value)) {

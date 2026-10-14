@@ -1,8 +1,8 @@
-import {SERVER_DEFAULT_SETTINGS, SERVER_SETTING_RANGES} from '../composables/api.settings.js'
-import type {ClampedPath} from '../composables/api.settings.js'
-import type {Settings} from '../composables/api.types.js'
-import type {SettingPath} from '../utils/settings.js'
-import {serverDefault, serverLimits} from './serverSettings.js'
+import {SERVER_DEFAULT_SETTINGS, SERVER_SETTING_RANGES} from '../composables/api.settings'
+import type {ClampedPath} from '../composables/api.settings'
+import type {Settings} from '../composables/api.types'
+import type {SettingPath} from '../utils/settings'
+import {serverDefault, serverLimits} from './serverSettings'
 import {
     AUTO_STRETCH_INTENSITY,
     BACKGROUND_GRAIN_LIMITS,
@@ -19,7 +19,7 @@ import {
     REJECTION_SIGMA_LIMITS,
     SATURATION_BOOST_LIMITS,
     SIMULATED_PRELOAD_LIMITS,
-} from './index.js'
+} from './index'
 
 /** Each control's range, by the setting the server clamps it as; every end a number. */
 const BOUND: [ClampedPath, {min: number; max: number; default: unknown}][] = [

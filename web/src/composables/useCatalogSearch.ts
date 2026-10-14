@@ -1,7 +1,7 @@
 import {ref, watch} from 'vue'
-import {tryOnScopeDispose} from './lifecycle.js'
-import {searchCatalog} from './api.js'
-import type {CatalogEntry} from './api.types.js'
+import {tryOnScopeDispose} from './lifecycle'
+import {searchCatalog} from './api'
+import type {CatalogEntry} from './api.types'
 
 const DEBOUNCE_DELAY_MS = 300
 const MIN_QUERY_LENGTH = 2
@@ -24,7 +24,7 @@ export function getCatalogClass(type: string | null | undefined): string {
 
 /** Messier label to show beside a result, or null when the designation already says it (M 40) */
 export function messierLabel(entry: Pick<CatalogEntry, 'designation' | 'messier'>): string | null {
-    if (!entry?.messier) return null
+    if (!entry.messier) return null
     const compact = (text: string) => text.replace(/\s/g, '').toLowerCase()
     return compact(entry.messier) === compact(entry.designation) ? null : entry.messier
 }

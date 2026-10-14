@@ -4,10 +4,10 @@
  * running. Mirrors both and emits `apply(key, value)`.
  */
 import {BaseToggle} from './ui'
-import {useSectionMirror} from '../composables/useSectionMirror.js'
+import {useSectionMirror} from '../composables/useSectionMirror'
 import {HELP_TEXTS} from '../constants'
-import type {SettingApply} from '../utils/settings.js'
-import type {Settings} from '../composables/api.types.js'
+import type {SettingApply} from '../utils/settings'
+import type {Settings} from '../composables/api.types'
 
 const props = defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */

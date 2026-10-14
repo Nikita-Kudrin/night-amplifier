@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import {ref, onMounted} from 'vue'
-import {getLicenseStatus, updateLicense} from '../composables/api.js'
-import {useError} from '../composables/useError.js'
-import {useSoftwareLicenses} from '../composables/useSoftwareLicenses.js'
+import {getLicenseStatus, updateLicense} from '../composables/api'
+import {useError} from '../composables/useError'
+import {useSoftwareLicenses} from '../composables/useSoftwareLicenses'
 import {BaseAlert, BaseModal, BaseSpinner, ButtonGroup} from './ui'
 import LicenseTexts from './LicenseTexts.vue'
-import type {Option} from '../constants/tables.js'
-import type {LicenseStatus} from '../composables/api.types.js'
+import type {Option} from '../constants/tables'
+import type {LicenseStatus} from '../composables/api.types'
 
 defineEmits<{close: []}>()
 

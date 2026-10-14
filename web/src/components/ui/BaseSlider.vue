@@ -34,7 +34,7 @@ const emit = defineEmits<{
   change: [value: number]
 }>()
 
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+import { useScrollProtect } from '../../composables/useScrollProtect'
 
 const { blockIfScrolling } = useScrollProtect()
 

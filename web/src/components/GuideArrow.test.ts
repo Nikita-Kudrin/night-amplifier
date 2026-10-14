@@ -1,8 +1,9 @@
 import {mount} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import GuideArrow from './GuideArrow.vue'
-import type {pushDirectionFrom, ClientPushDirection} from '../composables/events/pushToEvents.js'
-import type {PushDirection} from '../composables/api.events.js'
+import type {pushDirectionFrom, ClientPushDirection} from '../composables/events/pushToEvents'
+import type {PushDirection} from '../composables/api.events'
+import {DIRECTION_HINT_VALUES} from '../composables/api.types'
 
 type ArrowProps = InstanceType<typeof GuideArrow>['$props']
 
@@ -19,8 +20,8 @@ const DEFAULT_PROPS = {
     angleDeg: 0,
     distanceDeg: 10,
     isClose: false,
-    directionHint: 'North',
-}
+    directionHint: 'N',
+} satisfies FlatProps
 
 const IMAGE_PROPS = {
     imageLeft: 0,
@@ -101,7 +102,7 @@ describe('GuideArrow', () => {
     })
 
     describe('over another camera than the one it was solved on', () => {
-        const OTHER = {...IMAGE_PROPS, angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', fovDeg: 1.45, otherCamera: 'Neptune-C II'}
+        const OTHER = {...IMAGE_PROPS, angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', fovDeg: 1.45, otherCamera: 'Neptune-C II'} satisfies FlatProps
 
         it('drops the chevron, whose rotation belongs to the other camera', () => {
             const wrapper = mountArrow(OTHER)
@@ -135,7 +136,7 @@ describe('GuideArrow', () => {
 
     describe('rendering', () => {
         it('renders arrow wrapper when not on target', () => {
-            const wrapper = mountArrow({angleDeg: 45, directionHint: 'NorthEast'})
+            const wrapper = mountArrow({angleDeg: 45, directionHint: 'NE'})
 
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
             expect(wrapper.find('.on-target').exists()).toBe(false)
@@ -169,12 +170,12 @@ describe('GuideArrow', () => {
             const wrapper = mountArrow({
                 angleDeg: 90,
                 distanceDeg: 5.5,
-                directionHint: 'East',
+                directionHint: 'E',
             })
 
             expect(wrapper.find('.distance-info').exists()).toBe(true)
             expect(wrapper.find('.distance').text()).toBe('5.5°')
-            expect(wrapper.find('.hint').text()).toBe('East')
+            expect(wrapper.find('.hint').text()).toBe('E')
         })
 
         it('does not render distance info when on target', () => {
@@ -190,12 +191,12 @@ describe('GuideArrow', () => {
 
     describe('rotation', () => {
         const rotationCases = [
-            {angle: 0, direction: 'North'},
-            {angle: 90, direction: 'East'},
-            {angle: 180, direction: 'South'},
-            {angle: 270, direction: 'West'},
-            {angle: 135, direction: 'SouthEast'},
-        ]
+            {angle: 0, direction: 'N'},
+            {angle: 90, direction: 'E'},
+            {angle: 180, direction: 'S'},
+            {angle: 270, direction: 'W'},
+            {angle: 135, direction: 'SE'},
+        ] as const
 
         rotationCases.forEach(({angle, direction}) => {
             it(`applies correct rotation for ${direction} (${angle} degrees)`, () => {
@@ -376,7 +377,7 @@ describe('GuideArrow', () => {
     })
 
     describe('direction hints', () => {
-        const hints = ['North', 'NorthEast', 'East', 'SouthEast', 'South', 'SouthWest', 'West', 'NorthWest']
+        const hints = DIRECTION_HINT_VALUES.filter((hint) => hint !== 'OK')
 
         hints.forEach((hint) => {
             it(`displays ${hint} direction hint`, () => {
@@ -437,7 +438,7 @@ describe('GuideArrow', () => {
             const wrapper = mountArrow({
                 angleDeg: 45,
                 distanceDeg: 0.5,
-                directionHint: 'NorthEast',
+                directionHint: 'NE',
                 ...offScreenImageProps,
                 fovDeg: 2,
             })
@@ -540,33 +541,33 @@ describe('GuideArrow', () => {
             const edgeCases = [
                 {
                     angleDeg: 0,
-                    directionHint: 'North',
+                    directionHint: 'N',
                     leftRelation: 'equal',
                     topRelation: 'lessThan',
                     description: 'top edge for north'
                 },
                 {
                     angleDeg: 180,
-                    directionHint: 'South',
+                    directionHint: 'S',
                     leftRelation: 'equal',
                     topRelation: 'greaterThan',
                     description: 'bottom edge for south'
                 },
                 {
                     angleDeg: 90,
-                    directionHint: 'East',
+                    directionHint: 'E',
                     leftRelation: 'greaterThan',
                     topRelation: 'equal',
                     description: 'right edge for east'
                 },
                 {
                     angleDeg: 270,
-                    directionHint: 'West',
+                    directionHint: 'W',
                     leftRelation: 'lessThan',
                     topRelation: 'equal',
                     description: 'left edge for west'
                 },
-            ]
+            ] as const
 
             edgeCases.forEach(({angleDeg, directionHint, leftRelation, topRelation, description}) => {
                 it(`positions near ${description} (${angleDeg}°) when off-screen`, () => {
@@ -585,7 +586,7 @@ describe('GuideArrow', () => {
             })
 
             it('positions near top-right corner for northeast (45°) when off-screen', () => {
-                const wrapper = mountArrow({...offScreenProps, angleDeg: 45, directionHint: 'NorthEast'})
+                const wrapper = mountArrow({...offScreenProps, angleDeg: 45, directionHint: 'NE'})
                 const pos = getPosition(wrapper)
 
                 expect(pos.left).toBeGreaterThan(400)
@@ -593,7 +594,7 @@ describe('GuideArrow', () => {
             })
 
             it('positions near bottom-left corner for southwest (225°) when off-screen', () => {
-                const wrapper = mountArrow({...offScreenProps, angleDeg: 225, directionHint: 'SouthWest'})
+                const wrapper = mountArrow({...offScreenProps, angleDeg: 225, directionHint: 'SW'})
                 const pos = getPosition(wrapper)
 
                 expect(pos.left).toBeLessThan(400)
@@ -605,7 +606,7 @@ describe('GuideArrow', () => {
             const offsetProps = {...IMAGE_PROPS, imageLeft: 100, imageTop: 50, fovDeg: 2, distanceDeg: 5}
 
             it('respects image offset when positioning near top edge', () => {
-                const wrapper = mountArrow({...offsetProps, angleDeg: 0, directionHint: 'North'})
+                const wrapper = mountArrow({...offsetProps, angleDeg: 0, directionHint: 'N'})
                 const pos = getPosition(wrapper)
 
                 expect(pos.left).toBe(500) // 100 + 800/2
@@ -614,7 +615,7 @@ describe('GuideArrow', () => {
             })
 
             it('respects image offset when positioning near right edge', () => {
-                const wrapper = mountArrow({...offsetProps, angleDeg: 90, directionHint: 'East'})
+                const wrapper = mountArrow({...offsetProps, angleDeg: 90, directionHint: 'E'})
                 const pos = getPosition(wrapper)
 
                 expect(pos.left).toBeLessThan(900) // Less than image right
@@ -628,7 +629,7 @@ describe('GuideArrow', () => {
                 const wrapper = mountArrow({
                     angleDeg: 90,
                     distanceDeg: 10,
-                    directionHint: 'East',
+                    directionHint: 'E',
                     imageLeft: 50,
                     imageTop: 0,
                     imageWidth: 400,
@@ -645,7 +646,7 @@ describe('GuideArrow', () => {
                 const wrapper = mountArrow({
                     angleDeg: 180,
                     distanceDeg: 10,
-                    directionHint: 'South',
+                    directionHint: 'S',
                     imageLeft: 0,
                     imageTop: 100,
                     imageWidth: 400,
@@ -680,7 +681,7 @@ describe('GuideArrow', () => {
                         const props = {
                             angleDeg,
                             distanceDeg: 20,
-                            directionHint: 'Off',
+                            directionHint: 'N' as const,
                             imageLeft: 0,
                             imageTop: 0,
                             imageWidth: 800,
@@ -699,7 +700,7 @@ describe('GuideArrow', () => {
                         const props = {
                             angleDeg,
                             distanceDeg: 80,
-                            directionHint: 'Off',
+                            directionHint: 'N' as const,
                             imageLeft: 5,
                             imageTop: 45,
                             imageWidth: 370,
@@ -716,7 +717,7 @@ describe('GuideArrow', () => {
                 const props = {
                     angleDeg: 135,
                     distanceDeg: 50,
-                    directionHint: 'Off',
+                    directionHint: 'N' as const,
                     imageLeft: 0,
                     imageTop: 0,
                     imageWidth: 200,
@@ -733,7 +734,7 @@ describe('GuideArrow', () => {
         describe('circular bounds positioning', () => {
             const circularProps = {
                 distanceDeg: 20,
-                directionHint: 'Off',
+                directionHint: 'N' as const,
                 imageLeft: 0,
                 imageTop: 0,
                 imageWidth: 600,

@@ -72,8 +72,8 @@ pub struct PushToDirectionResponse {
     pub distance_deg: f64,
     /// Whether within fine-adjustment range (<1 degree)
     pub is_close: bool,
-    /// Direction hint (N, NE, E, SE, S, SW, W, NW, OK)
-    pub direction_hint: String,
+    /// Which way to push, in the celestial frame; `OK` once on target.
+    pub direction_hint: DirectionHint,
     /// Full direction description
     pub direction_full: String,
     /// Current position (if solved)
@@ -84,6 +84,48 @@ pub struct PushToDirectionResponse {
     /// camera solves for both views, and its rotation and parity are not the imaging
     /// camera's, so a client draws the chevron only over this camera's picture.
     pub solved_camera: Option<String>,
+}
+
+/// A push direction's compass label, in the celestial frame. Pro's own direction type
+/// maps onto it; the wire spells it `N`…`NW`, and `OK` when on target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
+pub enum DirectionHint {
+    #[serde(rename = "N")]
+    North,
+    #[serde(rename = "NE")]
+    NorthEast,
+    #[serde(rename = "E")]
+    East,
+    #[serde(rename = "SE")]
+    SouthEast,
+    #[serde(rename = "S")]
+    South,
+    #[serde(rename = "SW")]
+    SouthWest,
+    #[serde(rename = "W")]
+    West,
+    #[serde(rename = "NW")]
+    NorthWest,
+    #[serde(rename = "OK")]
+    OnTarget,
+}
+
+impl DirectionHint {
+    /// As the wire spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::North => "N",
+            Self::NorthEast => "NE",
+            Self::East => "E",
+            Self::SouthEast => "SE",
+            Self::South => "S",
+            Self::SouthWest => "SW",
+            Self::West => "W",
+            Self::NorthWest => "NW",
+            Self::OnTarget => "OK",
+        }
+    }
 }
 
 /// Coordinate response (simplified)
@@ -245,6 +287,18 @@ mod tests {
         serde_json::to_string(value).unwrap()
     }
 
+    /// The UI compares the hint against these spellings; `as_str` logs the same ones.
+    #[test]
+    fn a_direction_hint_keeps_its_wire_spelling() {
+        use DirectionHint::*;
+        let hints = [North, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest, OnTarget];
+        let wire: Vec<String> = hints.iter().map(json).collect();
+        assert_eq!(wire, ["N", "NE", "E", "SE", "S", "SW", "W", "NW", "OK"].map(|s| format!("\"{s}\"")));
+        for hint in hints {
+            assert_eq!(json(&hint), format!("\"{}\"", hint.as_str()));
+        }
+    }
+
     /// The REST answers the plugin's values become, captured while they were still
     /// server DTOs: moving them into the domain must not move a byte of the wire.
     #[test]
@@ -253,7 +307,7 @@ mod tests {
             angle_deg: 12.0,
             distance_deg: 3.5,
             is_close: false,
-            direction_hint: "NE".into(),
+            direction_hint: DirectionHint::NorthEast,
             direction_full: "North-East".into(),
             current_position: Some(coordinate()),
             target: Some(coordinate()),

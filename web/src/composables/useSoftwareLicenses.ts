@@ -1,7 +1,7 @@
 import {ref} from 'vue'
-import {tryOnMounted} from './lifecycle.js'
-import {getSoftwareLicenses} from './api.js'
-import {useError} from './useError.js'
+import {tryOnMounted} from './lifecycle'
+import {getSoftwareLicenses} from './api'
+import {useError} from './useError'
 
 /**
  * The build's version and licence texts, loaded on mount — About and the EULA both show

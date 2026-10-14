@@ -10,8 +10,8 @@
  */
 import {computed, ref, watch} from 'vue'
 import {BaseInfoIcon} from './ui'
-import {splitExposure, toMicros} from '../utils/exposure.js'
-import type {ExposureUnit} from '../utils/exposure.js'
+import {splitExposure, toMicros} from '../utils/exposure'
+import type {ExposureUnit} from '../utils/exposure'
 import {EXPOSURE_PRESETS, HELP_TEXTS} from '../constants'
 
 const model = defineModel<number>({required: true})
@@ -41,7 +41,7 @@ watch([value, unit], () => {
   if (us !== null) model.value = us
 })
 
-const presets = computed(() => EXPOSURE_PRESETS[unit.value] || EXPOSURE_PRESETS.ms)
+const presets = computed(() => EXPOSURE_PRESETS[unit.value])
 
 function commit() {
   const us = toMicros(value.value, unit.value)

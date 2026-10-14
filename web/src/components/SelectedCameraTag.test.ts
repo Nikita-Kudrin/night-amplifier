@@ -2,9 +2,9 @@ import {describe, it, expect} from 'vitest'
 import {mount} from '@vue/test-utils'
 import {nextTick, ref} from 'vue'
 import SelectedCameraTag from './SelectedCameraTag.vue'
-import {contextProvides} from '../composables/appContext.js'
-import {camera} from '../test/fixtures.js'
-import type {Camera} from '../composables/api.types.js'
+import {contextProvides} from '../composables/appContext'
+import {camera} from '../test/fixtures'
+import type {Camera} from '../composables/api.types'
 
 const MAIN = camera({id: 'cam-a', name: 'ASI533MC Pro', role: 'main'})
 const GUIDE = camera({id: 'cam-b', name: 'ASI120MM Mini', role: 'guide'})

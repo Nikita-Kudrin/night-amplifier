@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {ref, computed, watch, nextTick, useSlots, useTemplateRef} from 'vue'
 import type {CSSProperties} from 'vue'
-import {useClickOutside} from '../../composables/useClickOutside.js'
-import {useEventListener} from '../../composables/useEventListener.js'
+import {useClickOutside} from '../../composables/useClickOutside'
+import {useEventListener} from '../../composables/useEventListener'
 
 /** A secondary action of the menu. */
 export interface SplitButtonOption {

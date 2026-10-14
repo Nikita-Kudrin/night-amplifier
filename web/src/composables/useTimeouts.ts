@@ -1,4 +1,4 @@
-import {tryOnScopeDispose} from './lifecycle.js'
+import {tryOnScopeDispose} from './lifecycle'
 
 /**
  * `setTimeout` owned by the calling component (or effect scope): whatever is still

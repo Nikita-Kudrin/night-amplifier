@@ -5,16 +5,16 @@ import {ref, nextTick} from 'vue'
 import CoolerControl from './CoolerControl.vue'
 import {COOLER_TEMP_LIMITS} from '../constants'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         updateSettings: vi.fn(),
     }))
 
-import {updateSettings} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
-import {camera, settings} from '../test/fixtures.js'
-import type {ByCameraName, CameraStatus} from '../composables/cameraStore.js'
-import type {Camera, CameraCaptureProfile, CameraInfo, CameraRole, Settings} from '../composables/api.types.js'
+import {updateSettings} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
+import {camera, settings} from '../test/fixtures'
+import type {ByCameraName, CameraStatus} from '../composables/cameraStore'
+import type {Camera, CameraCaptureProfile, CameraInfo, CameraRole, Settings} from '../composables/api.types'
 
 /** The guide camera's block: the defaults, with `fields` over them. */
 function guideCamera(fields: Partial<CameraCaptureProfile>): CameraCaptureProfile {

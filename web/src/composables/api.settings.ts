@@ -4,7 +4,7 @@
  *   UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types
  */
 
-import type {Settings} from './api.types.js'
+import type {Settings} from './api.types'
 
 export const SERVER_DEFAULT_SETTINGS = {
   "exposure_us": 1000000,

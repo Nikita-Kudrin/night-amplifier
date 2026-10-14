@@ -25,7 +25,7 @@ pub enum PushToEvent {
         total_bytes: Option<u64>,
         /// Of the current download, 0-100.
         percent: Option<f32>,
-        stage: Option<String>,
+        stage: Option<InstallStage>,
         /// Of the whole installation, 0-100.
         overall_percent: Option<f32>,
     },
@@ -33,12 +33,12 @@ pub enum PushToEvent {
         component: String,
         /// Of the extraction, 0-100.
         progress: f32,
-        stage: Option<String>,
+        stage: Option<InstallStage>,
         overall_percent: Option<f32>,
     },
     AstapInstallCompleted {
         component: String,
-        stage: Option<String>,
+        stage: Option<InstallStage>,
         overall_percent: Option<f32>,
     },
     AstapInstallFailed {
@@ -73,15 +73,10 @@ fn percent_of(done: u64, total: Option<u64>) -> Option<f32> {
     total.map(|total| (done as f32 / total as f32) * 100.0)
 }
 
-/// The stage's name, and where `fraction` (0-1) of it puts the whole installation.
-fn stage_progress(stage: Option<&InstallStage>, fraction: f32) -> (Option<String>, Option<f32>) {
-    match stage {
-        Some(s) => (
-            Some(s.display_name().to_string()),
-            Some(s.base_progress() + s.weight() * fraction),
-        ),
-        None => (None, None),
-    }
+/// The stage, and where `fraction` (0-1) of it puts the whole installation.
+fn stage_progress(stage: Option<&InstallStage>, fraction: f32) -> (Option<InstallStage>, Option<f32>) {
+    let overall = stage.map(|s| s.base_progress() + s.weight() * fraction);
+    (stage.copied(), overall)
 }
 
 impl PushToEvent {

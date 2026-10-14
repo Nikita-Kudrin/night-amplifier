@@ -7,10 +7,10 @@
  */
 import {computed} from 'vue'
 import {BaseToggle, BaseInfoIcon} from './ui'
-import {useSectionMirror} from '../composables/useSectionMirror.js'
+import {useSectionMirror} from '../composables/useSectionMirror'
 import {HELP_TEXTS, RAW_FRAME_SAVING_MODES} from '../constants'
-import type {SettingApply} from '../utils/settings.js'
-import type {RawFrameSaving, Settings} from '../composables/api.types.js'
+import type {SettingApply} from '../utils/settings'
+import type {RawFrameSaving, Settings} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */

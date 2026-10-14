@@ -7,10 +7,10 @@
  * `useCatalogSearch` for why that is decided by value rather than by a flag.
  */
 import {useTemplateRef} from 'vue'
-import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch.js'
-import {useClickOutside} from '../composables/useClickOutside.js'
+import {useCatalogSearch, getCatalogClass, messierLabel} from '../composables/useCatalogSearch'
+import {useClickOutside} from '../composables/useClickOutside'
 import {BaseSpinner} from './ui'
-import type {CatalogEntry} from '../composables/api.types.js'
+import type {CatalogEntry} from '../composables/api.types'
 
 withDefaults(defineProps<{
   /** A solve is running: the field is locked and Cancel is offered. */
