@@ -12,16 +12,16 @@ export default [
     eslintConfigPrettier,
     {
         files: ['**/*.{js,ts,vue}'],
-        languageOptions: {
-            ecmaVersion: 'latest',
-            sourceType: 'module',
-            // For the remaining JS: tsc resolves names in TypeScript.
-            globals: {...globals.browser, ...globals.vitest, global: 'readonly'},
-        },
+        languageOptions: {ecmaVersion: 'latest', sourceType: 'module'},
         rules: {
             'vue/multi-word-component-names': 'off',
             'no-unused-vars': ['error', {argsIgnorePattern: '^_'}],
         },
+    },
+    // Only this config is JavaScript; tsc resolves names in the TypeScript.
+    {
+        files: ['**/*.js'],
+        languageOptions: {globals: globals.node},
     },
     {
         files: ['**/*.{ts,vue}'],
@@ -37,10 +37,10 @@ export default [
         },
     },
     {
-        files: ['**/*.test.{js,ts}', 'src/test/**', '**/__tests__/**'],
+        files: ['**/*.test.ts', 'src/test/**', '**/__tests__/**'],
         rules: {'@typescript-eslint/no-explicit-any': 'off'},
     },
     {
-        ignores: ['dist/', 'node_modules/'],
+        ignores: ['dist/', 'coverage/', 'node_modules/'],
     },
 ]

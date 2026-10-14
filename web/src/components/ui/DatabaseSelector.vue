@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type {DatabaseType} from '../../composables/api.types.js'
+import type {DatabaseType} from '../../composables/api.types'
 
 const props = withDefaults(defineProps<{
   databases: readonly DatabaseType[]

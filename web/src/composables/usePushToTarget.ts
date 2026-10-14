@@ -4,10 +4,10 @@ import {
     setTargetByCoordinates,
     clearTarget as apiClearTarget,
     cancelPushToSolve as apiCancelSolve,
-} from './api.js'
-import {runDirectly} from './useError.js'
-import type {ErrorHandler} from './useError.js'
-import type {EventStream} from './useEventStream.js'
+} from './api'
+import {runDirectly} from './useError'
+import type {ErrorHandler} from './useError'
+import type {EventStream} from './useEventStream'
 
 export interface PushToTargetOptions {
     withErrorHandling?: ErrorHandler
@@ -18,7 +18,7 @@ export interface PushToTargetOptions {
 
 /**
  * Push-To target management over the event stream, which owns the target, the push
- * direction and the solve (`events/pushToEvents.js`): requests go to the server here, and
+ * direction and the solve (`events/pushToEvents.ts`): requests go to the server here, and
  * their answers are handed to the stream rather than written into its refs.
  * `withErrorHandling` wraps each request; errors propagate without one.
  */

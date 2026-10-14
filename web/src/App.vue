@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import {ref, onMounted, useTemplateRef} from 'vue'
-import {useEventStream} from './composables/useEventStream.js'
-import {useAppState} from './composables/useAppState.js'
-import {provideAppContext} from './composables/appContext.js'
-import {useAiCompute} from './composables/useAiCompute.js'
-import {useSidebarTabs} from './composables/useSidebarTabs.js'
-import {getAstapStatus, getCatalogStatus} from './composables/api.js'
+import {useEventStream} from './composables/useEventStream'
+import {useAppState} from './composables/useAppState'
+import {provideAppContext} from './composables/appContext'
+import {useAiCompute} from './composables/useAiCompute'
+import {useSidebarTabs} from './composables/useSidebarTabs'
+import {getAstapStatus, getCatalogStatus} from './composables/api'
 import {isEyepiecePage, SIDEBAR_TABS} from './constants'
 
 import CameraPanel from './components/CameraPanel.vue'

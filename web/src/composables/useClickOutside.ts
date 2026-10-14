@@ -1,6 +1,6 @@
 import {unref} from 'vue'
 import type {MaybeRef} from 'vue'
-import {useEventListener} from './useEventListener.js'
+import {useEventListener} from './useEventListener'
 
 /**
  * Calls `onOutside(event)` for a click anywhere but inside `targets` — elements or refs

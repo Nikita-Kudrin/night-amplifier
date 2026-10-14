@@ -1,10 +1,9 @@
 /** Capturing: exposure, gain and binning choices, the capture states and modes. */
-import {CAPTURE_STATE_VALUES} from '../composables/api.events.js'
-import type {CaptureState} from '../composables/api.events.js'
-import type {RawFrameSaving} from '../composables/api.types.js'
-import {serverDefault} from './serverSettings.js'
-import {byName} from './tables.js'
-import type {Option} from './tables.js'
+import {CAPTURE_STATE_VALUES} from '../composables/api.types'
+import type {CaptureState, RawFrameSaving} from '../composables/api.types'
+import {serverDefault} from './serverSettings'
+import {byName} from './tables'
+import type {Option} from './tables'
 
 // Exposure presets by unit
 export const EXPOSURE_PRESETS = {

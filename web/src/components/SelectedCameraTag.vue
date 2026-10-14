@@ -9,8 +9,8 @@
  * land in the guide's profile before either was connected.
  */
 import {computed} from 'vue'
-import {roleLabel} from '../composables/useCameraBadges.js'
-import {useSelectedCamera} from '../composables/appContext.js'
+import {roleLabel} from '../composables/useCameraBadges'
+import {useSelectedCamera} from '../composables/appContext'
 
 const props = withDefaults(defineProps<{
   fallbackName?: string | null

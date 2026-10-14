@@ -6,7 +6,7 @@
  */
 import BaseInfoIcon from './BaseInfoIcon.vue'
 import BaseProLock from './BaseProLock.vue'
-import type {Option} from '../../constants/tables.js'
+import type {Option} from '../../constants/tables'
 
 const model = defineModel<NoInfer<T>>({required: true})
 

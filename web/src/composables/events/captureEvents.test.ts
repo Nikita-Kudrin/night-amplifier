@@ -1,13 +1,13 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {createCaptureEvents} from './captureEvents.js'
-import {sendTo, serverEvent} from '../../test/eventStream.js'
-import type {EventFields} from '../../test/eventStream.js'
-import type {ServerEventType} from '../api.events.js'
+import {createCaptureEvents} from './captureEvents'
+import {sendTo, serverEvent} from '../../test/eventStream'
+import type {EventFields} from '../../test/eventStream'
+import type {ServerEventType} from '../api.events'
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
-import {dismissRecoveryFailure} from '../api.js'
+import {dismissRecoveryFailure} from '../api'
 
 beforeEach(() => vi.clearAllMocks())
 

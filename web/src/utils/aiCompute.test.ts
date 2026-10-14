@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest'
-import {aiComputeOptions, aiComputeSummary, unusableRungs, SYSTEM_DEPENDENCIES_URL} from './aiCompute.js'
-import type {AiComputeReport} from '../composables/api.types.js'
-import {aiComputeReport} from '../test/fixtures.js'
+import {aiComputeOptions, aiComputeSummary, unusableRungs, SYSTEM_DEPENDENCIES_URL} from './aiCompute'
+import type {AiComputeReport} from '../composables/api.types'
+import {aiComputeReport} from '../test/fixtures'
 
 /** This laptop's report: Iris Xe usable, the NVIDIA card without a Vulkan driver. */
 function laptop(overrides: Partial<AiComputeReport> = {}): AiComputeReport {

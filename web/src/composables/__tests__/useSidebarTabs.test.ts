@@ -2,10 +2,10 @@ import {describe, it, expect, vi} from 'vitest'
 import {nextTick, ref} from 'vue'
 import {flushPromises} from '@vue/test-utils'
 import type {Ref} from 'vue'
-import {useSidebarTabs} from '../useSidebarTabs.js'
+import {useSidebarTabs} from '../useSidebarTabs'
 import {SIDEBAR_TABS} from '../../constants'
-import {capabilities as wireCapabilities, proCapabilities} from '../../test/fixtures.js'
-import type {Capabilities} from '../api.types.js'
+import {capabilities as wireCapabilities, proCapabilities} from '../../test/fixtures'
+import type {Capabilities} from '../api.types'
 
 const {MAIN, PUSH_TO, SETTINGS} = SIDEBAR_TABS
 

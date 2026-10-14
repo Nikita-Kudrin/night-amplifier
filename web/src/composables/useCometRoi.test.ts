@@ -1,14 +1,14 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {ref} from 'vue'
 import type {Ref} from 'vue'
-import {useCometRoi} from './useCometRoi.js'
-import {updateSettings} from './api.js'
-import {settings as settingsFixture} from '../test/fixtures.js'
-import type {Settings} from './api.types.js'
-import type {ScreenRect} from './useCometRoi.js'
+import {useCometRoi} from './useCometRoi'
+import {updateSettings} from './api'
+import {settings as settingsFixture} from '../test/fixtures'
+import type {Settings} from './api.types'
+import type {ScreenRect} from './useCometRoi'
 
-vi.mock('./api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('./api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
 describe('useCometRoi', () => {
     let settings: Ref<Settings>

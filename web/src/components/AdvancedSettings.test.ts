@@ -3,19 +3,19 @@ import type {VueWrapper} from '@vue/test-utils'
 import {computed, nextTick, ref} from 'vue'
 import AdvancedSettings from './AdvancedSettings.vue'
 import SettingsPanel from './SettingsPanel.vue'
-import {settingsMirror} from '../utils/settings.js'
-import type {SettingApply} from '../utils/settings.js'
-import {findSliderByLabel, findToggleByLabel} from '../test/settingsPanel.js'
-import {mountWithDefaults} from '../test/mount.js'
-import {settings} from '../test/fixtures.js'
+import {settingsMirror} from '../utils/settings'
+import type {SettingApply} from '../utils/settings'
+import {findSliderByLabel, findToggleByLabel} from '../test/settingsPanel'
+import {mountWithDefaults} from '../test/mount'
+import {settings} from '../test/fixtures'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>()))
 
-import {updateSettings} from '../composables/api.js'
-import type * as Api from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
-import {runDirectly} from '../composables/useError.js'
+import {updateSettings} from '../composables/api'
+import type * as Api from '../composables/api'
+import {contextProvides} from '../composables/appContext'
+import {runDirectly} from '../composables/useError'
 
 function mountSection(server: Parameters<typeof settingsMirror>[0] = {}, simulatorEnabled = ref(false)) {
     const wrapper = mount(AdvancedSettings, {

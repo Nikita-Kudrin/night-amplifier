@@ -1,7 +1,7 @@
 import {ref} from 'vue'
-import type {AstapInstallStatusEvent, CatalogInstallStatusEvent, ServerEvent} from '../api.events.js'
-import {handlerOf} from './handlers.js'
-import type {EventHandlers} from './handlers.js'
+import type {AstapInstallStatusEvent, CatalogInstallStatusEvent, InstallStage, ServerEvent} from '../api.events'
+import {handlerOf} from './handlers'
+import type {EventHandlers} from './handlers'
 
 /**
  * Why an install a page was following ended with the server saying `idle` — nothing
@@ -31,7 +31,7 @@ export type InstallProgress<Extra> = Extra & (
 
 export type AstapInstallProgress = InstallProgress<{
     component: string
-    stageName?: string | null
+    stageId?: InstallStage | null
     overallPercent?: number | null
 }>
 
@@ -65,21 +65,21 @@ export function createInstallEvents() {
             astapInstallProgress.value = {
                 component: data.component, stage: 'downloading',
                 percent: data.percent, bytesDownloaded: data.bytes_downloaded,
-                totalBytes: data.total_bytes, stageName: data.stage,
+                totalBytes: data.total_bytes, stageId: data.stage_id,
                 overallPercent: data.overall_percent, error: null,
             }
         },
         astap_install_extracting(data) {
             astapInstallProgress.value = {
                 component: data.component, stage: 'extracting',
-                percent: data.progress, stageName: data.stage,
+                percent: data.progress, stageId: data.stage_id,
                 overallPercent: data.overall_percent, error: null,
             }
         },
         astap_install_completed(data) {
             astapInstallProgress.value = {
                 component: data.component, stage: 'completed',
-                stageName: data.stage, overallPercent: data.overall_percent, error: null,
+                stageId: data.stage_id, overallPercent: data.overall_percent, error: null,
             }
         },
         astap_install_failed(data) {
@@ -116,7 +116,7 @@ export function createInstallEvents() {
                 return
             }
             astapInstallProgress.value = data.state === 'completed'
-                ? {component: '', stage: 'completed', stageName: '', overallPercent: 100, error: null, ended: true}
+                ? {component: '', stage: 'completed', stageId: null, overallPercent: 100, error: null, ended: true}
                 : {component: '', ...endedFailure(data)}
         },
         catalog_install_status(data) {

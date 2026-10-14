@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { installResizeObserverStub } from '../../test/dom.js'
+import { installResizeObserverStub } from '../../test/dom'
 import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { nextTick, ref, shallowRef } from 'vue'
 import type { Component } from 'vue'
-import type { FrameData, FrameSize, ImageStream } from '../../composables/useImageStream.js'
-import type { RendererBackend, WebGLRenderer } from '../../composables/useWebGLRenderer.js'
-import type { Canvas2DRenderer } from '../../composables/useCanvas2DRenderer.js'
-import type { CameraRole, EyepieceSettings, Settings } from '../../composables/api.types.js'
-import type { EyepieceSnapshot } from '../../composables/api.js'
-import type { AppContext } from '../../composables/appContext.js'
+import type { FrameData, FrameSize, ImageStream } from '../../composables/useImageStream'
+import type { RendererBackend, WebGLRenderer } from '../../composables/useWebGLRenderer'
+import type { Canvas2DRenderer } from '../../composables/useCanvas2DRenderer'
+import type { CameraRole, EyepieceSettings, Settings } from '../../composables/api.types'
+import type { EyepieceSnapshot } from '../../composables/api'
+import type { AppContext } from '../../composables/appContext'
 
 // Mock the image stream composable
-vi.mock('../../composables/useImageStream.js', () => ({
+vi.mock('../../composables/useImageStream', () => ({
   useImageStream: vi.fn(() => ({
     connected: ref(true),
     error: ref<string | null>(null),
@@ -30,7 +30,7 @@ vi.mock('../../composables/useImageStream.js', () => ({
 }))
 
 // Mock renderer composables
-vi.mock('../../composables/useWebGLRenderer.js', () => ({
+vi.mock('../../composables/useWebGLRenderer', () => ({
   useWebGLRenderer: vi.fn(() => ({
     init: vi.fn(() => true),
     render: vi.fn(() => true), // drew, as a live context does
@@ -40,7 +40,7 @@ vi.mock('../../composables/useWebGLRenderer.js', () => ({
   } satisfies WebGLRenderer))
 }))
 
-vi.mock('../../composables/useCanvas2DRenderer.js', () => ({
+vi.mock('../../composables/useCanvas2DRenderer', () => ({
   useCanvas2DRenderer: vi.fn(() => ({
     init: vi.fn(() => false),
     render: vi.fn(() => true),
@@ -51,8 +51,8 @@ vi.mock('../../composables/useCanvas2DRenderer.js', () => ({
 }))
 
 const mockSnapshotFilename = 'eyepiece_05-09-2026_21-14-03.png'
-vi.mock('../../composables/api.js', async (importOriginal) =>
-  (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../../composables/api', async (importOriginal) =>
+  (await import('../../test/mockApi')).mockApi(await importOriginal(), {
     fetchEyepieceSnapshot: vi.fn(async (_circular: boolean) => ({
       blob: new Blob(['png'], { type: 'image/png' }),
       filename: mockSnapshotFilename,
@@ -65,12 +65,12 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-import { useImageStream } from '../../composables/useImageStream.js'
-import * as api from '../../composables/api.js'
-import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility.js'
-import {contextProvides} from '../../composables/appContext.js'
-import { createEventStreamStub } from '../../test/eventStream.js'
-import { camera, capabilities, catalogEntry, clientDirection, settings } from '../../test/fixtures.js'
+import { useImageStream } from '../../composables/useImageStream'
+import * as api from '../../composables/api'
+import { IDLE_HIDE_MS } from '../../composables/useOverlayVisibility'
+import {contextProvides} from '../../composables/appContext'
+import { createEventStreamStub } from '../../test/eventStream'
+import { camera, capabilities, catalogEntry, clientDirection, settings } from '../../test/fixtures'
 
 const fetchEyepieceSnapshot = vi.mocked(api.fetchEyepieceSnapshot)
 

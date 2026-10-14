@@ -8,9 +8,11 @@ import type {
     Camera,
     CameraPhase,
     CameraRole,
+    CaptureState,
+    DirectionHint,
     SolveStage,
     SolveVerdict,
-} from './api.types.js'
+} from './api.types'
 
 /** Capture state changed */
 export interface StateChangedEvent {
@@ -335,7 +337,7 @@ export interface PushDirectionUpdatedEvent {
     type: 'push_direction_updated'
     angle_deg: number
     distance_deg: number
-    direction_hint: string
+    direction_hint: DirectionHint
     is_close: boolean
     fov_deg: number | null
     solved_camera: string | null
@@ -386,6 +388,8 @@ export interface AstapInstallProgressEvent {
     percent: number | null
     /** Current installation stage name */
     stage: string | null
+    /** The same stage as an id, which the UI branches on */
+    stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
 }
@@ -398,6 +402,8 @@ export interface AstapInstallExtractingEvent {
     progress: number
     /** Current installation stage name */
     stage: string | null
+    /** The same stage as an id, which the UI branches on */
+    stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
 }
@@ -408,6 +414,8 @@ export interface AstapInstallCompletedEvent {
     component: string
     /** Current installation stage name */
     stage: string | null
+    /** The same stage as an id, which the UI branches on */
+    stage_id: InstallStage | null
     /** Overall installation progress (0-100) */
     overall_percent: number | null
 }
@@ -537,16 +545,20 @@ export interface CameraPhaseEntry {
     warmup_remaining_s?: number | null
 }
 
-/** DTO for CaptureState serialization */
-export const CAPTURE_STATE_VALUES = [
-    'Idle',
-    'Starting',
-    'Capturing',
-    'Stopping',
-    'Error',
-    'Recovering',
+/**
+ * Where an ASTAP install stands. Sent as `stage_id` beside its label (`stage`), so the UI
+ * branches on the id rather than on the label's wording.
+ */
+export const INSTALL_STAGE_VALUES = [
+    'downloading_cli',
+    'extracting_cli',
+    'cli_completed',
+    'downloading_database',
+    'extracting_database',
+    'database_completed',
+    'catalog_files',
 ] as const
-export type CaptureState = (typeof CAPTURE_STATE_VALUES)[number]
+export type InstallStage = (typeof INSTALL_STAGE_VALUES)[number]
 
 /**
  * A push direction as announced: the plugin's answer plus the solved field of view.
@@ -556,7 +568,7 @@ export type CaptureState = (typeof CAPTURE_STATE_VALUES)[number]
 export interface PushDirection {
     angle_deg: number
     distance_deg: number
-    direction_hint: string
+    direction_hint: DirectionHint
     is_close: boolean
     fov_deg: number | null
     solved_camera: string | null

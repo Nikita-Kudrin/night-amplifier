@@ -4,8 +4,8 @@ import {ref, watch} from 'vue'
 import CameraPanel from './CameraPanel.vue'
 
 // Mock the API module
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         connectCamera: vi.fn(),
         disconnectCamera: vi.fn(),
         configureSimulator: vi.fn(),
@@ -19,13 +19,12 @@ import {
     disconnectCamera,
     getSimulatorConfig,
     removeSimulatedCamera,
-} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
-import {createEventStreamStub} from '../test/eventStream.js'
-import {cameraInfo, settings} from '../test/fixtures.js'
-import type {CaptureState} from '../composables/api.events.js'
-import type {Camera, CameraInfo, CameraPhase, Settings} from '../composables/api.types.js'
-import type {ByCameraName, CameraStatus} from '../composables/cameraStore.js'
+} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
+import {createEventStreamStub} from '../test/eventStream'
+import {cameraInfo, settings} from '../test/fixtures'
+import type {Camera, CameraInfo, CameraPhase, CaptureState, Settings} from '../composables/api.types'
+import type {ByCameraName, CameraStatus} from '../composables/cameraStore'
 
 /** A camera list entry as a test writes it: the info it cares about. */
 type CameraFields = Omit<Camera, 'info'> & {info?: Partial<CameraInfo>}

@@ -4,15 +4,15 @@ import {ref} from 'vue'
 import SettingsPanel from './SettingsPanel.vue'
 import CaptureControls from './CaptureControls.vue'
 import PushToPanel from './PushToPanel.vue'
-import {createEventStreamStub} from '../test/eventStream.js'
-import {settings} from '../test/fixtures.js'
-import {contextProvides} from '../composables/appContext.js'
+import {createEventStreamStub} from '../test/eventStream'
+import {settings} from '../test/fixtures'
+import {contextProvides} from '../composables/appContext'
 
 // Mock dependencies that aren't injections
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         getStackingTypes: vi.fn(async () => []),
-        getAstapStatus: vi.fn(async () => (await import('../test/fixtures.js')).astapStatus({ready: false})),
+        getAstapStatus: vi.fn(async () => (await import('../test/fixtures')).astapStatus({ready: false})),
     }))
 
 describe('Injection Resilience', () => {

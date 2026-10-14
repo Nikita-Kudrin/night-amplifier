@@ -1,9 +1,9 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount} from '@vue/test-utils'
-import {setupMocks, mountLiveView} from './setup.js'
+import {setupMocks, mountLiveView} from './setup'
 import LiveView from '../../LiveView.vue'
-import {contextProvides} from '../../../composables/appContext.js'
-import type {Mocks} from './setup.js'
+import {contextProvides} from '../../../composables/appContext'
+import type {Mocks} from './setup'
 
 describe('LiveView - Placeholder State', () => {
     let mocks: Mocks

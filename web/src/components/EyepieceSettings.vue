@@ -8,11 +8,11 @@
  * fields Processing edits. A typed screen field is held out of syncs until it is sent.
  */
 import {BaseToggle, BaseInfoIcon, SettingSelect} from './ui'
-import {useDebouncedCall} from '../composables/useDebouncedCall.js'
-import {useSectionMirror} from '../composables/useSectionMirror.js'
+import {useDebouncedCall} from '../composables/useDebouncedCall'
+import {useSectionMirror} from '../composables/useSectionMirror'
 import {EYEPIECE_STREAM_RESOLUTION_OPTIONS, HELP_TEXTS, SETTINGS_DEBOUNCE_MS} from '../constants'
-import type {EyepieceFields, SettingApply} from '../utils/settings.js'
-import type {EyepieceSettings} from '../composables/api.types.js'
+import type {EyepieceFields, SettingApply} from '../utils/settings'
+import type {EyepieceSettings} from '../composables/api.types'
 
 const props = defineProps<{
   eyepiece: EyepieceSettings

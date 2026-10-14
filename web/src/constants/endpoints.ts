@@ -1,8 +1,8 @@
 /**
- * Where the server answers. REST calls go through `api.js` under `API_BASE`; the sockets
+ * Where the server answers. REST calls go through `api.ts` under `API_BASE`; the sockets
  * and the eyepiece pages are named here so a route is spelled once.
  */
-import type {CameraRole} from '../composables/api.types.js'
+import type {CameraRole} from '../composables/api.types'
 
 export const API_BASE = '/api'
 

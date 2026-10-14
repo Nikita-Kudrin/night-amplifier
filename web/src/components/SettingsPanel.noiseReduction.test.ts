@@ -3,18 +3,18 @@ import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {flushPromises} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import BaseSlider from './ui/BaseSlider.vue'
-import {settings} from '../test/fixtures.js'
-import {findSliderByLabel, findToggleByLabel, mountSettingsPanel} from '../test/settingsPanel.js'
-import type * as Api from '../composables/api.js'
+import {settings} from '../test/fixtures'
+import {findSliderByLabel, findToggleByLabel, mountSettingsPanel} from '../test/settingsPanel'
+import type * as Api from '../composables/api'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>(), {
         updateSettings: vi.fn(),
         getAiCompute: vi.fn(),
         remeasureAiCompute: vi.fn(),
     }))
 
-import {updateSettings} from '../composables/api.js'
+import {updateSettings} from '../composables/api'
 
 describe('SettingsPanel noise reduction', () => {
     beforeEach(() => {

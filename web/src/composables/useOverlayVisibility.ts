@@ -1,5 +1,5 @@
 import {ref} from 'vue'
-import {tryOnScopeDispose} from './lifecycle.js'
+import {tryOnScopeDispose} from './lifecycle'
 import {TOUCH_SLOP_PX} from '../constants'
 
 /**

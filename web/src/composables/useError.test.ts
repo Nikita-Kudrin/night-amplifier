@@ -1,4 +1,4 @@
-import {useError} from './useError.js'
+import {useError} from './useError'
 
 describe('useError', () => {
     it('shows a failure\'s message and resolves to nothing', async () => {

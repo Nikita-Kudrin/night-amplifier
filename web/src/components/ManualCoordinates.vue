@@ -6,8 +6,8 @@
  * fields cleared, so a refused target keeps what was typed.
  */
 import {ref} from 'vue'
-import {useCoordinateInput} from '../composables/useCoordinates.js'
-import type {TypedCoordinates} from '../composables/useCoordinates.js'
+import {useCoordinateInput} from '../composables/useCoordinates'
+import type {TypedCoordinates} from '../composables/useCoordinates'
 import {BaseToggle} from './ui'
 
 const props = defineProps<{

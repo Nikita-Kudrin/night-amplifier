@@ -1,13 +1,13 @@
 import {computed, ref} from 'vue'
-import type {CatalogEntry, Coordinate, SolveVerdict} from '../api.types.js'
-import type {PushDirection, PushToTarget} from '../api.events.js'
-import type {EventHandlers} from './handlers.js'
+import type {CatalogEntry, Coordinate, DirectionHint, SolveVerdict} from '../api.types'
+import type {PushDirection, PushToTarget} from '../api.events'
+import type {EventHandlers} from './handlers'
 
 /** A push direction in the client's casing; `fovDeg` is 0 until a solve measured one. */
 export interface ClientPushDirection {
     angleDeg: number
     distanceDeg: number
-    directionHint: string
+    directionHint: DirectionHint
     isClose: boolean
     fovDeg: number
     solvedCamera: string | null

@@ -1,6 +1,6 @@
 <script setup lang="ts" generic="T extends string | number">
-import type {Option} from '../../constants/tables.js'
-import { useScrollProtect } from '../../composables/useScrollProtect.js'
+import type {Option} from '../../constants/tables'
+import { useScrollProtect } from '../../composables/useScrollProtect'
 
 withDefaults(defineProps<{
   modelValue?: NoInfer<T> | null

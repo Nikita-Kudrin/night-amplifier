@@ -1,4 +1,4 @@
-import * as api from './api.js'
+import * as api from './api'
 import {
     ApiError,
     ignoreProOnly,
@@ -6,9 +6,9 @@ import {
     isProOnly,
     LONG_REQUEST_TIMEOUT_MS,
     REQUEST_TIMEOUT_MS,
-} from './api.js'
-import {envelope, refusal, stubFetch, textResponse} from '../test/http.js'
-import type {Endpoint} from '../test/mockApi.js'
+} from './api'
+import {envelope, refusal, stubFetch, textResponse} from '../test/http'
+import type {Endpoint} from '../test/mockApi'
 import type {Mock} from 'vitest'
 
 const JSON_HEADERS = {'Content-Type': 'application/json'}
@@ -116,7 +116,7 @@ describe('API Client', () => {
         const endpoints = Object.entries(api)
             .filter(([, value]) => value?.constructor?.name === 'AsyncFunction')
             .map(([name]) => name)
-            .filter((name) => name !== 'fetchEyepieceSnapshot') // eyepieceSnapshot.test.js
+            .filter((name) => name !== 'fetchEyepieceSnapshot') // eyepieceSnapshot.test.ts
         expect(new Set(CALLS.map(([name]) => name))).toEqual(new Set(endpoints))
     })
 

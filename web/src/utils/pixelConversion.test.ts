@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {rgb8ToRgba8} from './pixelConversion.js'
+import {rgb8ToRgba8} from './pixelConversion'
 
 describe('pixelConversion', () => {
     describe('rgb8ToRgba8', () => {

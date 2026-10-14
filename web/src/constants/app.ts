@@ -1,5 +1,5 @@
 /** The app shell: sidebar tabs, and what an unanswered `/api/capabilities` means. */
-import type {Capabilities} from '../composables/api.types.js'
+import type {Capabilities} from '../composables/api.types'
 
 // Sidebar tabs: the header's compass and gear each show their panel alone
 export const SIDEBAR_TABS = {

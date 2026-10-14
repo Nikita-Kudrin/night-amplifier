@@ -1,7 +1,7 @@
 import {FIT_MARGIN} from '../constants'
-import {fitScale} from '../utils/viewGeometry.js'
-import type {StreamCrop, StreamFrameSize} from './api.events.js'
-import type {View} from './usePanZoom.js'
+import {fitScale} from '../utils/viewGeometry'
+import type {StreamCrop, StreamFrameSize} from './api.events'
+import type {View} from './usePanZoom'
 
 /**
  * Keeps the observer's framing when the server's auto crop moves (`stack_crop_changed`).
@@ -40,7 +40,7 @@ export function reframeForCrop({from, to, oldDims, newDims, view}: CropChange & 
     view: View
 }): View | null {
     const like = to ?? from
-    if (!like || !oldDims?.width || !oldDims?.height || !newDims?.width || !newDims?.height) return null
+    if (!like || !oldDims?.width || !oldDims.height || !newDims?.width || !newDims.height) return null
     const before = rectOf(from, like)
     const after = rectOf(to, like)
     // Stream pixels per stack pixel, before and after: a frame is its crop scaled into the box.
@@ -63,7 +63,7 @@ export function reframeForCrop({from, to, oldDims, newDims, view}: CropChange & 
 
 /** Whether `view` is the fit `usePanZoom.fitToView` gives `dims` in `container`. */
 export function isFitted(view: View, container: Size | null | undefined, dims: Size | null | undefined) {
-    if (!container?.width || !dims?.width || !dims?.height) return true
+    if (!container?.width || !dims?.width || !dims.height) return true
     const fit = fitScale(container, dims.width, dims.height, FIT_MARGIN)
     const still = view.position.x === 0 && view.position.y === 0
     return still && Math.abs(view.scale - fit) <= fit * 1e-6
@@ -90,7 +90,7 @@ export function useCropFraming() {
     function take(dims?: Size | null): CropChange | null {
         if (!pending) return null
         const {from, to, frame} = pending
-        if (frame && (dims?.width !== frame.width || dims?.height !== frame.height)) return null
+        if (frame && (dims?.width !== frame.width || dims.height !== frame.height)) return null
         pending = null
         return {from, to}
     }

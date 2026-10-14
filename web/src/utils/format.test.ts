@@ -8,7 +8,7 @@ import {
     formatSigma,
     formatTemperature,
     MISSING,
-} from './format.js'
+} from './format'
 
 describe('format', () => {
     it('formats a fraction as a percentage', () => {

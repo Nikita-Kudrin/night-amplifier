@@ -1,11 +1,11 @@
 import {computed, ref, watch} from 'vue'
 import type {Ref} from 'vue'
-import {tryOnBeforeUnmount, tryOnMounted} from './lifecycle.js'
-import {useWebGLRenderer} from './useWebGLRenderer.js'
-import type {RenderSource, RendererBackend} from './useWebGLRenderer.js'
-import {useCanvas2DRenderer} from './useCanvas2DRenderer.js'
-import type {FrameData, FrameSize} from './useImageStream.js'
-import {formatResolution} from '../utils/format.js'
+import {tryOnBeforeUnmount, tryOnMounted} from './lifecycle'
+import {useWebGLRenderer} from './useWebGLRenderer'
+import type {RenderSource, RendererBackend} from './useWebGLRenderer'
+import {useCanvas2DRenderer} from './useCanvas2DRenderer'
+import type {FrameData, FrameSize} from './useImageStream'
+import {formatResolution} from '../utils/format'
 
 /** What the frame on screen is drawn by: a renderer, or `jpeg`, the stream's own. */
 export type FrameBackend = RendererBackend | 'jpeg'
@@ -127,7 +127,7 @@ export function useFrameRenderer({frameData, dimensions, isJpeg, canvases, onSiz
         const drew = ready.map((surface) => surface.draw(held)).some(Boolean)
         if (!drew) return
         const {width, height} = held
-        if (drawnSize?.width === width && drawnSize?.height === height) return
+        if (drawnSize?.width === width && drawnSize.height === height) return
         drawnSize = {width, height}
         onSizeChange?.(drawnSize)
     }

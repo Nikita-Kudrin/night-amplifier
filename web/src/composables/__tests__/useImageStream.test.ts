@@ -11,14 +11,14 @@ import {
     createRgb8Lz4Buffer,
     createInvalidMagicBuffer,
     setupGlobalWebSocketMock,
-} from './webSocketTestUtils.js'
+} from './webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
 import {nextTick, ref} from 'vue'
 import type {MaybeRefOrGetter} from 'vue'
-import {IMAGE_LIVENESS_MS, NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream.js'
-import type {ImageStream, ImageStreamOptions} from '../useImageStream.js'
+import {IMAGE_LIVENESS_MS, NO_FRAME, useImageStream as originalUseImageStream} from '../useImageStream'
+import type {ImageStream, ImageStreamOptions} from '../useImageStream'
 import {WS_RECONNECT} from '../../constants'
 import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'

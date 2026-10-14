@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import {ref, computed, onMounted, onUnmounted, useTemplateRef, watch} from 'vue'
-import {useImageStream} from '../composables/useImageStream.js'
-import {useFrameRenderer} from '../composables/useFrameRenderer.js'
-import {useEventListener} from '../composables/useEventListener.js'
-import {usePanZoom} from '../composables/usePanZoom.js'
-import {useAutoFit} from '../composables/useAutoFit.js'
-import {useOverlayVisibility} from '../composables/useOverlayVisibility.js'
-import {useCometRoi} from '../composables/useCometRoi.js'
-import {useTimeouts} from '../composables/useTimeouts.js'
-import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming.js'
+import {useImageStream} from '../composables/useImageStream'
+import {useFrameRenderer} from '../composables/useFrameRenderer'
+import {useEventListener} from '../composables/useEventListener'
+import {usePanZoom} from '../composables/usePanZoom'
+import {useAutoFit} from '../composables/useAutoFit'
+import {useOverlayVisibility} from '../composables/useOverlayVisibility'
+import {useCometRoi} from '../composables/useCometRoi'
+import {useTimeouts} from '../composables/useTimeouts'
+import {isFitted, reframeForCrop, useCropFraming} from '../composables/useCropFraming'
 import {CAPTURE_STATES, isCaptureRunning, liveStreamEndpoint} from '../constants'
 import GuideArrow from './GuideArrow.vue'
 import LiveViewControls from './LiveViewControls.vue'
 import LiveViewCometOverlay from './LiveViewCometOverlay.vue'
-import {useAppState} from '../composables/useAppState.js'
+import {useAppState} from '../composables/useAppState'
 import {
   useApplySettings,
   useCapabilities,
@@ -22,10 +22,10 @@ import {
   useHasGuideCamera,
   useMainCamera,
   useSettings,
-} from '../composables/appContext.js'
-import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov.js'
-import {setViewedCamera} from '../composables/api.js'
-import type {ScreenRect} from '../composables/useCometRoi.js'
+} from '../composables/appContext'
+import {useDisplayedFov, useOtherSolvedCamera} from '../composables/useDisplayedFov'
+import {setViewedCamera} from '../composables/api'
+import type {ScreenRect} from '../composables/useCometRoi'
 
 /**
  * How long to wait before fitting after a frame changes the image's size. Viewport
@@ -241,9 +241,9 @@ watch(showGuide, () => cropFraming.clear())
 // Fit the view when a frame changes the image's size — unless the frame is a new crop of
 // a view the observer zoomed or panned, which keeps its framing (see `useCropFraming`).
 watch([dimensions, frameData], ([newDims], [oldDims]) => {
-  const resized = newDims.width !== oldDims?.width || newDims.height !== oldDims?.height
+  const resized = newDims.width !== oldDims.width || newDims.height !== oldDims.height
   const crop = frameData.value ? cropFraming.take(newDims) : null
-  if (crop && oldDims?.width) {
+  if (crop && oldDims.width) {
     const view = {scale: scale.value, position: position.value}
     const container = containerRef.value?.getBoundingClientRect()
     const reframed = !isFitted(view, container, oldDims) &&

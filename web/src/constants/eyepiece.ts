@@ -1,8 +1,8 @@
 /** The eyepiece pages: their tone controls, stream size and zoom. */
-import type {EyepieceStreamResolution} from '../composables/api.types.js'
-import {PREVIEW_RESOLUTION_OPTIONS} from './imageQuality.js'
-import {serverDefault, serverLimits} from './serverSettings.js'
-import type {Option} from './tables.js'
+import type {EyepieceStreamResolution} from '../composables/api.types'
+import {PREVIEW_RESOLUTION_OPTIONS} from './imageQuality'
+import {serverDefault, serverLimits} from './serverSettings'
+import type {Option} from './tables'
 
 /** Black level (`eyepiece.intensity`), which the renderer clamps where it reads it. */
 export const BLACK_LEVEL_LIMITS = {

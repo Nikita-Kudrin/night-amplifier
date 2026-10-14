@@ -2,12 +2,12 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {flushPromises} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import EquipmentSection from './EquipmentSection.vue'
-import {updateSettings} from '../composables/api.js'
-import type * as Api from '../composables/api.js'
-import {mountWithDefaults} from '../test/mount.js'
+import {updateSettings} from '../composables/api'
+import type * as Api from '../composables/api'
+import {mountWithDefaults} from '../test/mount'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>()))
 
 describe('EquipmentSection', () => {
     beforeEach(() => vi.useFakeTimers())

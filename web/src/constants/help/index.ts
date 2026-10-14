@@ -1,9 +1,9 @@
-import {CAPTURE_HELP} from './capture.js'
-import {CAMERA_HELP} from './camera.js'
-import {EYEPIECE_HELP} from './eyepiece.js'
-import {IMAGE_QUALITY_HELP} from './imageQuality.js'
-import {PUSH_TO_HELP} from './pushTo.js'
-import {STACKING_HELP} from './stacking.js'
+import {CAPTURE_HELP} from './capture'
+import {CAMERA_HELP} from './camera'
+import {EYEPIECE_HELP} from './eyepiece'
+import {IMAGE_QUALITY_HELP} from './imageQuality'
+import {PUSH_TO_HELP} from './pushTo'
+import {STACKING_HELP} from './stacking'
 
 /** Every panel's help, by key; one file per panel. */
 export const HELP_SECTIONS = {

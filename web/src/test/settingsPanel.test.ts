@@ -1,5 +1,5 @@
-import {createDefaultSettings} from './settingsPanel.js'
-import type {Settings} from '../composables/api.types.js'
+import {createDefaultSettings} from './settingsPanel'
+import type {Settings} from '../composables/api.types'
 
 describe('createDefaultSettings', () => {
     // It once listed a few keys by hand and missed `raw_frame_saving.guide`.

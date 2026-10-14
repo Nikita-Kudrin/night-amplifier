@@ -3,9 +3,9 @@ import type {
     BackgroundExtractionAlgorithm,
     Resolution,
     StretchAggressiveness,
-} from '../composables/api.types.js'
-import {serverLimits} from './serverSettings.js'
-import type {Option} from './tables.js'
+} from '../composables/api.types'
+import {serverLimits} from './serverSettings'
+import type {Option} from './tables'
 
 /** Color Intensity. */
 export const AUTO_STRETCH_INTENSITY = serverLimits('auto_stretch_intensity', {step: 0.05})

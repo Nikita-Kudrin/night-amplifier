@@ -1,10 +1,10 @@
 import {mount} from '@vue/test-utils'
 import {defineComponent, h, readonly, ref} from 'vue'
-import {contextProvides, findCamera, isSimulator, useCapabilities, useSelectedCamera} from './appContext.js'
-import type {AppContext} from './appContext.js'
-import type {Capabilities} from './api.types.js'
+import {contextProvides, findCamera, isSimulator, useCapabilities, useSelectedCamera} from './appContext'
+import type {AppContext} from './appContext'
+import type {Capabilities} from './api.types'
 import {DEFAULT_CAPABILITIES} from '../constants'
-import {camera, proCapabilities} from '../test/fixtures.js'
+import {camera, proCapabilities} from '../test/fixtures'
 
 /** Runs `use` inside a component given these provides (by name), and hands back what it returned. */
 function withProvides<T>(provide: Partial<AppContext>, use: () => T): T {

@@ -1,9 +1,9 @@
 import {defineComponent, h, nextTick, ref, shallowRef} from 'vue'
 import {mount} from '@vue/test-utils'
-import {BACKEND_LABELS, backendLabel, useFrameRenderer} from './useFrameRenderer.js'
-import type {FrameRenderer, FrameRendererOptions} from './useFrameRenderer.js'
-import type {FrameData, FrameSize} from './useImageStream.js'
-import {installCanvasContexts, quietly} from '../test/renderStubs.js'
+import {BACKEND_LABELS, backendLabel, useFrameRenderer} from './useFrameRenderer'
+import type {FrameRenderer, FrameRendererOptions} from './useFrameRenderer'
+import type {FrameData, FrameSize} from './useImageStream'
+import {installCanvasContexts, quietly} from '../test/renderStubs'
 
 /** A JPEG as the stream hands it on, carrying the size its fake decode reports. */
 type SizedJpeg = Blob & FrameSize

@@ -1,4 +1,4 @@
-import {clamp, fitScale, offsetBounds, touchCenter, touchDistance} from './viewGeometry.js'
+import {clamp, fitScale, offsetBounds, touchCenter, touchDistance} from './viewGeometry'
 
 const touch = (clientX: number, clientY: number) => ({clientX, clientY})
 

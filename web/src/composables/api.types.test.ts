@@ -1,5 +1,5 @@
-import type {Settings, StartCaptureRequest, UpdateSettingsRequest} from './api.types.js'
-import {SERVER_DEFAULT_SETTINGS} from './api.settings.js'
+import type {Settings, StartCaptureRequest, UpdateSettingsRequest} from './api.types'
+import {SERVER_DEFAULT_SETTINGS} from './api.settings'
 
 // Type-level: `tsconfig.vitest.json` is part of `npm run typecheck`.
 describe('api.types', () => {

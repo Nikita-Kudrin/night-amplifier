@@ -2,19 +2,19 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
 import {flushPromises} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
-import {mountSettingsPanel} from '../test/settingsPanel.js'
-import {aiComputeReport, settings} from '../test/fixtures.js'
-import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute.js'
-import type * as Api from '../composables/api.js'
+import {mountSettingsPanel} from '../test/settingsPanel'
+import {aiComputeReport, settings} from '../test/fixtures'
+import {__resetForTests as resetAiCompute, useAiCompute} from '../composables/useAiCompute'
+import type * as Api from '../composables/api'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>(), {
         updateSettings: vi.fn(),
         getAiCompute: vi.fn(),
         remeasureAiCompute: vi.fn(),
     }))
 
-import {getAiCompute, remeasureAiCompute, updateSettings} from '../composables/api.js'
+import {getAiCompute, remeasureAiCompute, updateSettings} from '../composables/api'
 
 describe('SettingsPanel AI compute', () => {
     beforeEach(() => {

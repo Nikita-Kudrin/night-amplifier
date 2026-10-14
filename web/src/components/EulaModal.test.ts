@@ -1,12 +1,12 @@
 import {flushPromises, mount} from '@vue/test-utils'
 import EulaModal from './EulaModal.vue'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
             getSoftwareLicenses: vi.fn(async () => ({version: '1.0.0', core_license: 'CORE TEXT', third_party_licenses: 'THIRD PARTY'})),
     }))
 
-import {getSoftwareLicenses, updateSettings} from '../composables/api.js'
+import {getSoftwareLicenses, updateSettings} from '../composables/api'
 
 async function mountModal() {
     const wrapper = mount(EulaModal)

@@ -7,10 +7,10 @@ import {
   configureSimulator,
   getSimulatorConfig,
   removeSimulatedCamera,
-} from '../composables/api.js'
-import {useCameraBadges} from '../composables/useCameraBadges.js'
-import {useDisconnectConfirm} from '../composables/useDisconnectConfirm.js'
-import {useError} from '../composables/useError.js'
+} from '../composables/api'
+import {useCameraBadges} from '../composables/useCameraBadges'
+import {useDisconnectConfirm} from '../composables/useDisconnectConfirm'
+import {useError} from '../composables/useError'
 import {
   isSimulator,
   useCameraPhase,
@@ -24,13 +24,13 @@ import {
   useSettings,
   useSimulatorEnabled,
   useWarmupEndsAt,
-} from '../composables/appContext.js'
+} from '../composables/appContext'
 import {BaseAlert, BaseInfoIcon, BaseModal, BasePanel, BaseSpinner, BaseSplitButton, CollapseToggle} from './ui'
 import CameraRow from './CameraRow.vue'
 import SimulatorDirectoryInput from './SimulatorDirectoryInput.vue'
 import {CAPTURE_STATES, HELP_TEXTS, isCaptureRunning} from '../constants'
-import {CAMERA_ROLE_VALUES} from '../composables/api.types.js'
-import type {Camera, CameraRole, SimulatorConfig} from '../composables/api.types.js'
+import {CAMERA_ROLE_VALUES} from '../composables/api.types'
+import type {Camera, CameraRole, SimulatorConfig} from '../composables/api.types'
 import type {SplitButtonOption} from './ui/BaseSplitButton.vue'
 
 /** A camera as the camera list hands it out. */

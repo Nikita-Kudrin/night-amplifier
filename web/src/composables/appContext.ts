@@ -1,10 +1,10 @@
 import {computed, inject, provide, readonly, ref} from 'vue'
 import type {ComputedRef, InjectionKey, Ref} from 'vue'
-import {updateSettings} from './api.js'
+import {updateSettings} from './api'
 import {DEFAULT_CAPABILITIES} from '../constants'
-import type {Camera} from './api.types.js'
-import type {AppState} from './useAppState.js'
-import type {EventStream} from './useEventStream.js'
+import type {Camera} from './api.types'
+import type {AppState} from './useAppState'
+import type {EventStream} from './useEventStream'
 
 /**
  * What `App.vue` provides to the components below it, and the accessors that read it.

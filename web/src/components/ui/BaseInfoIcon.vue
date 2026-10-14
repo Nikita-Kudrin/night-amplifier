@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {ref, nextTick, useTemplateRef} from 'vue'
 import type {CSSProperties} from 'vue'
-import {useClickOutside} from '../../composables/useClickOutside.js'
-import {useEventListener} from '../../composables/useEventListener.js'
+import {useClickOutside} from '../../composables/useClickOutside'
+import {useEventListener} from '../../composables/useEventListener'
 
 withDefaults(defineProps<{
   message: string

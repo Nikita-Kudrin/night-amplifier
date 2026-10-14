@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {__resetForTests, createScrollProtect, useScrollProtect} from './useScrollProtect.js'
+import {__resetForTests, createScrollProtect, useScrollProtect} from './useScrollProtect'
 import {TOUCH_SLOP_PX} from '../constants'
 
 type ScrollProtect = ReturnType<typeof createScrollProtect>

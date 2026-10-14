@@ -1,8 +1,8 @@
 import { describe, it, expect, expectTypeOf, vi, beforeEach, afterEach } from 'vitest'
-import { useWebGLRenderer } from '../useWebGLRenderer.js'
-import type { WebGLRendererOptions } from '../useWebGLRenderer.js'
-import { useCanvas2DRenderer } from '../useCanvas2DRenderer.js'
-import { installCanvasContexts, quietly } from '../../test/renderStubs.js'
+import { useWebGLRenderer } from '../useWebGLRenderer'
+import type { WebGLRendererOptions } from '../useWebGLRenderer'
+import { useCanvas2DRenderer } from '../useCanvas2DRenderer'
+import { installCanvasContexts, quietly } from '../../test/renderStubs'
 
 describe('useWebGLRenderer', () => {
     let canvas: HTMLCanvasElement

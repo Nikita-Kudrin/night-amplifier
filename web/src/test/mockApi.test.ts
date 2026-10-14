@@ -1,6 +1,6 @@
-import * as actual from '../composables/api.js'
-import {mockApi} from './mockApi.js'
-import {astapStatus, settings} from './fixtures.js'
+import * as actual from '../composables/api'
+import {mockApi} from './mockApi'
+import {astapStatus, settings} from './fixtures'
 
 describe('mockApi', () => {
     it('mocks every endpoint and keeps the rest real', async () => {

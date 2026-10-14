@@ -125,7 +125,7 @@ impl Args {
         //
         // This used to be hardcoded to `web`, which meant that running the binary
         // anywhere near a checkout served the Vite *source* template — the one that
-        // loads `/src/main.js` and untransformed `.vue` files — in place of the built
+        // loads `/src/main.ts` and untransformed `.vue` files — in place of the built
         // bundle, for a frontend that could not start. Nothing depends on it: `npm run
         // dev` serves the UI from Vite and proxies `/api` and `/ws` here, so the
         // embedded bundle is the right default for every way the server is actually run.
@@ -373,7 +373,7 @@ mod tests {
 
     /// The regression this flag exists for. `static_dir` was hardcoded to `web`, so a
     /// binary run from anywhere near a checkout served the Vite *source* template —
-    /// which loads `/src/main.js` and untransformed `.vue` files — instead of the
+    /// which loads `/src/main.ts` and untransformed `.vue` files — instead of the
     /// embedded bundle, and the frontend never started. Nothing may infer it.
     #[test]
     fn the_frontend_is_embedded_unless_asked_otherwise() {

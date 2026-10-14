@@ -2,8 +2,8 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {mount} from '@vue/test-utils'
 import type {ComponentMountingOptions, VueWrapper} from '@vue/test-utils'
 import StackingSettings from './StackingSettings.vue'
-import {findSliderByLabel} from '../test/settingsPanel.js'
-import type {SettingApply} from '../utils/settings.js'
+import {findSliderByLabel} from '../test/settingsPanel'
+import type {SettingApply} from '../utils/settings'
 
 const PROPS = {
     weightingPreset: 'balanced',

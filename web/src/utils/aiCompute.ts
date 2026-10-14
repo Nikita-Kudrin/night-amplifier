@@ -2,9 +2,9 @@
  * What the "AI compute" selector shows, from `GET /api/ai-compute`: Auto with its pick,
  * then one option per rung, greyed out with the reason when this computer cannot use it.
  */
-import type {AiComputePreference, AiComputeReport, ComputeRung, RungReport} from '../composables/api.types.js'
+import type {AiComputePreference, AiComputeReport, ComputeRung, RungReport} from '../composables/api.types'
 import type {Option} from '../constants'
-import {formatMs} from './format.js'
+import {formatMs} from './format'
 
 /** An AI compute choice as the selector shows it; a disabled one says why. */
 export interface AiComputeOption {
@@ -40,7 +40,7 @@ export function rungLabel(value: ComputeRung): string {
 }
 
 function rungReport(report: Report, value: ComputeRung | null): RungReport | null {
-    return report?.rungs?.find((r) => r.rung === value) ?? null
+    return report?.rungs.find((r) => r.rung === value) ?? null
 }
 
 export function isReady(report: Report): report is AiComputeReport {
@@ -87,7 +87,7 @@ export function aiComputeSummary(report: Report): string {
 /** The rungs greyed out, with the device found (if any) and why. */
 export function unusableRungs(report: Report): UnusableRung[] {
     if (!isReady(report)) return []
-    return (report.rungs ?? [])
+    return report.rungs
         .filter((r) => !r.usable)
         .map((r) => ({
             rung: r.rung,

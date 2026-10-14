@@ -7,17 +7,17 @@ import {
     openWebSocket,
     setupGlobalWebSocketMock,
     syncWebSocket,
-} from './webSocketTestUtils.js'
+} from './webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
-import {getAiCompute, getPushToStatus, getSettings, listCameras} from '../api.js'
-import {useEventStream} from '../useEventStream.js'
-import {createAppState} from '../useAppState.js'
-import {createAiComputeStore} from '../useAiCompute.js'
+import {getAiCompute, getPushToStatus, getSettings, listCameras} from '../api'
+import {useEventStream} from '../useEventStream'
+import {createAppState} from '../useAppState'
+import {createAiComputeStore} from '../useAiCompute'
 
 /**
  * Every startup read the page makes, and the stores following one real event stream. Push-To

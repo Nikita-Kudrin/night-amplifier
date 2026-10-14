@@ -2,10 +2,10 @@ import {computed, isRef, ref} from 'vue'
 import type {Component} from 'vue'
 import {vi} from 'vitest'
 import {mount} from '@vue/test-utils'
-import {capabilities, settings} from './fixtures.js'
-import {createEventStreamStub} from './eventStream.js'
-import {contextProvides} from '../composables/appContext.js'
-import type {AppContext} from '../composables/appContext.js'
+import {capabilities, settings} from './fixtures'
+import {createEventStreamStub} from './eventStream'
+import {contextProvides} from '../composables/appContext'
+import type {AppContext} from '../composables/appContext'
 
 /** A ref key's value as a test gives it: the ref, or the plain value to wrap in one. */
 type Override<T> = T | (T extends {readonly value: infer V} ? V : never)

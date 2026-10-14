@@ -1,5 +1,5 @@
 import {reactive, watch} from 'vue'
-import {copySetting} from '../utils/settings.js'
+import {copySetting} from '../utils/settings'
 
 /**
  * A settings section's editable copy of the keys it owns, following `source()` (the

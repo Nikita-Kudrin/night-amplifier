@@ -1,11 +1,11 @@
 import {nextTick} from 'vue'
 import type {VueWrapper} from '@vue/test-utils'
-import {setupMocks, mountLiveView} from './setup.js'
-import {clientDirection} from '../../../test/fixtures.js'
-import type {Mocks} from './setup.js'
-import type {PushToTarget} from '../../../composables/api.events.js'
+import {setupMocks, mountLiveView} from './setup'
+import {clientDirection} from '../../../test/fixtures'
+import type {Mocks} from './setup'
+import type {PushToTarget} from '../../../composables/api.events'
 
-const DIRECTION = clientDirection({angleDeg: 45, distanceDeg: 10, directionHint: 'NorthEast', isClose: false})
+const DIRECTION = clientDirection({angleDeg: 45, distanceDeg: 10, directionHint: 'NE', isClose: false})
 const TARGET: PushToTarget = {name: null, designation: 'M31', ra_degrees: 10.68, dec_degrees: 41.27}
 
 /** Lays the container out at 800x600 and the canvas where the pan puts it, counting reads. */

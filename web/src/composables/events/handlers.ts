@@ -1,4 +1,4 @@
-import type {EventOf, ServerEvent, ServerEventType} from '../api.events.js'
+import type {EventOf, ServerEvent, ServerEventType} from '../api.events'
 
 /**
  * A `{type: handler}` table, each handler taking its own event: a field the event does not

@@ -4,23 +4,23 @@ import type {DOMWrapper, VueWrapper} from '@vue/test-utils'
 import {ref} from 'vue'
 import SettingsPanel from './SettingsPanel.vue'
 import BaseToggle from './ui/BaseToggle.vue'
-import {DEFAULT_SETTINGS} from '../constants/index.js'
-import {capabilities, settings as settingsFixture} from '../test/fixtures.js'
-import {createDefaultSettings, findSliderByLabel, findToggleByLabel, mountSettingsPanel} from '../test/settingsPanel.js'
-import type {SettingsOverrides} from '../test/settingsPanel.js'
-import type {SectionValues, SettingApply, SettingKey} from '../utils/settings.js'
-import type * as Api from '../composables/api.js'
-import type {EyepieceSettings, Settings, StackingType, UpdateSettingsRequest} from '../composables/api.types.js'
+import {DEFAULT_SETTINGS} from '../constants'
+import {capabilities, settings as settingsFixture} from '../test/fixtures'
+import {createDefaultSettings, findSliderByLabel, findToggleByLabel, mountSettingsPanel} from '../test/settingsPanel'
+import type {SettingsOverrides} from '../test/settingsPanel'
+import type {SectionValues, SettingApply, SettingKey} from '../utils/settings'
+import type * as Api from '../composables/api'
+import type {EyepieceSettings, Settings, StackingType, UpdateSettingsRequest} from '../composables/api.types'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>(), {
         updateSettings: vi.fn(),
         getAiCompute: vi.fn(),
         remeasureAiCompute: vi.fn(),
     }))
 
-import {updateSettings} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
+import {updateSettings} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
 
 describe('SettingsPanel', () => {
     beforeEach(() => {

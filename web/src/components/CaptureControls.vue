@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import {ref, computed, watch, onMounted} from 'vue'
-import {startCapture, stopCapture, getStackingTypes} from '../composables/api.js'
-import type {HardwarePatch} from '../composables/api.js'
-import type {StackingType, StackingTypeInfo, UpdateSettingsRequest} from '../composables/api.types.js'
-import {useError} from '../composables/useError.js'
+import {startCapture, stopCapture, getStackingTypes} from '../composables/api'
+import type {HardwarePatch} from '../composables/api'
+import type {StackingType, StackingTypeInfo, UpdateSettingsRequest} from '../composables/api.types'
+import {useError} from '../composables/useError'
 import {
   findCamera,
   useApplySettings,
@@ -14,10 +14,10 @@ import {
   useSelectedCameraId,
   useSelectedCameraRole,
   useSettings,
-} from '../composables/appContext.js'
-import {hardwareBlock} from '../composables/useCameraHardwareSettings.js'
-import type {HardwareEdit} from '../composables/useCameraHardwareSettings.js'
-import {useCaptureTarget} from '../composables/useCaptureTarget.js'
+} from '../composables/appContext'
+import {hardwareBlock} from '../composables/useCameraHardwareSettings'
+import type {HardwareEdit} from '../composables/useCameraHardwareSettings'
+import {useCaptureTarget} from '../composables/useCaptureTarget'
 import {BaseAlert, BaseToggle, BaseInfoIcon, ButtonGroup, BaseProLock, BasePanel, BaseSlider} from './ui'
 import ExposureControl from './ExposureControl.vue'
 import {
@@ -203,7 +203,7 @@ const focusModeBlocked = computed(
 // would have the two panels disagreeing about the same setting.
 const applyFocusMode = () =>
     applySetting({focus_mode: focusMode.value}, () => {
-      focusMode.value = settings?.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
+      focusMode.value = settings.value?.focus_mode ?? DEFAULT_SETTINGS.focus_mode
     })
 
 function applyStackingMode(val: StackingMode) {
@@ -212,7 +212,7 @@ function applyStackingMode(val: StackingMode) {
     stacking: {stacking: true, wanderer_mode: false},
     off: {stacking: false, wanderer_mode: false},
   }
-  applySetting(modes[val] || modes.off)
+  applySetting(modes[val])
 }
 
 const showCometLock = computed(() => {

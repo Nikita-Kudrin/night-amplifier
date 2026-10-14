@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed, getCurrentInstance} from 'vue'
 import type {CSSProperties} from 'vue'
-import {formatAngle} from '../utils/format.js'
+import {formatAngle} from '../utils/format'
 import {
   ARROW_ASPECT,
   arrowScale as scaleFor,
@@ -11,9 +11,9 @@ import {
   infoOffset,
   isOffScreen,
   screensAway,
-} from '../utils/guideArrowLayout.js'
-import type {ClientPushDirection} from '../composables/events/pushToEvents.js'
-import type {ScreenRect} from '../composables/useCometRoi.js'
+} from '../utils/guideArrowLayout'
+import type {ClientPushDirection} from '../composables/events/pushToEvents'
+import type {ScreenRect} from '../composables/useCometRoi'
 
 const props = withDefaults(defineProps<{
   /** `pushDirection` from the event stream. */

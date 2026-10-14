@@ -1,6 +1,6 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {effectScope} from 'vue'
-import {useTimeouts} from './useTimeouts.js'
+import {useTimeouts} from './useTimeouts'
 
 describe('useTimeouts', () => {
     beforeEach(() => vi.useFakeTimers())

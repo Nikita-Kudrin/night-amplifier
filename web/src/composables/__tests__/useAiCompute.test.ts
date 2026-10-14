@@ -1,18 +1,18 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal(), {
         getAiCompute: vi.fn(),
     }))
 
 import {effectScope, nextTick, ref} from 'vue'
-import {getAiCompute} from '../api.js'
-import {AI_COMPUTE_POLL_MS, __resetForTests as resetAiCompute, useAiCompute} from '../useAiCompute.js'
-import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream.js'
-import type {EventStream} from '../useEventStream.js'
-import {aiComputeReport, settings as wireSettings} from '../../test/fixtures.js'
-import {pending} from '../../test/http.js'
-import type {AiComputeReport, AiComputePreference, BenchmarkState, Settings} from '../api.types.js'
+import {getAiCompute} from '../api'
+import {AI_COMPUTE_POLL_MS, __resetForTests as resetAiCompute, useAiCompute} from '../useAiCompute'
+import {createEventStreamStub, emitEvent, emitSync} from '../../test/eventStream'
+import type {EventStream} from '../useEventStream'
+import {aiComputeReport, settings as wireSettings} from '../../test/fixtures'
+import {pending} from '../../test/http'
+import type {AiComputeReport, AiComputePreference, BenchmarkState, Settings} from '../api.types'
 import type {EffectScope} from 'vue'
 
 const report = (state: BenchmarkState, extra: Partial<AiComputeReport> = {}) =>

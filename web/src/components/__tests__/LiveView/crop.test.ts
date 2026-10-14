@@ -1,13 +1,13 @@
 import {assert, describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
 import {nextTick, ref} from 'vue'
 import type {Ref} from 'vue'
-import {setupMocks, mountLiveView, createMockFrameData} from './setup.js'
-import type {Mocks} from './setup.js'
-import type {MockProvides} from './setup.js'
-import {reframeForCrop} from '../../../composables/useCropFraming.js'
-import type {StackCrop} from '../../../composables/events/captureEvents.js'
-import type {StreamCrop, StreamFrameSize} from '../../../composables/api.events.js'
-import type {CameraRole} from '../../../composables/api.types.js'
+import {setupMocks, mountLiveView, createMockFrameData} from './setup'
+import type {Mocks} from './setup'
+import type {MockProvides} from './setup'
+import {reframeForCrop} from '../../../composables/useCropFraming'
+import type {StackCrop} from '../../../composables/events/captureEvents'
+import type {StreamCrop, StreamFrameSize} from '../../../composables/api.events'
+import type {CameraRole} from '../../../composables/api.types'
 
 /**
  * The server's auto crop resizes the stream's frames every few subs. A view the observer

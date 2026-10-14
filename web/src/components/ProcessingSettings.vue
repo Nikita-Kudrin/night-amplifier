@@ -8,10 +8,10 @@
  * (`apply('eyepiece', {field})`) and the panel sends it over its own copy of the group.
  */
 import {BaseToggle, BaseSlider, BaseProLock, SettingSelect} from './ui'
-import {useSectionMirror} from '../composables/useSectionMirror.js'
-import {formatPercent} from '../utils/format.js'
-import {applyArgs} from '../utils/settings.js'
-import type {SettingApply} from '../utils/settings.js'
+import {useSectionMirror} from '../composables/useSectionMirror'
+import {formatPercent} from '../utils/format'
+import {applyArgs} from '../utils/settings'
+import type {SettingApply} from '../utils/settings'
 import {
   AUTO_STRETCH_INTENSITY,
   BACKGROUND_ALGORITHM_OPTIONS,
@@ -20,7 +20,7 @@ import {
   HELP_TEXTS,
   SATURATION_BOOST_LIMITS,
 } from '../constants'
-import type {EyepieceSettings, Settings} from '../composables/api.types.js'
+import type {EyepieceSettings, Settings} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */

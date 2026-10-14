@@ -1,7 +1,7 @@
-import {SERVER_DEFAULT_SETTINGS, SERVER_SETTING_RANGES} from '../composables/api.settings.js'
-import type {ClampedPath} from '../composables/api.settings.js'
-import type {Settings} from '../composables/api.types.js'
-import type {PathValue, SettingPath} from '../utils/settings.js'
+import {SERVER_DEFAULT_SETTINGS, SERVER_SETTING_RANGES} from '../composables/api.settings'
+import type {ClampedPath} from '../composables/api.settings'
+import type {Settings} from '../composables/api.types'
+import type {PathValue, SettingPath} from '../utils/settings'
 
 /** The server's default for a setting, by its dotted path in `Settings`. */
 export function serverDefault<P extends SettingPath>(path: P): PathValue<Settings, P> {

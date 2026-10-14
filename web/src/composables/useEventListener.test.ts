@@ -1,5 +1,5 @@
 import {effectScope} from 'vue'
-import {useEventListener} from './useEventListener.js'
+import {useEventListener} from './useEventListener'
 
 describe('useEventListener', () => {
     it('listens until its scope goes away', () => {

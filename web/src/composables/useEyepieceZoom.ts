@@ -1,7 +1,7 @@
 import {ref, computed} from 'vue'
 import {EYEPIECE_ZOOM} from '../constants'
-import {clamp, touchCenter, touchDistance} from '../utils/viewGeometry.js'
-import type {GestureTouches, TouchGesture} from './usePanZoom.js'
+import {clamp, touchCenter, touchDistance} from '../utils/viewGeometry'
+import type {GestureTouches, TouchGesture} from './usePanZoom'
 
 const zoomed = (value: number) => clamp(value, 1, EYEPIECE_ZOOM.max)
 

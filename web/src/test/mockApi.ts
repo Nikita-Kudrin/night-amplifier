@@ -1,6 +1,6 @@
 import {vi} from 'vitest'
 import type {Mock} from 'vitest'
-import type * as Api from '../composables/api.js'
+import type * as Api from '../composables/api'
 import {
     aiComputeReport,
     astapStatus,
@@ -9,7 +9,7 @@ import {
     pushToStatus,
     settings,
     stackingTypes,
-} from './fixtures.js'
+} from './fixtures'
 
 type ApiModule = typeof Api
 
@@ -46,8 +46,8 @@ const DEFAULTS: Defaults = {
  * A stand-in for `api.ts` with every endpoint a `vi.fn()`, so a file mocks the module
  * once instead of listing the calls its component happens to make today:
  *
- *   vi.mock('../composables/api.js', async (importOriginal) =>
- *       (await import('../test/mockApi.js')).mockApi(await importOriginal<typeof Api>(), {
+ *   vi.mock('../composables/api', async (importOriginal) =>
+ *       (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>(), {
  *           getSettings: vi.fn(async () => settings({gain: 100})),
  *       }))
  *

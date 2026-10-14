@@ -1,8 +1,8 @@
 import {computed, toValue} from 'vue'
 import type {DeepReadonly, MaybeRefOrGetter} from 'vue'
-import {fieldOfViewDeg} from '../utils/optics.js'
-import type {Camera, Settings} from './api.types.js'
-import type {ClientPushDirection} from './events/pushToEvents.js'
+import {fieldOfViewDeg} from '../utils/optics'
+import type {Camera, Settings} from './api.types'
+import type {ClientPushDirection} from './events/pushToEvents'
 
 type Named = Pick<Camera, 'name'> | null | undefined
 type Optics = DeepReadonly<Pick<Settings, 'telescope' | 'camera_telescope_profiles'>> | null | undefined

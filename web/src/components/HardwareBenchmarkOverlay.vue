@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed, nextTick, useTemplateRef, watch} from 'vue'
-import {useAiCompute} from '../composables/useAiCompute.js'
+import {useAiCompute} from '../composables/useAiCompute'
 import {BaseSpinner, InstallProgressBar} from './ui'
 
 /**

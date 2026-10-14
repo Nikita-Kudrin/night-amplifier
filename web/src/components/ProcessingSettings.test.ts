@@ -2,9 +2,9 @@ import {mount} from '@vue/test-utils'
 import type {ComponentMountingOptions, VueWrapper} from '@vue/test-utils'
 import {nextTick} from 'vue'
 import ProcessingSettings from './ProcessingSettings.vue'
-import {settingsMirror} from '../utils/settings.js'
-import type {SettingApply} from '../utils/settings.js'
-import {findSliderByLabel as slider, findToggleByLabel} from '../test/settingsPanel.js'
+import {settingsMirror} from '../utils/settings'
+import type {SettingApply} from '../utils/settings'
+import {findSliderByLabel as slider, findToggleByLabel} from '../test/settingsPanel'
 import {HELP_TEXTS} from '../constants'
 
 type Props = ComponentMountingOptions<typeof ProcessingSettings>['props']

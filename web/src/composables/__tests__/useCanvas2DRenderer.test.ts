@@ -1,6 +1,6 @@
 import { describe, it, expect, expectTypeOf, vi, beforeEach } from 'vitest'
-import { useCanvas2DRenderer } from '../useCanvas2DRenderer.js'
-import type { useWebGLRenderer } from '../useWebGLRenderer.js'
+import { useCanvas2DRenderer } from '../useCanvas2DRenderer'
+import type { useWebGLRenderer } from '../useWebGLRenderer'
 
 function createContext() {
     return {

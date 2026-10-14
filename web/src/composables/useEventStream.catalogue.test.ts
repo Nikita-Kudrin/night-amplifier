@@ -7,25 +7,25 @@ import {
     openWebSocket,
     setupGlobalWebSocketMock,
     syncWebSocket,
-} from './__tests__/webSocketTestUtils.js'
+} from './__tests__/webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
-vi.mock('./api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('./api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {getAiCompute, getSettings, listCameras} from './api.js'
-import {SERVER_EVENTS, TOPICS} from './api.events.js'
-import type {ServerEventType, Topic} from './api.events.js'
-import {useEventStream} from './useEventStream.js'
-import type {EventStream} from './useEventStream.js'
-import {createAppState} from './useAppState.js'
-import {createAiComputeStore} from './useAiCompute.js'
-import type {createCaptureEvents} from './events/captureEvents.js'
-import type {createPushToEvents} from './events/pushToEvents.js'
-import type {createInstallEvents} from './events/installEvents.js'
-import type {createSettingsStore} from './settingsStore.js'
-import type {createCameraStore} from './cameraStore.js'
+import {getAiCompute, getSettings, listCameras} from './api'
+import {SERVER_EVENTS, TOPICS} from './api.events'
+import type {ServerEventType, Topic} from './api.events'
+import {useEventStream} from './useEventStream'
+import type {EventStream} from './useEventStream'
+import {createAppState} from './useAppState'
+import {createAiComputeStore} from './useAiCompute'
+import type {createCaptureEvents} from './events/captureEvents'
+import type {createPushToEvents} from './events/pushToEvents'
+import type {createInstallEvents} from './events/installEvents'
+import type {createSettingsStore} from './settingsStore'
+import type {createCameraStore} from './cameraStore'
 
 /** Every event that states or announces a topic; a notice may go unheard. */
 type StateEventType = {

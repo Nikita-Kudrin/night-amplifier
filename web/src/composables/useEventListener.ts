@@ -1,4 +1,4 @@
-import {tryOnScopeDispose} from './lifecycle.js'
+import {tryOnScopeDispose} from './lifecycle'
 
 /**
  * `target.addEventListener(type, listener, options)`, removed when the calling component

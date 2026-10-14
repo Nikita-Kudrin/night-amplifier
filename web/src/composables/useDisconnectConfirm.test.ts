@@ -1,5 +1,5 @@
 import {nextTick, ref} from 'vue'
-import {useDisconnectConfirm} from './useDisconnectConfirm.js'
+import {useDisconnectConfirm} from './useDisconnectConfirm'
 
 function setup({warming = false, capturing = false} = {}) {
     const camera = {id: 'cam1', name: 'ZWO ASI533', connected: true}

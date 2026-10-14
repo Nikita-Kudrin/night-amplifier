@@ -11,16 +11,16 @@
  * the panel's save rather than an emit (see `AiComputeSettings`).
  */
 import {ref, watch} from 'vue'
-import {useSimulatorEnabled} from '../composables/appContext.js'
+import {useSimulatorEnabled} from '../composables/appContext'
 import {BaseAlert, BaseToggle, BaseSlider, BaseInfoIcon, ButtonGroup} from './ui'
 import AiComputeSettings from './AiComputeSettings.vue'
 import SelectedCameraTag from './SelectedCameraTag.vue'
-import {useSectionMirror} from '../composables/useSectionMirror.js'
-import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings.js'
+import {useSectionMirror} from '../composables/useSectionMirror'
+import {useCameraHardwareSettings} from '../composables/useCameraHardwareSettings'
 import {BINNING_OPTIONS, DEFAULT_SETTINGS, HELP_TEXTS, SIMULATED_PRELOAD_LIMITS} from '../constants'
-import type {SaveSetting, SettingApply} from '../utils/settings.js'
-import type {ErrorHandler} from '../composables/useError.js'
-import type {Settings} from '../composables/api.types.js'
+import type {SaveSetting, SettingApply} from '../utils/settings'
+import type {ErrorHandler} from '../composables/useError'
+import type {Settings} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   /** The panel's settings mirror (`settingsMirror`). */

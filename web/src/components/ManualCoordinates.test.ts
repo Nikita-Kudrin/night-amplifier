@@ -2,7 +2,7 @@ import {describe, it, expect, expectTypeOf, vi} from 'vitest'
 import {mount, flushPromises} from '@vue/test-utils'
 import type {ComponentMountingOptions} from '@vue/test-utils'
 import ManualCoordinates from './ManualCoordinates.vue'
-import type {TypedCoordinates} from '../composables/useCoordinates.js'
+import type {TypedCoordinates} from '../composables/useCoordinates'
 
 async function mountOpen(submit: (coords: TypedCoordinates) => Promise<boolean>) {
     const wrapper = mount(ManualCoordinates, {props: {submit}})

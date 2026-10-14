@@ -4,24 +4,23 @@ import {readonly, ref} from 'vue'
 import CaptureControls from './CaptureControls.vue'
 import {BaseProLock} from './ui'
 import {HELP_TEXTS} from '../constants'
-import {camera, capabilities, settings, stackingTypes} from '../test/fixtures.js'
-import {createEventStreamStub} from '../test/eventStream.js'
-import type {CaptureState} from '../composables/api.events.js'
-import type {Camera, CameraPhase, CameraRole, Capabilities, Settings} from '../composables/api.types.js'
-import type {ByCameraName} from '../composables/cameraStore.js'
+import {camera, capabilities, settings, stackingTypes} from '../test/fixtures'
+import {createEventStreamStub} from '../test/eventStream'
+import type {Camera, CameraPhase, CameraRole, Capabilities, CaptureState, Settings} from '../composables/api.types'
+import type {ByCameraName} from '../composables/cameraStore'
 import type {Option} from '../constants'
 
 // Mock the API module
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         startCapture: vi.fn(),
         stopCapture: vi.fn(),
         updateSettings: vi.fn(),
         getStackingTypes: vi.fn(),
     }))
 
-import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
+import {startCapture, stopCapture, updateSettings, getStackingTypes} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
 
 describe('CaptureControls', () => {
     beforeEach(() => {

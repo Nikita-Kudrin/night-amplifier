@@ -1,8 +1,8 @@
 import {computed} from 'vue'
 import type {Ref} from 'vue'
-import {useCameraPhase, useEventStreamContext, useGuideCamera, useSelectedCameraId} from './appContext.js'
+import {useCameraPhase, useEventStreamContext, useGuideCamera, useSelectedCameraId} from './appContext'
 import {CAMERA_PHASES, CAPTURE_STATES, isCaptureRunning} from '../constants'
-import type {CameraRole} from './api.types.js'
+import type {CameraRole} from './api.types'
 
 /**
  * Whether the camera Start/Stop addresses is running, and what its buttons say. `role`
@@ -31,7 +31,7 @@ export function useCaptureTarget({role, busy}: {role: Readonly<Ref<CameraRole>>;
 
     const guideRunning = computed(() => {
         const name = guideCamera.value?.name
-        return name ? cameraPhase.value?.[name] === CAMERA_PHASES.GUIDING : false
+        return name ? cameraPhase.value[name] === CAMERA_PHASES.GUIDING : false
     })
 
     const isCapturing = computed(() => (isGuide.value ? guideRunning.value : mainCapturing.value))

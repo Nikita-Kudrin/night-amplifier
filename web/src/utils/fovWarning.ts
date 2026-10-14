@@ -1,5 +1,5 @@
-import type {DatabaseType, InstalledDatabaseInfo} from '../composables/api.types.js'
-import {formatFov} from './format.js'
+import type {DatabaseType, InstalledDatabaseInfo} from '../composables/api.types'
+import {formatFov} from './format'
 
 type FovRange = Pick<DatabaseType, 'min_fov_deg' | 'max_fov_deg'>
 

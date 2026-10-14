@@ -12,9 +12,6 @@
         "moduleResolution": "bundler",
         "resolveJsonModule": true,
         "esModuleInterop": true,
-        // Until every file is TypeScript: a `.ts` file is checked strictly, a `.js` one not at all.
-        "allowJs": true,
-        "checkJs": false,
         "noEmit": true,
         "skipLibCheck": true,
         "strict": true,

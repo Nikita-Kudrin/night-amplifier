@@ -4,8 +4,8 @@
  * typed by the `api.types.ts` answer it stands in for.
  */
 import {DEFAULT_CAPABILITIES, defaultSettings, STACKING_TYPES} from '../constants'
-import {STACKING_TYPE_VALUES} from '../composables/api.types.js'
-import type {ClientPushDirection} from '../composables/events/pushToEvents.js'
+import {STACKING_TYPE_VALUES} from '../composables/api.types'
+import type {ClientPushDirection} from '../composables/events/pushToEvents'
 import type {
     AiComputeReport,
     AstapStatus,
@@ -19,7 +19,7 @@ import type {
     Settings,
     StackingType,
     StackingTypeInfo,
-} from '../composables/api.types.js'
+} from '../composables/api.types'
 
 export function settings(overrides: Partial<Settings> = {}): Settings {
     return {...defaultSettings(), ...overrides}

@@ -3,15 +3,15 @@ import type {Mock} from 'vitest'
 import {ref, nextTick} from 'vue'
 import type {Ref} from 'vue'
 import {mount, flushPromises} from '@vue/test-utils'
-import {useTelescopeSetup} from '../useTelescopeSetup.js'
-import type {CameraOptics, TelescopeSetup} from '../useTelescopeSetup.js'
+import {useTelescopeSetup} from '../useTelescopeSetup'
+import type {CameraOptics, TelescopeSetup} from '../useTelescopeSetup'
 import {SETTINGS_DEBOUNCE_MS} from '../../constants'
-import {settings} from '../../test/fixtures.js'
-import type {ErrorHandler} from '../useError.js'
-import type {Settings, TelescopeSettings, UpdateSettingsRequest} from '../api.types.js'
-import * as api from '../api.js'
-import {contextProvides} from '../appContext.js'
-import type {AppContext} from '../appContext.js'
+import {settings} from '../../test/fixtures'
+import type {ErrorHandler} from '../useError'
+import type {Settings, TelescopeSettings, UpdateSettingsRequest} from '../api.types'
+import * as api from '../api'
+import {contextProvides} from '../appContext'
+import type {AppContext} from '../appContext'
 
 /** Optics with only `fields` known, as the server sends them: every field, `null` if unset. */
 function optics(fields: Partial<TelescopeSettings> = {}): TelescopeSettings {
@@ -32,8 +32,8 @@ function posted(): UpdateSettingsRequest[] {
 }
 
 // Mock API
-vi.mock('../api.js', async (importOriginal) =>
-    (await import('../../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../api', async (importOriginal) =>
+    (await import('../../test/mockApi')).mockApi(await importOriginal(), {
         updateSettings: vi.fn().mockResolvedValue({}),
         updatePushToConfig: vi.fn().mockResolvedValue({}),
     }))

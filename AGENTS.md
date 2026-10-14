@@ -25,8 +25,8 @@ SOLID Principles:
   problem.
 
 - Files over 500 lines: consider refactoring/extracting.
-- Follow standard Rust conventions for backend; frontend is moving from JavaScript to strict TypeScript file by
-  file (`plans/TYPESCRIPT_PLAN.md`), and a converted `.ts` file is checked strictly.
+- Follow standard Rust conventions for backend; the frontend is strict TypeScript (`plans/TYPESCRIPT_PLAN.md`):
+  no `.js` in `web/src`, relative imports without an extension, no `any`.
 - Write tests for new or changed functionality.
 - Don't write obvious comments — code should be self-describing; comment only non-obvious behavior.
 - Keep comments, doc comments, and prose summaries (module docs, AGENTS.md sections) to 5-10 lines per point: state
@@ -239,7 +239,9 @@ self-referencing or fallback `var()` and any colour literal outside `:root` (an 
 components' error icons). Test helpers live in `src/test/`: `mockApi` (an override of the wrong shape does not compile), fixtures typed by `api.types.ts`,
 `createEventStreamStub` held to `useEventStream` and `serverEvent(type, fields)` typed by `api.events.ts`, `mountWithDefaults`, `stubFetch`, `renderStubs` (canvas contexts as a
 browser hands them out); tests sit beside their source (`X.test.ts`, `X.<aspect>.test.ts`). Wire enums the UI
-spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to its `*_VALUES`.
+spells (`CAMERA_PHASES`, `STACKING_TYPES`) are constants held to its `*_VALUES`. A wire value the UI compares
+against is a Rust enum, never a `String` (`DirectionHint`, `CaptureStatus.state`); an install event's `stage` is
+copy, and the UI branches on its `stage_id`.
 
 ## Camera Notes
 

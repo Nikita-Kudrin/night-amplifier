@@ -1,5 +1,5 @@
 import {describe, it, expect} from 'vitest'
-import {useCoordinateInput} from './useCoordinates.js'
+import {useCoordinateInput} from './useCoordinates'
 
 describe('useCoordinateInput', () => {
     it('provides reactive input refs', () => {

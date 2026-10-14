@@ -6,12 +6,12 @@ import {
     openWebSocket,
     createTestFrame,
     setupGlobalWebSocketMock,
-} from './webSocketTestUtils.js'
+} from './webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
-import {useImageStream as originalUseImageStream} from '../useImageStream.js'
-import type {ImageStream} from '../useImageStream.js'
+import {useImageStream as originalUseImageStream} from '../useImageStream'
+import type {ImageStream} from '../useImageStream'
 import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 

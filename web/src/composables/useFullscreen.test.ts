@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {useFullscreen} from './useFullscreen.js'
+import {useFullscreen} from './useFullscreen'
 
 function setFullscreenElement(element: Element | null) {
     Object.defineProperty(document, 'fullscreenElement', {

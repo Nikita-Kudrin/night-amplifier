@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest'
-import {saveBlob, URL_RELEASE_MS} from './saveBlob.js'
+import {saveBlob, URL_RELEASE_MS} from './saveBlob'
 
 describe('saveBlob', () => {
     let links: {el: HTMLAnchorElement; inDocument: boolean}[]

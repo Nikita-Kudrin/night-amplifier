@@ -1,15 +1,16 @@
 import {nextTick} from 'vue'
 import lz4 from 'lz4js'
+import {beforeEach, vi} from 'vitest'
 import {
     FRAME_HEADER_SIZE as RGB8_HEADER_SIZE,
     RGB8_CHUNKED_MAGIC,
     RGB8_MAGIC,
     SA09_CHUNK_DESCRIPTOR_SIZE,
     SA09_HEADER_SIZE,
-} from '../../utils/frameDecoder.js'
-import {serverEvent} from '../../test/eventStream.js'
-import type {EventFields} from '../../test/eventStream.js'
-import type {ServerEventType, SyncedEvent} from '../api.events.js'
+} from '../../utils/frameDecoder'
+import {serverEvent} from '../../test/eventStream'
+import type {EventFields} from '../../test/eventStream'
+import type {ServerEventType, SyncedEvent} from '../api.events'
 
 // --- Constants ---
 const WS_STATES = {
@@ -269,8 +270,7 @@ export function createChunkedTestFrame(width = 4, height = 4, chunkCount = 2, fi
 }
 
 // --- Setup Global Mock ---
-// Assigned rather than `vi.stubGlobal`-ed: it is installed once per file, which
-// `unstubGlobals` would undo after the first test.
+/** Puts `MockWebSocket` in place before each test of the calling file; `unstubGlobals` takes it back after. */
 export function setupGlobalWebSocketMock() {
-    globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket
+    beforeEach(() => vi.stubGlobal('WebSocket', MockWebSocket))
 }

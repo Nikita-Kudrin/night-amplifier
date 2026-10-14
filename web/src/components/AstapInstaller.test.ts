@@ -1,13 +1,13 @@
 import {flushPromises, mount} from '@vue/test-utils'
 import AstapInstaller from './AstapInstaller.vue'
-import {astapStatus, databaseType} from '../test/fixtures.js'
-import {createEventStreamStub} from '../test/eventStream.js'
+import {astapStatus, databaseType} from '../test/fixtures'
+import {createEventStreamStub} from '../test/eventStream'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal()))
 
-import {getAstapDatabases, getAstapStatus, installAstap} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
+import {getAstapDatabases, getAstapStatus, installAstap} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
 
 const FRESH = astapStatus({binary_installed: false, database_installed: false, installed_databases: [], ready: false})
 const DATABASES = [databaseType(), databaseType({id: 'G05', description: 'Camera Lenses', min_fov_deg: 3, max_fov_deg: 20})]
@@ -69,7 +69,7 @@ describe('AstapInstaller', () => {
         expect(wrapper.find('.progress-fill').attributes('style')).toContain('width: 20%')
 
         vi.mocked(getAstapStatus).mockResolvedValue(astapStatus())
-        progress.value = {component: 'D80 Database', stage: 'completed', stageName: 'Database Installed', overallPercent: 100, error: null}
+        progress.value = {component: 'D80 Database', stage: 'completed', stageId: 'database_completed', overallPercent: 100, error: null}
         await flushPromises()
         await vi.advanceTimersByTimeAsync(500)
         await flushPromises()
@@ -83,7 +83,7 @@ describe('AstapInstaller', () => {
         const {wrapper, progress} = mountInstaller()
         await flushPromises()
         await wrapper.find('.install-btn').trigger('click')
-        progress.value = {component: 'D80 Database', stage: 'completed', stageName: 'Database Installed', overallPercent: 100, error: null}
+        progress.value = {component: 'D80 Database', stage: 'completed', stageId: 'database_completed', overallPercent: 100, error: null}
         await flushPromises()
         vi.mocked(getAstapStatus).mockClear()
 

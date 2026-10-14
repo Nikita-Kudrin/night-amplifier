@@ -1,12 +1,12 @@
 import {mount} from '@vue/test-utils'
-import {createEventStreamStub, serverEvent} from './eventStream.js'
-import {SERVER_EVENTS} from '../composables/api.events.js'
-import type {ServerEventType} from '../composables/api.events.js'
-import {useEventStream} from '../composables/useEventStream.js'
-import {MockWebSocket, setupGlobalWebSocketMock} from '../composables/__tests__/webSocketTestUtils.js'
+import {createEventStreamStub, serverEvent} from './eventStream'
+import {SERVER_EVENTS} from '../composables/api.events'
+import type {ServerEventType} from '../composables/api.events'
+import {useEventStream} from '../composables/useEventStream'
+import {MockWebSocket, setupGlobalWebSocketMock} from '../composables/__tests__/webSocketTestUtils'
 
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('./mockApi.js')).mockApi(await importOriginal()))
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('./mockApi')).mockApi(await importOriginal()))
 
 setupGlobalWebSocketMock()
 
@@ -48,7 +48,7 @@ describe('serverEvent', () => {
     // Type-level: `tsconfig.vitest.json` is part of `npm run typecheck`.
     it('takes only the fields an event carries, with their wire types', () => {
         // @ts-expect-error the server sends no 'capture_count' event
-        expect(() => serverEvent('capture_count')).toThrow("no 'capture_count' event")
+        serverEvent('capture_count')
         // @ts-expect-error 'frame_dropped' carries `dropped_count`, not `dropped`
         serverEvent('frame_dropped', {dropped: 3})
         // @ts-expect-error `role` is a `CameraRole`

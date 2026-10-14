@@ -64,7 +64,7 @@ fn root<T: JsonSchema>(generator: &mut SchemaGenerator, name: &str) -> Root {
     (name.to_string(), Value::String(key.to_string()))
 }
 
-/// The answers `api.js` documents, by the name it uses for each.
+/// The answers `api.ts` documents, by the name it uses for each.
 fn roots(generator: &mut SchemaGenerator) -> Vec<Root> {
     vec![
         root::<SettingsResponse>(generator, "Settings"),
@@ -88,7 +88,7 @@ fn roots(generator: &mut SchemaGenerator) -> Vec<Root> {
     ]
 }
 
-/// The bodies (and the one query) `api.js` sends, as the server reads them.
+/// The bodies (and the one query) `api.ts` sends, as the server reads them.
 fn request_roots(generator: &mut SchemaGenerator) -> Vec<Root> {
     vec![
         root::<UpdateSettingsRequest>(generator, "UpdateSettingsRequest"),
@@ -399,7 +399,7 @@ fn generate_settings() -> String {
     ranges.insert("eyepiece.black_floor".to_string(), range(BLACK_FLOOR_RANGE));
     format!(
         "{SETTINGS_HEADER}\n\
-         import type {{Settings}} from './api.types.js'\n\n\
+         import type {{Settings}} from './api.types'\n\n\
          export const SERVER_DEFAULT_SETTINGS = {} satisfies Settings\n\n\
          /**\n \
          * The range the server clamps each ranged setting to, by its dotted path in `Settings`;\n \

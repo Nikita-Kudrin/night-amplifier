@@ -1,5 +1,5 @@
 import {effectScope, ref} from 'vue'
-import {useClickOutside} from './useClickOutside.js'
+import {useClickOutside} from './useClickOutside'
 
 describe('useClickOutside', () => {
     let root: HTMLDivElement

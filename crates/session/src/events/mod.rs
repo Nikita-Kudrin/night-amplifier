@@ -15,7 +15,7 @@ pub use camera_list::{CameraInfoResponse, CameraListEntry, SensorModeDto};
 pub use push_to::{PushDirection, PushToTarget, SolveStage, SolveStatus, SolveVerdict};
 pub use sync::{SyncCause, Topic, TopicKind};
 
-use night_amplifier_core::push_to::PushToDirectionResponse;
+use night_amplifier_core::push_to::{InstallStage, PushToDirectionResponse};
 use serde::Serialize;
 
 use super::state::{CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus};
@@ -295,6 +295,8 @@ pub enum ServerEvent {
         percent: Option<f32>,
         /// Current installation stage name
         stage: Option<String>,
+        /// The same stage as an id, which the UI branches on
+        stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
     },
@@ -306,6 +308,8 @@ pub enum ServerEvent {
         progress: f32,
         /// Current installation stage name
         stage: Option<String>,
+        /// The same stage as an id, which the UI branches on
+        stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
     },
@@ -315,6 +319,8 @@ pub enum ServerEvent {
         component: String,
         /// Current installation stage name
         stage: Option<String>,
+        /// The same stage as an id, which the UI branches on
+        stage_id: Option<InstallStage>,
         /// Overall installation progress (0-100)
         overall_percent: Option<f32>,
     },
@@ -360,7 +366,7 @@ pub enum ServerEvent {
 }
 
 /// DTO for CaptureState serialization
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "PascalCase")]
 pub enum CaptureStateDto {
@@ -639,6 +645,7 @@ impl ServerEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use night_amplifier_core::push_to::DirectionHint;
 
     #[test]
     fn a_push_direction_names_the_camera_that_oriented_it() {
@@ -646,7 +653,7 @@ mod tests {
             angle_deg: 37.0,
             distance_deg: 26.1,
             is_close: false,
-            direction_hint: "NE".into(),
+            direction_hint: DirectionHint::NorthEast,
             direction_full: "North-East".into(),
             current_position: None,
             target: None,

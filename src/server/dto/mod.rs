@@ -5,7 +5,7 @@
 mod install;
 mod push_to;
 
-pub use crate::session::events::{CameraInfoResponse, CameraListEntry, SensorModeDto};
+pub use crate::session::events::{CameraInfoResponse, CameraListEntry, CaptureStateDto, SensorModeDto};
 pub use crate::session::services::UpdateSettingsRequest;
 
 pub use install::*;
@@ -97,7 +97,7 @@ impl ApiResponse<()> {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub struct CaptureStatusResponse {
-    pub state: String,
+    pub state: CaptureStateDto,
     pub frame_count: u64,
     pub stacked_count: u64,
     pub rejected_count: u64,
@@ -116,7 +116,7 @@ impl CaptureStatusResponse {
     pub fn new(state: CaptureState, stats: &SessionStats, settings: &CaptureSettings) -> Self {
         let counts = stats.counts();
         Self {
-            state: format!("{:?}", state),
+            state: state.into(),
             frame_count: counts.frames,
             stacked_count: counts.stacked,
             rejected_count: counts.rejected,
@@ -357,7 +357,7 @@ mod tests {
         };
 
         let response = CaptureStatusResponse::new(CaptureState::Capturing, &stats, &settings);
-        assert_eq!(response.state, "Capturing");
+        assert_eq!(response.state, CaptureStateDto::Capturing);
         assert_eq!((response.frame_count, response.stacked_count, response.rejected_count), (3, 2, 1));
         assert_eq!((response.exposure_us, response.gain), (30_000_000, 120));
         assert_eq!((response.dropped_count, response.delivered_count), (1, 3));

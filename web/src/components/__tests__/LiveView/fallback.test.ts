@@ -1,13 +1,13 @@
 import {nextTick, ref, shallowRef} from 'vue'
-import {mountWithDefaults} from '../../../test/mount.js'
-import {installCanvasContexts, quietly} from '../../../test/renderStubs.js'
-import {capabilities} from '../../../test/fixtures.js'
+import {mountWithDefaults} from '../../../test/mount'
+import {installCanvasContexts, quietly} from '../../../test/renderStubs'
+import {capabilities} from '../../../test/fixtures'
 
 // The real renderers, unlike the other LiveView files: only the socket is faked.
-vi.mock('../../../composables/useImageStream.js', () => ({useImageStream: vi.fn()}))
+vi.mock('../../../composables/useImageStream', () => ({useImageStream: vi.fn()}))
 
-import {useImageStream} from '../../../composables/useImageStream.js'
-import type {FrameData, FrameSize, ImageStream} from '../../../composables/useImageStream.js'
+import {useImageStream} from '../../../composables/useImageStream'
+import type {FrameData, FrameSize, ImageStream} from '../../../composables/useImageStream'
 import LiveView from '../../LiveView.vue'
 
 function mountWithStream() {

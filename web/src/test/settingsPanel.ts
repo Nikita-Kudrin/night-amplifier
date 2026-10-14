@@ -4,9 +4,9 @@ import {mount} from '@vue/test-utils'
 import type {VueWrapper} from '@vue/test-utils'
 import SettingsPanel from '../components/SettingsPanel.vue'
 import BaseSlider from '../components/ui/BaseSlider.vue'
-import {capabilities, settings} from './fixtures.js'
-import {contextProvides} from '../composables/appContext.js'
-import type {Capabilities, DeepSkyCapabilities, Settings} from '../composables/api.types.js'
+import {capabilities, settings} from './fixtures'
+import {contextProvides} from '../composables/appContext'
+import type {Capabilities, DeepSkyCapabilities, Settings} from '../composables/api.types'
 
 /**
  * A toggle's checkbox, found by the label text next to it.

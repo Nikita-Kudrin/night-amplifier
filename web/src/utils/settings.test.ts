@@ -1,6 +1,6 @@
 import {reactive, readonly} from 'vue'
 import {DEFAULT_SETTINGS} from '../constants'
-import {settingsMirror} from './settings.js'
+import {settingsMirror} from './settings'
 
 describe('settingsMirror', () => {
     it('is the defaults before the server answered', () => {

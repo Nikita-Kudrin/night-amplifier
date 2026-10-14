@@ -176,7 +176,7 @@ export interface Capabilities {
 
 /** Capture status response */
 export interface CaptureStatus {
-    state: string
+    state: CaptureState
     frame_count: number
     stacked_count: number
     rejected_count: number
@@ -449,6 +449,17 @@ export type CameraPhase = (typeof CAMERA_PHASE_VALUES)[number]
 export const CAMERA_ROLE_VALUES = ['main', 'guide'] as const
 export type CameraRole = (typeof CAMERA_ROLE_VALUES)[number]
 
+/** DTO for CaptureState serialization */
+export const CAPTURE_STATE_VALUES = [
+    'Idle',
+    'Starting',
+    'Capturing',
+    'Stopping',
+    'Error',
+    'Recovering',
+] as const
+export type CaptureState = (typeof CAPTURE_STATE_VALUES)[number]
+
 export interface CometCapabilities {
     pro_stacking: boolean
 }
@@ -565,6 +576,13 @@ export interface DenoiseSettings {
 }
 
 /**
+ * A push direction's compass label, in the celestial frame. Pro's own direction type
+ * maps onto it; the wire spells it `N`…`NW`, and `OK` when on target.
+ */
+export const DIRECTION_HINT_VALUES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'OK'] as const
+export type DirectionHint = (typeof DIRECTION_HINT_VALUES)[number]
+
+/**
  * Dual sampling sensor mode (Player One terminology). Only meaningful for
  * cameras that advertise sensor-mode selection — other providers ignore it.
  */
@@ -669,8 +687,8 @@ export interface PushToStatusDirection {
     distance_deg: number
     /** Whether within fine-adjustment range (<1 degree) */
     is_close: boolean
-    /** Direction hint (N, NE, E, SE, S, SW, W, NW, OK) */
-    direction_hint: string
+    /** Which way to push, in the celestial frame; `OK` once on target. */
+    direction_hint: DirectionHint
     /** Full direction description */
     direction_full: string
     /** Current position (if solved) */

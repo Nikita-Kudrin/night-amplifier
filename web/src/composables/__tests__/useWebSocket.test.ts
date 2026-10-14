@@ -7,12 +7,12 @@ import {
     getWebSocket,
     openWebSocket,
     setupGlobalWebSocketMock,
-} from './webSocketTestUtils.js'
+} from './webSocketTestUtils'
 
 setupGlobalWebSocketMock()
 
-import {useWebSocket as originalUseWebSocket, WS_CLOSE_UNRESPONSIVE} from '../useWebSocket.js'
-import type {SocketData, WebSocketConnection, WebSocketOptions} from '../useWebSocket.js'
+import {useWebSocket as originalUseWebSocket, WS_CLOSE_UNRESPONSIVE} from '../useWebSocket'
+import type {SocketData, WebSocketConnection, WebSocketOptions} from '../useWebSocket'
 import {WS_RECONNECT} from '../../constants'
 import { mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'

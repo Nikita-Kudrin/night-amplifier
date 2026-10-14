@@ -1,16 +1,15 @@
 import {ref} from 'vue'
-import {dismissRecoveryFailure} from '../api.js'
+import {dismissRecoveryFailure} from '../api'
 import {CAMERA_PHASES} from '../../constants'
-import type {CameraRole} from '../api.types.js'
+import type {CameraRole, CaptureState} from '../api.types'
 import type {
     CameraPhaseEntry,
-    CaptureState,
     FrameCapturedEvent,
     FrameRejectedEvent,
     StreamCrop,
     StreamFrameSize,
-} from '../api.events.js'
-import type {EventHandlers} from './handlers.js'
+} from '../api.events'
+import type {EventHandlers} from './handlers'
 
 /**
  * The camera a recovery or watchdog warning is about: `role` null when the event had none,

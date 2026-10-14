@@ -1,6 +1,6 @@
-import {createInstallEvents, INSTALL_INTERRUPTED} from './installEvents.js'
-import {sendTo} from '../../test/eventStream.js'
-import type {EventOf, ServerEventType} from '../api.events.js'
+import {createInstallEvents, INSTALL_INTERRUPTED} from './installEvents'
+import {sendTo} from '../../test/eventStream'
+import type {EventOf, ServerEventType} from '../api.events'
 
 /** An install table, and `send(type, fields)` to hand it an event as the stream would. */
 function installEvents() {
@@ -18,7 +18,7 @@ describe('createInstallEvents', () => {
             state: 'running',
             progress: {
                 type: 'astap_install_progress', component: 'D80 Database', bytes_downloaded: 500,
-                total_bytes: 2000, percent: 25, stage: 'Downloading Database', overall_percent: 37.5,
+                total_bytes: 2000, percent: 25, stage: 'Downloading Database', stage_id: 'downloading_database', overall_percent: 37.5,
             },
         })
         send('catalog_install_status', {
@@ -28,7 +28,7 @@ describe('createInstallEvents', () => {
 
         expect(state.astapInstallProgress.value).toEqual({
             component: 'D80 Database', stage: 'downloading', percent: 25, bytesDownloaded: 500,
-            totalBytes: 2000, stageName: 'Downloading Database', overallPercent: 37.5, error: null,
+            totalBytes: 2000, stageId: 'downloading_database', overallPercent: 37.5, error: null,
         })
         expect(state.catalogInstallProgress.value).toEqual({
             stage: 'downloading', fileName: 'NGC.csv', percent: 25, bytesDownloaded: 300, totalBytes: 1200, error: null,
@@ -80,7 +80,7 @@ describe('createInstallEvents', () => {
     it('marks only a status as ended, never a live event', () => {
         const {send, state} = installEvents()
 
-        send('astap_install_completed', {component: 'D80 Database', stage: 'Database Installed', overall_percent: 100})
+        send('astap_install_completed', {component: 'D80 Database', stage: 'Database Installed', stage_id: 'database_completed', overall_percent: 100})
         send('catalog_install_completed', {object_count: 13957})
 
         expect(state.astapInstallProgress.value).not.toHaveProperty('ended')

@@ -5,21 +5,21 @@ import {ref, nextTick} from 'vue'
 import type {Ref} from 'vue'
 import AstapInstallOverlay from './AstapInstallOverlay.vue'
 import type AstapStatusSection from './AstapStatusSection.vue'
-import {createInstallEvents} from '../composables/events/installEvents.js'
-import type {AstapInstallProgress} from '../composables/events/installEvents.js'
-import {createEventStreamStub, sendTo} from '../test/eventStream.js'
-import type {AstapStatus, InstalledDatabaseInfo} from '../composables/api.types.js'
+import {createInstallEvents} from '../composables/events/installEvents'
+import type {AstapInstallProgress} from '../composables/events/installEvents'
+import {createEventStreamStub, sendTo} from '../test/eventStream'
+import type {AstapStatus, InstalledDatabaseInfo} from '../composables/api.types'
 
 // Mock the API module
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         getAstapStatus: vi.fn(),
         getAstapDatabases: vi.fn(),
         installAstap: vi.fn(),
     }))
 
-import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api.js'
-import {contextProvides} from '../composables/appContext.js'
+import {getAstapStatus, getAstapDatabases, installAstap} from '../composables/api'
+import {contextProvides} from '../composables/appContext'
 
 const D80: InstalledDatabaseInfo = {id: 'D80', database_path: '/astap/d80_database', min_fov_deg: 0.15, max_fov_deg: 6.0}
 const G05: InstalledDatabaseInfo = {id: 'G05', database_path: '/astap/g05_database', min_fov_deg: 3.0, max_fov_deg: 20.0}
@@ -188,7 +188,7 @@ describe('AstapInstallOverlay', () => {
                 percent: 4.15,
                 bytesDownloaded: 52428800, // 50 MB
                 totalBytes: 1261887242, // ~1.2 GB
-                stageName: 'Downloading Database',
+                stageId: 'downloading_database',
                 overallPercent: 52.08,
                 error: null,
             }
@@ -258,7 +258,7 @@ describe('AstapInstallOverlay', () => {
                 component: 'D80 Database',
                 stage: 'extracting',
                 percent: 45.5,
-                stageName: 'Extracting Database',
+                stageId: 'extracting_database',
                 overallPercent: 72.75,
                 error: null,
             }
@@ -279,7 +279,7 @@ describe('AstapInstallOverlay', () => {
             progressRef.value = {
                 component: 'D80 Database',
                 stage: 'completed',
-                stageName: 'Database Installed',
+                stageId: 'database_completed',
                 overallPercent: 100,
                 error: null,
             }
@@ -333,7 +333,7 @@ describe('AstapInstallOverlay', () => {
                 percent: 15.3,
                 bytesDownloaded: 200000000,
                 totalBytes: 1300000000,
-                stageName: 'Downloading Database',
+                stageId: 'downloading_database',
                 overallPercent: 57.65,
                 error: null,
             }
@@ -365,7 +365,7 @@ describe('AstapInstallOverlay', () => {
                 percent: 50,
                 bytesDownloaded: 50000000,
                 totalBytes: 100000000,
-                stageName: 'Downloading ASTAP CLI',
+                stageId: 'downloading_cli',
                 overallPercent: 25,
                 error: null,
             }
@@ -398,7 +398,7 @@ describe('AstapInstallOverlay', () => {
                 percent: 5,
                 bytesDownloaded: 50000000,
                 totalBytes: 1000000000,
-                stageName: 'Downloading Database',
+                stageId: 'downloading_database',
                 overallPercent: 52.5,
                 error: null,
             }
@@ -465,7 +465,7 @@ describe('AstapInstallOverlay', () => {
             await flushPromises()
             await wrapper.find('.btn-primary').trigger('click')
             await flushPromises()
-            progressRef.value = {component: 'D80 Database', stage: 'completed', stageName: 'Database Installed', overallPercent: 100, error: null}
+            progressRef.value = {component: 'D80 Database', stage: 'completed', stageId: 'database_completed', overallPercent: 100, error: null}
             await flushPromises()
         }
 

@@ -1,7 +1,7 @@
 import {describe, it, expect} from 'vitest'
 import {ref} from 'vue'
-import {useDisplayedFov, useOtherSolvedCamera} from '../useDisplayedFov.js'
-import type {TelescopeSettings} from '../api.types.js'
+import {useDisplayedFov, useOtherSolvedCamera} from '../useDisplayedFov'
+import type {TelescopeSettings} from '../api.types'
 
 /** Optics with only `fields` known. */
 function optics(fields: Partial<TelescopeSettings>): TelescopeSettings {

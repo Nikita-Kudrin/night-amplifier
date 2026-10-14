@@ -1,7 +1,7 @@
 /** Cameras and optics: camera phases, cooler, dew heater, telescope, simulator. */
-import {CAMERA_PHASE_VALUES} from '../composables/api.types.js'
-import {serverLimits} from './serverSettings.js'
-import {byName} from './tables.js'
+import {CAMERA_PHASE_VALUES} from '../composables/api.types'
+import {serverLimits} from './serverSettings'
+import {byName} from './tables'
 
 /** `CameraPhase` (`api.types.ts`), by name. */
 export const CAMERA_PHASES = byName(CAMERA_PHASE_VALUES)

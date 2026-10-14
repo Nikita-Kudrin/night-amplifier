@@ -1,6 +1,6 @@
 import {ref, toValue} from 'vue'
 import type {MaybeRefOrGetter} from 'vue'
-import {tryOnScopeDispose} from './lifecycle.js'
+import {tryOnScopeDispose} from './lifecycle'
 import {WS_RECONNECT} from '../constants'
 
 /** Sent closing a socket that answered nothing for its liveness window: `CLOSE_UNRESPONSIVE` on the server. */

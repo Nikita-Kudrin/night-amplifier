@@ -1,5 +1,5 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest'
-import {usePanZoom} from './usePanZoom.js'
+import {usePanZoom} from './usePanZoom'
 
 // Mock ZOOM_LIMITS
 vi.mock('../constants', () => ({

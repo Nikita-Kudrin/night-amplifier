@@ -3,11 +3,11 @@
 import {describe, it, expect, expectTypeOf} from 'vitest'
 import {mount} from '@vue/test-utils'
 import type {ComponentMountingOptions} from '@vue/test-utils'
-import {BINNING_OPTIONS} from '../../constants/capture.js'
-import {WEIGHTING_PRESET_OPTIONS} from '../../constants/stacking.js'
-import type {WeightingPreset} from '../../composables/api.types.js'
-import {BaseSplitButton, ButtonGroup, SettingSelect} from './index.js'
-import type {BaseAlert, BaseInfoIcon, BaseSpinner, BaseToggle, InstallStatusList} from './index.js'
+import {BINNING_OPTIONS} from '../../constants/capture'
+import {WEIGHTING_PRESET_OPTIONS} from '../../constants/stacking'
+import type {WeightingPreset} from '../../composables/api.types'
+import {BaseSplitButton, ButtonGroup, SettingSelect} from './index'
+import type {BaseAlert, BaseInfoIcon, BaseSpinner, BaseToggle, InstallStatusList} from './index'
 import StatusIcon from './StatusIcon.vue'
 
 type Props<C> = NonNullable<ComponentMountingOptions<C>['props']>

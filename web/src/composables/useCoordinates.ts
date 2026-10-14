@@ -1,5 +1,5 @@
 import {ref} from 'vue'
-import {parseCoordinate} from '../utils/coordinates.js'
+import {parseCoordinate} from '../utils/coordinates'
 
 /** Coordinates in degrees, as typed into the RA and Dec fields. */
 export interface TypedCoordinates {

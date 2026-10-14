@@ -4,13 +4,13 @@ import type {VueWrapper} from '@vue/test-utils'
 import {ref} from 'vue'
 import type {Ref} from 'vue'
 import PushToPanel from './PushToPanel.vue'
-import {createEventStreamStub} from '../test/eventStream.js'
-import {camera, capabilities, catalogEntry, settings} from '../test/fixtures.js'
-import type {AstapStatus, Camera, DatabaseType, InstalledDatabaseInfo, Settings} from '../composables/api.types.js'
+import {createEventStreamStub} from '../test/eventStream'
+import {camera, capabilities, catalogEntry, settings} from '../test/fixtures'
+import type {AstapStatus, Camera, DatabaseType, InstalledDatabaseInfo, Settings} from '../composables/api.types'
 
 // Mock the full API module used by PushToPanel and its composables
-vi.mock('../composables/api.js', async (importOriginal) =>
-    (await import('../test/mockApi.js')).mockApi(await importOriginal(), {
+vi.mock('../composables/api', async (importOriginal) =>
+    (await import('../test/mockApi')).mockApi(await importOriginal(), {
         getAstapStatus: vi.fn(),
         getAstapDatabases: vi.fn(),
         updateSettings: vi.fn().mockResolvedValue({}),
@@ -30,14 +30,14 @@ import {
     searchCatalog,
     setTargetByName,
     setTargetByCoordinates,
-} from '../composables/api.js'
+} from '../composables/api'
 import ManualCoordinates from './ManualCoordinates.vue'
-import {fieldOfViewDeg} from '../utils/optics.js'
-import {contextProvides} from '../composables/appContext.js'
+import {fieldOfViewDeg} from '../utils/optics'
+import {contextProvides} from '../composables/appContext'
 
 // ─── FOV calculation helpers ──────────────────────────────────────────────────
 //
-// The frontend computes fovY = 2·atan(h·py / 2fl) (`utils/optics.js`), as Pro's solver does.
+// The frontend computes fovY = 2·atan(h·py / 2fl) (`utils/optics.ts`), as Pro's solver does.
 // These helpers produce settings that yield a specific, predictable fovY.
 
 const FL = 10       // focal length mm

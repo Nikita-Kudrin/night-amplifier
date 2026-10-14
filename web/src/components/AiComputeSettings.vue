@@ -8,14 +8,14 @@
  * error handler, so a refused "Measure again" lands in the panel's one error banner.
  */
 import {computed, reactive, ref, watch} from 'vue'
-import {remeasureAiCompute} from '../composables/api.js'
-import {useAiCompute} from '../composables/useAiCompute.js'
-import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute.js'
+import {remeasureAiCompute} from '../composables/api'
+import {useAiCompute} from '../composables/useAiCompute'
+import {aiComputeOptions, aiComputeSummary, isReady, SYSTEM_DEPENDENCIES_URL, unusableRungs} from '../utils/aiCompute'
 import {BaseToggle, BaseInfoIcon, BaseProLock} from './ui'
 import {HELP_TEXTS} from '../constants'
-import type {SaveSetting} from '../utils/settings.js'
-import type {ErrorHandler} from '../composables/useError.js'
-import type {AiComputePreference, DenoiseSettings} from '../composables/api.types.js'
+import type {SaveSetting} from '../utils/settings'
+import type {ErrorHandler} from '../composables/useError'
+import type {AiComputePreference, DenoiseSettings} from '../composables/api.types'
 
 const props = withDefaults(defineProps<{
   denoise: DenoiseSettings

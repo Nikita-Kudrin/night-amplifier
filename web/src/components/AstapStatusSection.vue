@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {computed} from 'vue'
 import InstallStatusList from './ui/InstallStatusList.vue'
-import type {AstapStatus} from '../composables/api.types.js'
+import type {AstapStatus} from '../composables/api.types'
 
 const props = defineProps<{
   status: AstapStatus
