@@ -3,11 +3,11 @@ import type {VueWrapper} from '@vue/test-utils'
 import {computed, nextTick, ref} from 'vue'
 import AdvancedSettings from './AdvancedSettings.vue'
 import SettingsPanel from './SettingsPanel.vue'
-import {settingsMirror} from '../utils/settings'
+import {settings} from '../test/fixtures'
+import type {SettingsOverrides} from '../test/fixtures'
 import type {SettingApply} from '../utils/settings'
 import {findSliderByLabel, findToggleByLabel} from '../test/settingsPanel'
 import {mountWithDefaults} from '../test/mount'
-import {settings} from '../test/fixtures'
 
 vi.mock('../composables/api', async (importOriginal) =>
     (await import('../test/mockApi')).mockApi(await importOriginal<typeof Api>()))
@@ -17,9 +17,9 @@ import type * as Api from '../composables/api'
 import {contextProvides} from '../composables/appContext'
 import {runDirectly} from '../composables/useError'
 
-function mountSection(server: Parameters<typeof settingsMirror>[0] = {}, simulatorEnabled = ref(false)) {
+function mountSection(server: SettingsOverrides = {}, simulatorEnabled = ref(false)) {
     const wrapper = mount(AdvancedSettings, {
-        props: {settings: settingsMirror(server), save: vi.fn(async () => {}), guard: runDirectly},
+        props: {settings: settings(server), save: vi.fn(async () => {}), guard: runDirectly},
         global: {provide: contextProvides({simulatorEnabled}), stubs: {BaseProLock: true}},
     })
     return {wrapper, simulatorEnabled}

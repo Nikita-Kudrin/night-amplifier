@@ -14,17 +14,17 @@ setupGlobalWebSocketMock()
 vi.mock('../api', async (importOriginal) =>
     (await import('../../test/mockApi')).mockApi(await importOriginal()))
 
-import {getAiCompute, getPushToStatus, getSettings, listCameras} from '../api'
+import {getAiCompute, getSettings, listCameras} from '../api'
 import {useEventStream} from '../useEventStream'
 import {createAppState} from '../useAppState'
 import {createAiComputeStore} from '../useAiCompute'
 
 /**
  * Every startup read the page makes, and the stores following one real event stream. Push-To
- * is never read: its state travels in the snapshot.
+ * has no read: its state travels in the snapshot.
  */
 describe('a sync of the real event stream', () => {
-    const reads = {getSettings, listCameras, getAiCompute, getPushToStatus}
+    const reads = {getSettings, listCameras, getAiCompute}
     let scope: EffectScope
 
     beforeEach(async () => {
@@ -56,7 +56,7 @@ describe('a sync of the real event stream', () => {
         await syncWebSocket()
         await vi.runOnlyPendingTimersAsync()
 
-        expect(callCounts()).toEqual({getSettings: 1, listCameras: 1, getAiCompute: 1, getPushToStatus: 0})
+        expect(callCounts()).toEqual({getSettings: 1, listCameras: 1, getAiCompute: 1})
     })
 
     it('reads everything no event restates again after a lag', async () => {
@@ -66,7 +66,7 @@ describe('a sync of the real event stream', () => {
         await syncWebSocket({cause: 'lagged', dropped: 144})
         await vi.runOnlyPendingTimersAsync()
 
-        expect(callCounts()).toEqual({getSettings: 2, listCameras: 2, getAiCompute: 2, getPushToStatus: 0})
+        expect(callCounts()).toEqual({getSettings: 2, listCameras: 2, getAiCompute: 2})
         // A sync follows every reconnect and lag: enumerating the USB bus each time opened
         // every idle QHY/ZWO camera for seconds, mid-capture too.
         expect(listCameras).toHaveBeenLastCalledWith({discover: false})

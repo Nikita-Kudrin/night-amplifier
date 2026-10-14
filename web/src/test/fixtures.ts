@@ -15,14 +15,28 @@ import type {
     CatalogEntry,
     CatalogStatus,
     DatabaseType,
-    PushToStatus,
     Settings,
     StackingType,
     StackingTypeInfo,
 } from '../composables/api.types'
 
-export function settings(overrides: Partial<Settings> = {}): Settings {
-    return {...defaultSettings(), ...overrides}
+/** Settings as a test gives them: any field, and a group with only the fields it is about. */
+export type SettingsOverrides = {
+    [K in keyof Settings]?: Settings[K] extends object ? Partial<Settings[K]> : Settings[K]
+}
+
+const isGroup = (value: unknown): value is object =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/** The server's default settings with `overrides` over them, a group's fields over its own. */
+export function settings(overrides: SettingsOverrides = {}): Settings {
+    const merged: Record<string, unknown> = {...defaultSettings()}
+    for (const [key, value] of Object.entries(overrides)) {
+        const group = merged[key]
+        merged[key] = isGroup(value) && isGroup(group) ? {...group, ...value} : value
+    }
+    // The defaults, each field (or a group's field) replaced by one of its own type.
+    return merged as unknown as Settings
 }
 
 export function capabilities(overrides: Partial<Capabilities> = {}): Capabilities {
@@ -133,19 +147,6 @@ export function catalogStatus(overrides: Partial<CatalogStatus> = {}): CatalogSt
         addendum_file_exists: true,
         hyg_file_exists: false,
         object_count: 13957,
-        ...overrides,
-    }
-}
-
-export function pushToStatus(overrides: Partial<PushToStatus> = {}): PushToStatus {
-    return {
-        solver_ready: true,
-        is_solving: false,
-        current_target: null,
-        last_position: null,
-        direction: null,
-        solve: {in_progress: false, target_name: null, stage: null, last_result: null},
-        blocker: null,
         ...overrides,
     }
 }

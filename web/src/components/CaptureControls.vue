@@ -212,7 +212,7 @@ function applyStackingMode(val: StackingMode) {
     stacking: {stacking: true, wanderer_mode: false},
     off: {stacking: false, wanderer_mode: false},
   }
-  applySetting(modes[val])
+  void applySetting(modes[val])
 }
 
 const showCometLock = computed(() => {

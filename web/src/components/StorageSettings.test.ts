@@ -1,12 +1,13 @@
 import {mount} from '@vue/test-utils'
 import StorageSettings from './StorageSettings.vue'
 import ReconnectSettings from './ReconnectSettings.vue'
-import {settingsMirror} from '../utils/settings'
+import {settings} from '../test/fixtures'
+import type {SettingsOverrides} from '../test/fixtures'
 import {findToggleByLabel} from '../test/settingsPanel'
 
 describe('StorageSettings', () => {
-    function mountSection(server: Parameters<typeof settingsMirror>[0] = {}, props: {hasGuideCamera?: boolean} = {}) {
-        return mount(StorageSettings, {props: {settings: settingsMirror(server), ...props}})
+    function mountSection(server: SettingsOverrides = {}, props: {hasGuideCamera?: boolean} = {}) {
+        return mount(StorageSettings, {props: {settings: settings(server), ...props}})
     }
 
     it('offers the guide camera\'s switch only with one attached', () => {
@@ -33,7 +34,7 @@ describe('StorageSettings', () => {
 
 describe('ReconnectSettings', () => {
     it('offers resuming only while reconnecting is on, and sends each switch', async () => {
-        const wrapper = mount(ReconnectSettings, {props: {settings: settingsMirror({auto_reconnect: false})}})
+        const wrapper = mount(ReconnectSettings, {props: {settings: settings({auto_reconnect: false})}})
         expect(() => findToggleByLabel(wrapper, 'Resume the capture')).toThrow()
 
         await findToggleByLabel(wrapper, 'Reconnect automatically').setValue(true)

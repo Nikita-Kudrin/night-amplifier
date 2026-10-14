@@ -31,7 +31,7 @@ export interface TelescopeSetupOptions {
 /** The settings this follows and saves: the flat block, the per-camera profiles, the last camera. */
 type TelescopeState = DeepReadonly<Pick<Settings, 'telescope' | 'camera_telescope_profiles' | 'last_camera_name'>>
 
-type Profiles = Record<string, Readonly<TelescopeSettings>>
+type Profiles = Partial<Record<string, Readonly<TelescopeSettings>>>
 
 const TELESCOPE_FIELDS: readonly (keyof TelescopeSettings)[] = [
     'focal_length_mm',
@@ -68,10 +68,12 @@ function sameOptics(a: Readonly<TelescopeSettings>, b: Readonly<TelescopeSetting
  * request names; sending the whole map from the last fetch erased a profile seeded at
  * connect since, and the guide camera then solved on the imaging scope's optics.
  */
-function changedProfiles(profiles: Profiles, persisted: Profiles): Record<string, TelescopeSettings> {
-    return Object.fromEntries(
-        Object.entries(profiles).filter(([name, profile]) => !sameOptics(profile, persisted[name]))
-    )
+function changedProfiles(profiles: Profiles, persisted: Profiles): Record<string, Readonly<TelescopeSettings>> {
+    const changed: Record<string, Readonly<TelescopeSettings>> = {}
+    for (const [name, profile] of Object.entries(profiles)) {
+        if (profile && !sameOptics(profile, persisted[name])) changed[name] = profile
+    }
+    return changed
 }
 
 /**
@@ -92,7 +94,7 @@ export function useTelescopeSetup({withErrorHandling = runDirectly, connectedCam
     const manualPixelSize = ref(false)
 
     // ── Per-camera profile state ──────────────────────────────────────
-    const cameraProfiles = ref<Record<string, TelescopeSettings>>({})   // camera_name -> TelescopeSettings
+    const cameraProfiles = ref<Partial<Record<string, TelescopeSettings>>>({})   // camera_name -> TelescopeSettings
     const lastCameraName = ref<string | null>(null)
     // The server's profiles as of the last sync or landed save: a save sends only the
     // entries that differ from them.

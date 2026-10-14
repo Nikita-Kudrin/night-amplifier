@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import BaseSpinner from './BaseSpinner.vue'
 
-export interface InstallStage {
+export interface StageRow {
   label: string
   completed: boolean
   active: boolean
@@ -9,7 +9,7 @@ export interface InstallStage {
 }
 
 defineProps<{
-  stages: readonly InstallStage[]
+  stages: readonly StageRow[]
 }>()
 </script>
 

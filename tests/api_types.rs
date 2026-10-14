@@ -2,7 +2,8 @@
 //! (the hand-kept file once described 8 of ~60 settings and push directions by field
 //! names the server never sent), `api.settings.ts`: the default settings and the ranges
 //! the server clamps them to, read off the code that enforces them, and `api.events.ts`
-//! (`events`): every `/ws/events` event and the topic it states.
+//! (`events`): every `/ws/events` event and the topic it states, and the tests' `api.examples.ts`:
+//! one complete event of each type.
 //!
 //! `cargo test --features api-schema --test api_types` fails when any file is stale;
 //! `UPDATE_API_TYPES=1` on the same command rewrites them. Run this binary alone: the feature
@@ -38,6 +39,7 @@ const TYPES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composabl
 const SETTINGS_FILE: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.settings.ts");
 const EVENTS_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/composables/api.events.ts");
+const EXAMPLES_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/web/src/test/api.examples.ts");
 
 const HEADER: &str = "\
 /**
@@ -216,8 +218,9 @@ fn type_expr(schema: &Value, roots: &[Root]) -> String {
                 None => "unknown[]".into(),
             },
             "object" => match schema.get("additionalProperties") {
+                // A map holds only the keys it was sent: a lookup may miss.
                 Some(values) if values.is_object() => {
-                    format!("Record<string, {}>", type_expr(values, roots))
+                    format!("Partial<Record<string, {}>>", type_expr(values, roots))
                 }
                 _ => "Record<string, unknown>".into(),
             },
@@ -234,6 +237,17 @@ fn property_key(field: &str) -> String {
     if identifier { field.to_string() } else { string_literal(&Value::String(field.to_string())) }
 }
 
+/// An object's fields, one per line at `indent`, each with its doc comment.
+fn members(properties: &Map<String, Value>, required: &BTreeSet<String>, roots: &[Root], indent: &str) -> String {
+    let mut out = String::new();
+    for (field, property) in properties {
+        let optional = if required.contains(field) { "" } else { "?" };
+        out.push_str(&doc_comment(property, indent));
+        out.push_str(&format!("{indent}{}{optional}: {}\n", property_key(field), type_expr(property, roots)));
+    }
+    out
+}
+
 /// An `interface` for an object, a values list and the type derived from it for a string
 /// union (so the list is exhaustive by construction), else a `type` alias.
 fn declaration(name: &str, schema: &Value, roots: &[Root]) -> String {
@@ -241,11 +255,7 @@ fn declaration(name: &str, schema: &Value, roots: &[Root]) -> String {
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         let required = strings(schema.get("required"));
         out.push_str(&format!("export interface {name} {{\n"));
-        for (field, property) in properties {
-            let optional = if required.contains(field) { "" } else { "?" };
-            out.push_str(&doc_comment(property, "    "));
-            out.push_str(&format!("    {}{optional}: {}\n", property_key(field), type_expr(property, roots)));
-        }
+        out.push_str(&members(properties, &required, roots, "    "));
         out.push_str("}\n");
         return out;
     }
@@ -416,7 +426,7 @@ fn generate_settings() -> String {
 
 /// Rewrites `path` under `UPDATE_API_TYPES`, else fails when it differs from `generated`.
 fn assert_current(path: &str, generated: &str) {
-    let name = path.rsplit('/').next().unwrap();
+    let name = path.strip_prefix(concat!(env!("CARGO_MANIFEST_DIR"), "/")).unwrap_or(path);
     if std::env::var_os("UPDATE_API_TYPES").is_some() {
         std::fs::write(path, generated).unwrap_or_else(|e| panic!("write {name}: {e}"));
         return;
@@ -424,7 +434,7 @@ fn assert_current(path: &str, generated: &str) {
     let committed = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {name}: {e}"));
     assert!(
         committed == generated,
-        "web/src/composables/{name} is stale; regenerate it with\n  \
+        "{name} is stale; regenerate it with\n  \
          UPDATE_API_TYPES=1 cargo test --features api-schema --test api_types"
     );
 }
@@ -442,6 +452,11 @@ fn api_settings_ts_is_current() {
 #[test]
 fn api_events_ts_is_current() {
     assert_current(EVENTS_FILE, &events::generate());
+}
+
+#[test]
+fn api_examples_ts_is_current() {
+    assert_current(EXAMPLES_FILE, &events::generate_examples());
 }
 
 #[test]
@@ -480,7 +495,7 @@ fn a_union_inside_an_array_or_a_map_keeps_its_meaning() {
     assert_eq!(type_expr(&json!({ "type": "array", "items": union }), &roots), "(CatalogEntry | null)[]");
     assert_eq!(
         type_expr(&json!({ "type": "object", "additionalProperties": union }), &roots),
-        "Record<string, CatalogEntry | null>"
+        "Partial<Record<string, CatalogEntry | null>>"
     );
     assert_eq!(type_expr(&json!({}), &roots), "unknown");
 }

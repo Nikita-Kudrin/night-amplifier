@@ -519,7 +519,6 @@ fn pointing() -> PushToDirectionResponse {
         distance_deg: 2.5,
         is_close: false,
         direction_hint: DirectionHint::NorthEast,
-        direction_full: "North-East".into(),
         current_position: None,
         target: None,
         solved_camera: Some("Guide Cam".into()),
@@ -556,7 +555,7 @@ async fn the_status_carries_the_solve_the_blocker_and_the_direction_fov() {
 
     assert_eq!(status["solver_ready"], true);
     assert_eq!(status["direction"]["angle_deg"], 37.0);
-    assert_eq!(status["direction"]["direction_full"], "North-East");
+    assert_eq!(status["direction"]["direction_hint"], "NE");
     assert_eq!(status["direction"]["solved_camera"], "Guide Cam");
     assert_eq!(status["direction"]["fov_deg"], 1.45);
     assert_eq!(

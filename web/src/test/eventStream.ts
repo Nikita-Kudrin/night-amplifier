@@ -6,24 +6,37 @@ import type {EventOf, ServerEvent, ServerEventType, SyncedEvent} from '../compos
 import type {CameraRole, CaptureState} from '../composables/api.types'
 import type {EventHandlers, EventStream, Sync} from '../composables/useEventStream'
 import {handlerOf} from '../composables/events/handlers'
+import type {EventHandler} from '../composables/events/handlers'
+import {SERVER_EVENT_EXAMPLES} from './api.examples'
 import type {StackCrop} from '../composables/events/captureEvents'
 import {NOT_SOLVING} from '../composables/events/pushToEvents'
 import type {ClientPushDirection, CurrentTarget, PlateSolving} from '../composables/events/pushToEvents'
 import type {AstapInstallProgress, CatalogInstallProgress} from '../composables/events/installEvents'
 
 /**
- * `{type, ...fields}`, typed by `api.events.ts`: a type the server never sends, a field its
- * event does not carry, or a value of the wrong type, does not compile. Fields may be left
- * out: a handler under test reads only some.
+ * The fields of `K`'s event a test may give, any of them: a type the server never sends, a
+ * field its event does not carry, or a value of the wrong type, does not compile. A union
+ * event is typed by the branch the fields name (`state: 'failed'` with its `error`).
  */
-export function serverEvent<K extends ServerEventType>(
-    type: K,
-    fields: Partial<Omit<EventOf<K>, 'type'>> = {},
-): EventOf<K> {
-    return {...fields, type} as EventOf<K>
+export type Fields<K extends ServerEventType> = EventOf<K> extends infer E
+    ? E extends unknown ? Partial<Omit<E, 'type'>> : never
+    : never
+
+/** An event as a test writes it: its `type`, and the fields `serverEvent` takes. */
+export type EventFields<K extends ServerEventType> = {type: K} & Fields<K>
+
+/**
+ * `K`'s event as the server sends it: `fields` over the generated example's required fields
+ * (`SERVER_EVENT_EXAMPLES`, a nullable one `null`), so a handler never meets a field the
+ * wire always carries left out. A union event's example is one branch: naming another
+ * (`state: 'running'`) means naming what that branch carries too.
+ */
+export function serverEvent<K extends ServerEventType>(type: K, fields?: Fields<K>): EventOf<K> {
+    // A spread over a generic event is not assignable to it; both halves are typed above.
+    return {...structuredClone(SERVER_EVENT_EXAMPLES[type]), ...fields, type} as EventOf<K>
 }
 
-type Handler = (event: ServerEvent) => void
+type Handler = EventHandler<ServerEvent>
 
 /** `vi.fn(fn)`, typed as `fn` too: `Mock` keeps only one signature, which drops `fn`'s generics. */
 function spy<F extends (...args: never[]) => unknown>(fn: F): Mock<F> & F {
@@ -43,7 +56,7 @@ const wirings = new WeakMap<EventStream, Wiring>()
 function stub(wiring: Wiring): EventStream {
     const {handlers} = wiring
 
-    function on<K extends ServerEventType>(type: K, handler: (event: EventOf<K>) => void): () => void {
+    function on<K extends ServerEventType>(type: K, handler: EventHandler<EventOf<K>>): () => void {
         let set = handlers.get(type)
         if (!set) handlers.set(type, (set = new Set()))
         // Each set holds one type's handlers, which only `emitEvent` of that type reaches.
@@ -128,14 +141,11 @@ export function createEventStreamStub(overrides: Overrides = {}): EventStream {
     return stream
 }
 
-/** An event as a test writes it: its `type`, and the fields `serverEvent` takes. */
-export type EventFields<K extends ServerEventType> = {type: K} & Partial<Omit<EventOf<K>, 'type'>>
-
 /** Hands `table`'s handler for `type` the event `serverEvent` builds, as the stream would; throws without one. */
 export function sendTo<K extends ServerEventType>(
     table: EventHandlers,
     type: K,
-    fields: Partial<Omit<EventOf<K>, 'type'>> = {},
+    fields?: Fields<K>,
 ): void {
     const handler = handlerOf(table, type)
     if (!handler) throw new Error(`no handler for '${type}'`)

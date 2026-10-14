@@ -15,7 +15,7 @@ const props = withDefaults(defineProps<{
   help?: string
   /** The choices, in order. */
   options: readonly Option<T>[]
-  id?: string
+  id?: string | undefined
   /** Whether the Pro options are unavailable; `proFeature` names them on the lock. */
   locked?: boolean
   proFeature?: string

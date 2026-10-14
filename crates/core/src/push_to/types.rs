@@ -74,8 +74,6 @@ pub struct PushToDirectionResponse {
     pub is_close: bool,
     /// Which way to push, in the celestial frame; `OK` once on target.
     pub direction_hint: DirectionHint,
-    /// Full direction description
-    pub direction_full: String,
     /// Current position (if solved)
     pub current_position: Option<CoordinateResponse>,
     /// Target position
@@ -86,8 +84,8 @@ pub struct PushToDirectionResponse {
     pub solved_camera: Option<String>,
 }
 
-/// A push direction's compass label, in the celestial frame. Pro's own direction type
-/// maps onto it; the wire spells it `N`…`NW`, and `OK` when on target.
+/// A push direction's compass label, in the celestial frame; the wire spells it `N`…`NW`,
+/// and `OK` when on target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "api-schema", derive(schemars::JsonSchema))]
 pub enum DirectionHint {
@@ -112,6 +110,21 @@ pub enum DirectionHint {
 }
 
 impl DirectionHint {
+    /// The compass point nearest a position angle (north through east), in 45° sectors.
+    pub fn from_angle(angle_deg: f64) -> Self {
+        match angle_deg.rem_euclid(360.0) {
+            a if a < 22.5 => Self::North,
+            a if a < 67.5 => Self::NorthEast,
+            a if a < 112.5 => Self::East,
+            a if a < 157.5 => Self::SouthEast,
+            a if a < 202.5 => Self::South,
+            a if a < 247.5 => Self::SouthWest,
+            a if a < 292.5 => Self::West,
+            a if a < 337.5 => Self::NorthWest,
+            _ => Self::North,
+        }
+    }
+
     /// As the wire spells it.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -299,6 +312,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_position_angle_names_its_nearest_compass_point() {
+        use DirectionHint::*;
+        let cases = [
+            (0.0, North), (45.0, NorthEast), (90.0, East), (135.0, SouthEast), (180.0, South),
+            (225.0, SouthWest), (270.0, West), (315.0, NorthWest), (337.5, North), (-45.0, NorthWest),
+            (405.0, NorthEast),
+        ];
+        for (angle, hint) in cases {
+            assert_eq!(DirectionHint::from_angle(angle), hint, "{angle}°");
+        }
+    }
+
     /// The REST answers the plugin's values become, captured while they were still
     /// server DTOs: moving them into the domain must not move a byte of the wire.
     #[test]
@@ -308,7 +334,6 @@ mod tests {
             distance_deg: 3.5,
             is_close: false,
             direction_hint: DirectionHint::NorthEast,
-            direction_full: "North-East".into(),
             current_position: Some(coordinate()),
             target: Some(coordinate()),
             solved_camera: Some("Guide Cam".into()),
@@ -322,7 +347,7 @@ mod tests {
         };
         assert_eq!(
             json(&status),
-            r#"{"solver_ready":true,"is_solving":false,"current_target":{"designation":"NGC 224","name":"Andromeda","catalog_type":"NGC","ra_degrees":10.68,"dec_degrees":41.27,"ra_string":"a","dec_string":"b","object_type":"Galaxy","magnitude":3.4,"constellation":"And","messier":"M31"},"last_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"direction":{"angle_deg":12.0,"distance_deg":3.5,"is_close":false,"direction_hint":"NE","direction_full":"North-East","current_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"target":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"solved_camera":"Guide Cam"}}"#
+            r#"{"solver_ready":true,"is_solving":false,"current_target":{"designation":"NGC 224","name":"Andromeda","catalog_type":"NGC","ra_degrees":10.68,"dec_degrees":41.27,"ra_string":"a","dec_string":"b","object_type":"Galaxy","magnitude":3.4,"constellation":"And","messier":"M31"},"last_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"direction":{"angle_deg":12.0,"distance_deg":3.5,"is_close":false,"direction_hint":"NE","current_position":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"target":{"ra_degrees":10.5,"dec_degrees":-20.25,"ra_string":"00h42m","dec_string":"-20°15'"},"solved_camera":"Guide Cam"}}"#
         );
 
         let position = PushToPositionResponse {

@@ -12,7 +12,20 @@ describe('fixtures', () => {
         expect(built.info).toMatchObject({id: 'qhy_1', name: 'QHY5III462C', has_cooler: true})
     })
 
+    // A test names only the fields of a group it is about; the rest are the server's defaults.
+    it('lays a partial group over its default, and any other value whole', () => {
+        const defaults = fixtures.settings()
+        const built = fixtures.settings({bin: 2, eyepiece: {intensity: 0.5}, comet_roi: {x: 1, y: 2, width: 3, height: 4}})
+
+        expect(built.bin).toBe(2)
+        expect(built.eyepiece).toEqual({...defaults.eyepiece, intensity: 0.5})
+        expect(built.comet_roi).toEqual({x: 1, y: 2, width: 3, height: 4})
+        expect(built.denoise).toEqual(defaults.denoise)
+    })
+
     it('hands out fresh objects', () => {
+        fixtures.settings().eyepiece.intensity = 0.9
+        expect(fixtures.settings().eyepiece.intensity).not.toBe(0.9)
         fixtures.capabilities().deep_sky.denoise = true
         expect(fixtures.capabilities().deep_sky.denoise).toBe(false)
     })

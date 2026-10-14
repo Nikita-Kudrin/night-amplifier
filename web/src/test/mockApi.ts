@@ -6,7 +6,6 @@ import {
     astapStatus,
     capabilities,
     catalogStatus,
-    pushToStatus,
     settings,
     stackingTypes,
 } from './fixtures'
@@ -33,7 +32,6 @@ const DEFAULTS: Defaults = {
     getCapabilities: () => capabilities(),
     listCameras: () => [],
     getStackingTypes: () => stackingTypes(),
-    getPushToStatus: () => pushToStatus(),
     searchCatalog: () => [],
     getAstapStatus: () => astapStatus(),
     getAstapDatabases: () => [],

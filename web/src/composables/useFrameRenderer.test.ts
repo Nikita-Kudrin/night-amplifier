@@ -58,7 +58,7 @@ function mountRenderer({count = 1, isJpeg = false, onSizeChange}: MountOptions =
     let renderer: FrameRenderer | undefined
     const Host = defineComponent({
         setup() {
-            renderer = useFrameRenderer({...stream, canvases: () => canvases.slice(0, canvasCount.value), onSizeChange})
+            renderer = useFrameRenderer({...stream, canvases: () => canvases.slice(0, canvasCount.value), ...(onSizeChange && {onSizeChange})})
             return () => h('div', Array.from({length: canvasCount.value}, (_, i) =>
                 h('canvas', {key: i, ref: (el) => { if (el instanceof HTMLCanvasElement) canvases[i] = el }})))
         },
@@ -257,6 +257,27 @@ describe('useFrameRenderer', () => {
 
             expect(decoder.bitmaps[0].close).toHaveBeenCalled()
             expect(decoder.bitmaps[1].close).not.toHaveBeenCalled()
+        })
+
+        it('logs a decoded frame it could not draw, and decodes the next', async () => {
+            const {glOf} = installCanvasContexts()
+            const decoder = installDecoder()
+            const view = mountRenderer({isJpeg: true})
+            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+            glOf(view.canvases[0]).texImage2D.mockImplementationOnce(() => {
+                throw new Error('context lost mid-upload')
+            })
+
+            await view.showJpeg(10, 10)
+            decoder.pending[0].resolve()
+            await flush()
+            await view.showJpeg(10, 10)
+            decoder.pending[1].resolve()
+            await flush()
+
+            expect(consoleSpy).toHaveBeenCalledWith('[FrameRenderer] Drawing a frame failed:', expect.objectContaining({message: 'context lost mid-upload'}))
+            expect(glOf(view.canvases[0]).texImage2D).toHaveBeenCalledTimes(2)
+            consoleSpy.mockRestore()
         })
 
         it('keeps the last picture when a frame cannot be decoded', async () => {

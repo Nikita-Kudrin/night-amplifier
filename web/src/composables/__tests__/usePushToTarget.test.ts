@@ -96,9 +96,4 @@ describe('usePushToTarget', () => {
         // @ts-expect-error without a stream there is nothing to own the target
         expect(() => usePushToTarget({})).toThrow()
     })
-
-    it('reads no status of its own: the sync snapshot carries Push-To', () => {
-        usePushToTarget({eventStream})
-        expect(api.getPushToStatus).not.toHaveBeenCalled()
-    })
 })

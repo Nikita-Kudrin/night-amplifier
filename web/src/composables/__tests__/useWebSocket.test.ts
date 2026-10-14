@@ -103,6 +103,22 @@ describe('useWebSocket', () => {
             expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({data: 'test data'}))
         })
 
+        // An async handler (the image streams decode a `Blob`) is awaited by nobody else.
+        it('logs a rejected async onMessage instead of leaving it unhandled', async () => {
+            const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+            useWebSocket('/ws/test', {onMessage: async () => {
+                throw new Error('decode failed')
+            }})
+
+            await openWebSocket()
+            getWebSocket().simulateMessage('frame')
+            await Promise.resolve()
+            await nextTick()
+
+            expect(consoleSpy).toHaveBeenCalledWith('Socket message handler failed:', expect.objectContaining({message: 'decode failed'}))
+            consoleSpy.mockRestore()
+        })
+
         it('ignores pong messages', async () => {
             const onMessage = vi.fn()
             useWebSocket('/ws/test', {onMessage})

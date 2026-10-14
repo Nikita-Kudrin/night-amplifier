@@ -5,7 +5,7 @@ import {createCaptureEvents} from './events/captureEvents'
 import {createPushToEvents} from './events/pushToEvents'
 import {createInstallEvents} from './events/installEvents'
 import {handlerEntries} from './events/handlers'
-import type {EventHandlers} from './events/handlers'
+import type {EventHandler, EventHandlers} from './events/handlers'
 import type {EventOf, ServerEvent, ServerEventType, SyncedEvent} from './api.events'
 
 export {pushDirectionFrom} from './events/pushToEvents'
@@ -15,6 +15,10 @@ export type {EventHandlers} from './events/handlers'
 export type Sync = Pick<SyncedEvent, 'cause' | 'dropped'> & {first: boolean}
 
 export type EventStream = ReturnType<typeof useEventStream>
+
+function isEvent(value: unknown): value is ServerEvent {
+    return typeof value === 'object' && value !== null && typeof (value as {type?: unknown}).type === 'string'
+}
 
 /**
  * Subscribes every handler of a `{type: handler}` table to `stream`.
@@ -56,17 +60,17 @@ export function resyncOn(
  */
 export function useEventStream() {
     // Each set holds one type's handlers, which `dispatch` hands only events of that type.
-    const subscribers = new Map<ServerEventType, Set<(event: ServerEvent) => void>>()
+    const subscribers = new Map<ServerEventType, Set<EventHandler<ServerEvent>>>()
 
     /**
      * Calls `handler(event)` for every event of `type`; inside a component or effect
      * scope, until it goes away.
      * @returns Unsubscribes early.
      */
-    function on<K extends ServerEventType>(type: K, handler: (event: EventOf<K>) => void): () => void {
+    function on<K extends ServerEventType>(type: K, handler: EventHandler<EventOf<K>>): () => void {
         let handlers = subscribers.get(type)
         if (!handlers) subscribers.set(type, (handlers = new Set()))
-        const added = handler as (event: ServerEvent) => void
+        const added = handler as EventHandler<ServerEvent>
         handlers.add(added)
         const off = () => {
             handlers.delete(added)
@@ -83,13 +87,16 @@ export function useEventStream() {
         return [...subscribers].filter(([, handlers]) => handlers.size > 0).map(([type]) => type)
     }
 
-    // `event` is parsed JSON: an object without a known `type` reaches no handler.
+    // A handler that fails, by throwing or by a promise it returns rejecting, is logged and
+    // skipped: unhandled, a rejection named no event and failed the test run in its place.
     function dispatch(event: ServerEvent) {
-        for (const handler of subscribers.get(event?.type) ?? []) {
+        const failed = (e: unknown) => console.error(`Handler for ${event.type} failed:`, e)
+        for (const handler of subscribers.get(event.type) ?? []) {
             try {
-                handler(event)
+                const result: unknown = handler(event)
+                if (result instanceof Promise) result.catch(failed)
             } catch (e) {
-                console.error(`Handler for ${event.type} failed:`, e)
+                failed(e)
             }
         }
     }
@@ -118,14 +125,16 @@ export function useEventStream() {
 
     const {connected, error, connect, disconnect} = useWebSocket(WS.EVENTS, {
         onMessage: (message: MessageEvent<string>) => {
-            let event: ServerEvent
+            let parsed: unknown
             try {
-                event = JSON.parse(message.data)
+                parsed = JSON.parse(message.data)
             } catch (e) {
                 console.error('Failed to parse event:', e)
                 return
             }
-            dispatch(event)
+            // The server's own events, typed by `api.events.ts`; anything without a `type`
+            // (a stray `null`, a number) has no handler to reach.
+            if (isEvent(parsed)) dispatch(parsed)
         },
     })
 

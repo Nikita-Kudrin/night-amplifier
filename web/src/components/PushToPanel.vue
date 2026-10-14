@@ -41,7 +41,7 @@ async function fetchAstapStatus() {
 
 // Re-fetch status when database manager is closed (user may have installed a new DB)
 watch(showDatabaseManager, (visible) => {
-  if (!visible) fetchAstapStatus()
+  if (!visible) void fetchAstapStatus()
 })
 
 const installedDatabases = computed(() => astapStatus.value?.installed_databases ?? [])
@@ -174,7 +174,7 @@ onMounted(fetchAstapStatus)
       <EquipmentSection
           :connected-camera-info="connectedCameraInfo"
           :installed-databases="installedDatabases"
-          :active-database-type="astapStatus?.database_type"
+          :active-database-type="astapStatus?.database_type ?? null"
           @fov-changed="calculatedFov = $event"
           @database-select="selectDatabase"
       />

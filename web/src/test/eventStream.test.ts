@@ -1,5 +1,6 @@
 import {mount} from '@vue/test-utils'
 import {createEventStreamStub, serverEvent} from './eventStream'
+import {SERVER_EVENT_EXAMPLES} from './api.examples'
 import {SERVER_EVENTS} from '../composables/api.events'
 import type {ServerEventType} from '../composables/api.events'
 import {useEventStream} from '../composables/useEventStream'
@@ -53,6 +54,34 @@ describe('serverEvent', () => {
         serverEvent('frame_dropped', {dropped: 3})
         // @ts-expect-error `role` is a `CameraRole`
         serverEvent('camera_reconnecting', {role: 'imaging'})
-        expect(serverEvent('frame_dropped', {dropped_count: 3})).toEqual({type: 'frame_dropped', dropped_count: 3})
+        expect(serverEvent('frame_dropped', {dropped_count: 3})).toMatchObject({type: 'frame_dropped', dropped_count: 3})
+    })
+
+    // A handler reads what the wire always carries without a fallback, so a test event must too.
+    it('carries every field the event requires, the given ones over the example', () => {
+        expect(serverEvent('capture_counts', {stacked_count: 7})).toEqual({
+            ...SERVER_EVENT_EXAMPLES.capture_counts,
+            stacked_count: 7,
+        })
+        expect(serverEvent('camera_reconnecting')).toEqual(expect.objectContaining({name: expect.any(String), role: 'main'}))
+    })
+
+    it('says nothing the test did not ask for: a nullable field null, a list empty, an optional one left out', () => {
+        expect(serverEvent('capture_counts').last_rejection_reason).toBeNull()
+        expect(serverEvent('camera_phases').cameras).toEqual([])
+        expect(serverEvent('frame_captured')).not.toHaveProperty('rejection_reason')
+    })
+
+    it('takes a union event by the branch its fields name', () => {
+        expect(serverEvent('astap_install_status', {state: 'failed', error: 'disk full'}))
+            .toMatchObject({type: 'astap_install_status', state: 'failed', error: 'disk full'})
+        // @ts-expect-error a `completed` status carries no `error`
+        serverEvent('astap_install_status', {state: 'completed', error: 'x'})
+    })
+
+    it('hands out a fresh event each time', () => {
+        const first = serverEvent('camera_phases')
+        first.cameras.push({name: 'A', role: 'main', phase: 'idle'})
+        expect(serverEvent('camera_phases').cameras).toEqual([])
     })
 })

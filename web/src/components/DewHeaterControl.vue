@@ -26,12 +26,12 @@ watch(
 
 function handleHeaterToggle(enabled: boolean) {
   localHeaterEnabled.value = enabled
-  apply({dew_heater_enabled: enabled})
+  void apply({dew_heater_enabled: enabled})
 }
 
 function handlePowerChange(value: number) {
   localHeaterPower.value = value
-  apply({dew_heater_power: value})
+  void apply({dew_heater_power: value})
 }
 
 /** The power control runs 0–100. */

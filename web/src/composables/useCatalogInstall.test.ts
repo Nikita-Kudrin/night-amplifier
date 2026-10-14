@@ -9,7 +9,8 @@ import type {CatalogInstall} from './useCatalogInstall'
 import {createInstallEvents, INSTALL_INTERRUPTED} from './events/installEvents'
 import type {CatalogInstallProgress} from './events/installEvents'
 import type {CatalogStatus, Message} from './api.types'
-import type {EventOf, ServerEventType} from './api.events'
+import type {ServerEventType} from './api.events'
+import type {Fields} from '../test/eventStream'
 
 vi.mock('./api', async (importOriginal) =>
     (await import('../test/mockApi')).mockApi(await importOriginal()))
@@ -137,7 +138,7 @@ describe('useCatalogInstall', () => {
 describe('useCatalogInstall after a sync', () => {
     function mountWithEvents(options: InstallOptions<CatalogStatus | null> = {}) {
         const {handlers, state} = createInstallEvents()
-        const send = <K extends ServerEventType>(type: K, fields: Partial<Omit<EventOf<K>, 'type'>>) =>
+        const send = <K extends ServerEventType>(type: K, fields: Fields<K>) =>
             sendTo(handlers, type, fields)
         return {...mountInstall(options, createEventStreamStub(state)), send}
     }

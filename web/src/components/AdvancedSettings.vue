@@ -58,7 +58,7 @@ watch(() => cameraSettings.value?.bin, (value) => (bin.value = value ?? DEFAULT_
 
 function applyBin(value: number) {
   bin.value = value
-  applyHardware({bin: value})
+  void applyHardware({bin: value})
 }
 
 /** The app's own switch (it decides which cameras the list offers), mirrored to the server. */

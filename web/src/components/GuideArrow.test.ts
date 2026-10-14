@@ -38,7 +38,7 @@ function mountArrow(propsOverrides: FlatProps = {}) {
     const bounds = imageWidth !== undefined && imageHeight !== undefined
         ? {left: imageLeft ?? 0, top: imageTop ?? 0, width: imageWidth, height: imageHeight}
         : undefined
-    const props: ArrowProps = {direction, ...rest, bounds}
+    const props: ArrowProps = {direction, ...rest, ...(bounds && {bounds})}
     return mount(GuideArrow, {props})
 }
 

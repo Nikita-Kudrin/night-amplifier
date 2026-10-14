@@ -26,7 +26,7 @@ export function useSoftwareLicenses() {
         if (!error.value && !coreLicense.value) setError('The server sent no license text.')
     }
 
-    tryOnMounted(load)
+    tryOnMounted(() => void load())
 
     return {version, coreLicense, thirdPartyLicenses, loading, error, load}
 }
