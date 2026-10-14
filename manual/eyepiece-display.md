@@ -45,7 +45,15 @@ recovers on its own, the eyepiece waits for it.
 Push-To arrows and **Download** follow too: the arrows are placed against the guide
 scope's field, and the download saves the guide camera's frame. An arrow is drawn only
 over the camera that solved it — a guide camera's rotation is not the imaging camera's —
-so on the imaging camera the eyepiece shows the distance and compass point instead.
+so on the imaging camera the eyepiece shows the distance and compass point instead, and
+names the guide camera while it is connected. Once the guide camera disconnects nothing
+names it; the imaging camera's own first solve brings the arrow back.
+
+The readout beside an arrow gives the distance in degrees and in screens: how many frames
+you would push across, measured the way the arrow points, so a sideways push on a wide
+guide frame counts widths and a push up or down counts heights. The screens count needs
+the field of the camera on screen: its focal length under **Push-To → Equipment**, or a
+plate solve on that same camera. Without either, only the degrees are shown.
 
 ## Running it as a dedicated display
 

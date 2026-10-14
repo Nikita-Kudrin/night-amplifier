@@ -246,7 +246,21 @@ describe('LiveView - Guide Arrow Integration', () => {
         it('withholds the guide camera\'s chevron from the imaging camera\'s picture', () => {
             const wrapper = mountLiveView({...CAMERAS, pushDirection: SOLVED_ON_GUIDE, currentTarget: TARGET})
 
-            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera')).toBe('Neptune-C II')
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera'))
+                .toEqual({name: 'Neptune-C II', connected: true})
+            expect(wrapper.find('.other-camera').text()).toBe('Arrow on Neptune-C II')
+        })
+
+        it('names no guide camera once it has disconnected', () => {
+            const wrapper = mountLiveView({
+                hasGuideCamera: false, mainCamera: CAMERAS.mainCamera, guideCamera: null,
+                pushDirection: SOLVED_ON_GUIDE, currentTarget: TARGET,
+            })
+
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera'))
+                .toEqual({name: 'Neptune-C II', connected: false})
+            expect(wrapper.find('.other-camera').exists()).toBe(false)
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
         })
 
         it('draws it over the guide camera\'s own picture', () => {
@@ -254,7 +268,7 @@ describe('LiveView - Guide Arrow Integration', () => {
                 ...CAMERAS, viewedCamera: 'guide', pushDirection: SOLVED_ON_GUIDE, currentTarget: TARGET,
             })
 
-            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera')).toBe('')
+            expect(wrapper.findComponent({name: 'GuideArrow'}).props('otherCamera')).toBeNull()
         })
     })
 })

@@ -881,10 +881,32 @@ describe('EyepieceView.vue follows the operator', () => {
     })
     const others = () => wrapper.findAllComponents({ name: 'GuideArrow' }).map((a) => a.props('otherCamera'))
 
-    expect(others()).toEqual(['', ''])
+    expect(others()).toEqual([null, null])
     viewedCamera.value = 'main'
     await nextTick()
-    expect(others()).toEqual(['Guide Cam', 'Guide Cam'])
+    const guide = { name: 'Guide Cam', connected: true }
+    expect(others()).toEqual([guide, guide])
+  })
+
+  it('names no guide camera over the imaging one once the guide has disconnected', async () => {
+    setPath('/eyepiece_quality')
+    await loadEyepieceView()
+    const wrapper = mountEyepiece({ binoview: true, circular_view: true }, {
+      eventStream: {
+        viewedCamera: ref<CameraRole>('main'),
+        pushDirection: clientDirection({ angleDeg: 37, distanceDeg: 26.1, isClose: false, directionHint: 'NE', solvedCamera: 'Guide Cam' }),
+        currentTarget: catalogEntry({ designation: 'NGC 40', name: 'Bow-Tie nebula', messier: null }),
+      },
+      provide: {
+        guideCamera: ref(null),
+        mainCamera: ref(camera({ name: 'Imaging Cam' })),
+      },
+    })
+
+    const arrows = wrapper.findAllComponents({ name: 'GuideArrow' })
+    expect(arrows.map((a) => a.props('otherCamera'))).toEqual(Array(2).fill({ name: 'Guide Cam', connected: false }))
+    expect(wrapper.find('.other-camera').exists()).toBe(false)
+    expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
   })
 
   /**

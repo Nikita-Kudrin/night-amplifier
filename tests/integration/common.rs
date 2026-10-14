@@ -363,6 +363,14 @@ pub const DEFAULT_FIXTURES: &[(&str, &str)] = &[
         "176mm-imx464-guide-lagoon-fits",
         "https://drive.usercontent.google.com/download?id=1O4lUyZZtH8XJeb_Ef7MDuuo1LhVT9Cc4&export=download&confirm=t",
     ),
+    // Guide frames from the 2026-10-12 hunt for M101, then the Spindle Galaxy: frames ASTAP
+    // solves under exit code 2, two full-sky false matches, one-off bad frames (a meteor,
+    // two shaking after a push) beside neighbours that solve, and the OpenNGC rows of both
+    // Spindles (`push_to_m101_spindle_replay_tests`, Pro).
+    (
+        "176mm-imx464-guide-m101-spindle-fits",
+        "https://drive.usercontent.google.com/download?id=1W6vYiyFl0Bq6sgMsUgME13Slw2CicL4g&export=download&confirm=t",
+    ),
     // 16 subs of M27, cropped to 1024x1024 on an even origin so the RGGB phase survives.
     // Deliberately not the whole session: this is the shortest run that still shows the
     // render collapsing as the stack deepens, which is what `stack_depth_regression`

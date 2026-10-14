@@ -77,7 +77,7 @@ const displayedCamera = computed(() =>
 
 const pushDirection = computed(() => eventStream?.pushDirection.value ?? null)
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
-const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
 const currentTarget = computed(() => eventStream?.currentTarget.value ?? null)
 const showGuideArrow = computed(() => currentTarget.value !== null && pushDirection.value !== null)
 

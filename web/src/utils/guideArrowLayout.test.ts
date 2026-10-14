@@ -4,6 +4,7 @@ import {
     baseSize,
     edgeOffset,
     formatScreens,
+    frameSpan,
     infoOffset,
     isOffScreen,
     screensAway,
@@ -13,6 +14,43 @@ describe('guideArrowLayout', () => {
     it('counts screens only once the FOV is known', () => {
         expect(screensAway(2, 0)).toBeNull()
         expect(screensAway(2, 1)).toBe(2)
+    })
+
+    it('counts a screen as the frame\'s reach along the arrow', () => {
+        expect(screensAway(22.22, 1.45, 2)).toBeCloseTo(22.22 / 2.9)
+    })
+
+    describe('frameSpan', () => {
+        const GUIDE_ASPECT = 2712 / 1538
+
+        it.each([0, 180])('is one height straight up or down (%s°)', angleDeg => {
+            expect(frameSpan(angleDeg, GUIDE_ASPECT)).toBeCloseTo(1)
+        })
+
+        it.each([90, 270])('is the width sideways (%s°)', angleDeg => {
+            expect(frameSpan(angleDeg, GUIDE_ASPECT)).toBeCloseTo(GUIDE_ASPECT)
+        })
+
+        it('is the chord to whichever edge comes first', () => {
+            // 45° on a square frame runs corner to corner
+            expect(frameSpan(45, 1)).toBeCloseTo(Math.SQRT2)
+            // 30° off vertical on 16:9 still leaves through the top edge
+            expect(frameSpan(30, GUIDE_ASPECT)).toBeCloseTo(1 / Math.cos(Math.PI / 6))
+            // 75° off vertical leaves through the side
+            expect(frameSpan(75, GUIDE_ASPECT)).toBeCloseTo(GUIDE_ASPECT / Math.sin((75 * Math.PI) / 180))
+        })
+
+        it('is the inscribed circle\'s diameter on a circular eyepiece, any way', () => {
+            for (const angleDeg of [0, 45, 90, 268]) {
+                expect(frameSpan(angleDeg, GUIDE_ASPECT, true)).toBe(1)
+                expect(frameSpan(angleDeg, 0.5, true)).toBe(0.5)
+            }
+        })
+
+        it('falls back to one height without a frame', () => {
+            expect(frameSpan(90, 0)).toBe(1)
+            expect(frameSpan(90, Number.NaN)).toBe(1)
+        })
     })
 
     it('moves the arrow to the edge past 0.4 of a screen', () => {

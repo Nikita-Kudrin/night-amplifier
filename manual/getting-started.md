@@ -63,7 +63,8 @@ What changes once a guide camera is attached:
 - **A "Guide camera" switch appears** next to the zoom controls over the live view. Turn
   it on to watch the guide camera instead of the imaging one. Push-To solves on the guide
   camera, so its arrow is drawn over the guide view; the imaging view shows the distance
-  and compass point with *Arrow on* and the guide camera's name. The switch is the
+  and compass point with *Arrow on* and the guide camera's name — or, once the guide
+  camera has disconnected, without a name until the imaging camera's own solve lands. The switch is the
   operator's: every [eyepiece view](/eyepiece-display#whose-camera-it-shows) follows it,
   and every open live view shows where it stands. Disconnecting the guide camera turns it
   off; a dropout the camera recovers from does not.
