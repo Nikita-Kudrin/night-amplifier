@@ -46,7 +46,7 @@ const showGuideArrow = computed(() => currentTarget.value !== null && pushDirect
 const showsGuideCamera = computed(() => eventStream?.viewedCamera.value === 'guide')
 const displayedCamera = computed(() => (showsGuideCamera.value ? guideCamera.value : mainCamera.value))
 const displayedFovDeg = useDisplayedFov(displayedCamera, settings, pushDirection)
-const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection)
+const arrowCamera = useOtherSolvedCamera(displayedCamera, pushDirection, () => [mainCamera.value, guideCamera.value])
 
 /**
  * `/eyepiece` is monocular whatever the Binoview setting says — it is the view an

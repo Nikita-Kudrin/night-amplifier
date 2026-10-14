@@ -13,12 +13,14 @@ type Optics = DeepReadonly<Pick<Settings, 'telescope' | 'camera_telescope_profil
  * The solve reports the field it was planned against, which with a guide camera connected
  * is the guide scope's. The Push-To chevron places an off-target arrow against the frame
  * edge, so it must describe the picture it is drawn over: the displayed camera's own
- * optics profile, then the telescope settings, then the solve's field as a last resort.
+ * optics profile, then the telescope settings, then the solve's field as a last resort —
+ * only over the camera that solved it. Over the imaging camera, with no focal length set,
+ * the guide's 1.45° once counted "screens" of a picture it does not describe (2026-10-12).
  */
 export function useDisplayedFov(
     camera: MaybeRefOrGetter<Named>,
     settings: MaybeRefOrGetter<Optics>,
-    pushDirection: MaybeRefOrGetter<Pick<ClientPushDirection, 'fovDeg'> | null>,
+    pushDirection: MaybeRefOrGetter<Pick<ClientPushDirection, 'fovDeg' | 'solvedCamera'> | null>,
 ) {
     return computed(() => {
         const current = toValue(settings)
@@ -30,8 +32,17 @@ export function useDisplayedFov(
             optics?.focal_length_mm,
             optics?.barlow_coeff
         )
-        return fov ?? (toValue(pushDirection)?.fovDeg ?? 0)
+        if (fov !== null) return fov
+        const direction = toValue(pushDirection)
+        const solvedElsewhere = name && direction?.solvedCamera && direction.solvedCamera !== name
+        return solvedElsewhere ? 0 : (direction?.fovDeg ?? 0)
     })
+}
+
+/** The camera a chevron was oriented for, and whether it is still there to look at. */
+export interface OtherSolvedCamera {
+    name: string
+    connected: boolean
 }
 
 /**
@@ -40,15 +51,18 @@ export function useDisplayedFov(
  * `angle_deg` carries the solving camera's rotation and parity, and with a guide camera
  * connected that is the guide's even while the imaging camera is shown. Over another
  * camera's picture the chevron could point anywhere, so the view drops it and says
- * whose it is. Empty when it matches, or when either camera is unknown.
+ * whose it is — unless that camera has since disconnected (`connected`), when there is
+ * nothing to send the observer to. `null` when it matches, or when either is unknown.
  */
 export function useOtherSolvedCamera(
     camera: MaybeRefOrGetter<Named>,
     pushDirection: MaybeRefOrGetter<Pick<ClientPushDirection, 'solvedCamera'> | null>,
+    connectedCameras: MaybeRefOrGetter<readonly Named[]>,
 ) {
-    return computed(() => {
+    return computed((): OtherSolvedCamera | null => {
         const solved = toValue(pushDirection)?.solvedCamera
         const shown = toValue(camera)?.name
-        return solved && shown && solved !== shown ? solved : ''
+        if (!solved || !shown || solved === shown) return null
+        return {name: solved, connected: toValue(connectedCameras).some(c => c?.name === solved)}
     })
 }

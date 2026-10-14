@@ -1669,6 +1669,32 @@ async fn the_solver_camera_is_the_guide_camera_when_there_is_one() {
     assert_eq!(state.solver_camera(), solver(CameraRole::Guide, "Guiding"));
 }
 
+/// 2026-10-14's sequence: the guide solves, leaves, the imaging camera connects and must
+/// solve from then on; a guide connecting again takes it back, being preferred whenever
+/// one is connected.
+#[tokio::test]
+async fn plate_solving_follows_the_guide_out_and_back_through_the_imaging_camera() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let solver = |role, name: &str| Some(SolverCamera { role, name: name.to_string() });
+
+    install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
+    assert_eq!(state.solver_camera(), solver(CameraRole::Guide, "Guiding"));
+    assert!(state.guide_holds_solving());
+
+    lifecycle::finalize_disconnect(&state, CameraRole::Guide, "Guiding", DisconnectCause::Requested).await;
+    assert_eq!(state.solver_camera(), None);
+    assert!(!state.guide_holds_solving(), "a departed guide must not keep the solver");
+
+    install_camera(&state, CameraRole::Main, "mock_0", "Imaging", CameraPhase::Idle).await;
+    assert_eq!(state.solver_camera(), solver(CameraRole::Main, "Imaging"));
+    assert!(!state.guide_holds_solving(), "the imaging camera's frames must be taken");
+
+    install_camera(&state, CameraRole::Guide, "mock_1", "Guiding", CameraPhase::Idle).await;
+    assert_eq!(state.solver_camera(), solver(CameraRole::Guide, "Guiding"));
+    assert!(state.guide_holds_solving());
+}
+
 /// An idle incumbent is just occupying the position, so a new camera takes its place.
 #[tokio::test]
 async fn an_idle_role_is_vacated_for_a_new_camera() {

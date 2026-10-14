@@ -8,11 +8,13 @@ import {
   baseSize,
   edgeOffset,
   formatScreens,
+  frameSpan,
   infoOffset,
   isOffScreen,
   screensAway,
 } from '../utils/guideArrowLayout'
 import type {ClientPushDirection} from '../composables/events/pushToEvents'
+import type {OtherSolvedCamera} from '../composables/useDisplayedFov'
 import type {ScreenRect} from '../composables/useCometRoi'
 
 const props = withDefaults(defineProps<{
@@ -23,15 +25,16 @@ const props = withDefaults(defineProps<{
   fovDeg?: number
   isCircular?: boolean
   /**
-   * Name of the camera the angle was solved on, when it is not the one on screen: the
-   * chevron would carry that camera's rotation, so only distance and compass point show.
+   * The camera the angle was solved on, when it is not the one on screen: the chevron
+   * would carry that camera's rotation, so only distance and compass point show. It is
+   * named only while connected — a disconnected guide is nowhere to look.
    */
-  otherCamera?: string
+  otherCamera?: OtherSolvedCamera | null
 }>(), {
   bounds: () => ({left: 0, top: 0, width: 400, height: 300}),
   fovDeg: 0,
   isCircular: false,
-  otherCamera: '',
+  otherCamera: null,
 })
 
 const angleDeg = computed(() => props.direction.angleDeg)
@@ -41,7 +44,11 @@ const directionHint = computed(() => props.direction.directionHint)
 const uid = getCurrentInstance()?.uid || Math.random().toString(36).substring(2, 9)
 const gradientId = `chevronGradient-${uid}`
 
-const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg))
+// Another camera's angle says nothing about which way this view's frame runs.
+const span = computed(() => props.otherCamera
+    ? 1
+    : frameSpan(angleDeg.value, props.bounds.width / props.bounds.height, props.isCircular))
+const screenSizes = computed(() => screensAway(distanceDeg.value, props.fovDeg, span.value))
 const offScreen = computed(() => isOffScreen(screenSizes.value))
 const arrowScale = computed(() => scaleFor(distanceDeg.value, screenSizes.value))
 const responsiveBaseSize = computed(() => baseSize(props.bounds.width, props.bounds.height, offScreen.value))
@@ -166,7 +173,7 @@ const screensLabel = computed(() => formatScreens(screenSizes.value))
         <span class="distance">{{ formatAngle(distanceDeg) }}</span>
         <span v-if="screensLabel" class="screen-size">{{ screensLabel }}</span>
         <span class="hint">{{ directionHint }}</span>
-        <span v-if="otherCamera" class="other-camera">Arrow on {{ otherCamera }}</span>
+        <span v-if="otherCamera?.connected" class="other-camera">Arrow on {{ otherCamera.name }}</span>
       </div>
     </template>
   </div>

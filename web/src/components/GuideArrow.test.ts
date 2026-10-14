@@ -102,7 +102,8 @@ describe('GuideArrow', () => {
     })
 
     describe('over another camera than the one it was solved on', () => {
-        const OTHER = {...IMAGE_PROPS, angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', fovDeg: 1.45, otherCamera: 'Neptune-C II'} satisfies FlatProps
+        const GUIDE = {name: 'Neptune-C II', connected: true}
+        const OTHER = {...IMAGE_PROPS, angleDeg: 37, distanceDeg: 26.1, directionHint: 'NE', fovDeg: 1.45, otherCamera: GUIDE} satisfies FlatProps
 
         it('drops the chevron, whose rotation belongs to the other camera', () => {
             const wrapper = mountArrow(OTHER)
@@ -126,8 +127,18 @@ describe('GuideArrow', () => {
             expect(wrapper.find('.on-target').exists()).toBe(true)
         })
 
+        it('names no camera that has disconnected, and still drops its chevron', () => {
+            const wrapper = mountArrow({...OTHER, otherCamera: {...GUIDE, connected: false}})
+
+            expect(wrapper.find('.arrow-wrapper').exists()).toBe(false)
+            expect(wrapper.find('.other-camera').exists()).toBe(false)
+            expect(wrapper.find('.distance').text()).toBe('26.1°')
+            expect(wrapper.find('.hint').text()).toBe('NE')
+            expect(wrapper.find('.distance-info').classes()).toContain('centered')
+        })
+
         it('draws the chevron as before when it belongs to this view', () => {
-            const wrapper = mountArrow({...OTHER, otherCamera: ''})
+            const wrapper = mountArrow({...OTHER, otherCamera: null})
 
             expect(wrapper.find('.arrow-wrapper').exists()).toBe(true)
             expect(wrapper.find('.other-camera').exists()).toBe(false)
@@ -413,6 +424,29 @@ describe('GuideArrow', () => {
                 description: 'shows rounded screen size for large values'
             },
         ]
+
+        // 2026-10-12, the guide's 2539x1440 stream, NGC 5866 22.22° off at 268.2°: in heights
+        // this read 15× screen, across the frame it is 8.7 of them
+        it('counts screens across the frame for a sideways push', () => {
+            const wrapper = mountArrow({
+                angleDeg: 268.2, distanceDeg: 22.22, directionHint: 'W', fovDeg: 1.45,
+                imageWidth: 2539, imageHeight: 1440,
+            })
+            expect(wrapper.find('.screen-size').text()).toBe('8.7× screen')
+        })
+
+        it('counts screens in heights for a vertical push on the same frame', () => {
+            const wrapper = mountArrow({distanceDeg: 22.22, fovDeg: 1.45, imageWidth: 2539, imageHeight: 1440})
+            expect(wrapper.find('.screen-size').text()).toBe('15× screen')
+        })
+
+        it('counts in heights when the angle belongs to another camera', () => {
+            const wrapper = mountArrow({
+                angleDeg: 268.2, distanceDeg: 22.22, fovDeg: 1.45, otherCamera: {name: 'Neptune-C II', connected: true},
+                imageWidth: 2539, imageHeight: 1440,
+            })
+            expect(wrapper.find('.screen-size').text()).toBe('15× screen')
+        })
 
         screenSizeCases.forEach(({fovDeg, distanceDeg, shouldExist, expected, description}) => {
             it(description, () => {

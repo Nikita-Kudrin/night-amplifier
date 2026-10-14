@@ -27,9 +27,27 @@ export const ARROW_ASPECT = 1.6
 const TAIL_FRACTION = 0.3125
 const INFO_TAIL_GAP_PX = 20
 
-/** How many screens away the target is, or `null` while the FOV is unknown. */
-export function screensAway(distanceDeg: number, fovDeg: number | null | undefined): number | null {
-    return fovDeg != null && fovDeg > 0 ? distanceDeg / fovDeg : null
+/**
+ * How far one screen reaches along the arrow, in image heights: the frame's chord through
+ * its centre at `angleDeg`. Sideways on a 16:9 guide frame that is 1.76 heights, so counting
+ * heights alone told the observer up to 1.76x the screens there were (2026-10-12). A circular
+ * eyepiece shows the circle inscribed in the frame, the same reach every way.
+ */
+export function frameSpan(angleDeg: number, aspect: number, isCircular = false): number {
+    if (!(aspect > 0)) return 1
+    if (isCircular) return Math.min(1, aspect)
+    const angleRad = (angleDeg * Math.PI) / 180
+    const across = Math.abs(Math.sin(angleRad))
+    const along = Math.abs(Math.cos(angleRad))
+    return Math.min(across > 1e-9 ? aspect / across : Infinity, along > 1e-9 ? 1 / along : Infinity)
+}
+
+/**
+ * How many screens away the target is, one screen being `span` image heights (`frameSpan`),
+ * or `null` while the FOV is unknown.
+ */
+export function screensAway(distanceDeg: number, fovDeg: number | null | undefined, span = 1): number | null {
+    return fovDeg != null && fovDeg > 0 ? distanceDeg / (fovDeg * span) : null
 }
 
 /** Whether the target lies far enough out that the arrow moves to the frame edge. */
