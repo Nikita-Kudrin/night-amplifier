@@ -10,7 +10,18 @@ use crate::telemetry::TelemetryConfig;
 use std::net::SocketAddr;
 use tracing::{error, info};
 
+/// The version the binary reports — the release's, when `build-dist.sh` names one — set
+/// by `main` before `run`.
 pub static APP_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Pro's own `git describe`, set by the Pro binary: Community's build script sees only
+/// Community's checkout, so a Pro build's commit was in no log.
+pub static PRO_GIT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// [`APP_VERSION`], or this crate's own when `main` set none (tests).
+fn app_version() -> &'static str {
+    APP_VERSION.get().map_or(env!("CARGO_PKG_VERSION"), String::as_str)
+}
 
 /// Command line arguments
 struct Args {
@@ -246,8 +257,9 @@ fn startup_context(args: &Args, log_dir: std::path::PathBuf) -> crate::system_in
         plugins: crate::plugins::Plugins::installed().registered(),
         frame_queue_budget_bytes: crate::session::capture::channel::frame_queue_budget_bytes(),
         build: crate::system_info::BuildFacts {
-            version: env!("CARGO_PKG_VERSION"),
+            version: app_version(),
             git: option_env!("NIGHT_AMPLIFIER_GIT_DESCRIBE").unwrap_or("unknown"),
+            pro_git: PRO_GIT.get().copied(),
             target: option_env!("NIGHT_AMPLIFIER_TARGET").unwrap_or("unknown"),
             target_cpu: option_env!("NIGHT_AMPLIFIER_TARGET_CPU").unwrap_or("unknown"),
             rustc: option_env!("NIGHT_AMPLIFIER_RUSTC_VERSION").unwrap_or("unknown"),
@@ -300,7 +312,7 @@ pub async fn run(plugins: crate::plugins::Plugins) {
     let log_dir = log_config.log_dir.clone();
     let _log_guard = init_logging(log_config).expect("Failed to initialize logging");
 
-    info!("Night Amplifier - EAA Live Stacking Server");
+    info!(version = app_version(), "Night Amplifier - EAA Live Stacking Server");
     crate::system_info::log_startup_report(startup_context(&args, log_dir)).await;
 
     if args.span_timings {

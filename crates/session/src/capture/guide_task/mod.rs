@@ -27,6 +27,7 @@ use super::stall::{handle_stall, StallSite, StallTracker, StallVerdict};
 use super::stream_encoding::{ConversionCache, FailureReports};
 use super::watchdog::{capture_frame_bounded, capture_watchdog_timeout, CaptureOutcome};
 use night_amplifier_core::camera::Camera;
+use crate::camera::health as camera_health;
 use crate::error::ApiError;
 use crate::state::{
     AppState, CameraOp, CameraRole, ConnectedCameraInfo, GuideLoopTicket, RawSessionResume,
@@ -253,6 +254,14 @@ pub(super) fn run(
     let mut cooler = GuideCooler::default();
     let mut sensor = SensorReadout::default();
     let mut stalls = StallTracker::for_camera(state, CameraRole::Guide, &camera_info.info.name);
+    let mut delivered = false;
+    // The handle goes to recovery; one that never framed counts toward giving up on it.
+    let faulted = |delivered: bool| {
+        if !delivered {
+            camera_health::record_frameless_open(state, CameraRole::Guide, &camera_info.info.name);
+        }
+        None
+    };
 
     while !cancel.load(Ordering::SeqCst) {
         let settings = state.settings.snapshot();
@@ -298,7 +307,7 @@ pub(super) fn run(
             CaptureOutcome::Completed(cam, result) => (cam, result),
             // The handle went with a detached thread that never returned. Nothing
             // left to hand back; the fault detector has already recorded it.
-            CaptureOutcome::TimedOut => return None,
+            CaptureOutcome::TimedOut => return faulted(delivered),
         };
         camera = returned;
 
@@ -311,14 +320,14 @@ pub(super) fn run(
                 }
                 if e.is_sdk_disconnected() {
                     error!(error = %e, "Guide camera disconnected during capture");
-                    return None;
+                    return faulted(delivered);
                 }
                 if let night_amplifier_core::camera::CameraError::ExposureTimeout(budget) = e {
                     let name = &camera_info.info.name;
                     if let StallVerdict::Escalate(_) =
                         handle_stall(&mut stalls, StallSite::Guide, state, name, budget)
                     {
-                        return None;
+                        return faulted(delivered);
                     }
                     continue;
                 }
@@ -346,6 +355,9 @@ pub(super) fn run(
         };
         rejected_config = None;
         stalls.frame_delivered();
+        if !std::mem::replace(&mut delivered, true) {
+            camera_health::frame_arrived(state, CameraRole::Guide, &camera_info.info.name);
+        }
 
         // Above both gates below: an unwatched guide camera with no solve target is
         // still saving subs if the user asked it to.

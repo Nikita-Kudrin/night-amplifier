@@ -24,6 +24,7 @@ mod frame_stream;
 mod guide_loop;
 mod installs;
 mod push_to_announcer;
+mod reopen_hold;
 mod roster;
 mod stream_viewers;
 mod session;
@@ -53,7 +54,8 @@ pub use frame_stream::FrameStream;
 pub use guide_loop::{GuideLoopTicket, GuideLoops};
 pub use installs::{InstallEvents, InstallStatus, Installer, Installs};
 pub use push_to_announcer::PushToAnnouncer;
-pub use roster::{CameraRoster, ConnectedCameraInfo};
+pub use reopen_hold::ReopenHold;
+pub use roster::{CameraRoster, ConnectedCameraInfo, FramelessRun};
 pub use session::{
     CaptureControl, CaptureResume, FrameCounts, SessionResumePlan, SessionStats, REJECTION_RATE_THRESHOLD,
     REJECTION_RATE_WINDOW,

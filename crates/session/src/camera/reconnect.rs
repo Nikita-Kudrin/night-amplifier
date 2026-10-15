@@ -5,7 +5,9 @@
 //! *same camera* (`camera::identity`) — list-position reopen put the imaging camera
 //! in the guide role on 2026-09-07. First attempt waits for an abandoned SDK call to
 //! return (`ABANDONED_CALL_WAIT`), retries follow `RETRY_SCHEDULE` bounded by
-//! `TOTAL_BUDGET`, silent until `NOTICE_AFTER`; single-flight per slot.
+//! `TOTAL_BUDGET`, silent until `NOTICE_AFTER`; single-flight per slot. A camera that keeps
+//! reopening but never frames is isolated, then given up on (`camera_health::FramelessVerdict`);
+//! a slot isolation closed waits on its `reopen_hold` first.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
+use super::health::{self as camera_health, FramelessVerdict};
 use super::recovery;
 use crate::error::ApiError;
 use crate::events::ServerEvent;
@@ -125,7 +128,13 @@ pub(super) fn spawn(state: &Arc<AppState>, recorded: ConnectedCameraInfo) {
 
     let state = Arc::clone(state);
     tokio::spawn(async move {
-        match supervise(&state, &recorded).await {
+        let outcome = supervise(&state, &recorded).await;
+        // A camera whose recovery ends without a frame verdict to come lets the camera
+        // isolation closed for it reopen now, not at the hold's deadline.
+        if outcome.is_err() {
+            recovery::end_isolation(&state, role);
+        }
+        match outcome {
             Ok(()) => info!(camera_id = %recorded.id, role = role.label(), "Camera recovered"),
             Err(Stop::Abandoned(why)) => {
                 info!(camera_id = %recorded.id, why, "Stopped reconnecting the camera");
@@ -163,7 +172,6 @@ pub(super) async fn release_flight(state: &Arc<AppState>, role: CameraRole) {
 
 /// Run the attempt sequence until the camera is back or the supervisor has to stop.
 async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Result<(), Stop> {
-    let started = Instant::now();
     let role = recorded.role;
     let name = &recorded.info.name;
     let mut recorded = recorded.clone();
@@ -175,11 +183,27 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
         });
     }
 
-    if !state.slot(role).sdk_calls.wait_drained(ABANDONED_CALL_WAIT).await {
+    let slot = state.slot(role);
+    if slot.reopen_hold.is_held() {
+        info!(camera = %name, "Holding the reopen until the other camera on its SDK has reopened alone and framed");
+        slot.reopen_hold.wait(|| slot.recovery() == Recovery::Suspended).await;
+    }
+    // From here, so a held reopen still gets its whole budget.
+    let started = Instant::now();
+
+    if !slot.sdk_calls.wait_drained(ABANDONED_CALL_WAIT).await {
         info!(camera = %name, "An abandoned SDK call is still running; reopening past it");
     }
-    tokio::time::sleep(FIRST_ATTEMPT_MIN_WAIT.saturating_sub(started.elapsed())).await;
+    // A camera that opens but never frames is reopened at the retry pace, not at once:
+    // these reopens all succeed, so the retry schedule below never slows them.
+    let frameless = camera_health::frameless_opens(state, role, name);
+    let first_wait = match frameless {
+        0 => FIRST_ATTEMPT_MIN_WAIT,
+        run => FIRST_ATTEMPT_MIN_WAIT.max(retry_delay(run)),
+    };
+    tokio::time::sleep(first_wait.saturating_sub(started.elapsed())).await;
 
+    let mut isolated = false;
     let mut noticed = false;
     let mut attempt = 0;
     loop {
@@ -199,6 +223,22 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
                 reason: format!("still unreachable after {} s", TOTAL_BUDGET.as_secs()),
             });
         }
+        // Before every attempt: a reopen that faulted during its own install (the guide
+        // loop starts inside it) counts without ending this supervisor. Each of these
+        // reopens succeeds, so only the frames that never came say the camera is not back.
+        match camera_health::frameless_verdict(state, role, name) {
+            FramelessVerdict::GiveUp { opens } => {
+                return Err(Stop::GaveUp {
+                    attempts: opens,
+                    reason: format!("it was opened {opens} times in a row but delivered no frame"),
+                });
+            }
+            FramelessVerdict::Isolate if !isolated => {
+                isolated = true;
+                recovery::isolate_from_sibling(state, &recorded).await;
+            }
+            FramelessVerdict::Isolate | FramelessVerdict::Reopen => {}
+        }
 
         // A handle that failed during its install left the entry at its new position.
         if let Some(current) = state.camera_in_role(role).filter(|c| c.id == recorded.id) {
@@ -209,9 +249,12 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
                 info!(camera = %name, role = role.label(), attempt, elapsed = ?started.elapsed(), "Reconnected");
                 state.recovery_status.clear(role);
                 // Only the imaging camera has a capture to resume. For the guide camera
-                // the reopen has already restarted its loop and reapplied its profile.
-                if role == CameraRole::Main {
-                    resume_capture_if_planned(state, &connected, noticed).await;
+                // the reopen has already restarted its loop, whose first frame judges it.
+                if role == CameraRole::Main && !resume_capture_if_planned(state, &connected, noticed).await {
+                    // Nothing will judge this open by a frame: a run kept past it would
+                    // wait for the next fault, however unrelated, to act on.
+                    camera_health::forget_frameless_opens(state, role, name);
+                    recovery::end_isolation(state, role);
                 }
                 return Ok(());
             }
@@ -238,26 +281,27 @@ async fn supervise(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) -> Res
 
 /// Restart the capture the dropout interrupted, in the mode it was running in, keeping
 /// the stack it had already built. Tells the observer only if they were told about the
-/// dropout in the first place.
-async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedCameraInfo, noticed: bool) {
+/// dropout in the first place. Returns whether a capture will judge the reopen by its
+/// first frame — the one resumed here, or the one the recovery under way resumes.
+async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedCameraInfo, noticed: bool) -> bool {
     // Failed again straight after the install: the capture stays paused for the recovery
     // that fault started, which resumes it instead.
     if state.slot(CameraRole::Main).is_recovering() {
         info!(camera_id = %connected.id, "Camera failed again before its capture could resume");
-        return;
+        return true;
     }
     let plan = state.resume.plan();
     let Some(plan) = plan.filter(|plan| plan.camera_id == connected.id) else {
         state.end_paused_capture();
-        return;
+        return false;
     };
     if !state.settings.snapshot().auto_resume_capture {
         info!(camera_id = %connected.id, "Not resuming capture — auto-resume is switched off");
         state.end_paused_capture();
-        return;
+        return false;
     }
     if state.capture_state() != CaptureState::Recovering {
-        return;
+        return false;
     }
 
     restore_settings(state, &plan).await;
@@ -274,10 +318,12 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
                     .events
                     .send(ServerEvent::capture_resumed(connected.info.name.clone(), stacked_count));
             }
+            true
         }
         // Stopped or disconnected between the check above and the resume.
         Err(ApiError::CaptureNotPaused) => {
-            info!(camera_id = %connected.id, "The paused capture was ended before it could resume")
+            info!(camera_id = %connected.id, "The paused capture was ended before it could resume");
+            false
         }
         Err(e) => {
             warn!(camera_id = %connected.id, error = %e, "Could not resume capture after reconnect");
@@ -286,6 +332,7 @@ async fn resume_capture_if_planned(state: &Arc<AppState>, connected: &ConnectedC
                 "Camera '{}' is back, but the capture could not be resumed: {}",
                 connected.info.name, e
             ));
+            false
         }
     }
 }

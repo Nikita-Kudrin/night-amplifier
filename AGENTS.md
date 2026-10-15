@@ -284,8 +284,15 @@ the server sends no display text the UI does not show.
   watched from before the exposure is triggered; its XML speaks the protocol's spelling (`Idle`, `On`, `Also`).
 - **Fault detection**: one detector with a per-role+name streak serves all watchdogs, so alternating faults still
   escalate. Recovery is a ladder (stream restart → quiet suspend → supervisor retry → give-up), silent before 20 s;
-  a failed hand-off always resumes the monitor. Only a *named, different* camera discards the FOV cache, since a
-  stale FOV *fails* hinted solves.
+  a failed hand-off always resumes the monitor. A reopen is not a recovery until a **frame** arrives: opens that
+  fault before their first frame are counted per role+name (`camera_health::FramelessVerdict`); the 2nd reopens with
+  the same-provider sibling closed and **held closed until the first frame** (`reopen_hold`, deadline-bounded; never a
+  capturing Main or one warming up after a Disconnect), the 3rd gives up once the run is 60 s old — 2026-10-12's
+  Ares-C PRO reopened 20 times in silence beside an open Neptune-C II, and streamed once that was closed. A Connect,
+  a Start, or a reopen no capture judges ends the run. A monitor call hands its handle back only if the slot is
+  neither `Suspended` nor past that **monitor's generation** (`claim_monitor_epoch`, retired by a suspension):
+  closing on `Installing` closed the live reopened camera. Only a *named, different* camera discards the FOV cache,
+  since a stale FOV *fails* hinted solves.
 - **Focus/Finder mode** forces six settings off, recorded only in `focus_mode_snapshot` — **entering must be
   idempotent**, or re-snapshotting destroys the observer's values. **Mutually exclusive with an accumulating
   stack**: starting/resuming a stacking capture drops the mode instead; *leaving* is never refused.
@@ -335,7 +342,9 @@ Magic "SA10" (4B) | Width u32 LE | Height u32 LE | Payload size u32 LE | JPEG by
 ```
 
 An eyepiece socket switched to a camera with no frame yet gets the text `no_frame` (on the image socket, so ordered
-with frames), or the old camera's picture would stay up as the new one's.
+with frames), or the old camera's picture would stay up as the new one's. `FrameStream::clear` publishes a
+payload-less version, so open sockets get `no_frame` too; Main is cleared on a fresh Start and on disconnect (never
+on a quiet suspend), or the last session's frame passed for live for three minutes of a frameless capture.
 
 **Streaming resolution is a setting, not negotiated**: every client of a family gets the **same payload**
 (`streaming_resolution` / `eyepiece.stream_resolution`, both default 1440p) — per-viewport tiers were tried and
@@ -524,7 +533,9 @@ sky at once. Lowering the midpoint below 0.2 washes the background out instead.
 `RUST_LOG` overrides levels; `tracing` + daily file rotation. The file layer uses its own `PlainFields` formatter,
 since tracing-subscriber caches formatted fields per formatter *type* — sharing one with the coloured console once
 leaked ANSI escapes into the file. **Startup system report** (`system_info`) logs build/host/CPU/memory facts as
-INFO events, self-contained, collected on `spawn_blocking` under a 5 s timeout.
+INFO events, self-contained, collected on `spawn_blocking` under a 5 s timeout. Its build line carries `APP_VERSION`
+(the release's, from `build-dist.sh`), Community's `git` and Pro's `pro_git` (Pro's own `build.rs`, via
+`app::PRO_GIT`). PlayerOne logs its SDK version on load and every bus rescan made while a camera is open.
 
 A dropped *capture* frame is signal lost for good, so render/stacking favour stacking: the display copy is gated
 by `want_display` but the frame always stacks; the capture→stacking queue is **latency-bounded** at 2s of

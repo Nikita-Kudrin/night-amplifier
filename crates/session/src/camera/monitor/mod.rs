@@ -47,9 +47,10 @@ pub fn spawn(
     rt: tokio::runtime::Handle,
 ) -> mpsc::Sender<MonitorCmd> {
     let (tx, rx) = mpsc::channel();
+    let epoch = state.slot(role).claim_monitor_epoch();
     std::thread::Builder::new()
         .name(format!("camera-monitor-{}", camera_name))
-        .spawn(move || run(state, role, camera_name, rt, rx))
+        .spawn(move || run(state, role, camera_name, epoch, rt, rx))
         .expect("failed to spawn camera monitor thread");
     tx
 }
@@ -61,6 +62,8 @@ struct MonitorCtx {
     /// two slots live "whatever is connected" is no longer an answer.
     role: CameraRole,
     camera_name: String,
+    /// This monitor's generation in the slot (`CameraSlot::claim_monitor_epoch`).
+    epoch: u64,
     rt: tokio::runtime::Handle,
     /// True while the capture thread owns the handle.
     paused_for_capture: bool,
@@ -91,6 +94,7 @@ fn run(
     state: Arc<AppState>,
     role: CameraRole,
     camera_name: String,
+    epoch: u64,
     rt: tokio::runtime::Handle,
     rx: mpsc::Receiver<MonitorCmd>,
 ) {
@@ -100,6 +104,7 @@ fn run(
         state,
         role,
         camera_name,
+        epoch,
         rt,
         paused_for_capture: false,
         warming_up: false,

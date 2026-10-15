@@ -5,7 +5,9 @@
 //! Everything deciding "persistently unresponsive" lives here: the threshold, the
 //! per-camera streak (kept in `CameraRoster`, keyed by role+name), and
 //! the escalation event — a counter per call site would let a camera failing every other
-//! poll stay "healthy". Also the per-camera `RestartHistory` of whether an in-place restart still works, deciding how soon a stall reopens the camera.
+//! poll stay "healthy". Also the per-camera `RestartHistory` of whether an in-place
+//! restart still works, deciding how soon a stall reopens the camera, and the run of opens
+//! that never delivered a frame, deciding when recovery stops reopening.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,7 +15,7 @@ use std::time::{Duration, Instant};
 use tracing::{error, warn};
 
 use crate::events::ServerEvent;
-use crate::state::{AppState, CameraRole};
+use crate::state::{AppState, CameraRole, FramelessRun};
 
 /// Consecutive faults against one camera before escalating from an ordinary
 /// disconnect to a distinct "persistently unresponsive" signal
@@ -187,4 +189,121 @@ pub(crate) fn distrusted_restarts(
         .roster
         .restart_history(role, camera_name)
         .and_then(|history| history.distrusted(Instant::now()))
+}
+
+/// Opens in a row — a connect's first capture, or a reopen's — that faulted before their
+/// first frame, at which recovery reopens the camera with the other camera on its SDK
+/// closed (`recovery::isolate_from_sibling`). 2026-10-12: the Ares-C PRO reopened 20 times
+/// without a frame beside an open Neptune-C II, and streamed the moment that was closed.
+pub(crate) const FRAMELESS_ISOLATE_AT: u32 = 2;
+
+/// Frameless opens in a row after which recovery gives up and says so, once the run is
+/// [`FRAMELESS_GIVE_UP_AFTER`] old. Every one of that night's reopens counted as a
+/// recovery, so the outage stayed silent for three minutes and the fault streak never
+/// passed 1.
+pub(crate) const FRAMELESS_GIVE_UP_AT: u32 = 3;
+
+/// A run younger than this is not given up on, whatever its count: with 1 s subs three
+/// frameless opens take seconds, and a brownout the 300 s reconnect budget rides out
+/// would end in a give-up inside the 20 s recovery stays quiet for. That night's ~9 s
+/// cycle reaches it in about seven opens.
+#[cfg(not(test))]
+pub(crate) const FRAMELESS_GIVE_UP_AFTER: Duration = Duration::from_secs(60);
+#[cfg(test)]
+pub(crate) const FRAMELESS_GIVE_UP_AFTER: Duration = Duration::from_millis(600);
+
+/// How long a frameless run is remembered without a new one, as for restarts.
+const FRAMELESS_HISTORY_TTL: Duration = RESTART_HISTORY_TTL;
+
+/// Record that the camera's latest open faulted before its first frame. Returns the run.
+pub(crate) fn record_frameless_open(state: &AppState, role: CameraRole, camera_name: &str) -> u32 {
+    let run = state
+        .roster
+        .bump_frameless_opens(role, camera_name, FRAMELESS_HISTORY_TTL, Instant::now())
+        .count;
+    warn!(camera_name, role = role.label(), run, "The camera faulted before delivering its first frame since it was opened");
+    run
+}
+
+/// A frame arrived: whatever the opens before it did, the camera delivers, and the other
+/// camera on its SDK, if isolation closed it, may reopen beside it.
+pub(crate) fn frame_arrived(state: &AppState, role: CameraRole, camera_name: &str) {
+    forget_frameless_opens(state, role, camera_name);
+    super::recovery::end_isolation(state, role);
+}
+
+/// Forget the run for a fresh attempt: the observer's own Connect or Start, or a reopen
+/// no capture will judge by its first frame. Kept past those, a run of 2 on an idle
+/// camera closed the healthy guide camera on its next, unrelated fault.
+pub(crate) fn forget_frameless_opens(state: &AppState, role: CameraRole, camera_name: &str) {
+    state.roster.forget_frameless_opens(role, camera_name);
+}
+
+/// The camera's current run of opens that faulted before their first frame.
+pub(crate) fn frameless_opens(state: &AppState, role: CameraRole, camera_name: &str) -> u32 {
+    frameless_run(state, role, camera_name).map_or(0, |run| run.count)
+}
+
+fn frameless_run(state: &AppState, role: CameraRole, camera_name: &str) -> Option<FramelessRun> {
+    state
+        .roster
+        .frameless_run(role, camera_name, FRAMELESS_HISTORY_TTL, Instant::now())
+}
+
+/// What recovery does about a camera's run of frameless opens before its next reopen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FramelessVerdict {
+    Reopen,
+    /// Reopen it with the other camera on its SDK closed.
+    Isolate,
+    GiveUp { opens: u32 },
+}
+
+pub(crate) fn frameless_verdict(state: &AppState, role: CameraRole, camera_name: &str) -> FramelessVerdict {
+    verdict_for(frameless_run(state, role, camera_name), Instant::now())
+}
+
+fn verdict_for(run: Option<FramelessRun>, now: Instant) -> FramelessVerdict {
+    let Some(run) = run else {
+        return FramelessVerdict::Reopen;
+    };
+    let old_enough = now.saturating_duration_since(run.since) >= FRAMELESS_GIVE_UP_AFTER;
+    if run.count >= FRAMELESS_GIVE_UP_AT && old_enough {
+        return FramelessVerdict::GiveUp { opens: run.count };
+    }
+    if run.count >= FRAMELESS_ISOLATE_AT {
+        return FramelessVerdict::Isolate;
+    }
+    FramelessVerdict::Reopen
+}
+
+#[cfg(test)]
+mod frameless_tests {
+    use super::*;
+    use crate::state::CameraRoster;
+
+    fn run_of(count: u32, start: Instant) -> Option<FramelessRun> {
+        let roster = CameraRoster::default();
+        (0..count)
+            .map(|_| roster.bump_frameless_opens(CameraRole::Main, "Ares", FRAMELESS_HISTORY_TTL, start))
+            .last()
+    }
+
+    #[test]
+    fn the_run_isolates_at_two_and_gives_up_at_three_once_old_enough() {
+        let start = Instant::now();
+        let old = start + FRAMELESS_GIVE_UP_AFTER;
+        assert_eq!(verdict_for(None, old), FramelessVerdict::Reopen);
+        assert_eq!(verdict_for(run_of(1, start), old), FramelessVerdict::Reopen);
+        assert_eq!(verdict_for(run_of(2, start), old), FramelessVerdict::Isolate);
+        assert_eq!(verdict_for(run_of(3, start), old), FramelessVerdict::GiveUp { opens: 3 });
+    }
+
+    /// Short subs reach three frameless opens in seconds: too soon to call the camera gone.
+    #[test]
+    fn a_young_run_is_isolated_not_given_up_on() {
+        let start = Instant::now();
+        let young = start + FRAMELESS_GIVE_UP_AFTER / 2;
+        assert_eq!(verdict_for(run_of(5, start), young), FramelessVerdict::Isolate);
+    }
 }

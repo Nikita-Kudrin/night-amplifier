@@ -102,8 +102,9 @@ export function useImageStream(options: ImageStreamOptions = {}) {
             let buffer: ArrayBuffer
 
             if (event.data === NO_FRAME) {
-                // The server switched this socket to a camera with nothing to show yet: the
-                // picture on screen is the other camera's.
+                // The server switched this socket to a camera with nothing to show yet, or
+                // cleared its stream (a new session, a camera gone): the picture on screen
+                // no longer belongs to anything.
                 clearFrameData()
                 return
             }

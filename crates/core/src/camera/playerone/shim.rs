@@ -26,6 +26,19 @@ fn poa_err(op: &str, err: POAErrors) -> String {
     detail
 }
 
+/// `POAGetCameraCount` rescans the bus, which every open, reopen and discovery does. On
+/// 2026-10-12 one PlayerOne camera wedged and another read -300 °C right after cameras
+/// beside them were opened; nothing logged the scans, so whether one ran with a camera
+/// open could not be told. Loud only then — a scan with nothing open is routine.
+fn log_rescan(count: i32) {
+    let open = DeviceLease::open_indices(PROVIDER);
+    if open.is_empty() {
+        tracing::debug!(count, "PlayerOne cameras rescanned");
+    } else {
+        tracing::info!(count, open_camera_ids = ?open, "PlayerOne cameras rescanned while some are open");
+    }
+}
+
 pub struct CameraDescription {
     properties: POACameraProperties,
 }
@@ -67,6 +80,7 @@ impl Camera {
             return vec![];
         };
         let count = unsafe { sdk.api.POAGetCameraCount() };
+        log_rescan(count);
         let mut cameras = Vec::new();
         for i in 0..count {
             let mut props = POACameraProperties::default();

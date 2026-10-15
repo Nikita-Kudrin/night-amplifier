@@ -8,6 +8,7 @@
 //! `reconnect::NOTICE_AFTER`. The slot's [`Recovery`] state records where this stands.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use tracing::{info, warn};
 
@@ -16,7 +17,7 @@ use super::lifecycle::{self, DisconnectCause};
 use super::reconnect::OPEN_TIMEOUT;
 use night_amplifier_core::camera::identity::{self, DeviceIdentity};
 use night_amplifier_core::camera::{DeviceCatalog, OpenedCamera};
-use crate::capture::watchdog::release_faulted_handle;
+use crate::capture::watchdog::{capture_watchdog_timeout, release_faulted_handle};
 use crate::error::{ApiError, ApiResult};
 use crate::state::{
     AppState, CameraPhase, CameraRole, CaptureState, ConnectedCameraInfo, InstallOutcome,
@@ -59,7 +60,7 @@ pub(super) async fn suspend(state: &Arc<AppState>, role: CameraRole, camera_name
 pub(super) async fn detach(state: &Arc<AppState>, role: CameraRole, camera_name: &str) {
     let slot = state.slot(role);
     lifecycle::send_monitor_cmd(state, role, MonitorCmd::Shutdown);
-    slot.set_monitor_tx(None);
+    slot.retire_monitor();
     // The guide stream keeps its last frame on screen.
     if role == CameraRole::Guide {
         crate::capture::guide_task::stop(state).await;
@@ -91,6 +92,66 @@ async fn pause_capture_for_recovery(state: &Arc<AppState>) {
     });
 }
 
+/// Close the other role's camera when it runs on the same SDK, so `recorded` has that SDK
+/// to itself until its first frame; the sibling's supervisor is held until then
+/// ([`end_isolation`]), bounded by [`isolation_deadline`].
+///
+/// 2026-10-12: the Ares-C PRO stayed frameless through 20 reopens and a reconnect while
+/// the Neptune-C II was open on the same PlayerOne SDK, and streamed — beside the Neptune,
+/// once that was reopened — the moment the Neptune was closed. Released on the open alone,
+/// the sibling reopened (and rescanned the bus) during the first exposure. Never an
+/// imaging camera mid-capture, nor one warming up after the observer's Disconnect: that
+/// one would be reopened and cooled again.
+pub(super) async fn isolate_from_sibling(state: &Arc<AppState>, recorded: &ConnectedCameraInfo) {
+    let role = recorded.role.other();
+    let Some(sibling) = state
+        .camera_in_role(role)
+        .filter(|sibling| sibling.provider.eq_ignore_ascii_case(&recorded.provider))
+    else {
+        return;
+    };
+    if state.slot(role).is_recovering() {
+        return;
+    }
+    if state.camera_phase(role) == CameraPhase::WarmingUp || state.slot(role).warmup().is_some() {
+        info!(camera = %recorded.info.name, sibling = %sibling.info.name, "Not closing the other camera: it is warming up to disconnect");
+        return;
+    }
+    if role == CameraRole::Main && !matches!(state.capture_state(), CaptureState::Idle | CaptureState::Error) {
+        info!(camera = %recorded.info.name, sibling = %sibling.info.name, "Not closing the imaging camera mid-capture to reopen this one alone");
+        return;
+    }
+    warn!(
+        camera = %recorded.info.name,
+        sibling = %sibling.info.name,
+        provider = %recorded.provider,
+        "The camera has delivered no frame since it was last opened; reopening it with the other camera on its SDK closed"
+    );
+    // Before the suspension, which spawns the supervisor this holds.
+    state.slot(role).reopen_hold.hold_until(isolation_deadline(state, recorded));
+    if !suspend(state, role, &sibling.info.name).await {
+        state.slot(role).reopen_hold.release();
+        return;
+    }
+    if !state.slot(role).sdk_calls.wait_drained(super::reconnect::ABANDONED_CALL_WAIT).await {
+        info!(sibling = %sibling.info.name, "The other camera's close is still running; reopening past it");
+    }
+}
+
+/// The latest a sibling stays closed for `recorded`: its reopen, its install, and one
+/// whole first frame, watchdog included.
+fn isolation_deadline(state: &AppState, recorded: &ConnectedCameraInfo) -> Instant {
+    let settings = state.settings.snapshot();
+    let config = settings.to_capture_config_with(&settings.profile_for(recorded.role), recorded.role);
+    Instant::now() + OPEN_TIMEOUT * 2 + capture_watchdog_timeout(&config, &recorded.info)
+}
+
+/// Let the camera that isolation closed for `role`'s camera reopen: that camera framed,
+/// or its recovery is over without one.
+pub(super) fn end_isolation(state: &AppState, role: CameraRole) {
+    state.slot(role.other()).reopen_hold.release();
+}
+
 /// Whether `recorded` is still the camera suspended in its role — the supervisor's
 /// check before each attempt, since the observer can disconnect it or connect another
 /// camera in its place at any time.
@@ -112,6 +173,7 @@ pub(super) async fn give_up(
     reason: &str,
 ) {
     warn!(camera = %recorded.info.name, %reason, "Giving up on reconnecting the camera");
+    end_isolation(state, recorded.role);
     if is_recovering(state, recorded).await {
         lifecycle::finalize_disconnect(
             state,

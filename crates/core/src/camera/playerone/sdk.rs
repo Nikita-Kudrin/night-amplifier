@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 use dlopen2::wrapper::{Container, WrapperApi};
-use std::os::raw::{c_int, c_long, c_uchar};
+use std::os::raw::{c_char, c_int, c_long, c_uchar};
 use std::sync::OnceLock;
 use tracing::info;
 
@@ -63,6 +63,19 @@ pub type ConfigAttributesByConfigId = unsafe extern "C" fn(
     pConfAttr: *mut POAConfigAttributes,
 ) -> POAErrors;
 
+/// `POAGetSDKVersion`: the SDK's version string, for the load line.
+pub type SdkVersion = unsafe extern "C" fn() -> *const c_char;
+
+/// The SDK's own version, if it says. Field logs need it to tell an SDK fix from a bug.
+fn sdk_version(lib_name: &str) -> Option<String> {
+    let version = unsafe { crate::native_library::optional_symbol_lazy::<SdkVersion>(lib_name, "POAGetSDKVersion") }?;
+    let text = crate::ffi_safety::catch_ffi_panic("PlayerOne::sdk_version", || {
+        let ptr = unsafe { version() };
+        (!ptr.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+    });
+    text.ok().flatten()
+}
+
 /// The optional symbols are looked up apart from `api`, so an SDK without them still loads.
 pub struct PlayerOneSdk {
     pub api: Container<PlayerOneSdkApi>,
@@ -85,7 +98,8 @@ impl PlayerOneSdk {
 
             match unsafe { Container::load(lib_name) } {
                 Ok(api) => {
-                    info!("PlayerOne SDK ({}) loaded successfully.", lib_name);
+                    let version = sdk_version(lib_name).unwrap_or_else(|| "unknown".to_string());
+                    info!(version = %version, "PlayerOne SDK ({}) loaded successfully.", lib_name);
                     use crate::native_library::optional_symbol_lazy;
                     let (dropped_images_count, config_attributes) = unsafe {
                         (

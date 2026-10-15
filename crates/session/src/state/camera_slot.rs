@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Notify, RwLock};
 
+use super::reopen_hold::ReopenHold;
 use super::MonitorCmd;
 use night_amplifier_core::camera::Camera;
 
@@ -39,6 +40,12 @@ pub struct CameraSlot {
     /// Sender for the monitor thread polling this slot's camera. `None` when no monitor
     /// is running.
     pub monitor_tx: StdMutex<Option<std::sync::mpsc::Sender<MonitorCmd>>>,
+    /// The generation of the monitor that may hand a handle back: claimed by each spawn,
+    /// bumped by a suspension. A call that returns from an older monitor brings back a
+    /// handle the slot no longer wants, whatever the recovery state reads.
+    monitor_epoch: AtomicU64,
+    /// Holds this slot's reopen back while the other camera on its SDK reopens alone.
+    pub reopen_hold: ReopenHold,
     /// Cancel token of the camera currently occupying the slot, so an in-flight exposure
     /// can be cut short when settings change.
     pub cancel_token: RwLock<Option<Arc<AtomicBool>>>,
@@ -143,6 +150,8 @@ impl Default for CameraSlot {
             handle: StdMutex::new(None),
             handle_returned: Arc::new(Notify::new()),
             monitor_tx: StdMutex::new(None),
+            monitor_epoch: AtomicU64::new(0),
+            reopen_hold: ReopenHold::default(),
             cancel_token: RwLock::new(None),
             reconnect_in_flight: Arc::new(AtomicBool::new(false)),
             recovery: StdMutex::new(Recovery::None),
@@ -225,6 +234,24 @@ impl CameraSlot {
         if let Some(tx) = guard.as_ref() {
             let _ = tx.send(cmd);
         }
+    }
+
+    /// The generation a newly spawned monitor runs as; every older one is superseded.
+    pub fn claim_monitor_epoch(&self) -> u64 {
+        self.monitor_epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Whether the monitor of generation `epoch` is the slot's current one.
+    pub fn is_current_monitor(&self, epoch: u64) -> bool {
+        self.monitor_epoch.load(Ordering::SeqCst) == epoch
+    }
+
+    /// Take the monitor's sender and supersede it, for a suspension: a call it still has
+    /// out must close its handle even once the reopen has moved the slot on to installing.
+    /// Not for a disconnect, which takes the handle back from the monitor to close it.
+    pub fn retire_monitor(&self) -> Option<std::sync::mpsc::Sender<MonitorCmd>> {
+        self.monitor_epoch.fetch_add(1, Ordering::SeqCst);
+        self.set_monitor_tx(None)
     }
 
     /// Install the monitor sender, returning the one it replaces so the caller can

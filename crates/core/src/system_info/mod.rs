@@ -73,7 +73,10 @@ pub struct AppContext {
 #[derive(Debug, Clone, Copy)]
 pub struct BuildFacts {
     pub version: &'static str,
+    /// Community's commit, which every build contains.
     pub git: &'static str,
+    /// Pro's commit, for a Pro build.
+    pub pro_git: Option<&'static str>,
     pub target: &'static str,
     pub target_cpu: &'static str,
     pub rustc: &'static str,
@@ -142,6 +145,7 @@ fn log_build(app: &AppContext) {
     info!(
         version = app.build.version,
         git = app.build.git,
+        pro_git = app.build.pro_git.unwrap_or("none"),
         target = app.build.target,
         target_cpu = app.build.target_cpu,
         rustc = app.build.rustc,
@@ -351,11 +355,46 @@ mod tests {
             build: BuildFacts {
                 version: "0.0.0-dev",
                 git: "unknown",
+                pro_git: None,
                 target: "unknown",
                 target_cpu: "unknown",
                 rustc: "unknown",
             },
         }
+    }
+
+    /// The build line names the release and both commits: on 2026-10-12 it said only
+    /// `0.0.0-dev` and Community's commit, so the Pro build that ran could not be named.
+    #[test]
+    fn the_build_line_names_the_release_and_the_pro_commit() {
+        #[derive(Clone, Default)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .finish();
+        let mut app = app();
+        app.build.version = "1.4.0 (Pro)";
+        app.build.git = "4fc50530449c";
+        app.build.pro_git = Some("e671b31a0c2d-dirty");
+
+        tracing::subscriber::with_default(subscriber, || log_build(&app));
+
+        let line = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(line.contains(r#"version="1.4.0 (Pro)""#), "{line}");
+        assert!(line.contains(r#"git="4fc50530449c""#), "{line}");
+        assert!(line.contains(r#"pro_git="e671b31a0c2d-dirty""#), "{line}");
     }
 
     #[test]
