@@ -245,8 +245,15 @@ pub async fn serve(mut socket: WebSocket, state: Arc<AppState>, client: StreamCl
                     continue;
                 }
                 // Missing when the producer moved on to a newer frame before this client
-                // woke; that frame's own publication follows.
+                // woke; that frame's own publication follows. Or the stream was cleared,
+                // and the picture on screen no longer belongs to anything.
                 let Some(payload) = attached.stream.payload(kind, current) else {
+                    if !attached.stream.holds_frame() {
+                        if socket.send(Message::Text(NO_FRAME.into())).await.is_err() {
+                            break;
+                        }
+                        last_sent = current;
+                    }
                     continue;
                 };
                 if !sender.send(&mut socket, payload).await {

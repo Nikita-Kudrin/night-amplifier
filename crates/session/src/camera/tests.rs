@@ -2526,3 +2526,125 @@ async fn connecting_a_camera_tells_clients_the_settings_changed() {
     );
     teardown(&state).await;
 }
+
+/// A cooled camera with its monitor running, its slot left where `recovery_step` puts
+/// it. Returns the controls, to count the closes the monitor made.
+async fn monitored_camera_in_recovery(
+    state: &Arc<AppState>,
+    recovery_step: impl FnOnce(&crate::state::CameraSlot),
+) -> Arc<CameraControls> {
+    let controls = Arc::new(CameraControls::default());
+    let camera = FakeCamera::sharing("Ares-C PRO", Arc::clone(&controls))
+        .with_info(|info| info.has_cooler = true)
+        .provider("Fake");
+    let name = camera.info().name.clone();
+    state.roster.install(
+        ConnectedCameraInfo {
+            id: "fake_0".to_string(),
+            provider: "Fake".to_string(),
+            index: 0,
+            role: CameraRole::Main,
+            info: camera.info().clone(),
+        },
+        true,
+    );
+    let slot = state.slot(CameraRole::Main);
+    recovery_step(slot);
+    *slot.handle.lock().unwrap() = Some(Box::new(camera));
+    state.set_camera_phase(CameraRole::Main, &name, CameraPhase::Precooling);
+    let tx = monitor::spawn(Arc::clone(state), CameraRole::Main, name, tokio::runtime::Handle::current());
+    *slot.monitor_tx.lock().unwrap() = Some(tx);
+    // What `install_camera` sends right after spawning the monitor: its cooler call is
+    // the one that raced the end of the install.
+    send_monitor_cmd_for_test(
+        state,
+        MonitorCmd::UpdateCoolerTarget { enabled: true, target: Some(-10.0), fast: true },
+    );
+    controls
+}
+
+/// 2026-10-12: a reopened camera's monitor pushed its cooler setpoint while the
+/// supervisor was still installing it, and closed the handle it brought back — the live
+/// one. The resumed capture found no camera and recovery went round again, 10 times.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_monitor_call_during_a_reinstall_hands_the_reopened_handle_back() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let controls = monitored_camera_in_recovery(&state, |slot| {
+        slot.begin_suspend();
+        assert!(slot.begin_install());
+    })
+    .await;
+
+    let returned = eventually(
+        || controls.status_reads.load(Ordering::SeqCst) > 0 && state.slot(CameraRole::Main).holds_handle(),
+        Duration::from_secs(3),
+    )
+    .await;
+    let closes = controls.closes.load(Ordering::SeqCst);
+    let outcome = state.slot(CameraRole::Main).finish_install();
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, "Ares-C PRO", DisconnectCause::Requested).await;
+
+    assert!(returned, "the reopened handle must go back into the slot");
+    assert_eq!(closes, 0, "the monitor closed the camera it was installed with");
+    assert_eq!(outcome, crate::state::InstallOutcome::Healthy);
+}
+
+/// The other half of the rule: a slot suspended while the call was out has no camera to
+/// take the handle back, so the monitor closes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_monitor_call_that_outlives_its_slot_closes_its_handle() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let controls = monitored_camera_in_recovery(&state, |slot| {
+        slot.begin_suspend();
+    })
+    .await;
+
+    let closed = eventually(|| controls.closes.load(Ordering::SeqCst) == 1, Duration::from_secs(3)).await;
+    let held = state.slot(CameraRole::Main).holds_handle();
+    send_monitor_cmd_for_test(&state, MonitorCmd::Shutdown);
+    state.slot(CameraRole::Main).end_recovery();
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, "Ares-C PRO", DisconnectCause::Requested).await;
+
+    assert!(closed, "a suspended slot's handle must be closed, not kept");
+    assert!(!held);
+}
+
+/// The other side of the reinstall rule: a monitor the suspension retired had a status
+/// call out (monitor calls are not in `sdk_calls`, so the supervisor does not wait for
+/// them), which returns while the reopen is still in `setup.apply`, before
+/// `install_camera` has put the new handle in. That stale handle is closed, not handed
+/// into the slot the install is about to fill — where it tripped the install's assertion.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_superseded_monitor_call_returning_mid_install_does_not_refill_the_slot() {
+    let (state, _dw) = AppState::new_for_testing();
+    let state = Arc::new(state);
+    let controls = monitored_camera_in_recovery(&state, |_| {}).await;
+    let slot = state.slot(CameraRole::Main);
+    assert!(eventually(|| controls.status_reads.load(Ordering::SeqCst) > 0, Duration::from_secs(3)).await);
+
+    // The next status call hangs inside the "SDK" for most of its budget.
+    controls.status_delay_ms.store(800, Ordering::SeqCst);
+    let reads = controls.status_reads.load(Ordering::SeqCst);
+    assert!(eventually(|| controls.status_reads.load(Ordering::SeqCst) > reads, Duration::from_secs(3)).await);
+    assert!(slot.monitor_call_age().is_some(), "the slow call must hold the handle");
+
+    // What `recovery::detach` and the supervisor do meanwhile.
+    send_monitor_cmd_for_test(&state, MonitorCmd::Shutdown);
+    slot.retire_monitor();
+    state.set_camera_phase(CameraRole::Main, "Ares-C PRO", CameraPhase::Recovering);
+    slot.begin_suspend();
+    assert!(slot.begin_install(), "the reopen starts installing");
+
+    let returned = eventually(|| slot.monitor_call_age().is_none(), Duration::from_secs(3)).await;
+    let refilled = slot.holds_handle();
+    let closes = controls.closes.load(Ordering::SeqCst);
+    let _ = slot.finish_install();
+    slot.end_recovery();
+    lifecycle::finalize_disconnect(&state, CameraRole::Main, "Ares-C PRO", DisconnectCause::Requested).await;
+
+    assert!(returned);
+    assert!(!refilled, "the superseded handle was handed into a slot mid-install");
+    assert_eq!(closes, 1, "the superseded handle must be closed");
+}

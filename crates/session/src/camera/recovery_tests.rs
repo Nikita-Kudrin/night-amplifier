@@ -60,6 +60,8 @@ pub(super) struct FakeCatalog {
     /// lost device or `status()` panic, and counts releases, whichever handle the server
     /// holds. `on_dew_heater` runs from inside `install_camera`.
     camera: Arc<CameraControls>,
+    /// Devices scripted apart from the rest (`controls_for`), by name.
+    own_controls: Mutex<Vec<(&'static str, Arc<CameraControls>)>>,
 }
 
 impl FakeCatalog {
@@ -75,6 +77,25 @@ impl FakeCatalog {
 
     fn hold(&self, device: Option<&FakeDevice>) {
         *self.held.lock().unwrap() = device.map(|device| device.name);
+    }
+
+    /// Script `device` apart from the shared controls: every handle of it opened from now
+    /// on shares these instead.
+    fn controls_for(&self, device: &FakeDevice) -> Arc<CameraControls> {
+        let mut own = self.own_controls.lock().unwrap();
+        if let Some((_, controls)) = own.iter().find(|(name, _)| *name == device.name) {
+            return Arc::clone(controls);
+        }
+        let controls = Arc::new(CameraControls::default());
+        own.push((device.name, Arc::clone(&controls)));
+        controls
+    }
+
+    fn controls_of(&self, name: &str) -> Arc<CameraControls> {
+        let own = self.own_controls.lock().unwrap();
+        own.iter()
+            .find(|(own, _)| *own == name)
+            .map_or_else(|| Arc::clone(&self.camera), |(_, controls)| Arc::clone(controls))
     }
 
     fn opened(&self) -> Vec<&'static str> {
@@ -152,7 +173,7 @@ impl DeviceCatalog for FakeCatalog {
         let mut info = Self::info_for(&device);
         info.has_cooler = self.cooled.load(Ordering::SeqCst);
         // Exposures are cut short by `cancel`, after the 20 ms every SDK call takes.
-        let camera = FakeCamera::sharing(device.name, Arc::clone(&self.camera))
+        let camera = FakeCamera::sharing(device.name, self.controls_of(device.name))
             .with_info(|camera_info| *camera_info = info)
             .provider(PROVIDER)
             .cancellable()
@@ -1746,4 +1767,317 @@ async fn a_start_while_stopping_leaves_no_pipeline_running_behind_an_idle_state(
     assert!(stopped, "the stopped capture never reached Idle");
     assert_eq!(ended, CaptureState::Idle);
     assert_eq!(delivered, 0, "the camera kept delivering frames behind an Idle state");
+}
+
+// --- Opens that never frame ----------------------------------------------------------
+
+/// What the live view still shows of the session before.
+fn last_session_picture(state: &AppState) {
+    let frame = night_amplifier_core::frame::Frame::filled(32, 24, 3, 0.25).unwrap();
+    let ready = night_amplifier_core::render::display::testing::to_ready_frame(&frame);
+    state.main_stream.set_latest_raw_frame(Arc::new(ready));
+}
+
+async fn stop_and_wait_idle(state: &Arc<AppState>) {
+    CaptureService::stop_capture(state).await;
+    eventually(|| matches!(state.capture_state(), CaptureState::Idle), Duration::from_secs(10)).await;
+}
+
+/// 2026-10-12: the Ares-C PRO reopened 20 times in three minutes, each reopen counted as
+/// a recovery and none delivered a frame. The observer was told nothing, and the live view
+/// showed the previous session's last frame throughout. A camera that keeps opening but
+/// never frames is given up on by count, and says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_camera_that_opens_but_never_frames_is_given_up_on_and_says_why() {
+    use crate::camera::health::FRAMELESS_GIVE_UP_AT;
+
+    let catalog = FakeCatalog::with(&[ARES]);
+    let state = rig(&catalog);
+    connect(&state, &ARES, CameraRole::Main).await;
+    last_session_picture(&state);
+    let opens_before = catalog.open_calls.load(Ordering::SeqCst);
+    let mut events = state.subscribe_events();
+    catalog.camera.stalls.store(usize::MAX, Ordering::SeqCst);
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let cleared = !state.main_stream.holds_frame();
+    let gave_up = eventually(|| state.roster.is_empty(), Duration::from_secs(20)).await;
+    let seen = drain(&mut events);
+    let reopens = catalog.open_calls.load(Ordering::SeqCst) - opens_before;
+    let status = state.recovery_status.get(CameraRole::Main);
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(cleared, "the previous session's picture stayed up as the new capture's");
+    assert!(gave_up, "a camera that never frames was reopened for good");
+    assert!(
+        reopens >= FRAMELESS_GIVE_UP_AT as usize - 1,
+        "at least one reopen per frameless open short of the give-up: {reopens}"
+    );
+    assert!(
+        matches!(&status, RecoveryStatus::Failed { reason, .. } if reason.contains("no frame")),
+        "the give-up is restated to clients, with its reason: {status:?}"
+    );
+    assert!(
+        seen.iter().any(|e| matches!(e, ServerEvent::Error { message } if message.contains("no frame"))),
+        "the observer must hear why the camera went"
+    );
+    assert!(!state.main_stream.holds_frame(), "a camera that left keeps no picture");
+}
+
+/// The same night's cure, made deliberate: the Ares-C PRO streamed the moment the
+/// Neptune-C II on its SDK was closed. The second frameless open reopens the camera with
+/// its sibling closed, and both come back — the sibling through its own recovery.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frameless_camera_is_reopened_with_its_sibling_closed_and_both_come_back() {
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    let ares = catalog.controls_for(&ARES);
+    connect(&state, &ARES, CameraRole::Main).await;
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let mut events = state.subscribe_events();
+
+    // Wedged for as long as the Neptune stays open.
+    ares.stalls.store(usize::MAX, Ordering::SeqCst);
+    let neptune_closes = catalog.camera.closes.load(Ordering::SeqCst);
+    let unwedge = {
+        let catalog = Arc::clone(&catalog);
+        let ares = Arc::clone(&ares);
+        tokio::spawn(async move {
+            while catalog.camera.closes.load(Ordering::SeqCst) == neptune_closes {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+            ares.stalls.store(0, Ordering::SeqCst);
+        })
+    };
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let capturing = eventually(
+        || ares.frames.load(Ordering::SeqCst) >= 2 && matches!(state.capture_state(), CaptureState::Capturing),
+        Duration::from_secs(10),
+    )
+    .await;
+    let guide_back = wait_recovered(&state, CameraRole::Guide).await;
+    let seen = drain(&mut events);
+    let opened = catalog.opened();
+    unwedge.abort();
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(capturing, "the imaging camera should stream once reopened alone: {opened:?}");
+    assert!(guide_back, "the guide camera must come back after making way");
+    let last = |name| opened.iter().rposition(|opened| *opened == name).unwrap();
+    assert!(last(ARES.name) < last(NEPTUNE.name), "the Ares reopened alone, the Neptune after it: {opened:?}");
+    assert!(
+        !seen.iter().any(|e| matches!(e, ServerEvent::CameraReconnectFailed { .. })),
+        "nothing was given up on"
+    );
+}
+
+/// The guide camera's loop counts the same way, but never at the price of the imaging
+/// camera's session: a capturing sibling is not closed for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_frameless_guide_camera_is_given_up_on_without_closing_a_capturing_imaging_camera() {
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    let neptune = catalog.controls_for(&NEPTUNE);
+    connect(&state, &ARES, CameraRole::Main).await;
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(
+        eventually(|| matches!(state.capture_state(), CaptureState::Capturing), Duration::from_secs(5)).await
+    );
+    let ares_opens = catalog.opened().iter().filter(|name| **name == ARES.name).count();
+    neptune.stalls.store(usize::MAX, Ordering::SeqCst);
+
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let gave_up = eventually(|| state.camera_in_role(CameraRole::Guide).is_none(), Duration::from_secs(20)).await;
+    let status = state.recovery_status.get(CameraRole::Guide);
+    let still_capturing = matches!(state.capture_state(), CaptureState::Capturing);
+    let ares_reopened = catalog.opened().iter().filter(|name| **name == ARES.name).count() > ares_opens;
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(gave_up, "a guide camera that never frames was reopened for good");
+    assert!(matches!(&status, RecoveryStatus::Failed { reason, .. } if reason.contains("no frame")), "{status:?}");
+    assert!(still_capturing, "the imaging session was interrupted for the guide camera");
+    assert!(!ares_reopened, "the capturing imaging camera was closed to make way");
+}
+
+/// A camera the observer disconnected stays registered while it warms up (`WarmingUp`):
+/// isolation took it for a live sibling, which stopped the warm-up, and its supervisor
+/// reopened and cooled again a camera the observer had let go.
+#[tokio::test(flavor = "multi_thread")]
+async fn isolation_does_not_reopen_a_sibling_the_observer_disconnected() {
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    catalog.cooled.store(true, Ordering::SeqCst);
+    let state = rig(&catalog);
+    state.settings.update(|settings| {
+        settings.cooler_enabled = true;
+        settings.target_temp_c = Some(-10.0);
+    });
+    let neptune = catalog.controls_for(&NEPTUNE);
+    connect(&state, &ARES, CameraRole::Main).await;
+    let outcome = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::WhenPossible)
+        .await
+        .expect("disconnect");
+    assert!(matches!(outcome, lifecycle::DisconnectOutcome::WarmingUp { .. }), "{outcome:?}");
+    let ares_opens = catalog.opened().iter().filter(|name| **name == ARES.name).count();
+
+    neptune.stalls.store(usize::MAX, Ordering::SeqCst);
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let gave_up = eventually(|| state.camera_in_role(CameraRole::Guide).is_none(), Duration::from_secs(20)).await;
+    let ares_reopened = catalog.opened().iter().filter(|name| **name == ARES.name).count() > ares_opens;
+    let ares_phase = state.camera_phase(CameraRole::Main);
+    let _ = lifecycle::disconnect(&state, &id_of(&ARES), lifecycle::WarmupPolicy::Skip).await;
+    teardown(&state).await;
+
+    assert!(gave_up, "the frameless guide camera should be given up on");
+    assert!(!ares_reopened, "a camera the observer disconnected was reopened: phase {ares_phase:?}");
+}
+
+/// A frameless run outlived the capture that counted it: with auto-resume off, two Starts
+/// that faulted on their first frame left it at 2 on an idle camera, and the next fault —
+/// a status call, a USB blip, nothing to do with frames — closed the healthy guide camera.
+/// A reopen no capture judges, and the observer's own Start, both leave no run behind.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stale_frameless_run_does_not_isolate_on_an_unrelated_fault() {
+    use crate::camera::health::frameless_opens;
+
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    state.settings.update(|settings| settings.auto_resume_capture = false);
+    let ares = catalog.controls_for(&ARES);
+    connect(&state, &ARES, CameraRole::Main).await;
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let ares_opens = || catalog.opened().iter().filter(|name| **name == ARES.name).count();
+
+    ares.stalls.store(usize::MAX, Ordering::SeqCst);
+    for start in 1..=2 {
+        let opens = ares_opens();
+        CaptureService::start_capture(&state, None).await.unwrap();
+        let reopened = eventually(|| ares_opens() > opens, Duration::from_secs(10)).await;
+        assert!(reopened, "start {start} should fault on its first frame and be reopened");
+        assert!(wait_recovered(&state, CameraRole::Main).await);
+        stop_and_wait_idle(&state).await;
+        assert_eq!(frameless_opens(&state, CameraRole::Main, ARES.name), 0, "a reopen nothing judged left a run");
+    }
+    ares.stalls.store(0, Ordering::SeqCst);
+    let neptune_closes = catalog.camera.closes.load(Ordering::SeqCst);
+
+    // A fault no frame was involved in, on the idle imaging camera.
+    assert!(super::recovery::suspend(&state, CameraRole::Main, ARES.name).await);
+    let back = wait_recovered(&state, CameraRole::Main).await;
+    let neptune_closed = catalog.camera.closes.load(Ordering::SeqCst) > neptune_closes;
+    teardown(&state).await;
+
+    assert!(back);
+    assert!(!neptune_closed, "an unrelated fault closed the healthy guide camera on a stale count");
+}
+
+/// Isolation lasts until the first frame, not the open. Released on the open, the
+/// sibling's supervisor reopened it (a bus rescan included) while the isolated camera's
+/// first frame was still exposing; a camera that needs its SDK to itself until it streams
+/// — the 2026-10-12 cure — was then given up on. Once it streams, the sibling may return.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_sibling_stays_closed_until_the_isolated_camera_frames() {
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    let ares = catalog.controls_for(&ARES);
+    // Any real sub outlasts the sibling supervisor's first-attempt wait.
+    ares.exposure_ms.store(400, Ordering::SeqCst);
+    state.settings.update(|settings| settings.exposure_us = 400_000);
+    connect(&state, &ARES, CameraRole::Main).await;
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+
+    // Until it first streams, wedged whenever the Neptune is open as an exposure starts.
+    let neptune_open = {
+        let catalog = Arc::clone(&catalog);
+        move || {
+            let opens = catalog.opened().iter().filter(|name| **name == NEPTUNE.name).count();
+            opens > catalog.camera.closes.load(Ordering::SeqCst)
+        }
+    };
+    let wedge = {
+        let ares = Arc::clone(&ares);
+        tokio::spawn(async move {
+            while ares.frames.load(Ordering::SeqCst) == 0 {
+                let stalls = if neptune_open() { usize::MAX } else { 0 };
+                ares.stalls.store(stalls, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            ares.stalls.store(0, Ordering::SeqCst);
+        })
+    };
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let capturing = eventually(
+        || ares.frames.load(Ordering::SeqCst) >= 2 && matches!(state.capture_state(), CaptureState::Capturing),
+        Duration::from_secs(10),
+    )
+    .await;
+    wedge.abort();
+    ares.stalls.store(0, Ordering::SeqCst);
+    let guide_back = wait_recovered(&state, CameraRole::Guide).await;
+    let opened = catalog.opened();
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(capturing, "the isolated camera never framed: the sibling was back first: {opened:?}");
+    assert!(guide_back, "the guide camera must come back after the imaging camera frames");
+}
+
+/// The observer's Start is a fresh attempt, as their Connect is: a run left by earlier
+/// frameless opens does not make its one stalled first frame the give-up, nor close the
+/// guide camera.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_observers_start_is_a_fresh_attempt() {
+    use crate::camera::health::record_frameless_open;
+
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    let ares = catalog.controls_for(&ARES);
+    connect(&state, &ARES, CameraRole::Main).await;
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    for _ in 0..crate::camera::health::FRAMELESS_GIVE_UP_AT {
+        record_frameless_open(&state, CameraRole::Main, ARES.name);
+    }
+    tokio::time::sleep(crate::camera::health::FRAMELESS_GIVE_UP_AFTER).await;
+    let neptune_closes = catalog.camera.closes.load(Ordering::SeqCst);
+
+    ares.stalls.store(1, Ordering::SeqCst);
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let capturing = eventually(
+        || ares.frames.load(Ordering::SeqCst) >= 2 && matches!(state.capture_state(), CaptureState::Capturing),
+        Duration::from_secs(10),
+    )
+    .await;
+    let neptune_closed = catalog.camera.closes.load(Ordering::SeqCst) > neptune_closes;
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(capturing, "one stalled first frame after a fresh Start ended the camera");
+    assert!(!neptune_closed, "the guide camera was closed for a run the Start had ended");
+}
+
+/// A frameless camera whose recovery ends without a frame — given up on here — lets the
+/// sibling it isolated come back at once, not at the hold's deadline.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_give_up_releases_the_isolated_sibling() {
+    let catalog = FakeCatalog::with(&[ARES, NEPTUNE]);
+    let state = rig(&catalog);
+    let ares = catalog.controls_for(&ARES);
+    connect(&state, &ARES, CameraRole::Main).await;
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    ares.stalls.store(usize::MAX, Ordering::SeqCst);
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let gave_up = eventually(|| state.camera_in_role(CameraRole::Main).is_none(), Duration::from_secs(20)).await;
+    let held = state.slot(CameraRole::Guide).reopen_hold.is_held();
+    let guide_back = wait_recovered(&state, CameraRole::Guide).await;
+    stop_and_wait_idle(&state).await;
+    teardown(&state).await;
+
+    assert!(gave_up);
+    assert!(!held, "the give-up left the guide camera held");
+    assert!(guide_back, "the isolated guide camera must come back after the give-up");
 }

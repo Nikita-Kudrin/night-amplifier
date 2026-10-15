@@ -136,6 +136,18 @@ impl DeviceLease {
         table.get(&(provider, index)).is_some_and(|slot| slot.open)
     }
 
+    /// Every index of `provider` an unclosed handle holds, for diagnostics.
+    pub fn open_indices(provider: &'static str) -> Vec<i32> {
+        let table = slots().lock().unwrap_or_else(|e| e.into_inner());
+        let mut open: Vec<i32> = table
+            .iter()
+            .filter(|((owner, _), slot)| *owner == provider && slot.open)
+            .map(|((_, index), _)| *index)
+            .collect();
+        open.sort_unstable();
+        open
+    }
+
     /// Authorize one vendor close call, or explain why not.
     ///
     /// Returns `true` exactly once, and only while this lease still owns the
@@ -208,6 +220,20 @@ mod tests {
             "a superseded lease must not close the device the new lease owns"
         );
         assert!(fresh.begin_close());
+    }
+
+    /// What a PlayerOne rescan logs as open: unclosed handles of that provider only.
+    #[test]
+    fn open_indices_lists_the_unclosed_handles_of_one_provider() {
+        let neptune = DeviceLease::acquire("test-open-indices", 1);
+        let ares = DeviceLease::acquire("test-open-indices", 0);
+        let _other = DeviceLease::acquire("test-open-indices-other", 2);
+        assert_eq!(DeviceLease::open_indices("test-open-indices"), vec![0, 1]);
+
+        assert!(neptune.begin_close());
+        assert_eq!(DeviceLease::open_indices("test-open-indices"), vec![0]);
+        assert!(ares.begin_close());
+        assert!(DeviceLease::open_indices("test-open-indices").is_empty());
     }
 
     /// The field failure in miniature: a handle is abandoned, a reconnect opens

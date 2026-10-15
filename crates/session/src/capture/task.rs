@@ -2,6 +2,7 @@ use super::capture_thread::{capture_probe_frame, run_capture_task, CaptureChanne
 use super::config_overrides::*;
 use super::watchdog::*;
 use night_amplifier_core::camera::CameraError;
+use crate::camera::health as camera_health;
 use crate::capture::channel::{pipeline_capacities, QueueDepth};
 use crate::capture::channel::{CapturedFrame, StackedFrame};
 use crate::error::ApiError;
@@ -108,6 +109,7 @@ pub async fn run_capture_loop(
         // which resumes it, and recovery decides what the observer hears.
         Err(e @ ApiError::CameraHandleLost { .. }) => {
             warn!(camera_id = %camera_id, error = %e, "No camera handle to start the capture with");
+            camera_health::record_frameless_open(&state, CameraRole::Main, &camera_name);
             lifecycle::return_from_capture(&state, CameraRole::Main, &camera_name, None).await;
             state.end_capture_state();
             return;
@@ -195,6 +197,7 @@ pub async fn run_capture_loop(
                 }
                 camera => {
                     warn!(reason = %reason, "The camera faulted on the first frame; handing it to recovery");
+                    camera_health::record_frameless_open(&state, CameraRole::Main, &camera_name);
                     if let Some(cam) = camera {
                         release_faulted_handle(cam, &state, CameraRole::Main);
                     }
@@ -205,6 +208,7 @@ pub async fn run_capture_loop(
             return;
         }
     };
+    camera_health::frame_arrived(&state, CameraRole::Main, &camera_name);
     // Sized through the same raw-CFA stage the pipeline will use: with
     // superpixel debayering on, a frame is a quarter of the size a full-
     // resolution demosaic would suggest, and the channel budget follows it.

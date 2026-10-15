@@ -7,7 +7,7 @@ use tracing::{error, warn};
 
 use super::MonitorCtx;
 use crate::camera::health::{self as camera_health, FaultKind};
-use crate::state::CameraPhase;
+use crate::state::{CameraPhase, Recovery};
 use night_amplifier_core::camera::CameraError;
 
 /// Budget for a single camera call made from the monitor. Matches the capture
@@ -183,13 +183,18 @@ where
 
     let phase = ctx.state.camera_phase(ctx.role);
     // A slot suspended while ours was out has no camera to give it back to, and the
-    // reopen expects it empty.
-    let recovering = slot.is_recovering();
-    if phase == CameraPhase::Disconnected || recovering {
+    // reopen expects it empty. Told apart by generation, not recovery state: the monitor
+    // an install starts runs while the slot reads `Installing`, and closing its handle
+    // closed the live camera 10 times on 2026-10-12; a monitor the suspension retired can
+    // return in that same state, before the install has put the new handle in.
+    let superseded = !slot.is_current_monitor(ctx.epoch);
+    let suspended = slot.recovery() == Recovery::Suspended;
+    if phase == CameraPhase::Disconnected || suspended || superseded {
         warn!(
             camera_name = %ctx.camera_name,
             ?phase,
-            recovering,
+            suspended,
+            superseded,
             "Closing the handle a status call brought back: its slot was torn down or suspended meanwhile"
         );
         let _ = camera.close();

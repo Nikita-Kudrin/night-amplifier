@@ -349,3 +349,26 @@ async fn assert_nothing_said(client: &mut Client, context: &str) {
         panic!("{context}: {message:?}");
     }
 }
+
+/// A stream cleared under an open socket — a new session starting, its camera leaving —
+/// must take the picture down. 2026-10-12: nothing told the live view, which went on
+/// showing the previous session's last frame for three minutes of a capture whose camera
+/// delivered nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[parallel(image_stream_log)]
+async fn clearing_the_stream_takes_the_picture_down_on_open_sockets() {
+    let server = start_server().await;
+    let mut client = server.connect_registered(LOSSLESS).await;
+    server.render(MAIN, 0.25).await;
+    assert_lossless(&next_frame(&mut client).await, size(MAIN), "imaging frame");
+
+    server.state.main_stream.clear();
+    let told = tokio::time::timeout(QUIET, client.next()).await;
+    assert!(
+        matches!(&told, Ok(Some(Ok(Message::Text(text)))) if text.as_str() == crate::server::ws::NO_FRAME),
+        "the cleared stream's picture stayed up: {told:?}"
+    );
+
+    server.render(MAIN, 0.5).await;
+    assert_lossless(&next_frame(&mut client).await, size(MAIN), "the next session's first frame");
+}

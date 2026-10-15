@@ -156,9 +156,21 @@ Amplifier handles them in the background, and most of the time you will not noti
   for the few seconds this takes and then continues. The status bar keeps showing
   *Capturing*.
 
+- **A camera that reopens but never delivers a frame** is not counted as back. On its
+  second such reopen in a row, the other camera on the same vendor driver (say, a Player
+  One guide camera beside a Player One imaging camera) is closed so this one reopens
+  alone; the other comes back on its own once this one delivers its first frame. An
+  imaging camera that is capturing, or one warming up after you disconnected it, is never
+  closed for this. After at least three such reopens over a minute, recovery gives up and
+  tells you (*"Could not bring … back (it was opened 3 times in a row but delivered no
+  frame)"*). Pressing Start or Connect yourself starts the count afresh.
+
 The imaging and guide cameras recover independently, and a recovering camera is always
 reopened as *itself* — never as the other camera, even after the USB bus has renumbered
 its devices.
+
+Starting a capture, or disconnecting the camera, clears the live view: until the first
+new frame arrives you see an empty view, never the previous session's last picture.
 
 You only see a message when recovery takes longer than about 20 seconds:
 

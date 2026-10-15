@@ -156,11 +156,22 @@ impl FrameStream {
 
     /// Drop every payload and forget the frame. Called when a stream's producer stops,
     /// so a reconnecting client is not served a frame from a camera that has gone.
+    ///
+    /// Published as a version of its own, with no payload: a client already watching
+    /// otherwise kept the last picture, which on 2026-10-12 passed for live for three
+    /// minutes of a capture whose camera delivered nothing.
     pub fn clear(&self) {
         drop(self.replace_raw_frame(None));
         for slot in &self.payloads {
             *slot.write().unwrap_or_else(|e| e.into_inner()) = None;
         }
+        self.frame_ready.send_replace(self.begin_frame());
+    }
+
+    /// Whether there is a frame to show — false until the first render and after a
+    /// [`Self::clear`].
+    pub fn holds_frame(&self) -> bool {
+        self.latest_raw_frame.read().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 }
 
@@ -309,9 +320,31 @@ mod tests {
         stream.clear();
 
         assert!(stream.get_latest_raw_frame().is_none());
+        assert!(!stream.holds_frame());
         for kind in StreamKind::all() {
             assert!(stream.payload(kind, counter).is_none());
         }
+    }
+
+    /// A client already watching is woken by the clear, onto a version with no payload,
+    /// which is how it learns to take its picture down.
+    #[tokio::test]
+    async fn clear_wakes_watching_clients_onto_a_frameless_version() {
+        let stream = FrameStream::default();
+        let counter = stream.begin_frame();
+        stream.set_payload(StreamKind::Jpeg, counter, vec![1]);
+        stream.publish_frame();
+        let mut frames = stream.subscribe_frames();
+
+        stream.clear();
+
+        tokio::time::timeout(Duration::from_secs(1), frames.changed())
+            .await
+            .expect("the clear woke nobody")
+            .unwrap();
+        let current = *frames.borrow_and_update();
+        assert!(current > counter);
+        assert!(stream.payload(StreamKind::Jpeg, current).is_none());
     }
 
     /// Storing payloads must not advance the counter — only `begin_frame` does, so

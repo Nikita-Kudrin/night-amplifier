@@ -50,6 +50,29 @@ struct Entries {
     /// Whether restarting a stalled stream in place has lately worked. Outlives the
     /// capture loop, whose next reopen it decides on.
     restart_histories: HashMap<CameraKey, RestartHistory>,
+    /// Opens in a row that faulted before their first frame. Outlives the reopens it
+    /// counts — see `camera_health::FRAMELESS_GIVE_UP_AT`.
+    frameless_opens: HashMap<CameraKey, FramelessRun>,
+}
+
+/// A run of opens that faulted before their first frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FramelessRun {
+    pub count: u32,
+    /// When the run's first open faulted: a run is given up on by age as well as count.
+    pub since: Instant,
+    last: Instant,
+}
+
+/// Extend a `(count, last)` run under `key`, restarting it at 1 once older than `ttl`.
+fn bump_run(runs: &mut HashMap<CameraKey, (u32, Instant)>, key: CameraKey, ttl: Duration, now: Instant) -> u32 {
+    let entry = runs.entry(key).or_insert((0, now));
+    if now.duration_since(entry.1) > ttl {
+        entry.0 = 0;
+    }
+    entry.0 += 1;
+    entry.1 = now;
+    entry.0
 }
 
 impl Entries {
@@ -224,17 +247,7 @@ impl CameraRoster {
         ttl: Duration,
         now: Instant,
     ) -> u32 {
-        let mut entries = self.lock();
-        let entry = entries
-            .fault_streaks
-            .entry((role, camera_name.to_string()))
-            .or_insert((0, now));
-        if now.duration_since(entry.1) > ttl {
-            entry.0 = 0;
-        }
-        entry.0 += 1;
-        entry.1 = now;
-        entry.0
+        bump_run(&mut self.lock().fault_streaks, (role, camera_name.to_string()), ttl, now)
     }
 
     pub fn clear_fault_streak(&self, role: CameraRole, camera_name: &str) {
@@ -273,6 +286,50 @@ impl CameraRoster {
     pub(crate) fn forget_restart_history(&self, role: CameraRole, camera_name: &str) {
         self.lock()
             .restart_histories
+            .remove(&(role, camera_name.to_string()));
+    }
+
+    /// Count one more open that faulted before its first frame; a run whose last open is
+    /// older than `ttl` starts again.
+    pub(crate) fn bump_frameless_opens(
+        &self,
+        role: CameraRole,
+        camera_name: &str,
+        ttl: Duration,
+        now: Instant,
+    ) -> FramelessRun {
+        let mut entries = self.lock();
+        let fresh = FramelessRun { count: 0, since: now, last: now };
+        let run = entries
+            .frameless_opens
+            .entry((role, camera_name.to_string()))
+            .or_insert(fresh);
+        if now.saturating_duration_since(run.last) > ttl {
+            *run = fresh;
+        }
+        run.count += 1;
+        run.last = now;
+        *run
+    }
+
+    /// The current run of frameless opens, `None` once its last open is older than `ttl`.
+    pub(crate) fn frameless_run(
+        &self,
+        role: CameraRole,
+        camera_name: &str,
+        ttl: Duration,
+        now: Instant,
+    ) -> Option<FramelessRun> {
+        self.lock()
+            .frameless_opens
+            .get(&(role, camera_name.to_string()))
+            .filter(|run| now.saturating_duration_since(run.last) <= ttl)
+            .copied()
+    }
+
+    pub(crate) fn forget_frameless_opens(&self, role: CameraRole, camera_name: &str) {
+        self.lock()
+            .frameless_opens
             .remove(&(role, camera_name.to_string()));
     }
 }
@@ -368,6 +425,30 @@ mod tests {
         assert!(roster.transition(CameraRole::Main, CameraPhase::Capturing, CameraPhase::Idle));
         assert_eq!(roster.phase(CameraRole::Main), CameraPhase::Idle);
         assert_eq!(roster.phase(CameraRole::Guide), CameraPhase::Disconnected);
+    }
+
+    #[test]
+    fn a_frameless_run_counts_per_role_ages_out_and_is_forgotten() {
+        let roster = CameraRoster::default();
+        let ttl = Duration::from_secs(600);
+        let start = Instant::now();
+
+        let count = |role, now| roster.frameless_run(role, "Ares", ttl, now).map_or(0, |run| run.count);
+
+        assert_eq!(count(CameraRole::Main, start), 0);
+        assert_eq!(roster.bump_frameless_opens(CameraRole::Main, "Ares", ttl, start).count, 1);
+        let run = roster.bump_frameless_opens(CameraRole::Main, "Ares", ttl, start + ttl);
+        assert_eq!((run.count, run.since), (2, start), "a run is dated from its first open");
+        assert_eq!(count(CameraRole::Main, start + ttl), 2);
+        assert_eq!(count(CameraRole::Guide, start + ttl), 0);
+
+        let late = start + ttl * 2 + Duration::from_secs(1);
+        assert_eq!(count(CameraRole::Main, late), 0, "an old run is not current");
+        let run = roster.bump_frameless_opens(CameraRole::Main, "Ares", ttl, late);
+        assert_eq!((run.count, run.since), (1, late), "an old run starts again");
+
+        roster.forget_frameless_opens(CameraRole::Main, "Ares");
+        assert_eq!(count(CameraRole::Main, late), 0);
     }
 
     #[test]

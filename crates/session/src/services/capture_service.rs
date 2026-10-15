@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use tracing::info;
 
+use crate::camera::health as camera_health;
 use crate::capture::{guide_task, run_capture_loop};
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
@@ -75,6 +76,7 @@ impl CaptureService {
         }
 
         info!(camera_id = %camera.id, "Starting the guide camera");
+        camera_health::forget_frameless_opens(state, CameraRole::Guide, &camera.info.name);
         guide_task::start(state, &camera);
         Ok(camera.id)
     }
@@ -174,6 +176,13 @@ impl CaptureService {
         state.reset_cancel();
         state.reset_session();
         state.resume.clear_stack();
+        // What the view still shows is the previous session's picture. 2026-10-12: a
+        // Start whose camera never delivered served it as live for three minutes.
+        state.main_stream.clear();
+        // The observer's own Start is a fresh attempt, not one more frameless reopen.
+        if let Some(camera) = state.camera_in_role(CameraRole::Main) {
+            camera_health::forget_frameless_opens(state, CameraRole::Main, &camera.info.name);
+        }
 
         // *After* the state moves off `Idle`, which is what closes the window: from here
         // `update_settings` refuses to enter the mode, so nothing can turn it back on

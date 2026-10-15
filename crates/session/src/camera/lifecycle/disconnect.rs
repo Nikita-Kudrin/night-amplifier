@@ -373,8 +373,9 @@ pub async fn finalize_disconnect(
     // path `disconnect` already stopped it; on a device fault this is where it stops.
     if role == CameraRole::Guide {
         crate::capture::guide_task::stop(state).await;
-        state.guide_stream.clear();
     }
+    // A camera that has left has no picture to show; a suspended one keeps its own above.
+    state.stream(role).clear();
 
     // Close and drop the handle.
     if let Some(mut cam) = state
