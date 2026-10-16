@@ -70,8 +70,8 @@ impl CpuFacts {
             "System report: CPU"
         );
 
-        let missing = self.feature_names(|f| f.compiled && f.detected == Some(false));
-        if missing != NONE {
+        let missing = missing_features(&self.features).join(",");
+        if !missing.is_empty() {
             warn!(
                 %missing,
                 "This build uses CPU features the host lacks - SIMD code will crash; use the generic build"
@@ -102,6 +102,20 @@ impl CpuFacts {
 }
 
 const NONE: &str = "none";
+
+/// Features this build was compiled for that the host CPU lacks: the ones that crash it.
+pub(super) fn missing_features(features: &[Feature]) -> Vec<&'static str> {
+    features
+        .iter()
+        .filter(|feature| feature.compiled && feature.detected == Some(false))
+        .map(|feature| feature.name)
+        .collect()
+}
+
+/// [`missing_features`] for the running host.
+pub fn host_missing_features() -> Vec<&'static str> {
+    missing_features(&simd_features())
+}
 
 /// `4x Cortex-A55, 4x Cortex-A76` — a hybrid SoC's clusters, in the order the OS lists them.
 pub(super) fn summarize_brands(brands: &[&str]) -> String {
@@ -147,19 +161,122 @@ pub(super) fn emulation_suspected(binary_arch: &str, cpu_brands: &str) -> bool {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(super) fn simd_features() -> Vec<Feature> {
-    macro_rules! probe {
-        ($($name:tt),* $(,)?) => {
-            vec![$(Feature {
-                name: $name,
-                compiled: cfg!(target_feature = $name),
-                detected: Some(std::arch::is_x86_feature_detected!($name)),
-            }),*]
-        };
-    }
-    probe![
+    let isa = x86::HostIsa::probe();
+    x86::REPORTED
+        .iter()
+        .map(|&name| Feature {
+            name,
+            compiled: x86::compiled(name),
+            detected: Some(isa.has(name)),
+        })
+        .collect()
+}
+
+/// Reads CPUID directly. `is_x86_feature_detected!` answers `true` at compile time for a
+/// feature the binary was built with, without asking the CPU, so it cannot see the one
+/// mismatch this report exists to catch.
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod x86 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::{__cpuid_count, CpuidResult, _xgetbv};
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::{__cpuid_count, CpuidResult, _xgetbv};
+
+    pub(super) const REPORTED: [&str; 21] = [
         "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "fma", "bmi1", "bmi2", "lzcnt", "f16c",
-        "movbe", "avx512f", "avx512bw", "avx512vl",
-    ]
+        "movbe", "adx", "aes", "pclmulqdq", "sha", "gfni", "vaes", "vpclmulqdq", "avxvnni",
+        "avx512f", "avx512bw",
+    ];
+
+    pub(super) fn compiled(name: &str) -> bool {
+        macro_rules! compiled {
+            ($($feature:tt),*) => {
+                match name { $($feature => cfg!(target_feature = $feature),)* _ => false }
+            };
+        }
+        compiled!(
+            "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "fma", "bmi1", "bmi2", "lzcnt", "f16c",
+            "movbe", "adx", "aes", "pclmulqdq", "sha", "gfni", "vaes", "vpclmulqdq", "avxvnni",
+            "avx512f", "avx512bw"
+        )
+    }
+
+    pub(super) struct HostIsa {
+        leaf1_ecx: u32,
+        leaf7_ebx: u32,
+        leaf7_ecx: u32,
+        leaf7_1_eax: u32,
+        ext1_ecx: u32,
+        /// XCR0: which register state the OS saves. A set CPUID bit with a clear one here
+        /// still faults.
+        xcr0: u64,
+    }
+
+    impl HostIsa {
+        pub(super) fn probe() -> Self {
+            let max_leaf = __cpuid_count(0, 0).eax;
+            let max_ext = __cpuid_count(0x8000_0000, 0).eax;
+            let leaf = |leaf: u32, sub: u32, max: u32| {
+                if leaf <= max {
+                    __cpuid_count(leaf, sub)
+                } else {
+                    CpuidResult { eax: 0, ebx: 0, ecx: 0, edx: 0 }
+                }
+            };
+            let leaf1 = leaf(1, 0, max_leaf);
+            let leaf7 = leaf(7, 0, max_leaf);
+            Self {
+                leaf1_ecx: leaf1.ecx,
+                leaf7_ebx: leaf7.ebx,
+                leaf7_ecx: leaf7.ecx,
+                leaf7_1_eax: leaf(7, 1, if leaf7.eax >= 1 { max_leaf } else { 0 }).eax,
+                ext1_ecx: leaf(0x8000_0001, 0, max_ext).ecx,
+                xcr0: if leaf1.ecx & (1 << 27) != 0 { read_xcr0() } else { 0 },
+            }
+        }
+
+        pub(super) fn has(&self, name: &str) -> bool {
+            const SSE_AVX_STATE: u64 = 0b110;
+            const AVX512_STATE: u64 = 0b1110_0110;
+            let bit = |word: u32, n: u32| word & (1 << n) != 0;
+            let avx = self.xcr0 & SSE_AVX_STATE == SSE_AVX_STATE && bit(self.leaf1_ecx, 28);
+            let avx512 = avx && self.xcr0 & AVX512_STATE == AVX512_STATE;
+            match name {
+                "sse4.1" => bit(self.leaf1_ecx, 19),
+                "sse4.2" => bit(self.leaf1_ecx, 20),
+                "popcnt" => bit(self.leaf1_ecx, 23),
+                "pclmulqdq" => bit(self.leaf1_ecx, 1),
+                "aes" => bit(self.leaf1_ecx, 25),
+                "movbe" => bit(self.leaf1_ecx, 22),
+                "lzcnt" => bit(self.ext1_ecx, 5),
+                "avx" => avx,
+                "fma" => avx && bit(self.leaf1_ecx, 12),
+                "f16c" => avx && bit(self.leaf1_ecx, 29),
+                "avx2" => avx && bit(self.leaf7_ebx, 5),
+                "bmi1" => bit(self.leaf7_ebx, 3),
+                "bmi2" => bit(self.leaf7_ebx, 8),
+                "adx" => bit(self.leaf7_ebx, 19),
+                "sha" => bit(self.leaf7_ebx, 29),
+                "gfni" => bit(self.leaf7_ecx, 8),
+                "vaes" => avx && bit(self.leaf7_ecx, 9),
+                "vpclmulqdq" => avx && bit(self.leaf7_ecx, 10),
+                "avxvnni" => avx && bit(self.leaf7_1_eax, 4),
+                "avx512f" => avx512 && bit(self.leaf7_ebx, 16),
+                "avx512bw" => avx512 && bit(self.leaf7_ebx, 30),
+                _ => false,
+            }
+        }
+    }
+
+    #[target_feature(enable = "xsave")]
+    unsafe fn xgetbv0() -> u64 {
+        _xgetbv(0)
+    }
+
+    fn read_xcr0() -> u64 {
+        // SAFETY: only called when CPUID reports OSXSAVE, which is what makes XGETBV valid.
+        unsafe { xgetbv0() }
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -239,6 +356,25 @@ mod tests {
                 feature.name
             );
         }
+    }
+
+    /// std's detector is authoritative for a feature the binary was not built with.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[test]
+    fn cpuid_probe_agrees_with_std_for_features_not_compiled_in() {
+        let isa = x86::HostIsa::probe();
+        macro_rules! agree {
+            ($($name:tt),*) => {$(
+                if !x86::compiled($name) {
+                    assert_eq!(isa.has($name), std::arch::is_x86_feature_detected!($name), $name);
+                }
+            )*};
+        }
+        agree!(
+            "sse4.1", "sse4.2", "popcnt", "avx", "avx2", "fma", "bmi1", "bmi2", "lzcnt", "f16c",
+            "movbe", "adx", "aes", "pclmulqdq", "sha", "gfni", "vaes", "vpclmulqdq", "avxvnni",
+            "avx512f", "avx512bw"
+        );
     }
 
     #[test]
