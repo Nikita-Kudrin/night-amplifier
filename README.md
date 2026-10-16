@@ -119,8 +119,9 @@ cd night-amplifier-*/
 
 ### Building Locally
 
-Local builds are optimized for your specific CPU architecture (`-C target-cpu=native`), which is critical for maximum
-performance on devices like Raspberry Pi 5 or Orange Pi 5.
+Local Arm builds are optimized for the CPU they are built on (`-C target-cpu=native`), which is critical for maximum
+performance on devices like Raspberry Pi 5 or Orange Pi 5. x86-64 builds target `x86-64-v3` (any CPU with AVX2) so the
+archive runs on other computers; pass `--target-cpu native` to tune it to this machine only.
 
 ```bash
 ./scripts/build-dist.sh
@@ -140,7 +141,7 @@ The archive is created in `dist/`. Extract and run `./night-amplifier`.
 | Flag                 | Description                          |
 |----------------------|--------------------------------------|
 | `--target <triple>`  | Rust target triple (default: host)   |
-| `--target-cpu <cpu>` | CPU optimization (default: `native`) |
+| `--target-cpu <cpu>` | CPU optimization (default: `x86-64-v3` on x86-64, `native` on Arm) |
 | `--cross`            | Use `cross` for cross-compilation    |
 | `--no-frontend`      | Skip web frontend build              |
 | `--appimage`         | Also create an AppImage              |

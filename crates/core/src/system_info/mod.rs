@@ -8,6 +8,7 @@
 //! what only the application knows arrives in [`AppContext`].
 
 mod cpu;
+pub mod cpu_guard;
 #[cfg(target_os = "linux")]
 mod linux;
 

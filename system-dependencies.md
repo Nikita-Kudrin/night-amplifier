@@ -13,6 +13,14 @@ put them, and several must match the driver installed with them.
 | AI denoising on an NPU *(Pro)*       | The NPU's runtime and driver ([NPU](#npu))                      | Intel NPU: OpenVINO + driver    | Nothing        |
 | AI denoising on the CPU *(Pro)*      | Nothing                                                        | Nothing                         | Nothing        |
 
+## It will not start: "Illegal instruction" or "cannot start: compiled for a newer CPU"
+
+This is never a missing package: the binary needs only the C library every Linux has. It means the build uses CPU
+instructions this computer lacks, typically a local build made with `--target-cpu native` on a newer machine (a
+laptop's archive copied to a mini PC). Current builds say so and list the missing features; older ones die silently
+with `Illegal instruction`. Use the x64 release build (`x86-64-v3`, any CPU with AVX2), or build with
+`./scripts/build-dist.sh --target-cpu x86-64-v3`, which is also the default on x86-64.
+
 ## Camera SDKs
 
 Camera SDKs are loaded at runtime and are **optional**: without one installed the binary still runs, with that brand

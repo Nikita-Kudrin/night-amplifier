@@ -2,6 +2,8 @@
 //!
 //! Runs a web server for remote camera control and image streaming.
 
+night_amplifier::refuse_unsupported_cpu_before_main!();
+
 #[tokio::main]
 async fn main() {
     let version = option_env!("NIGHT_AMPLIFIER_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));

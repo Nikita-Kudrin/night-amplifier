@@ -221,6 +221,7 @@ posting a log publicly.
 Two of its warnings are worth acting on straight away:
 
 - **uses CPU features the host lacks** — you have the build for a newer CPU; download the
-  generic one.
+  generic one. A build that cannot run at all says this and exits before the log starts
+  (see [System dependencies](system-dependencies)).
 - **runs under emulation** — an Intel (x64) build on an Arm computer such as an Apple
   Silicon Mac; the native Arm build is several times faster.
