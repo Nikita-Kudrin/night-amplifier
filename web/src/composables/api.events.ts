@@ -219,6 +219,20 @@ export interface DiskWriterWarningClearedEvent {
 }
 
 /**
+ * Whether `role`'s last capture is on the storage device, not just in the OS's cache:
+ * what the observer waits for before powering off. `files` were synced; `failed`
+ * writes or syncs did not land, the first one's reason in `error`.
+ */
+export interface StorageSyncEvent {
+    type: 'storage_sync'
+    role: CameraRole
+    state: StorageSyncState
+    files: number
+    failed: number
+    error: string | null
+}
+
+/**
  * Frame was dropped because the pipeline couldn't keep up.
  *
  * `delivered_count` travels with it so the client can show a *rate*. The count
@@ -520,6 +534,7 @@ export type ServerEvent =
     | ErrorEvent
     | DiskWriterWarningEvent
     | DiskWriterWarningClearedEvent
+    | StorageSyncEvent
     | FrameDroppedEvent
     | CaptureCountsEvent
     | WarningEvent
@@ -600,6 +615,9 @@ export interface PushToTarget {
     dec_degrees: number
 }
 
+export const STORAGE_SYNC_STATE_VALUES = ['idle', 'syncing', 'synced', 'failed'] as const
+export type StorageSyncState = (typeof STORAGE_SYNC_STATE_VALUES)[number]
+
 /** Where the main stream's frames were cut from the stack, in the stack's pixels. */
 export interface StreamCrop {
     x: number
@@ -648,6 +666,7 @@ export const SERVER_EVENTS = {
     error: {topic: null, kind: 'notice'},
     disk_writer_warning: {topic: 'disk_writer', kind: 'value'},
     disk_writer_warning_cleared: {topic: 'disk_writer', kind: 'value'},
+    storage_sync: {topic: 'storage_sync', kind: 'value'},
     frame_dropped: {topic: 'capture_counts', kind: 'value'},
     capture_counts: {topic: 'capture_counts', kind: 'value'},
     warning: {topic: null, kind: 'notice'},
@@ -690,6 +709,7 @@ export const TOPICS = {
     viewed_camera: 'value',
     stack_crop: 'value',
     disk_writer: 'value',
+    storage_sync: 'value',
     push_to_target: 'value',
     push_to_direction: 'value',
     push_to_solve: 'value',

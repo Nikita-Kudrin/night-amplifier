@@ -33,6 +33,7 @@ export const SERVER_EVENT_EXAMPLES: {readonly [K in ServerEventType]: EventOf<K>
     error: {"type":"error","message":"Camera lost"},
     disk_writer_warning: {"type":"disk_writer_warning","queue_depth":40},
     disk_writer_warning_cleared: {"type":"disk_writer_warning_cleared"},
+    storage_sync: {"type":"storage_sync","role":"main","state":"synced","files":166,"failed":0,"error":null},
     frame_dropped: {"type":"frame_dropped","dropped_count":3,"delivered_count":120},
     capture_counts: {"type":"capture_counts","frame_count":43,"stacked_count":40,"rejected_count":3,"dropped_count":3,"delivered_count":120,"last_rejection_reason":null},
     warning: {"type":"warning","message":"Disk nearly full"},

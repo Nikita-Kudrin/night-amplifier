@@ -20,6 +20,7 @@ impl AppState {
             Topic::ViewedCamera => vec![self.viewed_camera.event()],
             Topic::StackCrop => vec![self.stream_crop.event()],
             Topic::DiskWriter => vec![self.disk_warning.event()],
+            Topic::StorageSync => self.storage_sync.events(),
             Topic::AstapInstall => vec![self.installs.event(super::Installer::Astap)],
             Topic::CatalogInstall => vec![self.installs.event(super::Installer::Catalog)],
             Topic::PushToTarget => vec![self.push_to_announcer.target_event()],

@@ -19,6 +19,7 @@ pub mod cfa;
 pub mod debayer;
 pub mod detection;
 pub mod disk_writer;
+pub mod durable;
 pub mod error;
 pub mod ffi_safety;
 pub mod fits;
@@ -102,8 +103,8 @@ pub use fits::{write_fits, write_fits_u16, FitsMetadata};
 
 // Disk writer support
 pub use disk_writer::{
-    DiskWriter, DiskWriterConfig, DiskWriterError, DiskWriterHandle, FrameType, WriteRequest,
-    QUEUE_WARNING_THRESHOLD,
+    DiskWriter, DiskWriterConfig, DiskWriterError, DiskWriterHandle, FrameType, SyncGroup,
+    SyncReport, WriteRequest, QUEUE_WARNING_THRESHOLD,
 };
 
 // FFI safety utilities

@@ -18,7 +18,9 @@ pub use sync::{SyncCause, Topic, TopicKind};
 use night_amplifier_core::push_to::{InstallStage, PushToDirectionResponse};
 use serde::Serialize;
 
-use super::state::{CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus};
+use super::state::{
+    CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus, StorageSyncState, StorageSyncStatus,
+};
 
 /// Where the main stream's frames were cut from the stack, in the stack's pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -186,6 +188,17 @@ pub enum ServerEvent {
 
     /// Disk writer queue warning cleared
     DiskWriterWarningCleared,
+
+    /// Whether `role`'s last capture is on the storage device, not just in the OS's cache:
+    /// what the observer waits for before powering off. `files` were synced; `failed`
+    /// writes or syncs did not land, the first one's reason in `error`.
+    StorageSync {
+        role: CameraRole,
+        state: StorageSyncState,
+        files: usize,
+        failed: usize,
+        error: Option<String>,
+    },
 
     /// Frame was dropped because the pipeline couldn't keep up.
     ///
@@ -559,6 +572,16 @@ impl ServerEvent {
 
     pub fn disk_writer_warning(queue_depth: usize) -> Self {
         ServerEvent::DiskWriterWarning { queue_depth }
+    }
+
+    pub fn storage_sync(role: CameraRole, status: &StorageSyncStatus) -> Self {
+        ServerEvent::StorageSync {
+            role,
+            state: status.state,
+            files: status.files,
+            failed: status.failed,
+            error: status.error.clone(),
+        }
     }
 
     pub fn warning(message: impl Into<String>) -> Self {

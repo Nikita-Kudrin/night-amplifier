@@ -4,12 +4,14 @@
 //! and monitoring capture sessions.
 
 use std::sync::Arc;
-use tracing::info;
+use std::time::Duration;
+use tracing::{info, warn};
 
 use crate::camera::health as camera_health;
 use crate::capture::{guide_task, run_capture_loop};
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, CameraRole, CaptureState, SessionResumePlan};
+use night_amplifier_core::disk_writer::SyncGroup;
 
 /// Service for managing capture operations
 pub struct CaptureService;
@@ -38,6 +40,43 @@ impl CaptureService {
         match role {
             CameraRole::Main => Self::stop_capture(state).await,
             CameraRole::Guide => Self::stop_guide(state).await,
+        }
+    }
+
+    /// Before the process exits: stop both cameras' captures and wait — up to `budget` — for
+    /// the final stack and every saved file to reach the device, and for the settings to be
+    /// written. Without it, `systemctl stop` or a shutdown killed a running capture with no
+    /// stack saved and nothing synced. The sub in flight is cut short, as a Disconnect does.
+    pub async fn shut_down(state: &Arc<AppState>, budget: Duration) {
+        let deadline = tokio::time::Instant::now() + budget;
+        if Self::stop_capture(state).await {
+            state.cancel_active_exposure(CameraRole::Main).await;
+        }
+        Self::stop_guide(state).await;
+        while !matches!(state.capture_state(), CaptureState::Idle | CaptureState::Error) {
+            if tokio::time::Instant::now() >= deadline {
+                warn!("Exiting before the capture finished stopping; its stack may not be saved");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Both groups once more, whatever the cameras' own syncs got to: the guide loop's
+        // trailing sync runs on its thread after the hand-back `stop_guide` waited for, and
+        // jobs are synced in turn, so this answer comes after it.
+        let settled = {
+            let state = Arc::clone(state);
+            tokio::task::spawn_blocking(move || {
+                for group in [SyncGroup::Shared, SyncGroup::Owned] {
+                    if let Err(e) = state.disk_writer.sync(group) {
+                        warn!(?group, error = %e, "Could not sync the captures before exiting");
+                    }
+                }
+                state.flush_settings();
+            })
+        };
+        if tokio::time::timeout_at(deadline, settled).await.is_err() {
+            warn!("Exiting before every file was synced to disk");
         }
     }
 

@@ -5,14 +5,16 @@
 //! queue write requests and monitors queue depth to warn about slow disk
 //! performance.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::time::Duration;
 use tracing::error;
 
 mod config;
 mod error;
 mod failures;
 mod handle;
+mod sync;
 mod utils;
 mod worker;
 
@@ -23,10 +25,19 @@ pub use config::{
 pub use error::DiskWriterError;
 pub use failures::FailureSink;
 pub use handle::{DiskWriterHandle, OpenSession};
+pub use sync::{SyncGroup, SyncReport};
 pub use worker::DiskWriter;
 
 #[cfg(test)]
 pub(crate) use utils::write_rgb8_png;
+
+/// How long a wait on the writer lasts while it finishes no write and no sync step. Counted
+/// from the last one, not from the start: a slow card that is draining is waited out, a
+/// pulled drive or a hung card is not.
+#[cfg(not(test))]
+pub const STALL_PATIENCE: Duration = Duration::from_secs(60);
+#[cfg(test)]
+pub const STALL_PATIENCE: Duration = Duration::from_secs(2);
 
 use crate::telemetry::metrics as telemetry_metrics;
 
@@ -38,6 +49,7 @@ impl DiskWriter {
         let (sender, receiver) = mpsc::sync_channel(config.max_queue_size);
         let queue_depth = Arc::new(AtomicUsize::new(0));
         let queue_warning = Arc::new(AtomicBool::new(false));
+        let activity = Arc::new(AtomicU64::new(0));
         let enabled = Arc::new(AtomicBool::new(config.enabled));
 
         // Create directories
@@ -51,12 +63,18 @@ impl DiskWriter {
             error!(error = %e, path = ?stacked_dir, "Failed to create stacked captures directory");
         }
 
-        let writer = Self::new_internal(receiver, Arc::clone(&queue_depth), stacked_dir.clone());
+        let writer = Self::new_internal(
+            receiver,
+            Arc::clone(&queue_depth),
+            Arc::clone(&activity),
+            stacked_dir.clone(),
+        );
 
         let handle = DiskWriterHandle {
             sender,
             queue_depth,
             queue_warning,
+            activity,
             session: Arc::new(RwLock::new(None)),
             enabled,
             stacked_dir,
@@ -356,6 +374,7 @@ mod tests {
         let doomed = OpenSession {
             dir: temp_dir.join("blocker").join("doomed-stacking"),
             session_type: WritingSessionType::IndividualFrames,
+            group: SyncGroup::Owned,
         };
         let queue = |session: Option<OpenSession>, n| {
             handle
@@ -803,6 +822,7 @@ mod tests {
     fn test_disk_writer_error_display() {
         let err = DiskWriterError::QueueFull;
         assert_eq!(err.to_string(), "Disk writer queue is full");
+        assert_eq!(DiskWriterError::Unresponsive.to_string(), "Storage stopped responding");
     }
 
     /// Regression guard: `stacked_dir` is only created once, at `DiskWriter::new`.

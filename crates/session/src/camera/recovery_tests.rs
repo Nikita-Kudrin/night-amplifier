@@ -1362,6 +1362,153 @@ async fn a_capture_that_saves_no_raw_frame_leaves_raw_empty() {
     assert!(empty.is_empty(), "raw/ holds empty folders: {empty:?}");
 }
 
+/// 2026-10-16: the Orange Pi lost power seconds after a Stop and kept a 0-byte stack and
+/// three 0-byte subs, all written "successfully" into the OS's cache. A Stop now says the
+/// files are on the device — counting every one the session saved — before the capture
+/// reads Idle, which is when an observer reaches for the power switch.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_says_the_saved_files_are_on_disk_before_the_capture_reads_idle() {
+    use crate::state::{RawFrameSaving, StorageSyncState};
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig_with_disk_writer(&catalog);
+    state.settings.update(|s| {
+        s.raw_frame_saving = RawFrameSaving { live_view: true, wanderer: true, stacking: true, guide: false }
+    });
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    let mut events = state.subscribe_events();
+
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(eventually(|| state.stats.delivered() >= 3, Duration::from_secs(5)).await);
+    let dir = state.disk_writer.session_dir().unwrap();
+    CaptureService::stop_capture(&state).await;
+    assert!(eventually(|| matches!(state.capture_state(), CaptureState::Idle), Duration::from_secs(10)).await);
+    let seen = drain(&mut events);
+    let synced = state.storage_sync.status(CameraRole::Main);
+
+    // The next capture's files are not covered by the last one's verdict.
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(eventually(|| matches!(state.capture_state(), CaptureState::Capturing), Duration::from_secs(5)).await);
+    let while_capturing = state.storage_sync.status(CameraRole::Main).state;
+    CaptureService::stop_capture(&state).await;
+    assert!(eventually(|| matches!(state.capture_state(), CaptureState::Idle), Duration::from_secs(10)).await);
+    teardown(&state).await;
+    let saved: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let empty: Vec<_> = saved.iter().filter(|path| std::fs::metadata(path).unwrap().len() == 0).collect();
+    let _ = std::fs::remove_dir_all(state.disk_writer.raw_dir());
+
+    let position = |wanted: &dyn Fn(&ServerEvent) -> bool| seen.iter().position(wanted);
+    let syncing = position(&|e| matches!(e, ServerEvent::StorageSync { role: CameraRole::Main, state: StorageSyncState::Syncing, .. }));
+    let on_disk = position(&|e| matches!(e, ServerEvent::StorageSync { role: CameraRole::Main, state: StorageSyncState::Synced, .. }));
+    let idle = position(&|e| matches!(e, ServerEvent::StateChanged { state: crate::events::CaptureStateDto::Idle }));
+    assert!(syncing.is_some() && syncing < on_disk, "no sync announced before its outcome: {seen:?}");
+    assert!(on_disk.is_some() && on_disk < idle, "Idle came before the files were on disk: {seen:?}");
+    assert_eq!(synced.state, StorageSyncState::Synced);
+    assert!(synced.files >= 3, "only {} files synced", synced.files);
+    assert_eq!(synced.files, saved.len(), "the sync missed some of {saved:?}");
+    assert!(empty.is_empty(), "empty files: {empty:?}");
+    assert_eq!(while_capturing, StorageSyncState::Idle, "a running capture was still called safe");
+}
+
+/// The first verdict `role`'s sync announces — `(state, files)` — waiting up to 10 s. Read
+/// from the events, not the status: after a fault the reopened camera resets it at once.
+async fn storage_verdict(
+    events: &mut tokio::sync::broadcast::Receiver<ServerEvent>,
+    role: CameraRole,
+) -> Option<(crate::state::StorageSyncState, usize)> {
+    use crate::state::StorageSyncState;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        let verdict = drain(events).into_iter().find_map(|event| match event {
+            ServerEvent::StorageSync { role: r, state, files, .. }
+                if r == role && matches!(state, StorageSyncState::Synced | StorageSyncState::Failed) =>
+            {
+                Some((state, files))
+            }
+            _ => None,
+        });
+        if verdict.is_some() {
+            return verdict;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    None
+}
+
+fn files_and_empties(dir: &std::path::Path) -> (usize, Vec<std::path::PathBuf>) {
+    let saved: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+    let empty = saved.iter().filter(|path| std::fs::metadata(path).unwrap().len() == 0).cloned().collect();
+    (saved.len(), empty)
+}
+
+/// Disconnect stops a running capture before closing its camera; the frames that capture
+/// saved are synced on the way out, as a Stop's are — the cable is the next thing pulled.
+#[tokio::test(flavor = "multi_thread")]
+async fn disconnecting_the_imaging_camera_mid_capture_syncs_what_it_saved() {
+    use crate::state::{RawFrameSaving, StorageSyncState};
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig_with_disk_writer(&catalog);
+    state.settings.update(|s| {
+        s.raw_frame_saving = RawFrameSaving { live_view: true, wanderer: true, stacking: true, guide: false }
+    });
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    let mut events = state.subscribe_events();
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(eventually(|| state.stats.delivered() >= 3, Duration::from_secs(5)).await);
+    let dir = state.disk_writer.session_dir().unwrap();
+
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::Skip).await.unwrap();
+    let verdict = storage_verdict(&mut events, CameraRole::Main).await;
+    let (saved, empty) = files_and_empties(&dir);
+    let _ = std::fs::remove_dir_all(state.disk_writer.raw_dir());
+
+    assert!(state.camera_in_role(CameraRole::Main).is_none(), "the camera stayed connected");
+    assert!(saved >= 3, "only {saved} frames were saved");
+    assert_eq!(verdict, Some((StorageSyncState::Synced, saved)), "the disconnect did not sync every saved frame");
+    assert!(empty.is_empty(), "empty files: {empty:?}");
+}
+
+/// The guide loop syncs its own frames whichever way it ends: a disconnect, and a device
+/// loss that recovery reopens — the reopened loop then writes on into the same folder.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_guide_camera_syncs_its_frames_on_a_disconnect_and_on_a_device_loss() {
+    use crate::state::StorageSyncState;
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let state = rig_with_disk_writer(&catalog);
+    state.settings.update(|s| s.raw_frame_saving.guide = true);
+    let mut events = state.subscribe_events();
+    connect(&state, &NEPTUNE, CameraRole::Guide).await;
+    let guide_dir = || state.slot(CameraRole::Guide).raw_session().map(|r| r.dir);
+    let saved_by_guide = || guide_dir().map_or(0, |dir| files_and_empties(&dir).0);
+    assert!(eventually(|| saved_by_guide() >= 2, Duration::from_secs(5)).await, "the guide saved no frames");
+    let dir = guide_dir().unwrap();
+
+    let before_loss = saved_by_guide();
+    drain(&mut events);
+    catalog.camera.lost.store(1, Ordering::SeqCst);
+    let after_loss = storage_verdict(&mut events, CameraRole::Guide).await;
+    assert!(wait_recovered(&state, CameraRole::Guide).await, "the guide camera never came back");
+    assert!(eventually(|| saved_by_guide() > before_loss, Duration::from_secs(5)).await);
+
+    drain(&mut events);
+    lifecycle::disconnect(&state, &id_of(&NEPTUNE), lifecycle::WarmupPolicy::Skip).await.unwrap();
+    let after_disconnect = storage_verdict(&mut events, CameraRole::Guide).await;
+    let (saved, empty) = files_and_empties(&dir);
+    teardown(&state).await;
+    let _ = std::fs::remove_dir_all(state.disk_writer.raw_dir());
+
+    let (state_after_loss, synced_after_loss) = after_loss.expect("a device loss synced nothing");
+    assert_eq!(state_after_loss, StorageSyncState::Synced);
+    assert!(synced_after_loss >= before_loss, "{synced_after_loss} synced of {before_loss} saved");
+    // The reopened loop's frames only: the ones before the loss were synced already.
+    let (state_after_disconnect, synced_after_disconnect) = after_disconnect.expect("a disconnect synced nothing");
+    assert_eq!(state_after_disconnect, StorageSyncState::Synced);
+    assert_eq!(synced_after_loss + synced_after_disconnect, saved, "the two syncs missed some of {saved} frames");
+    assert!(empty.is_empty(), "empty files: {empty:?}");
+}
+
 /// The imaging camera is back but its paused capture has not resumed yet. Disconnect
 /// used to refuse only `Capturing`/`Starting`, so it went ahead and left the pause behind
 /// — for the resume to restart the capture on the camera being disconnected.
@@ -2080,4 +2227,66 @@ async fn a_give_up_releases_the_isolated_sibling() {
     assert!(gave_up);
     assert!(!held, "the give-up left the guide camera held");
     assert!(guide_back, "the isolated guide camera must come back after the give-up");
+}
+
+/// A Stop hands the camera back before the sync: the sync needs only the disk, while a
+/// Disconnect's warm-up waits on the handle, and every second a slow card took came out of
+/// its budget. The capture still reads `Stopping` until the files are on the device.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_hands_the_camera_back_before_its_files_are_synced() {
+    use crate::state::StorageSyncState;
+
+    let catalog = FakeCatalog::with(&[NEPTUNE]);
+    let (mut state, disk_writer) = AppState::new_for_testing();
+    state.device_catalog = Arc::clone(&catalog) as Arc<dyn DeviceCatalog>;
+    let state = Arc::new(state);
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    CaptureService::start_capture(&state, None).await.unwrap();
+    assert!(eventually(|| state.stats.delivered() >= 2, Duration::from_secs(5)).await, "no frames arrived");
+
+    // The writer is not running yet, so the capture's sync waits for it.
+    CaptureService::stop_capture(&state).await;
+    let handed_back = eventually(|| state.slot(CameraRole::Main).holds_handle(), Duration::from_secs(5)).await;
+    let while_syncing = (state.capture_state(), state.storage_sync.status(CameraRole::Main).state);
+    std::thread::spawn(move || disk_writer.run());
+    let idle = eventually(|| state.capture_state() == CaptureState::Idle, Duration::from_secs(10)).await;
+    teardown(&state).await;
+
+    assert!(handed_back, "the camera was held for the sync");
+    assert_eq!(while_syncing, (CaptureState::Stopping, StorageSyncState::Syncing));
+    assert!(idle, "the capture never finished stopping");
+}
+
+/// A `systemctl stop` mid-capture: both cameras stop, the imaging camera's files are synced
+/// before the process may exit, and the guide loop is not left exposing.
+#[tokio::test(flavor = "multi_thread")]
+async fn shutting_down_stops_both_cameras_and_syncs_what_they_saved() {
+    use crate::state::{RawFrameSaving, StorageSyncState};
+
+    let catalog = FakeCatalog::with(&[NEPTUNE, ARES]);
+    let state = rig_with_disk_writer(&catalog);
+    state.settings.update(|s| {
+        s.stacking = true;
+        s.raw_frame_saving = RawFrameSaving { stacking: true, ..Default::default() };
+    });
+    connect(&state, &NEPTUNE, CameraRole::Main).await;
+    connect(&state, &ARES, CameraRole::Guide).await;
+    CaptureService::start_capture(&state, None).await.unwrap();
+    let saving = eventually(
+        || state.disk_writer.session_dir().is_some_and(|dir| saved_frame_numbers(&dir).len() >= 2),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert!(saving, "no raw frames were saved");
+    assert!(state.guide_loop_running(), "the guide camera starts its loop on connect");
+
+    CaptureService::shut_down(&state, Duration::from_secs(10)).await;
+    let main = state.storage_sync.status(CameraRole::Main);
+    let (capture, guiding) = (state.capture_state(), state.guide_loop_running());
+    teardown(&state).await;
+
+    assert_eq!(capture, CaptureState::Idle);
+    assert!(!guiding, "the guide loop was left running");
+    assert_eq!(main.state, StorageSyncState::Synced, "{main:?}");
+    assert!(main.files >= 2, "{main:?}");
 }

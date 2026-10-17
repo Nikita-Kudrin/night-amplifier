@@ -1,6 +1,6 @@
 use chrono::{Local, Utc};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
 use tracing::{debug, error, info, instrument, warn};
@@ -8,6 +8,7 @@ use tracing::{debug, error, info, instrument, warn};
 use super::config::{DiskWriterMessage, FrameType, WriteRequest, WritingSessionType};
 use super::error::DiskWriterError;
 use super::failures::{FailureSink, WriteFailures};
+use super::sync::{spawn_syncer, PendingSync, SyncGroup, SyncJob};
 use super::utils::write_rgb8_png;
 use crate::fits::{write_fits, write_fits_from_raw};
 use crate::ser::{SerColorId, SerHeader, SerWriter};
@@ -66,11 +67,15 @@ pub struct DiskWriter {
     pub(crate) receiver: mpsc::Receiver<DiskWriterMessage>,
     /// Shared queue depth counter
     pub(crate) queue_depth: Arc<AtomicUsize>,
+    /// Bumped as each message is handled; see `DiskWriterHandle::activity`.
+    pub(crate) activity: Arc<AtomicU64>,
     /// Stacked output directory
     pub(crate) stacked_dir: PathBuf,
     /// Active SER writer for planetary sessions, and the session directory it belongs to
     pub(crate) ser_writer: Option<ActiveSer>,
     pub(crate) failures: WriteFailures,
+    /// What each group wrote since its last [`DiskWriterMessage::Sync`].
+    pub(crate) pending: [PendingSync; SyncGroup::COUNT],
 }
 
 /// The open SER container, tied to the session directory it was created for.
@@ -81,6 +86,9 @@ pub struct DiskWriter {
 /// the frames, so a disk that has fallen behind can lose it.
 pub(crate) struct ActiveSer {
     pub(crate) dir: PathBuf,
+    pub(crate) group: SyncGroup,
+    /// Recorded for its group's sync when created, and again after every sync while open.
+    pub(crate) path: PathBuf,
     pub(crate) writer: SerWriter,
 }
 
@@ -89,14 +97,17 @@ impl DiskWriter {
     pub fn new_internal(
         receiver: mpsc::Receiver<DiskWriterMessage>,
         queue_depth: Arc<AtomicUsize>,
+        activity: Arc<AtomicU64>,
         stacked_dir: PathBuf,
     ) -> Self {
         Self {
             receiver,
             queue_depth,
+            activity,
             stacked_dir,
             ser_writer: None,
             failures: WriteFailures::default(),
+            pending: Default::default(),
         }
     }
 
@@ -108,22 +119,39 @@ impl DiskWriter {
     /// Run the disk writer task (blocking — intended for a dedicated OS thread)
     pub fn run(mut self) {
         info!("Disk writer task started");
+        let syncer = spawn_syncer(Arc::clone(&self.activity));
 
         while let Ok(message) = self.receiver.recv() {
             match message {
                 DiskWriterMessage::WriteFrame(request) => {
                     let result = self.process_request(&request);
+                    let group = request.session.as_ref().map_or(SyncGroup::Shared, |s| s.group);
 
                     let depth = self.queue_depth.fetch_sub(1, Ordering::SeqCst) - 1;
                     telemetry_metrics::record_disk_writer_queue_depth(depth as u64);
 
                     match result {
-                        Ok(()) => self.failures.succeeded(),
-                        Err(e) => self.failures.failed(&e, request.frame_number, Instant::now()),
+                        Ok(written) => {
+                            self.failures.succeeded();
+                            if let Some(path) = written {
+                                self.pending_mut(group).written(&path);
+                            }
+                        }
+                        Err(e) => {
+                            self.failures.failed(&e, request.frame_number, Instant::now());
+                            self.pending_mut(group).failed(&e);
+                        }
                     }
                 }
                 DiskWriterMessage::EndSession => self.finalize_ser(),
+                DiskWriterMessage::Sync(group, reply) => {
+                    let job = self.take_for_sync(group, reply);
+                    if let Err(mpsc::SendError(job)) = syncer.send(job) {
+                        job.run(&self.activity);
+                    }
+                }
             }
+            self.activity.fetch_add(1, Ordering::SeqCst);
         }
 
         // Cleanup if task stops unexpectedly
@@ -137,15 +165,17 @@ impl DiskWriter {
         frame_type = ?request.frame_type,
         frame_number = request.frame_number
     ))]
-    fn process_request(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    /// The file written, for its group's next sync; `None` for a frame appended to an open
+    /// container, which was recorded when it was created.
+    fn process_request(&mut self, request: &WriteRequest) -> Result<Option<PathBuf>, DiskWriterError> {
         let _timer = telemetry_metrics::time_stage(telemetry_metrics::FrameStage::Storage);
         match request.frame_type {
             FrameType::Raw(_) => match request.session.as_ref().map(|s| s.session_type) {
-                Some(WritingSessionType::VideoContainer) => self.process_ser_frame(request),
-                _ => self.process_fits_raw(request),
+                Some(WritingSessionType::VideoContainer) => self.process_ser_frame(request).map(|()| None),
+                _ => self.process_fits_raw(request).map(Some),
             },
-            FrameType::Stacked(_) => self.process_fits_stacked(request),
-            FrameType::StackedPng { .. } => self.process_png_stacked(request),
+            FrameType::Stacked(_) => self.process_fits_stacked(request).map(Some),
+            FrameType::StackedPng { .. } => self.process_png_stacked(request).map(Some),
         }
     }
 
@@ -161,7 +191,29 @@ impl DiskWriter {
         info!(dir = ?active.dir, "Finalizing SER file");
         if let Err(e) = active.writer.finalize() {
             error!(error = %e, "Failed to finalize SER file");
+            self.pending_mut(active.group).failed(format!("{}: {e}", active.path.display()));
         }
+    }
+
+    fn pending_mut(&mut self, group: SyncGroup) -> &mut PendingSync {
+        &mut self.pending[group.index()]
+    }
+
+    /// Hand over everything `group` wrote since the last sync. A container still open is
+    /// flushed out of its buffer first, so the sync covers its frames (its header's count is
+    /// written only when it is finalized), and stays recorded for the next sync, which must
+    /// cover what is appended to it and finalized after this one.
+    fn take_for_sync(&mut self, group: SyncGroup, reply: mpsc::Sender<super::SyncReport>) -> SyncJob {
+        let open = self.ser_writer.as_mut().filter(|active| active.group == group);
+        let open = open.map(|active| (active.path.clone(), active.writer.flush()));
+        if let Some((path, Err(e))) = &open {
+            self.pending_mut(group).failed(format!("{}: {e}", path.display()));
+        }
+        let pending = std::mem::take(self.pending_mut(group));
+        if let Some((path, _)) = open {
+            self.pending_mut(group).written(&path);
+        }
+        SyncJob { group, pending, reply }
     }
 
     fn process_ser_frame(&mut self, request: &WriteRequest) -> Result<(), DiskWriterError> {
@@ -234,73 +286,79 @@ impl DiskWriter {
                 .with_instrument(&request.metadata.camera.clone().unwrap_or_default());
 
             info!(path = ?path, ?color_id, bit_depth, "Creating new SER file for planetary session");
-            let writer = SerWriter::create(path, header).map_err(|e| {
+            let writer = SerWriter::create(&path, header).map_err(|e| {
                 DiskWriterError::WriteFailed(format!("Failed to create SER file: {}", e))
             })?;
+            let group = request.session.as_ref().map_or(SyncGroup::Shared, |s| s.group);
+            self.pending_mut(group).written(&path);
             self.ser_writer = Some(ActiveSer {
                 dir: session_dir.clone(),
+                group,
+                path,
                 writer,
             });
         }
 
-        if let Some(ActiveSer { writer, .. }) = &mut self.ser_writer {
-            let frame_width = match &request.frame_type {
-                FrameType::Raw(r) => r.width,
-                FrameType::Stacked(s) => s.width() as u32,
-                FrameType::StackedPng { width, .. } => *width,
-            };
-            let frame_height = match &request.frame_type {
-                FrameType::Raw(r) => r.height,
-                FrameType::Stacked(s) => s.height() as u32,
-                FrameType::StackedPng { height, .. } => *height,
-            };
+        let writer = match &mut self.ser_writer {
+            Some(active) => &mut active.writer,
+            None => return Err(DiskWriterError::WriteFailed("No open SER container".to_string())),
+        };
+        let frame_width = match &request.frame_type {
+            FrameType::Raw(r) => r.width,
+            FrameType::Stacked(s) => s.width() as u32,
+            FrameType::StackedPng { width, .. } => *width,
+        };
+        let frame_height = match &request.frame_type {
+            FrameType::Raw(r) => r.height,
+            FrameType::Stacked(s) => s.height() as u32,
+            FrameType::StackedPng { height, .. } => *height,
+        };
 
-            // Check dimensions for consistency
-            if frame_width != writer.header().width || frame_height != writer.header().height {
-                warn!(
-                    frame_dims = ?(frame_width, frame_height),
-                    ser_dims = ?(writer.header().width, writer.header().height),
-                    "Frame dimensions changed during SER session, rejecting frame"
-                );
-                return Err(DiskWriterError::WriteFailed(
-                    "Dimension mismatch for SER session".to_string(),
-                ));
-            }
-
-            let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
-
-            debug!(
-                frame_number = request.frame_number,
-                "Writing frame to SER container"
+        // Check dimensions for consistency
+        if frame_width != writer.header().width || frame_height != writer.header().height {
+            warn!(
+                frame_dims = ?(frame_width, frame_height),
+                ser_dims = ?(writer.header().width, writer.header().height),
+                "Frame dimensions changed during SER session, rejecting frame"
             );
+            return Err(DiskWriterError::WriteFailed(
+                "Dimension mismatch for SER session".to_string(),
+            ));
+        }
 
-            match &request.frame_type {
-                FrameType::Raw(r) => {
-                    writer
-                        .write_raw_bytes(r.data_slice(), Some(timestamp))
-                        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
-                }
-                FrameType::Stacked(s) => {
-                    writer
-                        .write_frame(s, Some(timestamp))
-                        .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
-                }
-                FrameType::StackedPng { .. } => {
-                    // Unreachable in practice: `process_request` only ever routes
-                    // `FrameType::Raw` into `process_ser_frame`, and a PNG export
-                    // carries pre-rendered RGB8 bytes anyway, not a `Frame` a SER
-                    // container could accept.
-                    return Err(DiskWriterError::WriteFailed(
-                        "Stretched PNG frames cannot be written to a SER container".to_string(),
-                    ));
-                }
+        let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
+
+        debug!(
+            frame_number = request.frame_number,
+            "Writing frame to SER container"
+        );
+
+        match &request.frame_type {
+            FrameType::Raw(r) => {
+                writer
+                    .write_raw_bytes(r.data_slice(), Some(timestamp))
+                    .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+            }
+            FrameType::Stacked(s) => {
+                writer
+                    .write_frame(s, Some(timestamp))
+                    .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
+            }
+            FrameType::StackedPng { .. } => {
+                // Unreachable in practice: `process_request` only ever routes
+                // `FrameType::Raw` into `process_ser_frame`, and a PNG export
+                // carries pre-rendered RGB8 bytes anyway, not a `Frame` a SER
+                // container could accept.
+                return Err(DiskWriterError::WriteFailed(
+                    "Stretched PNG frames cannot be written to a SER container".to_string(),
+                ));
             }
         }
 
         Ok(())
     }
 
-    fn process_fits_raw(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_fits_raw(&self, request: &WriteRequest) -> Result<PathBuf, DiskWriterError> {
         let session_dir = request.session.as_ref().map(|s| &s.dir).ok_or_else(|| {
             DiskWriterError::DirectoryCreationFailed("No active session".to_string())
         })?;
@@ -325,10 +383,10 @@ impl DiskWriter {
             .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Raw FITS file written successfully (16-bit)");
-        Ok(())
+        Ok(path)
     }
 
-    fn process_fits_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_fits_stacked(&self, request: &WriteRequest) -> Result<PathBuf, DiskWriterError> {
         let session_name = stacked_output_name(request);
 
         ensure_dir(&self.stacked_dir)?;
@@ -351,10 +409,10 @@ impl DiskWriter {
             .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stacked FITS file written successfully");
-        Ok(())
+        Ok(path)
     }
 
-    fn process_png_stacked(&self, request: &WriteRequest) -> Result<(), DiskWriterError> {
+    fn process_png_stacked(&self, request: &WriteRequest) -> Result<PathBuf, DiskWriterError> {
         let session_name = stacked_output_name(request);
 
         ensure_dir(&self.stacked_dir)?;
@@ -381,6 +439,6 @@ impl DiskWriter {
             .map_err(|e| DiskWriterError::WriteFailed(e.to_string()))?;
 
         debug!(path = ?path, "Stretched PNG file written successfully");
-        Ok(())
+        Ok(path)
     }
 }

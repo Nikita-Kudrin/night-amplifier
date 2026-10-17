@@ -8,7 +8,9 @@ use super::{
     CameraInfoResponse, CameraListEntry, CameraPhaseEntry, PushDirection, PushToTarget, ServerEvent,
     SolveStage, SolveStatus, StreamCrop, StreamFrameSize, SyncCause,
 };
-use crate::state::{CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus};
+use crate::state::{
+    CameraPhase, CameraRole, CaptureState, FrameCounts, InstallStatus, StorageSyncState, StorageSyncStatus,
+};
 use night_amplifier_core::push_to::{DirectionHint, InstallStage};
 
 const WARMUP: Duration = Duration::from_secs(300);
@@ -85,6 +87,7 @@ impl ServerEvent {
             E::error("Camera lost"),
             E::disk_writer_warning(40),
             E::DiskWriterWarningCleared,
+            E::storage_sync(CameraRole::Main, &StorageSyncStatus { state: StorageSyncState::Synced, files: 166, failed: 0, error: None }),
             E::frame_dropped(3, 120),
             E::capture_counts(
                 FrameCounts { frames: 43, stacked: 40, rejected: 3, delivered: 120, dropped: 3 },

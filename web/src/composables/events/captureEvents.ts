@@ -6,6 +6,7 @@ import type {
     CameraPhaseEntry,
     FrameCapturedEvent,
     FrameRejectedEvent,
+    StorageSyncEvent,
     StreamCrop,
     StreamFrameSize,
 } from '../api.events'
@@ -28,6 +29,9 @@ export interface StackCrop {
     frame: StreamFrameSize | null
 }
 
+/** Whether a camera's last capture reached the storage device, which Stop waits for. */
+export type StorageSync = Omit<StorageSyncEvent, 'type' | 'role'>
+
 /**
  * What `/ws/events` says about the capture session: its state and counters, the faults
  * and notices it raises, and which camera the eyepiece pages show. Every ref is written
@@ -44,6 +48,9 @@ export function createCaptureEvents() {
     const deliveredCount = ref(0)
     const lastError = ref<string | null>(null)
     const diskWriterWarning = ref<number | null>(null)
+    // Per camera, since each syncs when it stops. Null while there is nothing to say: that
+    // camera saved nothing yet, or is saving now.
+    const storageSync = ref<Record<CameraRole, StorageSync | null>>({main: null, guide: null})
     const unresponsiveWarning = ref<string | null>(null)
     // Which camera the warning is about, so its end can clear it.
     const unresponsiveCamera = ref<WarnedCamera | null>(null)
@@ -170,6 +177,9 @@ export function createCaptureEvents() {
         disk_writer_warning_cleared() {
             diskWriterWarning.value = null
         },
+        storage_sync({role, state, files, failed, error}) {
+            storageSync.value = {...storageSync.value, [role]: state === 'idle' ? null : {state, files, failed, error}}
+        },
         frame_dropped(data) {
             droppedCount.value = data.dropped_count
             deliveredCount.value = data.delivered_count
@@ -198,6 +208,7 @@ export function createCaptureEvents() {
             deliveredCount,
             lastError,
             diskWriterWarning,
+            storageSync,
             unresponsiveWarning,
             resumeNotice,
             focusModeNotice,
@@ -206,6 +217,9 @@ export function createCaptureEvents() {
             viewedCameraRevision,
             clearError: () => (lastError.value = null),
             clearDiskWriterWarning: () => (diskWriterWarning.value = null),
+            clearStorageSync: (role: CameraRole) => {
+                storageSync.value = {...storageSync.value, [role]: null}
+            },
             clearUnresponsiveWarning: dismissUnresponsive,
             clearResumeNotice: () => (resumeNotice.value = null),
             clearFocusModeNotice: () => (focusModeNotice.value = null),

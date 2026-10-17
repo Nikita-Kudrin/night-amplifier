@@ -3,6 +3,7 @@
 //! Saves settings to a JSON file so they persist across server restarts.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -137,7 +138,9 @@ impl SettingsPersistence {
             .to_json()
             .map_err(|e| SettingsPersistenceError::SerializationFailed(e.to_string()))?;
 
-        std::fs::write(&self.file_path, json)
+        // On the device and never truncated: an in-place write cut by a power loss leaves an
+        // empty file, and every setting back at its default.
+        night_amplifier_core::durable::write_atomic(&self.file_path, json.as_bytes())
             .map_err(|e| SettingsPersistenceError::WriteFailed(e.to_string()))?;
 
         debug!("Saved settings to {:?}", self.file_path);
@@ -172,6 +175,81 @@ pub enum SettingsPersistenceError {
     SerializationFailed(String),
     #[error("Failed to write settings file: {0}")]
     WriteFailed(String),
+}
+
+/// Writes the settings off the caller's thread, the newest snapshot last.
+///
+/// A durable write waits for the device (41 ms on an idle NVMe, far longer on a busy SD
+/// card), and `save_settings` is called from async handlers, which held a runtime worker
+/// for all of it. Saves arriving while one is written collapse into one write of the
+/// newest snapshot: a slider drag is one fsync, not one per step.
+pub struct SettingsWriter {
+    persistence: Arc<SettingsPersistence>,
+    queue: Arc<(Mutex<Queued>, Condvar)>,
+}
+
+#[derive(Default)]
+struct Queued {
+    next: Option<Arc<CaptureSettings>>,
+    writing: bool,
+}
+
+impl SettingsWriter {
+    pub fn new(persistence: SettingsPersistence) -> Self {
+        Self {
+            persistence: Arc::new(persistence),
+            queue: Arc::default(),
+        }
+    }
+
+    /// Queue `snapshot()` for writing. It is taken under the queue's lock, so of two racing
+    /// saves the later snapshot is the one written last. On a blocking thread inside a
+    /// runtime; outside one (a capture thread), the caller writes it.
+    pub fn save(&self, snapshot: impl FnOnce() -> Arc<CaptureSettings>) {
+        let mut queued = self.lock();
+        queued.next = Some(snapshot());
+        if std::mem::replace(&mut queued.writing, true) {
+            return;
+        }
+        drop(queued);
+        let (persistence, queue) = (Arc::clone(&self.persistence), Arc::clone(&self.queue));
+        let drain = move || drain(&persistence, &queue);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(drain)),
+            Err(_) => drain(),
+        }
+    }
+
+    /// Block until every queued save is written: before the process exits, and in tests.
+    pub fn flush(&self) {
+        let idle = &self.queue.1;
+        let mut queued = self.lock();
+        while queued.writing {
+            queued = idle.wait(queued).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queued> {
+        self.queue.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+fn drain(persistence: &SettingsPersistence, queue: &(Mutex<Queued>, Condvar)) {
+    let (lock, idle) = queue;
+    loop {
+        let next = {
+            let mut queued = lock.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(next) = queued.next.take() else {
+                queued.writing = false;
+                idle.notify_all();
+                return;
+            };
+            next
+        };
+        if let Err(e) = persistence.save(&next) {
+            warn!("Failed to save settings: {}", e);
+        }
+    }
 }
 
 #[cfg(test)]

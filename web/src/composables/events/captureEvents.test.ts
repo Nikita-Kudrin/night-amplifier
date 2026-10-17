@@ -71,6 +71,22 @@ describe('captureEvents sync snapshot', () => {
         send({type: 'disk_writer_warning_cleared'})
         expect(state.diskWriterWarning.value).toBeNull()
     })
+
+    // A page opened after a Stop, or one that lagged through it, still learns whether the
+    // save reached the disk; `idle` (that camera saving again) takes the verdict down.
+    it('restates whether each camera\'s last capture is on disk, and drops it once it saves again', () => {
+        const {state, send} = captureEvents()
+
+        send({type: 'storage_sync', role: 'main', state: 'synced', files: 166, failed: 0, error: null})
+        send({type: 'storage_sync', role: 'guide', state: 'syncing', files: 0, failed: 0, error: null})
+        expect(state.storageSync.value).toEqual({
+            main: {state: 'synced', files: 166, failed: 0, error: null},
+            guide: {state: 'syncing', files: 0, failed: 0, error: null},
+        })
+        send({type: 'storage_sync', role: 'main', state: 'idle', files: 0, failed: 0, error: null})
+        expect(state.storageSync.value.main).toBeNull()
+        expect(state.storageSync.value.guide?.state).toBe('syncing')
+    })
 })
 
 describe('captureEvents camera recovery', () => {
